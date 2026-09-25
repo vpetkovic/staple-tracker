@@ -31,7 +31,9 @@
  * under a build that did not reconcile: it notices after the upgrade, by the epoch it last
  * reconciled against (`sync_reconciled_epoch`).
  */
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { writeEventRow } from "../event-row.js";
 import type { Journal, SyncEntity } from "../journal.js";
 import { moveIdentifier, recordRemovedHolder } from "../identifier-moves.js";
 import { WORKSPACE_SETTING_META_PREFIX } from "../settings-registry.js";
@@ -64,6 +66,59 @@ const BUILTINS: ReadonlyArray<readonly [SyncEntity, string]> = [
   ...BUILTIN_KIND_SEED.map((kind) => ["kind", kind.id as string] as const),
 ];
 const BUILTIN_KEYS = new Set(BUILTINS.map(([entity, id]) => keyOf(entity, id)));
+
+/** Every issue's blocker set, by the blocked issue: what a rewind is compared against. */
+export function blockerSets(db: DatabaseSync): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const edge of db.prepare("SELECT blocked_id, blocker_id FROM relations WHERE type = 'blocks' ORDER BY blocked_id, blocker_id").all() as Array<{
+    blocked_id: string;
+    blocker_id: string;
+  }>) {
+    const set = out.get(edge.blocked_id) ?? [];
+    set.push(edge.blocker_id);
+    out.set(edge.blocked_id, set);
+  }
+  return out;
+}
+
+/**
+ * A rewind is an edge-writing path: it removes edges the epoch does not hold and the snapshot
+ * puts back the ones it does, and neither says so in any event. Each issue whose blocker set
+ * changed gets a `blockers_changed` with the set it holds now, dated at the instant the restore
+ * committed (`restoredAt`, from the service) — the same on every device that rewinds into the
+ * epoch, whenever it does — under a key derived from the epoch and the issue, so a second read
+ * of the same epoch writes nothing twice. Without it, the edge history went on naming blockers
+ * nobody held any more, and the elapsed partition counted `blocked` time for them.
+ *
+ * A service before this build sends no instant: the rewind is dated by this device's clock.
+ */
+export function narrateRewoundSets(db: DatabaseSync, before: ReadonlyMap<string, readonly string[]>, epoch: number, restoredAt: string | null): void {
+  const after = blockerSets(db);
+  const at = restoredAt ?? nowIso();
+  for (const issueId of new Set([...before.keys(), ...after.keys()])) {
+    const was = before.get(issueId) ?? [];
+    const now = after.get(issueId) ?? [];
+    if (was.length === now.length && was.every((id, index) => id === now[index])) continue;
+    const row = db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined;
+    if (!row) continue;
+    const set = db
+      .prepare(
+        `SELECT i.id AS id, i.identifier AS identifier FROM relations r JOIN issues i ON i.id = r.blocker_id
+          WHERE r.blocked_id = ? AND r.type = 'blocks' ORDER BY r.created_at, i.identifier`,
+      )
+      .all(issueId) as Array<{ id: string; identifier: string }>;
+    const key = createHash("sha256").update(`rewind\n${epoch}\n${issueId}`, "utf8").digest("hex").slice(0, 32);
+    writeEventRow(db, {
+      kind: "blockers_changed",
+      issueId,
+      actor: null,
+      payload: { identifier: row.identifier, blockedBy: set.map((edge) => edge.identifier), blockedByIds: set.map((edge) => edge.id), rewoundToEpoch: epoch },
+      dedupKey: `blockers_rewound:${key}`,
+      createdAt: at,
+      originDevice: null,
+    });
+  }
+}
 
 /** What the read before it decided, for the half after it. */
 export interface ReconcilePlan {

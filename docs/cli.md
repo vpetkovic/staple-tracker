@@ -18,7 +18,10 @@ staple settings [get <key>|set <key> <value>]       this workspace's registered 
 
 staple wait <ref> [--timeout s] [--interval ms]     block until ready or finished
 staple events --follow [--since N] [--max N]        stream events as they land
-       [--exec CMD]                                 run CMD per event (JSON arg + $STAPLE_EVENT)
+       [--exec CMD]                                 run CMD per event (JSON arg + $STAPLE_EVENT);
+                                                    on a synchronized workspace this includes the
+                                                    status and blocker events other devices'
+                                                    changes re-emit here (payload.deviceId)
 
 staple start <ref> --steal-if-stale <30m|2h|3600>   take over a dead agent's claim
 staple release <ref> --if-stale <dur>               free a dead agent's claim

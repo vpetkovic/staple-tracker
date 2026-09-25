@@ -141,6 +141,8 @@ export interface SnapshotPage {
   /** The next SNAPSHOT page, or null when this was the last. Opaque. */
   readonly nextCursor: string | null;
   readonly hasMore: boolean;
+  /** When the restore that made this epoch committed; null when none did. Absent from an older Worker. */
+  readonly restoredAt?: string | null;
 }
 
 // ------------------------------------------------------------------ outbound

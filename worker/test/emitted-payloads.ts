@@ -202,14 +202,16 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "checkoutAgent": null,
       "checkoutAt": null,
       "createdAt": "2026-09-10T00:00:00.000Z",
-      "updatedAt": "2026-09-10T00:00:00.000Z"
+      "updatedAt": "2026-09-10T00:00:00.000Z",
+      "originEvents": []
     }
   },
   {
     "entity": "issue",
     "verb": "renumber",
     "payload": {
-      "identifier": "TST-14"
+      "identifier": "TST-14",
+      "originEvents": []
     }
   },
   {
@@ -220,7 +222,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "title": "Child, renamed",
       "priority": "low",
       "labels": "[]",
-      "normalizedTitle": "child, renamed"
+      "normalizedTitle": "child, renamed",
+      "originEvents": []
     }
   },
   {
@@ -386,7 +389,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
           "createdBy": "past",
           "createdAt": "2026-09-10T00:00:00.000Z"
         }
-      }
+      },
+      "originEvents": []
     }
   },
   {
@@ -404,9 +408,11 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       },
       "originEvents": [
         {
+          "issueId": "00000000-0000-4000-8000-000000000000",
           "kind": "blockers_changed",
           "at": "2026-09-10T00:00:00.000Z",
           "actor": "emitter",
+          "seq": 22,
           "payload": {
             "identifier": "TST-6",
             "blockedBy": [

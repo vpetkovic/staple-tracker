@@ -122,7 +122,7 @@ CREATE TABLE events (
   payload TEXT NOT NULL DEFAULT '{}',
   dedup_key TEXT,
   created_at TEXT NOT NULL
-);
+, origin_device TEXT, origin_seq INTEGER);
 
 CREATE UNIQUE INDEX events_dedup_uq
   ON events(dedup_key) WHERE dedup_key IS NOT NULL;
@@ -250,7 +250,7 @@ CREATE TABLE sync_conflicts (
          resolved_at      TEXT,
          resolved_by      TEXT,
          resolution       TEXT
-       );
+       , remote_events TEXT);
 
 CREATE INDEX sync_conflicts_open_idx ON sync_conflicts(detected_at) WHERE resolved_at IS NULL;
 

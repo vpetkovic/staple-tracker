@@ -14,7 +14,7 @@ import { migration as m010 } from "./010-sync-metadata.js";
 import { migration as m011 } from "./011-sync-field-writes.js";
 import { migration as m012 } from "./012-host-binding.js";
 import { migration as m013 } from "./013-execution-attempts.js";
-import { migration as m014 } from "./014-attempt-role.js";
+import { migration as m014 } from "./014-lifecycle-capture.js";
 
 /**
  * The workspace database — the per-repo (or global) task store.
@@ -45,7 +45,8 @@ import { migration as m014 } from "./014-attempt-role.js";
  * column on `sync_state` that only a home-resident workspace ever writes. 013
  * (execution attempts) follows: two new tables that replicate as protocol-3 entities, and
  * two nullable `sync_state` columns recording where the last pull reached the head. 014
- * (the attempt's lane) follows: one defaulted column on `attempts`.
+ * (the lifecycle work) follows: the attempt's lane, the events' cross-device order, and
+ * the events a withheld status narrated on its conflict record.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",

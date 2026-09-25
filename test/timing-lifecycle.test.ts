@@ -607,17 +607,19 @@ describe("the orchestrator lane", () => {
 
   it("never touches the worker lane: no superseded_by_merge, and a release ends the worker's attempt alone", () => {
     const x = store.createIssue({ title: "Coordinated leaf" });
-    store.checkoutIssue(x.id, "agent-a");
+    // One agent in both lanes, so the worker lane's clause 5 would see the newer orchestrator
+    // attempt as a later open attempt of the same claim if the lanes were not kept apart.
+    store.checkoutIssue(x.id, "dual");
     at(5);
-    store.openOrchestratorAttempt(x.id, "reviewer", "orchestrator");
+    store.openOrchestratorAttempt(x.id, "dual", "orchestrator");
     const read = () => Object.fromEntries(viewsOfIssue(store.db, x.id).map((view) => [view.role, [view.state, view.endReason]]));
     expect(read()).toEqual({ worker: ["running", null], orchestrator: ["running", null] });
     at(10);
-    store.releaseIssue(x.id, "agent-a");
+    store.releaseIssue(x.id, "dual", { });
     expect(read()).toEqual({ worker: ["ended", "released"], orchestrator: ["running", null] });
     // The resume rule reads the worker lane: an orchestrator attempt that ended orphaned is not resumed by a checkout.
     at(15);
-    store.openOrchestratorAttempt(store.createIssue({ title: "Elsewhere" }).id, "reviewer", "orchestrator");
+    store.openOrchestratorAttempt(store.createIssue({ title: "Elsewhere" }).id, "dual", "orchestrator");
     expect(viewsOfIssue(store.db, x.id).find((view) => view.role === "orchestrator")).toMatchObject({ outcome: "orphaned", endReason: "superseded_by_newer" });
     at(20);
     store.checkoutIssue(x.id, "agent-b");

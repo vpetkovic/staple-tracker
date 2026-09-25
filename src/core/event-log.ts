@@ -37,7 +37,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { writeEventRow, type EventInput } from "./event-row.js";
 import { journalFor } from "./journal.js";
 
-export { writeEventRow, type EventInput } from "./event-row.js";
+export { EVENT_ORDER, EVENT_ORDER_DESC, writeEventRow, type EventInput } from "./event-row.js";
 
 /**
  * Append one event.
@@ -49,6 +49,10 @@ export function insertEvent(db: DatabaseSync, input: EventInput): void {
   const journal = journalFor(db);
   // One mutation, one instant (`Journal.mutationAt`): its events share the row's time.
   const createdAt = input.createdAt ?? journal.mutationAt();
-  writeEventRow(db, { ...input, createdAt, dedupKey: input.dedupKey ?? journal.eventDedupKey(input.kind) });
-  journal.noteEvent(input.issueId, { kind: input.kind, at: createdAt, actor: input.actor ?? null, payload: input.payload ?? {} });
+  const originDevice = input.originDevice !== undefined ? input.originDevice : journal.deviceIdentity();
+  const seq = writeEventRow(db, { ...input, createdAt, originDevice, dedupKey: input.dedupKey ?? journal.eventDedupKey(input.kind) });
+  // A local event, written: the operation it belongs to carries it, with its place in this device's order.
+  if (seq !== null && input.originSeq === undefined && input.issueId) {
+    journal.noteEvent(input.issueId, { issueId: input.issueId, kind: input.kind, at: createdAt, actor: input.actor ?? null, seq, payload: input.payload ?? {} });
+  }
 }

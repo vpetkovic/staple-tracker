@@ -9,10 +9,10 @@
  * that fold. The write clock is faked (`Date` only) so every instant is chosen by the case.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listConflicts } from "../src/core/cloud/conflicts.js";
-import { applyToDatabase } from "../src/core/cloud/apply.js";
-import { beforeApply, reemitEvents } from "../src/core/cloud/reemit.js";
-import { journalFor } from "../src/core/journal.js";
+import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
+import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
+import { openWorkspace } from "../src/core/open.js";
+import { join } from "node:path";
 import { attemptsOfIssue } from "../src/core/telemetry/attempt-records.js";
 import { viewsOfIssue } from "../src/core/telemetry/attempt-derive.js";
 import type { IssueTiming } from "../src/core/types.js";
@@ -243,44 +243,6 @@ describe("events are re-emitted on apply, dated at the origin", () => {
     expect(t.wall!.buckets).toMatchObject({ work: min(15), paused: min(15), silent: min(10) });
     expect(t.quality.work.inputs).toContain("contested");
   }, 60_000);
-
-  it("a pulled delete that takes a blocker's edges narrates the dependents' new sets, dated at the delete", () => {
-    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
-    const a = fleet.machine("a");
-    a.use();
-    const x = a.store.createIssue({ title: "Dependent" });
-    const y = a.store.createIssue({ title: "Deleted elsewhere" });
-    const z = a.store.createIssue({ title: "Kept" });
-    a.store.setBlockedBy(x.id, [y.id, z.id], "vp");
-    const op = {
-      opId: "op-delete-y",
-      seq: 99,
-      epoch: 1,
-      protocol: 3,
-      schema: 14,
-      entity: "issue",
-      entityId: y.id,
-      verb: "delete",
-      baseVersion: 1,
-      payload: {},
-      deviceId: "device-elsewhere",
-      actor: "vp",
-      clientSeq: 1,
-      createdAt: iso(30),
-      serverTs: 0,
-    };
-    journalFor(a.db).applyRemote({ opId: op.opId, seq: op.seq }, () => {
-      const before = beforeApply(a.db, op);
-      applyToDatabase(a.db, { entity: op.entity, entityId: op.entityId, verb: op.verb, payload: op.payload, actor: op.actor, deviceId: op.deviceId, at: op.createdAt, opId: op.opId, seq: op.seq });
-      reemitEvents(a.db, op, before, a.deviceId);
-    });
-    const last = a.db.prepare("SELECT payload, created_at FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY seq DESC LIMIT 1").get(x.id) as {
-      payload: string;
-      created_at: string;
-    };
-    expect(last.created_at).toBe(iso(30));
-    expect(JSON.parse(last.payload)).toMatchObject({ blockedByIds: [z.id], removedBlockerIds: [y.id] });
-  });
 });
 
 describe("workSeconds converges, and does not move when an end arrives", () => {
@@ -437,4 +399,253 @@ describe("the orchestrator lane across devices", () => {
       converged(a, b, fresh);
     }, 60_000);
   }
+});
+
+describe("round 1: what an operation narrates, and what it does not", () => {
+  it("a seed narrates nothing: a device that read it replays nothing it cannot prove, and the fallback stands", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const b = fleet.machine("b");
+    await sync(b);
+    // A works before it ever connects: its history reaches the repository by the seed.
+    const prepared = fleet.prepare("a");
+    process.env.STAPLE_HOME = prepared.home;
+    const offline = openWorkspace(join(prepared.dir, ".staple", "staple.db"));
+    at(0);
+    const x = offline.store.createIssue({ title: "Done before connecting" });
+    offline.store.checkoutIssue(x.id, "agent-a");
+    at(20);
+    offline.store.updateIssue(x.id, { status: "done" }, "agent-a");
+    const y = offline.store.createIssue({ title: "Started before connecting" });
+    at(25);
+    offline.store.checkoutIssue(y.id, "agent-a");
+    const onAx = offline.store.timingFor([x.id], iso(45)).get(x.id)!;
+    const onAy = offline.store.timingFor([y.id], iso(45)).get(y.id)!;
+    offline.store.db.close();
+    at(30);
+    const a = fleet.connect("a", prepared);
+    await sync(a);
+    at(45);
+    await sync(b);
+    // B holds no event for either: the seed said what exists, not what happened.
+    expect(statusEvents(b, x.id)).toEqual([]);
+    expect(statusEvents(b, y.id)).toEqual([]);
+    const bx = timingOn(b, x.id, 45);
+    const by = timingOn(b, y.id, 45);
+    // The two-timestamp fallback, flagged, as before re-emission: never a birth in the current status.
+    expect(bx).toMatchObject({ approximate: true, activeSeconds: min(20), wall: null, missing: { wall: "replay_unavailable" } });
+    expect(by).toMatchObject({ approximate: true, wall: null, missing: { wall: "replay_unavailable" } });
+    // Effort does not read the log: it is the same as on the device that did the work.
+    expect(effort(bx)).toEqual(effort(onAx));
+    expect(effort(by).workSeconds).toBe(onAy.workSeconds);
+  }, 60_000);
+
+  it("a vocabulary migration narrates nothing on the device that made it, and nothing anywhere else", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    a.store.addStatus({ id: "parked", category: "ready", label: "Parked" }, "vp");
+    const x = a.store.createIssue({ title: "Parked", status: "parked" });
+    await sync(a, b);
+    at(10);
+    a.use();
+    a.store.removeStatus("parked", { migrateTo: "todo" }, "vp");
+    await sync(a, b);
+    expect(b.store.getIssue(x.id).status).toBe("todo");
+    expect(statusEvents(b, x.id)).toEqual(statusEvents(a, x.id));
+    expect(statusEvents(a, x.id).map((event) => (event as { kind: string }).kind)).toEqual(["issue_created"]);
+  }, 60_000);
+
+  it("a restore is an edge-writing path: every device narrates the set it rewound to, at the restore's own instant", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Dependent" });
+    const w = a.store.createIssue({ title: "Dependency" });
+    a.store.checkoutIssue(x.id, "agent-a");
+    at(5);
+    a.store.releaseIssue(x.id, "agent-a");
+    await sync(a, b);
+    at(20);
+    a.use();
+    await setBackupConsent(a.home, REPO, true, { fetchImpl: server.fetch });
+    const backup = await createBackup(a.home, REPO, null, { fetchImpl: server.fetch });
+    at(30);
+    a.store.setBlockedBy(x.id, [w.id], "vp");
+    await sync(a, b);
+    expect(b.db.prepare("SELECT COUNT(*) AS n FROM relations WHERE blocked_id = ?").get(x.id)).toEqual({ n: 1 });
+    at(40);
+    a.use();
+    await restoreFromBackup(a.db, a.home, REPO, backup.backupId, { fetchImpl: server.fetch });
+    at(45);
+    await sync(a);
+    at(50);
+    await sync(b, a, b);
+    for (const machine of [a, b]) {
+      expect(machine.db.prepare("SELECT COUNT(*) AS n FROM relations WHERE blocked_id = ?").get(x.id), machine.label).toEqual({ n: 0 });
+      const t = timingOn(machine, x.id, 60);
+      // Blocked from the edge (30) to the restore (40), then waiting in the queue again: the same on both.
+      expect(t.wall!.buckets, machine.label).toMatchObject({ blocked: min(10), queued: min(25 + 20) });
+      expect(t.quality.wall, machine.label).toEqual({ state: "exact", inputs: [] });
+    }
+    expect(timingOn(a, x.id, 60).wall).toEqual(timingOn(b, x.id, 60).wall);
+    const rewound = (machine: Machine) =>
+      machine.db.prepare("SELECT created_at, payload FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY seq DESC LIMIT 1").get(x.id) as {
+        created_at: string;
+        payload: string;
+      };
+    expect(rewound(a).created_at).toBe(iso(40));
+    expect(rewound(b).created_at).toBe(iso(40));
+    expect(JSON.parse(rewound(b).payload)).toMatchObject({ blockedByIds: [], rewoundToEpoch: 2 });
+  }, 90_000);
+
+  it("an edge the history names but the device no longer holds makes the partition approximate", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    a.use();
+    const x = a.store.createIssue({ title: "Dependent" });
+    const w = a.store.createIssue({ title: "Dependency" });
+    a.store.checkoutIssue(x.id, "agent-a");
+    at(5);
+    a.store.releaseIssue(x.id, "agent-a");
+    at(10);
+    a.store.setBlockedBy(x.id, [w.id], "vp");
+    // Gone with no event, as a cascade or an older build's rewind leaves it.
+    a.db.prepare("DELETE FROM relations WHERE blocked_id = ?").run(x.id);
+    expect(timingOn(a, x.id, 20).quality.wall).toEqual({ state: "approximate", inputs: ["edge_history_incomplete"] });
+  });
+
+  it("a status resolved in a conflict writes its history on every device, so the resolving device replays again", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Decided twice" });
+    a.store.checkoutIssue(x.id, "agent-a");
+    await sync(a, b);
+    at(10);
+    a.use();
+    a.store.updateIssue(x.id, { status: "in_review" }, "agent-a");
+    at(11);
+    b.use();
+    b.store.updateIssue(x.id, { status: "done" }, "vp");
+    await sync(a, b, a);
+    expect(a.store.getIssue(x.id).status).toBe("in_review");
+    at(20);
+    a.use();
+    const record = listConflicts(a.db).find((conflict) => conflict.entity === "issue" && conflict.field === "status" && conflict.resolvedAt === null)!;
+    resolveConflict(a.db, { id: record.id, choice: "remote", actor: "vp" });
+    await sync(a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b]) {
+      expect(machine.store.getIssue(x.id).status, machine.label).toBe("done");
+      const t = timingOn(machine, x.id, 30);
+      expect(t.approximate, machine.label).toBe(false);
+      // Ended by B's close at 11, which A now holds too, on both.
+      expect(t.wall, machine.label).toMatchObject({ endAt: iso(11) });
+    }
+    // The decision's own event, at the decision, on both.
+    const decided = (machine: Machine) =>
+      machine.db.prepare("SELECT created_at FROM events WHERE issue_id = ? AND kind = 'status_changed' AND json_extract(payload, '$.resolvesConflict') IS NOT NULL").all(x.id);
+    expect(decided(a)).toEqual([{ created_at: iso(20) }]);
+    expect(decided(b)).toEqual([{ created_at: iso(20) }]);
+  }, 60_000);
+
+  it("events in one millisecond on two devices order the same on both", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Dependent" });
+    const y = a.store.createIssue({ title: "One" });
+    const z = a.store.createIssue({ title: "Other" });
+    a.store.checkoutIssue(x.id, "agent-a");
+    at(5);
+    a.store.releaseIssue(x.id, "agent-a");
+    await sync(a, b);
+    // The same millisecond, offline on each.
+    at(10);
+    a.use();
+    a.store.setBlockedBy(x.id, [y.id], "vp");
+    b.use();
+    b.store.setBlockedBy(x.id, [z.id], "vp");
+    await sync(a, b, a);
+    const order = (machine: Machine) =>
+      (machine.db.prepare(`SELECT payload FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY ${"created_at, COALESCE(origin_device, ''), COALESCE(origin_seq, seq), seq"}`).all(x.id) as Array<{ payload: string }>).map(
+        (row) => (JSON.parse(row.payload) as { blockedByIds: string[] }).blockedByIds,
+      );
+    expect(order(a)).toEqual(order(b));
+    expect(timingOn(a, x.id, 20).quality.wall).toEqual(timingOn(b, x.id, 20).quality.wall);
+    expect(timingOn(a, x.id, 20).wall).toEqual(timingOn(b, x.id, 20).wall);
+  }, 60_000);
+
+  it("two children made offline on two devices to block one parent both keep their edge, on a fresh device too", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const parent = a.store.createIssue({ title: "Parent" });
+    const earlier = a.store.createIssue({ title: "An earlier blocker" });
+    // A blocker set written to the parent BEFORE the children: a fresh device must not let it drop them.
+    a.store.setBlockedBy(parent.id, [earlier.id], "vp");
+    await sync(a, b);
+    a.use();
+    const one = a.store.createIssue({ title: "From A", parent: parent.id, blockParentUntilDone: true });
+    b.use();
+    const two = b.store.createIssue({ title: "From B", parent: parent.id, blockParentUntilDone: true });
+    await sync(a, b, a);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    const blockers = (machine: Machine) =>
+      (machine.db.prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? ORDER BY blocker_id").all(parent.id) as Array<{ blocker_id: string }>).map((row) => row.blocker_id);
+    const want = [earlier.id, one.id, two.id].sort();
+    for (const machine of [a, b, fresh]) expect(blockers(machine), machine.label).toEqual(want);
+    converged(a, b, fresh);
+  }, 60_000);
+
+  it("an operation's narration is not the entity's state: no fold keeps it, and no field write records it", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    a.use();
+    const x = a.store.createIssue({ title: "Narrated" });
+    a.store.checkoutIssue(x.id, "agent-a");
+    await sync(a);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, fresh]) {
+      expect(machine.db.prepare("SELECT COUNT(*) AS n FROM sync_field_writes WHERE field = 'originEvents'").get(), machine.label).toEqual({ n: 0 });
+    }
+    const snapshot = (await (await server.fetch(`https://sync.test.example/v1/repos/${REPO}/snapshot`, { headers: { authorization: "Bearer token-device-a", "staple-protocol": "3" } })).json()) as {
+      entities: Array<{ entity: string; state: Record<string, unknown> }>;
+    };
+    expect(snapshot.entities.filter((entity) => entity.entity === "issue").every((entity) => !("originEvents" in entity.state))).toBe(true);
+  }, 60_000);
+});
+
+describe("the orchestrator lane's stored ends wait for a service that settles them", () => {
+  it("an older Worker that does not list the lane's reasons gets no stored orchestrator end; the attempt reads ended all the same", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO, orphanEndReasons: null }), REPO);
+    const a = fleet.machine("a");
+    await sync(a);
+    a.use();
+    const one = a.store.createIssue({ title: "First" });
+    const two = a.store.createIssue({ title: "Second" });
+    a.store.openOrchestratorAttempt(one.id, "orch", "orchestrator");
+    at(10);
+    a.store.openOrchestratorAttempt(two.id, "orch", "orchestrator");
+    await sync(a);
+    a.use();
+    a.store.addComment(two.id, "a mutating command", "vp");
+    expect(attemptsOfIssue(a.db, one.id)[0]!.state).toBe("running");
+    expect(viewsOfIssue(a.db, one.id)[0]).toMatchObject({ state: "ended", endReason: "superseded_by_newer" });
+  }, 60_000);
 });

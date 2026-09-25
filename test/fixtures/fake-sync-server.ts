@@ -32,7 +32,8 @@
 import { randomUUID } from "node:crypto";
 import { isRetryable, type ErrorCode } from "../../worker/src/errors.js";
 import { columnSpellingWins } from "../../src/core/cloud/apply.js";
-import { settleAttemptEnd } from "../../src/core/cloud/attempt-ends.js";
+import { ORPHAN_END_REASONS, settleAttemptEnd } from "../../src/core/cloud/attempt-ends.js";
+import { withoutNarration } from "../../src/core/cloud/narration.js";
 import { settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
 import { ORIGIN_RELEASING_STATUSES } from "../../src/core/types.js";
 
@@ -183,6 +184,8 @@ export interface FakeRestore {
   entityCount: number;
   staged: number;
   status: "staging" | "committed";
+  /** When the commit ran (`restores.committed_at`), as the Worker's snapshot reports it. */
+  committedAt?: string;
 }
 
 export interface FakeServerOptions {
@@ -192,6 +195,8 @@ export interface FakeServerOptions {
   maxPullLimit?: number;
   defaultPullLimit?: number;
   maxSnapshotPageSize?: number;
+  /** The orphan-end reasons advertised; null plays a Worker that advertises none. */
+  orphanEndReasons?: string[] | null;
   protocol?: { min: number; max: number };
   /**
    * The repository's vocabulary as PROVISIONED — `repos.vocabulary`, migration 0005.
@@ -359,6 +364,7 @@ export class FakeSyncServer {
       maxPullLimit: 500,
       defaultPullLimit: 200,
       maxSnapshotPageSize: 500,
+      orphanEndReasons: [...ORPHAN_END_REASONS].sort(),
       // Matches `worker/src/limits.ts`. `min` did not move with `max`, which is what
       // keeps every protocol-1 client working.
       protocol: { min: 1, max: 3 },
@@ -521,6 +527,8 @@ export class FakeSyncServer {
       maxPullLimit: this.options.maxPullLimit,
       defaultPullLimit: this.options.defaultPullLimit,
       maxSnapshotPageSize: this.options.maxSnapshotPageSize,
+      // `worker/src/limits.ts`: absent when a test plays a Worker from before the orchestrator lane.
+      ...(this.options.orphanEndReasons !== null ? { orphanEndReasons: this.options.orphanEndReasons } : {}),
     };
   }
 
@@ -1271,6 +1279,8 @@ export class FakeSyncServer {
 
     return this.ok(protocol, {
       epoch: this.epoch,
+      // `worker/src/snapshot.ts`: when the restore that made this epoch committed.
+      restoredAt: this.restores.find((restore) => restore.status === "committed" && restore.toEpoch === this.epoch)?.committedAt ?? null,
       cutoffSeq: cutoff,
       tailCursor: b64url(JSON.stringify({ v: 1, r: session.repoId, e: this.epoch, s: cutoff })),
       /**
@@ -1411,7 +1421,7 @@ export class FakeSyncServer {
       const spelled = this.legacyFold ? (op.payload as Record<string, unknown>) : columnSpellingWins(op.payload as Record<string, unknown>);
       // An orphan end never overwrites a real end, and leaves no provenance when dropped —
       // `settleAttemptEnd`, as `worker/src/fold.ts` calls it.
-      const carried = op.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled;
+      const carried = withoutNarration(op.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled);
       for (const key of this.legacyFold ? [] : Object.keys(carried)) {
         const other = key.includes("_")
           ? key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
@@ -1671,6 +1681,7 @@ export class FakeSyncServer {
     }
     this.epoch = restore.toEpoch;
     restore.status = "committed";
+    restore.committedAt = new Date().toISOString();
     return this.ok(protocol, {
       restoreId: restore.restoreId,
       status: "committed",

@@ -573,7 +573,26 @@ operation without `originEvents` is narrated from the change itself. A pulled
 delete narrates the `blockers_changed` of every dependent that lost a blocker, at
 the delete's own time. Attempt transitions were already re-emitted this way, by
 their own `at`. The replay orders by that instant, then `seq`, because a
-re-emitted event can hold a higher `seq` than a later local one.
+re-emitted event can hold a higher `seq` than a later local one: every reader that replays
+history orders by `(created_at, origin_device, origin_seq or seq)` (workspace migration 014),
+which every device that holds the same events computes alike, and the UI's issue feed shows
+them in that order.
+
+**Every `issue` and `relation` operation says what it narrates**, an empty list included: a
+seed, a heal, a republish after a restore, a vocabulary migration and a settlement narrate
+nothing, and no receiver invents a birth or a move for them. Only an operation with no
+`originEvents` key, from a build before this one, is narrated from itself, and then only as
+the birth of a create never edited since (`createdAt` equal to `updatedAt`). A status a
+conflict withheld keeps its events on the record, written if the record is resolved to that
+side, and the resolution itself writes a `status_changed` at the decision that every device
+holds. A rewind narrates each blocker set it changed at the instant the restore committed,
+which the service reports on the snapshot (`restoredAt`). No fold keeps `originEvents` as
+state, and no field write records it.
+
+**Hooks see other devices' changes.** Because re-emitted events are local rows, `staple
+events --follow --exec` fires on every device for a status move or a blocker change another
+device made, once per event, with the origin's `deviceId` in the payload. A hook that should
+act only on this device's own changes compares it.
 
 **Every event emitter must supply a `dedup_key`.** Three of the four
 (`milestone-store.ts`, `queue-store.ts`, `project-store.ts`) currently hardcode

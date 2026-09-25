@@ -782,6 +782,8 @@ export class AttemptLedger {
          * stored end arrives, so the number does not move when it does.
          */
         const orchestrator = !isWorkerAttempt(attempt);
+        // Only to a service whose fold settles this lane's reasons (`noteServiceOrphanReasons`, `sync.ts`).
+        if (orchestrator && synchronized && !serviceSettlesOrchestratorEnds(this.db)) continue;
         const judged = orchestrator ? evaluateOrchestrator(this.db, attempt, facts) : (evaluation.get(attempt.id) ?? null);
         const reason = judged?.orphanReason ?? null;
         if (reason === null) continue;
@@ -895,6 +897,24 @@ export class AttemptLedger {
       workspaceSyncedThrough,
       missing,
     };
+  }
+}
+
+/**
+ * Whether the service this workspace synchronizes with said its fold treats `issue_resolved`
+ * and `superseded_by_newer` as stored orphan ends. A Worker from before the orchestrator lane
+ * would take one for a real end and could keep it over a real `coordination_ended`, in its
+ * snapshots and its backups; until it is redeployed the attempt stays derived, which every
+ * device reads the same without it.
+ */
+function serviceSettlesOrchestratorEnds(db: DatabaseSync): boolean {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'service_orphan_end_reasons'").get() as { value: string } | undefined;
+  if (!row) return false;
+  try {
+    const reasons = JSON.parse(row.value) as unknown;
+    return Array.isArray(reasons) && reasons.includes("issue_resolved") && reasons.includes("superseded_by_newer");
+  } catch {
+    return false;
   }
 }
 

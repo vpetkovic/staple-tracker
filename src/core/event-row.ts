@@ -23,6 +23,13 @@ export interface EventInput {
    * the apply (`telemetry/attempts.ts`). Absent means now.
    */
   readonly createdAt?: string;
+  /**
+   * The device that wrote the event first, and its `seq` there: the cross-device tie-break for
+   * events in one millisecond (workspace migration 014). A local event: this device, and no
+   * `originSeq` (its own `seq` stands in). A re-emitted one: the origin's.
+   */
+  readonly originDevice?: string | null;
+  readonly originSeq?: number | null;
 }
 
 /**
@@ -33,7 +40,7 @@ export interface EventInput {
  * from the applier to the journal is a module cycle (`journal.ts` → `cloud/row-diff.ts` →
  * `cloud/apply.ts`). This half needs no journal, so the table still has one writer.
  */
-export function writeEventRow(db: DatabaseSync, input: EventInput & { readonly dedupKey: string | null }): void {
+export function writeEventRow(db: DatabaseSync, input: EventInput & { readonly dedupKey: string | null }): number | null {
   /**
    * Obligation 1 made structural instead of merely tested.
    *
@@ -49,15 +56,41 @@ export function writeEventRow(db: DatabaseSync, input: EventInput & { readonly d
         `so its mutation must run inside WorkspaceStore.journaled().`,
     );
   }
-  db.prepare(
-    `INSERT OR IGNORE INTO events (kind, issue_id, actor, payload, dedup_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(
-    input.kind,
-    input.issueId ?? null,
-    input.actor ?? null,
-    JSON.stringify(input.payload ?? {}),
-    input.dedupKey,
-    input.createdAt ?? nowIso(),
-  );
+  const origin = hasOriginColumns(db);
+  const result = db
+    .prepare(
+      origin
+        ? `INSERT OR IGNORE INTO events (kind, issue_id, actor, payload, dedup_key, created_at, origin_device, origin_seq)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        : `INSERT OR IGNORE INTO events (kind, issue_id, actor, payload, dedup_key, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.kind,
+      input.issueId ?? null,
+      input.actor ?? null,
+      JSON.stringify(input.payload ?? {}),
+      input.dedupKey,
+      input.createdAt ?? nowIso(),
+      ...(origin ? [input.originDevice ?? null, input.originSeq ?? null] : []),
+    );
+  return Number(result.changes) > 0 ? Number(result.lastInsertRowid) : null;
 }
+
+const withOrigin = new WeakSet<DatabaseSync>();
+/** Whether this database has reached migration 014's event columns. Remembered once true. */
+function hasOriginColumns(db: DatabaseSync): boolean {
+  if (withOrigin.has(db)) return true;
+  const hit = db.prepare("SELECT 1 FROM pragma_table_info('events') WHERE name = 'origin_seq'").get() !== undefined;
+  if (hit) withOrigin.add(db);
+  return hit;
+}
+
+/**
+ * The order of one issue's events every device that holds them computes alike: time, then the
+ * device that wrote each first, then that device's order (`origin_seq`, or the local `seq` for
+ * a local event), then this database's `seq`. Used by every reader that replays history.
+ */
+export const EVENT_ORDER = "created_at, COALESCE(origin_device, ''), COALESCE(origin_seq, seq), seq";
+/** {@link EVENT_ORDER}, newest first. */
+export const EVENT_ORDER_DESC = "created_at DESC, COALESCE(origin_device, '') DESC, COALESCE(origin_seq, seq) DESC, seq DESC";

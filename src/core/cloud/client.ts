@@ -59,6 +59,8 @@ export interface Capabilities {
   maxPullLimit: number;
   defaultPullLimit: number;
   maxSnapshotPageSize: number;
+  /** The stored orphan-end reasons the service's fold settles as subordinate; absent from an older Worker. */
+  orphanEndReasons?: string[];
 }
 
 export interface ConnectResult {

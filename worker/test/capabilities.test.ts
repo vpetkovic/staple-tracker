@@ -28,6 +28,9 @@ describe("GET /v1/capabilities", () => {
     // The test config declares PLAN = "free" in wrangler.toml. A push costs N+4 D1
     // statements against a free ceiling of 50 queries per invocation, so 25.
     expect(body.maxBatchSize).toBe(25);
+    // The stored orphan-end reasons this fold settles as subordinate: a client writes an
+    // orchestrator attempt's stored end only to a Worker that lists the lane's two.
+    expect(body.orphanEndReasons).toEqual(expect.arrayContaining(["issue_resolved", "superseded_by_newer", "claim_moved", "left_active"]));
   });
 
   it("is answerable without a credential", async () => {

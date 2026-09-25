@@ -328,12 +328,16 @@ The gaps, as measured before the lifecycle work, and how each is closed now:
   `blockParentUntilDone` edge were inserted without a `blockers_changed` event.
   Both now emit one, with the whole set, on the dependent: the new issue for
   `--blocked-by`, the parent for `blockParentUntilDone`. The child-to-parent edge
-  also travels now, as the parent's `relation` operation; before, it existed only
-  on the device that created the child.
+  also travels now, with the child's create, and every applier adds it to the
+  parent's set rather than replacing the set, so two children created offline on two
+  devices both keep theirs. Before, it existed nowhere but on the device that created
+  the child, and was lost even there when the parent's own create came back.
 - Deleting an issue removes its edges by cascade, with no event on the dependent.
-  Applying a pulled delete now writes a `blockers_changed` on each dependent that
-  lost a blocker, dated at the delete, on every device alike (`removedBlockerIds`
-  names what went). A restore that rewinds an issue away still writes none.
+  No mutation of this build deletes an issue; the one path that removes rows and
+  edges is a restore's rewind, and it now writes a `blockers_changed` on every issue
+  whose set it changed, dated at the instant the restore committed (the snapshot's
+  `restoredAt`), the same on every device. An edge the newest event names and the
+  device no longer holds, however it went, is reported as `edge_history_incomplete`.
 - `blocked-by` deleted and re-inserted the whole set, resetting `created_at` on
   every edge it kept. It now removes only the edges that leave and inserts only
   the ones that arrive.
@@ -954,7 +958,7 @@ which count both lanes.
 Each is a reading of this page the implementation had to choose. The page above
 states the choice in place.
 
-1. **Replay order.** The replay orders events by `created_at`, then `seq`, with the
+1. **Replay order.** The replay orders events by `created_at`, then the tie-break of item 10, with the
    birth first. The page said `seq`, which is only a device-local order once
    events are re-emitted at their origin's instant ([Intervals are half-open](#intervals-are-half-open)).
 2. **A hydrated device.** Re-emission makes `wall` the same on a device that read
@@ -977,9 +981,21 @@ states the choice in place.
    evidence instants, with the attempt's start and effective end counted as
    evidence, and paused time taken out of each gap.
 8. **The child-to-parent edge now replicates.** `blockParentUntilDone` edges were
-   device-local. They travel as the parent's `relation` operation.
+   device-local, and were lost even on the originating device when the parent's own
+   create came back. They travel with the child's create and are added to the
+   parent's set, never replacing it.
 9. **`resumeGapSeconds`** is defined here for the calibration work and not emitted
    by the lifecycle work.
+10. **Tie-break for one millisecond.** Events carry the device that wrote them first
+   and its `seq` (`origin_device`, `origin_seq`), and the replay orders by
+   `(created_at, origin_device, origin_seq or seq)`, the same on every device.
+11. **What a seed or a migration narrates is nothing.** Every issue and relation
+   operation carries `originEvents`, empty when the mutation narrated nothing, so
+   a receiver invents no history. An issue a device learned of by a seed reads
+   `replay_unavailable` there, with its `timing` on the two-timestamp fallback.
+12. **A conflict resolution writes history.** The withheld side's events wait on
+   the record and are written if it wins; the resolution adds a `status_changed`
+   at the decision on every device.
 
 ## Open questions
 

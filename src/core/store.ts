@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { insertEvent } from "./event-log.js";
+import { EVENT_ORDER, insertEvent } from "./event-log.js";
 import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
@@ -2412,25 +2412,12 @@ export class WorkspaceStore {
         },
         actor: input.createdBy ?? null,
       });
-      if (input.blockParentUntilDone && parent) {
-        /**
-         * The child-to-parent edge is the PARENT's blocker set changing, so it travels as the
-         * parent's `relation` operation, whole, as `setBlockedBy` sends one. Carried by nothing
-         * before, it existed only on the device that created the child.
-         */
-        this.journal.record({
-          entity: "relation",
-          entityId: parent.id,
-          verb: "update",
-          payload: {
-            blockedBy: (this.db
-              .prepare("SELECT blocker_id FROM relations WHERE blocked_id = ? AND type = 'blocks' ORDER BY created_at, blocker_id")
-              .all(parent.id) as Array<{ blocker_id: string }>).map((edge) => edge.blocker_id),
-            edges: this.edgeFactsOf(parent.id),
-          },
-          actor: input.createdBy ?? null,
-        });
-      }
+      /**
+       * The child-to-parent edge travels with the child's create (`blockParentUntilDone` and
+       * `parentId`), and every applier adds it to the parent's set rather than replacing the set
+       * (`insertIssue`, `cloud/apply.ts`): two children created offline on two devices both keep
+       * their edge. It used to travel nowhere, and existed only on the device that made it.
+       */
       // Transition site 1 of 5: a child appearing under a parent changes the
       // child landscape as surely as one moving does. The rule is about state,
       // not about which call produced it — so this is no longer gated on the
@@ -4737,7 +4724,7 @@ export class WorkspaceStore {
            FROM events
           WHERE issue_id IN (${placeholders})
             AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")})
-          ORDER BY issue_id, kind <> 'issue_created', created_at, seq`,
+          ORDER BY issue_id, kind <> 'issue_created', ${EVENT_ORDER}`,
       )
       .all(...([...ids, ...STATUS_MOVING_EVENT_KINDS] as never[])) as Array<{
       issue_id: string;
@@ -5048,7 +5035,7 @@ export class WorkspaceStore {
     const forever = Math.max(Date.parse(asOf), Date.now()) + 1;
     const events = (
       this.db
-        .prepare("SELECT payload, created_at FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY created_at, seq")
+        .prepare(`SELECT payload, created_at FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY ${EVENT_ORDER}`)
         .all(issueId) as Array<{ payload: string; created_at: string }>
     ).map((row) => {
       let payload: Record<string, unknown> = {};
@@ -5078,13 +5065,21 @@ export class WorkspaceStore {
     });
     const lastSet = events.length > 0 ? events[events.length - 1]!.ids : new Set<string>();
     const unexplainedIds = new Set<string>();
-    for (const edge of this.db
+    const held = this.db
       .prepare("SELECT blocker_id, created_at FROM relations WHERE blocked_id = ? AND type = 'blocks'")
-      .all(issueId) as Array<{ blocker_id: string; created_at: string }>) {
+      .all(issueId) as Array<{ blocker_id: string; created_at: string }>;
+    for (const edge of held) {
       if (lastSet.has(edge.blocker_id)) continue;
       unexplainedIds.add(edge.blocker_id);
       add(edge.blocker_id, Date.parse(edge.created_at), forever);
     }
+    /**
+     * And the other way round: the newest event names an edge this device no longer holds. Its
+     * removal was narrated nowhere (a cascade, a rewind by an older build), so the time it is
+     * taken to go on existing is the history's guess, and the record says so.
+     */
+    const heldIds = new Set(held.map((edge) => edge.blocker_id));
+    for (const id of lastSet) if (!heldIds.has(id)) unexplainedIds.add(id);
     const blocked: Array<[number, number]> = [];
     const unexplained: Array<[number, number]> = [];
     for (const [blockerId, spans] of presence) {
@@ -5109,7 +5104,7 @@ export class WorkspaceStore {
     const events = this.db
       .prepare(
         `SELECT kind, payload, created_at FROM events WHERE issue_id = ?
-            AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")}) ORDER BY created_at, seq`,
+            AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")}) ORDER BY ${EVENT_ORDER}`,
       )
       .all(issueId, ...(STATUS_MOVING_EVENT_KINDS as readonly string[])) as Array<{ kind: string; payload: string; created_at: string }>;
     const resolvedCategory = (status: string | null): boolean => {

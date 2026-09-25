@@ -408,6 +408,9 @@ describe("schema migration against a live database", () => {
       ]) {
         legacyDb.exec(`DROP TABLE IF EXISTS ${table}`);
       }
+      // Migration 014's columns on a table the legacy shape keeps.
+      legacyDb.exec("ALTER TABLE events DROP COLUMN origin_device");
+      legacyDb.exec("ALTER TABLE events DROP COLUMN origin_seq");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

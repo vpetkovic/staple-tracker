@@ -336,6 +336,8 @@ export function hydrate(
     if (!progressed || pending.length === 0) break;
   }
 
+  keepChildEdgesInLogOrder(db, entities);
+
   if (final) {
     for (const entity of pending) {
       quarantineSnapshotEntity(db, entity, missing.get(entity) ?? new ReferentMissing(`what ${entity.entity} ${entity.entityId} names`), { cutoffSeq, ledger, sameTimeline });
@@ -344,6 +346,37 @@ export function hydrate(
     settleRevisionsAfterRead(db, snapshotRead(cutoffSeq, ledger), rewind);
   }
   return { applied, parked: pending };
+}
+
+/**
+ * A child created to block its parent adds its edge to the parent's set (`applyIssue`); a
+ * blocker set written to the parent replaces the set. A device reading the tail applies them
+ * in log order. Hydrating, every issue lands before every set, so a set written BEFORE the
+ * child's create would drop the child's edge here while the tail kept it. Put back, where the
+ * child's create is the later write.
+ */
+function keepChildEdgesInLogOrder(db: DatabaseSync, entities: readonly SnapshotEntity[]): void {
+  const sets = new Map(entities.filter((entity) => entity.entity === "relation").map((entity) => [entity.entityId, entity]));
+  for (const entity of entities) {
+    if (entity.entity !== "issue" || entity.deletedAt !== null) continue;
+    const state = entity.state;
+    const parentId = typeof state.parentId === "string" ? state.parentId : typeof state.parent_id === "string" ? state.parent_id : null;
+    const blocks = state.blockParentUntilDone === true || state.blockParentUntilDone === 1 || state.block_parent_until_done === 1 || state.block_parent_until_done === true;
+    const set = parentId === null ? undefined : sets.get(parentId);
+    if (!blocks || parentId === null || set === undefined) continue;
+    const setSeq = set.fieldWrites?.blockedBy?.seq ?? set.createdSeq;
+    if (typeof entity.createdSeq !== "number" || typeof setSeq !== "number" || entity.createdSeq < setSeq) continue;
+    const child = db.prepare("SELECT created_by, created_at FROM issues WHERE id = ? AND parent_id = ?").get(entity.entityId, parentId) as
+      | { created_by: string | null; created_at: string }
+      | undefined;
+    if (!child) continue;
+    db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
+      entity.entityId,
+      parentId,
+      child.created_by,
+      child.created_at,
+    );
+  }
 }
 
 function isVocabularyOrder(entity: SnapshotEntity): boolean {

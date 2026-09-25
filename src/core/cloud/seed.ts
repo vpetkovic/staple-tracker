@@ -72,6 +72,12 @@ export interface RepositorySurvey {
   readonly fromTail?: boolean;
   /** How many operations of that tail an earlier, stopped read had already folded. */
   readonly resumedFrom?: number;
+  /**
+   * When the restore that made this epoch committed, as the service recorded it: the one
+   * instant every device that rewinds into the epoch dates what the rewind changed by. Null on
+   * an epoch no restore made, and absent from a service before this build.
+   */
+  readonly restoredAt?: string | null;
 }
 
 export interface SeedItem {
@@ -1566,7 +1572,16 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
      * nothing, and the fix is to shorten it and sync again.
      */
     const sendable: SeedIntent[] = [];
-    for (const intent of intents) {
+    for (const listed of intents) {
+      /**
+       * A seed, a heal and a republish send what exists, never what happened: every issue and
+       * blocker set says it narrates nothing, so no receiver writes a birth or a move for it
+       * dated by the seed (`cloud/reemit.ts`).
+       */
+      const intent: SeedIntent =
+        (listed.entity === "issue" || listed.entity === "relation") && listed.verb !== "delete" && !("originEvents" in listed.payload)
+          ? { ...listed, payload: { ...listed.payload, originEvents: [] } }
+          : listed;
       const bytes = Buffer.byteLength(JSON.stringify(intent.payload), "utf8");
       if (bytes <= args.maxOpBytes) {
         sendable.push(intent);

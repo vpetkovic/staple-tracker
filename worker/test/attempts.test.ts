@@ -193,6 +193,15 @@ describe("the fold: the orchestrator lane's orphan ends are subordinate too", ()
     });
   }
 
+  it("keeps an operation's narration out of the folded state: originEvents is not a field", async () => {
+    await pushOps([attemptOp(1, "create", { ...orchestratorCreated, originEvents: [{ kind: "status_changed", at: "2026-09-24T15:00:00.000Z" }] })], {
+      token,
+      protocol: 3,
+    });
+    expect((await snapshotAttempt()).state).not.toHaveProperty("originEvents");
+    expect((await snapshotAttempt()).fieldWrites).not.toHaveProperty("originEvents");
+  });
+
   it("stores the role verbatim on the create, and a create without one folds without it", async () => {
     await pushOps([attemptOp(1, "create", orchestratorCreated)], { token, protocol: 3 });
     expect((await snapshotAttempt()).state).toMatchObject({ role: "orchestrator", openedBy: "orchestrate" });

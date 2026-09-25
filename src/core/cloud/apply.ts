@@ -710,6 +710,19 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
 
   if (!exists) {
     insertIssue(db, input, pairs);
+    /**
+     * A child created to block its parent until done adds that one edge to the parent's set,
+     * merged into whatever the parent holds: an addition, never a replacement, so a child made
+     * offline elsewhere keeps its edge. Dated at the child's create, by its author.
+     */
+    const child = db.prepare("SELECT parent_id, block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(input.entityId) as
+      | { parent_id: string | null; block_parent_until_done: number; created_by: string | null; created_at: string }
+      | undefined;
+    if (child && child.parent_id !== null && child.block_parent_until_done === 1) {
+      db.prepare(
+        `INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`,
+      ).run(input.entityId, child.parent_id, child.created_by, child.created_at);
+    }
   } else if (pairs.length > 0) {
     const before = identifierOf(db, input.entityId);
     displaceIdentifierHolder(db, input, pairs);
@@ -755,7 +768,13 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
    * forgets the version of a set the epoch does not hold (`rewind.ts`).
    */
   const setLogged = db.prepare("SELECT 1 AS hit FROM sync_entity_versions WHERE entity = 'relation' AND entity_id = ?").get(input.entityId) !== undefined;
-  if (Array.isArray(payload.blockedBy) && !setLogged) {
+  /**
+   * And only when this apply made the issue: a create arriving over one this device already
+   * holds — its own coming back, above all — would replace the set with the one the issue was
+   * born with, and so dropped the edge a child created to block it had added since. That was
+   * how a `blockParentUntilDone` edge was lost even on the device that made it.
+   */
+  if (Array.isArray(payload.blockedBy) && !setLogged && !exists) {
     writeBlockers(db, input.entityId, payload.blockedBy as unknown[], input);
   }
   return true;

@@ -44,6 +44,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { NARRATION_KEY } from "./cloud/narration.js";
 import { stapleHome } from "../config/home.js";
 import { connectionPath } from "./cloud/connection.js";
 import { readDeviceId } from "./cloud/device.js";
@@ -267,9 +268,13 @@ interface SyncStateRow {
  * transported"; `docs/timing-semantics.md`, "Multi-device").
  */
 export interface OriginEvent {
+  /** The issue the event is on: not always the operation's own entity (a parent's blocker set rides on the child's create). */
+  readonly issueId: string;
   readonly kind: string;
   readonly at: string;
   readonly actor: string | null;
+  /** The event's `seq` on the device that wrote it: the tie-break every device orders by (`EVENT_ORDER`). */
+  readonly seq: number;
   readonly payload: Record<string, unknown>;
 }
 
@@ -378,8 +383,11 @@ export interface FieldWriteRecord {
  * newest write refreshes its attribution rather than being ignored.
  */
 export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): void {
-  // A derived column is nobody's write, on every path that records one (`docs/sync.md`, "Derived columns").
-  const fields = record.entity === "issue" ? record.fields.filter((field) => !DERIVED_ISSUE_KEYS.has(field)) : record.fields;
+  // A derived column is nobody's write, on every path that records one (`docs/sync.md`, "Derived columns"),
+  // and an operation's narration is not a field at all (`cloud/narration.ts`).
+  const fields = (record.entity === "issue" ? record.fields.filter((field) => !DERIVED_ISSUE_KEYS.has(field)) : record.fields).filter(
+    (field) => field !== NARRATION_KEY,
+  );
   if (fields.length === 0) return;
   const insert = db.prepare(
     `INSERT INTO sync_field_writes
@@ -443,6 +451,7 @@ export function recordInheritedFieldWrites(
   priorVersion: number,
 ): void {
   if (entity === "issue") writes = writes.filter((write) => !DERIVED_ISSUE_KEYS.has(write.field));
+  writes = writes.filter((write) => write.field !== NARRATION_KEY);
   if (writes.length === 0) return;
   const insert = db.prepare(
     `INSERT INTO sync_field_writes
@@ -792,13 +801,22 @@ export class Journal {
      * wrote one and on the issue's otherwise (a create carries its blockers inside). Not a
      * column: the applier re-emits them (`cloud/reemit.ts`) and writes nothing from them.
      */
+    /**
+     * EVERY `issue` and `relation` operation carries the key, an empty list when the mutation
+     * narrated nothing — a vocabulary migration, a settlement, a seed, a heal, a republish — so
+     * a receiver invents no event for a write the origin deliberately wrote none for. An event
+     * on an issue whose own operation this scope did not write (a parent's blocker set, which a
+     * child's create carries) rides on the first such operation, naming its issue.
+     */
+    const carriers = [...scope.intents.values()].filter((intent) => intent.entity === "issue" || intent.entity === "relation");
+    for (const carrier of carriers) carrier.payload.originEvents = [];
     for (const [issueId, events] of scope.originEvents) {
       const issueIntent = scope.intents.get(`issue\u0000${issueId}`);
       const relationIntent = scope.intents.get(`relation\u0000${issueId}`);
-      const onIssue = events.filter((event) => event.kind !== "blockers_changed" || relationIntent === undefined);
-      const onRelation = events.filter((event) => event.kind === "blockers_changed" && relationIntent !== undefined);
-      if (issueIntent && onIssue.length > 0) issueIntent.payload.originEvents = onIssue;
-      if (relationIntent && onRelation.length > 0) relationIntent.payload.originEvents = onRelation;
+      for (const event of events) {
+        const target = (event.kind === "blockers_changed" ? (relationIntent ?? issueIntent) : (issueIntent ?? relationIntent)) ?? carriers[0];
+        if (target) (target.payload.originEvents as OriginEvent[]).push(event);
+      }
     }
 
     const createdAt = nowIso();

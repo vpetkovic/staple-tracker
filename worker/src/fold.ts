@@ -88,6 +88,7 @@
  */
 
 import { settleAttemptEnd } from "../../src/core/cloud/attempt-ends.js";
+import { withoutNarration } from "../../src/core/cloud/narration.js";
 import { type FoldedRevisionEntry, settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
 import { entityKey } from "./cursor.js";
 import type { Env } from "./env.js";
@@ -365,7 +366,8 @@ export async function foldLog(
        * tail fold and the test service call (`src/core/cloud/attempt-ends.ts`).
        */
       const spelled = columnSpellingWins(payload as Record<string, unknown>);
-      const carried = row.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled;
+      // What the operation narrates is not the entity's state (`src/core/cloud/narration.ts`).
+      const carried = withoutNarration(row.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled);
       for (const key of Object.keys(carried)) {
         const other = otherSpelling(key);
         if (other !== key) {

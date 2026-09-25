@@ -27,6 +27,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Journal } from "../journal.js";
+import { EVENT_ORDER } from "../event-row.js";
 import { attemptPayload, insertAttempt, readAttempt, type AttemptRecord } from "./attempt-records.js";
 
 interface EventRow {
@@ -107,7 +108,7 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
         `SELECT seq, kind, actor, payload, dedup_key, created_at FROM events
           WHERE issue_id = ? AND kind IN ('checkout', 'claim_stolen', 'release', 'claim_released_stale', 'status_changed')
             AND (? IS NULL OR created_at < ?)
-          ORDER BY seq`,
+          ORDER BY ${EVENT_ORDER}`,
       )
       .all(issueId, boundary, boundary) as unknown as EventRow[];
     const built: AttemptRecord[] = [];
