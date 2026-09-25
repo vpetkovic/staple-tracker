@@ -172,6 +172,11 @@ export interface Expectation {
       samples: number;
       eligible?: number;
       medianRatio?: number;
+      minRatio?: number;
+      maxRatio?: number;
+      rangeConfidence?: number;
+      /** The class's members that are not samples of the set, by state and reason. */
+      excluded?: { count: number; counts: Record<string, number>; reasons: Record<string, number> };
       members?: string[];
     }>;
     /** Every sample, in listing order: its set, the estimate source and its ratio. */
@@ -715,6 +720,10 @@ function calibrationAgrees(
       at(`cohorts[${index}].samples`, want.samples, got?.samples ?? null);
       at(`cohorts[${index}].eligible`, want.eligible, got?.coverage.eligible ?? null);
       at(`cohorts[${index}].ratio.median`, want.medianRatio, got?.ratio.median ?? null, 0.001);
+      at(`cohorts[${index}].ratio.min`, want.minRatio, got?.ratio.min ?? null, 0.001);
+      at(`cohorts[${index}].ratio.max`, want.maxRatio, got?.ratio.max ?? null, 0.001);
+      at(`cohorts[${index}].rangeConfidence`, want.rangeConfidence, got?.rangeConfidence ?? null, 1e-9);
+      at(`cohorts[${index}].excluded`, want.excluded, got?.excluded ?? null);
       if (want.members !== undefined) at(`cohorts[${index}].members`, want.members, got === undefined ? null : refs(got.members.refs));
     });
   }

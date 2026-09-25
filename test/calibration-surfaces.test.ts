@@ -207,6 +207,6 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(lines[1]).toBe("8 eligible (done, own estimate) of 8 issues · minimum 5 samples per cohort");
     expect(lines[2]).toBe("exact         6 samples (75.0% of 8) in 3 cohorts · not samples: approximate 1, reconstructed 1");
     expect(lines[5]).toBe("exact         kind=task priority=high workType=unknown area=ui model=opus · 3 own → without_model (full 3, without_model 5)");
-    expect(lines[6]).toMatch(/^ {14}kind=task priority=high workType=unknown area=ui: n 5 \(83\.3% of 6\) · ratio median 0\.333, pooled 0\.350 · work median 40m/);
+    expect(lines[6]).toMatch(/^ {14}kind=task priority=high workType=unknown area=ui: n 5 \(83\.3% of 6\) · ratio median 0\.333, range 0\.167–0\.500, pooled 0\.350 · work median 40m/);
   });
 });

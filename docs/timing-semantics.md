@@ -1009,13 +1009,17 @@ beside it. `timing-floor`, `approximate` and `missing` records are never
 samples. They stay in every denominator and are counted, by state and reason,
 under `excluded`.
 
-**The estimate a sample divides by** is its first worker attempt's
-`estimateAtStart` when that reading is the issue's own estimate above 0, and
-otherwise the current own estimate ([Q4](#open-questions), clarification 27).
+**The estimate a sample divides by** is the `estimateAtStart` of the first
+worker attempt on the issue itself, among those behind its `workSeconds`,
+whose reading is the issue's own estimate above 0 (a reconstructed attempt
+read none, so a later captured attempt's reading is used), and otherwise the
+current own estimate ([Q4](#open-questions), clarification 27).
 `estimate.source` says which, and `estimate.missing.atStart` says why there
-was no reading: `no_worker_attempt` (a parent that is a data point has
-none of its own), `not_recorded` (a reconstructed attempt, or a reading with
-no estimate) or `not_own` (the plan came from descendants). A sample's
+was no reading: `parent` (a parent data point: its work is its children's, Q5
+keeps its own attempts out of it, and a child's reading is of the child's
+estimate), `no_worker_attempt`, `not_recorded` (every attempt read no
+estimate, as a reconstructed one does) or `not_own` (the plan came from
+descendants). A sample's
 `ratio` is `workSeconds / estimate.seconds`, so it can differ from the issue's
 `estimateRatio`, which divides by the current estimate.
 
@@ -1027,7 +1031,7 @@ no estimate) or `not_own` (the plan came from descendants). A sample's
 | `priority` | the issue's priority | never empty |
 | `workType` | labels `type:<x>` | `unknown` |
 | `area` | labels `area:<x>` | `unknown` |
-| `model` | `harness.model` of the worker attempts behind `workSeconds` (a leaf's own; a parent's descendants', as [Q5](#open-questions) counts them) | `unknown` |
+| `model` | `harness.model` of the worker attempts behind `workSeconds`, collected by the rule that sums it: a leaf's own; for a parent, those of the children its rollup counts, so never a cancelled child's and never a non-leaf's own ([Q5](#open-questions)) | `unknown` |
 
 The tracker has no column for work type or repository area, so both read a
 label convention: the prefix is matched without case, the value is lowercased
@@ -1060,8 +1064,11 @@ only on the samples.
 **Per cohort.** `samples`; `coverage: {samples, eligible, fraction,
 denominator: "ratio_population"}`, where `eligible` is every population member
 in the class whatever its quality; `ratio.median` (the lower median, index
-`floor((n − 1) / 2)`, the quantile method of this page) and `ratio.pooled`
-(`Σ workSeconds / Σ estimate`); `workSeconds.median` and `.total`;
+`floor((n − 1) / 2)`, the quantile method of this page), `ratio.pooled`
+(`Σ workSeconds / Σ estimate`) and the sample range `ratio.min`/`ratio.max`;
+`workSeconds.median`, `.total`, `.min` and `.max`; `rangeConfidence`, `1 − 2 ×
+0.5ⁿ`, the probability that the range covers the class's median whatever the
+distribution (0.9375 at n = 5, the guarantee the minimum rests on);
 `estimateSources`; `members` (up to 20 refs, oldest resolution first, with the
 total); and `excluded`, the members of the class that are not samples of this
 set, by state and reason. Each set also reports its own samples, coverage over
@@ -1071,8 +1078,8 @@ the same samples.
 
 **Snapshot identity.** Every report carries `snapshot`: `{id, algorithm,
 repositoryId, members, samples}`. `id` is a SHA-256 over the algorithm version
-(`calibration/1`), the repository id, the resolved selection (kinds,
-priorities, the parent's id, the resolved `since`, the sets read), the minimum,
+(`calibration/1`), the repository id, the selection (kinds, priorities, the
+parent's id, `since` as given, the sets read), the minimum,
 and every population member in id order. A sample contributes its set, its
 resolution instant, its state and reasons, its dimensions, `workSeconds`, the
 estimate it divided by, its source and the current estimate. Any other member
@@ -1082,7 +1089,9 @@ with `asOf`. So the same data gives the same id on every device, whatever order
 the rows are read in and however much later, and a page or the sample listing
 of it shares the id. It reads no event sequence and no operation sequence:
 both are device-local. A suggestion or forecast built from a report can name
-the exact data it came from by quoting `snapshot.id`.
+the exact data it came from by quoting `snapshot.id`. A relative `since` (`30d`) is hashed as
+written, not as the instant it resolves to at the read, so reading it again
+later over the same members gives the same id.
 
 ## What the live tracker says, in one place
 
@@ -1542,8 +1551,9 @@ states the choice in place.
 27. **Calibration divides by the estimate at start (Q4).** Q4 kept the current
    estimate until estimate history existed. Every estimate write now records
    `estimate_changed`, and every attempt stores `estimateAtStart`, so calibration
-   switched: a sample divides by its first worker attempt's reading when that is
-   the issue's own estimate, and otherwise by the current one, and says which.
+   switched: a sample divides by the first reading of its own estimate among the
+   attempts on the issue behind its work, and otherwise by the current one, and
+   says which. A parent data point divides by its current estimate.
    The per-issue `estimateRatio` still divides by the current estimate.
 28. **Work type and area are label conventions.** The tracker has no column for
    either, and a new column would need a migration and a way to fill it for

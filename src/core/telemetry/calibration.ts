@@ -19,9 +19,11 @@
  *
  * ## The estimate a sample divides by
  *
- * Q4's switch: the issue's first worker attempt's `estimateAtStart`, when that reading is its
- * own estimate above 0, so a re-estimate made after the work started cannot flatter the
- * ratio; otherwise the current own estimate, with the reason in `estimate.missing.atStart`.
+ * Q4's switch: the first `estimateAtStart` that reads the issue's own estimate above 0, among the
+ * worker attempts on the issue behind its work (a reconstructed attempt reads none), so a
+ * re-estimate made after the work started cannot flatter the ratio; otherwise the current own
+ * estimate, with the reason in `estimate.missing.atStart`. A parent data point always reads
+ * `parent`: its work is its children's (Q5).
  *
  * ## Dimensions and the fallback
  *
@@ -35,7 +37,7 @@
  * ## Snapshot identity
  *
  * Every report carries `snapshot.id`, a SHA-256 over the algorithm version, the repository id,
- * the resolved selection and every member of the population in id order, so the same data
+ * the selection (`since` as given, never resolved against the clock) and every member of the population in id order, so the same data
  * gives the same id on every device and in any order, and a changed sample changes it. It
  * reads replicated data only: no `asOf`, no event sequence (device-local), no wall figure.
  */
@@ -111,12 +113,12 @@ export function modelDimension(models: ReadonlyArray<string | null>): string {
 }
 
 /** Why a sample divides by the current estimate and not the one its work started from. */
-export type EstimateAtStartMissing = "no_worker_attempt" | "not_recorded" | "not_own";
+export type EstimateAtStartMissing = "parent" | "no_worker_attempt" | "not_recorded" | "not_own";
 
 /** The estimate a sample divides by. */
 export interface SampleEstimate {
   readonly seconds: number;
-  /** `at_start`: the first worker attempt's `estimateAtStart`; `current`: the issue's own estimate now. */
+  /** `at_start`: the first own `estimateAtStart` behind the work; `current`: the issue's own estimate now. */
   readonly source: "at_start" | "current";
   readonly atStartSeconds: number | null;
   readonly currentSeconds: number;
@@ -197,9 +199,17 @@ export interface CalibrationCohort {
   readonly samples: number;
   /** Samples over the population members in the class, whatever their quality. */
   readonly coverage: CalibrationCoverage;
-  /** Central tendency. Median is the lower median (`floor((n − 1) / 2)`); pooled is `Σ work / Σ estimate`. */
-  readonly ratio: { readonly median: number; readonly pooled: number };
-  readonly workSeconds: { readonly median: number; readonly total: number };
+  /**
+   * Median is the lower median (`floor((n − 1) / 2)`); pooled is `Σ work / Σ estimate`; `min` and
+   * `max` are the sample range, which covers the median with probability `rangeConfidence`.
+   */
+  readonly ratio: { readonly median: number; readonly pooled: number; readonly min: number; readonly max: number };
+  readonly workSeconds: { readonly median: number; readonly total: number; readonly min: number; readonly max: number };
+  /**
+   * `1 − 2 · 0.5ⁿ`: the probability that `[min, max]` covers the class's true median, for any
+   * distribution (0.9375 at the minimum of 5). 0 with no sample.
+   */
+  readonly rangeConfidence: number;
   readonly estimatedSeconds: { readonly total: number };
   /** How many samples divided by each estimate source. */
   readonly estimateSources: { readonly at_start: number; readonly current: number };
@@ -284,8 +294,14 @@ export function classAt(key: CohortKey, level: number): CohortKey {
 
 const inClass = (dimensions: CohortKey, klass: CohortKey): boolean => DIMENSIONS.every((dimension) => klass[dimension] === ANY || klass[dimension] === dimensions[dimension]);
 
+/** `1 − 2 · 0.5ⁿ`: how often the range of n samples covers the median, whatever the distribution. */
+export function rangeConfidence(n: number): number {
+  return n === 0 ? 0 : 1 - 2 * 0.5 ** n;
+}
+
 /** The lower median: index `floor((n − 1) / 2)` of the ascending list, the page's quantile method. */
 export function lowerMedian(values: readonly number[]): number {
+  // Callers guard the empty list.
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.floor((sorted.length - 1) / 2)]!;
 }
@@ -352,6 +368,10 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
   const workTotal = records.reduce((sum, sample) => sum + sample.workSeconds, 0);
   const estimateTotal = records.reduce((sum, sample) => sum + sample.estimate.seconds, 0);
   const n = records.length;
+  // A listed cohort has a sample of its own key; a key resolved from elsewhere (an empty set) reads 0.
+  const spread = (values: number[], of: (values: number[]) => number): number => (values.length === 0 ? 0 : of(values));
+  const ratios = records.map((sample) => sample.ratio);
+  const works = records.map((sample) => sample.workSeconds);
   const enough = n >= MIN_COHORT_SAMPLES;
   return {
     set,
@@ -364,8 +384,9 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
     fallback: chosen === 0 && enough ? "none" : enough ? "below_minimum" : "below_minimum_everywhere",
     samples: n,
     coverage: coverageOf(n, eligible.length),
-    ratio: { median: n === 0 ? 0 : lowerMedian(records.map((sample) => sample.ratio)), pooled: estimateTotal === 0 ? 0 : workTotal / estimateTotal },
-    workSeconds: { median: n === 0 ? 0 : lowerMedian(records.map((sample) => sample.workSeconds)), total: workTotal },
+    ratio: { median: spread(ratios, lowerMedian), pooled: estimateTotal === 0 ? 0 : workTotal / estimateTotal, min: spread(ratios, (v) => Math.min(...v)), max: spread(ratios, (v) => Math.max(...v)) },
+    workSeconds: { median: spread(works, lowerMedian), total: workTotal, min: spread(works, (v) => Math.min(...v)), max: spread(works, (v) => Math.max(...v)) },
+    rangeConfidence: rangeConfidence(n),
     estimatedSeconds: { total: estimateTotal },
     estimateSources: { at_start: records.filter((sample) => sample.estimate.source === "at_start").length, current: records.filter((sample) => sample.estimate.source === "current").length },
     members: { total: n, refs: records.slice(0, MEMBER_REFS).map((sample) => sample.identifier), truncated: n > MEMBER_REFS },
@@ -375,7 +396,7 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
 }
 
 /**
- * The snapshot id: SHA-256 over the algorithm, the repository, the resolved selection, the
+ * The snapshot id: SHA-256 over the algorithm, the repository, the selection (`since` as given), the
  * minimum and every member in id order. A sample contributes its figure, the estimate it divides
  * by (and the current one) and its dimensions; any other member contributes what keeps it out (its state and reasons)
  * and its dimensions, and not its figure, which for an unsettled record can move with `asOf`.
@@ -415,6 +436,8 @@ export function calibrationReport(input: {
   readonly filter: CalibrationFilter;
   readonly repositoryId: string | null;
   readonly parentId: string | null;
+  /** `since` as the caller gave it: what the snapshot id hashes (a resolved relative one moves with the clock). */
+  readonly sinceGiven: string | null;
   readonly population: CalibrationReport["population"];
   readonly members: readonly CalibrationMember[];
   readonly list: "cohorts" | "samples";
@@ -447,7 +470,7 @@ export function calibrationReport(input: {
   const snapshot = {
     id: snapshotId({
       repositoryId: input.repositoryId,
-      selection: { kind: filter.kind, priority: filter.priority, parentId: input.parentId, since: filter.since, include: filter.include },
+      selection: { kind: filter.kind, priority: filter.priority, parentId: input.parentId, since: input.sinceGiven, include: filter.include },
       members,
     }),
     algorithm: CALIBRATION_ALGORITHM,

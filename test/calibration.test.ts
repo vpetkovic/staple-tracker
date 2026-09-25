@@ -228,20 +228,77 @@ describe("the estimate a sample divides by", () => {
     expect(cohorts(readAt(clock + 1))[0]!.estimateSources).toEqual({ at_start: 1, current: 0 });
   });
 
-  it("a parent that is a data point takes its model from its children and its estimate from now, having no attempt of its own", () => {
+  it("a parent data point reads its model and evidence from the attempts behind its work: no cancelled child, no non-leaf's own attempt", () => {
     at(next(1));
     const parent = store.createIssue({ title: "parent", estimatedSeconds: min(90) }).id;
-    // An unestimated child leaves the parent's own estimate the only one in its subtree.
-    worked("child one", { parent, estimate: null, model: "m1" });
+    const middle = store.createIssue({ title: "middle", parent }).id;
+    // A non-leaf's own attempt (Q5: never in workSeconds): the middle parent checked out by m3.
+    at(next(5));
+    store.checkoutIssue(middle, "mid", undefined, { attempt: { harness: "claude_code", model: "m3" } });
+    at(clock);
+    store.releaseIssue(middle, "mid");
+    // Unestimated children leave the parent's own estimate the only one in its subtree.
+    worked("counted", { parent: middle, estimate: null, model: "m1" });
+    // Worked by m2 and then cancelled: the rollup skips it, so must calibration.
+    const from = next(20);
+    at(from);
+    const dropped = store.createIssue({ title: "dropped", parent }).id;
+    store.checkoutIssue(dropped, "w2", undefined, { attempt: { harness: "claude_code", model: "m2" } });
+    at(from + 10);
+    store.addComment(dropped, "progress", "w2", "agent");
+    at(from + 20);
+    store.updateIssue(dropped, { status: "cancelled" }, "w2");
     at(next(1));
+    store.updateIssue(middle, { status: "done" }, "w");
     store.updateIssue(parent, { status: "done" }, "w");
     const report = readAt(clock + 1, { list: "samples" });
     expect(report.population.parents).toBe(1);
     const sample = samples(report).find((s) => s.identifier === ident(parent))!;
+    expect(sample.workSeconds).toBe(min(20));
     expect(sample.dimensions.model).toBe("m1");
+    expect(sample.evidence).toMatchObject({ workerAttempts: 1, provenance: ["recorded"], harnessSupplied: 1 });
+    expect(sample.estimate).toEqual({ seconds: min(90), source: "current", atStartSeconds: null, currentSeconds: min(90), missing: { atStart: "parent" } });
+  });
+
+  it("a parent data point divides by its current estimate even when its own brief attempt read another", () => {
+    at(next(1));
+    const parent = store.createIssue({ title: "parent", estimatedSeconds: min(90) }).id;
+    // Briefly checked out at 90m (an own attempt Q5 keeps out of workSeconds), re-estimated to 30m.
+    store.checkoutIssue(parent, "lead");
+    at(next(1));
+    store.releaseIssue(parent, "lead");
+    store.setEstimate(parent, min(30), "lead");
+    worked("child", { parent, estimate: null });
+    at(next(1));
+    store.updateIssue(parent, { status: "done" }, "w");
+    const sample = samples(readAt(clock + 1, { list: "samples" })).find((s) => s.identifier === ident(parent))!;
+    expect(sample.estimate).toEqual({ seconds: min(30), source: "current", atStartSeconds: null, currentSeconds: min(30), missing: { atStart: "parent" } });
     expect(sample.evidence.workerAttempts).toBe(1);
-    expect(sample.estimate.source).toBe("current");
-    expect(sample.estimate.missing).toEqual({ atStart: "no_worker_attempt" });
+  });
+
+  it("takes the first attempt with an own reading: a reconstructed first attempt read none", () => {
+    const from = next(40);
+    at(from);
+    const id = store.createIssue({ title: "resumed", estimatedSeconds: min(120) }).id;
+    // An older build's checkout and release, rebuilt by reconstruct: an attempt with no reading.
+    tx(store.db, () => writeEventRow(store.db, { kind: "checkout", issueId: id, actor: "old", payload: {}, createdAt: iso(from), dedupKey: `legacy-co-${id}` }));
+    at(from + 10);
+    store.addComment(id, "progress", "old", "agent");
+    tx(store.db, () => writeEventRow(store.db, { kind: "release", issueId: id, actor: "old", payload: {}, createdAt: iso(from + 20), dedupKey: `legacy-rel-${id}` }));
+    at(from + 21);
+    expect(store.reconstructAttemptHistory().reconstructed).toBe(1);
+    // Captured from here: the attempt reads 2h, and a re-estimate after it started cannot flatter it.
+    store.checkoutIssue(id, "w");
+    store.setEstimate(id, min(60), "w");
+    at(from + 30);
+    store.addComment(id, "progress", "w", "agent");
+    at(from + 40);
+    store.updateIssue(id, { status: "done" }, "w");
+    const sample = samples(readAt(clock + 1, { include: ["reconstructed"], list: "samples" })).find((s) => s.identifier === ident(id));
+    expect(sample, JSON.stringify(store.timingFor([id], iso(clock + 1)).get(id)!.quality.work)).toBeDefined();
+    expect(sample!.set).toBe("reconstructed");
+    expect(sample!.evidence.provenance).toEqual(["reconstructed", "recorded"]);
+    expect(sample!.estimate).toEqual({ seconds: min(120), source: "at_start", atStartSeconds: min(120), currentSeconds: min(60), missing: {} });
   });
 });
 
@@ -275,6 +332,8 @@ describe("sparse cohorts fall back to broader classes", () => {
     for (let i = 0; i < 2; i += 1) worked(`sonnet ${i}`, { priority: "high", labels: ["type:fix", "area:sync"], model: "sonnet", minutes: 60 });
     // One bug alone in its kind; four more tasks elsewhere make eleven samples.
     worked("lonely bug", { kind: "bug", priority: "low" });
+    // A sparse bug: in the population, never a sample, and outside every task class.
+    worked("sparse bug", { kind: "bug", priority: "low", minutes: 45, every: null });
     for (let i = 0; i < 5; i += 1) worked(`plain ${i}`, { priority: "medium" });
 
     const report = readAt(clock + 1);
@@ -296,6 +355,14 @@ describe("sparse cohorts fall back to broader classes", () => {
     expect(opus.workSeconds.median).toBe(min(40));
     expect(opus.ratio.median).toBeCloseTo(40 / 120, 6);
     expect(opus.ratio.pooled).toBeCloseTo(210 / 600, 6);
+    // The sample range: at n = 5 it covers the median with probability 1 - 2 * 0.5^5.
+    expect(opus.ratio.min).toBeCloseTo(20 / 120, 6);
+    expect(opus.ratio.max).toBeCloseTo(60 / 120, 6);
+    expect(opus.workSeconds).toEqual({ median: min(40), total: min(210), min: min(20), max: min(60) });
+    expect(opus.rangeConfidence).toBe(0.9375);
+    // Its exclusions are its class's: the sparse bug is outside task/high/fix/sync.
+    expect(opus.excluded).toEqual({ count: 0, counts: {}, reasons: {} });
+    expect(report.sets[0]!.excluded.count).toBe(1);
     expect(byModel("sonnet").class).toEqual(opus.class);
 
     const plain = cohorts(report).find((cohort) => cohort.key.priority === "medium")!;
@@ -309,7 +376,10 @@ describe("sparse cohorts fall back to broader classes", () => {
     expect(bug.levelName).toBe("all");
     expect(bug.class).toEqual({ kind: "*", priority: "*", workType: "*", area: "*", model: "*" });
     expect(bug.samples).toBe(11);
+    expect(bug.coverage).toEqual({ samples: 11, eligible: 12, fraction: 11 / 12, denominator: "ratio_population" });
+    expect(bug.excluded).toEqual({ count: 1, counts: { approximate: 1 }, reasons: { sparse: 1 } });
     expect(bug.warnings).toEqual([]);
+    expect(bug.rangeConfidence).toBeCloseTo(1 - 2 * 0.5 ** 11, 12);
   });
 
   it("says so when not even the whole set has enough", () => {
@@ -383,6 +453,43 @@ describe("snapshot identity", () => {
     // So does the estimate.
     store.setEstimate(id, min(30), "w");
     expect(readAt(clock + 3).snapshot.id).not.toBe(relabelled.snapshot.id);
+  });
+
+  it("does not move with the clock under a relative since", () => {
+    worked("a");
+    worked("b");
+    const first = readAt(clock + 1, { since: "400d" });
+    const later = readAt(clock + 90, { since: "400d" });
+    expect(later.filter.since).not.toBe(first.filter.since);
+    expect(later.population.ratio).toBe(2);
+    expect(later.snapshot.id).toBe(first.snapshot.id);
+    // An instant names another selection, even over the same members.
+    expect(readAt(clock + 1, { since: iso(0) }).snapshot.id).not.toBe(first.snapshot.id);
+  });
+
+  it("covers what keeps a non-sample out, which a cohort reading the whole set reports", () => {
+    worked("kept", { labels: ["area:ui"] });
+    worked("sparse", { labels: ["area:ui"], minutes: 45, every: null });
+    worked("elsewhere", { kind: "bug", minutes: 0.5 });
+    const report = readAt(clock + 1);
+    const ui = cohorts(report).find((cohort) => cohort.key.area === "ui")!;
+    // Two samples short of the minimum: it reads the whole set, and so its exclusions are the set's.
+    expect(ui.levelName).toBe("all");
+    expect(ui.excluded.counts).toEqual({ "timing-floor": 1, approximate: 1 });
+    const member = (id: string, state: "exact" | "approximate", reasons: string[]): CalibrationMember => ({
+      id,
+      identifier: id,
+      title: id,
+      completedAt: iso(1),
+      workSeconds: 600,
+      estimate: { seconds: 3600, source: "current", atStartSeconds: null, currentSeconds: 3600, missing: { atStart: "not_recorded" } },
+      dimensions: { kind: "task", priority: "high", workType: "unknown", area: "unknown", model: "unknown" },
+      evidence: { state, reasons, workerAttempts: 1, provenance: ["recorded"], harnessSupplied: 0 },
+    });
+    const selection = { kind: null, priority: null, parentId: null, since: null, include: ["exact" as const] };
+    const base = snapshotId({ repositoryId: "r", selection, members: [member("a", "exact", []), member("b", "approximate", ["sparse"])] });
+    // The non-sample now carries another reason: what keeps it out changed, and so does the id.
+    expect(snapshotId({ repositoryId: "r", selection, members: [member("a", "exact", []), member("b", "approximate", ["capture_gap"])] })).not.toBe(base);
   });
 
   it("does not depend on the order the members arrive in", () => {

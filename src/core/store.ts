@@ -101,7 +101,7 @@ import { WORK_ORDER, cohortKey, cohortReport, type CohortMember, type TimingQual
 import { parseSince } from "./telemetry/read-budget.js";
 import { qualifyAttempt, qualifyAttempts, type QualifiedAttempt } from "./telemetry/attempt-quality.js";
 import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
-import { attemptsOfIssue, laneOf, transitionsOf, type AttemptRecord } from "./telemetry/attempt-records.js";
+import { readAttempt, transitionsOf, type AttemptRecord } from "./telemetry/attempt-records.js";
 import {
   EVIDENCE_SETS,
   LABEL_PREFIX,
@@ -4852,7 +4852,16 @@ export class WorkspaceStore {
      * for a caller that wants only the plan, such as the attempt ledger's `estimateAtStart`
      * inside a mutation.
      */
-    opts: { telemetry?: boolean } = {},
+    opts: {
+      telemetry?: boolean;
+      /**
+       * Filled, when given, with the worker attempts behind each issue's `workSeconds`, by the
+       * rule that sums it: a leaf's own worker attempts; a parent's, those of the children its
+       * rollup counts (never a cancelled child, never a non-leaf's own attempts, Q5). A cancelled
+       * issue has none. Read by calibration, whose model and evidence must describe that sum.
+       */
+      contributing?: Map<string, string[]>;
+    } = {},
   ): Map<string, IssueTiming> {
     const out = new Map<string, IssueTiming>();
     if (issueIds.length === 0) return out;
@@ -5096,7 +5105,7 @@ export class WorkspaceStore {
       });
       if (telemetry) {
         const timing = timings.get(row.id)!;
-        Object.assign(timing, this.telemetryOf(row, own, children, timings, effortOf, asOf, timing, resolvedSpans.has(row.id)));
+        Object.assign(timing, this.telemetryOf(row, own, children, timings, effortOf, asOf, timing, resolvedSpans.has(row.id), opts.contributing));
       }
     }
 
@@ -5121,6 +5130,8 @@ export class WorkspaceStore {
     timing: IssueTiming,
     /** A status conflict was resolved on this issue: part of its history is the decision's reading (`settleResolvedSpans`). */
     conflictResolved = false,
+    /** See `timingFor`'s `contributing`: filled with the attempts behind `workSeconds`. */
+    contributing?: Map<string, string[]>,
   ): Partial<IssueTiming> {
     const missing: Record<string, string> = {};
     const category = this.categoryOf(row.status);
@@ -5140,7 +5151,9 @@ export class WorkspaceStore {
     let reconstructed = false;
     let coverage: TimingQuality["work"]["coverage"] = null;
     const missingInputs: string[] = [];
+    const behind: string[] = [];
     if (!parent) {
+      for (const attempt of effort.workers.attempts) behind.push(attempt.id);
       workSeconds = ownWorkSeconds;
       workMissing = ownReason;
       if (ownReason !== null) missing.workSeconds = ownReason;
@@ -5162,6 +5175,7 @@ export class WorkspaceStore {
         }
         known += 1;
         sum += childTiming.workSeconds;
+        behind.push(...(contributing?.get(child.id) ?? []));
         // A child's inputs came out of this same method, typed as EffortInput when they were made.
         for (const input of childTiming.quality.work.inputs) inputs.add(input as EffortInput);
         if (childTiming.quality.work.state === "reconstructed") reconstructed = true;
@@ -5183,6 +5197,7 @@ export class WorkspaceStore {
       missing.workSeconds = "not_applicable_cancelled";
       inputs = new Set();
     }
+    contributing?.set(row.id, cancelled ? [] : behind);
     // The precedence lives in one place (`telemetry/quality.ts`); a cancelled issue owes no work and has no state.
     const work = cancelled ? null : workQuality({ workSeconds, missingReason: workMissing, reconstructed, inputs: [...inputs] });
     const state: WorkQualityState | null = work?.state ?? null;
@@ -5631,24 +5646,32 @@ export class WorkspaceStore {
     const { inFilter, eligibleRows, ratioParentRows } = this.analyticsPopulation({ kinds, priorities, parentRow, since });
     const ratioRows = [...eligibleRows.filter((row) => (row.estimated_seconds ?? 0) > 0), ...ratioParentRows];
     const parentIds = new Set(ratioParentRows.map((row) => row.id));
-    const timings = this.timingFor(ratioRows.map((row) => row.id), asOf);
-    const workers = (issueId: string): AttemptRecord[] => attemptsOfIssue(this.db, issueId).filter((attempt) => laneOf(attempt) === "worker");
+    /** The worker attempts behind each member's `workSeconds`, by the rule that sums it. */
+    const behind = new Map<string, string[]>();
+    const timings = this.timingFor(ratioRows.map((row) => row.id), asOf, { contributing: behind });
     const members: CalibrationMember[] = ratioRows.map((row) => {
       const timing = timings.get(row.id)!;
-      const own = workers(row.id);
-      // The attempts behind `workSeconds`: a leaf's own; a parent's are its descendants' (Q5).
-      const contributing = parentIds.has(row.id)
-        ? this.subtreeRows(row.id)
-            .filter((node) => node.id !== row.id)
-            .flatMap((node) => workers(node.id))
-        : own;
+      const contributing = (behind.get(row.id) ?? [])
+        .map((id) => readAttempt(this.db, id))
+        .filter((attempt): attempt is AttemptRecord => attempt !== null)
+        .sort((x, y) => (x.startedAt === y.startedAt ? (x.id < y.id ? -1 : 1) : x.startedAt < y.startedAt ? -1 : 1));
       const current = row.estimated_seconds!;
-      const first = own[0];
+      /**
+       * The estimate the work started from: the first contributing attempt ON THIS ISSUE whose
+       * reading is its own estimate above 0 (an earlier reconstructed attempt read none). A parent
+       * data point has no contributing attempt of its own (Q5): its work is its children's, and
+       * their readings are of their own estimates, so it divides by its current estimate.
+       */
+      const readings = contributing.filter((attempt) => attempt.issueId === row.id);
+      const reading = readings.find((attempt) => attempt.estimateAtStart.source === "own" && (attempt.estimateAtStart.estimatedSeconds ?? 0) > 0);
       let atStartMissing: EstimateAtStartMissing | null = null;
-      if (first === undefined) atStartMissing = "no_worker_attempt";
-      else if (first.estimateAtStart.source !== "own" && first.estimateAtStart.source !== "none") atStartMissing = "not_own";
-      else if (first.estimateAtStart.source === "none" || (first.estimateAtStart.estimatedSeconds ?? 0) <= 0) atStartMissing = "not_recorded";
-      const atStartSeconds = atStartMissing === null ? first!.estimateAtStart.estimatedSeconds! : null;
+      if (reading === undefined) {
+        if (parentIds.has(row.id)) atStartMissing = "parent";
+        else if (readings.length === 0) atStartMissing = "no_worker_attempt";
+        else if (readings.some((attempt) => attempt.estimateAtStart.source === "descendants")) atStartMissing = "not_own";
+        else atStartMissing = "not_recorded";
+      }
+      const atStartSeconds = reading === undefined ? null : reading.estimateAtStart.estimatedSeconds!;
       const labels = JSON.parse(row.labels) as string[];
       return {
         id: row.id,
@@ -5682,6 +5705,8 @@ export class WorkspaceStore {
     return calibrationReport({
       asOf,
       filter: { kind: kinds, priority: priorities, parent: parentRow?.identifier ?? null, since, include },
+      // As given: a relative `since` resolves against the read's clock, and the members already pin the population.
+      sinceGiven: query.since ?? null,
       repositoryId: readStoredRepositoryId(this.db),
       parentId: parentRow?.id ?? null,
       population: { issues: inFilter.length, ratio: members.length, parents: ratioParentRows.length },

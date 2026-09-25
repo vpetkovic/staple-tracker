@@ -364,8 +364,9 @@ against its estimate, from trusted samples only:
   (label `area:<x>`) and `model` (pass `--harness` and `--model` on checkout
   so your work lands under the right model). A key with fewer than 5 samples
   falls back to a broader class, and says which and why (`level`, `path`).
-- Each cohort gives `samples`, `coverage` with its denominator, the median and
-  pooled ratio and the median `workSeconds`. `snapshot.id` names the data it
+- Each cohort gives `samples`, `coverage` with its denominator, the median,
+  pooled ratio and range of the ratio, the median `workSeconds`, and
+  `rangeConfidence` (how often the range covers the median). `snapshot.id` names the data it
   came from; quote it when you cite a figure.
 
 The rules are in [cli.md](cli.md#calibration-staple-calibrate).

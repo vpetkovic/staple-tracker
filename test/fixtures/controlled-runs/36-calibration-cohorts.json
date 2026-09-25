@@ -7,7 +7,8 @@
     "a full key with fewer than five samples falls back, model first: three opus and two sonnet samples both read their without_model class of five; a lone bug falls back to the whole set",
     "reconstructed history is a separate set only when asked for, with its own cohorts: two samples, below the minimum everywhere",
     "the snapshot id is the same on every device and for the cohort and sample listings, because every input is replicated",
-    "samples and members list oldest resolution first, and two resolved in one millisecond by issue id: the same order on every device, and the order the cursor follows"
+    "samples and members list oldest resolution first, and two resolved in one millisecond by issue id: the same order on every device, and the order the cursor follows",
+    "each cohort's exclusions are its class's: the without_model class leaves out only its sparse and timing-floor members; a cohort reading the whole set leaves out every non-sample"
   ],
   "start": "2026-09-01T09:00:00.000Z",
   "devices": {
@@ -425,7 +426,20 @@
             "level": "all",
             "samples": 6,
             "eligible": 10,
-            "medianRatio": 0.3333
+            "medianRatio": 0.3333,
+            "excluded": {
+              "count": 4,
+              "counts": {
+                "timing-floor": 1,
+                "approximate": 1,
+                "reconstructed": 2
+              },
+              "reasons": {
+                "reconstructed": 2,
+                "sparse": 1,
+                "timing_floor": 1
+              }
+            }
           },
           {
             "set": "exact",
@@ -447,7 +461,21 @@
               "e3",
               "e5",
               "e4"
-            ]
+            ],
+            "excluded": {
+              "count": 2,
+              "counts": {
+                "timing-floor": 1,
+                "approximate": 1
+              },
+              "reasons": {
+                "sparse": 1,
+                "timing_floor": 1
+              }
+            },
+            "minRatio": 0.1667,
+            "maxRatio": 0.5,
+            "rangeConfidence": 0.9375
           },
           {
             "set": "exact",
@@ -462,7 +490,21 @@
             "level": "without_model",
             "samples": 5,
             "eligible": 7,
-            "medianRatio": 0.3333
+            "medianRatio": 0.3333,
+            "excluded": {
+              "count": 2,
+              "counts": {
+                "timing-floor": 1,
+                "approximate": 1
+              },
+              "reasons": {
+                "sparse": 1,
+                "timing_floor": 1
+              }
+            },
+            "minRatio": 0.1667,
+            "maxRatio": 0.5,
+            "rangeConfidence": 0.9375
           }
         ],
         "samples": [
@@ -537,7 +579,20 @@
             "level": "all",
             "samples": 6,
             "eligible": 10,
-            "medianRatio": 0.3333
+            "medianRatio": 0.3333,
+            "excluded": {
+              "count": 4,
+              "counts": {
+                "timing-floor": 1,
+                "approximate": 1,
+                "reconstructed": 2
+              },
+              "reasons": {
+                "reconstructed": 2,
+                "sparse": 1,
+                "timing_floor": 1
+              }
+            }
           },
           {
             "set": "exact",
@@ -559,7 +614,21 @@
               "e3",
               "e5",
               "e4"
-            ]
+            ],
+            "excluded": {
+              "count": 2,
+              "counts": {
+                "timing-floor": 1,
+                "approximate": 1
+              },
+              "reasons": {
+                "sparse": 1,
+                "timing_floor": 1
+              }
+            },
+            "minRatio": 0.1667,
+            "maxRatio": 0.5,
+            "rangeConfidence": 0.9375
           },
           {
             "set": "exact",
@@ -574,7 +643,21 @@
             "level": "without_model",
             "samples": 5,
             "eligible": 7,
-            "medianRatio": 0.3333
+            "medianRatio": 0.3333,
+            "excluded": {
+              "count": 2,
+              "counts": {
+                "timing-floor": 1,
+                "approximate": 1
+              },
+              "reasons": {
+                "sparse": 1,
+                "timing_floor": 1
+              }
+            },
+            "minRatio": 0.1667,
+            "maxRatio": 0.5,
+            "rangeConfidence": 0.9375
           },
           {
             "set": "reconstructed",
@@ -593,7 +676,19 @@
             "members": [
               "r1",
               "r2"
-            ]
+            ],
+            "excluded": {
+              "count": 8,
+              "counts": {
+                "exact": 6,
+                "timing-floor": 1,
+                "approximate": 1
+              },
+              "reasons": {
+                "sparse": 1,
+                "timing_floor": 1
+              }
+            }
           }
         ],
         "samples": [

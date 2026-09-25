@@ -17,8 +17,8 @@ const HELP = `staple calibrate — how long work of a class takes against its es
               samples    done issues with their own estimate (no estimated
                          descendant) whose work is exact; nothing approximate,
                          under a minute or missing is ever a sample
-              estimate   the first worker attempt's estimate at start, else the
-                         current one (each sample says which)
+              estimate   the first attempt's reading of the issue's own estimate
+                         at start, else the current one (each sample says which)
               cohort     kind, priority, work type (label type:<x>), area
                          (label area:<x>) and model (the attempts' harness
                          model); a key with fewer than 5 samples falls back:
@@ -73,7 +73,7 @@ function say(report: CalibrationReport): void {
       const fallback = cohort.level === 0 ? "" : ` → ${cohort.levelName} (${cohort.path.map((step) => `${step.name} ${step.samples}`).join(", ")})`;
       console.log(`${cohort.set.padEnd(13)} ${keyText(cohort.key)} · ${cohort.keySamples} own${fallback}`);
       console.log(
-        `              ${classText(cohort.class)}: n ${cohort.samples} (${percent(cohort.coverage.fraction)} of ${cohort.coverage.eligible}) · ratio median ${cohort.ratio.median.toFixed(3)}, pooled ${cohort.ratio.pooled.toFixed(3)} · work median ${formatDuration(cohort.workSeconds.median)}${cohort.warnings.length > 0 ? ` · ${cohort.warnings.join(", ")}` : ""}`,
+        `              ${classText(cohort.class)}: n ${cohort.samples} (${percent(cohort.coverage.fraction)} of ${cohort.coverage.eligible}) · ratio median ${cohort.ratio.median.toFixed(3)}, range ${cohort.ratio.min.toFixed(3)}–${cohort.ratio.max.toFixed(3)}, pooled ${cohort.ratio.pooled.toFixed(3)} · work median ${formatDuration(cohort.workSeconds.median)}${cohort.warnings.length > 0 ? ` · ${cohort.warnings.join(", ")}` : ""}`,
       );
     }
   }
