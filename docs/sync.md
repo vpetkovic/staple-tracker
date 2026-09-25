@@ -582,10 +582,12 @@ them in that order.
 seed, a heal, a republish after a restore, a vocabulary migration and a settlement narrate
 nothing, and no receiver invents a birth or a move for them. Only an operation with no
 `originEvents` key, from a build before this one, is narrated from itself, and then only as
-the birth of a create never edited since (`createdAt` equal to `updatedAt`). A status a
-conflict withheld keeps its events on the record, written if the record is resolved to that
-side, and the resolution itself writes a `status_changed` at the decision that every device
-holds. A rewind narrates each blocker set it changed at the instant the restore committed,
+the birth of a create never edited since (`createdAt` equal to `updatedAt`). A status
+conflict's resolution writes a canonical `status_changed` at the decision, carried on the
+`conflict` operation and written by every device that applies it (whatever its own record
+says), with `conflictStartedAt`; the replay reads the span it names as the decision
+([timing semantics](timing-semantics.md#clarifications-from-building-it)). An operation is
+dated at its mutation's instant, the same instant as its rows and events. A rewind narrates each blocker set it changed at the instant the restore committed,
 which the service reports on the snapshot (`restoredAt`). No fold keeps `originEvents` as
 state, and no field write records it.
 

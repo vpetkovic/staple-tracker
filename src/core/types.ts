@@ -788,7 +788,7 @@ export interface TimingQuality {
   wall: {
     /** Null when `wall` is. */
     state: "approximate" | "exact" | null;
-    /** `unattributed`, `edge_history_incomplete`, `clock_skew`: device-local, never read by the work state. */
+    /** `unattributed`, `edge_history_incomplete`, `conflict_resolved`, `clock_skew`: device-local, never read by the work state. */
     inputs: string[];
   };
 }

@@ -815,12 +815,13 @@ the ratio's eligibility is the same on every device:
 |---|---|
 | `missing` | **Exactly when `workSeconds` is `null`** on an issue that is not cancelled: reason `never_started`, `no_worker_attempt` or `input_missing`. |
 | `reconstructed` | Any contributing attempt has `provenance: reconstructed`. |
-| `approximate` | Any of: a parent's `coverage.partial`; any contributing attempt `contested`; `capture_gap` (the row's `startedAt` is more than one second before the first worker attempt, so `workSeconds` is a lower bound); `orphan_provisional` (a derived orphan end not yet stored); `end_unbounded` (an orphan end the row cannot bound); `clock_skew` between an attempt's instants and the row bound; or `sparse`, a gap longer than **30 minutes** between consecutive replicated evidence instants inside a worker attempt's working time. |
+| `approximate` | Any of: a parent's `coverage.partial`; any contributing attempt `contested` (the claim is contested, or two devices ended it differently and the attempt's `end` record is open); `capture_gap` (the row's `startedAt` is more than one second before the first worker attempt, so `workSeconds` is a lower bound); `orphan_provisional` (a derived orphan end not yet stored); `end_unbounded` (an orphan end the row cannot bound); `clock_skew` between an attempt's instants and the row bound; or `sparse`, a gap longer than **30 minutes** between consecutive replicated evidence instants inside a worker attempt's working time. |
 | `timing-floor` | `workSeconds < 60`. The work fits inside the write cadence the measure resolves, so the number says "quick" and little more. The record stays visible. |
 | `exact` | None of the above. |
 
 **The state of `wall`** and every elapsed figure is `approximate` when
-`timing.approximate` is set, `unattributed > 0`, `edge_history_incomplete`, or
+`timing.approximate` is set, `unattributed > 0`, `edge_history_incomplete`,
+`conflict_resolved` (part of the span is a resolved status conflict's reading), or
 `clock_skew` on a partition interval, and is `null` with `replay_unavailable`
 where the replay cannot run. These inputs never reach the `workSeconds` state:
 they are device-local, and a ratio that was eligible on one device and not on
@@ -993,9 +994,17 @@ states the choice in place.
    operation carries `originEvents`, empty when the mutation narrated nothing, so
    a receiver invents no history. An issue a device learned of by a seed reads
    `replay_unavailable` there, with its `timing` on the two-timestamp fallback.
-12. **A conflict resolution writes history.** The withheld side's events wait on
-   the record and are written if it wins; the resolution adds a `status_changed`
-   at the decision on every device.
+12. **A resolved status conflict is one approximate span.** Between the first of two
+   conflicting status writes and the decision, each device holds only its own side's
+   events. Every resolution writes a canonical `status_changed` to the chosen value at
+   the decision, on every device and whether or not the row moves there, naming where
+   the disagreement began (`conflictStartedAt`). The replay drops what either side wrote
+   in that span and reads the decision from its start, so every device reads the same
+   partition, and `wall` carries the new input `conflict_resolved` (approximate). Two
+   devices that resolved the same record offline each hold both decisions. Operations
+   are dated at their mutation's instant, so `conflictStartedAt` is the instant of the
+   earlier write itself. The attempt's own two ends are a separate record; until it is
+   resolved, both devices mark `workSeconds` `contested`.
 
 ## Open questions
 
