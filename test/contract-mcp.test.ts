@@ -1662,6 +1662,9 @@ describe("tool response shapes (31/31)", () => {
       // Pinned in test/calibration-surfaces.test.ts, value for value against
       // `staple calibrate --json` and `/api/calibration`.
       "calibration_cohorts",
+      // Pinned in test/forecast-surfaces.test.ts, value for value against
+      // `staple forecast --json` and `/api/forecast`.
+      "forecast",
       "create_task",
       "update_task",
       "set_estimate",
