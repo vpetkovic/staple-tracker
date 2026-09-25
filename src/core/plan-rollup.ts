@@ -36,7 +36,8 @@
  *
  * The PLANNED path is the longest chain weighted by each unit's estimate, parallel branches taking
  * the max: how long the whole plan takes at the very least, done work included. The REMAINING path
- * is the same chain with every `done` unit weighing 0: what is left of it. Neither is a forecast;
+ * is the longest chain over the same graph with every `done` unit weighing 0: what is left of it,
+ * recomputed, so it can follow a different chain. Neither is a forecast;
  * a unit in progress weighs its full estimate. Only in-subtree edges shape them; blockers from
  * outside are listed beside them, never folded in.
  *
@@ -156,7 +157,7 @@ export interface PlanSummary {
   coverage: PlanCoverage;
   /** The PLANNED path: every unit at its estimate, done ones included. */
   criticalPath: CriticalPath;
-  /** The REMAINING path: the same chain with done units weighing 0 and left off `chain`. */
+  /** The REMAINING path: the longest chain over the same graph, done units weighing 0 and left off `chain`. */
   remainingPath: PlanPath;
 }
 
@@ -185,6 +186,39 @@ export const PATH_CHAIN_LIMIT = 100;
 export const COMPARE_MAX_REFS = 20;
 
 /**
+ * The unit graph of a subtree, cycles already broken: what every path walk runs over. Built once
+ * per read by `planGraphOf` and walked by `walkPlanGraph` with whatever weights the caller needs.
+ */
+export interface PlanGraph {
+  units: readonly PlanNode[];
+  unitById: ReadonlyMap<string, PlanNode>;
+  /** Every graph node (units and container start/finish nodes) in the deterministic walk order. */
+  order: readonly string[];
+  /** Incoming edges per graph node, the edges that closed a cycle already dropped. */
+  predecessors: ReadonlyMap<string, readonly string[]>;
+  /** Unit ids on a broken cycle. */
+  cycleUnits: ReadonlySet<string>;
+  /** In-subtree dependency edges in the graph. */
+  edgeCount: number;
+  coverage: PlanCoverage;
+}
+
+/**
+ * What a walk weighs. `weightOf` is a unit's weight in seconds, null for unknown (the path turns
+ * partial, never 0). `include` says whether a unit counts at all: an excluded unit weighs 0 and
+ * is left off the chain, but still carries the dependencies through it.
+ */
+export interface PathWeights {
+  weightOf: (unit: PlanNode) => number | null;
+  include: (unit: PlanNode) => boolean;
+}
+
+/** The planned path's weights: every unit at its estimate. */
+export const PLANNED_WEIGHTS: PathWeights = { weightOf: (unit) => unit.estimatedSeconds, include: () => true };
+/** The remaining path's weights: done units weigh 0 and are left off the chain. */
+export const REMAINING_WEIGHTS: PathWeights = { weightOf: (unit) => unit.estimatedSeconds, include: (unit) => !unit.done };
+
+/**
  * Units, coverage and both paths of the subtree under `rootId`. `nodes` holds the whole subtree
  * (the root included), `edges` the `blocks` edges with both ends in it.
  */
@@ -195,6 +229,26 @@ export function planStructureOf(
   outside: readonly CrossSubtreeBlocker[],
   labor: PlanLabor,
 ): Omit<PlanSummary, "labor"> {
+  const graph = planGraphOf(rootId, nodes, edges);
+  const sortedOutside = [...outside].sort(
+    (a, b) => Number(a.resolved) - Number(b.resolved) || compareRefs(a.blocked, b.blocked) || compareRefs(a.blocker, b.blocker),
+  );
+  return {
+    coverage: graph.coverage,
+    criticalPath: {
+      ...walkPlanGraph(graph, PLANNED_WEIGHTS, labor),
+      edgeCount: graph.edgeCount,
+      cycle: [...graph.cycleUnits].map((id) => graph.unitById.get(id)!.identifier).sort(compareRefs),
+      crossSubtreeBlockers: sortedOutside.slice(0, PLAN_LIST_LIMIT),
+      crossSubtreeBlockerCount: outside.length,
+      unresolvedCrossSubtreeBlockerCount: outside.filter((blocker) => !blocker.resolved).length,
+    },
+    remainingPath: walkPlanGraph(graph, REMAINING_WEIGHTS, labor),
+  };
+}
+
+/** The unit graph of the subtree under `rootId` (see the module note), with its coverage. */
+export function planGraphOf(rootId: string, nodes: ReadonlyMap<string, PlanNode>, edges: readonly PlanEdge[]): PlanGraph {
   const childrenOf = new Map<string, PlanNode[]>();
   for (const node of nodes.values()) {
     if (node.id === rootId || node.parentId === null) continue;
@@ -355,93 +409,81 @@ export function planStructureOf(
     }
   }
   for (const preds of predecessors.values()) preds.sort(byRank);
+  return { units, unitById, order, predecessors, cycleUnits, edgeCount, coverage };
+}
 
-  const counted = (weightOf: (unit: PlanNode) => number | null, include: (unit: PlanNode) => boolean): PlanPath => {
-    // `best` is the heaviest chain ENDING at a node; length counts units only.
-    const best = new Map<string, { seconds: number; length: number; prev: string | null }>();
-    const resolve = (id: string): void => {
-      const work: Array<[string, boolean]> = [[id, false]];
-      while (work.length > 0) {
-        const [at, expanded] = work.pop()!;
-        if (best.has(at)) continue;
-        const preds = predecessors.get(at) ?? [];
-        if (!expanded) {
-          work.push([at, true]);
-          for (const pred of preds) if (!best.has(pred)) work.push([pred, false]);
-          continue;
+/**
+ * The longest chain through `graph` under `weights`, parallel branches taking the max. `labor`
+ * only sets `exceedsLabor`. Deterministic: ties go to the longer chain, then walk order.
+ */
+export function walkPlanGraph(graph: PlanGraph, weights: PathWeights, labor?: PlanLabor): PlanPath {
+  const { units, unitById, order, predecessors, cycleUnits } = graph;
+  const { weightOf, include } = weights;
+  // `best` is the heaviest chain ENDING at a node; length counts units only.
+  const best = new Map<string, { seconds: number; length: number; prev: string | null }>();
+  const resolve = (id: string): void => {
+    const work: Array<[string, boolean]> = [[id, false]];
+    while (work.length > 0) {
+      const [at, expanded] = work.pop()!;
+      if (best.has(at)) continue;
+      const preds = predecessors.get(at) ?? [];
+      if (!expanded) {
+        work.push([at, true]);
+        for (const pred of preds) if (!best.has(pred)) work.push([pred, false]);
+        continue;
+      }
+      let chosen = { seconds: 0, length: 0, prev: null as string | null };
+      for (const pred of preds) {
+        const reading = best.get(pred)!;
+        if (reading.seconds > chosen.seconds || (reading.seconds === chosen.seconds && reading.length > chosen.length)) {
+          chosen = { seconds: reading.seconds, length: reading.length, prev: pred };
         }
-        let chosen = { seconds: 0, length: 0, prev: null as string | null };
-        for (const pred of preds) {
-          const reading = best.get(pred)!;
-          if (reading.seconds > chosen.seconds || (reading.seconds === chosen.seconds && reading.length > chosen.length)) {
-            chosen = { seconds: reading.seconds, length: reading.length, prev: pred };
-          }
-        }
-        const unit = unitById.get(at);
-        const counts = unit !== undefined && include(unit);
-        best.set(at, {
-          seconds: chosen.seconds + (counts ? (weightOf(unit) ?? 0) : 0),
-          length: chosen.length + (counts ? 1 : 0),
-          prev: chosen.prev,
-        });
       }
-    };
-    let end: string | null = null;
-    for (const id of order) {
-      resolve(id);
-      const reading = best.get(id)!;
-      const current = end === null ? null : best.get(end)!;
-      if (current === null || reading.seconds > current.seconds || (reading.seconds === current.seconds && reading.length > current.length)) {
-        end = id;
-      }
+      const unit = unitById.get(at);
+      const counts = unit !== undefined && include(unit);
+      best.set(at, {
+        seconds: chosen.seconds + (counts ? (weightOf(unit) ?? 0) : 0),
+        length: chosen.length + (counts ? 1 : 0),
+        prev: chosen.prev,
+      });
     }
-    const considered = units.filter(include);
-    const plannedHere = considered.filter((unit) => weightOf(unit) !== null);
-    const unplannedHere = considered.length - plannedHere.length;
-    // Nothing counted at all is a real 0 (all done); counted units with no plan is unknown.
-    const seconds = considered.length === 0 ? 0 : plannedHere.length === 0 ? null : best.get(end!)!.seconds;
-    const chainIds: string[] = [];
-    if (seconds !== null) {
-      for (let at: string | null = end; at !== null; at = best.get(at)!.prev) {
-        const unit = unitById.get(at);
-        if (unit !== undefined && include(unit)) chainIds.push(at);
-      }
-      chainIds.reverse();
-    }
-    const missing: string[] = [];
-    if (seconds === null) missing.push("no_plan");
-    else if (unplannedHere > 0) missing.push("unplanned_units");
-    if (cycleUnits.size > 0) missing.push("dependency_cycle");
-    return {
-      seconds,
-      partial: unplannedHere > 0 || cycleUnits.size > 0,
-      missing,
-      chain: chainIds.slice(0, PATH_CHAIN_LIMIT).map((id) => {
-        const unit = unitById.get(id)!;
-        return { ref: unit.identifier, seconds: weightOf(unit), status: unit.status };
-      }),
-      chainLength: chainIds.length,
-      exceedsLabor: labor.source === "own" && labor.seconds !== null && seconds !== null && seconds > labor.seconds,
-    };
   };
-
-  const plannedPath = counted((unit) => unit.estimatedSeconds, () => true);
-  const remainingPath = counted((unit) => unit.estimatedSeconds, (unit) => !unit.done);
-
-  const sortedOutside = [...outside].sort(
-    (a, b) => Number(a.resolved) - Number(b.resolved) || compareRefs(a.blocked, b.blocked) || compareRefs(a.blocker, b.blocker),
-  );
+  let end: string | null = null;
+  for (const id of order) {
+    resolve(id);
+    const reading = best.get(id)!;
+    const current = end === null ? null : best.get(end)!;
+    if (current === null || reading.seconds > current.seconds || (reading.seconds === current.seconds && reading.length > current.length)) {
+      end = id;
+    }
+  }
+  const considered = units.filter(include);
+  const plannedHere = considered.filter((unit) => weightOf(unit) !== null);
+  const unplannedHere = considered.length - plannedHere.length;
+  // Nothing counted at all is a real 0 (all done); counted units with no plan is unknown.
+  const seconds = considered.length === 0 ? 0 : plannedHere.length === 0 ? null : best.get(end!)!.seconds;
+  const chainIds: string[] = [];
+  if (seconds !== null) {
+    for (let at: string | null = end; at !== null; at = best.get(at)!.prev) {
+      const unit = unitById.get(at);
+      if (unit !== undefined && include(unit)) chainIds.push(at);
+    }
+    chainIds.reverse();
+  }
+  const missing: string[] = [];
+  if (seconds === null) missing.push("no_plan");
+  else if (unplannedHere > 0) missing.push("unplanned_units");
+  if (cycleUnits.size > 0) missing.push("dependency_cycle");
   return {
-    coverage,
-    criticalPath: {
-      ...plannedPath,
-      edgeCount,
-      cycle: [...cycleUnits].map((id) => unitById.get(id)!.identifier).sort(compareRefs),
-      crossSubtreeBlockers: sortedOutside.slice(0, PLAN_LIST_LIMIT),
-      crossSubtreeBlockerCount: outside.length,
-      unresolvedCrossSubtreeBlockerCount: outside.filter((blocker) => !blocker.resolved).length,
-    },
-    remainingPath,
+    seconds,
+    partial: unplannedHere > 0 || cycleUnits.size > 0,
+    missing,
+    chain: chainIds.slice(0, PATH_CHAIN_LIMIT).map((id) => {
+      const unit = unitById.get(id)!;
+      return { ref: unit.identifier, seconds: weightOf(unit), status: unit.status };
+    }),
+    chainLength: chainIds.length,
+    exceedsLabor: labor !== undefined && labor.source === "own" && labor.seconds !== null && seconds !== null && seconds > labor.seconds,
   };
 }
 

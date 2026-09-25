@@ -796,7 +796,7 @@ const planSummaryShape = {
   remainingPath: z
     .object(pathShape)
     .describe(
-      "The REMAINING path: the same chain with done units weighing 0 (and left off chain). 0 when every unit is done; a unit in progress still weighs its full estimate",
+      "The REMAINING path: the longest chain over the same graph, with done units weighing 0 (and left off chain); it can follow a different chain from the planned path. 0 when every unit is done; a unit in progress still weighs its full estimate",
     ),
 };
 type _PlanSummaryShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof planSummaryShape>>, PlanSummary>>;
@@ -1161,7 +1161,7 @@ server.registerTool(
   "compare_plans",
   {
     description:
-      "Compare named issues (epics) as plans, with no tree dump. Per ref: labor (total labor, every planned unit once: an issue's own estimate over its descendants, never both; a cancelled issue's own estimate excluded, live work beneath it still counted), coverage (planned of units, unplanned refs; partial means a lower bound, never a silent 0), criticalPath (the PLANNED path: the longest blockedBy chain inside the subtree weighted by estimate, done units included, parallel branches taking the max, plus blockers from outside the subtree listed separately) and remainingPath (the same chain with done units weighing 0). exceedsLabor flags a path longer than an own estimate. overlaps names a ref that lies inside another ref, whose labor must not be added to it. Same payload as `staple compare <ref> <ref> --json`.",
+      "Compare named issues (epics) as plans, with no tree dump. Per ref: labor (total labor, every planned unit once: an issue's own estimate over its descendants, never both; a cancelled issue's own estimate excluded, live work beneath it still counted), coverage (planned of units, unplanned refs; partial means a lower bound, never a silent 0), criticalPath (the PLANNED path: the longest blockedBy chain inside the subtree weighted by estimate, done units included, parallel branches taking the max, plus blockers from outside the subtree listed separately) and remainingPath (the longest chain over the same graph, with done units weighing 0; it can follow a different chain). exceedsLabor flags a path longer than an own estimate. overlaps names a ref that lies inside another ref, whose labor must not be added to it. Same payload as `staple compare <ref> <ref> --json`.",
     inputSchema: {
       refs: z.array(z.string()).min(1).max(20).describe("1 to 20 issue identifiers or ids"),
       ws: wsSchema,

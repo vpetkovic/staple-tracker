@@ -4,7 +4,7 @@ import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
 import { applyToDatabase } from "../src/core/cloud/apply.js";
 import type { Issue } from "../src/core/types.js";
-import { planStructureOf, type PlanNode } from "../src/core/plan-rollup.js";
+import { PLANNED_WEIGHTS, REMAINING_WEIGHTS, planGraphOf, planStructureOf, walkPlanGraph, type PlanNode } from "../src/core/plan-rollup.js";
 
 /**
  * The certified plan (`core/plan-rollup.ts`, `docs/cli.md` "Comparing plans"): total labor,
@@ -359,6 +359,55 @@ describe("the planned path and the remaining path", () => {
     finish(child(epic, "A", 2));
     child(epic, "Open, unplanned");
     expect(compareOne(epic).remainingPath).toMatchObject({ seconds: null, partial: true, missing: ["no_plan"], chain: [] });
+  });
+});
+
+describe("the path walk takes the caller's weights", () => {
+  it("walks the same graph with custom weights, and the built-in weights reproduce both paths", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const a = child(epic, "A", 4);
+    const b = child(epic, "B", 4);
+    const c = child(epic, "C", 6);
+    block(b, a);
+    const rows = [epic, a, b, c].map((issue) => store.getIssue(issue.id));
+    const nodes = new Map<string, PlanNode>(
+      rows.map((row) => [
+        row.id,
+        { id: row.id, identifier: row.identifier, parentId: row.parentId, estimatedSeconds: row.estimatedSeconds, status: row.status, cancelled: false, done: false },
+      ]),
+    );
+    const graph = planGraphOf(epic.id, nodes, [{ blockerId: a.id, blockedId: b.id }]);
+    const summary = compareOne(epic);
+    const { edgeCount: _e, cycle: _c, crossSubtreeBlockers: _x, crossSubtreeBlockerCount: _n, unresolvedCrossSubtreeBlockerCount: _u, ...planned } =
+      summary.criticalPath;
+    expect(walkPlanGraph(graph, PLANNED_WEIGHTS, summary.labor)).toEqual(planned);
+    expect(walkPlanGraph(graph, REMAINING_WEIGHTS, summary.labor)).toEqual(summary.remainingPath);
+    // A caller's own weights: C at a quarter of its estimate; the A > B chain is 8h either way.
+    const custom = walkPlanGraph(graph, {
+      weightOf: (unit) => (unit.id === c.id ? 1.5 * H : unit.estimatedSeconds),
+      include: () => true,
+    });
+    expect(custom.seconds).toBe(8 * H);
+    expect(custom.chain.map((step) => step.ref)).toEqual([a.identifier, b.identifier]);
+    // Halving every weight halves the path over the same chain.
+    const halved = walkPlanGraph(graph, { weightOf: (unit) => (unit.estimatedSeconds ?? 0) / 2, include: () => true });
+    expect(halved).toMatchObject({ seconds: 4 * H, exceedsLabor: false });
+    expect(halved.chain.map((step) => step.ref)).toEqual([a.identifier, b.identifier]);
+  });
+
+  it("the remaining path is recomputed over the graph, so it can leave the planned chain", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const a = child(epic, "A", 5);
+    const b = child(epic, "B", 5);
+    const d = child(epic, "D", 3);
+    block(b, a);
+    store.checkoutIssue(a.id, "agent");
+    store.updateIssue(a.id, { status: "done" }, "agent");
+    store.checkoutIssue(b.id, "agent");
+    store.updateIssue(b.id, { status: "done" }, "agent");
+    const plan = compareOne(epic);
+    expect(plan.criticalPath.chain.map((step) => step.ref)).toEqual([a.identifier, b.identifier]);
+    expect(plan.remainingPath.chain.map((step) => step.ref)).toEqual([d.identifier]);
   });
 });
 

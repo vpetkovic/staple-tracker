@@ -20,7 +20,8 @@ const HELP = `staple compare — total labor, estimate coverage and critical pat
               planned path   the longest blockedBy chain inside the subtree,
                       weighted by estimate, parallel branches taking the max;
                       blockers from outside the subtree are listed, not followed
-              remaining path the same chain with done units weighing 0
+              remaining path the longest chain over the same graph, with
+                      done units weighing 0
 
   --json      {plans: [{ref, title, kind, status, labor, coverage, criticalPath,
               remainingPath}], overlaps}`;

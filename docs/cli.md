@@ -635,8 +635,10 @@ working days. The JSON is in seconds.
   `partial` with `unplanned_units` means some unit has no estimate. An
   unplanned unit on the chain shows `seconds: null`, unknown rather than 0.
   `chain` lists at most 100 steps, and `chainLength` gives the true length.
-- **`remainingPath`** has the same shape over the same chain, with every
-  `done` unit weighing 0 and left off `chain`: what is left of the plan. A
+- **`remainingPath`** has the same shape: the longest chain over the same
+  graph, with every `done` unit weighing 0 and left off `chain`. It is
+  recomputed, so it can follow a different chain from the planned path once
+  the planned chain's units are done. It measures what is left of the plan. A
   unit in progress still weighs its full estimate. It is 0 when every unit is
   done, and null with `no_plan` when open units remain and none of them is
   planned. A done unit with no estimate is no gap in what remains.

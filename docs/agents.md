@@ -314,7 +314,8 @@ For each named issue it returns:
 - `criticalPath`: the planned path. This is the longest `blockedBy` chain
   inside the subtree, weighted by estimate, with done work included. Blockers
   from outside the subtree are listed separately.
-- `remainingPath`: the same chain with done units weighing 0.
+- `remainingPath`: the longest chain over the same graph, with done units weighing 0.
+  It can follow a different chain from the planned path.
 
 `overlaps` names a ref that lies inside another ref. `exceedsLabor` flags a
 path longer than an own estimate. `partial: true` means a lower bound, never a
