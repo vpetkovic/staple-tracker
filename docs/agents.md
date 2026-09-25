@@ -270,11 +270,17 @@ Rules that hold on all four:
   and budget data does not replicate), `no_sample_yet`, `source_unavailable`,
   `stale` or `sliding_window`. A measured zero reads `0`.
 - **Burn** is, per limit of the attempt's account, the high-water usage at the
-  attempt's end minus the high-water at its start inside each window instance,
-  summed across a reset. `lowerBound: true` marks a window with no reading
-  before the attempt. `attribution` is `sole_known` when no other attempt this
-  machine started ran on the account meanwhile, and `shared` otherwise. It
-  never claims the usage was the attempt's alone.
+  attempt's end minus the usage at its start inside each window instance,
+  summed across a reset. A window counts only with a reading inside the
+  attempt. Otherwise its delta is `null` with `stale`. A window that began
+  inside the attempt starts from `0`, and a moved reset starts from the
+  instance it superseded. When no reading precedes the attempt in its window,
+  the first reading inside is the start, and `lowerBound: true` says the burn
+  is at least that much. The CLI prints it as `≥`. `attribution` is
+  `sole_known` only when every count this machine recorded says no other
+  attempt ran on the account meanwhile, and `shared` when one did. An unknown
+  count gives `null` with a reason. It never claims the usage was the
+  attempt's alone.
 - **Reads write nothing.** Not the journal, not a stored orphan end and not
   `hub.db`. The attempt tools take `ws`. The budget tools read this machine's
   hub and take none, like `record_budget_sample`.

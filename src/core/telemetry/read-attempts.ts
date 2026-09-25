@@ -14,6 +14,7 @@ import { viewsOfIssue, type AttemptView } from "./attempt-derive.js";
 import { attemptBurn, type AttemptBurn } from "./read-budget.js";
 import {
   afterPosition,
+  coverage,
   cutPage,
   decodeKeysetCursor,
   pageLimit,
@@ -100,7 +101,8 @@ export function listAttempts(db: DatabaseSync, issueId: string, request: PageReq
       if (to === null || gap.to > to) to = gap.to;
     }
   }
-  return { ...page, coverage: { from, to, itemCount: page.items.length, gaps } };
+  // An issue nobody has worked since capture began speaks for no span: `no_sample_yet`.
+  return { ...page, coverage: coverage(from, to, page.items.length, gaps, "no_sample_yet") };
 }
 
 /** One entry of an attempt's `chain`: enough to read every interruption boundary at once. */
@@ -159,12 +161,13 @@ export function attemptDetail(
   }
   const transitions: TelemetryPage<AttemptTransition> = {
     ...page,
-    coverage: {
-      from: position?.at ?? attempt.startedAt,
-      to: page.truncated ? page.items[page.items.length - 1]!.at : [endOfView(attempt), ...page.items.map((t) => t.at)].reduce((a, b) => (a > b ? a : b)),
-      itemCount: page.items.length,
+    coverage: coverage(
+      position?.at ?? attempt.startedAt,
+      page.truncated ? page.items[page.items.length - 1]!.at : [endOfView(attempt), ...page.items.map((t) => t.at)].reduce((a, b) => (a > b ? a : b)),
+      page.items.length,
       gaps,
-    },
+      "no_sample_yet",
+    ),
   };
 
   const byId = new Map(views.map((view) => [view.id, view]));

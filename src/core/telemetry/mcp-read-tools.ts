@@ -16,7 +16,9 @@ import { listBudgetSamples, readBudget } from "./read-budget.js";
 
 type Run = (fn: () => unknown) => { content: Array<{ type: "text"; text: string }>; isError?: true };
 
-const limit = z.number().int().optional().describe("Page size: default 50, at most 500 (a larger value is clamped).");
+// A number, not an integer schema: a fractional or negative limit is refused by the read
+// itself, with the same validation envelope the CLI prints, not by the protocol layer.
+const limit = z.number().optional().describe("Page size: a positive integer, default 50, at most 500 (a larger value is clamped).");
 const cursor = z
   .string()
   .optional()
@@ -28,6 +30,7 @@ const coverageShape = z
     to: z.string().nullable(),
     itemCount: z.number(),
     gaps: z.array(z.object({ from: z.string(), to: z.string(), reason: z.string() })),
+    missing: z.record(z.string(), z.string()).describe("Why from or to is null; empty when both have a value."),
   })
   .describe("The span this page speaks for, and the spans in it nobody was capturing (reason from the missingness table).");
 
@@ -63,7 +66,7 @@ export function registerTelemetryReadTools(
     "get_attempt",
     {
       description:
-        "One execution attempt by its id (the `id` of an attempt from list_attempts, get_task or a write's `attempt`): the attempt as it reads, its transitions (bounded, oldest first; limit and cursor page them), its `chain` (the attempts linked by resumesAttemptId, oldest first: every interruption boundary of one piece of work) and its `burn`: per limit of its provider account, the high-water usage delta over the attempt from THIS machine's budget samples, with `attribution` sole_known or shared. Burn is null with a reason in `missing` when it cannot be known (no_provider_binding, not_on_this_device, no_sample_yet, source_unavailable, sliding_window), never 0. Same payload as `staple attempt <id> --json`.",
+        "One execution attempt by its id (the `id` of an attempt from list_attempts, get_task or a write's `attempt`): the attempt as it reads, its transitions (bounded, oldest first; limit and cursor page them), its `chain` (the attempts linked by resumesAttemptId, oldest first: every interruption boundary of one piece of work) and its `burn`: per limit of its provider account, the high-water usage delta over the attempt from THIS machine's budget samples, with `attribution` sole_known or shared (null with a reason when a concurrency count is unknown); `lowerBound` true means the burn is at least that much. A window with no reading inside the attempt counts as unknown (stale). Burn is null with a reason in `missing` when it cannot be known (no_provider_binding, not_on_this_device, no_sample_yet, source_unavailable, sliding_window), never 0. Same payload as `staple attempt <id> --json`.",
       inputSchema: { attempt_id: z.string().describe("The attempt's id (a UUID)."), limit, cursor, ws: wsSchema },
       outputSchema: {
         attempt: z.record(z.string(), z.unknown()),
@@ -81,7 +84,7 @@ export function registerTelemetryReadTools(
     "get_budget",
     {
       description:
-        "Provider budget on THIS machine (docs/execution-telemetry.md): per account (those with readings and those a source binding names), each limit's current window with its latest sample, `status`, the high-water `remainingPercent` (the conservative figure) and `missing`. An unknown value is null with a reason (no_sample_yet, source_unavailable, window_elapsed, reset_not_reported, sliding_window), never 0. `stale` is true when the latest reading was recorded over 10 minutes ago. Budget data is machine-local and never synchronizes. Same payload as `staple budget --json`.",
+        "Provider budget on THIS machine (docs/execution-telemetry.md): per account (those with readings and those a source binding names), each limit's current window with its latest sample, `status`, the high-water `remainingPercent` (the conservative figure) and `missing`. An unknown value is null with a reason (no_sample_yet, source_unavailable, window_elapsed, reset_not_reported, sliding_window), never 0. `stale` is true when the latest reading's value is over 10 minutes old (judged on observedAt, as history's gaps are). Budget data is machine-local and never synchronizes. Same payload as `staple budget --json`.",
       inputSchema: { account: z.string().optional().describe("Only this account label.") },
       outputSchema: {
         asOf: z.string(),

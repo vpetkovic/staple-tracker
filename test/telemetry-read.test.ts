@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceStore } from "../src/core/store.js";
 import { attemptLinkerFor } from "../src/core/telemetry/attempt-link.js";
 import { attemptsOfIssue } from "../src/core/telemetry/attempt-records.js";
@@ -21,7 +21,7 @@ import { ingestBudget } from "../src/core/telemetry/ingest.js";
 import { attemptDetail, inWorkerLane } from "../src/core/telemetry/read-attempts.js";
 import { listBudgetSamples, readBudget } from "../src/core/telemetry/read-budget.js";
 import { initWorkspace } from "../src/core/workspace.js";
-import { STATUSLINE_SESSION_ID, epoch, statusline } from "./fixtures/budget-support.js";
+import { STATUSLINE_SESSION_ID, epoch, sessionMetaLine, statusline, tokenCountLine, writeRollout } from "./fixtures/budget-support.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet } from "./fixtures/sync-machines.js";
 
@@ -40,6 +40,7 @@ beforeEach(() => {
   process.env.CLAUDE_CONFIG_DIR = claudeDir;
 });
 afterEach(() => {
+  vi.useRealTimers();
   for (const store of opened.splice(0)) {
     try {
       store.db.close();
@@ -152,6 +153,7 @@ describe("list_attempts is bounded", () => {
     expect(() => store.listAttempts(two.id, { cursor })).toThrow(/different arguments/);
     expect(() => store.listAttempts(one.id, { cursor: "not-a-cursor" })).toThrow(/not a cursor/);
     expect(() => store.listAttempts(one.id, { limit: 0 })).toThrow(/positive integer/);
+    expect(() => store.listAttempts(one.id, { limit: 1.5 })).toThrow(/positive integer/);
     expect(store.listAttempts(one.id, { limit: 10_000 }).items).toHaveLength(3);
   });
 });
@@ -174,7 +176,12 @@ describe("the attempts summary on show/get_task", () => {
     expect(resumed.current!.resumesAttemptId).toBe(resumed.last!.id);
   });
 
-  it("describes the worker lane through one predicate", () => {
+  /**
+   * A placeholder until attempts carry a `role`: today every attempt is a worker attempt, so
+   * no fixture built through the store can hold an orchestrator one. This pins the ONE
+   * predicate the summary filters on, so the lane that adds `role` changes nothing here.
+   */
+  it("filters the summary on one lane predicate, ready for a role no attempt carries yet", () => {
     expect(inWorkerLane({ id: "a" })).toBe(true);
     expect(inWorkerLane({ id: "a", role: "worker" })).toBe(true);
     expect(inWorkerLane({ id: "a", role: null })).toBe(true);
@@ -231,7 +238,7 @@ describe("coverage of an attempt list", () => {
 
     const before = store.listAttempts(old.id);
     expect(before.items).toEqual([]);
-    expect(before.coverage).toEqual({ from: hourAgo, to: began, itemCount: 0, gaps: [{ from: hourAgo, to: began, reason: "before_capture_began" }] });
+    expect(before.coverage).toEqual({ from: hourAgo, to: began, itemCount: 0, gaps: [{ from: hourAgo, to: began, reason: "before_capture_began" }], missing: {} });
     // Nothing before capture on an issue started after it.
     expect(store.listAttempts(later.id).coverage.gaps).toEqual([]);
 
@@ -289,17 +296,19 @@ describe("an attempt's burn", () => {
     render(at(start, 45), 55, firstReset, "session-a"); // an older cache: a regression
     render(at(start, 60), 60, firstReset);
     render(at(start, 90), 54, firstReset, "session-a"); // the last reading in the window, and below its high-water
-    render(at(start, 180), 5, secondReset); // the next window: no reading before the attempt
+    render(at(start, 180), 5, secondReset); // the next window: it began inside the attempt, at 0
     render(at(start, 240), 8, secondReset);
     render(at(start, 900), 30, secondReset); // after `now`: not counted
 
     const detail = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(start, 300) });
     expect(detail.burn).toMatchObject({ provider: "anthropic", accountRef: "personal-max", attribution: "sole_known", missing: {} });
     const [limit] = detail.burn.limits;
-    expect(limit).toMatchObject({ limitKey: "five_hour", burnPercent: 13, coverage: { known: 2, total: 2 }, partial: false, regressionCount: 2 });
-    expect(limit!.windows.map((w) => [w.fromPercent, w.toPercent, w.deltaPercent, w.lowerBound])).toEqual([
-      [50, 60, 10, false],
-      [5, 8, 3, true],
+    // The first window reset inside the attempt, so the next one began at 0: 10 + 8, and no
+    // part of it is a lower bound.
+    expect(limit).toMatchObject({ limitKey: "five_hour", burnPercent: 18, lowerBound: false, coverage: { known: 2, total: 2 }, partial: false, regressionCount: 2 });
+    expect(limit!.windows.map((w) => [w.baseline, w.fromPercent, w.toPercent, w.deltaPercent, w.lowerBound])).toEqual([
+      ["window", 50, 60, 10, false],
+      ["reset", 0, 8, 8, false],
     ]);
     // The readings from the attempt's own session while it ran were linked to it at
     // ingestion (the attempt is still open, so the one after `now` too); the one before it
@@ -321,6 +330,69 @@ describe("an attempt's burn", () => {
     const detail = attemptDetail(one.db, attempt.id, { home, device: null, slug: "alpha", now: at(attempt.startedAt, 60) });
     expect(detail.burn.attribution).toBe("shared");
     expect(detail.burn.limits[0]!.burnPercent).toBe(2);
+  });
+
+  it("is a lower bound, said at every level, when nothing was read before the attempt in its window", () => {
+    captureOn();
+    const store = workspace();
+    const issue = store.createIssue({ title: "Unseen start" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: fromSession });
+    const attempt = attemptsOfIssue(store.db, issue.id)[0]!;
+    const reset = at(attempt.startedAt, 4 * 3600);
+    render(at(attempt.startedAt, 30), 40, reset);
+    render(at(attempt.startedAt, 90), 45, reset);
+    const [limit] = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(attempt.startedAt, 120) }).burn.limits;
+    expect(limit).toMatchObject({ burnPercent: 5, lowerBound: true, partial: false, missing: {} });
+    expect(limit!.windows[0]).toMatchObject({ baseline: "first_reading", fromPercent: 40, lowerBound: true });
+  });
+
+  it("takes a moved reset's baseline from the instance it superseded, instead of dropping that usage", () => {
+    captureOn();
+    const store = workspace();
+    const issue = store.createIssue({ title: "Reset moved" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: fromSession });
+    const attempt = attemptsOfIssue(store.db, issue.id)[0]!;
+    const start = attempt.startedAt;
+    render(at(start, -60), 50, at(start, 2 * 3600));
+    render(at(start, 60), 70, at(start, 2 * 3600));
+    // The provider moves the reset an hour: a new instance supersedes the old, and the
+    // readings go on from where they were.
+    render(at(start, 120), 72, at(start, 3 * 3600));
+    const [limit] = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(start, 300) }).burn.limits;
+    expect(limit).toMatchObject({ burnPercent: 22, lowerBound: false, coverage: { known: 1, total: 1 } });
+    expect(limit!.windows[0]).toMatchObject({ baseline: "superseded_window", fromPercent: 50, toPercent: 72 });
+  });
+
+  it("is unknown, not a measured 0, when nothing was read while the attempt ran", () => {
+    captureOn();
+    const store = workspace();
+    const issue = store.createIssue({ title: "Long and unobserved" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: fromSession });
+    const attempt = attemptsOfIssue(store.db, issue.id)[0]!;
+    render(at(attempt.startedAt, -60), 30, at(attempt.startedAt, 5 * 3600));
+    const burn = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(attempt.startedAt, 3 * 3600) }).burn;
+    expect(burn.limits[0]).toMatchObject({ burnPercent: null, lowerBound: false, coverage: { known: 0, total: 1 }, missing: { burnPercent: "stale" } });
+    expect(burn.limits[0]!.windows[0]).toMatchObject({ fromPercent: 30, toPercent: null, deltaPercent: null, missing: { deltaPercent: "stale" } });
+    expect(burn).toMatchObject({ attribution: null, missing: { attribution: "input_missing" } });
+    // get_budget agrees: the only reading is stale.
+    expect(readBudget(home, { now: at(attempt.startedAt, 3 * 3600) }).accounts[0]!.limits[0]!.stale).toBe(true);
+  });
+
+  it("never reads an unknown concurrency count as sole", () => {
+    captureOn();
+    const store = workspace();
+    // The machine's hub is unreadable when the attempt opens, so its counts are unknown.
+    rmSync(join(home, "hub.db"), { force: true });
+    rmSync(join(home, "hub.db-wal"), { force: true });
+    rmSync(join(home, "hub.db-shm"), { force: true });
+    const issue = store.createIssue({ title: "Uncounted" });
+    store.checkoutIssue(issue.id, "agent-a", undefined, { attempt: fromSession });
+    const attempt = attemptsOfIssue(store.db, issue.id)[0]!;
+    render(at(attempt.startedAt, -10), 10, at(attempt.startedAt, 3600));
+    render(at(attempt.startedAt, 10), 12, at(attempt.startedAt, 3600));
+    const burn = attemptDetail(store.db, attempt.id, { home, device: null, slug: "alpha", now: at(attempt.startedAt, 60) }).burn;
+    expect(burn.limits[0]!.burnPercent).toBe(2);
+    expect(burn).toMatchObject({ attribution: null, missing: { attribution: "source_unavailable" } });
   });
 
   it("reads a measured zero as 0, and no reading as null with a reason, never 0", () => {
@@ -411,7 +483,109 @@ describe("get_budget", () => {
   });
 });
 
+describe("get_budget, after a backfill and a moved reset", () => {
+  it("judges stale on when the value was true, as history's gaps do", () => {
+    const codexHome = join(home, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    setBudgetCapture(home, true);
+    bindBudgetSource(home, { source: "codex_rollout", account: "codex-plus", codexHome });
+    const now = new Date().toISOString();
+    const observed = at(now, -(2 * 3600 + 4 * 60)); // 2h04m ago, ingested now
+    const session = "11111111-0000-7000-8000-000000000001";
+    const file = writeRollout(codexHome, session, at(observed, -5), [
+      sessionMetaLine({ id: session, timestamp: at(observed, -5) }),
+      tokenCountLine({ timestamp: observed, primary: { used_percent: 12, window_minutes: 300, resets_at: epoch(at(now, 3600)) }, secondary: null }),
+    ]);
+    ingestBudget({ source: "codex-rollout", file }, { home });
+    const [limit] = readBudget(home, { now, account: "codex-plus" }).accounts[0]!.limits;
+    expect(limit!.latestSample!.observedAt).toBe(observed);
+    expect(limit!.stale).toBe(true);
+    const history = listBudgetSamples(home, { account: "codex-plus", now });
+    expect(history.coverage.gaps).toEqual([{ from: observed, to: now, reason: "stale" }]);
+  });
+
+  it("shows the newest instance still standing once every one has ended", () => {
+    const t0 = "2026-09-24T09:00:00.000Z";
+    manual(t0, 10, at(t0, 3600));
+    // The reset moves half an hour earlier: the new instance supersedes the first.
+    manual(at(t0, 600), 12, at(t0, 1800));
+    const [limit] = readBudget(home, { now: at(t0, 2700), account: "personal-max" }).accounts[0]!.limits;
+    expect(limit).toMatchObject({ status: "elapsed", window: { resetsAt: at(t0, 1800), supersededBy: null }, missing: { remainingPercent: "window_elapsed" } });
+  });
+});
+
 describe("list_budget_samples", () => {
+  it("names why an account with no readings speaks for no span", () => {
+    expect(listBudgetSamples(home, { account: "personal-max" }).coverage).toEqual({
+      from: null,
+      to: null,
+      itemCount: 0,
+      gaps: [],
+      missing: { from: "source_unavailable", to: "source_unavailable" },
+    });
+    captureOn();
+    expect(listBudgetSamples(home, { account: "personal-max" }).coverage.missing).toEqual({ from: "no_sample_yet", to: "no_sample_yet" });
+  });
+
+  it("walks every row under a relative --since while the clock moves between pages", () => {
+    // Readings denser than the clock moves between pages (two sessions rendering), so a
+    // `since` resolved again 42 s later would land past the cursor and skip the rows between.
+    const base = new Date(Date.now() - 2 * 3600 * 1000 + 10_000).toISOString();
+    const reset = at(base, 5 * 3600);
+    for (let i = 0; i < 120; i += 1) manual(at(base, i * 0.5), 10 + (i % 2), reset);
+    const first = listBudgetSamples(home, { account: "personal-max", since: "2h", limit: 50 });
+    expect(first.items).toHaveLength(50);
+    const seen = first.items.map((sample) => sample.id);
+    let cursor = first.nextCursor;
+    let clock = Date.now();
+    while (cursor !== null) {
+      clock += 42_000; // each page read later than the last
+      const page = listBudgetSamples(home, { account: "personal-max", since: "2h", limit: 50, cursor, now: new Date(clock).toISOString() });
+      seen.push(...page.items.map((sample) => sample.id));
+      cursor = page.nextCursor;
+    }
+    expect(seen).toHaveLength(120);
+    expect(new Set(seen).size).toBe(120);
+  });
+
+  it("treats heartbeat spacing as capture running, and only a longer silence as a gap", () => {
+    captureOn();
+    const base = "2026-09-24T09:00:00.000Z";
+    const reset = at(base, 5 * 3600);
+    // A live session: unchanged readings stored as heartbeats a little over 300 s apart.
+    for (const [offset, used] of [[0, 20], [305, 20], [612, 20], [918, 20]] as const) render(at(base, offset), used, reset);
+    render(at(base, 918 + 605), 21, reset); // 605 s of silence: longer than two heartbeats
+    const page = listBudgetSamples(home, { account: "personal-max", since: base, now: at(base, 918 + 605) });
+    expect(page.items.map((sample) => sample.heartbeat)).toEqual([false, true, true, true, false]);
+    expect(page.coverage.gaps).toEqual([{ from: at(base, 918), to: at(base, 1523), reason: "stale" }]);
+  });
+
+  it("keeps readings stored at one instant apart, by id, across a page boundary", () => {
+    captureOn();
+    const base = "2026-09-24T09:00:00.000Z";
+    // Every render stores one sample per limit at the same observedAt.
+    for (let i = 0; i < 3; i += 1) {
+      ingestBudget(
+        {
+          source: "claude-statusline",
+          input: statusline({ rate_limits: { five_hour: { used_percentage: 10 + i, resets_at: epoch(at(base, 3600)) }, seven_day: { used_percentage: 40 + i, resets_at: epoch(at(base, 86400)) } } }),
+          configDir: claudeDir,
+        },
+        { home, now: () => at(base, i * 60) },
+      );
+    }
+    const all = listBudgetSamples(home, { account: "personal-max", now: at(base, 600) }).items.map((sample) => sample.id);
+    expect(all).toHaveLength(6);
+    const walked: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = listBudgetSamples(home, { account: "personal-max", limit: 1, now: at(base, 600), ...(cursor ? { cursor } : {}) });
+      walked.push(...page.items.map((sample) => sample.id));
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+    expect(walked).toEqual(all);
+  });
+
   it("reports capture gaps: nothing before the first reading, silence between, and silence up to now", () => {
     const base = "2026-09-24T09:00:00.000Z";
     const reset = at(base, 5 * 3600);
@@ -430,6 +604,7 @@ describe("list_budget_samples", () => {
         { from: at(base, 2100), to: at(base, 6000), reason: "stale" },
         { from: at(base, 6000), to: now, reason: "stale" },
       ],
+      missing: {},
     });
     // A later page begins where the cursor stopped; an earlier reading makes a leading gap stale.
     const tail = listBudgetSamples(home, { account: "personal-max", since: at(base, 2000), now, limit: 1 });
@@ -513,6 +688,42 @@ describe("across two devices", () => {
     expect(b.store.getAttempt(aAttempt.id).burn).toMatchObject({ limits: [], missing: { limits: "not_on_this_device" } });
     fresh.use();
     expect(fresh.store.getAttempt(aAttempt.id).burn.missing.limits).toBe("not_on_this_device");
+  }, 60_000);
+
+  it("pages attempts two devices opened in one millisecond apart by id, the same on every device", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    a.use();
+    const issue = a.store.createIssue({ title: "Same instant" });
+    await a.sync();
+    await b.sync();
+    // Offline, each device opens an attempt at the same instant (a local write only bumps
+    // the instant past its own rows, never past another device's).
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-24T09:00:00.000Z") });
+    a.use();
+    a.store.checkoutIssue(issue.id, "agent-a");
+    b.use();
+    b.store.checkoutIssue(issue.id, "agent-b");
+    vi.useRealTimers();
+    await a.sync();
+    await b.sync();
+    await a.sync();
+    const fresh = fleet.machine("fresh");
+    await fresh.sync();
+    for (const machine of [a, b, fresh]) {
+      machine.use();
+      const stored = attemptsOfIssue(machine.db, issue.id);
+      expect(new Set(stored.map((attempt) => attempt.startedAt)).size, machine.label).toBe(1);
+      const walked: string[] = [];
+      let cursor: string | null = null;
+      do {
+        const page = machine.store.listAttempts(issue.id, { limit: 1, ...(cursor ? { cursor } : {}) });
+        walked.push(...page.items.map((view) => view.id));
+        cursor = page.nextCursor;
+      } while (cursor !== null);
+      expect(walked, machine.label).toEqual(stored.map((attempt) => attempt.id));
+    }
   }, 60_000);
 
   it("no budget row, and no read, ever becomes an operation", async () => {

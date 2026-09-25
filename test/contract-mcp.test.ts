@@ -809,7 +809,8 @@ describe("tool inventory", () => {
           openWorldHint: false,
         },
         hasOutputSchema: true,
-      },      /**
+      },
+      /**
        * The telemetry reads (docs/execution-telemetry.md, "Surfaces"): two per workspace
        * (attempts), two per machine (budget). All read-only, all bounded.
        */
