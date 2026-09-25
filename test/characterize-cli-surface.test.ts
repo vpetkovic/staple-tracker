@@ -181,6 +181,8 @@ const COMMANDS: ReadonlyArray<{
     shorts: ["h", "m"],
   },
   { name: "attempts", strings: ["db", "ws", "limit", "cursor"], booleans: ["json", "help"], shorts: ["h"] },
+  // `compare`: the certified plan (labor, coverage, critical path) of named issues.
+  { name: "compare", strings: ["db", "ws"], booleans: ["json", "help"], shorts: ["h"] },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -193,7 +195,7 @@ describe("command inventory", () => {
       "status", "estimate", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
-      "queue", "budget", "attempt", "attempts",
+      "queue", "budget", "attempt", "attempts", "compare",
     ]);
     // 32 tokens, 29 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
@@ -209,8 +211,9 @@ describe("command inventory", () => {
     // in the same change rather than leaving two.
     // 33 with `budget` (provider budget telemetry), 35 with `attempt` (dispatched
     // since execution attempts, missing here until the read surfaces) and `attempts`.
-    // 36 with `estimate`, the explicit estimate write.
-    expect(COMMAND_NAMES).toHaveLength(36);
+    // 36 with `estimate`, the explicit estimate write. 37 with `compare`, the
+    // certified plan of named issues.
+    expect(COMMAND_NAMES).toHaveLength(37);
   });
 
   it.each(COMMANDS.map((c) => c.name))(

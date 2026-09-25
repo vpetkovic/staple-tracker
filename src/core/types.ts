@@ -831,21 +831,35 @@ export interface SubtreePlan {
   /** Which of the two fed `estimatedSeconds`; `none` when it is null. */
   source: PlanSource;
   /**
-   * BOTTOM-UP: the sum of the DIRECT children's effective plans — the recursive
+   * BOTTOM-UP: the sum of the DIRECT children's contributions — the recursive
    * counterpart of `childrenEstimatedSeconds`, and equal to it whenever every
-   * child carries its own estimate. Null when no descendant at any depth does.
-   * Present even when `source` is `own`, so a top-down plan and the work
-   * beneath it can be compared.
+   * child carries its own estimate and none is cancelled. Null when no live
+   * descendant at any depth has one. Present even when `source` is `own`, so a
+   * top-down plan and the work beneath it can be compared.
+   *
+   * A CANCELLED child's own estimate contributes nothing: it owes no work. But
+   * cancelling a parent cancels none of its children, so a cancelled child with
+   * live work beneath it passes that work's plan up like an unestimated parent.
+   * Only a subtree cancelled throughout drops out entirely.
    */
   descendantsEstimatedSeconds: number | null;
   /**
-   * Descendants at ANY depth whose own estimate is a term of
+   * PLANNED UNITS: descendants at any depth whose own estimate is a term of
    * `descendantsEstimatedSeconds`. A descendant shadowed by an estimated
    * ancestor below this issue is not counted here — and not lost: it is still
-   * on that issue's own timing. Coverage is this over `totalCount`.
+   * on that issue's own timing, and it is covered by that ancestor's estimate.
    */
   contributingCount: number;
-  /** Descendants at any depth, whatever their status. 0 for a leaf. */
+  /**
+   * UNPLANNED UNITS: live descendants with no live work beneath them, no own
+   * estimate and no estimated ancestor below this issue — the work nobody
+   * planned. Cancelled issues are neither. COVERAGE is `contributingCount` over
+   * `contributingCount + unplannedCount`: every unit of work is exactly one of
+   * the two, so a fully planned subtree reads n of n however deep its shadowed
+   * estimates go.
+   */
+  unplannedCount: number;
+  /** Descendants at any depth, whatever their status, shadowed and cancelled included. 0 for a leaf. */
   totalCount: number;
 }
 

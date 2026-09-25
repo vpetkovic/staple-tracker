@@ -251,6 +251,7 @@ export function timingGolden(over: Record<string, unknown> = {}): Record<string,
       source: "none",
       descendantsEstimatedSeconds: null,
       contributingCount: 0,
+      unplannedCount: 0,
       totalCount: 0,
     },
     // docs/timing-semantics.md: an issue that never started has no work, no wall and no orchestration.

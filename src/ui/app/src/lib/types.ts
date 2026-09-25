@@ -407,11 +407,13 @@ export interface SubtreePlan {
   /** The effective (top-down) plan: own estimate if recorded, else `descendantsEstimatedSeconds`. */
   estimatedSeconds: number | null;
   source: PlanSource;
-  /** The bottom-up plan: sum of the direct children's effective plans; null when no descendant has one. */
+  /** The bottom-up plan: sum of the direct children's contributions (a cancelled child's own estimate drops out, live work beneath it counts); null when no live descendant has one. */
   descendantsEstimatedSeconds: number | null;
-  /** Descendants at any depth whose own estimate is a term of the bottom-up sum. */
+  /** Planned units: descendants at any depth whose own estimate is a term of the bottom-up sum. */
   contributingCount: number;
-  /** Descendants at any depth. 0 for a leaf. */
+  /** Unplanned units: live descendants with no live work beneath, no estimate and no estimated ancestor beneath this issue. */
+  unplannedCount: number;
+  /** Descendants at any depth, whatever their status. 0 for a leaf. */
   totalCount: number;
 }
 

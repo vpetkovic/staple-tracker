@@ -58,9 +58,11 @@ The complete list. A field not in this table is not a timing field.
 | Field | Axis | One meaning | Defined in | Null means |
 |---|---|---|---|---|
 | `timing.estimatedSeconds` | plan | The issue's own recorded estimate. | cli.md | none recorded |
-| `timing.subtreePlan.estimatedSeconds` | plan | The effective plan: own estimate, else the sum of the children's effective plans. | cli.md | no plan anywhere below |
+| `timing.subtreePlan.estimatedSeconds` | plan | The effective plan: own estimate, else the sum of the children's contributions. A cancelled issue's own estimate contributes nothing, while live work beneath it still does. Certified never to count a parent's estimate and its descendants' together. Coverage over plan units is `contributingCount` of `contributingCount + unplannedCount`. | cli.md | no plan anywhere below |
+| `planSummary.criticalPath.seconds` | plan | The planned path: the longest in-subtree `blockedBy` chain of plan units, every unit at its estimate, parallel branches taking the max. Also on `staple compare` / `compare_plans`. Not a forecast. | cli.md | no unit planned |
+| `planSummary.remainingPath.seconds` | plan | The longest chain over the same graph, with `done` units weighing 0: what is left of the plan. It can follow a different chain from the planned path. A unit in progress weighs its full estimate. | cli.md | open units remain and none is planned |
 | `timing.childrenEstimatedSeconds` | plan | Sum of direct children's own estimates. | cli.md | no child estimated |
-| `attempt.estimateAtStart` | plan | A reading of `subtreePlan` at the moment the attempt opened. | execution-telemetry.md | never null |
+| `attempt.estimateAtStart` | plan | A reading of `subtreePlan` at the moment the attempt opened, stored with the attempt. For a parent whose plan is built from descendants, readings taken since the rollup was certified leave out cancelled work (a cancelled issue's own estimate). Readings stored before that include it, so an older and a newer record of the same tree can differ by exactly that amount. | execution-telemetry.md | never null |
 | `timing.ownActiveSeconds` | elapsed | Seconds this issue itself sat in the `active` category, summed over intervals not opened by a derived flip, with an open interval ending at `countedThrough`. | cli.md | never active |
 | `timing.activeSeconds` | elapsed | The comparable form of `ownActiveSeconds`: a leaf's own, a parent's sum over direct children, `null` when cancelled. The number surfaces print as "ran". | cli.md | never active, or cancelled |
 | `timing.reviewSeconds` | elapsed | Seconds in the `review` category, non-derived intervals only. An open interval ends at the newest event on the issue ([see Q3](#open-questions)). | cli.md | never in review |
@@ -795,6 +797,9 @@ What the choice costs: `workSeconds` needs attempts. For history before capture,
 the ratio needs `staple attempt reconstruct` and is then `reconstructed` quality.
 Without it, older issues are `missing` and drop out of trusted samples. They are
 not silently replaced by `activeSeconds`.
+
+Durations these surfaces print (`staple show`, `staple compare`) use days of
+24 hours: `5d5h` is 125 hours, not five working days. JSON is always seconds.
 
 **Which estimate.** The denominator is the issue's own `estimatedSeconds` at
 read time, which is what every surface shows today. `attempt.estimateAtStart` is

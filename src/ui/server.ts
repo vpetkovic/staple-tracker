@@ -778,6 +778,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       ...handle.store.detailTiming(context.issue.id),
       attempts: handle.store.attemptSummary(context.issue.id),
       orchestration: handle.store.orchestrationSummary(context.issue.id),
+      planSummary: handle.store.planSummary(context.issue.id),
     };
   }
 
@@ -3539,7 +3540,18 @@ export function startUiServer(options: UiOptions): UiHandle {
           ...handle.store.detailTiming(context.issue.id),
           attempts: handle.store.attemptSummary(context.issue.id),
           orchestration: handle.store.orchestrationSummary(context.issue.id),
+          planSummary: handle.store.planSummary(context.issue.id),
         });
+        return;
+      }
+
+      /**
+       * `staple compare` / MCP `compare_plans`: the certified plan of each `ref` (repeat the
+       * parameter, up to 20), from the one store method both call.
+       */
+      if (url.pathname === "/api/compare") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.comparePlans(url.searchParams.getAll("ref")));
         return;
       }
 

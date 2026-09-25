@@ -302,6 +302,28 @@ Rules that hold on all four:
   `hub.db`. The attempt tools take `ws`. The budget tools read this machine's
   hub and take none, like `record_budget_sample`.
 
+### Comparing plans
+
+`compare_plans {refs, ws?}` (1 to 20 refs) is `staple compare <ref> ... --json`.
+For each named issue it returns:
+
+- `labor`: total labor, with every planned unit counted once. An issue's own
+  estimate counts instead of its descendants', never both. A cancelled issue's
+  own estimate is excluded, but live work beneath it still counts.
+- `coverage`: planned units out of all units, with the unplanned ones named.
+- `criticalPath`: the planned path. This is the longest `blockedBy` chain
+  inside the subtree, weighted by estimate, with done work included. Blockers
+  from outside the subtree are listed separately.
+- `remainingPath`: the longest chain over the same graph, with done units weighing 0.
+  It can follow a different chain from the planned path.
+
+`overlaps` names a ref that lies inside another ref. `exceedsLabor` flags a
+path longer than an own estimate. `partial: true` means a lower bound, never a
+silent 0. Use this tool to compare two epics instead of fetching their trees and
+adding estimates by hand. For a parent, `get_task` carries the same object as
+`planSummary` (null for a leaf). The rules are in
+[cli.md](cli.md#comparing-plans-staple-compare).
+
 ## Harness ergonomics
 
 All in-protocol, so a harness never needs out-of-band setup:
@@ -316,7 +338,7 @@ All in-protocol, so a harness never needs out-of-band setup:
   polluting the audit trail with anonymous writes.
 - **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
   creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 20 read-only, `checkout_task` and `set_estimate` idempotent — and
+- **Tools declare annotations** — 21 read-only, `checkout_task` and `set_estimate` idempotent — and
   return `structuredContent` (arrays wrap as `{items}`).
 - **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
   The telemetry lists answer `{items, truncated, nextCursor, coverage}` instead
