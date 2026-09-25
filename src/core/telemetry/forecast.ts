@@ -192,7 +192,7 @@ export interface CompletionPath extends RemainingFigure {
 
 export interface CompletionConfidence {
   /**
-   * `high`: nothing unknown, every class's bounds reach 90%, no heavy tail. `medium`: nothing
+   * `high`: nothing left at all, or nothing unknown, every class's bounds reach 90%, no heavy tail. `medium`: nothing
    * unknown and every class has at least the minimum of samples. `low`: anything else.
    */
   readonly label: "high" | "medium" | "low";
@@ -460,13 +460,14 @@ export function completionForecast(input: {
     .filter((node) => plans.get(node.id)!.draw !== null)
     .map((node) => input.units.get(node.id)!.duration!.bounds!.confidence);
   const achieved = confidences.length === 0 ? null : Math.min(BAND.nominal, ...confidences);
-  const reached = achieved !== null && achieved >= BAND.nominal - EPSILON && unknown.length === 0;
+  // Nothing left to forecast is certain: 0, with nothing drawn.
+  const reached = nothingLeft || (achieved !== null && achieved >= BAND.nominal - EPSILON && unknown.length === 0);
   const reasons: string[] = [];
   if (unknown.length > 0) reasons.push("unknown_units");
   for (const code of ["small_sample", "no_samples", "bounds_below_confidence", "heavy_tail"] as const) if (raised.has(code)) reasons.push(code);
   if (!nothingLeft && achieved === null && unknown.length === 0) reasons.push("no_class_drawn");
   const low = unknown.length > 0 || raised.has("small_sample") || raised.has("no_samples") || (!nothingLeft && achieved === null);
-  const label: CompletionConfidence["label"] = low ? "low" : reached && !raised.has("heavy_tail") ? "high" : "medium";
+  const label: CompletionConfidence["label"] = nothingLeft ? "high" : low ? "low" : reached && !raised.has("heavy_tail") ? "high" : "medium";
 
   const awaitingRefs = awaiting.map((node) => node.identifier);
   return {

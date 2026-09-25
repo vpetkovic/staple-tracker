@@ -694,22 +694,25 @@ try {
       toolError(approximateSet).code === "validation",
     "calibration_cohorts reads trusted samples only, names its snapshot, forecasts with the reason it has no seconds, and refuses an approximate set",
   );
-  // Nothing is a sample, so nothing beneath the epic can be forecast: unknown, never 0, and the
+  // The epic's only unit is done: nothing is left, which reads 0 and certain, not unknown. The
   // budget half, apart, reads this scratch home's missing budget with the contract's reason.
   const forecast = JSON.parse(toolText(await rpc("tools/call", { name: "forecast", arguments: { ref: epic.identifier } })));
   const badReserve = await rpc("tools/call", { name: "forecast", arguments: { ref: epic.identifier, reserve: "120%" } });
   assert(
     /^forecast1:[0-9a-f]{32}$/.test(forecast.snapshot.id) &&
       /^calibration2:[0-9a-f]{32}$/.test(forecast.snapshot.calibration.id) &&
-      forecast.completion.labor.expectedSeconds === null &&
-      forecast.completion.labor.partial === true &&
-      forecast.completion.confidence.label === "low" &&
+      forecast.completion.units.done === forecast.completion.units.total &&
+      forecast.completion.labor.expectedSeconds === 0 &&
+      forecast.completion.labor.partial === false &&
+      forecast.completion.path.expectedSeconds === 0 &&
+      forecast.completion.confidence.label === "high" &&
+      forecast.budget.missing.accounts === "source_unavailable" &&
       forecast.budget.machineLocal === true &&
       forecast.budget.reserve.source === "provisional_default" &&
       Array.isArray(forecast.budget.accounts) &&
       badReserve.isError === true &&
       toolError(badReserve).code === "validation",
-    "forecast keeps completion and budget apart, reads unknown work as unknown, names its snapshots, and refuses a reserve over 100%",
+    "forecast keeps completion and budget apart, reads nothing left as 0, names its snapshots, reads a missing budget with its reason, and refuses a reserve over 100%",
   );
   const epicEvents = JSON.parse(
     toolText(await rpc("tools/call", { name: "events_since", arguments: { since: 0 } })),

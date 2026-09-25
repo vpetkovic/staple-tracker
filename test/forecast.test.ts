@@ -246,6 +246,7 @@ describe("an epic", () => {
     const report = forecast(root.identifier, clock + 1);
     expect(report.completion.labor).toMatchObject({ expectedSeconds: 0, partial: false, missing: [] });
     expect(report.completion.path).toMatchObject({ expectedSeconds: 0, partial: false });
+    expect(report.completion.confidence).toEqual({ label: "high", nominal: 0.9, achieved: null, reached: true, reasons: [] });
   });
 
   it("refuses an empty ref and a bad reserve, naming the field", () => {

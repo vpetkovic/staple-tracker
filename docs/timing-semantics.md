@@ -1385,8 +1385,8 @@ What the draw model assumes, and where it reads wrong:
   tail, and draws pick sample ratios with equal weight. When short-estimate tickets run
   proportionally longer the draws' mean reads above `expected`. Both are published.
 
-`confidence.label` is `high` when nothing is unknown, the bounds reach 90% and no class
-is heavy-tailed; `medium` when nothing is unknown and every class drawn from has at
+`confidence.label` is `high` when nothing is left (0 is certain), or when nothing is
+unknown, the bounds reach 90% and no class is heavy-tailed; `medium` when nothing is unknown and every class drawn from has at
 least 5 samples; `low` otherwise. `reasons` says why it is not `high`.
 
 **Warnings.** The calibration warnings of the units with work left, in their order,
