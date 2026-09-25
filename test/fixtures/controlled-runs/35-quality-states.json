@@ -8,7 +8,8 @@
     "a parent is reconstructed when any child is, with partial and its children's inputs as reasons",
     "the cohort's denominator is the done leaves beneath the parent: the open and cancelled leaves are counted as not eligible, never in coverage",
     "the exact ratio aggregate is over exact records only; the admitted aggregate follows the exclusion",
-    "exclude and excludeReasons drop records from the listing and the admitted aggregate, never from the counts; timing-floor stays listed unless it is excluded by name"
+    "exclude and excludeReasons drop records from the listing and the admitted aggregate, never from the counts; timing-floor stays listed unless it is excluded by name",
+    "the level rule on every device: exclude approximate alone drops the reconstructed record that is sparse, and include exact,reconstructed keeps only the clean reconstructed one beside the exact one"
   ],
   "start": "2026-09-01T09:00:00.000Z",
   "devices": {
@@ -451,6 +452,43 @@
         "admittedRatio": 0.0167,
         "items": [
           "floor"
+        ]
+      }
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "cohort": {
+        "exclude": [
+          "approximate"
+        ],
+        "eligible": 6,
+        "excluded": 2,
+        "admittedCount": 2,
+        "admittedRatio": 0.45,
+        "items": [
+          "floor",
+          "missing",
+          "recon",
+          "exact"
+        ]
+      }
+    },
+    {
+      "asOf": "1h10m",
+      "ref": "p",
+      "cohort": {
+        "include": [
+          "exact",
+          "reconstructed"
+        ],
+        "eligible": 6,
+        "excluded": 4,
+        "admittedCount": 1,
+        "admittedRatio": 0.6667,
+        "items": [
+          "recon",
+          "exact"
         ]
       }
     }

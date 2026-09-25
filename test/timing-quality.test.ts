@@ -19,7 +19,14 @@ import { attemptLinkerFor } from "../src/core/telemetry/attempt-link.js";
 import { attemptsOfIssue } from "../src/core/telemetry/attempt-records.js";
 import { bindBudgetSource, setBudgetCapture } from "../src/core/telemetry/budget-config.js";
 import { ingestBudget } from "../src/core/telemetry/ingest.js";
+import { admitter } from "../src/core/telemetry/cohort.js";
 import {
+  EFFORT_INPUTS,
+  WORK_REASONS,
+  WORK_REASON_LEVEL,
+  WORK_STATES,
+  reasonLevel,
+  workLevels,
   attemptBurnQuality,
   attemptQuality,
   limitBurnQuality,
@@ -136,6 +143,37 @@ describe("one state per record, from one precedence", () => {
     expect(workQuality({ workSeconds: 59, missingReason: null, reconstructed: false, inputs: [] })).toEqual({ state: "timing-floor", reasons: ["timing_floor"] });
     expect(workQuality({ workSeconds: 60, missingReason: null, reconstructed: false, inputs: [] })).toEqual({ state: "exact", reasons: [] });
     expect(workQuality({ workSeconds: 0, missingReason: null, reconstructed: false, inputs: [] }).state).toBe("timing-floor");
+  });
+
+  it("every reason a work state can carry has a level, and nothing else does", () => {
+    // The emitted set, from the sources that emit it: the missing codes, reconstructed, every effort input, the floor.
+    expect(new Set(WORK_REASONS).size).toBe(WORK_REASONS.length);
+    for (const input of EFFORT_INPUTS) expect(WORK_REASONS, input).toContain(input);
+    expect(Object.keys(WORK_REASON_LEVEL).sort()).toEqual([...WORK_REASONS].sort());
+    for (const reason of WORK_REASONS) expect(WORK_STATES, reason).toContain(WORK_REASON_LEVEL[reason]);
+    // Every approximate input sits at approximate, and each other code at its own state.
+    for (const input of EFFORT_INPUTS) expect(WORK_REASON_LEVEL[input], input).toBe("approximate");
+    expect([WORK_REASON_LEVEL.reconstructed, WORK_REASON_LEVEL.timing_floor, WORK_REASON_LEVEL.never_started]).toEqual(["reconstructed", "timing-floor", "missing"]);
+    // Whatever combination is emitted, every reason is in the set.
+    for (let mask = 0; mask < 1 << EFFORT_INPUTS.length; mask += 1) {
+      const inputs = EFFORT_INPUTS.filter((_, index) => mask & (1 << index));
+      for (const seconds of [null, 30, 600]) {
+        for (const reconstructed of [false, true]) {
+          const { reasons } = workQuality({ workSeconds: seconds, missingReason: seconds === null ? "no_worker_attempt" : null, reconstructed, inputs });
+          for (const reason of reasons) expect(WORK_REASONS as readonly string[], reason).toContain(reason);
+        }
+      }
+    }
+  });
+
+  it("a reason with no level fails closed: it reads approximate, and the selection drops it", () => {
+    expect(reasonLevel("from_a_newer_build")).toBe("approximate");
+    const record = { work: { state: "exact" as const, reasons: ["from_a_newer_build"] } };
+    expect([...workLevels(record.work)].sort()).toEqual(["approximate", "exact"]);
+    const all = ["exact", "timing-floor", "approximate", "reconstructed", "missing"] as const;
+    expect(admitter({ include: ["exact"], exclude: [], excludeReasons: [] }).admits(record)).toBe(false);
+    expect(admitter({ include: [...all], exclude: ["approximate"], excludeReasons: [] }).admits(record)).toBe(false);
+    expect(admitter({ include: [...all], exclude: [], excludeReasons: [] }).admits(record)).toBe(true);
   });
 
   it("wall: missing with its reason when there is none, approximate on any input", () => {
@@ -302,6 +340,11 @@ describe("cohort coverage", () => {
     expect(typo.message).toContain("excludeReasons takes work reason codes");
     expect(refusal(() => store.timingQuality({ excludeReasons: ["stale"] })).code).toBe("validation");
     expect(refusal(() => store.timingQuality({ include: ["provider-unavailable"] })).code).toBe("validation");
+    // A selection that admits nothing is a mistake, not an empty answer.
+    const nothing = refusal(() => store.timingQuality({ include: ["exact"], exclude: ["exact"] }));
+    expect(nothing.code).toBe("validation");
+    expect(nothing.message).toContain("selection admits no state");
+    expect(refusal(() => store.timingQuality({ exclude: ["exact", "timing-floor", "approximate", "reconstructed", "missing"] })).message).toContain("admits no state");
     // The messages name the fields every surface shares, not one surface's flags.
     for (const error of [
       refusal(() => store.timingQuality({ exclude: ["approx"] })),

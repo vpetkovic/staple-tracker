@@ -23,6 +23,14 @@
  * reads and the cohort read all call it, so every surface answers the same state.
  */
 
+/**
+ * The approximate inputs a reading of effort can carry (`docs/timing-semantics.md`, "Quality
+ * inputs"). `effort.ts` and the store emit exactly these; they are listed here, beside the level
+ * map, so a new one cannot be emitted without a level.
+ */
+export const EFFORT_INPUTS = ["sparse", "capture_gap", "end_unbounded", "contested", "orphan_provisional", "clock_skew", "partial"] as const;
+export type EffortInput = (typeof EFFORT_INPUTS)[number];
+
 export type QualityState = "exact" | "approximate" | "missing" | "timing-floor" | "reconstructed" | "provider-unavailable";
 
 /** Every state, in the order reads list their counts. */
@@ -39,17 +47,30 @@ export type WallState = "missing" | "approximate" | "exact";
 export const TIMING_FLOOR_SECONDS = 60;
 
 /** The reason code of `timing-floor`. */
-export const TIMING_FLOOR = "timing_floor";
+export const TIMING_FLOOR_REASON = "timing_floor";
+export const TIMING_FLOOR = TIMING_FLOOR_REASON;
 /** The reason code of `reconstructed`. */
-export const RECONSTRUCTED = "reconstructed";
+export const RECONSTRUCTED_REASON = "reconstructed";
+export const RECONSTRUCTED = RECONSTRUCTED_REASON;
+
+/** Why an issue's `workSeconds` is null: the codes the store writes into `missing.workSeconds` for a work record. */
+export const WORK_MISSING_REASONS = ["never_started", "no_worker_attempt", "input_missing"] as const;
+export type WorkMissingReason = (typeof WORK_MISSING_REASONS)[number];
+
+/** Every reason a work (or attempt) state can carry, from the same lists that type what is emitted. */
+export const WORK_REASONS = [...WORK_MISSING_REASONS, RECONSTRUCTED_REASON, ...EFFORT_INPUTS, TIMING_FLOOR_REASON] as const;
+export type WorkReason = (typeof WORK_REASONS)[number];
 
 /**
  * The closed set of reasons a work (or attempt) state can carry, each at the level of the state
  * it produces. An analysis that drops a state drops every record carrying a reason at that level,
  * not only the records whose top state it is: a reconstructed record that is also sparse is
  * approximate at heart, and `exclude approximate` must drop it.
+ *
+ * `satisfies Record<WorkReason, WorkState>`: a code that can be emitted and has no level does
+ * not compile, and neither does a level for a code nothing emits.
  */
-export const WORK_REASON_LEVEL: Readonly<Record<string, WorkState>> = {
+export const WORK_REASON_LEVEL = {
   never_started: "missing",
   no_worker_attempt: "missing",
   input_missing: "missing",
@@ -62,15 +83,17 @@ export const WORK_REASON_LEVEL: Readonly<Record<string, WorkState>> = {
   end_unbounded: "approximate",
   clock_skew: "approximate",
   timing_floor: "timing-floor",
-};
+} as const satisfies Record<WorkReason, WorkState>;
+
+/** The level a reason sits at. A code with no level (a newer build's) fails CLOSED: approximate. */
+export function reasonLevel(reason: string): WorkState {
+  return (WORK_REASON_LEVEL as Readonly<Record<string, WorkState>>)[reason] ?? "approximate";
+}
 
 /** Every level a work record touches: its state and the level of each of its reasons. */
 export function workLevels(quality: { readonly state: WorkState; readonly reasons: readonly string[] }): Set<WorkState> {
   const levels = new Set<WorkState>([quality.state]);
-  for (const reason of quality.reasons) {
-    const level = WORK_REASON_LEVEL[reason];
-    if (level !== undefined) levels.add(level);
-  }
+  for (const reason of quality.reasons) levels.add(reasonLevel(reason));
   return levels;
 }
 
@@ -90,11 +113,11 @@ export function isQualityState(value: string): value is QualityState {
  */
 export function workQuality(input: {
   readonly workSeconds: number | null;
-  readonly missingReason: string | null;
+  readonly missingReason: WorkMissingReason | null;
   readonly reconstructed: boolean;
-  readonly inputs: readonly string[];
+  readonly inputs: readonly EffortInput[];
 }): Quality<WorkState> {
-  const reasons: string[] = [];
+  const reasons: WorkReason[] = [];
   if (input.workSeconds === null) reasons.push(input.missingReason ?? "input_missing");
   if (input.reconstructed) reasons.push(RECONSTRUCTED);
   reasons.push(...[...input.inputs].sort());
@@ -116,7 +139,7 @@ export function wallQuality(input: { readonly present: boolean; readonly missing
 }
 
 /** One attempt's state, over its contribution to the issue's effort (`effortSeconds`). */
-export function attemptQuality(input: { readonly seconds: number; readonly provenance: string; readonly inputs: readonly string[] }): Quality<Exclude<WorkState, "missing">> {
+export function attemptQuality(input: { readonly seconds: number; readonly provenance: string; readonly inputs: readonly EffortInput[] }): Quality<Exclude<WorkState, "missing">> {
   const reconstructed = input.provenance === "reconstructed";
   const { state, reasons } = workQuality({ workSeconds: input.seconds, missingReason: null, reconstructed, inputs: input.inputs });
   return { state: state as Exclude<WorkState, "missing">, reasons };

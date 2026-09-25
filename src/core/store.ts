@@ -96,7 +96,7 @@ import {
 } from "./telemetry/attempts.js";
 import { reconstructAttempts, type ReconstructReport } from "./telemetry/reconstruct.js";
 import { hasCaptureGap, inferredEndsOf, issueEffort, pausesOf } from "./telemetry/effort.js";
-import { WORK_REASON_LEVEL, WORK_STATES, wallQuality, workQuality, type WorkState } from "./telemetry/quality.js";
+import { WORK_REASON_LEVEL, WORK_STATES, wallQuality, workQuality, type EffortInput, type WorkMissingReason, type WorkState } from "./telemetry/quality.js";
 import { WORK_ORDER, cohortKey, cohortReport, type CohortMember, type TimingQualityReport } from "./telemetry/cohort.js";
 import { parseSince } from "./telemetry/read-budget.js";
 import { qualifyAttempt, qualifyAttempts, type QualifiedAttempt } from "./telemetry/attempt-quality.js";
@@ -5091,15 +5091,18 @@ export class WorkspaceStore {
 
     // ---- work
     const ownWorkSeconds = effort.workers.seconds;
-    const ownReason = ownWorkSeconds !== null ? null : row.started_at ? "no_worker_attempt" : "never_started";
+    const ownReason: WorkMissingReason | null = ownWorkSeconds !== null ? null : row.started_at ? "no_worker_attempt" : "never_started";
     if (ownReason !== null) missing.ownWorkSeconds = ownReason;
     let workSeconds: number | null;
-    let inputs = new Set<string>();
+    let inputs = new Set<EffortInput>();
+    /** Why a work record's figure is null, typed so every code has a level (`WORK_REASON_LEVEL`). */
+    let workMissing: WorkMissingReason | null = null;
     let reconstructed = false;
     let coverage: TimingQuality["work"]["coverage"] = null;
     const missingInputs: string[] = [];
     if (!parent) {
       workSeconds = ownWorkSeconds;
+      workMissing = ownReason;
       if (ownReason !== null) missing.workSeconds = ownReason;
       for (const input of effort.workers.inputs) inputs.add(input);
       if (hasCaptureGap(row.started_at, effort.firstWorkerStart)) inputs.add("capture_gap");
@@ -5119,17 +5122,20 @@ export class WorkspaceStore {
         }
         known += 1;
         sum += childTiming.workSeconds;
-        for (const input of childTiming.quality.work.inputs) inputs.add(input);
+        // A child's inputs came out of this same method, typed as EffortInput when they were made.
+        for (const input of childTiming.quality.work.inputs) inputs.add(input as EffortInput);
         if (childTiming.quality.work.state === "reconstructed") reconstructed = true;
       }
       coverage = { known, total, partial: known < total };
       if (known < total) inputs.add("partial");
       if (total === 0) {
         workSeconds = null;
-        missing.workSeconds = "never_started";
+        workMissing = "never_started";
+        missing.workSeconds = workMissing;
       } else if (known === 0) {
         workSeconds = null;
-        missing.workSeconds = "input_missing";
+        workMissing = "input_missing";
+        missing.workSeconds = workMissing;
       } else workSeconds = sum;
     }
     if (cancelled) {
@@ -5138,7 +5144,7 @@ export class WorkspaceStore {
       inputs = new Set();
     }
     // The precedence lives in one place (`telemetry/quality.ts`); a cancelled issue owes no work and has no state.
-    const work = cancelled ? null : workQuality({ workSeconds, missingReason: missing.workSeconds ?? null, reconstructed, inputs: [...inputs] });
+    const work = cancelled ? null : workQuality({ workSeconds, missingReason: workMissing, reconstructed, inputs: [...inputs] });
     const state: WorkQualityState | null = work?.state ?? null;
 
     // ---- orchestration: own orchestrator attempts plus the children's
@@ -5490,6 +5496,9 @@ export class WorkspaceStore {
     };
     const include = query.include === undefined || query.include.length === 0 ? [...WORK_ORDER] : states("include", query.include);
     const exclude = states("exclude", query.exclude);
+    if (!include.some((state) => !exclude.includes(state))) {
+      throw new StapleError("validation", `The selection admits no state: include (${include.join(", ")}) minus exclude (${exclude.join(", ")}) is empty.`);
+    }
     const excludeReasons = [...new Set(query.excludeReasons ?? [])].sort();
     for (const reason of excludeReasons) {
       if (!(reason in WORK_REASON_LEVEL)) {

@@ -118,6 +118,7 @@ export interface Expectation {
    * the tail only.
    */
   cohort?: {
+    include?: string[];
     exclude?: string[];
     excludeReasons?: string[];
     eligible?: number;
@@ -589,7 +590,7 @@ function cohortAgrees(
   const expected = expectation.cohort;
   if (expected === undefined) return;
   const report = machine.store.timingQuality(
-    { parent: id(expectation.ref), exclude: expected.exclude, excludeReasons: expected.excludeReasons, limit: 500 },
+    { parent: id(expectation.ref), include: expected.include, exclude: expected.exclude, excludeReasons: expected.excludeReasons, limit: 500 },
     iso(expectation.asOf),
   );
   const at = (field: string, want: unknown, got: unknown, tolerance = 0): void => {

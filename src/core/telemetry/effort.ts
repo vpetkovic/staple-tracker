@@ -42,7 +42,9 @@ export const SPARSE_GAP_MS = 30 * 60 * 1000;
 const TOLERANCE_MS = 1000;
 
 /** The quality inputs a reading of effort can carry (`docs/timing-semantics.md`, "Quality inputs"). */
-export type EffortInput = "sparse" | "capture_gap" | "end_unbounded" | "contested" | "orphan_provisional" | "clock_skew" | "partial";
+/** The inputs themselves are listed once, in `quality.ts`, beside the level each sits at. */
+import type { EffortInput } from "./quality.js";
+export type { EffortInput };
 
 /** One attempt's contribution. */
 export interface AttemptEffort {
