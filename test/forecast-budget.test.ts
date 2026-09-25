@@ -185,6 +185,19 @@ describe("the budget forecast of a piece of work", () => {
     expect(limit.reserve!.breachProbability).toBe(0);
   });
 
+  it("leaves an attempt with no reading while it ran out of the work rate, rather than reading its burn as 0", () => {
+    const { next } = history();
+    at(61);
+    const quiet = store.createIssue({ title: "quiet", estimatedSeconds: 3600 });
+    store.checkoutIssue(quiet.id, "agent", undefined, { attempt: { harness: "claude_code", harnessSession: STATUSLINE_SESSION_ID } });
+    at(65);
+    store.addComment(quiet.id, "working", "agent", "agent");
+    const limit = limitOf(store.forecast({ ref: next }, iso(66), home));
+    // Its burn is unknown (no reading inside it): the rate is the one known attempt's, 12%/work-hour, not diluted.
+    expect(limit.workRate).toMatchObject({ attempts: 1, excluded: 1, burnPercent: 12, workSeconds: 3600 });
+    expect(limit.workRate!.percentPerWorkHour).toBeCloseTo(12, 9);
+  });
+
   it("never counts an attempt that started before the window instance in its work rate", () => {
     history();
     // An attempt opened in the first instance runs on into the second, read on both sides of the reset.
