@@ -5711,7 +5711,8 @@ export class WorkspaceStore {
    * "Forecasts"). A pure read.
    */
   forecast(query: ForecastQuery, asOf: string = nowIso(), home: string = stapleHome()): ForecastReport {
-    const root = this.requireRow(query.ref);
+    if (typeof query.ref !== "string" || query.ref.trim() === "") throw new StapleError("validation", "forecast needs ref: the issue to forecast (identifier or id).");
+    const root = this.requireRow(query.ref.trim());
     const reserve = parseReserve(query.reserve);
     const pinnedModel = query.model === undefined ? null : query.model.trim();
     if (pinnedModel === "") throw new StapleError("validation", "model must name a model (as --model on checkout does); got an empty value.");

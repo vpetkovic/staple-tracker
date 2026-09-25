@@ -1263,6 +1263,32 @@ server.registerTool(
 );
 
 server.registerTool(
+  "forecast",
+  {
+    description:
+      "Forecast an issue's completion and, separately, what that work costs this machine's provider budget (docs/timing-semantics.md, \"Forecasts\"). completion: the certified plan's units beneath ref (a leaf is its own unit), each forecast from its calibrated duration (the exact set, the class calibration_cohorts for [ref] reads) less the work already done: done units weigh 0, units in review or gated weigh 0 and are listed (review waits and rework are not forecast), a unit with no samples, no estimate or worked past every sample of its class is unknown, never 0, and turns sums partial. labor is the remaining work added; path is the longest dependency chain of remaining work (effort along the chain, not calendar time). expectedSeconds adds each unit's calibrated expected figure; simulated is from resampling each unit's class sample ratios (conditioned on the unit not being done) with a fixed seed (method.seed, method.draws), so the same data reads the same everywhere: mean, p10/p50/p90 and band (p5-p95, nominal 0.9). confidence.achieved is the lowest prediction-bounds confidence of the classes drawn from; label high/medium/low with reasons; warnings carry the calibration warnings and unknown_units, beyond_class_range, overrun, awaiting_review, dependency_cycle, unresolved_outside_blockers. budget (machine-local, never blended with completion): per account and limit, the current window's high-water remainingPercent, resetsAt, pace (%/hour of wall clock over the window's readings), exhaustion at that pace before or after the reset, workRate (%/work-hour from this workspace's worker attempts' measured burn in the window, bootstrap-resampled), and for the remaining labor run serially from now: consumedPercent, beforeResetPercent, remainingAtResetPercent and reserve.breachProbability, the share of draws leaving less than the reserve at the reset. reserve is a parameter; without it a provisional default applies and says so (the admission policy will define it). A stale, elapsed or sliding window, no attempt burn or unknown labor reads null with the reason in missing (input_missing lists missingInputs), never 0. snapshot.id identifies the completion inputs (the same on every device, over calibration snapshot.id); snapshot.budget.id this machine's budget data. Same payload as `staple forecast <ref> --json`.",
+    inputSchema: {
+      ref: refSchema,
+      reserve: z.union([z.string(), z.number()]).optional().describe("The protected reserve, a percent of each limit (20 or \"20%\"); a provisional default otherwise"),
+      account: z.string().optional().describe("Only this provider account's budget"),
+      model: z.string().optional().describe("The model the work will run on, pinned in every unit's key (as --model on checkout names it)"),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      asOf: z.string(),
+      subject: z.record(z.string(), z.unknown()),
+      filter: z.record(z.string(), z.unknown()),
+      snapshot: z.record(z.string(), z.unknown()).describe("{id, algorithm, calibration: {id, ...}, budget: {id, machineLocal}}: what the forecast read"),
+      method: z.record(z.string(), z.unknown()),
+      completion: z.record(z.string(), z.unknown()).describe("{set, units, plan, labor, path, confidence, warnings}"),
+      budget: z.record(z.string(), z.unknown()).describe("{machineLocal, budgetCapture, reserve, work, accounts, missing}"),
+    },
+    annotations: { title: "Forecast", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ref, reserve, account, model, ws }) => run(() => storeFor(ws).forecast({ ref, reserve, account, model })),
+);
+
+server.registerTool(
   "create_task",
   {
     description:

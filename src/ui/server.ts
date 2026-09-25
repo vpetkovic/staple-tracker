@@ -3617,6 +3617,26 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
+       * `staple forecast` / MCP `forecast`: the completion forecast of `ref` and, apart from it,
+       * the budget forecast of that work on this machine, from the one store method both call.
+       * `reserve` is a percent (`20` or `20%`), `account` one account, `model` pins the model.
+       */
+      if (url.pathname === "/api/forecast") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(
+          res,
+          200,
+          handle.store.forecast({
+            ref: url.searchParams.get("ref") ?? "",
+            reserve: url.searchParams.get("reserve") ?? undefined,
+            account: url.searchParams.get("account") ?? undefined,
+            model: url.searchParams.get("model") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      /**
        * A document's history. A plain GET, so the token gate and the method pin above
        * already cover it — nothing about auth changed to add this.
        */

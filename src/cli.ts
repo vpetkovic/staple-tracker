@@ -24,6 +24,7 @@ import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
 import { planLines, runCompareCommand } from "./commands/compare.js";
 import { runTimingCommand } from "./commands/timing.js";
 import { runCalibrateCommand } from "./commands/calibrate.js";
+import { runForecastCommand } from "./commands/forecast.js";
 import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
@@ -928,6 +929,13 @@ Tasks
               floors and warnings; --for forecasts an issue's duration;
               reconstructed history only on request, as its own cohorts;
               staple calibrate --help
+  forecast <ref> [--reserve P] [--account A] [--model M]
+              completion: remaining labor and the longest chain of remaining
+              work over the plan's units, from calibrated durations less work
+              done, with resampled bands; budget, apart: per provider limit on
+              this machine, pace, exhaustion, the work's burn and the
+              probability it leaves less than the reserve at the reset;
+              staple forecast --help
   board                                 terminal kanban
   inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
               QUEUED is work a HUMAN has to release (see Approval gates below) and
@@ -1441,6 +1449,10 @@ function main() {
 
     case "calibrate":
       runCalibrateCommand(rest);
+      break;
+
+    case "forecast":
+      runForecastCommand(rest);
       break;
 
     case "attempts":
