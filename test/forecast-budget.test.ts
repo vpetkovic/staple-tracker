@@ -325,7 +325,8 @@ describe("the budget forecast of a piece of work", () => {
     const report = store.forecast({ ref: next }, iso(61), home);
     expect(report.budget.reserve).toMatchObject({ percent: PROVISIONAL_RESERVE_PERCENT, source: "provisional_default" });
     expect(report.budget.reserve.note).toMatch(/provisional/);
-    expect(limitOf(report).reserve!.percent).toBe(PROVISIONAL_RESERVE_PERCENT);
+    // Every limit's figure carries the label too, so none can be quoted without it.
+    expect(limitOf(report).reserve).toMatchObject({ percent: PROVISIONAL_RESERVE_PERCENT, source: "provisional_default", note: expect.stringMatching(/provisional/) });
   });
 
   it("reads the same on every read of the same data, and names the budget data it read", () => {
