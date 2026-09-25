@@ -250,7 +250,7 @@ CREATE TABLE sync_conflicts (
          resolved_at      TEXT,
          resolved_by      TEXT,
          resolution       TEXT
-       , remote_events TEXT);
+       );
 
 CREATE INDEX sync_conflicts_open_idx ON sync_conflicts(detected_at) WHERE resolved_at IS NULL;
 
