@@ -672,3 +672,32 @@ function qualifyLimit(burn: Omit<LimitBurn, "quality">): LimitBurn {
 function qualifyBurn(burn: Omit<AttemptBurn, "quality">): AttemptBurn {
   return { ...burn, quality: attemptBurnQuality(burn) };
 }
+
+// ------------------------------------------------------------------ forecast basis
+
+/** One reading of a window, as a forecast's pace reads it. */
+export interface WindowReading {
+  readonly id: string;
+  readonly observedAt: string;
+  readonly usedPercent: number;
+}
+
+/**
+ * The readings with a value of each named window instance, by `observedAt`: what a budget
+ * forecast measures its pace over (`forecast-budget.ts`). A pure read of this machine's hub; a
+ * window with no reading, or a machine with no hub, reads an empty list.
+ */
+export function windowReadings(home: string, windowIds: readonly string[]): Map<string, WindowReading[]> {
+  return withHub(home, (hub) => {
+    const out = new Map<string, WindowReading[]>();
+    const store = hub === null ? null : new BudgetStore(hub);
+    for (const windowId of windowIds) {
+      const samples = store === null ? [] : store.samplesInWindow(windowId);
+      out.set(
+        windowId,
+        samples.filter((sample) => sample.usedPercent !== null).map((sample) => ({ id: sample.id, observedAt: sample.observedAt, usedPercent: sample.usedPercent! })),
+      );
+    }
+    return out;
+  });
+}
