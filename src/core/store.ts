@@ -103,6 +103,7 @@ import { qualifyAttempt, qualifyAttempts, type QualifiedAttempt } from "./teleme
 import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
 import { readAttempt, transitionsOf, type AttemptRecord } from "./telemetry/attempt-records.js";
 import {
+  ANY,
   EVIDENCE_SETS,
   LABEL_PREFIX,
   calibrationReport,
@@ -688,6 +689,8 @@ export interface CalibrationQuery extends PageRequest {
   readonly list?: string;
   /** Issues to forecast a duration for, from the cohort each one's key reads (`forecasts`). */
   readonly for?: readonly string[];
+  /** The model the forecast issues will run on, when the caller knows it: pins their key's model. */
+  readonly model?: string;
 }
 
 /** An issue row as the analytics reads (`timingQuality`, `calibration`) take it. */
@@ -5652,6 +5655,9 @@ export class WorkspaceStore {
     /** The worker attempts behind each member's `workSeconds`, by the rule that sums it. */
     const behind = new Map<string, string[]>();
     const forRows = (query.for ?? []).map((ref) => this.requireRow(ref));
+    const pinnedModel = query.model === undefined ? null : query.model.trim();
+    if (pinnedModel === "") throw new StapleError("validation", "model must name a model (as --model on checkout does); got an empty value.");
+    if (pinnedModel !== null && forRows.length === 0) throw new StapleError("validation", "model pins the model of the issues to forecast; name them with for.");
     if (forRows.length > limit) throw new StapleError("validation", `for takes at most ${limit} issues (the limit); got ${forRows.length}.`);
     const timings = this.timingFor([...new Set([...ratioRows, ...forRows].map((row) => row.id))], asOf, { contributing: behind });
     /** The worker attempts behind an issue's `workSeconds`, oldest first. */
@@ -5670,6 +5676,17 @@ export class WorkspaceStore {
         area: labelDimension(labels, LABEL_PREFIX.area),
         model: modelDimension(contributing.map((attempt) => attempt.harness?.model ?? null)),
       };
+    };
+    /**
+     * A forecast issue's key: the sample rules, except the model. Pinned by the caller, or read
+     * from its attempts; with none, `*`, so an unstarted issue never matches the samples that
+     * named no model as if "no model" were one.
+     */
+    const forecastKey = (row: AnalyticsRow | IssueRow): CohortKey => {
+      const contributing = contributingTo(row.id);
+      const key = dimensionsOf(row, contributing);
+      if (pinnedModel !== null) return { ...key, model: pinnedModel };
+      return contributing.length === 0 ? { ...key, model: ANY } : key;
     };
     const members: CalibrationMember[] = ratioRows.map((row) => {
       const timing = timings.get(row.id)!;
@@ -5732,7 +5749,7 @@ export class WorkspaceStore {
         title: row.title,
         status: row.status,
         estimateSeconds: row.estimated_seconds,
-        dimensions: dimensionsOf(row, contributingTo(row.id)),
+        dimensions: forecastKey(row),
       })),
     });
   }

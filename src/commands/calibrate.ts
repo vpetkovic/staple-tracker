@@ -30,17 +30,23 @@ const HELP = `staple calibrate — how long work of a class takes against its es
               ranges     quantiles p10 p25 p50 p75 p90 (lower method), an
                          order-statistic interval for each, and bounds for one
                          more sample, at 90% or with the confidence reached
-              tail       heavy when 2+ samples (and 5%) sit beyond 3.5 robust
-                         deviations of ln(ratio): expected ratio winsorised
+              tail       from 10 samples: heavy when 3+ (and 5%) sit beyond
+                         3.5 robust deviations of ln(ratio); the expected
+                         ratio is then clipped at the fences, and reads low
               floors     work under 60s, never samples; more floors than
-                         samples and a forecast reads the floor
-              warnings   small_sample bounds_below_confidence fallback_used
-                         heavy_tail floor_dominated floors_excluded
-                         reconstructed_only no_samples
+                         samples (5+ of both) and a forecast reads the floor
+              warnings   small_sample bounds_below_confidence
+                         quantile_below_confidence fallback_used heavy_tail
+                         floor_dominated floors_excluded reconstructed_only
+                         no_samples
+              paths      only a forecast's expected seconds add along a path;
+                         quantiles and bounds do not
   --include reconstructed   add backfilled history as its own cohorts, never
               pooled with exact (records with nothing approximate about them)
   --for REF   forecast REF's duration (repeat, or a comma list): the cohort
-              its key reads times its own estimate, per evidence set
+              its key reads times its own estimate, per evidence set. An
+              issue with no attempt yet matches any model
+  --model M   with --for: the model the work will run on, pinned in its key
   --samples   list the samples instead of the cohorts
   --kind, --priority  only these      --parent  only issues beneath REF
   --since     resolved at or after an ISO instant, or that long ago (7d, 12h)
@@ -135,6 +141,7 @@ export function runCalibrateCommand(rest: string[]): void {
       limit: { type: "string" },
       cursor: { type: "string" },
       for: { type: "string", multiple: true },
+      model: { type: "string" },
     },
   });
   if (values.help === true) return console.log(HELP);
@@ -152,6 +159,7 @@ export function runCalibrateCommand(rest: string[]): void {
     limit: limitFlag(values.limit),
     cursor: values.cursor,
     for: list(values.for),
+    model: values.model,
   });
   if (values.json) return console.log(JSON.stringify(report));
   say(report);

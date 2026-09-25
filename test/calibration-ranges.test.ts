@@ -1,7 +1,7 @@
 /**
  * Confidence ranges (`docs/timing-semantics.md`, "Confidence ranges"): lower quantiles, the
  * order-statistic intervals and prediction bounds with the confidence each reaches, the
- * heavy-tail test and the winsorised expected ratio, timing floors kept apart, the warnings,
+ * heavy-tail test and the fence-clipped expected ratio, timing floors kept apart, the warnings,
  * and duration forecasts.
  *
  * The statistics are checked against an independent brute-force oracle and a seeded Monte
@@ -165,49 +165,97 @@ describe("quantiles and intervals", () => {
 describe("the heavy-tail test", () => {
   const at = (ratios: number[], estimate = 7200) => ratios.map((ratio) => ({ ratio, estimateSeconds: estimate }));
 
-  it("flags two samples beyond 3.5 robust deviations of ln(ratio), and winsorises the expected ratio at the fences", () => {
-    expect(HEAVY_TAIL).toEqual({ rule: "log_mad_z", z: 3.5, minOutliers: 2, minShare: 0.05 });
+  /** The rule written out independently: standard medians, z over 3.5 and more than ln 1.05 out. */
+  const median = (values: number[]): number => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const n = sorted.length;
+    return n % 2 === 1 ? sorted[(n - 1) / 2]! : (sorted[n / 2 - 1]! + sorted[n / 2]!) / 2;
+  };
+
+  it("flags three samples beyond 3.5 robust deviations of ln(ratio), and clips the expected ratio at the fences", () => {
+    expect(HEAVY_TAIL).toEqual({ rule: "log_mad_z", z: 3.5, minSamples: 10, minOutliers: 3, minShare: 0.05, minLogDeviation: Math.log(1.05) });
     const core = [0.15, 0.158, 0.167, 0.175, 0.183, 0.192, 0.2, 0.208];
-    const tail = tailOf(at([...core, 4, 4]));
+    const tail = tailOf(at([...core, 4, 4, 4]));
     expect(tail.tested).toBe(true);
-    expect(tail.outliers).toEqual({ lower: 0, upper: 2 });
-    expect(tail.share).toBe(0.2);
+    expect(tail.outliers).toEqual({ lower: 0, upper: 3 });
+    expect(tail.share).toBeCloseTo(3 / 11, 12);
     expect(tail.heavy).toBe(true);
     expect(tail.scale).toBe("mad");
-    // Median ln(0.183); MAD the lower median of the deviations, ln(0.183 / 0.167).
-    const m = Math.log(0.183);
-    const scale = Math.log(0.183 / 0.167) / 0.6745;
+    // n = 11: the median is the sixth ratio, 0.192; the MAD the sixth deviation, ln(0.192 / 0.167).
+    const logs = [...core, 4, 4, 4].map(Math.log);
+    const m = median(logs);
+    expect(m).toBeCloseTo(Math.log(0.192), 12);
+    const scale = median(logs.map((x) => Math.abs(x - m))) / 0.6745;
+    expect(scale).toBeCloseTo(Math.log(0.192 / 0.167) / 0.6745, 12);
     expect(tail.fences!.upper).toBeCloseTo(Math.exp(m + 3.5 * scale), 10);
     expect(tail.fences!.lower).toBeCloseTo(Math.exp(m - 3.5 * scale), 10);
-    const winsorised = (core.reduce((sum, ratio) => sum + ratio, 0) + 2 * tail.fences!.upper) / 10;
-    expect(tail.winsorisedPooled).toBeCloseTo(winsorised, 12);
-    expect(tail.winsorisedPooled!).toBeLessThan((core.reduce((sum, ratio) => sum + ratio, 0) + 8) / 10);
+    const clipped = (core.reduce((sum, ratio) => sum + ratio, 0) + 3 * tail.fences!.upper) / 11;
+    expect(tail.fenceClippedPooled).toBeCloseTo(clipped, 12);
+    expect(tail.fenceClippedPooled!).toBeLessThan((core.reduce((sum, ratio) => sum + ratio, 0) + 12) / 11);
   });
 
-  it("does not call one far sample a tail, nor test fewer than five", () => {
-    const one = tailOf(at([0.15, 0.158, 0.167, 0.175, 0.183, 0.192, 0.2, 0.208, 4]));
-    expect(one.outliers.upper).toBe(1);
-    expect(one.heavy).toBe(false);
-    // Not heavy, so a cohort's expected ratio stays pooled (checked on the store below).
-    const four = tailOf(at([0.1, 0.1, 0.2, 9]));
-    expect(four).toEqual({ tested: false, outliers: { lower: 0, upper: 0 }, share: null, heavy: false, fences: null, scale: null, winsorisedPooled: null });
+  it("does not call two far samples a tail, nor test fewer than ten", () => {
+    const two = tailOf(at([0.15, 0.158, 0.167, 0.175, 0.183, 0.192, 0.2, 0.208, 4, 4]));
+    expect(two.outliers.upper).toBe(2);
+    expect(two.heavy).toBe(false);
+    const nine = tailOf(at([0.15, 0.158, 0.167, 0.175, 0.183, 0.192, 4, 4, 4]));
+    expect(nine).toEqual({ tested: false, outliers: { lower: 0, upper: 0 }, share: null, heavy: false, fences: null, scale: null, fenceClippedPooled: null });
   });
 
-  it("counts a heavy lower tail too, and falls back to the mean absolute deviation when the MAD is 0", () => {
-    const lower = tailOf(at([0.001, 0.001, 0.15, 0.158, 0.167, 0.175, 0.183, 0.192, 0.2, 0.208]));
-    expect(lower.outliers).toEqual({ lower: 2, upper: 0 });
+  it("uses the standard median at even n, where the lower one under-reads the MAD", () => {
+    // Ten samples, even: the lower median of the deviations would be the fifth, the standard one
+    // averages the fifth and sixth. The fences follow the standard one.
+    const ratios = [0.1, 0.11, 0.12, 0.13, 0.14, 0.16, 0.18, 0.2, 0.22, 0.25];
+    const logs = ratios.map(Math.log);
+    const m = median(logs);
+    const scale = median(logs.map((x) => Math.abs(x - m))) / 0.6745;
+    expect(tailOf(at(ratios)).fences!.upper).toBeCloseTo(Math.exp(m + 3.5 * scale), 12);
+  });
+
+  it("counts a heavy lower tail too, and falls back to the mean absolute deviation when at least half are equal", () => {
+    const lower = tailOf(at([0.001, 0.001, 0.001, 0.15, 0.158, 0.167, 0.175, 0.183, 0.192, 0.2, 0.208]));
+    expect(lower.outliers).toEqual({ lower: 3, upper: 0 });
     expect(lower.heavy).toBe(true);
-    // Eight of ten equal: the MAD is 0, and the mean absolute deviation scales instead,
-    // 1.2533 × 2d / 10 for the two at distance d, which puts them at 3.99 deviations: a tail.
-    const ties = tailOf(at([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 50, 50]));
+    // Eleven of fourteen equal: the MAD is 0, and the mean absolute deviation scales instead,
+    // 1.2533 × 3d / 14 for the three at distance d, which puts them at 3.72 deviations.
+    const ties = tailOf(at([...Array.from({ length: 11 }, () => 0.2), 50, 50, 50]));
     expect(ties.scale).toBe("mean_absolute_deviation");
-    expect(ties.outliers).toEqual({ lower: 0, upper: 2 });
+    expect(ties.outliers).toEqual({ lower: 0, upper: 3 });
     expect(ties.heavy).toBe(true);
-    expect(ties.fences!.upper).toBeCloseTo(0.2 * Math.exp((3.5 * 1.253314 * 2 * Math.log(250)) / 10), 9);
-    // Every sample equal: no scale, no fence, no outlier.
-    const flat = tailOf(at([0.2, 0.2, 0.2, 0.2, 0.2]));
-    expect(flat).toMatchObject({ tested: true, heavy: false, fences: null, outliers: { lower: 0, upper: 0 } });
-    expect(flat.winsorisedPooled).toBeCloseTo(0.2, 12);
+    expect(ties.fences!.upper).toBeCloseTo(0.2 * Math.exp((3.5 * 1.253314 * 3 * Math.log(250)) / 14), 9);
+    // Every sample equal: nothing is an outlier, and the fences sit ln 1.05 out.
+    const flat = tailOf(at(Array.from({ length: 10 }, () => 0.2)));
+    expect(flat).toMatchObject({ tested: true, heavy: false, outliers: { lower: 0, upper: 0 } });
+    expect(flat.fences!.upper).toBeCloseTo(0.21, 12);
+    expect(flat.fenceClippedPooled).toBeCloseTo(0.2, 12);
+  });
+
+  it("never calls a spread of fractions of a percent an outlier", () => {
+    // 39 at 1.0 and three at 1.001: the MAD is 0 and the scale tiny, so z is enormous, but no
+    // sample is more than ln 1.05 from the median.
+    const trivial = tailOf(at([...Array.from({ length: 39 }, () => 1), 1.001, 1.001, 1.001]));
+    expect(trivial.outliers).toEqual({ lower: 0, upper: 0 });
+    expect(trivial.heavy).toBe(false);
+  });
+
+  it("flags at most 2% of plain lognormal cohorts at any n, and finds a real tail (seeded simulation)", () => {
+    const random = seeded(1227);
+    const normal = (): number => Math.sqrt(-2 * Math.log(1 - random())) * Math.cos(2 * Math.PI * random());
+    const trials = 2000;
+    for (const n of [5, 8, 9, 10, 11, 12, 15, 20, 30, 40, 60, 100]) {
+      let flagged = 0;
+      for (let trial = 0; trial < trials; trial += 1) {
+        if (tailOf(at(Array.from({ length: n }, () => Math.exp(0.5 * normal())))).heavy) flagged += 1;
+      }
+      expect(flagged / trials, `n ${n}`).toBeLessThanOrEqual(0.02);
+    }
+    // The same core with 15% of the samples forty times the median: found nearly always (at twenty times, about 70%: three must each clear the fence).
+    let found = 0;
+    for (let trial = 0; trial < trials; trial += 1) {
+      const values = Array.from({ length: 20 }, (_, index) => (index < 3 ? 40 : 1) * Math.exp(0.5 * normal()));
+      if (tailOf(at(values)).heavy) found += 1;
+    }
+    expect(found / trials).toBeGreaterThan(0.9);
   });
 
   it("flags the live tracker's shape: the sparse minority is a heavy tail, the rest is not", () => {
@@ -320,34 +368,47 @@ describe("cohort ranges", () => {
     expect(cohort!.ratio.bounds).toEqual({ lower: 20 / 120, upper: 60 / 120, ranks: [1, 5], confidence: 0.666666666667, reached: false });
     expect(cohort!.workSeconds.bounds).toEqual({ lower: min(20), upper: min(60), ranks: [1, 5], confidence: 0.666666666667, reached: false });
     expect(cohort!.ratio.expected).toEqual({ value: 210 / 600, method: "pooled" });
-    expect(cohort!.tail).toMatchObject({ tested: true, heavy: false });
+    // Five samples cannot tell a tail from noise: untested.
+    expect(cohort!.tail).toMatchObject({ tested: false, heavy: false });
     expect(cohort!.floors).toEqual({ count: 0, share: 0, dominated: false, seconds: 60, refs: [], truncated: false });
-    expect(cohort!.warnings).toEqual(["bounds_below_confidence"]);
+    expect(cohort!.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence"]);
   });
 
-  it("reaches 90% bounds from 19 samples and drops the warning", () => {
+  it("reaches 90% bounds from 19 samples, and every quantile's interval from 22", () => {
     for (let i = 0; i < 19; i += 1) worked(`t${i}`, { minutes: 15 + i });
     const [cohort] = cohorts(read());
     expect(cohort!.ratio.bounds).toMatchObject({ lower: 15 / 120, upper: 33 / 120, confidence: 0.9, reached: true });
     expect(cohort!.ratio.intervals!.p50.reached).toBe(true);
-    expect(cohort!.warnings).toEqual([]);
+    expect(cohort!.ratio.intervals!.p90.reached).toBe(false);
+    expect(cohort!.warnings).toEqual(["quantile_below_confidence"]);
+    for (let i = 19; i < 22; i += 1) worked(`t${i}`, { minutes: 15 + i });
+    const [more] = cohorts(read());
+    expect(Object.values(more!.ratio.intervals!).every((interval) => interval.reached)).toBe(true);
+    expect(more!.warnings).toEqual([]);
   });
 
-  it("reads a heavy-tailed cohort's expected ratio winsorised, never pooled", () => {
+  it("reads a heavy-tailed cohort's expected ratio clipped at the fences, never pooled", () => {
     for (let i = 0; i < 8; i += 1) worked(`core ${i}`, { minutes: 18 + i, labels: ["type:feature"] });
-    // Two tickets estimated at five minutes that took twenty: 4 × the estimate.
-    worked("under 1", { minutes: 20, estimate: min(5), labels: ["type:feature"] });
-    worked("under 2", { minutes: 20, estimate: min(5), labels: ["type:feature"] });
+    // Three tickets estimated at five minutes that took twenty: 4 × the estimate.
+    for (let i = 0; i < 3; i += 1) worked(`under ${i}`, { minutes: 20, estimate: min(5), labels: ["type:feature"] });
     const [cohort] = cohorts(read());
-    expect(cohort!.tail).toMatchObject({ tested: true, heavy: true, outliers: { lower: 0, upper: 2 }, share: 0.2 });
-    expect(cohort!.ratio.pooled).toBeCloseTo(212 / 970, 12);
-    expect(cohort!.ratio.expected.method).toBe("winsorised_pooled");
-    expect(cohort!.ratio.expected.value).toBeCloseTo(cohort!.tail.winsorisedPooled!, 12);
-    expect(cohort!.ratio.expected.value).toBeCloseTo((172 + 2 * cohort!.tail.fences!.upper * 5) / 970, 12);
+    expect(cohort!.tail).toMatchObject({ tested: true, heavy: true, outliers: { lower: 0, upper: 3 } });
+    expect(cohort!.ratio.pooled).toBeCloseTo(232 / 975, 12);
+    expect(cohort!.ratio.expected.method).toBe("fence_clipped_pooled");
+    expect(cohort!.ratio.expected.value).toBeCloseTo(cohort!.tail.fenceClippedPooled!, 12);
+    expect(cohort!.ratio.expected.value).toBeCloseTo((172 + 3 * cohort!.tail.fences!.upper * 5) / 975, 12);
     // The quantiles are order statistics: the tail moves p90 only.
-    expect(cohort!.ratio.quantiles!.p50).toBeCloseTo(22 / 120, 12);
+    expect(cohort!.ratio.quantiles!.p50).toBeCloseTo(23 / 120, 12);
     expect(cohort!.ratio.quantiles!.p90).toBe(4);
-    expect(cohort!.warnings).toEqual(["bounds_below_confidence", "heavy_tail"]);
+    expect(cohort!.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "heavy_tail"]);
+  });
+
+  it("keeps the pooled ratio when only two samples sit far out", () => {
+    for (let i = 0; i < 8; i += 1) worked(`core ${i}`, { minutes: 18 + i });
+    for (let i = 0; i < 2; i += 1) worked(`under ${i}`, { minutes: 20, estimate: min(5) });
+    const [cohort] = cohorts(read());
+    expect(cohort!.tail).toMatchObject({ tested: true, heavy: false, outliers: { lower: 0, upper: 2 } });
+    expect(cohort!.ratio.expected).toEqual({ value: cohort!.ratio.pooled, method: "pooled" });
   });
 
   it("keeps timing floors apart: counted and listed per class, never samples, and a warning that the samples read long", () => {
@@ -359,7 +420,7 @@ describe("cohort ranges", () => {
     expect(cohort!.floors).toEqual({ count: 2, share: 2 / 7, dominated: false, seconds: 60, refs: [floorA.identifier, floorB.identifier], truncated: false });
     expect(cohort!.excluded.counts).toEqual({ "timing-floor": 2 });
     expect(cohort!.path).toEqual([{ level: 0, name: "full", samples: 5, floors: 2 }]);
-    expect(cohort!.warnings).toEqual(["bounds_below_confidence", "floors_excluded"]);
+    expect(cohort!.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "floors_excluded"]);
   });
 
   it("files a floor under its own evidence set: a captured floor is never the reconstructed set's, nor a backfilled one the exact set's", () => {
@@ -373,7 +434,7 @@ describe("cohort ranges", () => {
     const bySet = (set: string) => cohorts(report).find((cohort) => cohort.set === set)!;
     expect(bySet("exact").floors).toMatchObject({ count: 1, refs: [captured.identifier] });
     expect(bySet("reconstructed").floors).toMatchObject({ count: 1, refs: [backfilled.identifier] });
-    expect(bySet("reconstructed").warnings).toEqual(["bounds_below_confidence", "floors_excluded", "reconstructed_only"]);
+    expect(bySet("reconstructed").warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "floors_excluded", "reconstructed_only"]);
   });
 
   it("reads a class its floors outnumber at its own key, floor_dominated, instead of falling back past it", () => {
@@ -385,7 +446,17 @@ describe("cohort ranges", () => {
     expect(chore.path).toEqual([{ level: 0, name: "full", samples: 1, floors: 4 }]);
     expect(chore.samples).toBe(1);
     expect(chore.floors).toMatchObject({ count: 4, share: 0.8, dominated: true });
-    expect(chore.warnings).toEqual(["small_sample", "bounds_below_confidence", "floor_dominated"]);
+    expect(chore.warnings).toEqual(["small_sample", "bounds_below_confidence", "quantile_below_confidence", "floor_dominated"]);
+  });
+
+  it("does not call one floor record a floor-dominated class: floors and samples must make five", () => {
+    worked("tiny", { kind: "chore", minutes: 0.5 });
+    at(clock);
+    const open = store.createIssue({ title: "next chore", kind: "chore", estimatedSeconds: min(30) });
+    const [forecast] = read({ for: [open.identifier] }).forecasts;
+    expect(forecast!.floors).toMatchObject({ count: 1, dominated: false });
+    expect(forecast!.state).toBe("no_samples");
+    expect(forecast!.warnings).toEqual(["small_sample", "fallback_used", "floors_excluded", "no_samples"]);
   });
 
   it("warns reconstructed_only on the reconstructed set, and fallback_used on a broader class", () => {
@@ -393,8 +464,18 @@ describe("cohort ranges", () => {
     worked("bug", { kind: "bug" });
     const bug = cohorts(read()).find((cohort) => cohort.key.kind === "bug")!;
     expect(bug.levelName).toBe("all");
-    expect(bug.warnings).toEqual(["bounds_below_confidence", "fallback_used"]);
-    expect(CALIBRATION_WARNINGS).toEqual(["small_sample", "bounds_below_confidence", "fallback_used", "heavy_tail", "floor_dominated", "floors_excluded", "reconstructed_only", "no_samples"]);
+    expect(bug.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "fallback_used"]);
+    expect(CALIBRATION_WARNINGS).toEqual([
+      "small_sample",
+      "bounds_below_confidence",
+      "quantile_below_confidence",
+      "fallback_used",
+      "heavy_tail",
+      "floor_dominated",
+      "floors_excluded",
+      "reconstructed_only",
+      "no_samples",
+    ]);
   });
 });
 
@@ -412,18 +493,20 @@ describe("duration forecasts", () => {
       identifier: open.identifier,
       status: "backlog",
       estimate: { seconds: min(240) },
-      key: { kind: "task", priority: "high", workType: "unknown", area: "sync", model: "unknown" },
-      cohort: { level: 0, levelName: "full", fallback: "none", samples: 5 },
+      // Nobody has started it: no model to match, so the walk starts without the model.
+      key: { kind: "task", priority: "high", workType: "unknown", area: "sync", model: "*" },
+      cohort: { level: 1, levelName: "without_model", fallback: "none", samples: 5 },
       state: "ratio",
       heavyTail: false,
-      warnings: ["bounds_below_confidence"],
+      warnings: ["bounds_below_confidence", "quantile_below_confidence"],
       missing: {},
     });
     expect(forecast!.seconds).toEqual({ p10: min(40), p25: min(60), p50: min(80), p75: min(120), p90: min(120) });
     expect(forecast!.bounds).toEqual({ lower: min(40), upper: min(120), ranks: [1, 5], confidence: 0.666666666667, reached: false });
     expect(forecast!.expected).toEqual({ seconds: (210 / 600) * min(240), ratio: 210 / 600, method: "pooled" });
-    // One rule for the key: the class the forecast read is the listed cohort's.
-    expect(forecast!.cohort.class).toEqual(cohort!.class);
+    // The class the forecast read holds exactly the listed cohort's samples.
+    expect(forecast!.cohort.class).toEqual({ ...cohort!.class, model: "*" });
+    expect(forecast!.cohort.samples).toBe(cohort!.samples);
     // The forecast is not part of the data: asking for one leaves the snapshot alone.
     expect(report.snapshot.id).toBe(read().snapshot.id);
   });
@@ -436,7 +519,29 @@ describe("duration forecasts", () => {
     const [forecast] = read({ for: [open.id] }).forecasts;
     expect(forecast!.key.model).toBe("sonnet");
     expect(forecast!.cohort).toMatchObject({ levelName: "without_model", fallback: "below_minimum", samples: 5 });
-    expect(forecast!.warnings).toEqual(["bounds_below_confidence", "fallback_used"]);
+    expect(forecast!.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "fallback_used"]);
+  });
+
+  it("never files an unstarted issue under the samples that named no model, and lets the caller pin the model", () => {
+    // Five runs with no harness named took their whole estimate; twenty opus runs took a fifth.
+    for (let i = 0; i < 5; i += 1) worked(`bare ${i}`, { minutes: 20, estimate: min(20) });
+    for (let i = 0; i < 20; i += 1) worked(`opus ${i}`, { minutes: 24, model: "opus" });
+    at(clock);
+    const open = store.createIssue({ title: "new", estimatedSeconds: min(60) });
+    const [unpinned] = read({ for: [open.identifier] }).forecasts;
+    // Every sample of task/medium, whatever its model: 20 of 25 read 0.2, so p50 is 12 minutes, not an hour.
+    expect(unpinned!.key.model).toBe("*");
+    expect(unpinned!.cohort).toMatchObject({ levelName: "without_model", fallback: "none", samples: 25 });
+    expect(unpinned!.seconds!.p50).toBeCloseTo(min(12), 6);
+    const [opus] = read({ for: [open.identifier], model: "opus" }).forecasts;
+    expect(opus!.key.model).toBe("opus");
+    expect(opus!.cohort).toMatchObject({ levelName: "full", samples: 20 });
+    expect(opus!.seconds!.p50).toBeCloseTo(min(12), 6);
+    const [bare] = read({ for: [open.identifier], model: "unknown" }).forecasts;
+    expect(bare!.cohort).toMatchObject({ levelName: "full", samples: 5 });
+    expect(bare!.seconds!.p50).toBeCloseTo(min(60), 6);
+    // A pin overrides the model an attempt named, and changes nothing but the forecasts.
+    expect(read({ for: [open.identifier], model: "opus" }).snapshot.id).toBe(read().snapshot.id);
   });
 
   it("forecasts the floor for a floor-dominated class, and says why there are no seconds", () => {
@@ -444,16 +549,20 @@ describe("duration forecasts", () => {
     for (let i = 0; i < 4; i += 1) worked(`tiny ${i}`, { kind: "chore", minutes: 0.5, estimate: min(30) });
     at(clock);
     const open = store.createIssue({ title: "tiny next", kind: "chore", estimatedSeconds: min(30) });
-    const [forecast] = read({ for: [open.identifier] }).forecasts;
+    const unplanned = store.createIssue({ title: "tiny unplanned", kind: "chore" });
+    const [forecast, noEstimate] = read({ for: [open.identifier, unplanned.identifier] }).forecasts;
     expect(forecast).toMatchObject({
       state: "floor",
       seconds: null,
       bounds: null,
-      expected: null,
+      // A path sum adds the bound, never nothing.
+      expected: { seconds: 60, ratio: null, method: "floor_bound" },
       floors: { count: 4, share: 0.8, dominated: true, seconds: 60 },
       missing: { seconds: "floor_dominated" },
-      warnings: ["small_sample", "bounds_below_confidence", "floor_dominated"],
+      warnings: ["small_sample", "bounds_below_confidence", "quantile_below_confidence", "floor_dominated"],
     });
+    // The floor needs no estimate.
+    expect(noEstimate).toMatchObject({ state: "floor", expected: { seconds: 60, method: "floor_bound" }, missing: { seconds: "floor_dominated" } });
   });
 
   it("names a missing estimate and an empty set, per evidence set, in the order asked", () => {
@@ -486,5 +595,7 @@ describe("duration forecasts", () => {
     const a = store.createIssue({ title: "a" }).identifier;
     const b = store.createIssue({ title: "b" }).identifier;
     expect(refusal(() => store.calibration({ for: [a, b], limit: 1 })).message).toMatch(/for takes at most 1 issues/);
+    expect(refusal(() => store.calibration({ model: "opus" })).message).toMatch(/name them with for/);
+    expect(refusal(() => store.calibration({ for: [a], model: " " })).code).toBe("validation");
   });
 });

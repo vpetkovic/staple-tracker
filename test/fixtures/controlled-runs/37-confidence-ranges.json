@@ -1,12 +1,12 @@
 {
   "title": "confidence ranges: quantiles, order-statistic intervals and bounds, a heavy tail read robustly, timing floors kept apart, and duration forecasts, the same on every device",
   "covers": [
-    "ten task/high/feature samples: eight at 18 to 25 minutes over 2h and two at 20 minutes over a 5-minute estimate; the lower quantiles p10 p25 p50 p75 p90 read indices 0 2 4 6 8",
-    "the median's order-statistic interval is ranks 2 to 8, 957/1024; the bounds for one more sample are the range, 9/11, below 90% and said so",
-    "the two 5-minute tickets sit 21.8 robust deviations above the median of ln(ratio): heavy_tail, and the expected ratio is winsorised at the fence (0.180) instead of pooled (0.219)",
+    "eleven task/high/feature samples: eight at 18 to 25 minutes over 2h and three at 20 minutes over a 5-minute estimate; the lower quantiles p10 p25 p50 p75 p90 read indices 1 2 5 7 9",
+    "the median's order-statistic interval is ranks 3 to 9, 1914/2048; the bounds for one more sample are the range, 10/12, below 90% and said so, and the p10/p90 intervals miss 90% too",
+    "the three 5-minute tickets sit 14.7 robust deviations above the standard median of ln(ratio): heavy_tail, and the expected ratio is the pooled ratio clipped at the fence (0.1825) instead of pooled (0.2379)",
     "two timing-floor records in that class are listed apart and never samples: floors_excluded",
-    "a bug/low key with one sample and four floors reads its own key, floor_dominated, and an open bug/low forecasts the floor instead of a ratio",
-    "an open task/high/feature estimated at 4h forecasts estimate times the ratio's quantiles, bounds and expected ratio; one with no estimate reads no_estimate",
+    "a bug/low key with one sample and four floors reads its own key, floor_dominated, and an open bug/low forecasts the floor with a 60-second floor_bound expected figure, with or without an estimate",
+    "an unstarted task/high/feature estimated at 4h has no model to match: its walk starts without the model, and it forecasts estimate times the ratio's quantiles, bounds and clipped expected ratio; one with no estimate reads no_estimate",
     "every figure is from replicated data, so the writer, the tail device and a hydrated device read the same ranges, warnings and forecasts"
   ],
   "start": "2026-09-02T09:00:00.000Z",
@@ -145,6 +145,18 @@
     {
       "at": "0s",
       "do": "create",
+      "ref": "h11",
+      "parent": "p",
+      "estimate": "5m",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
       "ref": "f1",
       "parent": "p",
       "estimate": "30m",
@@ -245,6 +257,14 @@
     },
     {
       "at": "0s",
+      "do": "create",
+      "ref": "o4",
+      "parent": "p",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
       "do": "checkout",
       "ref": "h1",
       "agent": "w1"
@@ -302,6 +322,12 @@
       "do": "checkout",
       "ref": "h10",
       "agent": "w10"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h11",
+      "agent": "w99"
     },
     {
       "at": "0s",
@@ -425,6 +451,13 @@
     {
       "at": "20m",
       "do": "status",
+      "ref": "h11",
+      "to": "done",
+      "agent": "w99"
+    },
+    {
+      "at": "20m",
+      "do": "status",
       "ref": "b1",
       "to": "done",
       "agent": "w13"
@@ -470,14 +503,15 @@
       "asOf": "30m",
       "ref": "p",
       "calibration": {
-        "population": 17,
+        "population": 18,
         "sets": {
-          "exact": 11
+          "exact": 12
         },
         "for": [
           "o1",
           "o2",
-          "o3"
+          "o3",
+          "o4"
         ],
         "cohorts": [
           {
@@ -521,6 +555,7 @@
             "warnings": [
               "small_sample",
               "bounds_below_confidence",
+              "quantile_below_confidence",
               "floor_dominated"
             ]
           },
@@ -533,38 +568,38 @@
               "area": "unknown",
               "model": "unknown"
             },
-            "keySamples": 10,
+            "keySamples": 11,
             "level": "full",
-            "samples": 10,
+            "samples": 11,
             "minRatio": 0.15,
             "maxRatio": 4.0,
             "quantiles": {
-              "p10": 0.15,
+              "p10": 0.15833,
               "p25": 0.16667,
-              "p50": 0.18333,
-              "p75": 0.2,
+              "p50": 0.19167,
+              "p75": 0.20833,
               "p90": 4.0
             },
             "medianInterval": {
-              "lower": 0.15833,
-              "upper": 0.20833,
+              "lower": 0.16667,
+              "upper": 4.0,
               "confidence": 0.9345703125,
               "reached": true
             },
             "bounds": {
               "lower": 0.15,
               "upper": 4.0,
-              "confidence": 0.818182,
+              "confidence": 0.833333,
               "reached": false
             },
             "tail": {
               "heavy": true,
               "lower": 0,
-              "upper": 2
+              "upper": 3
             },
             "expected": {
-              "value": 0.180419,
-              "method": "winsorised_pooled"
+              "value": 0.1825,
+              "method": "fence_clipped_pooled"
             },
             "floors": {
               "count": 2,
@@ -576,6 +611,7 @@
             },
             "warnings": [
               "bounds_below_confidence",
+              "quantile_below_confidence",
               "heavy_tail",
               "floors_excluded"
             ]
@@ -586,26 +622,27 @@
             "ref": "o1",
             "set": "exact",
             "state": "ratio",
-            "level": "full",
+            "level": "without_model",
             "seconds": {
-              "p10": 2160,
+              "p10": 2280,
               "p25": 2400,
-              "p50": 2640,
-              "p75": 2880,
+              "p50": 2760,
+              "p75": 3000,
               "p90": 57600
             },
             "bounds": {
               "lower": 2160,
               "upper": 57600,
-              "confidence": 0.818182,
+              "confidence": 0.833333,
               "reached": false
             },
             "expected": {
-              "seconds": 2598,
-              "method": "winsorised_pooled"
+              "seconds": 2628,
+              "method": "fence_clipped_pooled"
             },
             "warnings": [
               "bounds_below_confidence",
+              "quantile_below_confidence",
               "heavy_tail",
               "floors_excluded"
             ]
@@ -614,10 +651,15 @@
             "ref": "o2",
             "set": "exact",
             "state": "floor",
-            "level": "full",
+            "level": "without_model",
+            "expected": {
+              "seconds": 60,
+              "method": "floor_bound"
+            },
             "warnings": [
               "small_sample",
               "bounds_below_confidence",
+              "quantile_below_confidence",
               "floor_dominated"
             ]
           },
@@ -625,11 +667,28 @@
             "ref": "o3",
             "set": "exact",
             "state": "no_estimate",
-            "level": "full",
+            "level": "without_model",
             "warnings": [
               "bounds_below_confidence",
+              "quantile_below_confidence",
               "heavy_tail",
               "floors_excluded"
+            ]
+          },
+          {
+            "ref": "o4",
+            "set": "exact",
+            "state": "floor",
+            "level": "without_model",
+            "expected": {
+              "seconds": 60,
+              "method": "floor_bound"
+            },
+            "warnings": [
+              "small_sample",
+              "bounds_below_confidence",
+              "quantile_below_confidence",
+              "floor_dominated"
             ]
           }
         ]

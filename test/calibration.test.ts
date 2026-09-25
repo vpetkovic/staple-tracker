@@ -394,7 +394,7 @@ describe("sparse cohorts fall back to broader classes", () => {
     expect(bug.coverage).toEqual({ samples: 11, eligible: 12, fraction: 11 / 12, denominator: "ratio_population" });
     expect(bug.excluded).toEqual({ count: 1, counts: { approximate: 1 }, reasons: { sparse: 1 } });
     // Enough samples for the median, too few for bounds at 90%, and read from a broader class.
-    expect(bug.warnings).toEqual(["bounds_below_confidence", "fallback_used"]);
+    expect(bug.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence", "fallback_used"]);
     expect(bug.rangeConfidence).toBeCloseTo(1 - 2 * 0.5 ** 11, 12);
   });
 
@@ -405,7 +405,7 @@ describe("sparse cohorts fall back to broader classes", () => {
     expect(first!.levelName).toBe("all");
     expect(first!.fallback).toBe("below_minimum_everywhere");
     expect(first!.samples).toBe(2);
-    expect(first!.warnings).toEqual(["small_sample", "bounds_below_confidence", "fallback_used"]);
+    expect(first!.warnings).toEqual(["small_sample", "bounds_below_confidence", "quantile_below_confidence", "fallback_used"]);
   });
 
   it("filters by kind, priority, parent and since before any cohort is formed", () => {

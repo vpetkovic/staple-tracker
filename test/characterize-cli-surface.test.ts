@@ -194,7 +194,7 @@ const COMMANDS: ReadonlyArray<{
   // `--for` forecasts the durations of the issues named.
   {
     name: "calibrate",
-    strings: ["db", "ws", "kind", "priority", "parent", "since", "include", "limit", "cursor", "for"],
+    strings: ["db", "ws", "kind", "priority", "parent", "since", "include", "limit", "cursor", "for", "model"],
     booleans: ["json", "help", "samples"],
     shorts: ["h"],
   },

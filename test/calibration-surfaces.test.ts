@@ -150,7 +150,7 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
       confidence: 0.9,
       intervals: "order_statistic",
       minBoundsSamples: 19,
-      heavyTail: { rule: "log_mad_z", z: 3.5, minOutliers: 2, minShare: 0.05 },
+      heavyTail: { rule: "log_mad_z", z: 3.5, minSamples: 10, minOutliers: 3, minShare: 0.05, minLogDeviation: Math.log(1.05) },
       floorSeconds: 60,
     });
     expect(viaCli.forecasts).toEqual([]);
@@ -168,7 +168,7 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     ]);
     const reconstructed = viaCli.items.filter((cohort: any) => cohort.set === "reconstructed");
     expect(reconstructed).toHaveLength(1);
-    expect(reconstructed[0]).toMatchObject({ samples: 1, fallback: "below_minimum_everywhere", warnings: ["small_sample", "bounds_below_confidence", "fallback_used", "reconstructed_only"], members: { total: 1, refs: [refs.legacy], truncated: false } });
+    expect(reconstructed[0]).toMatchObject({ samples: 1, fallback: "below_minimum_everywhere", warnings: ["small_sample", "bounds_below_confidence", "quantile_below_confidence", "fallback_used", "reconstructed_only"], members: { total: 1, refs: [refs.legacy], truncated: false } });
     expect(viaCli.snapshot.id).not.toBe(cliJson("calibrate", "--parent", epic).snapshot.id);
   });
 
@@ -221,8 +221,20 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(next.seconds.p50).toBeCloseTo(4800, 6);
     expect(next.bounds).toMatchObject({ lower: 2400, upper: 7200, reached: false });
     expect(next.expected).toMatchObject({ method: "pooled" });
-    expect(next.warnings).toEqual(["bounds_below_confidence", "fallback_used"]);
-    expect(viaCli.forecasts[1].warnings).toEqual(["small_sample", "bounds_below_confidence", "fallback_used", "reconstructed_only"]);
+    // Unstarted: its model is `*`, so its walk starts without the model and reads that class as its own.
+    expect(next.key.model).toBe("*");
+    expect(next.cohort.fallback).toBe("none");
+    expect(next.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence"]);
+    expect(viaCli.forecasts[1].warnings).toEqual(["small_sample", "bounds_below_confidence", "quantile_below_confidence", "fallback_used", "reconstructed_only"]);
+    // A pinned model, the same on every surface.
+    const pinned = cliJson("calibrate", "--parent", epic, "--for", refs.next!, "--model", "opus");
+    const pinnedMcp = await tool("calibration_cohorts", { parent: epic, for: [refs.next], model: "opus" });
+    const pinnedHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}&for=${refs.next}&model=opus`);
+    expect(withoutAsOf(pinnedMcp)).toEqual(withoutAsOf(pinned));
+    expect(withoutAsOf(pinnedHttp.body)).toEqual(withoutAsOf(pinned));
+    // Three opus samples under task/high/ui: below five, so it falls back to without_model.
+    expect(pinned.forecasts[0]).toMatchObject({ key: { model: "opus" }, cohort: { levelName: "without_model", fallback: "below_minimum" } });
+    expect(pinned.forecasts[0].cohort.path[0]).toEqual({ level: 0, name: "full", samples: 3, floors: 0 });
     // Asking for a forecast leaves the data's identity alone.
     expect(viaCli.snapshot.id).toBe(cliJson("calibrate", "--parent", epic, "--include", "reconstructed").snapshot.id);
     const missing = cli("calibrate", "--for", "NOPE-1", "--ws", WS);
@@ -253,11 +265,11 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(lines[6]).toBe("exact         kind=task priority=high workType=unknown area=ui model=opus · 3 own → without_model (full 3, without_model 5)");
     expect(lines[7]).toMatch(/^ {14}kind=task priority=high workType=unknown area=ui: n 5 \(83\.3% of 6\) · ratio median 0\.333, range 0\.167–0\.500, pooled 0\.350 · work median 40m/);
     expect(lines[8]).toBe(
-      "              ratio p10 0.167 p25 0.250 p50 0.333 p75 0.500 p90 0.500 · bounds 0.167–0.500 (66.7%, below target) · expected 0.350 (pooled) · tail ok (0 beyond the fences)",
+      "              ratio p10 0.167 p25 0.250 p50 0.333 p75 0.500 p90 0.500 · bounds 0.167–0.500 (66.7%, below target) · expected 0.350 (pooled) · tail untested",
     );
     const forecast = cli("calibrate", "--parent", epic, "--for", refs.next!, "--ws", WS).stdout.trimEnd().split("\n").at(-1);
     expect(forecast).toBe(
-      `forecast      ${refs.next} exact · est 4h · kind=task priority=high workType=unknown area=ui n 5 → p50 1h20m, p10–p90 40m–2h · bounds 40m–2h (66.7%, below target) · expected 1h24m (pooled) · bounds_below_confidence, fallback_used`,
+      `forecast      ${refs.next} exact · est 4h · kind=task priority=high workType=unknown area=ui n 5 → p50 1h20m, p10–p90 40m–2h · bounds 40m–2h (66.7%, below target) · expected 1h24m (pooled) · bounds_below_confidence, quantile_below_confidence`,
     );
   });
 });

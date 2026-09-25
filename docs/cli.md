@@ -801,30 +801,42 @@ staple calibrate --kind task --include reconstructed --for STA-42
   target is 90%, and one that cannot reach it is the sample range with the
   confidence it does reach, `reached: false`. Bounds reach 90% from 19 samples
   and the median's interval from 5; p10 and p90 need 22. Null with no sample.
-- **Heavy tails.** `tail` tests `ln(ratio)`: a sample is an outlier past 3.5
-  robust deviations (modified z-score over the MAD), and the cohort is heavy
-  when at least 2 samples, and 5% of them, are. It reports the outliers each
-  way, the share, the `fences` and `winsorisedPooled`. `ratio.expected` is
-  `{value, method}`: the pooled ratio, or for a heavy tail the winsorised
-  pooled ratio (each sample's ratio held inside the fences). Never a mean.
+- **Heavy tails.** `tail` tests `ln(ratio)` from 10 samples, with the
+  standard median: a sample is an outlier past 3.5 robust deviations
+  (modified z-score over the MAD) and more than 5% from the median, and the
+  cohort is heavy when at least 3 samples, and 5% of them, are. It reports the
+  outliers each way, the share, the `fences` and `fenceClippedPooled`.
+  `ratio.expected` is `{value, method}`: the pooled ratio, or for a heavy tail
+  the pooled ratio with each sample's ratio clipped at the fences
+  (`fence_clipped_pooled`). Never a mean. The clipped figure reads low on the
+  class it is used for.
 - **Floors.** `floors` lists the class's timing-floor members (work under 60
   seconds, never samples): `count`, `share` of floors and samples, `dominated`
-  (more floors than samples), and up to 20 refs.
+  (more floors than samples, and at least 5 of the two), and up to 20 refs.
 - **Warnings.** A closed list, in this order: `small_sample` (under 5
-  samples), `bounds_below_confidence` (under 19), `fallback_used` (a class
-  broader than the key), `heavy_tail`, `floor_dominated`, `floors_excluded`
-  (some floors, fewer than samples: the samples read long),
+  samples), `bounds_below_confidence` (under 19), `quantile_below_confidence`
+  (a quantile's interval under 90%: p10 and p90 need 22), `fallback_used` (a
+  class broader than the first level tried), `heavy_tail`, `floor_dominated`,
+  `floors_excluded` (some floors, not dominating: the samples read long),
   `reconstructed_only` (the reconstructed set) and `no_samples`.
 - **Forecasts.** `--for REF` (repeat, or a comma list; up to `--limit`) adds
   `forecasts`, one per issue and per evidence set, in the order asked. Each
-  one reads the issue's key by the sample rules (an unstarted issue's model is
-  `unknown`), resolves it to a class as the listing does, and multiplies its
-  own current estimate: `seconds` (p10 … p90), `bounds`, and `expected`
-  (`{seconds, ratio, method}`, additive along a path). `state` is `ratio`,
-  `floor` (a floor-dominated class: the work is expected under 60 seconds,
-  and no seconds are given), `no_samples` or `no_estimate`, with the reason in
+  one reads the issue's key by the sample rules, except that an issue nobody
+  has started has no model to match: its model reads `*` and its walk starts
+  without the model. `--model M` pins the model of every forecast in the read.
+  The key resolves to a class as the listing does, and the forecast multiplies
+  the issue's own current estimate: `seconds` (p10 … p90), `bounds`, and
+  `expected` (`{seconds, ratio, method}`). `state` is `ratio`, `floor` (a
+  floor-dominated class, with or without an estimate: the work is expected
+  under 60 seconds, with no seconds or bounds and `expected` the 60-second
+  `floor_bound`), `no_samples` or `no_estimate`, with the reason in
   `missing.seconds`. The class read (`cohort`) and its warnings come with it.
-  A forecast does not change `snapshot.id`. The rules and a worked example are
+  A forecast does not change `snapshot.id`.
+- **Along a path, only `expected` adds.** Sum `expected.seconds` across a
+  chain for its expected duration. Do not sum quantiles or bounds: the p90 of a
+  chain is not the sum of its links' p90s, and summed bounds are no bound at
+  any stated confidence. A sum over heavy-tailed classes inherits the clipped
+  figure's low bias. The rules and a worked example are
   in [timing-semantics.md](timing-semantics.md#confidence-ranges).
 - **Snapshot.** `snapshot.id` identifies the data the report was computed
   from. The same data gives the same id on every device, in any order and at

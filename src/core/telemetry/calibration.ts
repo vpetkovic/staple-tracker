@@ -82,14 +82,18 @@ export type QuantileName = `p${(typeof QUANTILES)[number]}`;
 export const MIN_BOUNDS_SAMPLES = 19;
 
 /**
- * The heavy-tail rule, on `ln(ratio)`: a sample is an outlier when its modified z-score
- * `(x − median) / (MAD / 0.6745)` exceeds `z` in either direction (Iglewicz and Hoaglin's
- * 3.5); the cohort is heavy-tailed when at least `minOutliers` samples, and at least
- * `minShare` of them, are outliers. Tested from {@link MIN_COHORT_SAMPLES} samples. On the
- * maintainers' tracker it flags the estimated done leaves with their sparse records in
- * (12 of 129, 9.3%) and flags none once the sparse records are out (0 of 108).
+ * The heavy-tail rule, on `ln(ratio)`, with the standard (averaged) median for the centre and
+ * the MAD: a sample is an outlier when its modified z-score `(x − median) / (MAD / 0.6745)`
+ * exceeds `z` in either direction (Iglewicz and Hoaglin's 3.5) AND it sits more than
+ * `minLogDeviation` (ln 1.05) from the median, so a spread of fractions of a percent never
+ * makes one. The cohort is heavy-tailed when at least `minOutliers` samples, and at least
+ * `minShare` of them, are outliers. Tested from `minSamples`. On plain lognormal cohorts
+ * (seeded, 4 000 per n) the rule flags at most about 1.2% at any n from 10 to 200; with two
+ * outliers, or from five samples, it flagged 3–6%. On the maintainers' tracker it flags the
+ * estimated done leaves with their sparse records in (12 of 129, 9.3%) and none once the
+ * sparse records are out (0 of 108).
  */
-export const HEAVY_TAIL = { rule: "log_mad_z", z: 3.5, minOutliers: 2, minShare: 0.05 } as const;
+export const HEAVY_TAIL = { rule: "log_mad_z", z: 3.5, minSamples: 10, minOutliers: 3, minShare: 0.05, minLogDeviation: Math.log(1.05) } as const;
 
 /** The MAD of a normal sample is 0.6745 of its standard deviation. */
 const MAD_SCALE = 0.6745;
@@ -103,8 +107,10 @@ const MEAN_AD_SCALE = 1.253314;
  *   interval cannot reach the confidence.
  * - `bounds_below_confidence`: fewer than {@link MIN_BOUNDS_SAMPLES}; the bounds reach less than it.
  * - `fallback_used`: the class read is broader than the key.
- * - `heavy_tail`: the ratio's tail fails {@link HEAVY_TAIL}; the expected ratio is winsorised.
- * - `floor_dominated`: the class has more timing-floor members than samples; a forecast reads the floor.
+ * - `quantile_below_confidence`: a ratio quantile's interval (p10 and p90 last, from 22 samples) reaches less than it.
+ * - `heavy_tail`: the ratio's tail fails {@link HEAVY_TAIL}; the expected ratio is clipped at the fences.
+ * - `floor_dominated`: the class has more timing-floor members than samples, and at least
+ *   {@link MIN_COHORT_SAMPLES} of the two; a forecast reads the floor.
  * - `floors_excluded`: the class has timing-floor members (fewer than samples); the samples leave them out, so they read long.
  * - `reconstructed_only`: the samples are reconstructed history.
  * - `no_samples`: the class read has no sample at all.
@@ -112,6 +118,7 @@ const MEAN_AD_SCALE = 1.253314;
 export const CALIBRATION_WARNINGS = [
   "small_sample",
   "bounds_below_confidence",
+  "quantile_below_confidence",
   "fallback_used",
   "heavy_tail",
   "floor_dominated",
@@ -241,6 +248,9 @@ export interface CalibrationCoverage {
   readonly denominator: "ratio_population";
 }
 
+/** How an expected ratio was formed. */
+export type ExpectedMethod = "pooled" | "fence_clipped_pooled";
+
 /** A distribution-free interval between two order statistics of a cohort's samples. */
 export interface OrderInterval {
   readonly lower: number;
@@ -265,19 +275,22 @@ export interface CalibrationSpread {
 
 /** The heavy-tail test of a cohort's ratios ({@link HEAVY_TAIL}). */
 export interface CalibrationTail {
-  /** False below {@link MIN_COHORT_SAMPLES}: too few samples to tell a tail from noise. */
+  /** False below `HEAVY_TAIL.minSamples` (10): too few samples to tell a tail from noise. */
   readonly tested: boolean;
   /** Samples beyond each fence. */
   readonly outliers: { readonly lower: number; readonly upper: number };
   /** Outliers over samples; null when not tested. */
   readonly share: number | null;
   readonly heavy: boolean;
-  /** The ratios beyond which a sample is an outlier; null when not tested or when every sample is equal. */
+  /** The ratios beyond which a sample is an outlier; null when not tested. */
   readonly fences: { readonly lower: number; readonly upper: number } | null;
   /** The scale the z-score divides by: the MAD, or the mean absolute deviation when the MAD is 0. */
   readonly scale: "mad" | "mean_absolute_deviation" | null;
-  /** `Σ clamp(ratio, fences) × estimate / Σ estimate`; null when not tested. */
-  readonly winsorisedPooled: number | null;
+  /**
+   * `Σ clamp(ratio, fences) × estimate / Σ estimate`: the pooled ratio with every sample's
+   * ratio clipped at the fences (not a winsorisation at a quantile). Null when not tested.
+   */
+  readonly fenceClippedPooled: number | null;
 }
 
 /** The class's timing-floor members: work under {@link TIMING_FLOOR_SECONDS}, never samples, kept visible. */
@@ -285,7 +298,7 @@ export interface CalibrationFloors {
   readonly count: number;
   /** Floors over floors and samples; null when both are 0. */
   readonly share: number | null;
-  /** More floors than samples: a forecast reads the floor, not a ratio. */
+  /** More floors than samples, with at least {@link MIN_COHORT_SAMPLES} of the two: a forecast reads the floor, not a ratio. */
   readonly dominated: boolean;
   readonly seconds: number;
   /** Oldest resolution first, at most {@link MEMBER_REFS}. */
@@ -325,8 +338,12 @@ export interface CalibrationCohort {
     readonly pooled: number;
     readonly min: number;
     readonly max: number;
-    /** The ratio a forecast's expected duration uses: `pooled`, or `winsorised_pooled` when the tail is heavy. */
-    readonly expected: { readonly value: number; readonly method: "pooled" | "winsorised_pooled" };
+    /**
+     * The ratio a forecast's expected duration uses: `pooled`, or `fence_clipped_pooled` when the
+     * tail is heavy. The clipped figure is biased low on a heavy-tailed class: it caps exactly
+     * the long runs that make the tail.
+     */
+    readonly expected: { readonly value: number; readonly method: ExpectedMethod };
     /** Null with no sample. */
     readonly quantiles: CalibrationSpread["quantiles"] | null;
     readonly intervals: CalibrationSpread["intervals"] | null;
@@ -384,8 +401,12 @@ export interface DurationForecast {
   readonly seconds: Record<QuantileName, number> | null;
   /** `estimate × ratio.bounds`: where this issue's duration falls, at the confidence reached. */
   readonly bounds: OrderInterval | null;
-  /** `estimate × ratio.expected`: the figure a sum along a path adds. */
-  readonly expected: { readonly seconds: number; readonly ratio: number; readonly method: "pooled" | "winsorised_pooled" } | null;
+  /**
+   * `estimate × ratio.expected`: the one figure that adds along a path (quantiles and bounds do
+   * not). For a floor forecast, `{seconds: 60, ratio: null, method: "floor_bound"}`, an upper
+   * bound. `fence_clipped_pooled` reads low on a heavy-tailed class, and a sum inherits that.
+   */
+  readonly expected: { readonly seconds: number; readonly ratio: number | null; readonly method: ExpectedMethod | "floor_bound" } | null;
   readonly heavyTail: boolean;
   readonly floors: Pick<CalibrationFloors, "count" | "share" | "dominated" | "seconds">;
   readonly warnings: CalibrationWarning[];
@@ -618,33 +639,39 @@ export function spreadOf(values: readonly number[]): CalibrationSpread | null {
   return { quantiles, intervals, bounds: intervalOf(sorted, predictionInterval(n)) };
 }
 
+/** The standard median: the middle value, or the mean of the two middle values. Only the tail test reads it. */
+export function standardMedian(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  return n % 2 === 1 ? sorted[(n - 1) / 2]! : (sorted[n / 2 - 1]! + sorted[n / 2]!) / 2;
+}
+
 /**
  * The heavy-tail test ({@link HEAVY_TAIL}) over samples' ratios and the estimates they divided
- * by. On `ln(ratio)`: the lower median m, the MAD (the lower median of `|x − m|`), and the
- * scale `MAD / 0.6745`, or `1.2533 × mean |x − m|` when the MAD is 0 (more than half the
- * samples equal); a scale of 0 means every sample is equal, and nothing is an outlier.
+ * by. On `ln(ratio)`: the standard median m, the MAD (the standard median of `|x − m|`), and
+ * the scale `MAD / 0.6745`, or `1.2533 × mean |x − m|` when the MAD is 0 (at least half the
+ * samples equal). The fences sit `max(z × scale, ln 1.05)` either side of m; a sample beyond
+ * one is an outlier. The lower median, the published quantiles' method, under-reads the MAD
+ * at even n and was the source of false positives there, so the test alone uses this one.
  */
 export function tailOf(samples: ReadonlyArray<{ readonly ratio: number; readonly estimateSeconds: number }>): CalibrationTail {
   const n = samples.length;
-  if (n < MIN_COHORT_SAMPLES) {
-    return { tested: false, outliers: { lower: 0, upper: 0 }, share: null, heavy: false, fences: null, scale: null, winsorisedPooled: null };
+  if (n < HEAVY_TAIL.minSamples) {
+    return { tested: false, outliers: { lower: 0, upper: 0 }, share: null, heavy: false, fences: null, scale: null, fenceClippedPooled: null };
   }
   const logs = samples.map((sample) => Math.log(sample.ratio));
-  const m = lowerMedian(logs);
+  const m = standardMedian(logs);
   const deviations = logs.map((x) => Math.abs(x - m));
-  const mad = lowerMedian(deviations);
+  const mad = standardMedian(deviations);
   const kind: "mad" | "mean_absolute_deviation" = mad > 0 ? "mad" : "mean_absolute_deviation";
   const scale = mad > 0 ? mad / MAD_SCALE : (MEAN_AD_SCALE * deviations.reduce((sum, d) => sum + d, 0)) / n;
-  const estimateTotal = samples.reduce((sum, sample) => sum + sample.estimateSeconds, 0);
-  const pooled = samples.reduce((sum, sample) => sum + sample.ratio * sample.estimateSeconds, 0) / estimateTotal;
-  if (scale === 0) {
-    return { tested: true, outliers: { lower: 0, upper: 0 }, share: 0, heavy: false, fences: null, scale: kind, winsorisedPooled: pooled };
-  }
-  const fences = { lower: Math.exp(m - HEAVY_TAIL.z * scale), upper: Math.exp(m + HEAVY_TAIL.z * scale) };
-  const lower = logs.filter((x) => (x - m) / scale < -HEAVY_TAIL.z).length;
-  const upper = logs.filter((x) => (x - m) / scale > HEAVY_TAIL.z).length;
+  const half = Math.max(HEAVY_TAIL.z * scale, HEAVY_TAIL.minLogDeviation);
+  const fences = { lower: Math.exp(m - half), upper: Math.exp(m + half) };
+  const lower = logs.filter((x) => m - x > half).length;
+  const upper = logs.filter((x) => x - m > half).length;
   const outliers = lower + upper;
-  const winsorised = samples.reduce((sum, sample) => sum + Math.min(fences.upper, Math.max(fences.lower, sample.ratio)) * sample.estimateSeconds, 0) / estimateTotal;
+  const estimateTotal = samples.reduce((sum, sample) => sum + sample.estimateSeconds, 0);
+  const clipped = samples.reduce((sum, sample) => sum + Math.min(fences.upper, Math.max(fences.lower, sample.ratio)) * sample.estimateSeconds, 0) / estimateTotal;
   return {
     tested: true,
     outliers: { lower, upper },
@@ -652,7 +679,7 @@ export function tailOf(samples: ReadonlyArray<{ readonly ratio: number; readonly
     heavy: outliers >= HEAVY_TAIL.minOutliers && outliers / n >= HEAVY_TAIL.minShare,
     fences,
     scale: kind,
-    winsorisedPooled: winsorised,
+    fenceClippedPooled: clipped,
   };
 }
 
@@ -705,7 +732,9 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
   const path: Array<{ level: number; name: string; samples: number; floors: number }> = [];
   let chosen = LEVELS.length - 1;
   let enough = false;
-  for (const { level, name } of LEVELS) {
+  // A key with no model to match (an issue nobody has started) starts without the model.
+  const start = key.model === ANY ? 1 : 0;
+  for (const { level, name } of LEVELS.filter((step) => step.level >= start)) {
     const klass = classAt(key, level);
     const count = samples.filter((member) => inClass(member.dimensions, klass)).length;
     const floors = floorMembers.filter((member) => inClass(member.dimensions, klass)).length;
@@ -736,7 +765,8 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
   const floors: CalibrationFloors = {
     count: floored.length,
     share: floored.length + n === 0 ? null : floored.length / (floored.length + n),
-    dominated: floored.length > n,
+    // More floors than samples, and enough of the two to be evidence rather than one record.
+    dominated: floored.length > n && floored.length + n >= MIN_COHORT_SAMPLES,
     seconds: TIMING_FLOOR_SECONDS,
     refs: floored.slice(0, MEMBER_REFS).map((member) => member.identifier),
     truncated: floored.length > MEMBER_REFS,
@@ -744,7 +774,8 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
   const raised = new Set<CalibrationWarning>();
   if (n < MIN_COHORT_SAMPLES) raised.add("small_sample");
   if (ratioSpread !== null && !ratioSpread.bounds.reached) raised.add("bounds_below_confidence");
-  if (chosen > 0) raised.add("fallback_used");
+  if (ratioSpread !== null && Object.values(ratioSpread.intervals).some((interval) => !interval.reached)) raised.add("quantile_below_confidence");
+  if (chosen > start) raised.add("fallback_used");
   if (tail.heavy) raised.add("heavy_tail");
   if (floors.dominated) raised.add("floor_dominated");
   else if (floors.count > 0) raised.add("floors_excluded");
@@ -758,7 +789,7 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
     levelName: LEVELS[chosen]!.name,
     class: klass,
     path,
-    fallback: chosen === 0 && enough ? "none" : enough ? "below_minimum" : "below_minimum_everywhere",
+    fallback: chosen === start && enough ? "none" : enough ? "below_minimum" : "below_minimum_everywhere",
     samples: n,
     coverage: coverageOf(n, eligible.length),
     ratio: {
@@ -766,7 +797,7 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
       pooled,
       min: extreme(ratios, (v) => Math.min(...v)),
       max: extreme(ratios, (v) => Math.max(...v)),
-      expected: tail.heavy ? { value: tail.winsorisedPooled!, method: "winsorised_pooled" } : { value: pooled, method: "pooled" },
+      expected: tail.heavy ? { value: tail.fenceClippedPooled!, method: "fence_clipped_pooled" } : { value: pooled, method: "pooled" },
       quantiles: ratioSpread?.quantiles ?? null,
       intervals: ratioSpread?.intervals ?? null,
       bounds: ratioSpread?.bounds ?? null,
@@ -798,7 +829,11 @@ export interface ForecastSubject {
   readonly status: string;
   /** Its own estimate; null or 0 without one. */
   readonly estimateSeconds: number | null;
-  /** Its key, by the rules a member's is read by. */
+  /**
+   * Its key, by the rules a member's is read by, except the model: an issue with no worker
+   * attempt yet has no model to match, and reads `*` (its walk starts without the model), unless
+   * the caller names the model it will run on.
+   */
   readonly dimensions: CohortKey;
 }
 
@@ -811,10 +846,11 @@ export interface ForecastSubject {
 export function forecastDuration(set: EvidenceSet, subject: ForecastSubject, population: readonly CalibrationMember[]): DurationForecast {
   const cohort = resolveCohort(set, subject.dimensions, population);
   const estimate = subject.estimateSeconds !== null && subject.estimateSeconds > 0 ? subject.estimateSeconds : null;
-  const state: DurationForecast["state"] = estimate === null ? "no_estimate" : cohort.floors.dominated ? "floor" : cohort.samples === 0 ? "no_samples" : "ratio";
+  // The floor needs no estimate: the work is expected under the floor whatever was planned.
+  const state: DurationForecast["state"] = cohort.floors.dominated ? "floor" : estimate === null ? "no_estimate" : cohort.samples === 0 ? "no_samples" : "ratio";
   const missing: Record<string, string> = {};
-  if (state === "no_estimate") missing.seconds = "no_estimate";
-  else if (state === "floor") missing.seconds = "floor_dominated";
+  if (state === "floor") missing.seconds = "floor_dominated";
+  else if (state === "no_estimate") missing.seconds = "no_estimate";
   else if (state === "no_samples") missing.seconds = "no_samples";
   const scaled = state === "ratio" ? estimate! : null;
   const scale = (interval: OrderInterval): OrderInterval => ({ ...interval, lower: interval.lower * scaled!, upper: interval.upper * scaled! });
@@ -829,7 +865,13 @@ export function forecastDuration(set: EvidenceSet, subject: ForecastSubject, pop
     state,
     seconds: scaled === null ? null : (Object.fromEntries(Object.entries(cohort.ratio.quantiles!).map(([name, value]) => [name, value * scaled])) as Record<QuantileName, number>),
     bounds: scaled === null ? null : scale(cohort.ratio.bounds!),
-    expected: scaled === null ? null : { seconds: cohort.ratio.expected.value * scaled, ratio: cohort.ratio.expected.value, method: cohort.ratio.expected.method },
+    // A floor forecast still adds its bound along a path, so a sum never silently drops it.
+    expected:
+      state === "floor"
+        ? { seconds: cohort.floors.seconds, ratio: null, method: "floor_bound" }
+        : scaled === null
+          ? null
+          : { seconds: cohort.ratio.expected.value * scaled, ratio: cohort.ratio.expected.value, method: cohort.ratio.expected.method },
     heavyTail: cohort.tail.heavy,
     floors: { count: cohort.floors.count, share: cohort.floors.share, dominated: cohort.floors.dominated, seconds: cohort.floors.seconds },
     warnings: cohort.warnings,
