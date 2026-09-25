@@ -888,14 +888,15 @@ export const MAX_ESTIMATE_SECONDS = 365 * 86400;
 /**
  * Estimates are positive whole seconds. Zero is refused rather than accepted as
  * a clear: "estimated at nothing" and "no estimate" are different claims, and
- * every surface has an explicit way to say the second one (`--no-estimate`, or
- * an explicit null).
+ * every surface has an explicit way to say the second one (`staple estimate
+ * <ref> --clear` or `--no-estimate` on the CLI, an explicit null on MCP and HTTP),
+ * and the refusal names it for zero, a negative and a fraction alike.
  */
 export function assertEstimateSeconds(value: number): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new StapleError(
       "validation",
-      `estimate must be a positive whole number of seconds (got ${value}); clear it explicitly instead of passing 0`,
+      `estimate must be a positive whole number of seconds (got ${value}); to remove an estimate, clear it: \`staple estimate <ref> --clear\` on the CLI, null on MCP and HTTP`,
     );
   }
   if (value > MAX_ESTIMATE_SECONDS) {

@@ -259,6 +259,16 @@ beforeAll(async () => {
   // moves the source from default to workspace, captured in that order.
   await call("get_setting", "get_setting", { key: "queue.policy", ws: WS });
   await call("set_setting", "set_setting", { key: "queue.policy", value: "strict", ws: WS });
+
+  /**
+   * The explicit estimate write, last and on CON-2 (backlog, unclaimed) so no golden
+   * above reads an estimate it wrote. A set, the identical repeat, the clear, and the
+   * store's refusal of zero.
+   */
+  await call("set_estimate", "set_estimate", { ref: "CON-2", estimate_seconds: 7200, ws: WS });
+  await call("set_estimate_repeat", "set_estimate", { ref: "CON-2", estimate_seconds: 7200, ws: WS });
+  await call("set_estimate_clear", "set_estimate", { ref: "CON-2", estimate_seconds: null, ws: WS });
+  await call("err_estimate_zero", "set_estimate", { ref: "CON-2", estimate_seconds: 0, ws: WS });
 }, 60_000);
 
 afterAll(async () => {
@@ -285,8 +295,9 @@ describe("tool inventory", () => {
   // this ticket adds no tool.
   // Budget ingestion added record_budget_sample: 46 -> 47. Execution attempts added
   // record_attempt_event: 47 -> 48. The telemetry reads added list_attempts,
-  // get_attempt, get_budget and list_budget_samples: 48 -> 52.
-  it("exposes exactly these 52 tools with these annotations and output schemas", async () => {
+  // get_attempt, get_budget and list_budget_samples: 48 -> 52. The explicit estimate
+  // write added set_estimate: 52 -> 53.
+  it("exposes exactly these 53 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -330,6 +341,22 @@ describe("tool inventory", () => {
           openWorldHint: false,
         },
         hasOutputSchema: false,
+      },
+      /**
+       * The explicit estimate write. Idempotent by value: the identical repeat is a
+       * no-op answering changed: false. Not destructive, like update_task, which can
+       * clear an estimate too.
+       */
+      {
+        name: "set_estimate",
+        annotations: {
+          title: "Set estimate",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
       },
       /**
        * C1 moved BOTH claim tools to destructiveHint: true. With
@@ -978,6 +1005,27 @@ describe("tool response shapes (31/31)", () => {
     );
   });
 
+  it("set_estimate: the issue plus what the call did to its estimate", () => {
+    const con2 = { identifier: "CON-2", title: "Contract idempotent", idempotencyKey: "idem-1" };
+    assertGolden(
+      "set_estimate",
+      issueGolden({ ...con2, estimatedSeconds: 7200, estimateChange: { from: null, to: 7200, changed: true } }),
+    );
+    // The identical repeat writes nothing and says so.
+    assertGolden(
+      "set_estimate_repeat",
+      issueGolden({ ...con2, estimatedSeconds: 7200, estimateChange: { from: 7200, to: 7200, changed: false } }),
+    );
+    assertGolden(
+      "set_estimate_clear",
+      issueGolden({ ...con2, estimatedSeconds: null, estimateChange: { from: 7200, to: null, changed: true } }),
+    );
+    const refused = mcpEnvelope(got("err_estimate_zero"));
+    expect(refused.code).toBe("validation");
+    expect(String(refused.message)).toMatch(/positive whole number of seconds/);
+    expect(refused.retryable).toBe(false);
+  });
+
   it("release_task", () => {
     assertGolden(
       "release_task",
@@ -1530,6 +1578,7 @@ describe("tool response shapes (31/31)", () => {
       "init",
       "create_task",
       "update_task",
+      "set_estimate",
       "checkout_task",
       "release_task",
       "set_blocked_by",

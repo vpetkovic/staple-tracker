@@ -341,6 +341,52 @@ function estimateOption(
   return parseDuration(raw, "estimate");
 }
 
+/**
+ * `staple estimate <ref> <dur>` / `staple estimate <ref> --clear`, resolved to the store's
+ * REQUIRED value: seconds to set, or null to clear. Never undefined — that is the
+ * status verb's "leave it alone", and this verb exists only to change the estimate.
+ *
+ * The grammar keeps `estimateOption`'s shell-safety property (see above) in both of the
+ * shapes an unset variable can take:
+ *
+ *  - `staple estimate STA-42 "$EST"` with EST unset passes `""`, which `parseDuration`
+ *    refuses — an empty string is never a clear.
+ *  - `staple estimate STA-42 $EST` unquoted passes nothing at all, which is refused here
+ *    as a missing duration — an absent value is never a clear either.
+ *
+ * Only the literal `--clear` erases, and `<dur> --clear` together is refused rather than
+ * resolved by precedence, for the reason `estimateOption` gives.
+ */
+function estimateVerbValue(
+  ref: string | undefined,
+  raw: string | undefined,
+  extra: readonly string[],
+  clear: boolean | undefined,
+): number | null {
+  const usage = "usage: staple estimate <ref> <dur> | staple estimate <ref> --clear";
+  if (ref === undefined || ref.trim() === "") throw new StapleError("validation", `${usage} (no issue given)`);
+  if (extra.length > 0) {
+    throw new StapleError("validation", `${usage} (unexpected argument "${extra[0]}")`);
+  }
+  if (clear && raw !== undefined) {
+    throw new StapleError("validation", "a duration and --clear cannot be used together");
+  }
+  if (clear) return null;
+  if (raw === undefined) {
+    throw new StapleError(
+      "validation",
+      `${usage} (no duration given; an estimate is only cleared by --clear)`,
+    );
+  }
+  try {
+    return parseDuration(raw, "estimate");
+  } catch (error) {
+    // The duration is a positional here, not the --estimate flag the shared sentence names.
+    if (error instanceof StapleError) throw new StapleError("validation", error.message.replace(/^--estimate/, "<dur>"));
+    throw error;
+  }
+}
+
 /** Read from argv, not parsed values: a parse failure must still honour --json. */
 const jsonMode = process.argv.includes("--json");
 
@@ -877,8 +923,12 @@ Flow
   done <ref> [--agent A] [-m comment]   complete (+ cross-workspace fan-out)
   cancel <ref> [--agent A] [-m comment]
   status <ref> <status> [--agent A] [--estimate <dur>|--no-estimate]
-              any status, guards enforced; --estimate also re-records the
-              estimate (same status = estimate-only write), --no-estimate clears
+              any status, guards enforced; --estimate/--no-estimate re-record
+              the estimate in the same write as the move
+  estimate <ref> <dur> | estimate <ref> --clear   [--agent A]
+              change ONLY the estimate: no status to restate, no claim needed.
+              A value it already has is a no-op ("changed": false). Only --clear
+              erases; an empty or missing <dur> is refused (exit 2)
   release <ref> [--agent A] [--if-stale <dur>]
               give a claim back -> todo; --if-stale frees a claim whose holder
               has been silent at least <dur> (any caller)
@@ -995,7 +1045,8 @@ Claim liveness: in_progress rows show "held <dur> · silent <dur>" in ls/show; t
               same numbers ride in --json as "claim". Nothing expires a claim on
               its own — a takeover only ever happens because you asked for one.
 Estimates:    --estimate takes a <dur> and is what makes estimate-vs-actual honest,
-              so record it when you PLAN, not when you finish. Actuals are derived
+              so record it when you PLAN, not when you finish. Re-estimate later
+              with "staple estimate <ref> <dur>". Actuals are derived
               from started_at/completed_at and never stored; show prints
               "time   est 2h · ran 3h10m" and --json carries "timing" (with
               children rollups over DIRECT children) beside the issue.
@@ -1442,11 +1493,13 @@ function main() {
       const { store } = getStore(values);
       const target = positionals[1]! as IssueStatus;
       /**
-       * `status` is the CLI's only update path, so it is also where a re-estimate
-       * lands. `staple status STA-81 in_progress --estimate 2h` is the natural
-       * moment for one; `staple status STA-81 backlog --estimate 2h` sets an
-       * estimate without moving the ticket (a same-status write is a no-op
-       * transition, not an error).
+       * A move can re-estimate in the same write: `staple status STA-42
+       * in_progress --estimate 2h` is the natural moment for one. A same-status
+       * write with `--estimate` still sets the estimate without moving the ticket
+       * (a no-op transition, not an error) and is kept for scripts that already
+       * say it, but it is no longer the documented form: an estimate-only change
+       * is `staple estimate <ref> <dur>`, which does not make the caller restate
+       * a status it did not mean to touch.
        */
       const estimatedSeconds = estimateOption(values.estimate, values["no-estimate"]);
       const attempt = attemptOptionsFrom(values);
@@ -1464,6 +1517,31 @@ function main() {
         break;
       }
       console.log(line(issue));
+      break;
+    }
+
+    case "estimate": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { ...common, agent: { type: "string" }, clear: { type: "boolean" } },
+      });
+      const [ref, raw, ...extra] = positionals;
+      const seconds = estimateVerbValue(ref, raw, extra, values.clear);
+      const { store } = getStore(values);
+      const result = store.setEstimate(ref!, seconds, agentName(values.agent));
+      const estimateChange = { from: result.from, to: result.to, changed: result.changed };
+      if (values.json) {
+        outJson({ ...result.issue, estimateChange });
+        break;
+      }
+      const said = (value: number | null) => (value === null ? "none" : formatDuration(value));
+      console.log(
+        line(
+          result.issue,
+          result.changed ? `  est ${said(result.from)} -> ${said(result.to)}` : `  est ${said(result.to)} (unchanged)`,
+        ),
+      );
       break;
     }
 
