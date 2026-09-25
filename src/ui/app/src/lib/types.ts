@@ -1116,7 +1116,13 @@ export type ActionPayload =
    * for a `null` to mean. Contrast `assignee`, which has its own action precisely
    * because clearing it IS a real and distinct fact.
    */
-  | { type: "update"; title?: string; priority?: IssuePriority; kind?: IssueKind; labels?: string[] };
+  | { type: "update"; title?: string; priority?: IssuePriority; kind?: IssueKind; labels?: string[] }
+  /**
+   * The explicit estimate write (`staple estimate`, MCP `set_estimate`): `estimateSeconds`
+   * is required, and `null` is the only clear. Answers the issue plus
+   * `estimateChange: {from, to, changed}`.
+   */
+  | { type: "estimate"; estimateSeconds: number | null };
 
 /** The error envelope every staple surface speaks. */
 export interface ErrorEnvelope {

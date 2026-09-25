@@ -173,6 +173,20 @@ export interface AddCommentResult {
   replayed: boolean;
 }
 
+/**
+ * What `setEstimate` did. `from`/`to` are the estimate before and after, in seconds
+ * (null = none recorded); `changed` is false exactly when the write was a no-op
+ * because the issue already carried `to`. Every surface prints this beside the issue
+ * as `estimateChange`, so a retry can tell "applied" from "already so" without a
+ * second read.
+ */
+export interface SetEstimateResult {
+  issue: Issue;
+  from: number | null;
+  to: number | null;
+  changed: boolean;
+}
+
 export interface IssueFilters {
   status?: IssueStatus[];
   kind?: IssueKind[];
@@ -3981,6 +3995,53 @@ export class WorkspaceStore {
   }
 
   // ---------- update ----------
+
+  /**
+   * Re-estimate one issue without touching anything else — the ONE store method behind
+   * `staple estimate`, MCP `set_estimate` and the HTTP `estimate` action.
+   *
+   * It exists because the only other path, a same-status `updateIssue`, made a caller
+   * restate a status it did not mean to change. That path still works and is not routed
+   * through here: a status move with an estimate is one transaction, and splitting it
+   * would be two operations.
+   *
+   * ## No value is not a clear
+   *
+   * `seconds` is REQUIRED: a number sets, null clears, and undefined is refused rather
+   * than read as either. Each surface keeps the same property its own way — the CLI
+   * clears only on `--clear`, MCP and HTTP only on an explicit JSON null — so nothing an
+   * unset variable or a dropped key produces erases an estimate.
+   *
+   * ## Idempotent by value, not by key
+   *
+   * The write is an absolute set, so repeating it cannot compound. A write of the value
+   * the issue already carries is a no-op: no row write, no journal operation (so nothing
+   * to sync), no `estimate_changed` event and no `updated_at` bump, and the result says
+   * `changed: false`. No idempotency key is taken — keys exist on creates and comments,
+   * where a repeat would duplicate a row; here it cannot.
+   *
+   * ## Guards: the ones a status write has, no more
+   *
+   * `updateIssue` does not ask who holds the claim, and a same-status write is allowed in
+   * every status (gated and resolved included), so this does not either: any actor may
+   * re-estimate any issue, and the event names who did. The claim, the status and the
+   * attempt ledger are untouched — an attempt's `estimateAtStart` stays what it read at
+   * its start. A change goes through `updateIssue` inside this scope, so its journal
+   * payload and its `estimate_changed` event are exactly the old path's.
+   */
+  setEstimate(ref: string, seconds: number | null, actor?: string | null): SetEstimateResult {
+    if (seconds === undefined) {
+      throw new StapleError("validation", "setEstimate needs a number of seconds, or null to clear the estimate");
+    }
+    const to = seconds === null ? null : assertEstimateSeconds(seconds);
+    return this.journaled(() => {
+      const row = this.requireTarget(ref);
+      const from = row.estimated_seconds ?? null;
+      if (from === to) return { issue: rowToIssue(row), from, to, changed: false };
+      const issue = this.updateIssue(row.id, { estimatedSeconds: to }, actor);
+      return { issue, from, to, changed: true };
+    });
+  }
 
   updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null, attempt?: AttemptOptions): Issue {
     assertAttemptOptions(attempt);

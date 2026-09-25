@@ -798,8 +798,11 @@ not silently replaced by `activeSeconds`.
 
 **Which estimate.** The denominator is the issue's own `estimatedSeconds` at
 read time, which is what every surface shows today. `attempt.estimateAtStart` is
-the better calibration input once there is enough of it, because the estimate is
-overwritten in place with no history. [Q4](#open-questions) asks when to switch.
+the better calibration input once there is enough of it, because the estimate
+column is overwritten in place. Each change is recorded as an `estimate_changed`
+event (`from`, `to`, actor), but a read of the column shows only the latest
+value, and an imported or restored workspace has no event log to replay.
+[Q4](#open-questions) asks when to switch.
 
 ## Quality inputs
 

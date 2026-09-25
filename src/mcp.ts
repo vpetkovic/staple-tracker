@@ -1137,7 +1137,13 @@ server.registerTool(
       labels: z.array(z.string()).optional(),
       unblock_owner: z.string().nullable().optional(),
       unblock_action: z.string().nullable().optional(),
-      estimate_seconds: estimateSchema,
+      /**
+       * Its own description: update_task still takes an estimate beside other fields, but
+       * an estimate-only change has one documented form, set_estimate.
+       */
+      estimate_seconds: estimateSchema.describe(
+        "Plan-time estimate in SECONDS (90m = 5400, 2h = 7200), written in the same patch as the other fields. Must be a positive whole number of seconds, at most 365d. Pass null to clear; omit to leave unchanged. To change only the estimate, use set_estimate.",
+      ),
       expected_status_version: z.number().int().optional(),
       comment: z.string().optional(),
       ...attemptOpenFields,
@@ -1178,6 +1184,60 @@ server.registerTool(
       );
       notifyHubIfResolved(store, input.ref, input.status);
       return withAttemptResult(store, updated);
+    }),
+);
+
+/**
+ * The explicit estimate write: `WorkspaceStore.setEstimate`, the same method as
+ * `staple estimate` and the HTTP `estimate` action.
+ *
+ * `estimate_seconds` is REQUIRED, unlike on update_task where absence means "leave
+ * it alone": this tool exists only to change the estimate, so a missing value is a
+ * refused call (the SDK's schema check), never a clear. Null is the clear — the
+ * same explicit value update_task and create_task already use for it.
+ *
+ * idempotentHint is TRUE and honest: the write is an absolute set, and repeating it
+ * finds the value already there and returns `estimateChange.changed: false` with
+ * no event and nothing to sync.
+ */
+server.registerTool(
+  "set_estimate",
+  {
+    description:
+      "Change ONLY an issue's plan-time estimate — no status to restate, no claim needed (like a status write, any actor may; the estimate_changed event records who). estimate_seconds is required: a number sets it, null clears it. Repeating the same value is a no-op that answers estimateChange.changed: false. Returns the issue plus estimateChange {from, to, changed}.",
+    inputSchema: {
+      ref: refSchema,
+      estimate_seconds: z
+        .number()
+        .nullable()
+        .describe(
+          "Plan-time estimate in SECONDS (90m = 5400, 2h = 7200): a positive whole number, at most 365d. null clears it. Required — there is no 'leave unchanged' here.",
+        ),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: {
+      ...issueShape,
+      estimateChange: z
+        .object({
+          from: z.number().nullable().describe("The estimate before this call, in seconds; null when none was recorded"),
+          to: z.number().nullable().describe("The estimate after this call; null when cleared"),
+          changed: z.boolean().describe("False when the issue already carried `to`: nothing was written"),
+        })
+        .describe("What this call did to the estimate"),
+    },
+    annotations: {
+      title: "Set estimate",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, estimate_seconds, actor, ws }) =>
+    run(() => {
+      const result = storeFor(ws).setEstimate(ref, estimate_seconds, requireActor(actor));
+      return { ...result.issue, estimateChange: { from: result.from, to: result.to, changed: result.changed } };
     }),
 );
 

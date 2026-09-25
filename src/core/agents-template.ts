@@ -54,10 +54,11 @@ Read this before you touch the repo. It takes a minute.
    claim is already held; retrying just burns turns. (Exit code 4 / \`conflict\`.)
 3. Write the plan: \`staple doc ${ref} plan --put plan.md\`. Documents are keyed
    and revisioned — this replaces a scratch \`plan.md\` nobody else can find.
-   **Record your estimate while you are planning** — \`staple status ${ref} in_progress
-   --estimate 2h\`, or \`--estimate\` on \`staple new\`. An estimate written after the
-   work is a memory of how long it took, not a prediction, and the whole
-   estimate-vs-actual comparison is worthless the moment it becomes one.
+   **Record your estimate while you are planning** — \`staple estimate ${ref} 2h\`
+   (whatever the status; \`--clear\` removes one), or \`--estimate\` on
+   \`staple new\`. An estimate written after the work is a memory of how long it
+   took, not a prediction, and the whole estimate-vs-actual comparison is
+   worthless the moment it becomes one.
 4. Work. Leave progress as you go: \`staple comment ${ref} "…"\`.
    **Your comments are the clock.** Time worked is measured as the span from your
    claim to your newest event or comment — never to "now" — so a task you hold in
@@ -432,7 +433,7 @@ claude mcp add staple -e STAPLE_AGENT=your-name -- staple mcp
 
 The MCP tools mirror the CLI: \`inbox\`, \`next_task\` and \`list_queue\` for the
 pickup queue, \`checkout_task\` (with \`steal_if_idle_seconds\` and
-\`override_reason\`), \`put_document\`, \`add_comment\`, \`update_task\`,
+\`override_reason\`), \`put_document\`, \`add_comment\`, \`set_estimate\`, \`update_task\`,
 \`release_task\` (with \`if_idle_seconds\`), \`record_attempt_event\`, \`events_since\`, \`list_statuses\`,
 \`list_kinds\`, \`update_statuses\`, \`update_kinds\`, and the gate verbs
 \`gate_task\` / \`approve_task\` / \`request_changes\`. Writes require an

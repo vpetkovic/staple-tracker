@@ -478,6 +478,25 @@ function optionalEstimate(value: unknown): number | null | undefined {
   return seconds;
 }
 
+/**
+ * `estimateSeconds` for the `estimate` action: present, and either a number or null.
+ * The store owns every range refusal; this only refuses what is not a value at all.
+ */
+function requiredEstimate(body: Record<string, unknown>): number | null {
+  if (!("estimateSeconds" in body) || body.estimateSeconds === undefined) {
+    throw new StapleError(
+      "validation",
+      "estimate requires estimateSeconds: a number of seconds, or null to clear the estimate",
+    );
+  }
+  const value = body.estimateSeconds;
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new StapleError("validation", "estimateSeconds must be a number of seconds, or null to clear the estimate");
+  }
+  return value;
+}
+
 function stringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
@@ -3890,6 +3909,18 @@ export function startUiServer(options: UiOptions): UiHandle {
           result = { ...released, attempt: handle.store.attempts().result() };
         } else if (type === "comment") {
           result = handle.store.addComment(ref, body.body as string, actor, "user");
+        } else if (type === "estimate") {
+          /**
+           * The explicit estimate write — `WorkspaceStore.setEstimate`, the same method as
+           * `staple estimate` and MCP `set_estimate`, answering the same shape. The key is
+           * REQUIRED and `null` is the only clear: unlike `update`'s `optionalEstimate`, a
+           * missing key or `""` is refused rather than read as "leave alone" or "clear".
+           */
+          const change = handle.store.setEstimate(ref, requiredEstimate(body), actor);
+          result = {
+            ...change.issue,
+            estimateChange: { from: change.from, to: change.to, changed: change.changed },
+          };
         } else if (type === "assignee") {
           result = handle.store.updateIssue(ref, { assignee: (body.assignee as string) || null }, actor);
         } else if (type === "doc_restore") {

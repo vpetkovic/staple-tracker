@@ -64,13 +64,30 @@ Any MCP client can launch `npx -y staple-cli mcp` the same way, with
 `STAPLE_AGENT` naming the agent. There is no separate MCP binary — `staple mcp`
 is the same entrypoint as the CLI.
 
-Fifty-two stdio tools. The loop they exist for:
+Fifty-three stdio tools. The loop they exist for:
 
 `inbox` (or `next_task`) → `checkout_task` (a conflict means pick another, never
-retry; `out_of_order` means take the one it names) → `put_document` the plan →
-work, `add_comment` progress → `update_task` done → `events_since` to see what
-your completion unblocked. `cross_link` + `hub_overview` cover cross-repository
-dependencies.
+retry; `out_of_order` means take the one it names) → `put_document` the plan and
+`set_estimate` the estimate → work, `add_comment` progress → `update_task` done →
+`events_since` to see what your completion unblocked. `cross_link` +
+`hub_overview` cover cross-repository dependencies.
+
+### Changing an estimate
+
+**`set_estimate`** `{ref, estimate_seconds}` changes only the estimate. You do
+not restate the status, and you do not need the claim: like a status write, any
+actor may re-estimate, and the `estimate_changed` event records who.
+`estimate_seconds` is required. A number of seconds sets it, `null` clears it,
+and omitting or mistyping it is the SDK's `-32602` input-validation error (an
+`isError` result), not a clear. It answers the issue plus
+`estimateChange: {from, to, changed}`. The identical repeat is a no-op
+(`changed: false`, no event, nothing to sync), which is why it is annotated
+`idempotentHint: true`. A value that is not an estimate (zero, a fraction, over
+365 days) is `validation` with the store's sentence. An unknown ref is
+`not_found`. It is the same store method as `staple estimate <ref> <dur>` and
+the UI server's `estimate` action ([cli.md](cli.md#changing-an-estimate-staple-estimate)).
+`update_task`'s `estimate_seconds` still works, but `set_estimate` is the form
+to use.
 
 ### The milestone tools
 
@@ -299,7 +316,7 @@ All in-protocol, so a harness never needs out-of-band setup:
   polluting the audit trail with anonymous writes.
 - **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
   creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 20 read-only, `checkout_task` idempotent — and
+- **Tools declare annotations** — 20 read-only, `checkout_task` and `set_estimate` idempotent — and
   return `structuredContent` (arrays wrap as `{items}`).
 - **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
   The telemetry lists answer `{items, truncated, nextCursor, coverage}` instead

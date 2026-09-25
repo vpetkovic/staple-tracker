@@ -209,6 +209,8 @@ const SCENARIOS: readonly Scenario[] = [
   },
   { method: "WorkspaceStore.createChild", name: "create a child", prep: (w) => void issue(w, "The epic", { kind: "epic" }), run: (w) => void (w.ids["The child"] = w.a.store.createChild(w.ids["The epic"]!, { title: "The child", assignee: "alice" }).id) },
   { method: "WorkspaceStore.setBlockedBy", name: "set blockers", run: (w) => void w.a.store.setBlockedBy(w.ids["Everything"]!, [w.ids["Retried"]!], "alice") },
+  { method: "WorkspaceStore.setEstimate", name: "re-estimate without restating the status", run: (w) => void w.a.store.setEstimate(w.ids["The child"]!, 5400, "alice") },
+  { method: "WorkspaceStore.setEstimate", name: "clear the estimate", run: (w) => void w.a.store.setEstimate(w.ids["The child"]!, null, "alice") },
   { method: "WorkspaceStore.updateIssue", name: "retitle", run: (w) => void w.a.store.updateIssue(w.ids["Everything"]!, { title: "Everything, renamed" }, "alice") },
   { method: "WorkspaceStore.updateIssue", name: "start work", run: (w) => void w.a.store.updateIssue(w.ids["The child"]!, { status: "in_progress" }, "alice") },
   { method: "WorkspaceStore.updateIssue", name: "finish work, moving the epic", run: (w) => void w.a.store.updateIssue(w.ids["The child"]!, { status: "done" }, "alice") },
