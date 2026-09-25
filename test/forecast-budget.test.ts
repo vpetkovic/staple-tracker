@@ -291,7 +291,8 @@ describe("the budget forecast of a piece of work", () => {
 
     const next = store.createIssue({ title: "planned", estimatedSeconds: 7200 }).identifier;
     const limit = limitOf(store.forecast({ ref: next, reserve: "20" }, iso(411), home));
-    const labor = store.forecast({ ref: next }, iso(411), home).completion.labor.expectedSeconds!;
+    const completion = store.forecast({ ref: next }, iso(411), home).completion;
+    const labor = completion.labor.expectedSeconds!;
     const horizon = 189 * 60;
     expect(labor).toBeLessThan(horizon);
     const withOther = limit.reserve!.withOtherUse!;
@@ -301,6 +302,13 @@ describe("the budget forecast of a piece of work", () => {
     // of the time to the reset: 71 − 15 × labor − 6 × (horizon − labor), in hours.
     expect(withOther.remainingAtResetPercent.expected).toBeCloseTo(71 - (15 * labor) / 3600 - (6 * (horizon - labor)) / 3600, 6);
     expect(withOther.remainingAtResetPercent.expected).toBeGreaterThan(71 - (15 * labor) / 3600 - (6 * horizon) / 3600);
+    // Draw by draw the same: every labor draw ends before the reset, so the two means differ by
+    // the other use over the time left after the work, 6 × (horizon − mean labor draw).
+    expect(completion.labor.simulated!.band.upper).toBeLessThan(horizon);
+    expect(limit.work!.remainingAtResetPercent.simulated.mean - withOther.remainingAtResetPercent.simulated.mean).toBeCloseTo(
+      (6 * (horizon - completion.labor.simulated!.mean)) / 3600,
+      6,
+    );
     // The other use can only add to the breach.
     expect(withOther.currentWindowBreachProbability).toBeGreaterThanOrEqual(limit.reserve!.currentWindowBreachProbability);
   });
