@@ -47,6 +47,10 @@ staple budget capture on|off | bind --source S --account A | unbind | bindings
 staple attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label]
                                                     report on the attempt you hold
 staple attempt reconstruct                          rebuild attempts from events recorded before them
+staple attempts <ref> [--limit N] [--cursor C]      every attempt on the issue, as it reads now
+staple attempt <attempt-id>                         one attempt: transitions, chain, budget burn
+staple budget [--account A]                         each account's current windows and remaining budget
+staple budget history --account A [--since T]       one account's readings, with capture gaps
 staple checkout|status|done ... [--harness H --harness-session ID] [--model M] [--account A] [--attempt-key K]
 staple release|status|done ... --outcome failed --reason R   only the agent says it failed
 ```
@@ -672,6 +676,47 @@ with `reason` one of `unchanged`, `fork_copied`, `not_reported_by_source`,
 typed at the CLI is the operator's own and is accepted with capture off; the
 same reading sent by an agent through `record_budget_sample` is refused
 (`capture_disabled`) until the operator runs `staple budget capture on`.
+
+### Reading budget and attempts back
+
+```bash
+staple budget                                   # every account, each limit's current window
+staple budget --account personal-max --json
+staple budget history --account personal-max --since 2h --limit 100
+staple attempts STA-42                          # every attempt on the issue, oldest first
+staple attempt 0b6f2c1e-6d0a-4f7e-9d38-2f3b8a1c9e44 --json
+```
+
+- **`staple budget`** shows each limit's current window with its latest
+  reading, `status` (`current` or `elapsed`) and the high-water
+  `remainingPercent`: the highest usage seen in the window so far, which is
+  the conservative figure when concurrent sessions report caches of different
+  ages. Once a window resets nothing carries forward: the limit reads
+  `null` with `window_elapsed` until a new reading arrives. A bound account
+  with no readings reads `no_sample_yet`. An account with no ingestion path
+  reads `source_unavailable`. Neither is shown as 0. `stale: true` means the
+  latest reading was recorded over 10 minutes ago.
+- **`staple budget history`** lists one account's readings oldest first by
+  `observedAt`, each with a derived `regression` flag. `--since` takes an
+  instant or a duration meaning that long ago.
+- **`staple attempts <ref>`** lists the issue's attempts, oldest first, each as
+  it reads now. An attempt whose claim was cleared or moved by a path that ran
+  no side effect (an applied remote operation, a status recategorized, a hand
+  edit) reads `state: "ended"`, `outcome: "orphaned"`, with the row's own
+  value in `storedState`. `show` prints a summary line and `show --json`
+  carries `attempts: {current, last, count}`.
+- **`staple attempt <attempt-id>`** prints one attempt with its transitions,
+  its chain (the attempts linked by `resumesAttemptId`) and its burn, per limit,
+  from this machine's readings.
+
+The lists are bounded: `--limit` defaults to 50 and is clamped to 500. With
+`--json` they print `{items, truncated, nextCursor, coverage}`. `truncated` is
+stated rather than inferred from a full page. Pass `nextCursor` back as
+`--cursor` with the same other arguments. The cursor is a keyset position, so
+rows added between pages never shift a page. `coverage.gaps` lists the spans no
+capture ran in, each with a reason. These are the payloads the MCP tools
+`get_budget`, `list_budget_samples`, `list_attempts` and `get_attempt` return
+([agents.md](agents.md#execution-telemetry)).
 
 ## Machine-readable output
 

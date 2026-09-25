@@ -1,8 +1,10 @@
 /**
- * `staple budget` — the write side of provider budget telemetry
- * (docs/execution-telemetry.md): ingesting readings, and the operator's opt-in and
- * source bindings. Machine-level: it reads and writes the staple home, never a workspace.
+ * `staple budget` — provider budget telemetry (docs/execution-telemetry.md): ingesting
+ * readings, the operator's opt-in and source bindings, and reading them back.
+ * Machine-level: it reads and writes the staple home, never a workspace.
  *
+ *   budget [--account A]                   each account's current windows (get_budget)
+ *   budget history --account A [--since T] [--limit N] [--cursor C]   (list_budget_samples)
  *   budget ingest --source claude-statusline [--tee] [--account A] [--config-dir D]
  *   budget ingest --source codex-rollout <file> [--account A]
  *   budget ingest --source manual --account A --limit-key K --used P [--resets-at T] [--provider P]
@@ -11,7 +13,9 @@
  *   budget unbind --source claude-statusline|codex-rollout [--config-dir D | --codex-home D]
  *   budget bindings
  *
- * `ingest` calls the same `ingestBudget` the MCP tool `record_budget_sample` calls.
+ * `ingest` calls the same `ingestBudget` the MCP tool `record_budget_sample` calls; the
+ * two reads call `readBudget` and `listBudgetSamples`, as `get_budget` and
+ * `list_budget_samples` do.
  */
 import { readSync, writeSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -27,11 +31,21 @@ import {
 import type { BindingSource } from "../core/telemetry/config.js";
 import { INGEST_SOURCES, ingestBudget, type IngestResult, type IngestSource } from "../core/telemetry/ingest.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
+import { listBudgetSamples, readBudget, type BudgetView, type HistorySample } from "../core/telemetry/read-budget.js";
+import type { TelemetryPage } from "../core/telemetry/read-page.js";
+import { limitFlag } from "./attempts.js";
 
-const USAGE = "Use: ingest, capture, bind, unbind, bindings (staple budget --help)";
+const USAGE = "Use: history, ingest, capture, bind, unbind, bindings (staple budget --help)";
 
 const HELP = `staple budget — provider budget telemetry on this machine (docs/execution-telemetry.md)
 
+  budget [--account A]                  each account's limits: the current window, its
+              latest reading, the high-water remaining percent and status. Unknown is
+              shown as unknown with its reason, never as 0
+  budget history --account A [--since T] [--limit N] [--cursor C]
+              one account's readings, oldest first; T is an instant or a duration
+              (2h = two hours ago); --limit defaults to 50, at most 500; gaps where
+              capture was not running are listed
   budget ingest --source claude-statusline [--tee] [--account A] [--config-dir D]
               read one Claude Code status-line JSON from stdin; --tee writes the input
               back to stdout byte for byte, so staple can sit in front of the
@@ -134,6 +148,29 @@ function sayIngest(result: IngestResult): void {
   }
 }
 
+const percent = (value: number | null, reason: string | undefined): string => (value === null ? `unknown (${reason ?? "no reading"})` : `${value}%`);
+
+function sayBudget(view: BudgetView): void {
+  if (view.accounts.length === 0) console.log(`no accounts (capture ${view.budgetCapture ? "on" : "off"}; staple budget bind names one)`);
+  for (const account of view.accounts) {
+    console.log(`${account.accountRef}${account.provider ? ` (${account.provider})` : ""}${account.limits.length === 0 ? `  ${account.missing.limits ?? "no readings"}` : ""}`);
+    for (const limit of account.limits) {
+      const reset = limit.window?.resetsAt ? ` resets ${limit.window.resetsAt}` : "";
+      const stale = limit.stale ? "  (stale)" : "";
+      console.log(`  ${limit.limitKey.padEnd(22)} ${(limit.status ?? "-").padEnd(8)} remaining ${percent(limit.remainingPercent, limit.missing.remainingPercent)}${reset}${stale}`);
+    }
+  }
+}
+
+function sayHistory(page: TelemetryPage<HistorySample>): void {
+  if (page.items.length === 0) console.log("no readings");
+  for (const s of page.items) {
+    console.log(`${s.observedAt}  ${s.limitKey.padEnd(22)} ${String(s.usedPercent).padStart(5)}% used${s.heartbeat ? "  (heartbeat)" : ""}${s.regression ? "  (regression)" : ""}`);
+  }
+  for (const gap of page.coverage.gaps) console.log(`  gap ${gap.from} -> ${gap.to} (${gap.reason})`);
+  if (page.truncated) console.log(`more: --cursor ${page.nextCursor}`);
+}
+
 function sayConfig(view: BudgetConfigView): void {
   console.log(`capture  ${view.budgetCapture ? "on" : "off"}`);
   if (view.bindings.length === 0) console.log("bindings none");
@@ -167,6 +204,9 @@ export function runBudgetCommand(argv: string[]): void {
       "limit-key": { type: "string" },
       used: { type: "string" },
       "resets-at": { type: "string" },
+      since: { type: "string" },
+      limit: { type: "string" },
+      cursor: { type: "string" },
     },
   });
   const [sub, ...args] = positionals;
@@ -183,6 +223,17 @@ export function runBudgetCommand(argv: string[]): void {
   }
 
   switch (sub) {
+    case undefined: {
+      const view = readBudget(home, { account: values.account });
+      print(view, () => sayBudget(view));
+      return;
+    }
+    case "history": {
+      if (values.account === undefined) throw new StapleError("validation", "budget history needs --account: the label of the account to read.");
+      const page = listBudgetSamples(home, { account: values.account, since: values.since, limit: limitFlag(values.limit), cursor: values.cursor });
+      print(page, () => sayHistory(page));
+      return;
+    }
     case "ingest": {
       const source = values.source as IngestSource | undefined;
       if (source === undefined || !(INGEST_SOURCES as readonly string[]).includes(source)) {
@@ -250,6 +301,6 @@ export function runBudgetCommand(argv: string[]): void {
       return;
     }
     default:
-      throw new StapleError("validation", sub === undefined ? `staple budget needs a subcommand. ${USAGE}` : `Unknown budget subcommand "${sub}". ${USAGE}`);
+      throw new StapleError("validation", `Unknown budget subcommand "${sub}". ${USAGE}`);
   }
 }

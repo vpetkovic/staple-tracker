@@ -104,6 +104,8 @@ describe("the pane cannot drift from the tool", () => {
   it("carries every key get_task declares, and no more", async () => {
     expect(Object.keys(await http(false)).sort()).toEqual([
       "ancestors",
+      // Execution attempts: get_task grew them, so this pane grew them in lockstep.
+      "attempts",
       "blockedBy",
       "blocks",
       "children",

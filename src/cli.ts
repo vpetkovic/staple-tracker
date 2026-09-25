@@ -20,6 +20,7 @@ import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runBudgetCommand } from "./commands/budget.js";
 import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
+import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
 import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
@@ -889,6 +890,10 @@ Execution attempts (one agent's tenure on one issue; opened and ended by the ver
   release|status|done ... --outcome failed --reason R   only the agent can say it failed
   attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label]
   attempt reconstruct                   rebuild attempts from events recorded before them
+  attempts <ref> [--limit N] [--cursor C]
+              every attempt on the issue as it reads now, oldest first, bounded
+              (default 50, max 500) with truncation and coverage stated
+  attempt <attempt-id>                  one attempt: transitions, chain, budget burn
   --ack-renumber  on any write: a number sync renumbered on this device is refused
               while the issue that left it is checked out, leased here, or moved
               under a day ago — this writes to whatever holds it now. Or use the id
@@ -979,6 +984,10 @@ Provider budget
   budget ingest --source claude-statusline|codex-rollout|manual …
               record provider usage readings on this machine (opt-in: budget
               capture on; accounts come from budget bind); staple budget --help
+  budget [--account A]                  each account's current windows: latest reading,
+              high-water remaining, status; unknown is never shown as 0
+  budget history --account A [--since T] [--limit N] [--cursor C]
+              one account's readings, bounded, with capture gaps listed
 
 Durations (<dur>): 90s, 30m, 2h, 3d, or a bare number of seconds.
 Claim liveness: in_progress rows show "held <dur> · silent <dur>" in ls/show; the
@@ -1189,6 +1198,7 @@ function main() {
           gate: store.gate(ctx.issue.id),
           queuedBy: store.queuedBy(ctx.issue.id),
           ...store.detailTiming(ctx.issue.id),
+          attempts: store.attemptSummary(ctx.issue.id),
         });
         break;
       }
@@ -1208,6 +1218,12 @@ function main() {
         console.log(
           `claim  held ${formatAgo(claim.heldSeconds)} · silent ${formatAgo(claim.idleSeconds)} (last activity ${claim.lastActivityAt.slice(0, 19)}Z)`,
         );
+      }
+      // Execution attempts, only once there is one (`staple attempts <ref>` lists them all).
+      const attempts = store.attemptSummary(i.id);
+      if (attempts.count > 0) {
+        console.log(`attempts ${attempts.count}${attempts.current ? ` · current ${attemptLine(attempts.current)}` : ""}`);
+        if (attempts.last) console.log(`  last ${attemptLine(attempts.last)}`);
       }
       /**
        * Its own line, beside `claim`, and emitted only when there is something
@@ -1334,6 +1350,10 @@ function main() {
 
     case "attempt":
       runAttemptCommand(rest);
+      break;
+
+    case "attempts":
+      runAttemptsCommand(rest);
       break;
 
     case "checkout":

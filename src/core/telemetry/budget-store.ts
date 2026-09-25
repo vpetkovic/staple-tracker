@@ -135,7 +135,7 @@ export interface WindowHighWater {
   readonly missing: Missing;
 }
 
-interface SampleRow {
+export interface SampleRow {
   id: string;
   window_id: string | null;
   provider: string;
@@ -195,7 +195,7 @@ function parseMissing(text: string): Missing {
   }
 }
 
-function toSample(row: SampleRow): BudgetSample {
+export function toSample(row: SampleRow): BudgetSample {
   return {
     id: row.id,
     windowId: row.window_id,

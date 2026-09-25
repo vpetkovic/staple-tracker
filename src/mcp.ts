@@ -43,6 +43,7 @@ import {
 } from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { registerBudgetTools } from "./core/telemetry/mcp-tools.js";
+import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -1014,6 +1015,15 @@ server.registerTool(
       ...claimField,
       ...gateFields,
       ...timingField,
+      attempts: z
+        .object({
+          current: z.record(z.string(), z.unknown()).nullable(),
+          last: z.record(z.string(), z.unknown()).nullable(),
+          count: z.number(),
+        })
+        .describe(
+          "Execution attempts on this issue, worker lane, as they read now: the effectively open one, the newest ended one, and how many. list_attempts pages them all.",
+        ),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -1042,6 +1052,7 @@ server.registerTool(
         gate: store.gate(context.issue.id),
         queuedBy: store.queuedBy(context.issue.id),
         ...store.detailTiming(context.issue.id),
+        attempts: store.attemptSummary(context.issue.id),
       };
     }),
 );
@@ -2626,6 +2637,7 @@ server.registerTool(
 );
 
 registerBudgetTools(server, { run });
+registerTelemetryReadTools(server, { run, storeFor, wsSchema, refSchema });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
