@@ -34,6 +34,7 @@ import {
   UUID_RE,
   asStructured,
   claimGolden,
+  openAttemptsGolden,
   timingGolden,
   commentGolden,
   decodeCursorForAssertion,
@@ -280,8 +281,9 @@ describe("tool inventory", () => {
   // array was always right; only the sentence was stale. Corrected, not moved:
   // this ticket adds no tool.
   // Budget ingestion added record_budget_sample: 46 -> 47. Execution attempts added
-  // record_attempt_event: 47 -> 48.
-  it("exposes exactly these 48 tools with these annotations and output schemas", async () => {
+  // record_attempt_event: 47 -> 48. The telemetry reads added list_attempts,
+  // get_attempt, get_budget and list_budget_samples: 48 -> 52.
+  it("exposes exactly these 52 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -805,10 +807,34 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      /**
+       * The telemetry reads (docs/execution-telemetry.md, "Surfaces"): two per workspace
+       * (attempts), two per machine (budget). All read-only, all bounded.
+       */
+      {
+        name: "list_attempts",
+        annotations: { title: "List attempts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "get_attempt",
+        annotations: { title: "Get attempt", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "get_budget",
+        annotations: { title: "Get budget", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "list_budget_samples",
+        annotations: { title: "List budget samples", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
     ]);
   });
 
-  it("marks exactly the sixteen read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -836,6 +862,12 @@ describe("tool inventory", () => {
       "cloud_status",
       // Listing what two devices disagree about is a read of one local table.
       "conflict_list",
+      // Execution telemetry: reading attempts and this machine's budget writes nothing,
+      // a stored orphan end included.
+      "list_attempts",
+      "get_attempt",
+      "get_budget",
+      "list_budget_samples",
     ]);
   });
 
@@ -1095,6 +1127,13 @@ describe("tool response shapes (31/31)", () => {
       }),
       // Keyed by IDENTIFIER, not uuid — which is why this line is readable.
       childrenTiming: { "CON-4": timingGolden() },
+      /**
+       * Execution attempts, worker lane, as they read now (docs/execution-telemetry.md,
+       * "Surfaces"). CON-1's checkout opened one; it is running, so it is `current`,
+       * and nothing has ended, so `last` is null rather than omitted. The agent
+       * reported no harness and no account, so both are null with `not_supplied`.
+       */
+      attempts: openAttemptsGolden("CON-1"),
     });
   });
 
@@ -1545,6 +1584,12 @@ describe("tool response shapes (31/31)", () => {
       // Execution attempts: pinned in test/attempts-surfaces.test.ts, against the CLI's
       // `staple attempt ... --json` payload from the same `recordAttemptEvent`.
       "record_attempt_event",
+      // The telemetry reads: pinned in test/telemetry-read-surfaces.test.ts, value for
+      // value against `staple attempts|attempt|budget|budget history --json`.
+      "list_attempts",
+      "get_attempt",
+      "get_budget",
+      "list_budget_samples",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

@@ -73,6 +73,8 @@ const READS: Record<StoreName, readonly string[]> = {
     "edges", "milestones", "queue", "projects", "writeTarget",
     // The attempt ledger the mutators write through; its own writes are the store's methods below.
     "attempts",
+    // The attempt read surfaces: pure reads, which write no stored orphan end either.
+    "attemptSummary", "listAttempts", "getAttempt",
   ],
   MilestoneStore: ["queueSeam", "get", "list", "milestoneOf"],
   QueueStore: ["revision", "entries", "effectiveQueue", "view"],

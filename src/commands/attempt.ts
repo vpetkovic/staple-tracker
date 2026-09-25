@@ -4,13 +4,15 @@
  * Contract: `docs/execution-telemetry.md`, "Surfaces". Every verb here is one store
  * method (`WorkspaceStore.recordAttemptEvent`, `reconstructAttemptHistory`), called by the
  * CLI, the MCP tool and the HTTP route alike, so the surfaces cannot drift. The read
- * surfaces (`staple attempts`, `staple attempt <id>`) are not here.
+ * surfaces (`staple attempts`, `staple attempt <id>`) are in `attempts.ts`; this file only
+ * routes an attempt id there.
  */
 import { parseArgs } from "node:util";
 import type { WorkspaceStore } from "../core/store.js";
 import type { AttemptOptions, AttemptView } from "../core/telemetry/attempts.js";
 import { StapleError } from "../core/types.js";
 import { resolveWorkspace } from "../core/workspace.js";
+import { showAttempt } from "./attempts.js";
 
 /** The self-reported flags an attempt-opening write accepts (`checkout`, `status`, `done`). */
 export const ATTEMPT_OPEN_OPTIONS = {
@@ -58,6 +60,8 @@ const HELP = `staple attempt — report on the attempt you hold
                                          operator_stop, unknown. The claim stays: resume with checkout.
   attempt reconstruct                    rebuild attempts for work done before they were recorded,
                                          from the event log (idempotent)
+  attempt <attempt-id> [--limit N] [--cursor C]
+                                         read one attempt: transitions, chain, burn
 
   --agent A        who acts; else $STAPLE_AGENT, else $USER
   --json           the attempt as it now reads`;
@@ -83,10 +87,15 @@ export function runAttemptCommand(rest: string[]): void {
       message: { type: "string", short: "m" },
       "comment-id": { type: "string" },
       doc: { type: "string" },
+      limit: { type: "string" },
+      cursor: { type: "string" },
     },
   });
   const [sub, ref] = positionals;
   if (values.help === true || sub === undefined || sub === "help") return console.log(HELP);
+  const verbs = ["pause", "resume", "milestone", "interrupt", "reconstruct"];
+  // Any other single word is an attempt id: the read surface.
+  if (!verbs.includes(sub) && ref === undefined) return showAttempt(values, sub);
   const store = resolveWorkspace({ db: values.db, ws: values.ws }).store;
 
   if (sub === "reconstruct") {
@@ -99,7 +108,7 @@ export function runAttemptCommand(rest: string[]): void {
     );
   }
   if (!["pause", "resume", "milestone", "interrupt"].includes(sub)) {
-    throw new StapleError("validation", `Unknown attempt command "${sub}". Use pause, resume, milestone, interrupt or reconstruct.`);
+    throw new StapleError("validation", `Unknown attempt command "${sub}". Use pause, resume, milestone, interrupt or reconstruct, or name one attempt by its id.`);
   }
   if (ref === undefined) throw new StapleError("validation", `staple attempt ${sub} needs the issue: staple attempt ${sub} <ref>.`);
   const actor = values.agent ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";

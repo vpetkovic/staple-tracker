@@ -813,6 +813,33 @@ read time from the samples that bracket it inside one window instance (using
 the [high-water rule](#regressions-within-a-window)), summed across instances
 when it spans a reset. It is reported with `attribution: "sole_known"` when
 `storedOpenAttemptsOnAccountStartedHere` was 1 throughout and `"shared"` otherwise.
+If any count is unknown (`null`) and nothing shows a second attempt,
+`attribution` is `null` with that count's reason. An unknown count is never
+read as "alone".
+
+The read brackets each window instance separately:
+
+- A window counts only if it holds **at least one reading inside the
+  attempt**. A reading from before the attempt says nothing about what the
+  attempt burned. With none inside, the window's delta is `null` with
+  `stale`, never a measured `0`.
+- The **end** is the window's high-water at or before the attempt's end (for
+  an open attempt, now).
+- The **start** (`baseline`) is the window's high-water at or before the
+  attempt's start (`window`). If the window holds no such reading, the start
+  is one of three things. It is `0` when the limit's previous instance reset
+  inside the attempt, because a reset is the provider's statement that usage
+  restarts (`reset`). It is the high-water at the start of the instance this
+  one superseded, when this one's readings continue from it: a moved reset
+  (`superseded_window`). Otherwise it is the first reading inside the attempt
+  (`first_reading`). In that last case usage before it was not seen, so the
+  window, and the limit's sum, carry `lowerBound: true`.
+- A superseded instance is not summed beside the one that replaced it. Doing
+  so would count one usage twice. There is one exception: when the
+  replacement holds no reading inside the attempt, or does not reach it at
+  all, the superseded instances' readings during the attempt are the measure.
+  They are reported with the `superseded_window` baseline, or as a
+  `first_reading` lower bound when none of them was read before the attempt.
 `sole_known` means only that no *other attempt this machine knows of* ran on the
 account. Usage from another machine, from an interactive session or from a
 headless run outside staple lands in the same percentage and cannot be excluded,
@@ -1039,8 +1066,14 @@ missing values from looking like measurements.
 Clocks: `startedAt`, `endedAt`, transition `at` and `recordedAt` come from the
 local clock. `observedAt` and `resetsAt` come from the provider. Lease expiry
 comes from the sync service. Nothing compares a local-clock value against a
-provider instant without saying so: staleness is measured on `recordedAt`, and
-reset countdowns on `resetsAt`.
+provider instant without saying so. Reset countdowns are measured on `resetsAt`.
+Staleness is measured on `observedAt`, the instant the value was true, because
+it is the value's age that matters. A reading backfilled from a rollout a
+minute ago can be two hours old. For a `capture`-sourced sample `observedAt`
+is the local capture instant, so the comparison stays on one clock. For a
+`provider`-sourced one it compares the local clock with the provider's
+timestamp, and that is said here. `get_budget`'s `stale` and the history's
+coverage gaps apply this one rule.
 
 ## Where it lives and what synchronizes
 
@@ -1167,7 +1200,27 @@ Every list is bounded: default `limit` 50, maximum 500. Every list returns:
 
 `gaps` lists spans in which capture did not run (no sample and no heartbeat),
 each with a reason from the [missingness table](#missingness), so a consumer can
-tell "capture saw no change" from "nobody was looking". For `capture`-sourced
+tell "capture saw no change" from "nobody was looking". A gap is a span of more
+than **600 seconds**, two heartbeat intervals, with no stored sample, measured
+on `observedAt`. One interval is not enough: an unchanged reading is stored
+again only once the previous one is 300 seconds old, so a live session's
+heartbeats land a little over 300 seconds apart. `stale` in `get_budget` uses
+the same 600 seconds. Budget history reports a gap before the account's first
+reading as `no_sample_yet`, and every other gap as `stale`. An attempt list
+reports the span of an issue worked before any attempt was recorded in the
+workspace as `before_capture_began`. When a page speaks for no span at all,
+`from` and `to` are `null`, and `coverage.missing` gives the reason, as on
+every other record. For budget history that reason is `no_sample_yet` or
+`source_unavailable`. For an issue with no attempts it is one of the
+[timing contract's](timing-semantics.md#missingness-for-the-new-fields) codes:
+`never_started`, or `no_worker_attempt` when the issue has a start and no
+attempt.
+
+The cursor is a keyset position `(instant, id)`. The id breaks ties, because
+one status-line render stores one sample per limit at the same `observedAt`.
+Rows written between two pages never shift a page. A relative `since` (`2h`)
+is resolved against the clock once, on the first page. A cursor is already
+past it, so a later page never resolves it again. For `capture`-sourced
 samples, "no change" still does not mean the provider measured again (see
 [the status-line caveats](#status-line-readings-are-cached-re-reads)). `truncated` is never inferred from
 `itemCount == limit`: it is stated.

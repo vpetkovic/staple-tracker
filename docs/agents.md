@@ -56,7 +56,7 @@ Any MCP client can launch `npx -y staple-cli mcp` the same way, with
 `STAPLE_AGENT` naming the agent. There is no separate MCP binary — `staple mcp`
 is the same entrypoint as the CLI.
 
-Forty stdio tools. The loop they exist for:
+Fifty-two stdio tools. The loop they exist for:
 
 `inbox` (or `next_task`) → `checkout_task` (a conflict means pick another, never
 retry; `out_of_order` means take the one it names) → `put_document` the plan →
@@ -226,6 +226,57 @@ human asked. Both tools answer the exact object `staple settings get --json`
 prints and `/api/settings` serves under `values`, so no surface disagrees
 about a value or where it came from.
 
+### Execution telemetry
+
+Four read-only tools over what execution cost
+([execution-telemetry.md](execution-telemetry.md#surfaces)). Each answers the
+object the matching CLI command prints with `--json`, because both call one
+method:
+
+| Tool | CLI | Returns |
+|---|---|---|
+| `list_attempts {ref, limit?, cursor?, ws?}` | `staple attempts <ref>` | The issue's attempts, oldest first, each as it reads now: `state`, `outcome` and `endReason` are the effective values, with `storedState` beside them |
+| `get_attempt {attempt_id, limit?, cursor?, ws?}` | `staple attempt <id>` | `{attempt, transitions, chain, burn}` |
+| `get_budget {account?}` | `staple budget` | Per account, each limit's current window, latest sample, `status`, high-water `remainingPercent` and `missing` |
+| `list_budget_samples {account, since?, limit?, cursor?}` | `staple budget history` | One account's readings, oldest first, each with a derived `regression` flag |
+
+`get_task` carries `attempts: {current, last, count}` beside `claim` and
+`timing`: the effectively open attempt, the newest ended one and the number of
+attempts, for the worker lane. A held claim with `attempts.current: null` and
+`attempts.last.outcome: "interrupted"` means the holder reported an
+interruption and has not resumed.
+
+Rules that hold on all four:
+
+- **Bounded.** `limit` defaults to 50 and is clamped to 500. `truncated` is
+  stated, never inferred from a full page. `nextCursor` is a keyset position:
+  rows added between two pages never shift a page, and a cursor replayed
+  against other arguments is refused with `validation`.
+- **Coverage.** `coverage: {from, to, itemCount, gaps}` names the span a page
+  speaks for and, in `gaps`, the spans nobody was capturing, each with a
+  reason: `before_capture_began` for attempts, `stale` (no reading and no
+  heartbeat for more than 10 minutes) or `no_sample_yet` for budget readings.
+- **Unknown is never 0.** A value that cannot be known is `null` with a reason
+  in `missing`. `burn` in particular is `null` with `no_provider_binding` (the
+  attempt names no account), `not_on_this_device` (another device opened it,
+  and budget data does not replicate), `no_sample_yet`, `source_unavailable`,
+  `stale` or `sliding_window`. A measured zero reads `0`.
+- **Burn** is, per limit of the attempt's account, the high-water usage at the
+  attempt's end minus the usage at its start inside each window instance,
+  summed across a reset. A window counts only with a reading inside the
+  attempt. Otherwise its delta is `null` with `stale`. A window that began
+  inside the attempt starts from `0`, and a moved reset starts from the
+  instance it superseded. When no reading precedes the attempt in its window,
+  the first reading inside is the start, and `lowerBound: true` says the burn
+  is at least that much. The CLI prints it as `≥`. `attribution` is
+  `sole_known` only when every count this machine recorded says no other
+  attempt ran on the account meanwhile, and `shared` when one did. An unknown
+  count gives `null` with a reason. It never claims the usage was the
+  attempt's alone.
+- **Reads write nothing.** Not the journal, not a stored orphan end and not
+  `hub.db`. The attempt tools take `ws`. The budget tools read this machine's
+  hub and take none, like `record_budget_sample`.
+
 ## Harness ergonomics
 
 All in-protocol, so a harness never needs out-of-band setup:
@@ -240,9 +291,11 @@ All in-protocol, so a harness never needs out-of-band setup:
   polluting the audit trail with anonymous writes.
 - **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
   creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 14 read-only, `checkout_task` idempotent — and
+- **Tools declare annotations** — 20 read-only, `checkout_task` idempotent — and
   return `structuredContent` (arrays wrap as `{items}`).
 - **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
+  The telemetry lists answer `{items, truncated, nextCursor, coverage}` instead
+  ([below](#execution-telemetry)).
 - `get_task` includes cross-workspace blockers and can inline document bodies
   with `include_documents: true`.
 
