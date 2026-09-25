@@ -1199,6 +1199,7 @@ function main() {
           queuedBy: store.queuedBy(ctx.issue.id),
           ...store.detailTiming(ctx.issue.id),
           attempts: store.attemptSummary(ctx.issue.id),
+          orchestration: store.orchestrationSummary(ctx.issue.id),
         });
         break;
       }

@@ -289,6 +289,11 @@ export function parentBucketsGolden(): Record<string, string> {
  * issue the contract agent checked out once and still holds: one running attempt, nothing
  * ended. No harness and no account were reported, so both are null with `not_supplied`.
  */
+/** The `orchestration` block beside it for an issue nobody coordinates by hand. */
+export function noOrchestrationGolden(): Record<string, unknown> {
+  return { current: null, count: 0 };
+}
+
 export function openAttemptsGolden(identifier: string): Record<string, unknown> {
   return {
     count: 1,
@@ -297,6 +302,7 @@ export function openAttemptsGolden(identifier: string): Record<string, unknown> 
       issueId: UUID,
       identifier,
       agent: CONTRACT_AGENT,
+      role: "worker",
       ordinal: 1,
       state: "running",
       storedState: "running",

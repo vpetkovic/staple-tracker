@@ -30,6 +30,7 @@ import {
   UUID,
   claimGolden,
   openAttemptsGolden,
+  noOrchestrationGolden,
   timingGolden,
   leafBucketsGolden,
   commentGolden,
@@ -298,6 +299,7 @@ describe("read shapes", () => {
       childrenTiming: {},
       // Execution attempts, from the store method get_task spreads too.
       attempts: openAttemptsGolden("CON-1"),
+      orchestration: noOrchestrationGolden(),
     });
   });
 

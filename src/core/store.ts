@@ -535,6 +535,20 @@ type DerivedRung = "active" | "review" | "workable" | "blocked" | "done" | "canc
  * What the interval replay produces for ONE issue, before rollups: the issue's
  * own numbers with no opinion yet about children.
  */
+/**
+ * `attempt open|end` take `--role orchestrator` and nothing else: the orchestrator lane is the
+ * only lane a caller opens or ends by hand.
+ */
+function assertOrchestratorRole(role: string | undefined, verb: "open" | "end"): void {
+  if (role === "orchestrator") return;
+  throw new StapleError(
+    "validation",
+    role === undefined
+      ? `staple attempt ${verb} needs --role orchestrator (MCP role: "orchestrator"): it is how an orchestrator ${verb === "open" ? "opens" : "ends"} its lane on the issue it coordinates.`
+      : `staple attempt ${verb} takes --role orchestrator only; got "${role}". A worker attempt ${verb === "open" ? "opens with a checkout or a status write into the active category" : "ends with the write that clears the claim"}.`,
+  );
+}
+
 /** What a parent reads of a child's own orchestration. */
 interface OwnEffort {
   orchestration: number | null;
@@ -681,12 +695,55 @@ export class WorkspaceStore {
     ref: string,
     event: string,
     actor: string,
-    input: { reason?: string; label?: string; commentId?: string; document?: { key: string; revision: number } } = {},
+    input: {
+      reason?: string;
+      label?: string;
+      commentId?: string;
+      document?: { key: string; revision: number };
+      /** The lane to act in (`--role`), when the actor holds an attempt in each. */
+      role?: string;
+      /** The attempt to act on, by id: the other way to say which lane. */
+      attemptId?: string;
+    } = {},
   ): AttemptView {
     if (!actor?.trim()) throw new StapleError("validation", "An attempt event needs an actor: pass --agent, or set STAPLE_AGENT.");
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const attempt = this.attempts().record(row, event, actor, input);
+      return viewAttempt(this.db, attempt.id)!;
+    });
+  }
+
+  /**
+   * `staple attempt open <ref> --role orchestrator` and MCP `record_attempt_event` with
+   * `event: "open"`: an orchestrator attempt on the issue being coordinated
+   * (`docs/timing-semantics.md`, "The orchestrator lane"). The only way an attempt gets
+   * `role: orchestrator`, and an exception to "no caller writes an attempt directly". It
+   * changes neither the issue's status nor its claim. Refused for any other role: a worker
+   * attempt opens with a checkout or a status write, never by hand.
+   */
+  openOrchestratorAttempt(ref: string, actor: string, role: string | undefined, opts: AttemptOptions = {}): AttemptView {
+    if (!actor?.trim()) throw new StapleError("validation", "An orchestrator attempt needs an actor: pass --agent, or set STAPLE_AGENT.");
+    assertOrchestratorRole(role, "open");
+    assertAttemptOptions(opts);
+    if (opts.outcome !== undefined) throw new StapleError("validation", "--outcome goes on the write that clears a claim; an orchestrator attempt ends with staple attempt end.");
+    return this.journaled(() => {
+      const row = this.requireTarget(ref);
+      const attempt = this.attempts().openOrchestrator(row, actor, opts);
+      return viewAttempt(this.db, attempt.id)!;
+    });
+  }
+
+  /**
+   * `staple attempt end <ref> --role orchestrator`: the actor's open orchestrator attempt on the
+   * issue ends `yielded`, reason `coordination_ended` — a real end.
+   */
+  endOrchestratorAttempt(ref: string, actor: string, role: string | undefined, attemptId?: string): AttemptView {
+    if (!actor?.trim()) throw new StapleError("validation", "Ending an orchestrator attempt needs an actor: pass --agent, or set STAPLE_AGENT.");
+    assertOrchestratorRole(role, "end");
+    return this.journaled(() => {
+      const row = this.requireTarget(ref);
+      const attempt = this.attempts().endOrchestrator(row, actor, attemptId);
       return viewAttempt(this.db, attempt.id)!;
     });
   }
@@ -707,6 +764,17 @@ export class WorkspaceStore {
    */
   attemptSummary(ref: string): AttemptSummary {
     return attemptSummary(this.db, this.requireRow(ref).id);
+  }
+
+  /**
+   * `orchestration: {current, count}` on `show`/`get_task`, beside `attempts`
+   * (`docs/timing-semantics.md`, "The orchestrator lane"): the orchestrator lane of this
+   * issue, read with that lane's own clauses — the newest effectively open orchestrator
+   * attempt, and how many there are. A pure read.
+   */
+  orchestrationSummary(ref: string): { current: AttemptView | null; count: number } {
+    const views = viewsOfIssue(this.db, this.requireRow(ref).id).filter((view) => view.role === "orchestrator");
+    return { current: [...views].reverse().find((view) => view.state !== "ended") ?? null, count: views.length };
   }
 
   /** `staple attempts <ref>` / `list_attempts`: bounded, with coverage. */

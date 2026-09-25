@@ -757,6 +757,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       // method get_task also spreads, so the two cannot drift.
       ...handle.store.detailTiming(context.issue.id),
       attempts: handle.store.attemptSummary(context.issue.id),
+      orchestration: handle.store.orchestrationSummary(context.issue.id),
     };
   }
 
@@ -3517,6 +3518,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           queuedBy: handle.store.queuedBy(context.issue.id),
           ...handle.store.detailTiming(context.issue.id),
           attempts: handle.store.attemptSummary(context.issue.id),
+          orchestration: handle.store.orchestrationSummary(context.issue.id),
         });
         return;
       }

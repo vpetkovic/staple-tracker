@@ -1024,6 +1024,14 @@ server.registerTool(
         .describe(
           "Execution attempts on this issue, worker lane, as they read now: the effectively open one, the newest ended one, and how many. list_attempts pages them all.",
         ),
+      orchestration: z
+        .object({
+          current: z.record(z.string(), z.unknown()).nullable(),
+          count: z.number(),
+        })
+        .describe(
+          "The orchestrator lane on this issue (docs/timing-semantics.md): the effectively open orchestrator attempt, and how many. Opened only by record_attempt_event event=open role=orchestrator; never part of workSeconds.",
+        ),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -1053,6 +1061,7 @@ server.registerTool(
         queuedBy: store.queuedBy(context.issue.id),
         ...store.detailTiming(context.issue.id),
         attempts: store.attemptSummary(context.issue.id),
+        orchestration: store.orchestrationSummary(context.issue.id),
       };
     }),
 );
@@ -1261,7 +1270,7 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, actor, agent, if_idle_seconds, ws, outcome, reason }) =>
+  ({ ref, actor, agent, if_idle_seconds, ws, outcome, reason, role }) =>
     run(() => {
       // An issue a restore removed has no checkout or lease left: said, not refused.
       const gone = storeFor(ws).removedByRestore(ref);
@@ -1269,7 +1278,7 @@ server.registerTool(
       const store = storeFor(ws);
       const released = store.releaseIssue(ref, requireActor(actor, agent), {
         ifIdleSeconds: if_idle_seconds,
-        attempt: attemptOptionsFromInput({ outcome, reason }),
+        attempt: attemptOptionsFromInput({ outcome, reason, role }),
       });
       return withAttemptResult(store, released);
     }),
@@ -1279,7 +1288,7 @@ server.registerTool(
   "record_attempt_event",
   {
     description:
-      "Report on the attempt you hold on an issue (docs/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. An attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry.",
+      "Report on the attempt you hold on an issue (docs/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (docs/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry.",
     inputSchema: {
       ref: refSchema,
       ...recordAttemptEventInput,

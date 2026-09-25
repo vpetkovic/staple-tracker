@@ -35,6 +35,7 @@ import {
   asStructured,
   claimGolden,
   openAttemptsGolden,
+  noOrchestrationGolden,
   timingGolden,
   parentBucketsGolden,
   commentGolden,
@@ -1146,6 +1147,7 @@ describe("tool response shapes (31/31)", () => {
        * reported no harness and no account, so both are null with `not_supplied`.
        */
       attempts: openAttemptsGolden("CON-1"),
+      orchestration: noOrchestrationGolden(),
     });
   });
 
