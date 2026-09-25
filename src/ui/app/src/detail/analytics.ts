@@ -391,9 +391,9 @@ export function computeTotals(timing: IssueTiming, rows: readonly ChildRow[]): T
  * mean opposite things to a reader: an INHERITED plan is a total nobody typed
  * and must say what it was built from, while an OWN plan sitting over planned
  * work must show the bottom-up number beside it rather than let one side win
- * quietly. Coverage is over descendants at every depth — not the direct-child
+ * quietly. Coverage is over plan units at every depth — not the direct-child
  * count the totals row reports — because that is the population the sum was
- * actually drawn from.
+ * actually drawn from (see `planCoverage`).
  */
 export function subtreePlanHint(plan: SubtreePlan): string | null {
   const coverage = planCoverage(plan);
@@ -421,9 +421,14 @@ export function childPlanHint(plan: SubtreePlan): string | null {
   return subtreePlanHint(plan) ?? OWN_PLAN;
 }
 
-/** `3 of 9 descendants` — the population the recursive sum was drawn from. */
+/**
+ * `3 of 9 units` — coverage over PLAN UNITS (`SubtreePlan.unplannedCount`): planned units of
+ * planned plus unplanned. Not over descendants: an unestimated epic over planned leaves, or
+ * leaves shadowed by an estimated parent, are covered, and counting them as gaps made a fully
+ * planned subtree read as partly planned.
+ */
 function planCoverage(plan: SubtreePlan): string {
-  return `${plan.contributingCount} of ${plan.totalCount} descendants`;
+  return `${plan.contributingCount} of ${plan.contributingCount + plan.unplannedCount} units`;
 }
 
 // ---------------------------------------------------------- the spoken headline
@@ -446,7 +451,12 @@ export function summarySentence(
   hints: { actual?: string | null; difference?: string | null } = {},
 ): string {
   const qualify = (text: string, hint: string | null | undefined) => (hint ? `${text} (${hint})` : text);
-  const coverage = plan.totalCount === 0 ? "no descendants" : `${planCoverage(plan)} planned`;
+  const coverage =
+    plan.totalCount === 0
+      ? "no descendants"
+      : plan.contributingCount + plan.unplannedCount === 0
+        ? "no live descendants"
+        : `${planCoverage(plan)} planned`;
   const source =
     plan.source === "own" ? OWN_PLAN : plan.source === "descendants" ? "inherited from descendants" : "no plan";
   return [
@@ -571,7 +581,7 @@ export interface BreakdownRow {
 export function buildBreakdown(timing: IssueTiming): BreakdownRow[] {
   if (!isAggregated(timing)) return [];
   const plan = timing.subtreePlan;
-  const descendants = `${plan.contributingCount} of ${plan.totalCount} descendants`;
+  const descendants = planCoverage(plan);
   return [
     {
       label: "This issue",
@@ -591,7 +601,9 @@ export function buildBreakdown(timing: IssueTiming): BreakdownRow[] {
       plannedSeconds: plan.descendantsEstimatedSeconds,
       planSource:
         plan.descendantsEstimatedSeconds === null
-          ? `no estimate among ${plan.totalCount} descendants`
+          ? plan.unplannedCount === 0
+            ? "no live descendants"
+            : `no estimate among ${plan.unplannedCount} units`
           : `bottom-up, from ${descendants}`,
       actualSeconds: timing.childrenActiveSeconds,
       actualSource: aggregationHint(timing.childCount),

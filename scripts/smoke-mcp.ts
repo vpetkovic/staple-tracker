@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 20 &&
+    readOnly.length === 21 &&
       [
         "inbox",
         "list_tasks",
@@ -149,8 +149,10 @@ try {
         "get_attempt",
         "get_budget",
         "list_budget_samples",
+        // Comparing the certified plans of named issues writes nothing.
+        "compare_plans",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 20 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 21 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -633,6 +635,19 @@ try {
     closedEpic.status === "done" && closedEpic.completedAt,
     "the last child landing closes the epic on the wire, with completedAt",
   );
+  // The certified plan of that epic: one unit, unplanned, so no labor and no path, never 0.
+  const compared = JSON.parse(
+    toolText(await rpc("tools/call", { name: "compare_plans", arguments: { refs: [epic.identifier] } })),
+  );
+  assert(
+    compared.plans.length === 1 &&
+      compared.plans[0].ref === epic.identifier &&
+      compared.plans[0].labor.seconds === null &&
+      compared.plans[0].coverage.unplanned === 1 &&
+      compared.plans[0].criticalPath.missing.includes("no_plan") &&
+      Array.isArray(compared.overlaps),
+    "compare_plans reports labor, coverage and the path of a named epic, null rather than 0 when unplanned",
+  );
   const epicEvents = JSON.parse(
     toolText(await rpc("tools/call", { name: "events_since", arguments: { since: 0 } })),
   ).filter((e: any) => e.payload?.identifier === epic.identifier);
@@ -771,8 +786,8 @@ try {
   // and it routes by ws exactly as they do (the cold phase below proves it). The
   // attempt reads list_attempts and get_attempt make 43; the budget reads, like
   // record_budget_sample, read this machine's hub and take no ws. set_estimate, the
-  // explicit estimate write, makes 44.
-  assert(wsTargetable.length === 44, `44 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // explicit estimate write, makes 44, and compare_plans, the certified plan read, 45.
+  assert(wsTargetable.length === 45, `45 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&

@@ -31,6 +31,7 @@ function plan(over: Partial<SubtreePlan> = {}): SubtreePlan {
     source: "none",
     descendantsEstimatedSeconds: null,
     contributingCount: 0,
+    unplannedCount: 0,
     totalCount: 0,
     ...over,
   };
@@ -107,6 +108,7 @@ const STA_157 = detail(
       source: "descendants",
       descendantsEstimatedSeconds: 39_600,
       contributingCount: 3,
+      unplannedCount: 0,
       totalCount: 3,
     }),
   }),
@@ -139,6 +141,7 @@ const STA_156 = detail(
       source: "descendants",
       descendantsEstimatedSeconds: 39_600,
       contributingCount: 3,
+      unplannedCount: 6,
       totalCount: 9,
     }),
   }),
@@ -152,6 +155,7 @@ const STA_156 = detail(
         source: "descendants",
         descendantsEstimatedSeconds: 39_600,
         contributingCount: 3,
+        unplannedCount: 0,
         totalCount: 3,
       }),
     }),
@@ -162,7 +166,7 @@ describe("a parent leads with the rolled-up plan", () => {
   it("STA-157 leads with 11h planned, not with 'no estimate recorded'", () => {
     const html = render(STA_157);
     expect(html).toContain(figure("11h"));
-    expect(html).toContain("inherited from 3 of 3 descendants");
+    expect(html).toContain("inherited from 3 of 3 units");
     expect(html).not.toContain("no estimate recorded");
     // The 11h is the FIRST figure on the page (the spoken sentence before it is
     // `sr-only` text, not a figure — see "the headline is spoken" below).
@@ -172,7 +176,7 @@ describe("a parent leads with the rolled-up plan", () => {
   it("STA-156 leads with the recursive descendant plan, not with '0 of 6 estimated'", () => {
     const html = render(STA_156);
     expect(html).toContain(figure("11h"));
-    expect(html).toContain("inherited from 3 of 9 descendants");
+    expect(html).toContain("inherited from 3 of 9 units");
     expect(html).not.toContain("0 of 6");
     expect(html).not.toContain("6 of 6");
     // The coverage caveat measures PLANS, so STA-157 counts as planned.
@@ -234,6 +238,7 @@ describe("the This issue and Children rows state the source of each number", () 
             source: "own",
             descendantsEstimatedSeconds: 39_600,
             contributingCount: 3,
+            unplannedCount: 0,
             totalCount: 3,
           }),
         }),
@@ -245,7 +250,7 @@ describe("the This issue and Children rows state the source of each number", () 
     expect(html).toContain("top-down, set on this issue");
     expect(html).toContain("worked directly — not in the headline");
     expect(html).toContain("Children");
-    expect(html).toContain("bottom-up, from 3 of 3 descendants");
+    expect(html).toContain("bottom-up, from 3 of 3 units");
     expect(html).toContain("aggregated from 3 children");
     // The headline is the own estimate; the disagreement with the children is visible, not summed.
     expect(html).toContain(figure("6h"));
@@ -257,7 +262,7 @@ describe("the This issue and Children rows state the source of each number", () 
     const html = render(STA_157);
     expect(html).toContain("no estimate set on this issue");
     expect(html).toContain("never worked directly");
-    expect(html).toContain("bottom-up, from 3 of 3 descendants");
+    expect(html).toContain("bottom-up, from 3 of 3 units");
   });
 });
 
@@ -343,6 +348,7 @@ describe("the caveats stay visible but concise", () => {
             source: "descendants",
             descendantsEstimatedSeconds: 3600,
             contributingCount: 1,
+            unplannedCount: 2,
             totalCount: 3,
           }),
         }),
@@ -423,7 +429,7 @@ describe("a child shows the plan its parent counts it as", () => {
 
   it("puts the provenance in a tooltip, never a third line", () => {
     const list = perChild(render(STA_156));
-    expect(list).toContain('title="inherited from 3 of 3 descendants" data-testid="child-plan"');
+    expect(list).toContain('title="inherited from 3 of 3 units" data-testid="child-plan"');
     // Not as text: nothing between the tags says "inherited".
     expect(list).not.toMatch(/>[^<]*inherited/);
     // Two lines per child, six children — twelve `ChildLine` divs, and not one more. (The
@@ -470,7 +476,7 @@ describe("the headline is spoken as one sentence in a fixed order", () => {
     expect(start).toBeLessThan(html.indexOf(figure("11h")));
     const sentence = html.slice(start, html.indexOf("</p>", start));
     expect(sentence).toMatch(
-      /Planned 11h\. Actual 5h[^.]*\. Difference 6h under \(55%\)\. Coverage 3 of 9 descendants planned\. Source inherited from descendants\./,
+      /Planned 11h\. Actual 5h[^.]*\. Difference 6h under \(55%\)\. Coverage 3 of 9 units planned\. Source inherited from descendants\./,
     );
     const at = (word: string) => {
       const index = sentence.indexOf(word);
@@ -531,6 +537,7 @@ describe("regression stand-ins for the five screenshot states", () => {
             source: "descendants",
             descendantsEstimatedSeconds: 3600,
             contributingCount: 1,
+            unplannedCount: 2,
             totalCount: 3,
           }),
         }),
@@ -545,7 +552,7 @@ describe("regression stand-ins for the five screenshot states", () => {
     expect(childPlans(html)).toEqual(["1h", "—", "—"]);
     expect(html).toContain(figure("1h"));
     expect(html).toContain("2 of 3 children have no plan");
-    expect(html).toContain("Coverage 1 of 3 descendants planned.");
+    expect(html).toContain("Coverage 1 of 3 units planned.");
   });
 
   it("narrow width: child lines truncate the title and pin the figures; the headline wraps", () => {

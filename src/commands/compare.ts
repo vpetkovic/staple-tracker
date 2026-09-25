@@ -1,0 +1,108 @@
+/**
+ * `staple compare <ref> <ref> [...]`: the certified plan of each named issue side by side —
+ * total labor, estimate coverage and the critical path — with no tree in the output
+ * (docs/cli.md, "Comparing plans"). One store method, `WorkspaceStore.comparePlans`, which MCP
+ * `compare_plans` and HTTP `/api/compare` call too, so `--json` and the tools answer one shape.
+ */
+import { parseArgs } from "node:util";
+import type { PlanComparison, PlanPath, PlanSummary } from "../core/plan-rollup.js";
+import { StapleError, formatDuration } from "../core/types.js";
+import { resolveWorkspace } from "../core/workspace.js";
+
+const HELP = `staple compare — total labor, estimate coverage and critical path of named issues
+
+  compare <ref> [<ref> ...]   up to 20 issues; no tree is printed
+              labor   every planned unit once: an issue's own estimate, else the
+                      sum of its units beneath; never a parent's estimate on top
+                      of its descendants'. Cancelled work is no labor
+              units   planned of all units; an unplanned unit makes both labor
+                      and path lower bounds (partial), never a silent 0
+              planned path   the longest blockedBy chain inside the subtree,
+                      weighted by estimate, parallel branches taking the max;
+                      blockers from outside the subtree are listed, not followed
+              remaining path the longest chain over the same graph, with
+                      done units weighing 0
+
+  --json      {plans: [{ref, title, kind, status, labor, coverage, criticalPath,
+              remainingPath}], overlaps}`;
+
+const CHAIN_SHOWN = 8;
+const hours = (seconds: number | null): string => (seconds === null ? "unknown" : formatDuration(seconds));
+
+/**
+ * The plan in three lines, as `show` and `compare` print it: labor with coverage, the planned
+ * path, and the remaining path. `show` prints them for a parent whose plan has a planned unit; a
+ * leaf's plan is its own estimate, already on `time`.
+ */
+export function planLines(plan: PlanSummary): string[] {
+  const { labor, coverage, criticalPath, remainingPath } = plan;
+  const source =
+    labor.source === "own" && labor.descendantsSeconds !== null
+      ? `own estimate; units beneath add up to ${formatDuration(labor.descendantsSeconds)}`
+      : labor.source;
+  const units = `${coverage.planned} of ${coverage.units} units planned`;
+  const cancelled = coverage.cancelled > 0 ? ` · ${coverage.cancelled} cancelled` : "";
+  const unplanned =
+    coverage.unplanned > 0
+      ? ` · unplanned ${coverage.unplannedRefs.join(", ")}${coverage.unplanned > coverage.unplannedRefs.length ? ` (+${coverage.unplanned - coverage.unplannedRefs.length})` : ""}`
+      : "";
+  const pathLine = (label: string, path: PlanPath, extra: string[]): string => {
+    const shown = path.chain.slice(0, CHAIN_SHOWN).map((step) => (step.seconds === null ? `${step.ref}(?)` : step.ref));
+    const more = path.chainLength > shown.length ? ` > … (+${path.chainLength - shown.length})` : "";
+    const flags = [
+      path.partial ? `partial: ${path.missing.join(", ")}` : null,
+      path.exceedsLabor ? "longer than the own estimate" : null,
+      ...extra,
+    ].filter((flag): flag is string => flag !== null);
+    if (path.seconds === 0 && path.chainLength === 0) return `${label} 0 (every unit is done)`;
+    return `${label} ${path.seconds !== null && path.partial ? "≥" : ""}${hours(path.seconds)}${shown.length > 0 ? ` · ${shown.join(" > ")}${more}` : ""}${flags.length > 0 ? ` · ${flags.join(" · ")}` : ""}`;
+  };
+  const structural = [
+    criticalPath.cycle.length > 0 ? `cycle broken at ${criticalPath.cycle.join(", ")}` : null,
+    criticalPath.crossSubtreeBlockerCount > 0
+      ? `${criticalPath.unresolvedCrossSubtreeBlockerCount} of ${criticalPath.crossSubtreeBlockerCount} outside blockers open` +
+        (criticalPath.unresolvedCrossSubtreeBlockerCount > 0
+          ? ` (${criticalPath.crossSubtreeBlockers
+              .filter((blocker) => !blocker.resolved)
+              .map((blocker) => `${blocker.blocked} <- ${blocker.blocker}`)
+              .join(", ")})`
+          : "")
+      : null,
+  ].filter((flag): flag is string => flag !== null);
+  return [
+    `labor ${labor.source === "descendants" && coverage.partial ? "≥" : ""}${hours(labor.seconds)} (${source}) · ${units}${cancelled}${unplanned}`,
+    pathLine("planned path", criticalPath, structural),
+    pathLine("remaining path", remainingPath, []),
+  ];
+}
+
+function say(result: PlanComparison): void {
+  for (const plan of result.plans) {
+    console.log(`${plan.ref} · ${plan.title} (${plan.kind}, ${plan.status})`);
+    for (const line of planLines(plan)) console.log(`  ${line}`);
+  }
+  for (const overlap of result.overlaps) {
+    console.log(`note ${overlap.ref} lies inside ${overlap.within}: its labor is already part of ${overlap.within}'s, do not add them`);
+  }
+}
+
+export function runCompareCommand(rest: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: {
+      db: { type: "string" },
+      ws: { type: "string" },
+      json: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+  if (values.help === true) return console.log(HELP);
+  if (positionals.length === 0) {
+    throw new StapleError("validation", "staple compare needs at least one issue: staple compare <ref> [<ref> ...].");
+  }
+  const store = resolveWorkspace({ db: values.db, ws: values.ws }).store;
+  const result = store.comparePlans(positionals);
+  if (values.json) return console.log(JSON.stringify(result));
+  say(result);
+}

@@ -40,6 +40,7 @@ function timing(): IssueTiming {
       source: "none",
       descendantsEstimatedSeconds: null,
       contributingCount: 0,
+      unplannedCount: 0,
       totalCount: 0,
     },
   };
