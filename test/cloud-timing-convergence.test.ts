@@ -647,6 +647,35 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     expect(timingOn(b, x.id, 30).wall).toEqual(timingOn(a, x.id, 30).wall);
   }, 60_000);
 
+  it("single-value records decided offline to different values leave no record open anywhere", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Named" });
+    await sync(a, b);
+    a.use();
+    a.store.updateIssue(x.id, { title: "Named by A", priority: "high" }, "vp");
+    b.use();
+    b.store.updateIssue(x.id, { title: "Named by B", priority: "low" }, "vp");
+    await sync(a, b, a);
+    at(10);
+    for (const machine of [b, a]) {
+      machine.use();
+      for (const record of listConflicts(machine.db).filter((conflict) => conflict.entity === "issue")) {
+        resolveConflict(machine.db, { id: record.id, choice: "local", actor: "vp" });
+      }
+    }
+    await sync(b, a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) {
+      expect(machine.store.getIssue(x.id), machine.label).toMatchObject({ title: "Named by A", priority: "high" });
+      expect(listConflicts(machine.db), machine.label).toEqual([]);
+    }
+  }, 60_000);
+
   it("a late decision replaces only the disputed span: history both devices held after it stays", async () => {
     const { a, b, x, recordOn } = await disputedStatus();
     at(100);
@@ -697,6 +726,84 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     expect(timingOn(b, d.id, 40).wall).toEqual(onA.wall);
     expect(onA.wall!.buckets).toMatchObject({ blocked: min(40) });
     for (const machine of [a, b]) expect(timingOn(machine, d.id, 40).quality.wall, machine.label).toEqual({ state: "approximate", inputs: ["conflict_resolved"] });
+  }, 60_000);
+
+  it("a status decision settles only the attempt-end dispute its own two writes made", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Two disputes", estimatedSeconds: 600 });
+    a.store.checkoutIssue(x.id, "agent-a");
+    await sync(a, b);
+    // Attempt 1: A reports an interruption at 10, B closes the issue at 11, offline.
+    at(10);
+    a.use();
+    a.store.recordAttemptEvent(x.id, "interrupt", "agent-a", { reason: "provider_limit" });
+    at(11);
+    b.use();
+    b.store.updateIssue(x.id, { status: "done" }, "vp");
+    await sync(a, b, a);
+    const [first] = attemptsOfIssue(a.db, x.id);
+    expect(listConflicts(a.db).some((record) => record.entity === "attempt" && record.entityId === first!.id)).toBe(true);
+    // Attempt 2: reopened and claimed by agent-c; A sends it to review at 30, B closes it at 31.
+    at(20);
+    a.use();
+    a.store.updateIssue(x.id, { status: "todo" }, "vp");
+    a.store.checkoutIssue(x.id, "agent-c");
+    await sync(a, b);
+    at(30);
+    a.use();
+    a.store.updateIssue(x.id, { status: "in_review" }, "agent-c");
+    at(31);
+    b.use();
+    b.store.updateIssue(x.id, { status: "done" }, "vp");
+    await sync(a, b, a);
+    at(40);
+    a.use();
+    const status = listConflicts(a.db).find((record) => record.entity === "issue" && record.field === "status")!;
+    resolveConflict(a.db, { id: status.id, choice: "remote", actor: "vp" });
+    await sync(a, b);
+    for (const machine of [a, b]) {
+      const open = listConflicts(machine.db).filter((record) => record.entity === "attempt");
+      // Attempt 1's dispute is nobody's decision: still open, and the reading still says so.
+      expect(open.map((record) => record.entityId), machine.label).toEqual([first!.id]);
+      expect(timingOn(machine, x.id, 50).quality.work.inputs, machine.label).toContain("contested");
+    }
+    // Attempt 2's ends follow the decision: done at 31.
+    expect(attemptsOfIssue(b.db, x.id)[1]).toMatchObject({ agent: "agent-c", endReason: "done", endedAt: iso(31) });
+  }, 60_000);
+
+  it("a status decision settles the end a steal wrote: the stolen attempt follows the chosen status", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    const b = fleet.machine("b");
+    await sync(a, b);
+    a.use();
+    const x = a.store.createIssue({ title: "Stolen and closed" });
+    a.store.checkoutIssue(x.id, "agent-a");
+    await sync(a, b);
+    at(10);
+    a.use();
+    a.store.updateIssue(x.id, { status: "in_review" }, "agent-a");
+    at(90);
+    b.use();
+    b.store.checkoutIssue(x.id, "agent-b", undefined, { stealIfIdleSeconds: 60 });
+    at(95);
+    b.store.updateIssue(x.id, { status: "done" }, "agent-b");
+    await sync(a, b, a);
+    at(100);
+    a.use();
+    const status = listConflicts(a.db).find((record) => record.entity === "issue" && record.field === "status")!;
+    resolveConflict(a.db, { id: status.id, choice: "local", actor: "vp" });
+    await sync(a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const machine of [a, b, fresh]) {
+      expect(attemptsOfIssue(machine.db, x.id)[0], machine.label).toMatchObject({ agent: "agent-a", endReason: "review", endedAt: iso(10) });
+      expect(listConflicts(machine.db).filter((record) => record.entity === "attempt" && record.entityId === attemptsOfIssue(machine.db, x.id)[0]!.id), machine.label).toEqual([]);
+    }
   }, 60_000);
 
   it("an attempt two devices ended differently is contested until the record is settled", async () => {

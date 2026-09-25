@@ -1297,7 +1297,7 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
     close(db, conflict.id, at, actor, chosen);
     settleOpenFor(db, conflict.entity, conflict.entityId, conflict.field, at, actor, chosen);
     forgetClosedEntries(db);
-    if (resolution !== null) settleAttemptEnds(db, conflict.entityId, chosen as string, actor);
+    if (resolution !== null) settleAttemptEnds(db, conflict, chosen as string, actor);
 
     /**
      * The decision replicates as its own operation so that every other device
@@ -1552,12 +1552,13 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
      */
     const standing = (): false => {
       /**
-       * A status and an attempt's end only — what a status decision writes — and only the record
-       * whose remote side IS the losing decision's value: its write, and nothing else. For a
-       * list, closing records here that stay open on another device would let a later write
-       * land here and be withheld there (`test/cloud-fleet-sweep.test.ts`).
+       * Only the record whose remote side IS the losing decision's value — the one its own
+       * resolving write opened here — and never for a whole list (the plan, a milestone's
+       * members, a vocabulary's order): a list's records are not one write against one write,
+       * and closing them here while they stay open elsewhere let a later write land here and be
+       * withheld there (`test/cloud-fleet-sweep.test.ts`, seed 163).
        */
-      if ((entity === "issue" && field === "status") || (entity === "attempt" && field === "end")) {
+      if (WHOLE[entity] !== field && field !== "order") {
         const close = db.prepare("UPDATE sync_conflicts SET resolved_at = ?, resolved_by = ?, resolution = ? WHERE id = ?");
         for (const record of listConflicts(db)) {
           if (record.entity !== entity || record.entityId !== targetId || record.field !== field || !sameValue(record.remoteValue, value)) continue;
@@ -1655,14 +1656,23 @@ const END_REASON_FOR_CATEGORY: Readonly<Record<string, string>> = {
  * settles it, a fresh one included, and `workSeconds` reads the same everywhere. An end conflict
  * no status decision explains is left for a human, as before.
  */
-function settleAttemptEnds(db: DatabaseSync, issueId: string, chosenStatus: string, actor: string | null): void {
+function settleAttemptEnds(db: DatabaseSync, status: ConflictRecord, chosenStatus: string, actor: string | null): void {
+  const issueId = status.entityId;
   const category = (db.prepare("SELECT category FROM workspace_statuses WHERE id = ?").get(chosenStatus) as { category: string } | undefined)?.category;
   const reason = category === undefined ? undefined : (END_REASON_FOR_CATEGORY[category] ?? "returned");
   if (reason === undefined) return;
   const open = listConflicts(db).filter((record) => {
     if (record.entity !== "attempt" || record.field !== "end" || record.resolvedAt !== null) return false;
     const attempt = db.prepare("SELECT issue_id, role FROM attempts WHERE id = ?").get(record.entityId) as { issue_id: string; role: string | null } | undefined;
-    return attempt !== undefined && attempt.issue_id === issueId && (attempt.role ?? "worker") !== "orchestrator";
+    if (attempt === undefined || attempt.issue_id !== issueId || (attempt.role ?? "worker") === "orchestrator") return false;
+    /**
+     * Only the dispute those two status writes made: each end was journaled by the same mutation
+     * as its side's status write, so the end record's two writes are the status record's two
+     * writes, instant for instant (operations are dated at their mutation). Another dispute on
+     * the issue's attempts — an interruption against a close, a minute apart — is nobody's
+     * decision yet, and stays open.
+     */
+    return record.localAt === status.localAt && record.remoteAt === status.remoteAt;
   });
   const endReasonOf = (value: unknown): unknown =>
     value !== null && typeof value === "object" ? ((value as Record<string, unknown>).endReason ?? (value as Record<string, unknown>).end_reason) : undefined;
