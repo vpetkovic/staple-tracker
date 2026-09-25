@@ -615,9 +615,12 @@ describe("round 1: what an operation narrates, and what it does not", () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
+    // Connected and synchronized first, so the journal writes these operations itself.
+    await sync(a);
     a.use();
     const x = a.store.createIssue({ title: "Narrated" });
     a.store.checkoutIssue(x.id, "agent-a");
+    expect(a.db.prepare("SELECT COUNT(*) AS n FROM sync_field_writes WHERE entity = 'issue' AND entity_id = ?").get(x.id)).not.toEqual({ n: 0 });
     await sync(a);
     const fresh = fleet.machine("fresh");
     await sync(fresh);
