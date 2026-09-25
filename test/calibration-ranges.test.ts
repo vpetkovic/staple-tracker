@@ -197,9 +197,13 @@ describe("the heavy-tail test", () => {
     const lower = tailOf(at([0.001, 0.001, 0.15, 0.158, 0.167, 0.175, 0.183, 0.192, 0.2, 0.208]));
     expect(lower.outliers).toEqual({ lower: 2, upper: 0 });
     expect(lower.heavy).toBe(true);
-    // Six of eight equal: the MAD is 0, the mean absolute deviation scales instead.
-    const ties = tailOf(at([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 50, 50]));
+    // Eight of ten equal: the MAD is 0, and the mean absolute deviation scales instead,
+    // 1.2533 × 2d / 10 for the two at distance d, which puts them at 3.99 deviations: a tail.
+    const ties = tailOf(at([0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 50, 50]));
     expect(ties.scale).toBe("mean_absolute_deviation");
+    expect(ties.outliers).toEqual({ lower: 0, upper: 2 });
+    expect(ties.heavy).toBe(true);
+    expect(ties.fences!.upper).toBeCloseTo(0.2 * Math.exp((3.5 * 1.253314 * 2 * Math.log(250)) / 10), 9);
     // Every sample equal: no scale, no fence, no outlier.
     const flat = tailOf(at([0.2, 0.2, 0.2, 0.2, 0.2]));
     expect(flat).toMatchObject({ tested: true, heavy: false, fences: null, outliers: { lower: 0, upper: 0 } });
