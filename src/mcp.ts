@@ -1137,7 +1137,13 @@ server.registerTool(
       labels: z.array(z.string()).optional(),
       unblock_owner: z.string().nullable().optional(),
       unblock_action: z.string().nullable().optional(),
-      estimate_seconds: estimateSchema,
+      /**
+       * Its own description: update_task still takes an estimate beside other fields, but
+       * an estimate-only change has one documented form, set_estimate.
+       */
+      estimate_seconds: estimateSchema.describe(
+        "Plan-time estimate in SECONDS (90m = 5400, 2h = 7200), written in the same patch as the other fields. Must be a positive whole number of seconds, at most 365d. Pass null to clear; omit to leave unchanged. To change only the estimate, use set_estimate.",
+      ),
       expected_status_version: z.number().int().optional(),
       comment: z.string().optional(),
       ...attemptOpenFields,

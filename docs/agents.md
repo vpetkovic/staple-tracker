@@ -78,7 +78,8 @@ retry; `out_of_order` means take the one it names) → `put_document` the plan a
 not restate the status, and you do not need the claim: like a status write, any
 actor may re-estimate, and the `estimate_changed` event records who.
 `estimate_seconds` is required. A number of seconds sets it, `null` clears it,
-and omitting it is a schema error, not a clear. It answers the issue plus
+and omitting or mistyping it is the SDK's `-32602` input-validation error (an
+`isError` result), not a clear. It answers the issue plus
 `estimateChange: {from, to, changed}`. The identical repeat is a no-op
 (`changed: false`, no event, nothing to sync), which is why it is annotated
 `idempotentHint: true`. A value that is not an estimate (zero, a fraction, over

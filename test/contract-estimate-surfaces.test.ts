@@ -658,8 +658,16 @@ describe("the explicit estimate write: one store method, three doors, no status 
     expect((toolPayload(set) as Record<string, any>).estimateChange).toEqual({ from: 2700, to: 3600, changed: true });
     expect(cliShow(ref).issue.estimatedSeconds).toBe(3600);
 
-    const missing = await mcp.call("set_estimate", { ref, ws: WS });
-    expect(missing.isError).toBe(true);
+    /**
+     * Absent or mistyped, the value never reaches the store: the SDK's input-schema check
+     * refuses it as -32602 (invalid params). This SDK wraps that refusal in an isError tool
+     * result whose text is the SDK's sentence, not staple's envelope.
+     */
+    for (const args of [{ ref, ws: WS }, { ref, estimate_seconds: "2h", ws: WS }]) {
+      const refused = await mcp.call("set_estimate", args);
+      expect(refused.isError).toBe(true);
+      expect(String(refused.content[0]?.text)).toMatch(/^MCP error -32602: Input validation error/);
+    }
     expect(cliShow(ref).issue.estimatedSeconds).toBe(3600);
 
     const cleared = await mcp.call("set_estimate", { ref, estimate_seconds: null, ws: WS });

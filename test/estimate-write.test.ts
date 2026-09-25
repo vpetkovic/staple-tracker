@@ -199,7 +199,12 @@ describe("guards: a value refusal, and nothing a status write does not have", ()
     for (const bad of [0, -5, 1.5, 366 * 86_400]) {
       expect(refusal(() => store.setEstimate(issue.id, bad, "a")).code).toBe("validation");
     }
-    expect(refusal(() => store.setEstimate(issue.id, 0, "a")).message).toMatch(/positive whole number of seconds/);
+    // One sentence for zero, a negative and a fraction, naming the clear on every surface.
+    for (const bad of [0, -1, 1.5]) {
+      expect(refusal(() => store.setEstimate(issue.id, bad, "a")).message).toBe(
+        `estimate must be a positive whole number of seconds (got ${bad}); to remove an estimate, clear it: \`staple estimate <ref> --clear\` on the CLI, null on MCP and HTTP`,
+      );
+    }
     // No value at all is not a clear.
     expect(refusal(() => store.setEstimate(issue.id, undefined as unknown as null, "a")).code).toBe("validation");
     expect(store.getIssue(issue.id).estimatedSeconds).toBe(600);

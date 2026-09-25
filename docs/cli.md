@@ -443,8 +443,17 @@ method and answer the same shape. MCP `set_estimate` takes `{ref,
 estimate_seconds}`, and `estimate_seconds` is required: a number sets, `null`
 clears, and omitting it is a schema error, not a clear. The HTTP action takes
 `{type: "estimate", ref, estimateSeconds}`. A missing key or `""` is refused
-with HTTP 409 and `validation`. The error envelope is the same on every
-surface.
+with HTTP 409 and `validation`.
+
+Refusals carry the same `code`, `message` and `retryable` on every surface,
+each in that surface's usual wrapper: the CLI's single stderr line under
+`--json`, the MCP tool result's `isError` text block, and the UI server's JSON
+body with its HTTP status. One refusal comes from somewhere else. A missing or
+mistyped `estimate_seconds` on MCP (absent, a string) is rejected by the MCP
+SDK's input-schema check before the store runs. That refusal is a `-32602`
+invalid-params error. The SDK returns it as an `isError` tool result whose text
+starts `MCP error -32602: Input validation error`, not as a staple
+`validation` envelope.
 
 **Only the estimate is stored.** The actual is `activeSeconds`, reconstructed
 at read time by replaying the event log into `in_progress` **intervals** —
