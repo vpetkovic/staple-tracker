@@ -1,0 +1,90 @@
+{
+  "title": "a steal on a device that has not yet pulled the holder's last document revision",
+  "covers": [
+    "a recorded inferred end is the later of the stored end and the replicated evidence before the successor, on both axes",
+    "the stealing device dates the end at its own lastActivityOf, before a revision the holder wrote offline arrives",
+    "once the revision arrives, the work bucket, workSeconds and the chain link agree on every device"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "x",
+      "estimate": "2h"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "11m",
+      "do": "sync",
+      "devices": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "at": "30m",
+      "do": "document",
+      "ref": "x",
+      "agent": "w1",
+      "key": "worklog"
+    },
+    {
+      "at": "90m",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w2",
+      "stealIfIdle": "30m",
+      "device": "b"
+    },
+    {
+      "at": "100m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w2",
+      "device": "b"
+    },
+    {
+      "at": "110m",
+      "do": "status",
+      "ref": "x",
+      "to": "done",
+      "agent": "w2",
+      "device": "b"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "120m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "50m",
+      "wall": {
+        "startAt": "0s",
+        "endAt": "110m",
+        "buckets": {
+          "work": "50m",
+          "interrupted": "60m"
+        }
+      },
+      "resumeGaps": [
+        "60m"
+      ]
+    }
+  ]
+}

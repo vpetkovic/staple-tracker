@@ -1,0 +1,229 @@
+{
+  "title": "transitions in the same millisecond: zero-length intervals count zero and nothing overlaps",
+  "covers": [
+    "born in active and done in the same millisecond: wall 0, work 0, timing-floor",
+    "an interruption re-claimed in the same millisecond: the new attempt starts a millisecond later, gap 0",
+    "a pause and a resume in the same millisecond pause nothing",
+    "review entered and left in the same millisecond is zero review",
+    "three attempts opened in one millisecond keep the order they happened in: each re-claim resumes the one before it"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "born",
+      "status": "in_progress",
+      "agent": "w0"
+    },
+    {
+      "at": "0s",
+      "do": "status",
+      "ref": "born",
+      "to": "done",
+      "agent": "w0"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "x"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "z"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "y"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "y",
+      "agent": "w2"
+    },
+    {
+      "at": "5m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "5m",
+      "do": "checkout",
+      "ref": "z",
+      "agent": "w4"
+    },
+    {
+      "at": "5m",
+      "do": "interrupt",
+      "ref": "z",
+      "agent": "w4",
+      "reason": "harness_exit"
+    },
+    {
+      "at": "5m",
+      "do": "checkout",
+      "ref": "z",
+      "agent": "w4"
+    },
+    {
+      "at": "5m",
+      "do": "interrupt",
+      "ref": "z",
+      "agent": "w4",
+      "reason": "harness_exit"
+    },
+    {
+      "at": "5m",
+      "do": "checkout",
+      "ref": "z",
+      "agent": "w4"
+    },
+    {
+      "at": "10m",
+      "do": "interrupt",
+      "ref": "x",
+      "agent": "w1",
+      "reason": "harness_exit"
+    },
+    {
+      "at": "10m",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "pause",
+      "ref": "y",
+      "agent": "w2",
+      "reason": "operator"
+    },
+    {
+      "at": "10m",
+      "do": "resume",
+      "ref": "y",
+      "agent": "w2"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "z",
+      "agent": "w4"
+    },
+    {
+      "at": "15m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "15m",
+      "do": "comment",
+      "ref": "y",
+      "agent": "w2"
+    },
+    {
+      "at": "15m",
+      "do": "status",
+      "ref": "z",
+      "to": "done",
+      "agent": "w4"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "x",
+      "to": "done",
+      "agent": "w1"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "y",
+      "to": "in_review",
+      "agent": "w2"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "y",
+      "to": "done",
+      "agent": "reviewer"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "30m",
+      "ref": "born",
+      "workSeconds": 0,
+      "quality": {
+        "work": "timing-floor"
+      },
+      "wall": {
+        "startAt": "0s",
+        "endAt": "0s",
+        "buckets": {}
+      }
+    },
+    {
+      "asOf": "30m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "20m",
+      "wall": {
+        "startAt": "0s",
+        "endAt": "20m",
+        "buckets": {
+          "work": "20m"
+        }
+      },
+      "resumeGaps": [
+        0
+      ]
+    },
+    {
+      "asOf": "30m",
+      "ref": "y",
+      "workSeconds": "20m",
+      "reviewSeconds": 0,
+      "wall": {
+        "startAt": "0s",
+        "endAt": "20m",
+        "buckets": {
+          "work": "20m"
+        }
+      }
+    },
+    {
+      "asOf": "30m",
+      "ref": "z",
+      "intervals": 3,
+      "workSeconds": "10m",
+      "wall": {
+        "startAt": "5m",
+        "endAt": "15m",
+        "buckets": {
+          "work": "10m"
+        }
+      },
+      "resumeGaps": [
+        0,
+        0
+      ]
+    }
+  ]
+}

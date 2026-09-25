@@ -284,3 +284,44 @@ describe("HTTP /api/action", () => {
     }
   }, 120_000);
 });
+
+describe("resumeGapSeconds on every read surface", () => {
+  let ui: UiHandle | null = null;
+  afterAll(() => ui?.close());
+
+  it("show, get_task and /api/issue carry timing.resumeGaps; attempt <id> and get_attempt carry chain[].resumeGapSeconds", async () => {
+    const ref = String(cli("new", "Interrupted and resumed").json.identifier);
+    const first = String(attemptOf(cli("checkout", ref).json).id);
+    cli("attempt", "interrupt", ref, "--reason", "provider_limit");
+    const second = String(attemptOf(cli("checkout", ref).json).id);
+    const link = { attemptId: first, resumedByAttemptId: second, resumeGapSeconds: expect.any(Number), clockSkew: false };
+
+    const shown = cli("show", ref).json;
+    expect((shown.timing as Record<string, unknown>).resumeGaps).toEqual([expect.objectContaining(link)]);
+    const task = toolPayload(await mcp.call("get_task", { ref, ws: WS })) as Record<string, unknown>;
+    expect((task.timing as Record<string, unknown>).resumeGaps).toEqual([expect.objectContaining(link)]);
+
+    const detail = cli("attempt", first).json;
+    const viaMcp = toolPayload(await mcp.call("get_attempt", { attempt_id: first, ws: WS })) as Record<string, unknown>;
+    for (const payload of [detail, viaMcp]) {
+      const chain = payload.chain as Array<Record<string, unknown>>;
+      expect(chain.map((entry) => entry.id)).toEqual([first, second]);
+      expect(chain[0]!.resumeGapSeconds).toEqual(expect.any(Number));
+      // Nothing has resumed the second attempt yet.
+      expect(chain[1]!.resumeGapSeconds).toBeNull();
+    }
+
+    const previous = process.env.STAPLE_HOME;
+    process.env.STAPLE_HOME = home;
+    try {
+      ui = startUiServer({ port: 0, hub: false, ws: WS });
+      await once(ui.server, "listening");
+      const origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
+      const body = (await (await fetch(`${origin}/api/issue?ref=${ref}&ws=${WS}`, { headers: { "x-staple-token": ui.token } })).json()) as Record<string, unknown>;
+      expect((body.timing as Record<string, unknown>).resumeGaps).toEqual([expect.objectContaining(link)]);
+    } finally {
+      if (previous === undefined) delete process.env.STAPLE_HOME;
+      else process.env.STAPLE_HOME = previous;
+    }
+  }, 120_000);
+});

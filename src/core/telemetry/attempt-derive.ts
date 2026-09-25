@@ -19,7 +19,7 @@
  * device with no open conflict of its own holds the settled claim.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { nowIso } from "../types.js";
+import { nowIso, type ResumeGap } from "../types.js";
 import { attemptsOfIssue, isWorkerAttempt, laneOf, transitionsOf, type AttemptRecord, type AttemptTransition } from "./attempt-records.js";
 
 export type EvaluationMode = "read" | "own";
@@ -223,8 +223,10 @@ export function countEffectivelyOpen(db: DatabaseSync): number {
 }
 
 /**
- * The newest event or comment by `agent` on the issue, floored at `since`: the query the
- * claim uses (`lastActivityOf` in `store.ts`), with the attempt's agent and `startedAt`.
+ * The newest event, comment or document revision by `agent` on the issue, floored at
+ * `since`: the query the claim uses (`lastActivityOf` in `store.ts`), with the attempt's
+ * agent and `startedAt`. Comments and revisions replicate and their events do not, so a
+ * device that read the tail reads the writer's instant.
  */
 export function lastActivityOf(db: DatabaseSync, issueId: string, agent: string, since: string): string {
   const row = db
@@ -232,10 +234,12 @@ export function lastActivityOf(db: DatabaseSync, issueId: string, agent: string,
       `SELECT MAX(t) AS t FROM (
          SELECT MAX(created_at) AS t FROM events   WHERE issue_id = ? AND actor  = ?
          UNION ALL
-         SELECT MAX(created_at) AS t FROM comments WHERE issue_id = ? AND author = ? AND deleted_at IS NULL
+         SELECT MAX(created_at) AS t FROM comments WHERE issue_id = ? AND author = ?
+         UNION ALL
+         SELECT MAX(created_at) AS t FROM document_revisions WHERE issue_id = ? AND author = ?
        )`,
     )
-    .get(issueId, agent, issueId, agent) as { t: string | null } | undefined;
+    .get(issueId, agent, issueId, agent, issueId, agent) as { t: string | null } | undefined;
   const newest = row?.t ?? null;
   return newest && newest > since ? newest : since;
 }
@@ -325,6 +329,40 @@ export function chainOf(attempts: readonly AttemptRecord[], id: string): string[
     const right = byId.get(b)!;
     return left.startedAt === right.startedAt ? (a < b ? -1 : 1) : left.startedAt < right.startedAt ? -1 : 1;
   });
+}
+
+/**
+ * Every chain link among an issue's worker-lane views, by the resuming attempt's start. An
+ * attempt resumed more than once (two devices re-claimed it offline) links to the earliest
+ * resumer, the one that ended its wait. An attempt nothing has resumed yet has no link.
+ */
+export function resumeGapsOf(
+  views: readonly AttemptView[],
+  /** The corrected end of every inferred or orphan end (`inferredEndsOf`). */
+  ends: ReadonlyMap<string, string> = new Map(),
+): ResumeGap[] {
+  const workers = views.filter((view) => view.role === "worker");
+  const byId = new Map(workers.map((view) => [view.id, view]));
+  const linked = new Set<string>();
+  const out: ResumeGap[] = [];
+  for (const next of [...workers].sort((a, b) => (a.startedAt === b.startedAt ? (a.id < b.id ? -1 : 1) : a.startedAt < b.startedAt ? -1 : 1))) {
+    const previous = next.resumesAttemptId === null ? undefined : byId.get(next.resumesAttemptId);
+    if (!previous || linked.has(previous.id)) continue;
+    // An orphan's end comes from `ends` (its replicated evidence before the resumer), never its
+    // `endedAtBound`: that is the opener's last activity, the resumer's own included.
+    const endedAt = ends.get(previous.id) ?? previous.endedAt ?? null;
+    if (endedAt === null) continue;
+    linked.add(previous.id);
+    out.push({
+      attemptId: previous.id,
+      resumedByAttemptId: next.id,
+      endedAt,
+      resumedAt: next.startedAt,
+      resumeGapSeconds: seconds(endedAt, next.startedAt),
+      clockSkew: Date.parse(next.startedAt) + 1000 < Date.parse(endedAt),
+    });
+  }
+  return out;
 }
 
 /** Every attempt of an issue as it reads, both lanes, oldest first; each view carries `role`. */

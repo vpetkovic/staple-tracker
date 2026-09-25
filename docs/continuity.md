@@ -6,8 +6,10 @@ What happens after an agent dies mid-task.
 
 Every held issue carries a `claim`: `heldBy`, `lastActivityAt`, `heldSeconds`,
 `idleSeconds`. Those are derived at read time from the checkout plus the newest
-event or comment *by that holder* — so a caller can tell a working agent from
-one a usage limit killed three hours ago.
+event, comment or document revision *by that holder* (a comment deleted later
+still counts) — so a caller can tell a working agent from one a usage limit killed
+three hours ago. Comments and revisions replicate, so a device that pulled them
+reads the same liveness as the one they were written on.
 
 `ls` and `show` print `held 2h · silent 45m` on `in_progress` rows, and
 `--json` carries the same numbers under `claim`.

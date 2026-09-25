@@ -1,0 +1,33 @@
+{
+  "title": "liveness decides a steal: a document revision the holder wrote keeps the claim, on the device that only pulled it",
+  "covers": [
+    "the claim's lastActivityAt reads the holder's document revisions, so a device that pulled one reads the holder idle since it",
+    "checkout --steal-if-stale 30m is refused at 20 minutes idle (the revision), where the holder's last event or comment was 40 minutes ago",
+    "the positive control: past the threshold the steal succeeds, and the tenure ends at the revision"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "30m", "do": "document", "ref": "x", "agent": "w1", "key": "worklog" },
+    { "at": "31m", "do": "sync", "devices": ["a", "b"] },
+    { "at": "50m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m", "device": "b", "refused": "conflict" },
+    { "at": "70m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m", "device": "b" },
+    { "at": "80m", "do": "comment", "ref": "x", "agent": "w2", "device": "b" },
+    { "at": "90m", "do": "status", "ref": "x", "to": "done", "agent": "w2", "device": "b" }
+  ],
+  "expect": [
+    { "asOf": "45m", "ref": "x", "claim": { "lastActivityAt": "30m" } },
+    {
+      "asOf": "95m",
+      "ref": "x",
+      "intervals": 2,
+      "claim": null,
+      "workSeconds": "50m",
+      "wall": { "startAt": "0s", "endAt": "90m", "buckets": { "work": "50m", "interrupted": "40m" } },
+      "resumeGaps": ["40m"]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "title": "a reported interruption and the holder's re-claim: interrupted time and the resume gap",
+  "covers": [
+    "attempt interrupt ends the attempt at t; interrupted runs from t",
+    "the holder re-claiming after its attempt ended opens a new attempt that resumes it; work from t",
+    "resumeGapSeconds = next.startedAt - previous.endedAt",
+    "interrupted time is never work, on either axis"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x", "estimate": "1h" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "15m0.3s", "do": "interrupt", "ref": "x", "agent": "w1", "reason": "provider_limit" },
+    { "at": "45m", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "60m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "70m", "do": "status", "ref": "x", "to": "done", "agent": "w1" }
+  ],
+  "expect": [
+    {
+      "asOf": "80m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "40m0.3s",
+      "activeSeconds": "70m",
+      "quality": { "work": "exact", "wall": "exact" },
+      "wall": { "startAt": "0s", "endAt": "70m", "buckets": { "work": "40m0.3s", "interrupted": "29m59.7s" } },
+      "resumeGaps": ["29m59.7s"]
+    }
+  ]
+}

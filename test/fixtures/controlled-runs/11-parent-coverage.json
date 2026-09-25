@@ -1,0 +1,155 @@
+{
+  "title": "a parent with children: which children owe work, and the sum over those that do",
+  "covers": [
+    "a cancelled child reports what ran (ownWorkSeconds) and no comparable work, and leaves the coverage",
+    "a child that never started owes no work and leaves the coverage",
+    "an open child contributes its work so far",
+    "a parent's workSeconds sums its children's; its own active time is undivided"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "p",
+      "title": "parent"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "done",
+      "parent": "p"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "cancelled",
+      "parent": "p"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "never",
+      "parent": "p"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "open",
+      "parent": "p"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "done",
+      "agent": "w1"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "cancelled",
+      "agent": "w2"
+    },
+    {
+      "at": "5m",
+      "do": "comment",
+      "ref": "done",
+      "agent": "w1"
+    },
+    {
+      "at": "5m",
+      "do": "comment",
+      "ref": "cancelled",
+      "agent": "w2"
+    },
+    {
+      "at": "10m",
+      "do": "status",
+      "ref": "done",
+      "to": "done",
+      "agent": "w1"
+    },
+    {
+      "at": "12m",
+      "do": "status",
+      "ref": "cancelled",
+      "to": "cancelled",
+      "agent": "w2"
+    },
+    {
+      "at": "15m",
+      "do": "status",
+      "ref": "never",
+      "to": "done",
+      "agent": "lead"
+    },
+    {
+      "at": "20m",
+      "do": "checkout",
+      "ref": "open",
+      "agent": "w3"
+    },
+    {
+      "at": "30m",
+      "do": "comment",
+      "ref": "open",
+      "agent": "w3"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "40m",
+      "ref": "p",
+      "intervals": 2,
+      "workSeconds": "20m",
+      "coverage": {
+        "known": 2,
+        "total": 2,
+        "partial": false
+      },
+      "wall": {
+        "startAt": "0s",
+        "endAt": null,
+        "buckets": {
+          "active": "32m",
+          "queued": "8m"
+        }
+      }
+    },
+    {
+      "asOf": "40m",
+      "ref": "cancelled",
+      "workSeconds": null,
+      "ownWorkSeconds": "12m",
+      "missing": {
+        "workSeconds": "not_applicable_cancelled"
+      }
+    },
+    {
+      "asOf": "40m",
+      "ref": "never",
+      "workSeconds": null,
+      "missing": {
+        "workSeconds": "never_started"
+      },
+      "wall": null
+    },
+    {
+      "asOf": "40m",
+      "ref": "open",
+      "workSeconds": "10m",
+      "wall": {
+        "startAt": "20m",
+        "endAt": null,
+        "buckets": {
+          "work": "10m",
+          "silent": "10m"
+        }
+      }
+    }
+  ]
+}

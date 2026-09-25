@@ -236,6 +236,34 @@ export function issueEffort(db: DatabaseSync, issueId: string): { workers: LaneE
   return { workers: lane(workers, "worker"), orchestrators: lane(orchestrators, "orchestrator"), firstWorkerStart: workers[0]?.startedAt ?? null };
 }
 
+/** What {@link inferredEndsOf} reads of an attempt view. */
+type EndedView = { id: string; role: string; state: string; storedState: string; endDetection: string | null; endReason: string | null };
+
+/**
+ * The corrected end of each worker attempt whose end was inferred rather than written by the
+ * mutation that ended it, by attempt id: the end {@link effectiveEnd} gives `workSeconds`. The
+ * elapsed partition and the chain link (`resumeGapSeconds`) read it too, so the three agree.
+ *
+ * - A recorded end inferred by a steal or a stale release (`claim_stolen`, `released_stale`):
+ *   its stored `endedAt` is the ending device's own `lastActivityOf`, which misses evidence
+ *   that had not reached that device.
+ * - An orphan end, stored or derived: its `endedAtBound` and its stored end are the opener's
+ *   `lastActivityOf`, which counts the resuming attempt's own activity when the same agent
+ *   resumed.
+ */
+export function inferredEndsOf(views: readonly EndedView[], workers: LaneEffort): Map<string, string> {
+  const effortEnd = new Map(workers.attempts.map((attempt) => [attempt.id, attempt.end]));
+  const out = new Map<string, string>();
+  for (const view of views) {
+    if (view.role !== "worker" || view.state !== "ended") continue;
+    const inferred = view.endDetection === "derived" || (view.storedState === "ended" && view.endDetection === "inferred");
+    if (!inferred) continue;
+    const end = effortEnd.get(view.id);
+    if (end !== undefined) out.set(view.id, end);
+  }
+  return out;
+}
+
 /** True when the row's `startedAt` is more than one second before the first worker attempt: work before it has no attempt. */
 export function hasCaptureGap(rowStartedAt: string | null, firstWorkerStart: string | null): boolean {
   return rowStartedAt !== null && firstWorkerStart !== null && ms(firstWorkerStart) - ms(rowStartedAt) > TOLERANCE_MS;

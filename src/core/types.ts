@@ -750,10 +750,39 @@ export interface IssueTiming {
   estimateRatio: number | null;
   /** The elapsed partition, device-local (`docs/timing-semantics.md`). Null reasons in `missing.wall`. */
   wall: WallTiming | null;
+  /**
+   * The issue's own worker-lane chain links, oldest first: each interrupted attempt that has
+   * been resumed, with its `resumeGapSeconds`. Empty when nothing was resumed; null only on a
+   * read that skipped the effort and elapsed fields (`timingFor(…, { telemetry: false })`),
+   * like every other field it skips.
+   */
+  resumeGaps: ResumeGap[] | null;
   /** The quality state of each axis, and what it was derived from. */
   quality: TimingQuality;
   /** Why each null new field is null: `never_started`, `no_worker_attempt`, `replay_unavailable`, … */
   missing: Record<string, string>;
+}
+
+/**
+ * One link of a worker-lane chain (`docs/timing-semantics.md`, `resumeGapSeconds`): an
+ * attempt that ended `interrupted` or reads `orphaned`, and the attempt that resumed it.
+ */
+export interface ResumeGap {
+  /** The attempt that was interrupted. */
+  attemptId: string;
+  /** The attempt whose `resumesAttemptId` names it. */
+  resumedByAttemptId: string;
+  /** The interrupted attempt's end as this device reads it: the stored `endedAt`, or the orphan's `endedAtBound`. */
+  endedAt: string;
+  /** The resuming attempt's `startedAt`. */
+  resumedAt: string;
+  /**
+   * `resumedAt − endedAt`, whole seconds: how long the interrupted work waited, across whatever
+   * buckets that spans. An inverted gap (the resuming device's clock reads earlier) counts 0.
+   */
+  resumeGapSeconds: number;
+  /** The gap is inverted by more than one second: two devices' clocks disagree, and 0 is a clamp, not a measurement. */
+  clockSkew: boolean;
 }
 
 /** An issue's elapsed span and its partition into buckets that never overlap. */
@@ -1266,6 +1295,25 @@ export function normalizeTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/**
+ * The write clock: the one seam every recorded instant reads. The store, the event writer
+ * (`Journal.mutationAt`, `event-row.ts`) and the attempt ledger all take their instants from
+ * `nowIso`, so a run that installs a clock here controls every instant a mutation stamps
+ * (`docs/timing-semantics.md`, "Controlled runs"). Production installs nothing and reads the
+ * real clock.
+ */
+let clockSource: (() => number) | null = null;
+
+/** Install a clock (milliseconds since the epoch), or `null` for the real one again. */
+export function setClock(source: (() => number) | null): void {
+  clockSource = source;
+}
+
+/** The write clock in milliseconds. */
+export function nowMs(): number {
+  return clockSource === null ? Date.now() : clockSource();
+}
+
 export function nowIso(): string {
-  return new Date().toISOString();
+  return new Date(nowMs()).toISOString();
 }

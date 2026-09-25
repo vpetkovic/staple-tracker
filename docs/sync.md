@@ -569,7 +569,9 @@ writes nothing from it but the events. They are written **dated at the origin's
 instant**, never at the apply: an event dated by the apply would put the
 transition at the moment this device synchronized. The device's own operations
 coming back are skipped, and a status a conflict withheld narrates nothing. An
-operation without `originEvents` is narrated from the change itself. A pulled
+operation without `originEvents` narrates only a pristine birth (an
+`issue_created` for a create never edited); the rest of what it changed has no
+history, and the timing replay reads `replay_unavailable`. A pulled
 delete narrates the `blockers_changed` of every dependent that lost a blocker, at
 the delete's own time. Attempt transitions were already re-emitted this way, by
 their own `at`. The replay orders by that instant, then `seq`, because a

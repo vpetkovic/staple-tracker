@@ -27,6 +27,11 @@ export interface PathEntry {
 
 /** A worker attempt as this device's ledger reads it. */
 export interface CoverageAttempt {
+  readonly id: string;
+  /** The attempt this one resumes (`resumesAttemptId`): a chain link, whose gap must not run backwards. */
+  readonly resumesAttemptId: string | null;
+  /** The end a chain link measures from (`resumeGapSeconds`): `end` once ended, null while open. */
+  readonly chainEnd: string | null;
   readonly startedAt: string;
   /** `end(A)`: the stored end, the orphan's `endedAtBound`, or `asOf` while effectively open. */
   readonly end: string;
@@ -105,9 +110,20 @@ export function partition(input: WallInput): Wall | null {
       if (to < from) to = from;
       const counted = attempt.open ? Math.max(from, Math.min(ms(attempt.countedThrough), to)) : to;
       const pauses: Array<[number, number]> = attempt.pauses.map(([p, q]) => [Math.max(from, ms(p)), Math.min(to, ms(q))]);
-      return { from, to, counted, open: attempt.open, broken: attempt.interruptedOrOrphaned, pauses: pauses.filter(([p, q]) => p < q) };
+      return { id: attempt.id, resumes: attempt.resumesAttemptId, chainEnd: attempt.chainEnd === null ? null : ms(attempt.chainEnd), from, to, counted, open: attempt.open, broken: attempt.interruptedOrOrphaned, pauses: pauses.filter(([p, q]) => p < q) };
     })
     .sort((a, b) => a.from - b.from);
+  /**
+   * A chain link whose resumer starts more than the snap window before the end it resumes: two
+   * devices' clocks disagree (`docs/timing-semantics.md`, "Clocks", comparison 2). The gap
+   * between them is an inverted interval, counted as 0, so the partition is off by that much
+   * and says so.
+   */
+  const byId = new Map(attempts.map((attempt) => [attempt.id, attempt]));
+  for (const attempt of attempts) {
+    const resumed = attempt.resumes === null ? undefined : byId.get(attempt.resumes);
+    if (resumed !== undefined && resumed.chainEnd !== null && attempt.from + SNAP_MS < resumed.chainEnd) inputs.add("clock_skew");
+  }
 
   const buckets: Record<string, number> = Object.fromEntries((parent ? PARENT_BUCKETS : LEAF_BUCKETS).map((bucket) => [bucket, 0]));
   let unexplained = false;

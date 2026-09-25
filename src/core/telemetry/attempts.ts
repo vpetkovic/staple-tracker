@@ -259,6 +259,12 @@ export class AttemptLedger {
     mutationAt?: string,
     /** The lane. Only `openOrchestrator` passes `orchestrator`; every mutation hook opens a worker attempt. */
     role: "worker" | "orchestrator" = "worker",
+    /**
+     * The issue as it stood BEFORE the opening mutation, for the resume rule. Read after it,
+     * an attempt orphaned because the issue left `active` reads revived the moment the
+     * mutation moves the issue back, and the attempt that resumes it would link to nothing.
+     */
+    before?: IssueFacts,
   ): AttemptRecord {
     if (opts.idempotencyKey !== undefined) {
       const replay = attemptByKey(this.db, issue.id, opts.idempotencyKey);
@@ -276,7 +282,7 @@ export class AttemptLedger {
     const now = mutationAt ?? this.host.journal.mutationAt();
     const at = latest !== null && now <= latest ? new Date(Date.parse(latest) + 1).toISOString() : now;
     // The resume rule is the worker lane's: an orchestrator attempt resumes nothing.
-    const resume = role === "worker" ? this.resumeFor(issue.id) : { id: null, contested: false };
+    const resume = role === "worker" ? this.resumeFor(issue.id, before) : { id: null, contested: false };
     const missing: Record<string, string> = {};
     let harness: AttemptHarness | null = null;
     if (opts.harness !== undefined) {
@@ -353,12 +359,12 @@ export class AttemptLedger {
    * effectively ended `interrupted` or `orphaned`, the new attempt names it. Evaluated by
    * the opening device and stored, so it never changes afterwards.
    */
-  private resumeFor(issueId: string): { id: string | null; contested: boolean } {
+  private resumeFor(issueId: string, before?: IssueFacts): { id: string | null; contested: boolean } {
     // "The latest attempt" is the latest WORKER attempt (`docs/timing-semantics.md`).
     const attempts = attemptsOfIssue(this.db, issueId).filter(isWorkerAttempt);
     const latest = attempts[attempts.length - 1];
     if (!latest) return { id: null, contested: false };
-    const evaluation = evaluateIssue(attempts, issueFacts(this.db, issueId), "read").get(latest.id)!;
+    const evaluation = evaluateIssue(attempts, before ?? issueFacts(this.db, issueId), "read").get(latest.id)!;
     const orphaned = latest.state !== "ended" && evaluation.orphanReason !== null;
     const interrupted = latest.state === "ended" && latest.outcome === "interrupted";
     if (!orphaned && !interrupted) return { id: null, contested: false };
@@ -452,8 +458,8 @@ export class AttemptLedger {
   // ------------------------------------------------------- the store's hooks
 
   /** `checkout` created a new claim. */
-  checkedOut(issue: { id: string; identifier: string; updated_at?: string }, agent: string, opts?: AttemptOptions): void {
-    this.open(issue, agent, "checkout", opts, undefined, issue.updated_at);
+  checkedOut(issue: { id: string; identifier: string; updated_at?: string }, agent: string, opts?: AttemptOptions, before?: IssueFacts): void {
+    this.open(issue, agent, "checkout", opts, undefined, issue.updated_at, "worker", before);
   }
 
   /** `checkout --steal-if-stale` took the claim from `before.checkoutAgent`. */
@@ -461,7 +467,7 @@ export class AttemptLedger {
     for (const attempt of this.targets(issue.id, before)) {
       this.endByMutation(attempt, { outcome: "interrupted", endReason: "claim_stolen", inferred: true }, agent, undefined);
     }
-    this.open(issue, agent, "steal", opts, undefined, issue.updated_at);
+    this.open(issue, agent, "steal", opts, undefined, issue.updated_at, "worker", before);
   }
 
   /**
@@ -526,7 +532,7 @@ export class AttemptLedger {
       return;
     }
     if (categoryBefore !== "active" && categoryAfter === "active") {
-      this.open(issue, actor ?? "unknown", "status", opts, { scope: "none", fencingToken: null }, issue.updated_at);
+      this.open(issue, actor ?? "unknown", "status", opts, { scope: "none", fencingToken: null }, issue.updated_at, "worker", before);
     }
   }
 

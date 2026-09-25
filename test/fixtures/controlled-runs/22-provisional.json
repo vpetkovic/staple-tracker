@@ -1,0 +1,27 @@
+{
+  "title": "provisional buckets read at several instants: silence becomes work when the agent writes again; done while paused",
+  "covers": [
+    "silent exists only while an attempt is open, after its last evidence",
+    "the agent writing again turns the silence before it into work, on the writer and on the tail",
+    "a terminal transition while paused closes the pause at t: the pause stays paused, never work"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "create", "ref": "y" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "0s", "do": "checkout", "ref": "y", "agent": "w2" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "pause", "ref": "y", "agent": "w2", "reason": "awaiting_input" },
+    { "at": "30m", "do": "status", "ref": "y", "to": "done", "agent": "w2" },
+    { "at": "40m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "50m", "do": "status", "ref": "x", "to": "done", "agent": "w1" }
+  ],
+  "expect": [
+    { "asOf": "30m", "ref": "x", "workSeconds": "10m", "activeSeconds": "10m", "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "10m", "silent": "20m" } } },
+    { "asOf": "45m", "ref": "x", "workSeconds": "40m", "activeSeconds": "40m", "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "40m", "silent": "5m" } } },
+    { "asOf": "55m", "ref": "x", "workSeconds": "50m", "activeSeconds": "50m", "wall": { "startAt": "0s", "endAt": "50m", "buckets": { "work": "50m" } } },
+    { "asOf": "55m", "ref": "y", "workSeconds": "10m", "activeSeconds": "30m", "wall": { "startAt": "0s", "endAt": "30m", "buckets": { "work": "10m", "paused": "20m" } } }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "title": "a status write into active with no claim: the attempt's evidence is its own agent's, category time is anyone's",
+  "covers": [
+    "a non-derived status write into active opens a worker attempt (openedBy status, claim scope none) at t",
+    "open: the work bucket stops at the agent's last activity, the rest is silent; activeSeconds runs to the newest event by anyone",
+    "closed by the agent's own mutation, the silence becomes work"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "create", "ref": "y" },
+    { "at": "0s", "do": "status", "ref": "x", "to": "in_progress", "agent": "lead", "assignee": "lead" },
+    { "at": "0s", "do": "status", "ref": "y", "to": "in_progress", "agent": "lead2", "assignee": "lead2" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "lead" },
+    { "at": "10m", "do": "comment", "ref": "y", "agent": "lead2" },
+    { "at": "25m", "do": "comment", "ref": "x", "agent": "bot" },
+    { "at": "25m", "do": "comment", "ref": "y", "agent": "bot" },
+    { "at": "30m", "do": "status", "ref": "y", "to": "done", "agent": "lead2" }
+  ],
+  "expect": [
+    {
+      "asOf": "40m",
+      "ref": "x",
+      "workSeconds": "10m",
+      "activeSeconds": "25m",
+      "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "10m", "silent": "30m" } }
+    },
+    {
+      "asOf": "40m",
+      "ref": "y",
+      "workSeconds": "30m",
+      "activeSeconds": "30m",
+      "wall": { "startAt": "0s", "endAt": "30m", "buckets": { "work": "30m" } }
+    }
+  ]
+}

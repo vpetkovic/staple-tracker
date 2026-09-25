@@ -49,6 +49,7 @@ import {
   claimGuardMessage,
   normalizeTitle,
   nowIso,
+  nowMs,
 } from "./types.js";
 import { SORT_ORDER_STEP } from "./migrations/workspace/004-workspace-settings.js";
 import {
@@ -94,10 +95,10 @@ import {
   viewAttempt,
 } from "./telemetry/attempts.js";
 import { reconstructAttempts, type ReconstructReport } from "./telemetry/reconstruct.js";
-import { hasCaptureGap, issueEffort, pausesOf } from "./telemetry/effort.js";
+import { hasCaptureGap, inferredEndsOf, issueEffort, pausesOf } from "./telemetry/effort.js";
 import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
 import { transitionsOf } from "./telemetry/attempt-records.js";
-import { viewsOfIssue } from "./telemetry/attempt-derive.js";
+import { resumeGapsOf, viewsOfIssue } from "./telemetry/attempt-derive.js";
 import { attemptDetail, attemptSummary, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
 import type { PageRequest, TelemetryPage } from "./telemetry/read-page.js";
 import { stapleHome } from "../config/home.js";
@@ -620,7 +621,7 @@ interface OwnEffort {
 /** The new timing fields, null, for a caller that asked for the plan alone (`telemetry: false`). */
 function noTelemetry(): Pick<
   IssueTiming,
-  "workSeconds" | "ownWorkSeconds" | "orchestrationSeconds" | "leadSeconds" | "estimateRatio" | "wall" | "quality" | "missing"
+  "workSeconds" | "ownWorkSeconds" | "orchestrationSeconds" | "leadSeconds" | "estimateRatio" | "wall" | "resumeGaps" | "quality" | "missing"
 > {
   return {
     workSeconds: null,
@@ -629,6 +630,7 @@ function noTelemetry(): Pick<
     leadSeconds: null,
     estimateRatio: null,
     wall: null,
+    resumeGaps: null,
     quality: { work: { state: null, inputs: [], coverage: null, missingInputs: [] }, wall: { state: null, inputs: [] } },
     missing: {},
   };
@@ -4284,8 +4286,11 @@ export class WorkspaceStore {
   // ---------- claim liveness (derived, never stored) ----------
 
   /**
-   * Newest timestamp the HOLDER produced on this issue: their own events and
-   * their own comments, floored at the checkout itself. One query, computed at
+   * Newest timestamp the HOLDER produced on this issue: their own events, their
+   * own comments and their own document revisions, floored at the checkout itself.
+   * Comments and revisions replicate while their events do not, so reading them
+   * keeps a device that read the tail on the writer's instant. A deleted comment
+   * still counts: the writer's `comment_added` event outlives the deletion. One query, computed at
    * read time — there is no `last_activity_at` column and deliberately so, since
    * every write path would have to remember to touch it.
    *
@@ -4298,10 +4303,12 @@ export class WorkspaceStore {
         `SELECT MAX(t) AS t FROM (
            SELECT MAX(created_at) AS t FROM events   WHERE issue_id = ? AND actor  = ?
            UNION ALL
-           SELECT MAX(created_at) AS t FROM comments WHERE issue_id = ? AND author = ? AND deleted_at IS NULL
+           SELECT MAX(created_at) AS t FROM comments WHERE issue_id = ? AND author = ?
+           UNION ALL
+           SELECT MAX(created_at) AS t FROM document_revisions WHERE issue_id = ? AND author = ?
          )`,
       )
-      .get(issueId, holder, issueId, holder) as { t: string | null } | undefined;
+      .get(issueId, holder, issueId, holder, issueId, holder) as { t: string | null } | undefined;
     const newest = row?.t ?? null;
     // ISO-8601 UTC from nowIso() sorts lexicographically == chronologically.
     return newest && newest > checkoutAt ? newest : checkoutAt;
@@ -4353,7 +4360,10 @@ export class WorkspaceStore {
              SELECT e.issue_id AS issue_id, e.actor AS who, e.created_at AS t FROM events e
              UNION ALL
              SELECT c.issue_id AS issue_id, c.author AS who, c.created_at AS t
-               FROM comments c WHERE c.deleted_at IS NULL
+               FROM comments c
+             UNION ALL
+             SELECT r.issue_id AS issue_id, r.author AS who, r.created_at AS t
+               FROM document_revisions r
            ) a ON a.issue_id = i.id AND a.who = i.checkout_agent
           WHERE i.id IN (${placeholders})
             AND i.status IN ${sqlIdList(this.settings().active)}
@@ -4871,14 +4881,26 @@ export class WorkspaceStore {
       eventsByIssue.set(issueId, settled.events);
     }
 
-    // 3/4 — the no-holder clamp: newest event of ANY kind on the issue.
+    /**
+     * 3/4 — the no-holder clamp: the newest event of ANY kind on the issue, or comment or
+     * document revision by anyone. Comments and revisions replicate and their events do not,
+     * so without them a device that read the tail would stop an unheld issue's open interval
+     * at its last re-emitted status change, where the writer counts through the latest
+     * comment. The held clamp below reads both for the same reason. A deleted comment still
+     * counts, as its event on the writer does.
+     */
     const newestEvent = new Map<string, string>();
     for (const row of this.db
       .prepare(
-        `SELECT issue_id, MAX(created_at) AS t FROM events
-          WHERE issue_id IN (${placeholders}) GROUP BY issue_id`,
+        `SELECT issue_id, MAX(t) AS t FROM (
+           SELECT issue_id, created_at AS t FROM events WHERE issue_id IN (${placeholders})
+           UNION ALL
+           SELECT issue_id, created_at AS t FROM comments WHERE issue_id IN (${placeholders})
+           UNION ALL
+           SELECT issue_id, created_at AS t FROM document_revisions WHERE issue_id IN (${placeholders})
+         ) GROUP BY issue_id`,
       )
-      .all(...(ids as never[])) as Array<{ issue_id: string; t: string | null }>) {
+      .all(...([...ids, ...ids, ...ids] as never[])) as Array<{ issue_id: string; t: string | null }>) {
       if (row.t) newestEvent.set(row.issue_id, row.t);
     }
 
@@ -5116,6 +5138,8 @@ export class WorkspaceStore {
     if (orchestrationSeconds === null) missing.orchestrationSeconds = "no_orchestrator_attempt";
 
     // ---- the elapsed partition, device-local
+    const views = viewsOfIssue(this.db, row.id, asOf);
+    const inferredEnds = inferredEndsOf(views, effort.workers);
     let wall: WallTiming | null = null;
     const wallInputs = new Set<string>();
     if (own.approximate || own.path === undefined) {
@@ -5126,7 +5150,7 @@ export class WorkspaceStore {
         parent,
         path: own.path,
         asOf,
-        attempts: parent ? [] : this.coverageOf(row.id, asOf),
+        attempts: parent ? [] : this.coverageOf(views, asOf, inferredEnds),
         blocked: edges.blocked,
         unexplainedBlocked: edges.unexplained,
       });
@@ -5153,6 +5177,7 @@ export class WorkspaceStore {
       leadSeconds,
       estimateRatio,
       wall,
+      resumeGaps: resumeGapsOf(views, inferredEnds),
       quality: {
         work: { state, inputs: [...inputs].sort(), coverage, missingInputs },
         wall: { state: wall === null ? null : timing.approximate || wallInputs.size > 0 ? "approximate" : "exact", inputs: [...wallInputs].sort() },
@@ -5166,13 +5191,25 @@ export class WorkspaceStore {
    * each one's end (stored, the orphan's `endedAtBound`, or `asOf` while open), its evidence
    * limit, and its pauses.
    */
-  private coverageOf(issueId: string, asOf: string): CoverageAttempt[] {
-    return viewsOfIssue(this.db, issueId, asOf)
+  private coverageOf(views: readonly AttemptView[], asOf: string, inferredEnds: ReadonlyMap<string, string>): CoverageAttempt[] {
+    return views
       .filter((view) => view.role === "worker")
       .map((view) => {
         const open = view.state !== "ended";
-        const end = open ? asOf : (view.endedAt ?? view.endedAtBound ?? view.startedAt);
+        /**
+         * A steal's or a stale release's end is the later of the stored end and the replicated
+         * evidence, as `workSeconds` reads it: the stored one can miss evidence that had not
+         * reached the ending device. An orphan's is its `endedAtBound` or stored end, its
+         * agent's last activity: this axis is elapsed, and where that overlaps a successor's
+         * tenure (two offline checkouts) both really held the issue, which the precedence
+         * resolves. The successor limit is effort's rule against counting seconds twice.
+         */
+        const stolenOrReleased = view.storedState === "ended" && view.endDetection === "inferred" && (view.endReason === "claim_stolen" || view.endReason === "released_stale");
+        const end = open ? asOf : ((stolenOrReleased ? inferredEnds.get(view.id) : undefined) ?? view.endedAt ?? view.endedAtBound ?? view.startedAt);
         return {
+          id: view.id,
+          resumesAttemptId: view.resumesAttemptId,
+          chainEnd: open ? null : (inferredEnds.get(view.id) ?? view.endedAt ?? null),
           startedAt: view.startedAt,
           end,
           countedThrough: open ? (view.countedThrough ?? view.startedAt) : end,
@@ -5192,7 +5229,7 @@ export class WorkspaceStore {
    * for when it resolved and reopened.
    */
   private edgeHistory(issueId: string, asOf: string): { blocked: Array<[number, number]>; unexplained: Array<[number, number]>; settled: boolean } {
-    const forever = Math.max(Date.parse(asOf), Date.now()) + 1;
+    const forever = Math.max(Date.parse(asOf), nowMs()) + 1;
     const events = (
       this.db
         .prepare(`SELECT payload, created_at FROM events WHERE issue_id = ? AND kind = 'blockers_changed' ORDER BY ${EVENT_ORDER}`)
@@ -5797,7 +5834,7 @@ export class WorkspaceStore {
         actor: agent,
       });
       emitOverride();
-      this.attempts().checkedOut(claimed, agent, opts.attempt);
+      this.attempts().checkedOut(claimed, agent, opts.attempt, this.factsOf(row));
       // Transition site 3 of 5, and the one that matters most in practice: a
       // plain `staple checkout` IS how work starts, and its UPDATE above sets
       // status = 'in_progress' directly. Hooking only `updateIssue` would have
