@@ -150,6 +150,8 @@ export interface BudgetWorkProjection {
   readonly remainingAtResetPercent: { readonly expected: number; readonly simulated: SimulatedSpread };
   /** The share of draws in which the work runs past the reset. */
   readonly outlastsResetProbability: number;
+  /** The share of draws in which the work alone uses up the limit before the reset (`remainingAtReset` under 0). */
+  readonly exhaustionProbability: number;
   /** The completion forecast is partial, or a burn is a lower bound: the burn can only be higher. */
   readonly lowerBound: boolean;
 }
@@ -337,6 +339,7 @@ function limitForecast(
     const left = new Float64Array(draws);
     let outlasts = 0;
     let breaches = 0;
+    let exhausts = 0;
     for (let d = 0; d < draws; d += 1) {
       const laborDraw = context.labor.draws![d]!;
       consumed[d] = (rateDraws![d]! * laborDraw) / HOUR;
@@ -344,6 +347,7 @@ function limitForecast(
       left[d] = remaining - before[d]!;
       if (laborDraw > horizon) outlasts += 1;
       if (left[d]! < context.reserve) breaches += 1;
+      if (left[d]! < 0) exhausts += 1;
     }
     const beforeExpected = (rate * Math.min(labor, horizon)) / HOUR;
     work = {
@@ -351,6 +355,7 @@ function limitForecast(
       beforeResetPercent: { expected: beforeExpected, simulated: spreadOfDraws(before) },
       remainingAtResetPercent: { expected: remaining - beforeExpected, simulated: spreadOfDraws(left) },
       outlastsResetProbability: outlasts / draws,
+      exhaustionProbability: exhausts / draws,
       lowerBound: context.labor.partial || workRate!.lowerBound,
     };
     const alreadyBelow = remaining < context.reserve;

@@ -78,7 +78,7 @@ function limitText(limit: BudgetLimitForecast): string[] {
   else {
     const work = limit.work;
     lines.push(
-      `the work uses ${percent(work.consumedPercent.expected)} (${bandText(work.consumedPercent.simulated, percent)}) · at the reset ${percent(work.remainingAtResetPercent.expected)} left (${bandText(work.remainingAtResetPercent.simulated, percent)})${work.lowerBound ? " · burn at least" : ""}`,
+      `the work uses ${percent(work.consumedPercent.expected)} (${bandText(work.consumedPercent.simulated, percent)}) · at the reset ${percent(work.remainingAtResetPercent.expected)} left (${bandText(work.remainingAtResetPercent.simulated, percent)})${work.exhaustionProbability > 0 ? ` · P(it alone exhausts the limit first) ${probability(work.exhaustionProbability)}` : ""}${work.lowerBound ? " · burn at least" : ""}`,
     );
   }
   if (limit.reserve !== null) {

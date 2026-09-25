@@ -138,6 +138,7 @@ describe("the budget forecast of a piece of work", () => {
     expect(limit.work!.beforeResetPercent.expected).toBeCloseTo(22, 9);
     expect(limit.work!.remainingAtResetPercent.expected).toBeCloseTo(56, 9);
     expect(limit.work!.outlastsResetProbability).toBe(0);
+    expect(limit.work!.exhaustionProbability).toBe(0);
     // The draws: durations 1, 1.33, 1.67, 2, 2 and 3 hours, so 66, 62, 58, 54, 54 or 42% left.
     const left = [66, 62, 58, 54, 42];
     for (const figure of [limit.work!.remainingAtResetPercent.simulated.p10, limit.work!.remainingAtResetPercent.simulated.p50, limit.work!.remainingAtResetPercent.simulated.p90]) {
@@ -154,6 +155,21 @@ describe("the budget forecast of a piece of work", () => {
     expect(limitOf(store.forecast({ ref: next, reserve: 40 }, iso(61), home)).reserve!.breachProbability).toBe(0);
     expect(limitOf(store.forecast({ ref: next, reserve: "70" }, iso(61), home)).reserve).toMatchObject({ breachProbability: 1, alreadyBelow: false });
     expect(limitOf(store.forecast({ ref: next, reserve: "80%" }, iso(61), home)).reserve).toMatchObject({ breachProbability: 1, alreadyBelow: true });
+  });
+
+  it("says how often the work alone would use the limit up before the reset", () => {
+    const { next } = history();
+    // Someone else used the account after the attempt: 30% left, while the work rate stays the attempt's 12%/work-hour.
+    reading(61, 70);
+    const limit = limitOf(store.forecast({ ref: next, reserve: "10" }, iso(61), home));
+    expect(limit.remainingPercent).toBe(30);
+    expect(limit.workRate!.percentPerWorkHour).toBeCloseTo(12, 9);
+    // Draws leave 18, 14, 10, 6, 6 or -6%: one in six runs out, and three in six end under 10%.
+    expect(limit.work!.exhaustionProbability).toBeGreaterThan(0.12);
+    expect(limit.work!.exhaustionProbability).toBeLessThan(0.21);
+    expect(limit.reserve!.breachProbability).toBeGreaterThan(0.45);
+    expect(limit.reserve!.breachProbability).toBeLessThan(0.55);
+    expect(limit.work!.remainingAtResetPercent.simulated.band.lower).toBeCloseTo(-6, 9);
   });
 
   it("uses a provisional reserve until the admission policy defines one, and says so", () => {
