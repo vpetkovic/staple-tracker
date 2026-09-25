@@ -1,0 +1,361 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { openDb } from "../src/core/db.js";
+import { migrateWorkspace } from "../src/core/schema.js";
+import { WorkspaceStore } from "../src/core/store.js";
+import { applyToDatabase } from "../src/core/cloud/apply.js";
+import type { Issue } from "../src/core/types.js";
+
+/**
+ * The certified plan (`core/plan-rollup.ts`, `docs/cli.md` "Comparing plans"): total labor,
+ * estimate coverage and the critical path, audited against adversarial trees. Every tree is
+ * built by real store calls: estimates, cancellations and edges go through the same mutations
+ * an agent makes, so the rollup is tested against the rows the tracker actually writes.
+ */
+
+const H = 3600;
+let store: WorkspaceStore;
+beforeEach(() => {
+  const db = openDb(":memory:");
+  migrateWorkspace(db);
+  store = new WorkspaceStore(db, "test", "TST");
+});
+
+const child = (parent: Issue, title: string, hours?: number): Issue =>
+  store.createChild(parent.id, { title, estimatedSeconds: hours === undefined ? undefined : hours * H });
+const cancel = (issue: Issue): void => void store.updateIssue(issue.id, { status: "cancelled" }, "planner");
+const block = (blocked: Issue, ...blockers: Issue[]): void =>
+  void store.setBlockedBy(blocked.id, blockers.map((b) => b.id), "planner");
+const compareOne = (issue: Issue) => store.comparePlans([issue.identifier]).plans[0]!;
+const path = (issue: Issue) => compareOne(issue).criticalPath;
+
+describe("labor: own estimate over descendants, never both", () => {
+  it("an estimated parent over estimated children is counted once, at its own estimate", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const mid = child(epic, "Mid", 10);
+    [4, 3, 4].forEach((hours, i) => child(mid, `Leaf ${i}`, hours));
+    const side = child(epic, "Side", 2);
+
+    const plan = compareOne(epic);
+    expect(plan.labor).toEqual({ seconds: 12 * H, source: "descendants", ownSeconds: null, descendantsSeconds: 12 * H });
+    // The three leaves are inside Mid's unit: covered by its estimate, not gaps and not added.
+    expect(plan.coverage).toMatchObject({ planned: 2, unplanned: 0, units: 2, partial: false });
+    expect(store.timing(epic.id).subtreePlan).toMatchObject({ contributingCount: 2, unplannedCount: 0, totalCount: 5 });
+    expect(plan.criticalPath).toMatchObject({ seconds: 10 * H, partial: false, missing: [] });
+    expect(plan.criticalPath.chain.map((step) => step.ref)).toEqual([mid.identifier]);
+    expect(side.identifier).toBeTruthy();
+  });
+
+  it("the named issue's own estimate is the labor, with the bottom-up figure beside it", () => {
+    const epic = store.createIssue({ title: "Epic", estimatedSeconds: 6 * H });
+    child(epic, "A", 4);
+    child(epic, "B", 5);
+    const plan = compareOne(epic);
+    expect(plan.labor).toEqual({ seconds: 6 * H, source: "own", ownSeconds: 6 * H, descendantsSeconds: 9 * H });
+    // The path describes the structure beneath: two parallel units, the max of them.
+    expect(plan.criticalPath.seconds).toBe(5 * H);
+  });
+
+  it("a mixed, partially estimated subtree is a lower bound with every gap named", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const a = child(epic, "A", 2);
+    const b = child(epic, "B");
+    const c = child(epic, "C");
+    child(c, "C1", 1);
+    const c2 = child(c, "C2");
+    const plan = compareOne(epic);
+    expect(plan.labor.seconds).toBe(3 * H);
+    expect(plan.coverage).toEqual({
+      planned: 2,
+      unplanned: 2,
+      units: 4,
+      partial: true,
+      unplannedRefs: [b.identifier, c2.identifier],
+      cancelled: 0,
+    });
+    expect(store.timing(epic.id).subtreePlan).toMatchObject({ contributingCount: 2, unplannedCount: 2 });
+    expect(plan.criticalPath).toMatchObject({ seconds: 2 * H, partial: true, missing: ["unplanned_units"] });
+    expect(plan.criticalPath.chain).toEqual([{ ref: a.identifier, seconds: 2 * H, status: "backlog" }]);
+  });
+
+  it("nothing planned is null with no_plan, never 0", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    child(child(epic, "Mid"), "Leaf");
+    const plan = compareOne(epic);
+    expect(plan.labor).toMatchObject({ seconds: null, source: "none" });
+    expect(plan.coverage).toMatchObject({ planned: 0, unplanned: 1, units: 1 });
+    expect(plan.criticalPath).toMatchObject({ seconds: null, partial: true, missing: ["no_plan"] });
+  });
+
+  it("deep nesting: unestimated levels pass the plan up, an estimated level shadows everything under it", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    let level = epic;
+    const levels: Issue[] = [];
+    for (let depth = 1; depth <= 12; depth++) {
+      level = child(level, `L${depth}`, depth === 6 ? 3 : undefined);
+      levels.push(level);
+      child(level, `side ${depth}`, 1);
+    }
+    // Levels 1-5 are containers, each with a 1h side leaf; level 6 is a 3h unit that shadows
+    // levels 7-12 and their side leaves.
+    const plan = compareOne(epic);
+    expect(plan.labor.seconds).toBe(5 * H + 3 * H);
+    expect(plan.coverage).toMatchObject({ planned: 6, unplanned: 0 });
+    expect(store.timing(epic.id).subtreePlan).toMatchObject({ contributingCount: 6, unplannedCount: 0, totalCount: 24 });
+    // Level 6's own reading still shows what lies beneath it.
+    expect(store.timing(levels[5]!.id).subtreePlan).toMatchObject({ estimatedSeconds: 3 * H, descendantsEstimatedSeconds: 7 * H });
+  });
+});
+
+describe("done and cancelled descendants", () => {
+  it("done work stays labor; a cancelled subtree is no labor and no gap", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const done = child(epic, "Done", 2);
+    store.checkoutIssue(done.id, "agent");
+    store.updateIssue(done.id, { status: "done" }, "agent");
+    const dropped = child(epic, "Dropped", 3);
+    cancel(dropped);
+    const droppedEpic = child(epic, "Dropped epic");
+    child(droppedEpic, "never planned");
+    child(droppedEpic, "planned", 5);
+    cancel(droppedEpic);
+
+    const timing = store.timing(epic.id);
+    expect(timing.subtreePlan).toEqual({
+      estimatedSeconds: 2 * H,
+      source: "descendants",
+      descendantsEstimatedSeconds: 2 * H,
+      contributingCount: 1,
+      unplannedCount: 0,
+      totalCount: 5,
+    });
+    // The depth-1 raw sum is unchanged: it is the literal sum of the children's own estimates.
+    expect(timing.childrenEstimatedSeconds).toBe(5 * H);
+    const plan = compareOne(epic);
+    expect(plan.coverage).toMatchObject({ planned: 1, unplanned: 0, cancelled: 4 });
+    expect(plan.criticalPath).toMatchObject({ seconds: 2 * H, partial: false });
+    // The cancelled issue keeps its own reading.
+    expect(store.timing(dropped.id).subtreePlan.estimatedSeconds).toBe(3 * H);
+  });
+
+  it("an epic whose children are all cancelled is an unplanned unit, not a planned zero", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const shell = child(epic, "Shell");
+    cancel(child(shell, "gone", 4));
+    // Derivation cancels a parent whose every child is; a person reopening it is what leaves
+    // a live issue with no live children.
+    expect(store.getIssue(shell.id).status).toBe("cancelled");
+    store.updateIssue(shell.id, { status: "todo" }, "planner");
+    const plan = compareOne(epic);
+    expect(plan.labor.seconds).toBeNull();
+    expect(plan.coverage).toMatchObject({ planned: 0, unplanned: 1, unplannedRefs: [shell.identifier] });
+    expect(store.timing(epic.id).subtreePlan).toMatchObject({ unplannedCount: 1, contributingCount: 0 });
+  });
+});
+
+describe("the critical path", () => {
+  function diamond() {
+    const epic = store.createIssue({ title: "Epic" });
+    const a = child(epic, "A container");
+    const a1 = child(a, "a1", 1);
+    const a2 = child(a, "a2", 2);
+    const b = child(epic, "B", 3);
+    const c = child(epic, "C", 4);
+    const d = child(epic, "D", 1);
+    return { epic, a, a1, a2, b, c, d };
+  }
+
+  it("follows cross-parent edges, and parallel branches take the max rather than adding", () => {
+    const { epic, a2, b, c, d } = diamond();
+    block(b, a2); // a2 (under container A) -> B: an edge across parents
+    block(c, b);
+    block(d, a2); // a parallel 1h branch off a2
+    const plan = path(epic);
+    expect(plan.seconds).toBe(9 * H);
+    expect(plan.chain.map((step) => step.ref)).toEqual([a2.identifier, b.identifier, c.identifier]);
+    expect(plan.chainLength).toBe(3);
+    expect(plan.edgeCount).toBe(3);
+    // Labor still counts every unit once: 1 + 2 + 3 + 4 + 1.
+    expect(compareOne(epic).labor.seconds).toBe(11 * H);
+  });
+
+  it("a container on either end stands for every unit beneath it", () => {
+    const { epic, a, a1, b } = diamond();
+    block(b, a); // B waits for the whole of A: a1 and a2
+    block(a1, store.createIssue({ title: "unrelated" })); // outside, listed not followed
+    const plan = path(epic);
+    expect(plan.seconds).toBe(5 * H); // a2 (2h) -> B (3h)
+    expect(plan.edgeCount).toBe(2);
+    expect(plan.crossSubtreeBlockers).toEqual([
+      { blocked: a1.identifier, blocker: expect.any(String), blockerStatus: "backlog", resolved: false },
+    ]);
+    expect(plan.unresolvedCrossSubtreeBlockerCount).toBe(1);
+  });
+
+  it("an edge inside one unit, to the named issue, or between an issue and its ancestor shapes nothing", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const unit = child(epic, "Unit", 2);
+    const inner1 = child(unit, "inner 1", 5);
+    const inner2 = child(unit, "inner 2", 5);
+    block(inner2, inner1); // inside Unit's shadow
+    const container = child(epic, "Container");
+    const leaf = child(container, "leaf", 1);
+    child(container, "sibling", 1);
+    block(leaf, container); // a child blocked by its own parent: not sibling -> leaf
+    const other = child(epic, "Other", 1);
+    block(epic, other); // the named issue itself
+    const plan = path(epic);
+    expect(plan.edgeCount).toBe(0);
+    expect(plan.seconds).toBe(2 * H);
+    expect(leaf.identifier).toBeTruthy();
+  });
+
+  it("an issue inside a unit stands for that unit on either end of an edge", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const unit = child(epic, "Unit", 2);
+    const inner = child(unit, "inner", 7);
+    const after = child(epic, "After", 3);
+    block(after, inner); // After waits on work inside Unit: Unit -> After, at Unit's 2h
+    const plan = path(epic);
+    expect(plan).toMatchObject({ seconds: 5 * H, edgeCount: 1 });
+    expect(plan.chain.map((step) => step.ref)).toEqual([unit.identifier, after.identifier]);
+  });
+
+  it("a cancelled blocker drops out of the path", () => {
+    const { epic, b, c } = diamond();
+    block(c, b);
+    cancel(b);
+    expect(path(epic)).toMatchObject({ seconds: 4 * H, edgeCount: 0 });
+  });
+
+  it("an unplanned unit on the chain is shown as unknown, and makes the path partial", () => {
+    const { epic, b, c } = diamond();
+    const gap = child(epic, "Gap");
+    block(gap, c);
+    block(b, gap);
+    const plan = path(epic);
+    expect(plan.chain.map((step) => [step.ref, step.seconds])).toEqual([
+      [c.identifier, 4 * H],
+      [gap.identifier, null],
+      [b.identifier, 3 * H],
+    ]);
+    expect(plan).toMatchObject({ seconds: 7 * H, partial: true, missing: ["unplanned_units"] });
+  });
+
+  it("a cycle the tracker could not see (through a container) is broken and reported, never looped", () => {
+    const { epic, a, a1, b } = diamond();
+    block(b, a); // B waits for all of A…
+    block(a1, b); // …and a1, inside A, waits for B. No direct edge cycle, so the tracker allows it.
+    const plan = path(epic);
+    expect(plan.cycle).toEqual([a1.identifier, b.identifier]);
+    expect(plan.partial).toBe(true);
+    expect(plan.missing).toContain("dependency_cycle");
+    expect(plan.seconds).not.toBeNull();
+  });
+
+  it("a leaf is its own single unit", () => {
+    const leaf = store.createIssue({ title: "Leaf", estimatedSeconds: 2 * H });
+    const plan = compareOne(leaf);
+    expect(plan.coverage).toMatchObject({ planned: 1, units: 1 });
+    expect(plan.criticalPath.chain.map((step) => step.ref)).toEqual([leaf.identifier]);
+    expect(store.planSummary(leaf.id)).toBeNull();
+  });
+});
+
+describe("comparing named issues", () => {
+  it("returns each plan once and names the overlap instead of letting two figures be added", () => {
+    const epic = store.createIssue({ title: "Epic" });
+    const inner = child(epic, "Inner");
+    child(inner, "x", 2);
+    const other = store.createIssue({ title: "Other", estimatedSeconds: 3 * H });
+    const result = store.comparePlans([epic.identifier, inner.identifier, other.identifier, epic.id]);
+    expect(result.plans.map((plan) => [plan.ref, plan.labor.seconds])).toEqual([
+      [epic.identifier, 2 * H],
+      [inner.identifier, 2 * H],
+      [other.identifier, 3 * H],
+    ]);
+    expect(result.overlaps).toEqual([{ ref: inner.identifier, within: epic.identifier }]);
+  });
+
+  it("refuses an empty or oversize request", () => {
+    expect(() => store.comparePlans([])).toThrow(/at least one/);
+    const refs = Array.from({ length: 21 }, (_, i) => store.createIssue({ title: `I${i}` }).identifier);
+    expect(() => store.comparePlans(refs)).toThrow(/at most 20/);
+  });
+});
+
+describe("a leaf moved between parents", () => {
+  /**
+   * No local verb reparents an issue: the parent is fixed at creation. The one path that writes
+   * `parentId` is the sync applier, taking an issue update from another device, so that is the
+   * path used here: the real applier inside `Journal.applyRemote`.
+   */
+  it("leaves the old parent and joins the new one, counted once", () => {
+    const from = store.createIssue({ title: "From" });
+    const to = store.createIssue({ title: "To" });
+    child(to, "stays", 1);
+    const leaf = child(from, "Moving", 3);
+    const before = store.comparePlans([from.identifier, to.identifier]).plans.map((plan) => plan.labor.seconds);
+    expect(before).toEqual([3 * H, 1 * H]);
+    store.journal.applyRemote({ opId: "f".repeat(32), seq: 7 }, () =>
+      applyToDatabase(store.db, {
+        entity: "issue",
+        entityId: leaf.id,
+        verb: "update",
+        payload: { parentId: to.id },
+        actor: "agent-b",
+        deviceId: "device-b",
+        at: new Date().toISOString(),
+        opId: "f".repeat(32),
+        seq: 7,
+      }),
+    );
+    const after = store.comparePlans([from.identifier, to.identifier]).plans;
+    expect(after.map((plan) => plan.labor.seconds)).toEqual([null, 4 * H]);
+    expect(after[1]!.coverage.planned).toBe(2);
+  });
+});
+
+describe("the certified invariants hold on random trees", () => {
+  /** A seeded generator, so a failure names its tree. */
+  function rng(seed: number) {
+    let state = seed;
+    return () => {
+      state = (state * 1103515245 + 12345) % 2147483648;
+      return state / 2147483648;
+    };
+  }
+
+  it.each([1, 2, 3, 4, 5, 6, 7, 8])("seed %i: units sum to the bottom-up plan; the path never exceeds it", (seed) => {
+    const random = rng(seed);
+    const epic = store.createIssue({ title: `Epic ${seed}` });
+    const all: Issue[] = [epic];
+    for (let i = 0; i < 40; i++) {
+      const parent = all[Math.floor(random() * all.length)]!;
+      const estimate = random() < 0.6 ? Math.ceil(random() * 8) : undefined;
+      const issue = child(parent, `n${i}`, estimate);
+      all.push(issue);
+      if (random() < 0.1) cancel(issue);
+    }
+    // Edges between random pairs, whatever the tracker accepts.
+    for (let i = 0; i < 25; i++) {
+      const x = all[1 + Math.floor(random() * (all.length - 1))]!;
+      const y = all[1 + Math.floor(random() * (all.length - 1))]!;
+      try {
+        store.setBlockedBy(y.id, [...store.blockersOf(y.id).map((b) => b.id), x.id], "planner");
+      } catch {
+        // a refused cycle or self edge: the tracker's rule, not this test's
+      }
+    }
+    const plan = compareOne(epic);
+    const subtree = store.timing(epic.id).subtreePlan;
+    expect(plan.labor.descendantsSeconds).toBe(subtree.descendantsEstimatedSeconds);
+    expect(plan.coverage.planned).toBe(subtree.contributingCount);
+    expect(plan.coverage.unplanned).toBe(subtree.unplannedCount);
+    const sum = plan.coverage.planned === 0 ? null : plan.labor.descendantsSeconds;
+    if (sum === null) expect(plan.criticalPath.seconds).toBeNull();
+    else expect(plan.criticalPath.seconds!).toBeLessThanOrEqual(sum);
+    // The chain is a real dependency chain, and its seconds add up to the reported length.
+    const chainSum = plan.criticalPath.chain.reduce((total, step) => total + (step.seconds ?? 0), 0);
+    if (plan.criticalPath.seconds !== null) expect(chainSum).toBe(plan.criticalPath.seconds);
+  });
+});

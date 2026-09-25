@@ -300,6 +300,8 @@ describe("read shapes", () => {
       // Execution attempts, from the store method get_task spreads too.
       attempts: openAttemptsGolden("CON-1"),
       orchestration: noOrchestrationGolden(),
+      // The certified plan, from the store method get_task spreads too: null for a leaf.
+      planSummary: null,
     });
   });
 
@@ -524,6 +526,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * refresh parameter ever appears on this route, that is the review moment.
        */
       "/api/cloud/workspaces",
+      // The certified plan of named issues: `staple compare` / `compare_plans`. GET, a read.
+      "/api/compare",
       "/api/document",
       "/api/events",
       "/api/gate/approve",

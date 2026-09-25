@@ -302,6 +302,19 @@ Rules that hold on all four:
   `hub.db`. The attempt tools take `ws`. The budget tools read this machine's
   hub and take none, like `record_budget_sample`.
 
+### Comparing plans
+
+`compare_plans {refs, ws?}` (1 to 20 refs) is `staple compare <ref> ... --json`:
+per named issue, `labor` (total labor, every planned unit once: an issue's own
+estimate over its descendants, never both, cancelled work excluded),
+`coverage` (planned of units, the unplanned ones named) and `criticalPath`
+(the longest `blockedBy` chain inside the subtree weighted by estimate, with
+blockers from outside listed separately), plus `overlaps` for a ref that lies
+inside another. Use it to compare two epics instead of fetching their trees
+and adding estimates by hand. `partial: true` means a lower bound, never a
+silent 0. `get_task` carries the same object for a parent as `planSummary`
+(null for a leaf). The rules are in [cli.md](cli.md#comparing-plans-staple-compare).
+
 ## Harness ergonomics
 
 All in-protocol, so a harness never needs out-of-band setup:
@@ -316,7 +329,7 @@ All in-protocol, so a harness never needs out-of-band setup:
   polluting the audit trail with anonymous writes.
 - **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
   creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 20 read-only, `checkout_task` and `set_estimate` idempotent — and
+- **Tools declare annotations** — 21 read-only, `checkout_task` and `set_estimate` idempotent — and
   return `structuredContent` (arrays wrap as `{items}`).
 - **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
   The telemetry lists answer `{items, truncated, nextCursor, coverage}` instead

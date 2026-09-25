@@ -58,7 +58,8 @@ The complete list. A field not in this table is not a timing field.
 | Field | Axis | One meaning | Defined in | Null means |
 |---|---|---|---|---|
 | `timing.estimatedSeconds` | plan | The issue's own recorded estimate. | cli.md | none recorded |
-| `timing.subtreePlan.estimatedSeconds` | plan | The effective plan: own estimate, else the sum of the children's effective plans. | cli.md | no plan anywhere below |
+| `timing.subtreePlan.estimatedSeconds` | plan | The effective plan: own estimate, else the sum of the live (not cancelled) children's effective plans. Certified never to count a parent's estimate and its descendants' together. Coverage over plan units is `contributingCount` of `contributingCount + unplannedCount`. | cli.md | no plan anywhere below |
+| `planSummary.criticalPath.seconds` | plan | The longest in-subtree `blockedBy` chain of plan units, weighted by estimate, parallel branches taking the max. Also on `staple compare` / `compare_plans`. | cli.md | no unit planned |
 | `timing.childrenEstimatedSeconds` | plan | Sum of direct children's own estimates. | cli.md | no child estimated |
 | `attempt.estimateAtStart` | plan | A reading of `subtreePlan` at the moment the attempt opened. | execution-telemetry.md | never null |
 | `timing.ownActiveSeconds` | elapsed | Seconds this issue itself sat in the `active` category, summed over intervals not opened by a derived flip, with an open interval ending at `countedThrough`. | cli.md | never active |

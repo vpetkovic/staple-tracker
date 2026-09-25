@@ -44,6 +44,7 @@ import {
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { registerBudgetTools } from "./core/telemetry/mcp-tools.js";
 import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
+import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import {
@@ -671,14 +672,19 @@ const timingShape = {
         .number()
         .nullable()
         .describe(
-          "BOTTOM-UP: sum of the DIRECT children's effective plans, the recursive counterpart of childrenEstimatedSeconds; null when no descendant at any depth has an estimate. Present even when an own estimate wins, so the two can be compared",
+          "BOTTOM-UP: sum of the effective plans of the DIRECT children that are not cancelled, the recursive counterpart of childrenEstimatedSeconds; null when no live descendant at any depth has an estimate. Present even when an own estimate wins, so the two can be compared",
         ),
       contributingCount: z
         .number()
         .describe(
-          "Descendants at any depth whose own estimate is a term of descendantsEstimatedSeconds; a descendant shadowed by an estimated ancestor beneath this issue is not counted",
+          "PLANNED UNITS: descendants at any depth whose own estimate is a term of descendantsEstimatedSeconds; a descendant shadowed by an estimated ancestor beneath this issue is covered by it, not counted",
         ),
-      totalCount: z.number().describe("Descendants at any depth, whatever their status; 0 for a leaf"),
+      unplannedCount: z
+        .number()
+        .describe(
+          "UNPLANNED UNITS: live descendants with no children, no own estimate and no estimated ancestor beneath this issue. Coverage is contributingCount of contributingCount + unplannedCount; cancelled subtrees are neither",
+        ),
+      totalCount: z.number().describe("Descendants at any depth, whatever their status, shadowed and cancelled included; 0 for a leaf"),
     })
     .describe(
       "Recursive, non-double-counting plan for the subtree: an issue contributes its own estimate if it has one, otherwise its children's contributions — never both",
@@ -731,6 +737,68 @@ const timingShape = {
 type _TimingShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof timingShape>>, IssueTiming>
 >;
+
+/**
+ * The certified plan (`core/plan-rollup.ts`): `planSummary` on get_task, one entry per ref of
+ * compare_plans. Typed against the interface, like `timingShape`, so the schema cannot drift.
+ */
+const planSummaryShape = {
+  labor: z
+    .object({
+      seconds: z
+        .number()
+        .nullable()
+        .describe("TOTAL LABOR: every planned unit once — the own estimate if set, else the sum of the units beneath; never a parent's estimate on top of its descendants'. Cancelled work is excluded. Null when nothing is planned"),
+      source: z.enum(["own", "descendants", "none"]).describe("own = this issue's own estimate; descendants = the sum of its units"),
+      ownSeconds: z.number().nullable(),
+      descendantsSeconds: z.number().nullable().describe("The bottom-up sum of the planned units beneath, kept beside an own estimate"),
+    })
+    .describe("= timing.subtreePlan"),
+  coverage: z
+    .object({
+      planned: z.number(),
+      unplanned: z.number(),
+      units: z.number().describe("planned + unplanned. A unit is an issue with its own estimate (shadowing everything under it) or a live issue with no estimate and no live children"),
+      partial: z.boolean().describe("Some unit is unplanned: labor (when source is descendants) and path are lower bounds"),
+      unplannedRefs: z.array(z.string()).describe("At most 20"),
+      cancelled: z.number().describe("Cancelled issues beneath, excluded from every figure"),
+    })
+    .describe("Estimate coverage over plan units"),
+  criticalPath: z
+    .object({
+      seconds: z.number().nullable().describe("Longest in-subtree blockedBy chain of units weighted by estimate, parallel branches taking the max; null when no unit is planned"),
+      partial: z.boolean(),
+      missing: z.array(z.string()).describe("no_plan, unplanned_units, dependency_cycle"),
+      chain: z
+        .array(z.object({ ref: z.string(), seconds: z.number().nullable(), status: z.string() }))
+        .describe("The chain first to last, at most 100 steps; seconds null = an unplanned unit, unknown, not 0"),
+      chainLength: z.number(),
+      edgeCount: z.number(),
+      cycle: z.array(z.string()).describe("Units on a dependency cycle broken to compute the path; normally empty"),
+      crossSubtreeBlockers: z
+        .array(z.object({ blocked: z.string(), blocker: z.string(), blockerStatus: z.string(), resolved: z.boolean() }))
+        .describe("Blockers OUTSIDE the subtree on issues inside it, unresolved first, at most 20; listed, never folded into the path"),
+      crossSubtreeBlockerCount: z.number(),
+      unresolvedCrossSubtreeBlockerCount: z.number(),
+    })
+    .describe("Dependency-aware wall-clock inputs"),
+};
+type _PlanSummaryShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof planSummaryShape>>, PlanSummary>>;
+const comparePlansShape = {
+  plans: z.array(
+    z.object({
+      ref: z.string(),
+      title: z.string(),
+      kind: z.string(),
+      status: z.string(),
+      ...planSummaryShape,
+    }),
+  ),
+  overlaps: z
+    .array(z.object({ ref: z.string(), within: z.string() }))
+    .describe("A compared issue that lies inside another compared issue: its labor is already part of the other's, so never add the two"),
+};
+type _ComparePlansShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof comparePlansShape>>, PlanComparison>>;
 
 /**
  * Attached to the DETAIL surface only, never to `list_tasks`/`inbox`.
@@ -1032,6 +1100,12 @@ server.registerTool(
         .describe(
           "The orchestrator lane on this issue (docs/timing-semantics.md): the effectively open orchestrator attempt, and how many. Opened only by record_attempt_event event=open role=orchestrator; never part of workSeconds.",
         ),
+      planSummary: z
+        .object(planSummaryShape)
+        .nullable()
+        .describe(
+          "The certified plan of a parent: total labor, estimate coverage and critical path, as compare_plans reports them. Null for an issue with no children, whose plan is its own estimate on timing.",
+        ),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -1062,8 +1136,24 @@ server.registerTool(
         ...store.detailTiming(context.issue.id),
         attempts: store.attemptSummary(context.issue.id),
         orchestration: store.orchestrationSummary(context.issue.id),
+        planSummary: store.planSummary(context.issue.id),
       };
     }),
+);
+
+server.registerTool(
+  "compare_plans",
+  {
+    description:
+      "Compare named issues (epics) as plans, with no tree dump. Per ref: labor (total labor, every planned unit once: an issue's own estimate over its descendants, never both; cancelled work excluded), coverage (planned of units, unplanned refs; partial means a lower bound, never a silent 0) and criticalPath (the longest blockedBy chain inside the subtree weighted by estimate, parallel branches taking the max, plus blockers from outside the subtree listed separately). overlaps names a ref that lies inside another ref, whose labor must not be added to it. Same payload as `staple compare <ref> <ref> --json`.",
+    inputSchema: {
+      refs: z.array(z.string()).min(1).max(20).describe("1 to 20 issue identifiers or ids"),
+      ws: wsSchema,
+    },
+    outputSchema: comparePlansShape,
+    annotations: { title: "Compare plans", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ refs, ws }) => run(() => storeFor(ws).comparePlans(refs)),
 );
 
 server.registerTool(

@@ -484,6 +484,7 @@ describe("the recursive plan reaches every read surface across three levels", ()
     source: "descendants",
     descendantsEstimatedSeconds: ELEVEN_HOURS,
     contributingCount: 3,
+    unplannedCount: 0,
     totalCount,
   });
 
@@ -513,12 +514,15 @@ describe("the recursive plan reaches every read surface across three levels", ()
 
   it("CLI show renders the inherited plan and its coverage on the human line", () => {
     expect(cli("show", mid, "--ws", WS).stdout).toContain(
-      "time   children est 11h · plan 11h (from 3 of 3 descendants)",
+      "time   children est 11h · plan 11h (3 of 3 units planned)",
     );
-    // No `children est` on the epic — its direct child has none — but a plan.
+    // No `children est` on the epic — its direct child has none — but a plan. Coverage
+    // is over plan units: the unestimated middle level is a container, not a gap.
     expect(cli("show", epic, "--ws", WS).stdout).toContain(
-      "time   plan 11h (from 3 of 4 descendants)",
+      "time   plan 11h (3 of 3 units planned)",
     );
+    // And the certified plan beneath it: labor with coverage, then the path.
+    expect(cli("show", epic, "--ws", WS).stdout).toMatch(/\nlabor 11h \(descendants\) · 3 of 3 units planned\ncritical path 4h · CON-\d+\n/);
   });
 
   it("an estimate on the middle level shadows the leaves for the epic — never both", async () => {
@@ -530,6 +534,7 @@ describe("the recursive plan reaches every read surface across three levels", ()
       source: "own",
       descendantsEstimatedSeconds: ELEVEN_HOURS,
       contributingCount: 3,
+      unplannedCount: 0,
       totalCount: 3,
     });
     // …and the epic counts it ONCE, at 10h, with the leaves shadowed.
@@ -539,13 +544,14 @@ describe("the recursive plan reaches every read surface across three levels", ()
       source: "descendants",
       descendantsEstimatedSeconds: 36_000,
       contributingCount: 1,
+      unplannedCount: 0,
       totalCount: 4,
     });
     // Direct-child compatibility now sees the middle level's own estimate,
     // exactly as it did before STA-192.
     expect(top.timing.childrenEstimatedSeconds).toBe(36_000);
     expect(cli("show", mid, "--ws", WS).stdout).toContain(
-      "time   est 10h · children est 11h · descendants est 11h (3 of 3)",
+      "time   est 10h · children est 11h · descendants est 11h (3 of 3 units planned)",
     );
   });
 });

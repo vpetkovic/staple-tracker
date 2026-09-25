@@ -81,6 +81,7 @@ function plan(over: Partial<SubtreePlan> = {}): SubtreePlan {
     source: "none",
     descendantsEstimatedSeconds: null,
     contributingCount: 0,
+    unplannedCount: 0,
     totalCount: 0,
     ...over,
   };
@@ -474,6 +475,7 @@ describe("the caveat says out loud why a total might mislead", () => {
             source: "descendants",
             descendantsEstimatedSeconds: 39_600,
             contributingCount: 3,
+            unplannedCount: 0,
             totalCount: 3,
           }),
         }),
@@ -593,6 +595,7 @@ describe("the summary leads with the recursive plan", () => {
       source: "descendants",
       descendantsEstimatedSeconds: 39_600,
       contributingCount: 3,
+      unplannedCount: 0,
       totalCount: 3,
     }),
   });
@@ -605,6 +608,7 @@ describe("the summary leads with the recursive plan", () => {
       source: "descendants",
       descendantsEstimatedSeconds: 39_600,
       contributingCount: 3,
+      unplannedCount: 6,
       totalCount: 9,
     }),
   });
@@ -612,13 +616,13 @@ describe("the summary leads with the recursive plan", () => {
   it("STA-157: an unestimated parent over three planned tasks plans 11h", () => {
     const summary = computeSummary(STA_157);
     expect(summary.plannedSeconds).toBe(39_600);
-    expect(summary.planHint).toBe("inherited from 3 of 3 descendants");
+    expect(summary.planHint).toBe("inherited from 3 of 3 units");
   });
 
   it("STA-156: the plan survives an unestimated middle level, whatever depth-1 says", () => {
     const summary = computeSummary(STA_156);
     expect(summary.plannedSeconds).toBe(39_600);
-    expect(summary.planHint).toBe("inherited from 3 of 9 descendants");
+    expect(summary.planHint).toBe("inherited from 3 of 9 units");
   });
 
   it("uses the own estimate when one is set, and says the descendants disagree", () => {
@@ -631,6 +635,7 @@ describe("the summary leads with the recursive plan", () => {
           source: "own",
           descendantsEstimatedSeconds: 39_600,
           contributingCount: 3,
+          unplannedCount: 0,
           totalCount: 3,
         }),
       }),
@@ -685,6 +690,7 @@ describe("the breakdown names the source of every number", () => {
           source: "own",
           descendantsEstimatedSeconds: 39_600,
           contributingCount: 3,
+          unplannedCount: 0,
           totalCount: 3,
         }),
       }),
@@ -698,14 +704,14 @@ describe("the breakdown names the source of every number", () => {
     });
     expect(rows[1]).toMatchObject({
       plannedSeconds: 39_600,
-      planSource: "bottom-up, from 3 of 3 descendants",
+      planSource: "bottom-up, from 3 of 3 units",
       actualSeconds: 18_000,
       actualSource: "aggregated from 3 children",
     });
   });
 
   it("names each absence rather than drawing a zero", () => {
-    const rows = buildBreakdown(timing({ childCount: 2, subtreePlan: plan({ totalCount: 2 }) }));
+    const rows = buildBreakdown(timing({ childCount: 2, subtreePlan: plan({ unplannedCount: 2, totalCount: 2 }) }));
     expect(rows[0]).toMatchObject({
       plannedSeconds: null,
       planSource: "no estimate set on this issue",
@@ -714,7 +720,7 @@ describe("the breakdown names the source of every number", () => {
     });
     expect(rows[1]).toMatchObject({
       plannedSeconds: null,
-      planSource: "no estimate among 2 descendants",
+      planSource: "no estimate among 2 units",
       actualSeconds: null,
     });
   });
@@ -725,8 +731,9 @@ describe("the breakdown names the source of every number", () => {
 describe("the subtree plan says where its number came from", () => {
   it("names the coverage when the plan was inherited", () => {
     // STA-156 over STA-157 over three 4h/3h/4h leaves: nobody typed 11h, so
-    // the figure has to say what it was built from — and over ALL descendants,
-    // not the one direct child the totals row counts.
+    // the figure has to say what it was built from — over plan UNITS at every
+    // depth, not the one direct child the totals row counts. The middle level is
+    // a container, not a gap, so the tree is fully planned: 3 of 3, not 3 of 4.
     expect(
       subtreePlanHint(
         plan({
@@ -734,10 +741,11 @@ describe("the subtree plan says where its number came from", () => {
           source: "descendants",
           descendantsEstimatedSeconds: 39_600,
           contributingCount: 3,
+          unplannedCount: 0,
           totalCount: 4,
         }),
       ),
-    ).toBe("inherited from 3 of 4 descendants");
+    ).toBe("inherited from 3 of 3 units");
   });
 
   it("shows the bottom-up number beside an own estimate, so a disagreement is visible", () => {
@@ -748,15 +756,16 @@ describe("the subtree plan says where its number came from", () => {
           source: "own",
           descendantsEstimatedSeconds: 39_600,
           contributingCount: 3,
+          unplannedCount: 0,
           totalCount: 3,
         }),
       ),
-    ).toBe("own estimate; descendants add up to 11h (3 of 3 descendants)");
+    ).toBe("own estimate; descendants add up to 11h (3 of 3 units)");
   });
 
   it("adds nothing under an own estimate with no planned work beneath it, or under no plan at all", () => {
     expect(subtreePlanHint(plan({ estimatedSeconds: 3600, source: "own" }))).toBeNull();
-    expect(subtreePlanHint(plan({ totalCount: 2 }))).toBeNull();
+    expect(subtreePlanHint(plan({ unplannedCount: 2, totalCount: 2 }))).toBeNull();
   });
 });
 
@@ -775,6 +784,7 @@ const INHERITED_11H = plan({
   source: "descendants",
   descendantsEstimatedSeconds: 39_600,
   contributingCount: 3,
+  unplannedCount: 0,
   totalCount: 3,
 });
 
@@ -785,7 +795,7 @@ describe("child rows carry the effective plan and say where it came from", () =>
     });
     expect(rows[0]!.estimatedSeconds).toBeNull();
     expect(rows[0]!.plannedSeconds).toBe(39_600);
-    expect(rows[0]!.planHint).toBe("inherited from 3 of 3 descendants");
+    expect(rows[0]!.planHint).toBe("inherited from 3 of 3 units");
   });
 
   it("names a plain own estimate as own — the column mixes typed and flowed-up figures", () => {
@@ -806,12 +816,13 @@ describe("child rows carry the effective plan and say where it came from", () =>
           source: "own",
           descendantsEstimatedSeconds: 39_600,
           contributingCount: 3,
+          unplannedCount: 0,
           totalCount: 3,
         }),
       }),
     });
     expect(rows[0]!.plannedSeconds).toBe(21_600);
-    expect(rows[0]!.planHint).toBe("own estimate; descendants add up to 11h (3 of 3 descendants)");
+    expect(rows[0]!.planHint).toBe("own estimate; descendants add up to 11h (3 of 3 units)");
   });
 
   it("has no hint when there is no plan to explain", () => {
@@ -839,8 +850,8 @@ describe("child rows carry the effective plan and say where it came from", () =>
 
   it("childPlanHint: own says own, inherited says inherited, none says nothing", () => {
     expect(childPlanHint(plan({ estimatedSeconds: 3600, source: "own" }))).toBe("own estimate");
-    expect(childPlanHint(INHERITED_11H)).toBe("inherited from 3 of 3 descendants");
-    expect(childPlanHint(plan({ totalCount: 2 }))).toBeNull();
+    expect(childPlanHint(INHERITED_11H)).toBe("inherited from 3 of 3 units");
+    expect(childPlanHint(plan({ unplannedCount: 2, totalCount: 2 }))).toBeNull();
   });
 });
 
@@ -855,6 +866,7 @@ describe("the parent's headline is the sum of the child rows' plans", () => {
       source: "descendants",
       descendantsEstimatedSeconds: 39_600,
       contributingCount: 3,
+      unplannedCount: 6,
       totalCount: 9,
     }),
   });
@@ -893,13 +905,14 @@ describe("the spoken headline says planned, actual, difference, coverage, source
       source: "descendants",
       descendantsEstimatedSeconds: 39_600,
       contributingCount: 3,
+      unplannedCount: 6,
       totalCount: 9,
     }),
   });
 
   it("reads the STA-156 headline as one sentence", () => {
     expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toBe(
-      "Planned 11h. Actual 5h. Difference 6h under (55%). Coverage 3 of 9 descendants planned. Source inherited from descendants.",
+      "Planned 11h. Actual 5h. Difference 6h under (55%). Coverage 3 of 9 units planned. Source inherited from descendants.",
     );
   });
 

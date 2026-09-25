@@ -197,6 +197,7 @@ beforeAll(async () => {
 
   // Read views, captured while CON-1 is held so the claim fields are non-null.
   await call("get_task", "get_task", { ref: "CON-1", include_documents: true, ws: WS });
+  await call("compare_plans", "compare_plans", { refs: ["CON-1", "CON-4"], ws: WS });
   await call("list_tasks", "list_tasks", { ws: WS, limit: 2 });
   page1Cursor = (toolPayload(got("list_tasks")) as { nextCursor: string }).nextCursor;
   await call("list_tasks_p2", "list_tasks", { ws: WS, limit: 2, cursor: page1Cursor });
@@ -296,8 +297,8 @@ describe("tool inventory", () => {
   // Budget ingestion added record_budget_sample: 46 -> 47. Execution attempts added
   // record_attempt_event: 47 -> 48. The telemetry reads added list_attempts,
   // get_attempt, get_budget and list_budget_samples: 48 -> 52. The explicit estimate
-  // write added set_estimate: 52 -> 53.
-  it("exposes exactly these 53 tools with these annotations and output schemas", async () => {
+  // write added set_estimate: 52 -> 53. The certified plan read added compare_plans: 53 -> 54.
+  it("exposes exactly these 54 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -318,6 +319,12 @@ describe("tool inventory", () => {
       {
         name: "get_task",
         annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // The certified plan of named issues: labor, coverage, critical path. A read.
+      {
+        name: "compare_plans",
+        annotations: { title: "Compare plans", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
       {
@@ -864,13 +871,15 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-one read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
       "inbox",
       "list_tasks",
       "get_task",
+      // The certified plan of named issues: a read.
+      "compare_plans",
       "list_comments",
       "get_document",
       "events_since",
@@ -1100,6 +1109,24 @@ describe("tool response shapes (31/31)", () => {
     });
   });
 
+  const UNPLANNED_CON1 = {
+    labor: { seconds: null, source: "none", ownSeconds: null, descendantsSeconds: null },
+    coverage: { planned: 0, unplanned: 1, units: 1, partial: true, unplannedRefs: ["CON-4"], cancelled: 0 },
+    criticalPath: {
+      seconds: null,
+      partial: true,
+      missing: ["no_plan"],
+      chain: [{ ref: "CON-4", seconds: null, status: "backlog" }],
+      chainLength: 1,
+      edgeCount: 0,
+      cycle: [],
+      // CON-4 waits on CON-3, outside CON-1's subtree: listed, not followed.
+      crossSubtreeBlockers: [{ blocked: "CON-4", blocker: "CON-3", blockerStatus: "backlog", resolved: false }],
+      crossSubtreeBlockerCount: 1,
+      unresolvedCrossSubtreeBlockerCount: 1,
+    },
+  };
+
   it("get_task", () => {
     assertGolden("get_task", {
       issue: issueGolden({
@@ -1173,6 +1200,7 @@ describe("tool response shapes (31/31)", () => {
           source: "none",
           descendantsEstimatedSeconds: null,
           contributingCount: 0,
+          unplannedCount: 1,
           totalCount: 1,
         },
         // A parent's work is its children's, and its one child never started: nothing owed.
@@ -1197,6 +1225,25 @@ describe("tool response shapes (31/31)", () => {
        */
       attempts: openAttemptsGolden("CON-1"),
       orchestration: noOrchestrationGolden(),
+      // The certified plan of a parent: its one child is an unplanned unit, so labor and
+      // path are null with a reason, never 0.
+      planSummary: UNPLANNED_CON1,
+    });
+  });
+
+  it("compare_plans: each ref's labor, coverage and path, and the overlap", () => {
+    assertGolden("compare_plans", {
+      plans: [
+        { ref: "CON-1", title: "Contract root task", kind: "task", status: "in_progress", ...UNPLANNED_CON1 },
+        {
+          ref: "CON-4",
+          title: "Contract child",
+          kind: "task",
+          status: "backlog",
+          ...UNPLANNED_CON1,
+        },
+      ],
+      overlaps: [{ ref: "CON-4", within: "CON-1" }],
     });
   });
 
@@ -1576,6 +1623,7 @@ describe("tool response shapes (31/31)", () => {
     const tools = (await harness.listTools()).map((t) => t.name);
     const covered = new Set([
       "init",
+      "compare_plans",
       "create_task",
       "update_task",
       "set_estimate",

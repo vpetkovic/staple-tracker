@@ -21,6 +21,7 @@ import { runQueueCommand } from "./commands/queue.js";
 import { runBudgetCommand } from "./commands/budget.js";
 import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
 import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
+import { planLines, runCompareCommand } from "./commands/compare.js";
 import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
@@ -907,6 +908,10 @@ Tasks
   ls [--status s1,s2] [--kind k1,k2] [--assignee A] [-q text] [--all]
   show <ref>                            full context (ancestry, relations, comments, docs)
   tree [ref]                            subtask tree
+  compare <ref> [<ref> ...]             total labor, estimate coverage and critical path
+              of each named issue, side by side, with no tree dump: every planned
+              unit once (own estimate over descendants), unplanned units named,
+              the longest in-subtree blockedBy chain; staple compare --help
   board                                 terminal kanban
   inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
               QUEUED is work a HUMAN has to release (see Approval gates below) and
@@ -1252,6 +1257,7 @@ function main() {
           ...store.detailTiming(ctx.issue.id),
           attempts: store.attemptSummary(ctx.issue.id),
           orchestration: store.orchestrationSummary(ctx.issue.id),
+          planSummary: store.planSummary(ctx.issue.id),
         });
         break;
       }
@@ -1317,11 +1323,11 @@ function main() {
       const plan = timing.subtreePlan;
       if (plan.source === "descendants" && plan.estimatedSeconds != null) {
         timingParts.push(
-          `plan ${formatDuration(plan.estimatedSeconds)} (from ${plan.contributingCount} of ${plan.totalCount} descendants)`,
+          `plan ${formatDuration(plan.estimatedSeconds)} (${plan.contributingCount} of ${plan.contributingCount + plan.unplannedCount} units planned)`,
         );
       } else if (plan.source === "own" && plan.descendantsEstimatedSeconds != null) {
         timingParts.push(
-          `descendants est ${formatDuration(plan.descendantsEstimatedSeconds)} (${plan.contributingCount} of ${plan.totalCount})`,
+          `descendants est ${formatDuration(plan.descendantsEstimatedSeconds)} (${plan.contributingCount} of ${plan.contributingCount + plan.unplannedCount} units planned)`,
         );
       }
       if (timing.childrenActiveSeconds != null) {
@@ -1334,6 +1340,10 @@ function main() {
       }
       if (timing.approximate && timingParts.length > 0) timingParts.push("approx");
       if (timingParts.length > 0) console.log(`time   ${timingParts.join(" · ")}`);
+      // The certified plan of a parent (`staple compare`): labor with coverage, and the path.
+      // Only once something beneath is planned, so an unplanned parent renders as it always did.
+      const planSummary = store.planSummary(i.id);
+      if (planSummary && planSummary.coverage.planned > 0) for (const line of planLines(planSummary)) console.log(line);
       if (ctx.ancestors.length > 0) {
         console.log(`path   ${[...ctx.ancestors.map((a) => a.identifier), i.identifier].join(" > ")}`);
       }
@@ -1403,6 +1413,10 @@ function main() {
 
     case "attempt":
       runAttemptCommand(rest);
+      break;
+
+    case "compare":
+      runCompareCommand(rest);
       break;
 
     case "attempts":

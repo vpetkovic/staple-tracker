@@ -597,6 +597,7 @@ describe("rollups", () => {
         source: "descendants",
         descendantsEstimatedSeconds: 11 * H,
         contributingCount: 3,
+        unplannedCount: 0,
         totalCount: 3,
       });
     });
@@ -612,6 +613,7 @@ describe("rollups", () => {
         source: "descendants",
         descendantsEstimatedSeconds: 11 * H,
         contributingCount: 3,
+        unplannedCount: 0,
         totalCount: 4,
       });
     });
@@ -624,6 +626,7 @@ describe("rollups", () => {
         source: "own",
         descendantsEstimatedSeconds: 11 * H,
         contributingCount: 3,
+        unplannedCount: 0,
         totalCount: 3,
       });
       // …but the ancestor counts it ONCE, at its own 10h — never 21h.
@@ -655,6 +658,7 @@ describe("rollups", () => {
         source: "none",
         descendantsEstimatedSeconds: null,
         contributingCount: 0,
+        unplannedCount: 1,
         totalCount: 2,
       });
       expect(store.timing(mid.id).subtreePlan.totalCount).toBe(1);

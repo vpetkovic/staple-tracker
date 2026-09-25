@@ -345,8 +345,8 @@ describe("the installed binary, run from outside this repository", () => {
       // the conflict lane's conflict_list / conflict_resolve, and record_budget_sample.
       // Execution attempts added record_attempt_event (48), and the telemetry reads
       // list_attempts, get_attempt, get_budget and list_budget_samples (52),
-      // and the explicit estimate write set_estimate (53).
-      expect(tools).toHaveLength(53);
+      // and the explicit estimate write set_estimate (53), and compare_plans (54).
+      expect(tools).toHaveLength(54);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.

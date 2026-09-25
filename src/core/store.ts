@@ -101,6 +101,15 @@ import { viewsOfIssue } from "./telemetry/attempt-derive.js";
 import { attemptDetail, attemptSummary, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
 import type { PageRequest, TelemetryPage } from "./telemetry/read-page.js";
 import { stapleHome } from "../config/home.js";
+import {
+  COMPARE_MAX_REFS,
+  planStructureOf,
+  type CrossSubtreeBlocker,
+  type PlanComparison,
+  type PlanEdge,
+  type PlanNode,
+  type PlanSummary,
+} from "./plan-rollup.js";
 
 export interface CreateIssueInput {
   title: string;
@@ -4689,6 +4698,7 @@ export class WorkspaceStore {
         source: "none",
         descendantsEstimatedSeconds: null,
         contributingCount: 0,
+        unplannedCount: 0,
         totalCount: 0,
       },
       ...noTelemetry(),
@@ -4749,7 +4759,10 @@ export class WorkspaceStore {
    *    its own estimate if it has one, otherwise its children's contributions.
    *    Own wins, so the estimates under an estimated parent are shadowed for
    *    every ancestor rather than added — and a parent with no estimate passes
-   *    its children's plan straight up. See `SubtreePlan` in core/types.ts.
+   *    its children's plan straight up. A cancelled child contributes nothing.
+   *    Coverage is counted in plan units (`unplannedCount`), not descendants.
+   *    See `SubtreePlan` in core/types.ts; `planSummary` / `comparePlans` build
+   *    the critical path over the same units (core/plan-rollup.ts).
    *
    * That recursion is why this resolves a bounded DESCENDANT CLOSURE up front
    * (one recursive CTE, capped at MAX_TREE_DEPTH) and then rolls up deepest-first
@@ -4896,6 +4909,8 @@ export class WorkspaceStore {
     // Deepest first, so a parent always reads children that are already final.
     const timings = new Map<string, IssueTiming>();
     const effortOf = new Map<string, OwnEffort>();
+    /** Children that are not cancelled, per issue: an issue with none is a unit of work itself. */
+    const liveChildCount = new Map<string, number>();
     for (const row of [...rows].sort((a, b) => b.depth - a.depth)) {
       const own = ownTimings.get(row.id)!;
       const children = childrenOf.get(row.id) ?? [];
@@ -4907,7 +4922,9 @@ export class WorkspaceStore {
       // `subtreePlan` — the same deepest-first order the actuals rely on.
       let descendantsEstimatedSeconds: number | null = null;
       let contributingCount = 0;
+      let unplannedCount = 0;
       let totalCount = 0;
+      let liveChildren = 0;
       for (const child of children) {
         // Only configured statuses get a bucket; an orphaned id is counted
         // nowhere rather than inventing a key no consumer's schema knows about.
@@ -4923,18 +4940,30 @@ export class WorkspaceStore {
         if (childTiming?.approximate) childApproximate = true;
         const childPlan = childTiming?.subtreePlan;
         if (childPlan) {
+          totalCount += 1 + childPlan.totalCount;
+          // A cancelled child owes no work, so its subtree is no part of the plan:
+          // its estimate, and everything beneath it, contributes nothing and is
+          // not a gap either. It is still on its own timing, and in `totalCount`.
+          if (this.categoryOf(child.status) === "cancelled") continue;
+          liveChildren += 1;
           // The child's EFFECTIVE plan is its contribution — own if it has one,
           // else what flowed up through it. Never both, which is the whole rule.
           if (childPlan.estimatedSeconds != null) {
             descendantsEstimatedSeconds =
               (descendantsEstimatedSeconds ?? 0) + childPlan.estimatedSeconds;
           }
-          // A child that contributed its own estimate is ONE contributing item,
-          // and shadows whatever its subtree counted; otherwise its count flows up.
-          contributingCount += childPlan.source === "own" ? 1 : childPlan.contributingCount;
-          totalCount += 1 + childPlan.totalCount;
+          // A child that contributed its own estimate is ONE contributing unit,
+          // and shadows whatever its subtree counted; otherwise its counts flow
+          // up. An unestimated child with no live children is itself a unit of
+          // work nobody planned: one gap.
+          if (childPlan.source === "own") contributingCount += 1;
+          else if (liveChildCount.get(child.id)! > 0) {
+            contributingCount += childPlan.contributingCount;
+            unplannedCount += childPlan.unplannedCount;
+          } else unplannedCount += 1;
         }
       }
+      liveChildCount.set(row.id, liveChildren);
       const hasChildren = children.length > 0;
       const ownEstimate = row.estimated_seconds ?? null;
       timings.set(row.id, {
@@ -4964,6 +4993,7 @@ export class WorkspaceStore {
             ownEstimate != null ? "own" : descendantsEstimatedSeconds != null ? "descendants" : "none",
           descendantsEstimatedSeconds,
           contributingCount,
+          unplannedCount,
           totalCount,
         },
         ...noTelemetry(),
@@ -5303,6 +5333,139 @@ export class WorkspaceStore {
       if (timing) childrenTiming[child.identifier] = timing;
     }
     return { timing: all.get(row.id) ?? this.emptyTiming(), childrenTiming };
+  }
+
+  /**
+   * The CERTIFIED plan of a parent (`core/plan-rollup.ts`): labor, coverage and the critical
+   * path, on every detail surface as `planSummary`. Null for an issue with no children: its plan
+   * is its own estimate, already on `timing`.
+   */
+  planSummary(ref: string): PlanSummary | null {
+    const row = this.requireRow(ref);
+    const hasChildren = this.db.prepare("SELECT 1 FROM issues WHERE parent_id = ? LIMIT 1").get(row.id);
+    return hasChildren ? this.planSummariesFor([row.id]).get(row.id)! : null;
+  }
+
+  /**
+   * `staple compare` / MCP `compare_plans` / HTTP `/api/compare`: the certified plan of each
+   * named issue, side by side, with no tree in the payload. `overlaps` names every compared issue
+   * that lies inside another one, whose labor is therefore already part of the other's.
+   */
+  comparePlans(refs: readonly string[]): PlanComparison {
+    if (refs.length === 0) throw new StapleError("validation", "compare needs at least one issue");
+    if (refs.length > COMPARE_MAX_REFS) {
+      throw new StapleError("validation", `compare takes at most ${COMPARE_MAX_REFS} issues, got ${refs.length}`);
+    }
+    const rows = [...new Map(refs.map((ref) => this.requireRow(ref)).map((row) => [row.id, row])).values()];
+    const summaries = this.planSummariesFor(rows.map((row) => row.id));
+    const overlaps: PlanComparison["overlaps"] = [];
+    const within = new Map(rows.map((row) => [row.id, new Set(this.subtreeRows(row.id).map((node) => node.id))]));
+    for (const row of rows) {
+      for (const other of rows) {
+        if (other.id !== row.id && within.get(other.id)!.has(row.id)) {
+          overlaps.push({ ref: row.identifier, within: other.identifier });
+        }
+      }
+    }
+    return {
+      plans: rows.map((row) => ({
+        ref: row.identifier,
+        title: row.title,
+        kind: row.kind,
+        status: row.status,
+        ...summaries.get(row.id)!,
+      })),
+      overlaps,
+    };
+  }
+
+  /** The issue and every descendant, capped at MAX_TREE_DEPTH like `timingFor`'s closure. */
+  private subtreeRows(rootId: string): PlanNode[] {
+    const rows = this.db
+      .prepare(
+        `WITH RECURSIVE closure(id, depth) AS (
+             SELECT id, 0 FROM issues WHERE id = ?
+             UNION
+             SELECT i.id, closure.depth + 1
+               FROM issues i JOIN closure ON i.parent_id = closure.id
+              WHERE closure.depth < ?
+           )
+           SELECT DISTINCT i.id AS id, i.identifier AS identifier, i.parent_id AS parent_id,
+                  i.estimated_seconds AS estimated_seconds, i.status AS status
+             FROM closure JOIN issues i ON i.id = closure.id`,
+      )
+      .all(rootId, MAX_TREE_DEPTH) as Array<{
+      id: string;
+      identifier: string;
+      parent_id: string | null;
+      estimated_seconds: number | null;
+      status: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      identifier: row.identifier,
+      parentId: row.parent_id,
+      estimatedSeconds: row.estimated_seconds ?? null,
+      status: row.status,
+      cancelled: this.categoryOf(row.status) === "cancelled",
+    }));
+  }
+
+  /**
+   * One certified plan per issue. The labor is `timing.subtreePlan`, read through `timingFor` and
+   * never recomputed; the units, coverage and path are `planStructureOf` over the same subtree.
+   */
+  private planSummariesFor(rootIds: string[]): Map<string, PlanSummary> {
+    const timings = this.timingFor(rootIds, undefined, { telemetry: false });
+    const out = new Map<string, PlanSummary>();
+    for (const rootId of rootIds) {
+      const subtree = this.subtreeRows(rootId);
+      const nodes = new Map(subtree.map((node) => [node.id, node]));
+      // Issues under a cancelled ancestor wait on nothing the plan counts.
+      const excluded = new Set<string>();
+      const isExcluded = (id: string): boolean => {
+        for (let at: string | null = id; at !== null && at !== rootId; at = nodes.get(at)?.parentId ?? null) {
+          if (excluded.has(at) || nodes.get(at)?.cancelled) return true;
+        }
+        return false;
+      };
+      for (const node of subtree) if (isExcluded(node.id)) excluded.add(node.id);
+      const ids = subtree.map((node) => node.id);
+      const placeholders = ids.map(() => "?").join(",");
+      const relationRows = this.db
+        .prepare(
+          `SELECT r.blocker_id AS blocker_id, r.blocked_id AS blocked_id, b.identifier AS blocker_identifier,
+                  b.status AS blocker_status
+             FROM relations r JOIN issues b ON b.id = r.blocker_id
+            WHERE r.type = 'blocks' AND r.blocked_id IN (${placeholders})`,
+        )
+        .all(...(ids as never[])) as Array<{ blocker_id: string; blocked_id: string; blocker_identifier: string; blocker_status: string }>;
+      const edges: PlanEdge[] = [];
+      const outside: CrossSubtreeBlocker[] = [];
+      for (const relation of relationRows) {
+        if (nodes.has(relation.blocker_id)) {
+          edges.push({ blockerId: relation.blocker_id, blockedId: relation.blocked_id });
+        } else if (!excluded.has(relation.blocked_id)) {
+          outside.push({
+            blocked: nodes.get(relation.blocked_id)!.identifier,
+            blocker: relation.blocker_identifier,
+            blockerStatus: relation.blocker_status,
+            resolved: this.isResolvedStatus(relation.blocker_status),
+          });
+        }
+      }
+      const plan = (timings.get(rootId) ?? this.emptyTiming()).subtreePlan;
+      out.set(rootId, {
+        labor: {
+          seconds: plan.estimatedSeconds,
+          source: plan.source,
+          ownSeconds: nodes.get(rootId)?.estimatedSeconds ?? null,
+          descendantsSeconds: plan.descendantsEstimatedSeconds,
+        },
+        ...planStructureOf(rootId, nodes, edges, outside),
+      });
+    }
+    return out;
   }
   // ---------- checkout / release ----------
 
