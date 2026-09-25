@@ -39,6 +39,7 @@ interface OwnAttempt {
   started_at: string;
   ended_at: string | null;
   state: string;
+  role: string;
 }
 
 function hubPath(home: string): string {
@@ -73,6 +74,8 @@ function hubSlugFor(hub: DatabaseSync, db: DatabaseSync): string | null {
  * has never connected — the ones no device opened.
  */
 function ownAttempts(db: DatabaseSync, device: string | null): OwnAttempt[] {
+  // A workspace this build has not migrated yet (read-only, by `rebuildPresence`) has no lane column.
+  const role = db.prepare("SELECT 1 FROM pragma_table_info('attempts') WHERE name = 'role'").get() !== undefined ? "COALESCE(a.role, 'worker')" : "'worker'";
   const rows = db
     .prepare(
       `SELECT a.id, a.device_id, json_extract(a.provider_binding, '$.provider') AS provider,
@@ -83,7 +86,7 @@ function ownAttempts(db: DatabaseSync, device: string | null): OwnAttempt[] {
                  SELECT json_extract(t.detail, '$.sessionRef') FROM attempt_transitions t
                   WHERE t.attempt_id = a.id AND t.kind = 'attempt_session_added'
                ) WHERE ref IS NOT NULL) AS session_refs,
-              a.started_at, a.ended_at, a.state
+              a.started_at, a.ended_at, a.state, ${role} AS role
          FROM attempts a WHERE a.device_id IS NULL OR a.device_id = ?`,
     )
     .all(device ?? "") as unknown as Array<OwnAttempt & { device_id: string | null }>;
@@ -95,18 +98,19 @@ function ownAttempts(db: DatabaseSync, device: string | null): OwnAttempt[] {
 /** Write one workspace's rows to match its attempts: missing ones added, changed ones updated, gone ones removed. */
 function writeRows(hub: DatabaseSync, slug: string, attempts: readonly OwnAttempt[]): void {
   const held = new Map(
-    (hub.prepare("SELECT attempt_id, provider, account_ref, session_refs, ended_at FROM attempt_presence WHERE workspace = ?").all(slug) as Array<{
+    (hub.prepare("SELECT attempt_id, provider, account_ref, session_refs, ended_at, role FROM attempt_presence WHERE workspace = ?").all(slug) as Array<{
       attempt_id: string;
       provider: string | null;
       account_ref: string | null;
       session_refs: string;
       ended_at: string | null;
+      role: string;
     }>).map((row) => [row.attempt_id, row]),
   );
   const upsert = hub.prepare(
-    `INSERT INTO attempt_presence (workspace, attempt_id, provider, account_ref, session_refs, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO attempt_presence (workspace, attempt_id, provider, account_ref, session_refs, started_at, ended_at, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (workspace, attempt_id) DO UPDATE SET provider = excluded.provider, account_ref = excluded.account_ref,
-       session_refs = excluded.session_refs, started_at = excluded.started_at, ended_at = excluded.ended_at`,
+       session_refs = excluded.session_refs, started_at = excluded.started_at, ended_at = excluded.ended_at, role = excluded.role`,
   );
   hub.exec("BEGIN IMMEDIATE");
   try {
@@ -117,8 +121,9 @@ function writeRows(hub: DatabaseSync, slug: string, attempts: readonly OwnAttemp
       const endedAt = attempt.state === "ended" ? (attempt.ended_at ?? attempt.started_at) : null;
       const row = held.get(attempt.id);
       const sessions = attempt.session_refs ?? "[]";
-      if (row && row.ended_at === endedAt && row.account_ref === attempt.account_ref && row.provider === attempt.provider && row.session_refs === sessions) continue;
-      upsert.run(slug, attempt.id, attempt.provider, attempt.account_ref, sessions, attempt.started_at, endedAt);
+      const role = attempt.role === "orchestrator" ? "orchestrator" : "worker";
+      if (row && row.ended_at === endedAt && row.account_ref === attempt.account_ref && row.provider === attempt.provider && row.session_refs === sessions && row.role === role) continue;
+      upsert.run(slug, attempt.id, attempt.provider, attempt.account_ref, sessions, attempt.started_at, endedAt, role);
     }
     const remove = hub.prepare("DELETE FROM attempt_presence WHERE workspace = ? AND attempt_id = ?");
     for (const id of held.keys()) if (!seen.has(id)) remove.run(slug, id);
@@ -200,21 +205,26 @@ export function presenceCounts(home: string = stapleHome()): PresenceCounts | nu
       try {
         const table = hub.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'attempt_presence'").get();
         if (!table) return null;
+        // A hub from before migration 007 has no lane column: every row there is a worker.
+        const hasRole = (hub.prepare("SELECT 1 FROM pragma_table_info('attempt_presence') WHERE name = 'role'").get() ?? null) !== null;
         const rows = hub
           .prepare(
-            `SELECT p.account_ref AS account, w.path AS path
+            `SELECT p.account_ref AS account, w.path AS path, ${hasRole ? "p.role" : "'worker'"} AS role
                FROM attempt_presence p JOIN workspaces w ON w.slug = p.workspace
               WHERE p.ended_at IS NULL AND p.attempt_id <> ?`,
           )
-          .all(exclude) as Array<{ account: string | null; path: string }>;
+          .all(exclude) as Array<{ account: string | null; path: string; role: string }>;
         const reachable = new Map<string, boolean>();
         const live = rows.filter((row) => {
           if (!reachable.has(row.path)) reachable.set(row.path, row.path !== "" && existsSync(row.path));
           return reachable.get(row.path) === true;
         });
+        const orchestrator = live.filter((row) => row.role === "orchestrator").length;
         return {
           all: live.length,
           account: accountRef === null ? null : live.filter((row) => row.account === accountRef).length,
+          worker: live.length - orchestrator,
+          orchestrator,
         };
       } finally {
         hub.close();

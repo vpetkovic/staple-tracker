@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -316,7 +316,7 @@ CREATE TABLE attempts (
         idempotency_key     TEXT,
         provenance          TEXT NOT NULL,
         missing             TEXT NOT NULL DEFAULT '{}'
-      );
+      , role TEXT NOT NULL DEFAULT 'worker');
 
 CREATE INDEX attempts_issue_idx ON attempts (issue_id, started_at, id);
 

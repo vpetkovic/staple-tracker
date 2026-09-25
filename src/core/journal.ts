@@ -260,9 +260,46 @@ interface SyncStateRow {
  * `opId`, so a redelivered operation re-derives the same keys and the partial
  * unique index on `events.dedup_key` absorbs the second insert.
  */
+/**
+ * One status-moving or edge event a local mutation emitted, carried on the operation that
+ * made it (`originEvents`) so a device applying that operation re-emits the same event,
+ * dated at the origin's own instant (`docs/sync.md`, "Events are re-derived, never
+ * transported"; `docs/timing-semantics.md`, "Multi-device").
+ */
+export interface OriginEvent {
+  readonly kind: string;
+  readonly at: string;
+  readonly actor: string | null;
+  readonly payload: Record<string, unknown>;
+}
+
+/** The event kinds an operation carries for re-emission: every status-moving kind, and the blocker set. */
+export const REEMITTED_EVENT_KINDS: ReadonlySet<string> = new Set([
+  "issue_created",
+  "status_changed",
+  "checkout",
+  "claim_stolen",
+  "release",
+  "claim_released_stale",
+  "blockers_changed",
+]);
+
 class JournalScope {
   readonly intents = new Map<string, JournalIntent & { payload: Record<string, unknown> }>();
+  /** The re-emittable events this mutation wrote, by issue, in order. */
+  readonly originEvents = new Map<string, OriginEvent[]>();
   private eventOrdinal = 0;
+  private instant: string | null = null;
+
+  /**
+   * The mutation's one instant: read from the clock once, on first use, and handed to every
+   * writer in the scope — the row, its events and the attempt ledger — so one mutation's
+   * boundaries are one instant (`docs/timing-semantics.md`, "Boundary rules").
+   */
+  at(): string {
+    this.instant ??= nowIso();
+    return this.instant;
+  }
 
   constructor(
     readonly token: string,
@@ -579,6 +616,23 @@ export class Journal {
     return this.scope ? this.scope.nextEventKey(kind) : null;
   }
 
+  /** The current mutation's one instant, or the clock outside a scope. */
+  mutationAt(): string {
+    return this.scope ? this.scope.at() : nowIso();
+  }
+
+  /**
+   * A local mutation wrote a re-emittable event: note it, so the operation it belongs to
+   * carries it (`flush`). Nothing while applying a pulled operation.
+   */
+  noteEvent(issueId: string | null | undefined, event: OriginEvent): void {
+    const scope = this.scope;
+    if (!scope || scope.suppressed || !issueId || !REEMITTED_EVENT_KINDS.has(event.kind)) return;
+    const list = scope.originEvents.get(issueId) ?? [];
+    list.push(event);
+    scope.originEvents.set(issueId, list);
+  }
+
   /** True while a mutation scope is open. Read by the characterization tests. */
   get inScope(): boolean {
     return this.scope !== null;
@@ -732,6 +786,20 @@ export class Journal {
     if (!state?.repository_id) return;
     this.mergeRowChanges(scope, changes);
     if (scope.intents.size === 0) return;
+    /**
+     * The events this mutation narrated, on the operation that carries the change: an issue's
+     * on its `issue` operation, a blocker set's on its `relation` operation when the mutation
+     * wrote one and on the issue's otherwise (a create carries its blockers inside). Not a
+     * column: the applier re-emits them (`cloud/reemit.ts`) and writes nothing from them.
+     */
+    for (const [issueId, events] of scope.originEvents) {
+      const issueIntent = scope.intents.get(`issue\u0000${issueId}`);
+      const relationIntent = scope.intents.get(`relation\u0000${issueId}`);
+      const onIssue = events.filter((event) => event.kind !== "blockers_changed" || relationIntent === undefined);
+      const onRelation = events.filter((event) => event.kind === "blockers_changed" && relationIntent !== undefined);
+      if (issueIntent && onIssue.length > 0) issueIntent.payload.originEvents = onIssue;
+      if (relationIntent && onRelation.length > 0) relationIntent.payload.originEvents = onRelation;
+    }
 
     const createdAt = nowIso();
     /**

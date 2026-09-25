@@ -46,5 +46,9 @@ export { writeEventRow, type EventInput } from "./event-row.js";
  * a repeated emission a no-op rather than a duplicate row.
  */
 export function insertEvent(db: DatabaseSync, input: EventInput): void {
-  writeEventRow(db, { ...input, dedupKey: input.dedupKey ?? journalFor(db).eventDedupKey(input.kind) });
+  const journal = journalFor(db);
+  // One mutation, one instant (`Journal.mutationAt`): its events share the row's time.
+  const createdAt = input.createdAt ?? journal.mutationAt();
+  writeEventRow(db, { ...input, createdAt, dedupKey: input.dedupKey ?? journal.eventDedupKey(input.kind) });
+  journal.noteEvent(input.issueId, { kind: input.kind, at: createdAt, actor: input.actor ?? null, payload: input.payload ?? {} });
 }

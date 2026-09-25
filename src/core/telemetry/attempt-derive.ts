@@ -20,7 +20,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { nowIso } from "../types.js";
-import { attemptsOfIssue, transitionsOf, type AttemptRecord, type AttemptTransition } from "./attempt-records.js";
+import { attemptsOfIssue, isWorkerAttempt, laneOf, transitionsOf, type AttemptRecord, type AttemptTransition } from "./attempt-records.js";
 
 export type EvaluationMode = "read" | "own";
 
@@ -29,25 +29,106 @@ export interface IssueFacts {
   readonly exists: boolean;
   readonly active: boolean;
   readonly checkoutAgent: string | null;
+  /**
+   * What the orchestrator lane's clauses and the row bound read (`docs/timing-semantics.md`,
+   * "The orchestrator lane" and "Work"). Absent on facts a mutator built from a row it read
+   * before writing, which only ever feed the worker lane's clauses.
+   */
+  readonly category?: string | null;
+  readonly completedAt?: string | null;
+  readonly cancelledAt?: string | null;
 }
 
 export interface Evaluation {
   /** The clause that ends this stored-open attempt, or null when it stays open. Null for a stored end. */
   readonly orphanReason: string | null;
   readonly contested: boolean;
+  /**
+   * The orchestrator lane only: the earliest bound of every clause that holds, which limits
+   * the replicated evidence the end is read from (`evidenceBefore`). Null when no clause
+   * with a bound holds.
+   */
+  readonly limit?: string | null;
 }
 
 /** The issue as the rule reads it, from the replicated row and vocabulary. */
 export function issueFacts(db: DatabaseSync, issueId: string): IssueFacts {
   const row = db
     .prepare(
-      `SELECT i.checkout_agent AS agent, s.category AS category
+      `SELECT i.checkout_agent AS agent, s.category AS category, i.completed_at AS completed_at, i.cancelled_at AS cancelled_at
          FROM issues i LEFT JOIN workspace_statuses s ON s.id = i.status
         WHERE i.id = ?`,
     )
-    .get(issueId) as { agent: string | null; category: string | null } | undefined;
-  if (!row) return { exists: false, active: false, checkoutAgent: null };
-  return { exists: true, active: row.category === "active", checkoutAgent: row.agent };
+    .get(issueId) as { agent: string | null; category: string | null; completed_at: string | null; cancelled_at: string | null } | undefined;
+  if (!row) return { exists: false, active: false, checkoutAgent: null, category: null, completedAt: null, cancelledAt: null };
+  return {
+    exists: true,
+    active: row.category === "active",
+    checkoutAgent: row.agent,
+    category: row.category,
+    completedAt: row.completed_at,
+    cancelledAt: row.cancelled_at,
+  };
+}
+
+/**
+ * The row bound (`docs/timing-semantics.md`, "Work"): `completedAt` of a `done` row,
+ * `cancelledAt` of a `cancelled` one, and no bound from any other row — `updatedAt` is not
+ * one, because recategorizing a status moves issues without touching it.
+ */
+export function rowBoundOf(facts: IssueFacts): string | null {
+  if (!facts.exists) return null;
+  if (facts.category === "done") return facts.completedAt ?? null;
+  if (facts.category === "cancelled") return facts.cancelledAt ?? null;
+  return null;
+}
+
+/** The earliest of some instants, ignoring nulls; null when there are none. */
+export function earliest(...instants: Array<string | null | undefined>): string | null {
+  let best: string | null = null;
+  for (const instant of instants) if (typeof instant === "string" && (best === null || instant < best)) best = instant;
+  return best;
+}
+
+/**
+ * The newer orchestrator attempt by the same agent, anywhere in the workspace, in any
+ * state, by `startedAt` then `id`: clause 3 of the orchestrator lane (`superseded_by_newer`)
+ * and its bound. Null when this is the agent's newest.
+ */
+export function newerOrchestratorAttempt(db: DatabaseSync, attempt: AttemptRecord): { id: string; startedAt: string } | null {
+  const row = db
+    .prepare(
+      `SELECT id, started_at FROM attempts
+        WHERE role = 'orchestrator' AND agent = ? AND id <> ?
+          AND (started_at > ? OR (started_at = ? AND id > ?))
+        ORDER BY started_at, id LIMIT 1`,
+    )
+    .get(attempt.agent, attempt.id, attempt.startedAt, attempt.startedAt, attempt.id) as { id: string; started_at: string } | undefined;
+  return row ? { id: row.id, startedAt: row.started_at } : null;
+}
+
+/**
+ * The orchestrator lane's read-time clauses, from replicated rows only, so every device reads
+ * the same answer. A stored-open orchestrator attempt is effectively ended when:
+ *
+ *   1. its issue no longer exists (`issue_removed`);
+ *   2. its issue's category is `done` or `cancelled` (`issue_resolved`), bound `completedAt`
+ *      or `cancelledAt`;
+ *   3. a newer orchestrator attempt by the same agent exists in the workspace, in any state
+ *      (`superseded_by_newer`), bound its `startedAt`.
+ *
+ * The reason is the FIRST clause that holds, and the limit the EARLIEST bound of every clause
+ * that holds. Never contested: an orchestrator holds no claim.
+ */
+export function evaluateOrchestrator(db: DatabaseSync, attempt: AttemptRecord, facts: IssueFacts): Evaluation {
+  if (attempt.state === "ended") return { orphanReason: null, contested: false, limit: null };
+  const removed = !facts.exists;
+  const resolved = facts.exists && (facts.category === "done" || facts.category === "cancelled");
+  const newer = newerOrchestratorAttempt(db, attempt);
+  const reason = removed ? "issue_removed" : resolved ? "issue_resolved" : newer !== null ? "superseded_by_newer" : null;
+  if (reason === null) return { orphanReason: null, contested: false, limit: null };
+  const limit = earliest(resolved ? rowBoundOf(facts) : null, newer?.startedAt ?? null);
+  return { orphanReason: reason, contested: false, limit };
 }
 
 const newestFirst = (a: AttemptRecord, b: AttemptRecord): number =>
@@ -65,7 +146,13 @@ export function evaluateIssue(
   mode: EvaluationMode,
 ): Map<string, Evaluation> {
   const out = new Map<string, Evaluation>();
-  const open = attempts.filter((attempt) => attempt.state !== "ended").sort(newestFirst);
+  /**
+   * The WORKER lane only (`docs/timing-semantics.md`, "The orchestrator lane"): the contested
+   * set, clauses 3 to 5 and `laterOpen` never see an orchestrator attempt, so an open
+   * orchestrator attempt cannot orphan an older worker attempt as `superseded_by_merge`. An
+   * orchestrator attempt passed in is left out of the map; `evaluateLanes` evaluates it.
+   */
+  const open = attempts.filter((attempt) => attempt.state !== "ended" && isWorkerAttempt(attempt)).sort(newestFirst);
   /**
    * The contested case, triggered by the replicated shape itself: two or more stored-open
    * attempts with different agents and a claim scope other than `none`. Clauses 3 and 4 are
@@ -88,26 +175,51 @@ export function evaluateIssue(
     if (reason === null) laterOpen = true;
     out.set(attempt.id, { orphanReason: reason, contested: skip });
   }
-  for (const attempt of attempts) if (!out.has(attempt.id)) out.set(attempt.id, { orphanReason: null, contested: false });
+  for (const attempt of attempts) if (!out.has(attempt.id) && isWorkerAttempt(attempt)) out.set(attempt.id, { orphanReason: null, contested: false });
   return out;
 }
 
-/** The attempts of an issue that are effectively open under `mode`, newest first. */
+/** Both lanes of one issue, each with its own clauses: worker attempts by `evaluateIssue`, orchestrator ones by `evaluateOrchestrator`. */
+export function evaluateLanes(db: DatabaseSync, attempts: readonly AttemptRecord[], facts: IssueFacts, mode: EvaluationMode): Map<string, Evaluation> {
+  const out = evaluateIssue(attempts, facts, mode);
+  for (const attempt of attempts) if (!isWorkerAttempt(attempt)) out.set(attempt.id, evaluateOrchestrator(db, attempt, facts));
+  return out;
+}
+
+/** The WORKER attempts of an issue that are effectively open under `mode`, newest first. */
 export function effectivelyOpen(db: DatabaseSync, issueId: string, mode: EvaluationMode, facts: IssueFacts = issueFacts(db, issueId)): AttemptRecord[] {
-  const attempts = attemptsOfIssue(db, issueId);
+  const attempts = attemptsOfIssue(db, issueId).filter(isWorkerAttempt);
   const evaluation = evaluateIssue(attempts, facts, mode);
   return attempts.filter((attempt) => attempt.state !== "ended" && evaluation.get(attempt.id)?.orphanReason === null).sort(newestFirst);
 }
 
+/** The ORCHESTRATOR attempts of an issue that are effectively open, newest first. Replicated rows only, so no mode. */
+export function effectivelyOpenOrchestrators(db: DatabaseSync, issueId: string, facts: IssueFacts = issueFacts(db, issueId)): AttemptRecord[] {
+  return attemptsOfIssue(db, issueId)
+    .filter((attempt) => !isWorkerAttempt(attempt) && attempt.state !== "ended" && evaluateOrchestrator(db, attempt, facts).orphanReason === null)
+    .sort(newestFirst);
+}
+
 /**
  * Effectively open attempts in this workspace database, pulled ones included: the
- * concurrency context's `openAttemptsInWorkspace`. Read-mode, as every surface reads.
+ * concurrency context's `openAttemptsInWorkspace`, both lanes (both spend provider budget),
+ * with the split by `role` beside it. Read-mode, as every surface reads.
  */
-export function countEffectivelyOpen(db: DatabaseSync): number {
+export function countEffectivelyOpenByRole(db: DatabaseSync): { all: number; worker: number; orchestrator: number } {
   const issues = (db.prepare("SELECT DISTINCT issue_id AS id FROM attempts WHERE state <> 'ended'").all() as Array<{ id: string }>).map((row) => row.id);
-  let count = 0;
-  for (const issueId of issues) count += effectivelyOpen(db, issueId, "read").length;
-  return count;
+  let worker = 0;
+  let orchestrator = 0;
+  for (const issueId of issues) {
+    const facts = issueFacts(db, issueId);
+    worker += effectivelyOpen(db, issueId, "read", facts).length;
+    orchestrator += effectivelyOpenOrchestrators(db, issueId, facts).length;
+  }
+  return { all: worker + orchestrator, worker, orchestrator };
+}
+
+/** {@link countEffectivelyOpenByRole}'s total. */
+export function countEffectivelyOpen(db: DatabaseSync): number {
+  return countEffectivelyOpenByRole(db).all;
 }
 
 /**
@@ -134,6 +246,8 @@ export interface AttemptView {
   readonly issueId: string;
   readonly identifier: string | null;
   readonly agent: string;
+  /** `worker` or `orchestrator`: the lane whose clauses this view was read with. */
+  readonly role: string;
   readonly ordinal: number;
   readonly state: string;
   readonly storedState: string;
@@ -213,11 +327,11 @@ export function chainOf(attempts: readonly AttemptRecord[], id: string): string[
   });
 }
 
-/** Every attempt of an issue as it reads, oldest first. */
+/** Every attempt of an issue as it reads, both lanes, oldest first; each view carries `role`. */
 export function viewsOfIssue(db: DatabaseSync, issueId: string, now: string = nowIso()): AttemptView[] {
   const attempts = attemptsOfIssue(db, issueId);
   if (attempts.length === 0) return [];
-  const evaluation = evaluateIssue(attempts, issueFacts(db, issueId), "read");
+  const evaluation = evaluateLanes(db, attempts, issueFacts(db, issueId), "read");
   const identifier = (db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined)?.identifier ?? null;
   return attempts.map((attempt, index) => viewOf(db, attempt, index + 1, evaluation.get(attempt.id)!, identifier, attempts, now));
 }
@@ -241,9 +355,19 @@ function viewOf(
   const missing: Record<string, string> = { ...attempt.missing };
   const storedOpen = attempt.state !== "ended";
   const orphaned = storedOpen && evaluation.orphanReason !== null;
-  const lastActivityAt = storedOpen ? lastActivityOf(db, attempt.issueId, attempt.agent, attempt.startedAt) : (attempt.endedAt ?? attempt.startedAt);
-  const clockEnd = storedOpen ? lastActivityAt : (attempt.endedAt ?? attempt.startedAt);
+  const orchestrator = laneOf(attempt) === "orchestrator";
   const transitions = transitionsOf(db, attempt.id);
+  /**
+   * An orchestrator's activity is on the issues it coordinates, so its last activity is read
+   * over the issue and every descendant; its orphan end is read from replicated evidence
+   * before the clauses' limit, as every device reads it (`docs/timing-semantics.md`).
+   */
+  let lastActivityAt: string;
+  if (!storedOpen) lastActivityAt = attempt.endedAt ?? attempt.startedAt;
+  else if (orchestrator && orphaned) lastActivityAt = evidenceBefore(replicatedEvidence(db, attempt, transitions), attempt.startedAt, evaluation.limit ?? null);
+  else if (orchestrator) lastActivityAt = lastActivityOfSubtree(db, attempt.issueId, attempt.agent, attempt.startedAt);
+  else lastActivityAt = lastActivityOf(db, attempt.issueId, attempt.agent, attempt.startedAt);
+  const clockEnd = lastActivityAt;
   const pausedSeconds = pausedSecondsOf(transitions, attempt.startedAt, clockEnd);
   const activeSeconds = Math.max(0, seconds(attempt.startedAt, clockEnd) - pausedSeconds);
   if (orphaned) missing.endedAt = "end_not_observed";
@@ -252,6 +376,7 @@ function viewOf(
     issueId: attempt.issueId,
     identifier,
     agent: attempt.agent,
+    role: laneOf(attempt),
     ordinal,
     state: orphaned ? "ended" : attempt.state,
     storedState: attempt.state,
@@ -278,7 +403,78 @@ function viewOf(
     countedThrough: storedOpen && !orphaned ? lastActivityAt : null,
     idleSeconds: storedOpen && !orphaned ? seconds(lastActivityAt, now) : null,
     contested: evaluation.contested,
-    chain: chainOf(siblings, attempt.id),
+    chain: chainOf(siblings.filter((sibling) => laneOf(sibling) === laneOf(attempt)), attempt.id),
     missing,
   };
+}
+
+// ------------------------------------------------------------- replicated evidence
+
+/** An issue and every descendant of it, by the replicated `parent_id`. */
+export function subtreeIds(db: DatabaseSync, issueId: string): string[] {
+  return (
+    db
+      .prepare(
+        `WITH RECURSIVE sub(id, depth) AS (
+           SELECT ?, 0
+           UNION
+           SELECT i.id, sub.depth + 1 FROM issues i JOIN sub ON i.parent_id = sub.id WHERE sub.depth < 64
+         ) SELECT id FROM sub`,
+      )
+      .all(issueId) as Array<{ id: string }>
+  ).map((row) => row.id);
+}
+
+/** `lastActivityOf` over an issue and its descendants: an orchestrator's local last activity. */
+export function lastActivityOfSubtree(db: DatabaseSync, issueId: string, agent: string, since: string): string {
+  let newest = since;
+  for (const id of subtreeIds(db, issueId)) {
+    const at = lastActivityOf(db, id, agent, since);
+    if (at > newest) newest = at;
+  }
+  return newest;
+}
+
+/** The transition kinds that are evidence of work. Never an ending one: the ledger dates those when the end is written. */
+export const EVIDENCE_TRANSITIONS: ReadonlySet<string> = new Set([
+  "attempt_started",
+  "attempt_paused",
+  "attempt_resumed",
+  "attempt_milestone",
+  "attempt_session_added",
+]);
+
+/**
+ * Every replicated evidence instant of one attempt, ascending (`docs/timing-semantics.md`,
+ * "Work"): its evidence transitions, and the `created_at` of every comment (not deleted)
+ * and document revision on the issue by its agent after its `startedAt` — for an
+ * orchestrator attempt, on the issue and every descendant. Never the local `events` table.
+ * `startedAt` itself is not listed; {@link evidenceBefore} floors at it.
+ */
+export function replicatedEvidence(db: DatabaseSync, attempt: AttemptRecord, transitions: readonly AttemptTransition[] = transitionsOf(db, attempt.id)): string[] {
+  const instants: string[] = transitions.filter((transition) => EVIDENCE_TRANSITIONS.has(transition.kind)).map((transition) => transition.at);
+  const issues = laneOf(attempt) === "orchestrator" ? subtreeIds(db, attempt.issueId) : [attempt.issueId];
+  const comment = db.prepare("SELECT created_at AS at FROM comments WHERE issue_id = ? AND author = ? AND deleted_at IS NULL AND created_at > ?");
+  const revision = db.prepare("SELECT created_at AS at FROM document_revisions WHERE issue_id = ? AND author = ? AND created_at > ?");
+  for (const issueId of issues) {
+    for (const row of comment.all(issueId, attempt.agent, attempt.startedAt) as Array<{ at: string }>) instants.push(row.at);
+    for (const row of revision.all(issueId, attempt.agent, attempt.startedAt) as Array<{ at: string }>) instants.push(row.at);
+  }
+  return instants.sort();
+}
+
+/**
+ * `evidenceBefore(A, λ)`: the latest of `startedAt` and every evidence instant STRICTLY
+ * before the limit. A limit filters the evidence and never clamps the end to itself; with
+ * no limit, every instant counts. `inclusiveUpTo` is the stored orphan end's own filter:
+ * evidence after it is ignored, evidence at it counts.
+ */
+export function evidenceBefore(instants: readonly string[], startedAt: string, limit: string | null, inclusiveUpTo: string | null = null): string {
+  let latest = startedAt;
+  for (const at of instants) {
+    if (limit !== null && at >= limit) continue;
+    if (inclusiveUpTo !== null && at > inclusiveUpTo) continue;
+    if (at > latest) latest = at;
+  }
+  return latest;
 }

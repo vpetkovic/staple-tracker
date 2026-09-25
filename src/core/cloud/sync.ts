@@ -28,6 +28,7 @@
  *
  * There is no fifth state where some operations quietly did not go.
  */
+import { beforeApply, reemitEvents } from "./reemit.js";
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
 import { assertOwnHost } from "../repo-identity.js";
@@ -1528,8 +1529,14 @@ function applyOne(
        * it sits on, and `null` means every contentful field was contested and
        * there is nothing left to write.
        */
+      const before = beforeApply(db, op);
       const screened = screenForConflicts(db, op, localDeviceId);
       if (screened !== null) applyToDatabase(db, screened);
+      /**
+       * The events the operation narrates, dated at its origin, as local rows under this
+       * suppressed scope: nothing journaled (`reemit.ts`).
+       */
+      reemitEvents(db, op, before, localDeviceId);
       /**
        * The local entity version moves because, as far as this database is
        * concerned, this entity just changed. Not set to the remote's

@@ -682,6 +682,50 @@ const timingShape = {
     .describe(
       "Recursive, non-double-counting plan for the subtree: an issue contributes its own estimate if it has one, otherwise its children's contributions — never both",
     ),
+  /**
+   * The effort and elapsed fields of `docs/timing-semantics.md`. `workSeconds` is the estimate
+   * ratio's actual and reads the same on every device; `wall` is device-local.
+   */
+  workSeconds: z
+    .number()
+    .nullable()
+    .describe(
+      "AGENT WORK: worker-lane attempts only, measured from replicated data (attempt rows, transitions, the agent's comments and doc revisions), pauses excluded. Leaf: ownWorkSeconds; parent: sum of direct children's; null when cancelled or unmeasured (reason in missing.workSeconds). The estimate ratio's actual",
+    ),
+  ownWorkSeconds: z.number().nullable().describe("This issue's own worker attempts, any status; null when it has none"),
+  orchestrationSeconds: z
+    .number()
+    .nullable()
+    .describe("Orchestrator-lane attempts on this issue plus its children's; never part of workSeconds; null when none in the subtree"),
+  leadSeconds: z.number().nullable().describe("createdAt to wall.startAt: time before any work began"),
+  estimateRatio: z
+    .number()
+    .nullable()
+    .describe("workSeconds / estimatedSeconds, only for an issue with its own estimate, resolved done, with work quality exact"),
+  wall: z
+    .object({
+      startAt: z.string(),
+      endAt: z.string().nullable(),
+      through: z.string().nullable(),
+      seconds: z.number(),
+      buckets: z.record(z.string(), z.number()),
+    })
+    .nullable()
+    .describe(
+      "Elapsed span and its partition, device-local: leaf buckets work, paused, silent, interrupted, unattributed, review, gated, blocked, queued, resolved; parent buckets active, review, gated, blocked, queued, resolved. Null: missing.wall says never_started or replay_unavailable",
+    ),
+  quality: z
+    .object({
+      work: z.object({
+        state: z.enum(["missing", "reconstructed", "approximate", "timing-floor", "exact"]).nullable(),
+        inputs: z.array(z.string()),
+        coverage: z.object({ known: z.number(), total: z.number(), partial: z.boolean() }).nullable(),
+        missingChildren: z.array(z.string()),
+      }),
+      wall: z.object({ state: z.enum(["approximate", "exact"]).nullable(), inputs: z.array(z.string()) }),
+    })
+    .describe("One quality state per axis and the inputs it came from; the work state reads replicated inputs only"),
+  missing: z.record(z.string(), z.string()).describe("Why each null effort or elapsed field is null"),
 };
 type _TimingShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof timingShape>>, IssueTiming>

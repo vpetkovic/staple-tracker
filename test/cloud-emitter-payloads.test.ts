@@ -338,8 +338,9 @@ describe("every payload a real emitter sends is a JSON object", () => {
     // The plan's order, with who queued each entry, when and why beside it — a conflict
     // resolution too, from the side it chose (conflicts.ts, "the entries a plan record keeps").
     expect(new Set(listKey("queue.replace"))).toEqual(new Set(["entries,order"]));
-    // A blocker set, with who made each edge and when beside it.
-    expect(new Set(listKey("relation.update"))).toEqual(new Set(["blockedBy,edges"]));
+    // A blocker set, with who made each edge and when beside it, and the `blockers_changed` it
+    // narrated, which a receiver re-emits dated at the origin (`cloud/reemit.ts`).
+    expect(new Set(listKey("relation.update"))).toEqual(new Set(["blockedBy,edges,originEvents"]));
     expect(listKey("status.update")).toContain("order");
     expect(listKey("kind.update")).toContain("order");
     expect(listKey("milestone.replace").every((keys) => keys.split(",").includes("members"))).toBe(true);

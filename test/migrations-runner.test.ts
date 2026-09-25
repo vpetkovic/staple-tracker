@@ -133,9 +133,11 @@ describe("version detection", () => {
     // hub 005 (limit windows and budget samples, machine state that never
     // replicates): hub 4 -> 5, workspace still 12. Then workspace 12 -> 13
     // (013-execution-attempts, which replicates) and hub 5 -> 6 (006-attempt-presence,
-    // the machine-local index of attempts this machine started).
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(13);
-    expect(latestVersion(HUB_TARGET)).toBe(6);
+    // the machine-local index of attempts this machine started). Then workspace
+    // 13 -> 14 (014-attempt-role, the attempt's lane) and hub 6 -> 7
+    // (007-presence-role, the lane in the presence index).
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(14);
+    expect(latestVersion(HUB_TARGET)).toBe(7);
   });
 });
 

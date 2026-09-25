@@ -491,16 +491,18 @@ describe("in_review is measured, and kept out of the actual", () => {
     expect(store.timing(issue.id).reviewSeconds).toBeNull();
   });
 
-  it("clamps an open review interval too, rather than counting to now", () => {
+  it("counts an open review interval to the read instant: a queue's clock runs while nobody writes (Q3)", () => {
     const issue = store.createIssue({ title: "Waiting on a human" });
     store.checkoutIssue(issue.id, "agent-a");
     store.updateIssue(issue.id, { status: "in_review" }, "agent-a");
     backdateEvents(issue.id, [9000, 8000, 5000]);
 
-    // Newest event is the transition into review itself, so the queue reads 0
-    // until something else happens on the ticket. Honest: there is no evidence
-    // of anything since.
-    expect(store.timing(issue.id).reviewSeconds).toBe(0);
+    // The newest event is the transition into review itself, and the queue still
+    // reads the 5000 seconds it has been waiting (docs/timing-semantics.md, Q3):
+    // review waits on a person, and silence is the waiting, not the end of it.
+    const asOf = new Date().toISOString();
+    expect(store.timingFor([issue.id], asOf).get(issue.id)!.reviewSeconds).toBeGreaterThanOrEqual(5000);
+    expect(store.timingFor([issue.id], asOf).get(issue.id)!.reviewSeconds).toBeLessThanOrEqual(5001);
     // And review never leaks into the ACTIVE clock, open or not.
     expect(store.timing(issue.id).countedThrough).toBeNull();
   });

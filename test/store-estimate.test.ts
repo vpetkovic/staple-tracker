@@ -350,6 +350,21 @@ describe("rollups sum DIRECT children and nothing else", () => {
         contributingCount: 0,
         totalCount: 0,
       },
+      // docs/timing-semantics.md: nothing ran, so every effort and elapsed field is null, with its reason.
+      workSeconds: null,
+      ownWorkSeconds: null,
+      orchestrationSeconds: null,
+      leadSeconds: null,
+      estimateRatio: null,
+      wall: null,
+      quality: { work: { state: "missing", inputs: [], coverage: null, missingChildren: [] }, wall: { state: null, inputs: [] } },
+      missing: {
+        workSeconds: "never_started",
+        ownWorkSeconds: "never_started",
+        orchestrationSeconds: "no_orchestrator_attempt",
+        wall: "never_started",
+        leadSeconds: "never_started",
+      },
     });
   });
 

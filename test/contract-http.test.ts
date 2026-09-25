@@ -30,6 +30,7 @@ import {
   UUID,
   claimGolden,
   timingGolden,
+  leafBucketsGolden,
   commentGolden,
   issueGolden,
   normalize,
@@ -285,6 +286,13 @@ describe("read shapes", () => {
         ownActiveSeconds: SECONDS,
         activeSeconds: SECONDS,
         countedThrough: ISO,
+        // Checked out, so a worker attempt measures its work, and the partition has a span.
+        workSeconds: SECONDS,
+        ownWorkSeconds: SECONDS,
+        leadSeconds: SECONDS,
+        wall: { startAt: ISO, endAt: null, through: ISO, seconds: SECONDS, buckets: leafBucketsGolden() },
+        quality: { work: { state: "timing-floor", inputs: [], coverage: null, missingChildren: [] }, wall: { state: "exact", inputs: [] } },
+        missing: { orchestrationSeconds: "no_orchestrator_attempt" },
       }),
       childrenTiming: {},
     });

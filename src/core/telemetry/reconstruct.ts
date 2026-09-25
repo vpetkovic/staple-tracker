@@ -98,7 +98,8 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
   for (const issueId of issues) {
     // The first attempt recorded on this issue: where capture began, and how.
     const first = db
-      .prepare("SELECT id, agent, opened_by, started_at FROM attempts WHERE issue_id = ? AND provenance <> 'reconstructed' ORDER BY started_at, id LIMIT 1")
+      // Worker lane only: an orchestrator attempt says nothing about when capture of the WORK began.
+      .prepare("SELECT id, agent, opened_by, started_at FROM attempts WHERE issue_id = ? AND provenance <> 'reconstructed' AND role <> 'orchestrator' ORDER BY started_at, id LIMIT 1")
       .get(issueId) as { id: string; agent: string; opened_by: string; started_at: string } | undefined;
     const boundary = first?.started_at ?? null;
     const events = db
@@ -117,6 +118,8 @@ export function reconstructAttempts(db: DatabaseSync, journal: Journal, deviceId
           id: derivedId(issueId, event),
           issueId,
           agent,
+          // Reconstruction builds worker attempts only; orchestration before capture is `no_orchestrator_attempt`.
+          role: "worker",
           state: "running",
           outcome: null,
           endReason: null,
