@@ -532,6 +532,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/compare",
       "/api/document",
       "/api/events",
+      // `staple forecast` / MCP `forecast`: GET-only, a read.
+      "/api/forecast",
       "/api/gate/approve",
       "/api/gate/request",
       "/api/gate/request-changes",

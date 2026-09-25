@@ -1,0 +1,173 @@
+/**
+ * `staple forecast <ref>`: the completion forecast of an issue and, apart from it, the budget
+ * forecast of that work on this machine (docs/cli.md, "Forecasts"). One store method,
+ * `WorkspaceStore.forecast`, which MCP `forecast` and HTTP `/api/forecast` call too, so `--json`
+ * and the tools answer one shape.
+ */
+import { parseArgs } from "node:util";
+import { PROVISIONAL_RESERVE_PERCENT, type BudgetLimitForecast } from "../core/telemetry/forecast-budget.js";
+import type { SimulatedSpread } from "../core/telemetry/forecast.js";
+import type { ForecastReport } from "../core/telemetry/forecast-report.js";
+import { StapleError, formatDuration } from "../core/types.js";
+import { resolveWorkspace } from "../core/workspace.js";
+
+const HELP = `staple forecast — how much work is left, and what it costs a provider limit
+
+  forecast <ref> [--reserve P] [--account A] [--model M]
+              completion  the certified plan's units beneath <ref> (a leaf is
+                          its own unit), each from its calibrated duration
+                          (staple calibrate --for) less the work done on it;
+                          done and in-review units weigh 0 (review waits and
+                          rework are not forecast); a unit with no samples,
+                          no estimate or past every sample of its class is
+                          unknown, never 0, and turns the sums partial
+                labor     the remaining work, added
+                path      the longest dependency chain of remaining work:
+                          effort along the chain, not calendar time
+                bands     resampled from each class's samples with a fixed
+                          seed: p10 p50 p90 and a 90% band (p5-p95); achieved
+                          is the lowest bounds confidence of the classes read
+              budget      this machine only, never blended with completion:
+                          per account and limit, the high-water remaining,
+                          the reset, the pace (%/h), when it runs out, the
+                          work rate (%/work-hour: the limit's rise over the
+                          union of this workspace's attempt spans, per hour
+                          of their work), the other use (%/h outside them)
+                          and, for the remaining labor run serially from now
+                          through the reset and the windows after it, what
+                          is left and the probability it goes under the
+                          reserve: the work alone, and with the other use
+  --reserve P   the protected reserve, a percent of each limit (20 or 20%);
+                without it a PROVISIONAL default of ${PROVISIONAL_RESERVE_PERCENT}% applies, until the
+                admission policy defines one
+  --account A   only this account's budget
+  --model M     the model the work will run on, pinned in every unit's key
+
+  --json      {asOf, subject, filter, snapshot, method, completion, budget}`;
+
+const duration = (seconds: number | null): string => (seconds === null ? "unknown" : formatDuration(Math.round(seconds)));
+const percent = (value: number): string => `${value.toFixed(1)}%`;
+const probability = (value: number): string => `${(value * 100).toFixed(1)}%`;
+const bandText = (spread: SimulatedSpread, of: (value: number) => string): string =>
+  `p10–p90 ${of(spread.p10)}–${of(spread.p90)} · 90% band ${of(spread.band.lower)}–${of(spread.band.upper)}`;
+
+function limitText(limit: BudgetLimitForecast): string[] {
+  const reason = (field: string): string => {
+    const code = limit.missing[field] ?? "unknown";
+    const inputs = limit.missingInputs[field];
+    return inputs === undefined ? code : `${code} (${inputs.join(", ")})`;
+  };
+  const head = [
+    limit.remainingPercent === null ? `remaining ${reason("remainingPercent") === "unknown" ? limit.quality.state : reason("remainingPercent")}` : `${percent(limit.remainingPercent)} left`,
+    limit.resetsAt === null ? `no reset (${reason("secondsToReset")})` : `resets ${limit.resetsAt} (in ${duration(limit.secondsToReset)})`,
+    limit.stale === true ? "stale" : null,
+  ].filter((part): part is string => part !== null);
+  const lines = [head.join(" · ")];
+  const pace = limit.pace === null ? `pace ${reason("pace")}` : `pace ${limit.pace.percentPerHour.toFixed(2)}%/h over ${limit.pace.readings} readings`;
+  const exhaustion =
+    limit.exhaustion === null
+      ? `exhaustion ${reason("exhaustion")}`
+      : limit.exhaustion.atPace === "never"
+        ? "never runs out at this pace"
+        : `runs out in ${duration(limit.exhaustion.seconds)} (${limit.exhaustion.atPace.replace("_", " ")})`;
+  lines.push(`${pace} · ${exhaustion}`);
+  const rate = limit.workRate;
+  lines.push(
+    rate === null
+      ? `work rate ${reason("workRate")}`
+      : `work rate ${rate.percentPerWorkHour.toFixed(2)}%/work-hour over ${rate.attempts} attempts in ${rate.spans} spans (${duration(rate.workSeconds)}) · confidence ${rate.confidence.label}${rate.confidence.warnings.length > 0 ? ` (${rate.confidence.warnings.join(", ")})` : ""}` +
+          (limit.otherUse === null
+            ? ` · other use ${reason("otherUse")}`
+            : ` · other use ${limit.otherUse.percentPerHour.toFixed(2)}%/h · confidence ${limit.otherUse.confidence.label}${limit.otherUse.confidence.warnings.length > 0 ? ` (${limit.otherUse.confidence.warnings.join(", ")})` : ""}`),
+  );
+  if (limit.work === null) lines.push(`the work ${reason("work")}`);
+  else {
+    const work = limit.work;
+    lines.push(
+      `the work uses ${percent(work.consumedPercent.expected)} (${bandText(work.consumedPercent.simulated, percent)}) · at the reset ${percent(work.remainingAtResetPercent.expected)} left (${bandText(work.remainingAtResetPercent.simulated, percent)})${work.lowerBound ? " · burn at least" : ""}`,
+    );
+    lines.push(
+      `P(it runs past the reset) ${probability(work.outlastsResetProbability)} · windows p50 ${work.windows.p50}, p90 ${work.windows.p90} · P(it alone uses a window up) ${probability(work.exhaustionProbability)}`,
+    );
+  }
+  if (limit.reserve !== null) {
+    const r = limit.reserve;
+    const through = r.breachProbability === null ? `unknown (${r.missing.breachProbability ?? "input_missing"})` : probability(r.breachProbability);
+    const other =
+      r.withOtherUse === null
+        ? ` · with other use ${r.missing.withOtherUse ?? "unknown"}`
+        : ` · with other use ${r.withOtherUse.breachProbability === null ? "unknown" : probability(r.withOtherUse.breachProbability)}`;
+    lines.push(
+      `P(under the ${percent(r.percent)}${r.source === "provisional_default" ? " provisional" : ""} reserve) work alone ${through} through the work, ${probability(r.currentWindowBreachProbability)} this window${other}${r.alreadyBelow ? " · already under it" : ""} · confidence ${r.confidence.label}`,
+    );
+  }
+  return lines;
+}
+
+function say(report: ForecastReport): void {
+  const { subject, completion, budget } = report;
+  console.log(`${subject.ref} · ${subject.title} (${subject.kind}, ${subject.status}) · snapshot ${report.snapshot.id} over ${report.snapshot.calibration.id}`);
+  const units = completion.units;
+  console.log(
+    `completion  ${units.total} unit${units.total === 1 ? "" : "s"} · ${units.done} done · ${units.awaitingReview} awaiting review · ${units.forecast} to forecast, ${units.known} known` +
+      (units.unknownRefs.length > 0 ? ` · unknown ${units.unknownRefs.join(", ")}` : ""),
+  );
+  const partial = (figure: { partial: boolean }): string => (figure.partial ? "≥" : "");
+  const labor = completion.labor;
+  console.log(
+    `  labor     expected ${partial(labor)}${duration(labor.expectedSeconds)}` +
+      (labor.simulated === null ? "" : ` · ${bandText(labor.simulated, duration)}`) +
+      (labor.missing.length > 0 ? ` · ${labor.missing.join(", ")}` : "") +
+      (completion.review.units > 0 ? ` · ${completion.review.units} awaiting review (not forecast)` : "") +
+      ` · plan ${duration(completion.plan.seconds)} (${completion.plan.source})`,
+  );
+  const path = completion.path;
+  const chain = path.chain.map((step) => step.ref).slice(0, 8).join(" > ") + (path.chainLength > 8 ? ` > … (+${path.chainLength - 8})` : "");
+  console.log(
+    `  path      expected ${partial(path)}${duration(path.expectedSeconds)}${chain === "" ? "" : ` · ${chain}`}` +
+      (path.simulated === null ? "" : ` · ${bandText(path.simulated, duration)}`) +
+      (path.unresolvedCrossSubtreeBlockerCount > 0 ? ` · ${path.unresolvedCrossSubtreeBlockerCount} outside blockers open` : ""),
+  );
+  const confidence = completion.confidence;
+  console.log(
+    `  confidence ${confidence.label}${confidence.achieved === null ? "" : ` · bounds reach ${probability(confidence.achieved)} of ${probability(confidence.nominal)}`}` +
+      (confidence.reasons.length > 0 ? ` · ${confidence.reasons.join(", ")}` : "") +
+      (completion.warnings.length > 0 ? ` · warnings ${completion.warnings.join(", ")}` : ""),
+  );
+  console.log(
+    `budget      this machine · reserve ${percent(budget.reserve.percent)}${budget.reserve.source === "provisional_default" ? " (provisional default, until the admission policy defines one)" : ""} · work ${partial(budget.work)}${duration(budget.work.expectedSeconds)}, serial from now`,
+  );
+  if (budget.accounts.length === 0) console.log(`  no account: ${budget.missing.accounts ?? "unknown"}`);
+  for (const account of budget.accounts) {
+    if (account.limits.length === 0) console.log(`  ${account.provider ?? "-"}/${account.accountRef}: no limit read (${account.missing.limits ?? "unknown"})`);
+    for (const limit of account.limits) {
+      const [first, ...rest] = limitText(limit);
+      console.log(`  ${account.provider ?? "-"}/${account.accountRef} ${limit.limitKey}: ${first}`);
+      for (const line of rest) console.log(`      ${line}`);
+    }
+  }
+}
+
+export function runForecastCommand(rest: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: {
+      db: { type: "string" },
+      ws: { type: "string" },
+      json: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+      reserve: { type: "string" },
+      account: { type: "string" },
+      model: { type: "string" },
+    },
+  });
+  if (values.help === true) return console.log(HELP);
+  if (positionals.length !== 1) {
+    throw new StapleError("validation", `staple forecast takes one issue: staple forecast <ref>; got ${positionals.length === 0 ? "none" : `"${positionals.join(" ")}"`}.`);
+  }
+  const store = resolveWorkspace({ db: values.db, ws: values.ws }).store;
+  const report = store.forecast({ ref: positionals[0]!, reserve: values.reserve, account: values.account, model: values.model });
+  if (values.json) return console.log(JSON.stringify(report));
+  say(report);
+}

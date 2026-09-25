@@ -824,6 +824,18 @@ export function resolveCohort(set: EvidenceSet, key: CohortKey, population: read
   };
 }
 
+/**
+ * The ratios of the samples of `set` in `klass`, ascending: the class a forecast read, as the
+ * values a resampled forecast (`forecast.ts`) draws from. The same samples `resolveCohort`
+ * summarises, never a broader or narrower set.
+ */
+export function classRatios(set: EvidenceSet, klass: CohortKey, population: readonly CalibrationMember[]): number[] {
+  return population
+    .filter((member) => isSample(member, set) && inClass(member.dimensions, klass))
+    .map((member) => member.workSeconds! / member.estimate.seconds)
+    .sort((a, b) => a - b);
+}
+
 /** The issue a forecast is for, as the store supplies it. */
 export interface ForecastSubject {
   readonly identifier: string;

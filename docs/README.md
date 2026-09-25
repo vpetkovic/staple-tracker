@@ -12,7 +12,7 @@ purpose — the content is accurate, the prose is not finished.
 | [milestones.md](milestones.md) | Milestones: the `milestone` kind, UTC inclusive dates, ordered membership that never re-parents, count-each-leaf-once progress, queue expansion — the R3 contract, not yet built |
 | [sync.md](sync.md) | Optional cloud sync: what replicates, the operation envelope, ordering, conflicts, leases, the three consents and the zero-network rule — the S contract, not yet built |
 | [execution-telemetry.md](execution-telemetry.md) | Execution attempts, provider limit windows and budget samples: identifiers, lifecycle, units, absolute resets, provenance, missingness — the scheduling-telemetry contract, not yet built |
-| [timing-semantics.md](timing-semantics.md) | Time numbers: elapsed buckets vs effort, boundary rules at every transition, orchestrator attribution, and the one actual the estimate ratio uses; the [controlled runs](timing-semantics.md#controlled-runs) that validate them (`npm run validate:timing`) |
+| [timing-semantics.md](timing-semantics.md) | Time numbers: elapsed buckets vs effort, boundary rules at every transition, orchestrator attribution, and the one actual the estimate ratio uses; the [controlled runs](timing-semantics.md#controlled-runs) that validate them (`npm run validate:timing`); calibration and [forecasts](timing-semantics.md#forecasts) of completion and provider budget |
 | [cli.md](cli.md) | The command surface, estimates vs actuals, `--json`, exit codes |
 | [web-ui.md](web-ui.md) | `staple open`, the stack, the theme, the auth model |
 | [configuration.md](configuration.md) | The staple home, the bootstrap locator, `config.json` |

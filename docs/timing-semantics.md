@@ -1289,6 +1289,330 @@ issues per read.
   `[2 160 s, 57 600 s]` at 83.3%, expected `0.1825 × 14 400 = 2 628 s`
   (`fence_clipped_pooled`).
 
+## Forecasts
+
+`staple forecast <ref>` (MCP `forecast`, HTTP `GET /api/forecast?ref=`) answers two
+questions about the work left under an issue, and keeps the answers apart:
+
+- **completion**: how much work is left, and how long its longest dependency chain
+  still runs, from each plan unit's calibrated duration and the work already done;
+- **budget**: what that work does to this machine's provider limits, from measured
+  readings and measured burn.
+
+They are separate blocks of one payload and neither is folded into the other: a
+completion figure never moves because a limit is tight, and a budget figure never
+stands in for work. The rules are written once, in `src/core/telemetry/forecast.ts`
+and `src/core/telemetry/forecast-budget.ts`, and `method` in every report states them.
+
+### Completion
+
+**Units.** The units are the certified plan's ([Comparing plans](cli.md#comparing-plans-staple-compare)):
+every unit once, a parent's own estimate shadowing the estimates beneath it, a
+cancelled issue no unit. An issue with no child carrying live work is its own single
+unit (`subject.scope: "unit"`); otherwise its units are beneath it (`"subtree"`).
+
+That rule is the certified rollup's, and it means **the same work can read differently
+named alone and as a unit of its epic**. Inside an epic, a parent with its own estimate
+is one unit at that estimate. Named directly, the same parent is a container of what is
+live beneath it, as `staple compare` reads it. A parent estimated at 2 hours over one
+open 1-hour child reads 6 480 s as a unit of its epic and 3 240 s forecast alone, from
+the same class (`test/forecast.test.ts`). Neither is wrong. They answer "what does the
+plan say this unit costs" and "what is left beneath this issue", and the scope says which.
+
+Each unit is treated by its status category:
+
+| Category | Treatment | Remaining work |
+|---|---|---|
+| `done` | `done` | 0, left off the chain |
+| `review`, `gated` | `awaiting_review` | 0 as work, left off the chain, and the subtree is not settled |
+| anything else | `forecast` | from its calibrated duration and its work so far |
+
+A unit in review has handed its work over. What is left is the reviewer's or the
+approver's wait, which is not work, and any rework after the review, which nothing here
+can predict. Neither is forecast. `completion.review` lists those units with `seconds:
+null` (`missing.seconds: "not_forecast"`), `completion.settled` is true only when every
+unit is done, and the confidence is never `high` while a review is open: a subtree whose
+last unit is in review reads 0 of work left, `settled: false`, `medium`, with
+`awaiting_review` among the reasons.
+
+**One unit's remaining work.** The duration is `staple calibrate --for`'s, read from
+the `exact` set of the unfiltered calibration: the cohort the unit's key reads, times
+its own estimate. With `--model M` every unit's key names that model. Then:
+
+- **Draws**: the unit is not done, so its duration is longer than its work so far.
+  Each draw picks, uniformly, one of the class's sample ratios `r` with
+  `r × estimate > workSeconds`, and the unit has `r × estimate − workSeconds` left.
+  `admissibleSamples` says how many ratios qualified.
+- **Expected**: for a unit nobody has worked yet, the calibrated `expected.seconds`, the
+  one calibrated figure that adds (`method` is the calibration's). Once work has
+  started, the mean of the admissible remainders, `E[D − w | D > w]`
+  (`method: "conditional_mean"`): the figure the unit's own draws have. The calibrated
+  duration less the work would read low against them, and 0 once the work passed it.
+- **Overrun**: a unit worked past its calibrated expected duration says `overrun`. What
+  is left of it is read from the samples longer than its work.
+- **Few samples left**: fewer than 5 admissible samples (the cohort minimum) make a band
+  of a handful of values that looks precise. The unit warns `few_admissible`, and the
+  forecast's confidence is `low`.
+- **Beyond the class**: a unit worked longer than every sample of its class has no
+  ratio left to draw. Its remaining work is unknown (`state: "beyond_class_range"`).
+- **Floors**: a floor-dominated class reads the 60-second floor bound less the work,
+  with no spread.
+- **Unknown**: no samples, no estimate (and not a floor), or beyond the class. The
+  unit's `expected` is null with the reason in `missing.expected`. It is never 0: a
+  sum over it is `partial` and a lower bound, and its draws count it as 0, so they are
+  lower bounds too.
+
+A unit's `workSeconds` is the timing field of the same name, read from replicated data
+only; null reads as no work yet.
+
+**Labor and path.** `labor` adds every unit's remaining work. `path` is the longest
+dependency chain of remaining work through the plan's unit graph: `walkPlanGraph` with
+each unit's expected remaining work as its weight, done and awaiting-review units
+weighing 0 but still carrying the edges through them. Each is `{expectedSeconds,
+partial, missing, simulated}`; `missing` is `unknown_units`, `no_forecast` (no unit that
+counts is known) or `dependency_cycle`. One more reason belongs to completion only:
+`not_forecast`, on `review.missing.seconds`, says the time a unit waits in review or
+for approval is deliberately not forecast (it is not work), which is different from
+`no_forecast`, a sum with nothing known in it. Nothing left reads 0, not unknown. The path is
+**effort along the chain, not calendar time**: waits for a free agent, a review, an
+approval or an outside blocker are not in it. `path.crossSubtreeBlockers` lists the
+blockers outside the subtree, unresolved first, and an open one raises
+`unresolved_outside_blockers`. `plan` repeats the certified labor (the estimates) for
+reference: it is not a forecast. Nor is the plan's `remainingPath`, which weighs an
+in-progress unit at its full estimate and a unit in review in full.
+
+### Resampling and bands
+
+Quantiles do not add ([Confidence ranges](#confidence-ranges)), so the bands of a sum
+and of a path come from resampling. Each of `method.draws` (2 000) draws draws every
+unit once, in identifier order, from one pseudo-random stream (mulberry32) seeded with
+`method.seed` (20260925) and the label `completion`, and reads that draw's labor (the
+sum) and path (the longest chain, re-solved over the same graph). `simulated` is
+`{mean, p10, p50, p90, band}` over the draws, by the lower-quantile rule; `band` is the
+5th to the 95th percentile, a 90% band (`nominal: 0.9`) under the draw model. The seed
+and the count are fixed, so the same data reads the same figures, to the last digit, on
+every device.
+
+What the draw model assumes, and where it reads wrong:
+
+- **Units are independent.** Real overruns are correlated: one misjudged area runs long
+  on every ticket in it. The band of a sum is narrower than the truth can be, and every
+  forecast that draws more than one unit warns `independent_draws`.
+- **A draw never leaves its class's sample range.** With n samples, one more sample
+  falls inside the range with probability `(n − 1) / (n + 1)`, so the band can be no
+  more trustworthy than the prediction bounds of the classes it drew from.
+  `confidence.achieved` is the lowest of those bounds' confidences among the units that
+  drew, capped at 0.9; `reached` is true only when it reaches 0.9 and nothing is
+  unknown or awaiting review.
+- **For a unit nobody has started, the expected figure and the draws' mean differ.**
+  `expected` is the pooled ratio (`Σ work / Σ estimate`, weighted by estimate), or its
+  fence-clipped form on a heavy tail, and draws pick sample ratios with equal weight.
+  When short-estimate tickets run proportionally longer the draws' mean reads above
+  `expected`. Both are published. Once work has started the two are the same figure.
+
+`confidence.label` is `high` when every unit is done (0 is certain), or when nothing is
+unknown or awaiting review, the bounds reach 90% and no class is heavy-tailed. It is
+`low` when anything is unknown, a class has under 5 samples, or a unit has under 5
+admissible samples. Otherwise it is `medium`. `reasons` says why it is not `high`.
+
+**Warnings.** The calibration warnings of the units with work left, in their order,
+then:
+
+| Code | When |
+|---|---|
+| `unknown_units` | a unit's remaining work is unknown; the sums are lower bounds |
+| `beyond_class_range` | a unit was worked longer than every sample of its class |
+| `overrun` | a unit's work passed its calibrated expected duration |
+| `few_admissible` | a unit in progress has fewer than 5 samples longer than its work to draw from |
+| `awaiting_review` | units in review or gated weigh 0 as work; the subtree is not settled |
+| `independent_draws` | more than one unit was drawn, independently |
+| `dependency_cycle` | the unit graph held a cycle, broken to walk it |
+| `unresolved_outside_blockers` | a unit waits on an open issue outside the subtree |
+
+### Budget
+
+The budget block reads this machine's `hub.db` and nothing else: budget data never
+synchronizes, so it can differ between devices, and says so (`machineLocal: true`).
+For every account this machine has readings or a binding for (`--account A` for one),
+and every limit of it:
+
+- **The reading**, as `staple budget` reports it: the current window's high-water
+  `remainingPercent`, `resetsAt`, `secondsToReset`, `windowSeconds`, `stale`, and its
+  quality.
+- **Pace**, `%/hour` of wall clock: the rise of the current window instance's high-water
+  from its first reading to its latest, over the hours between them. Every use of the
+  account moves it, from this workspace or not. It needs two readings.
+- **Exhaustion at that pace**: `remainingPercent / pace` hours from `asOf`,
+  `before_reset` or `after_reset`, or `never` at a pace of 0.
+- **Work rate**, `%/work-hour`. Take this workspace's worker attempts on the account
+  that started inside the current window instance and did work. Merge the ones that
+  overlap into spans, then read each span's high-water rise from the window's readings:
+  from the high-water at or before its start (or its first reading inside, a lower
+  bound) to the highest reading inside it. The rate is the spans' rise over the work
+  done in them. **Concurrent attempts are one span**: two agents working the same hour
+  while the limit rises from 10% to 20% burned 5% per work-hour each, not 10%, which is
+  what each attempt's own delta would say. A span with no reading inside it is left out
+  (`excluded`), and an attempt that started before the instance never counts
+  (`spanningReset`). A span is **sparse** when its baseline reading, or its last reading
+  inside it, sits farther from that edge than 10% of the span's length, and at least
+  2 minutes (so a short span read at the capture cadence is not flagged): its rise then
+  belongs partly to time outside it, so the split between the work rate and other use is
+  a guess (`sparse_readings`, `sparseSpans`). A span is **shared** when a reading inside
+  it came from a harness session none of its attempts ran in, or named no session at all
+  (a `--source manual` reading, a source without one): its rise cannot be shown to be
+  the work's. An attempt checked out with a harness but no harness session still gets
+  the machine's account binding and forms a span, but no reading can be matched to it,
+  so every reading inside that span makes it shared. Its rise stays inside the span
+  (never other use); it leaves the rate when a clean span exists, and otherwise is read
+  with `shared_use` and a `low` confidence. The rate reads only the spans nobody else touched when there are
+  any (`sharedExcluded` counts the rest), and reads the shared ones, warning
+  `shared_use`, when every span is shared. The rate's band is a bootstrap of `method.draws` draws of its own,
+  over the spans, from a stream seeded with the forecast seed and the limit. It never
+  depends on the completion forecast, which may have no draws at all.
+  `confidence` is `low` under 5 spans (`small_sample`), when a rise is a lower bound
+  (`lower_bound`), a span is sparse or a shared span is in the rate, and `medium`
+  otherwise. `concurrent_attempts` says spans were merged.
+- **Other use**, `%/hour`: the pace outside the attempts' spans, the rise they did not
+  make over the time they were not running. It needs at least 30 minutes outside the
+  spans with at least 2 readings there, and a known rise for every span within the
+  readings; a couple of minutes between two long spans measures nothing and reads null
+  (`input_missing`, `time_outside_attempts`). Its `confidence` is `low` under 5 readings
+  outside the spans (`small_sample`) or beside a sparse span (`sparse_readings`), and
+  `withOtherUse` carries it as `otherConfidence`.
+- **The work**: the completion forecast's remaining labor, run **serially from
+  `asOf`**, one work-hour per hour. `consumedPercent` is the whole work at the work rate.
+  `beforeResetPercent` is the part before the reset, `rate × min(labor, time to reset)`.
+  `remainingAtResetPercent` is `remaining − beforeReset`, which falls to 0 or below when
+  the work alone runs the limit out. What is left of the work runs on into the next
+  window, which starts at 100% and lasts `windowSeconds`, then the next;
+  `windows` counts the windows it runs in, and `nextWindowRemainingPercent` is what the work
+  alone leaves of the first window after the reset (`withOtherUse` has the same figure with
+  the other use added for the hours of that window the work leaves free). `outlastsResetProbability` is the share of
+  draws that run past the reset. `exhaustionProbability` is the share in which the work
+  alone uses up a window it runs in (reaching 0 counts), and
+  `currentWindowExhaustionProbability` the same for the current window. Each figure is
+  `{expected, simulated}`, the draws pairing the completion forecast's labor draws with
+  the work-rate draws one to one. A fan-out of parallel agents puts more of the work
+  before the reset than this schedule does.
+- **The reserve**: `reserve.breachProbability` is the share of those draws that leave
+  less than the reserve at the reset of **any window the work runs in**
+  (`scope: "through_the_work"`), for the work alone (`basis: "work_alone"`). The first
+  full window after the reset takes the most of what is left, so it is the one checked
+  after the current one. `currentWindowBreachProbability` checks the current reset
+  only. `withOtherUse` (`basis: "work_and_other_use"`) adds the account's other use at
+  its measured rate for the time the work is **not** running: before the reset,
+  `other × (time to reset − min(labor, time to reset))`, and in the next window
+  `other × (windowSeconds − min(rest, windowSeconds))`. The work rate already holds
+  everything that happened while the work ran, other use included, so adding other use
+  for those hours again would count it twice. It is the figure to read when other
+  agents or people share the account, and it is null with a reason when other use
+  could not be measured. `reserve.confidence` is the work rate's: a breach figure from one span
+  is a guess, and says so. The work only ever lowers the remaining figure, so each
+  probability is also the probability of falling under the reserve at or before that
+  reset. A remaining figure already under the reserve reads 1 with `alreadyBelow: true`.
+
+**The reserve is a parameter.** `--reserve P` (MCP `reserve`, HTTP `reserve=`) takes a
+percent of each limit, `20` or `20%`. Deciding the protected reserve, and what pressure
+against it means for admitting work, belongs to the admission policy, which does not
+exist yet. Until it does, a **provisional default of 20%** applies. Every report says
+which applied, on `budget.reserve` and on every limit's `reserve`: `source` is
+`argument` or `provisional_default`, and the default carries a `note`. Nothing reads the
+default as policy.
+
+**Unknown is never 0.** Every null figure has its reason in `missing`, from the
+[telemetry contract's closed set](execution-telemetry.md#missingness); an
+`input_missing` figure names what it lacked in `missingInputs`:
+
+| Figure | Null when | Reason |
+|---|---|---|
+| everything projected off the reading | the window elapsed, no reading, a sliding window | the reading's own: `window_elapsed`, `no_sample_yet`, `reset_not_reported`, `sliding_window` |
+| `exhaustion`, `work`, `reserve` | the latest reading is over 10 minutes old | `stale` (the pace still stands: it describes the window's past) |
+| `pace` | one reading | `input_missing` (`second_reading`) |
+| `workRate` | no span of this workspace's attempts with a reading inside it | `input_missing` (`attempt_burn`) |
+| `otherUse`, `reserve.withOtherUse` | under 30 minutes or 2 readings outside the spans, or a span's rise unknown | `input_missing` (`time_outside_attempts`, `attempt_burn`, `pace`) |
+| `work`, `reserve` | no work rate, or the completion labor is unknown | `input_missing` (`work_rate`, `labor_seconds`) |
+| `reserve.breachProbability` | the work outlasts the reset and the window length is unknown | `input_missing` (`window_seconds`) |
+| `accounts` (empty) | no reading and no binding on this machine | `source_unavailable`, or `no_sample_yet` with capture on |
+
+### Snapshot identity
+
+`snapshot.id` (`forecast2:…`) is a SHA-256 over the algorithm, the calibration snapshot
+the classes came from (`snapshot.calibration.id`, exactly `staple calibrate`'s
+unfiltered `snapshot.id`), the seed and the draws, and every unit's own inputs (status,
+category, estimate, `workSeconds`, key) and the unit graph's edges and outside blockers.
+Replicated data only: the same data gives the same id on every device. An in-progress
+unit's `workSeconds` grows with its evidence, so a new comment changes the id.
+`snapshot.budget.id` (`forecast2-budget:…`) is this machine's, and it covers `asOf`: the
+time to every reset, and with it every projection, is measured from it, so the same
+readings read at another instant are another budget read. It also covers every limit's
+window, the readings it read, the attempt spans behind its rate, and the reserve.
+
+### Worked examples
+
+**A unit in progress** (controlled run `38-forecasts`). Five `task`/`high` samples
+worked 30, 40, 50, 60 and 90 minutes against 1 hour: ratios 0.5, 0.667, 0.833, 1.0 and
+1.5, pooled 270 / 300 = 0.9. A unit estimated at 2 hours has been worked 70 minutes
+(4 200 s).
+
+- Unworked, it would expect `0.9 × 7 200 = 6 480 s`.
+- Worked 70 minutes, only the four samples longer than that (80, 100, 120 and 180
+  minutes of a 2-hour estimate) can be its duration, so 600, 1 800, 3 000 or 6 600 s
+  are left, a quarter each. Its expected remainder is their mean, 3 000 s (not
+  `6 480 − 4 200 = 2 280`, which reads below its own draws). Four samples warn
+  `few_admissible`, and the confidence is `low`.
+- A unit it blocks, estimated 1 hour and not started, expects `0.9 × 3 600 = 3 240 s`;
+  the chain of the two expects 6 240 s, and so does the labor, with a third unit, not
+  estimated, unknown: both are `partial`, `≥`.
+- At 110 minutes of work it is past its calibrated 6 480 s: `overrun`, and only the 1.0
+  and 1.5 samples are longer, so 600 or 4 200 s are left, 2 400 s expected. Past 180
+  minutes it is past every sample: `beyond_class_range`, unknown.
+
+**A piece of work against a five-hour limit** (`test/forecast-budget.test.ts`, real
+status-line ingestion). An agent works one hour in its session while the limit reads
+10%, 16% and 22%: its span rose 12% over 3 600 s of work, 12%/work-hour, and the
+window's pace is 12%/hour. The work to forecast expects 6 600 s (six samples, pooled
+330 / 360 = 0.9167, times 2 hours), all of it before the reset 3h59m away.
+
+- It uses `12 × 6 600 / 3 600 = 22%`, leaving `78 − 22 = 56%` at the reset.
+- At the pace, 78% lasts 6.5 hours: after the reset.
+- Its draws are the six sample durations (1, 1.33, 1.67, 2, 2 and 3 hours), so it
+  leaves 66, 62, 58, 54, 54 or 42%. Against a 55% reserve three of six fall short:
+  `breachProbability` reads 0.5065 (the exact share is 1/2; 2 000 draws put it within
+  about 0.011 of that, one standard error). Against 40% none do (0); against 70% all do
+  (1). One span makes the rate's confidence `low` (`small_sample`).
+- Read ten minutes before the reset instead, a 20-hour piece of work leaves 76% of this
+  window and then takes five hours of the next at 12%/work-hour: 40% left there. Against
+  a 50% reserve, `currentWindowBreachProbability` is 0 and `breachProbability` is 1.
+- Two agents in parallel for an hour while the limit rises 10% read 5%/work-hour: one
+  span, two attempts, `concurrent_attempts`.
+- Another session pushes the limit from 10% to 40% during an hour's attempt: the span is
+  `shared` and the rate warns `shared_use`. Once a half-hour attempt with nobody else on
+  the account follows (40% to 46%), the rate reads it alone: 12%/work-hour.
+- With 40 minutes between two spans and three readings there showing +4%, other use is
+  6%/hour. Six hours of estimate at a pooled 0.8125 is 17 550 s of work: 11 340 s before a
+  reset 3h9m away and 6 210 s (1.725 h) into the next five-hour window, which it leaves at
+  `100 − 15 × 1.725 = 74.125%` alone and `74.125 − 6 × 3.275 = 54.475%` with the other use
+  for the 3.275 hours it leaves free. Before a reset 3h9m away, a piece of work of `L` seconds at 15%/work-hour
+  leaves `71 − 15 × L − 6 × (3h9m − L)` (in hours) with the other use: the other use
+  only fills the hours the work is not running.
+
+**On the maintainers' tracker** (a read-only snapshot taken on 2026-09-25, isolated
+home, no budget data). The scheduling epic has 25 units, 10 done and 15 to forecast,
+every one of them estimated and in a class with 6 or 7 exact samples. Its remaining
+labor expects 16h26m (90% band 14h36m to 23h7m) against 5d5h of estimates for the
+whole epic; its longest chain of remaining work runs through seven units and expects
+8h35m (band 7h6m to 13h44m). The confidence is `medium`: no class reaches 90% bounds
+(with 6 samples a class's bounds reach 71.4%, the `achieved` figure), and 15 units are
+drawn independently. The budget block reads `accounts: []` with
+`missing.accounts: "source_unavailable"`: this machine has no bindings and no readings,
+and the forecast says so rather than projecting from nothing. With real-shaped readings
+ingested into a scratch home over the same snapshot (a status line with its five-hour
+and seven-day limits, and a Codex rollout), each limit reads on its own. The Codex
+account reads `input_missing (attempt_burn)` for its work rate, since no workspace
+attempt ran on it. On the five-hour limit, 12%/work-hour over the epic's 15 hours of
+work leaves 22% at a reset three hours away. The rest then runs into three or four more
+windows, taking 60% of each full one and leaving 40%: no breach of a 20% reserve either way.
+
 ## What the live tracker says, in one place
 
 All figures come from a read-only snapshot of the maintainers' tracker **taken
@@ -1396,7 +1720,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
 | Closing lifecycle capture gaps | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition) as the reconstruction spec. `asOf` as a parameter. One mutation instant for every writer. `workSeconds` from replicated data only, as specified in [Work](#work). Re-emitting status-moving and edge events dated at the origin instant, so `wall` stops being device-local. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as the explicit approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping, if [Q1](#open-questions) is accepted. Agent guidance: yield or pause when a blocker appears mid-work. |
 | Validating against controlled runs | Every bucket is defined in milliseconds from recorded instants, so a controlled run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted` and `resumeGapSeconds`, and `orchestrationSeconds`. **Fixtures must control the write clock**, not just `asOf`: every instant on this page comes from `nowIso()` at write time, so a reproducible run injects the clock the store, the event writer and the attempt ledger all read. Tolerance: one second per interval for `activeSeconds`, one second per nonzero bucket for the partition, plus the one-second snapping window. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a bug. Runs on a second device check that `workSeconds` matches everywhere, that `wall` matches on a device that read the tail, and that it reads `replay_unavailable` on one that hydrated. Built: see [Controlled runs](#controlled-runs). |
 | Quality indicators | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five new reason codes. Built: see [Quality states](#quality-states). |
-| Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. Cohorts built: see [Calibration cohorts](#calibration-cohorts). Ranges, floors, tails and per-issue forecasts built: see [Confidence ranges](#confidence-ranges). A completion forecast along a path sums `forecasts[].expected.seconds` (a floor forecast's is its 60-second bound) as the `walkPlanGraph` weight, and carries the warnings. Quantiles and bounds do not add along a path: a band for a chain needs the links' distributions combined, not their quantiles summed. A fence-clipped `expected` reads low on a heavy-tailed class, and the sum inherits it. |
+| Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. Cohorts built: see [Calibration cohorts](#calibration-cohorts). Ranges, floors, tails and per-issue forecasts built: see [Confidence ranges](#confidence-ranges). A completion forecast along a path sums `forecasts[].expected.seconds` (a floor forecast's is its 60-second bound) as the `walkPlanGraph` weight, and carries the warnings. Quantiles and bounds do not add along a path: a band for a chain needs the links' distributions combined, not their quantiles summed. A fence-clipped `expected` reads low on a heavy-tailed class, and the sum inherits it. Completion and budget forecasts built: see [Forecasts](#forecasts). |
 
 ## Where the numbers appear
 
@@ -1522,7 +1846,11 @@ reads (the population, the samples per set, every cohort with its key, level, cl
 size and median, its ratio quantiles, median interval and bounds, its tail, expected
 ratio, floors and warnings, and every sample with its estimate source and ratio; with
 `for`, every forecast with its state, class, seconds, bounds, expected figure and
-warnings), with the snapshot id required to be the same on every device and for both listings. Every read also checks that the work state is
+warnings), with the snapshot id required to be the same on every device and for both listings. A read can state `forecast`, what `staple forecast <ref>` reads (the scope, the unit
+counts and unknown units, the expected labor and path, the chain, each named unit's state,
+expected remaining work and admissible samples, the confidence label and the warnings); the
+whole completion block, draws included, and its snapshot id must read the same on every
+device. Every read also checks that the work state is
 `exact` exactly when it has no reason, and that the wall has a state.
 Durations in `expect` are the same notation or whole seconds.
 
@@ -1588,6 +1916,7 @@ quality states and inputs, and coverage are compared exactly.
 | `35-quality-states` | one record in each work state (exact, timing-floor, sparse, missing, reconstructed, reconstructed and sparse) with its reasons and its attempt's state, a cancelled issue with no state, a parent that is reconstructed, and the cohort the leaves make: the eligible denominator, the ratio aggregates, and exclusion by state and by reason |
 | `37-confidence-ranges` | eleven samples of one key with three tickets that took four times a five-minute estimate: the lower quantiles, the median's order-statistic interval (ranks 3 to 9, 1914/2048), the bounds below 90% and said so, a heavy tail read with the fence-clipped expected ratio, two timing floors listed apart, a key with one sample and four floors reading its own class as floor-dominated, and forecasts for an unstarted issue (its walk starting without the model), two in the floor-dominated class (the floor, with and without an estimate) and one with no estimate, the same on every device |
 | `36-calibration-cohorts` | calibration over the leaves of a parent: exact samples with models from the checkouts and labels for work type and area, a sample re-estimated after it started dividing by its estimate at start, keys of three and two samples falling back to their class without model, a lone bug falling back to the whole set, sparse, timing-floor and reconstructed records kept out of the exact set, the reconstructed set on request, and one snapshot id on every device |
+| `38-forecasts` | a subtree's remaining work over the plan's units: an in-progress unit's expected remainder, the mean of the four samples longer than its work (3 000 s), with draws from those four (`few_admissible`), a unit it blocks on the chain, a unit in review weighing 0, an unestimated unit unknown and the sums partial; the whole completion block, draws included, and its snapshot id the same on the writer, a tail device and a hydrated device |
 
 **Adding one.** Write the timeline you want to check as a new file in
 `test/fixtures/controlled-runs/`, with a `title` and the `covers` it exercises. Work out

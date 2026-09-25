@@ -104,9 +104,14 @@ import { intersect, partition, union, type CoverageAttempt, type PathEntry } fro
 import { readAttempt, transitionsOf, type AttemptRecord } from "./telemetry/attempt-records.js";
 import {
   ANY,
+  CALIBRATION_ALGORITHM,
   EVIDENCE_SETS,
   LABEL_PREFIX,
   calibrationReport,
+  classRatios,
+  forecastDuration,
+  isSample,
+  snapshotId,
   labelDimension,
   modelDimension,
   type CalibrationMember,
@@ -117,15 +122,21 @@ import {
 } from "./telemetry/calibration.js";
 import { readStoredRepositoryId } from "./repo-identity.js";
 import { resumeGapsOf, viewsOfIssue } from "./telemetry/attempt-derive.js";
-import { attemptDetail, attemptSummary, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
+import { attemptDetail, attemptSummary, inWorkerLane, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
+import { FORECAST_ALGORITHM, FORECAST_DRAWS, FORECAST_SEED, completionForecast, completionSnapshotId, type ForecastUnitInput } from "./telemetry/forecast.js";
+import { RATE_ATTEMPT_LIMIT, budgetForecast, budgetSnapshotId, parseReserve, type AttemptSpanInput, type BudgetAccountInput } from "./telemetry/forecast-budget.js";
+import { FORECAST_METHOD, type ForecastReport } from "./telemetry/forecast-report.js";
+import { readBudget, windowReadings } from "./telemetry/read-budget.js";
 import { decodeKeysetCursor, pageLimit, type PageRequest, type TelemetryPage } from "./telemetry/read-page.js";
 import { stapleHome } from "../config/home.js";
 import {
   COMPARE_MAX_REFS,
+  planGraphOf,
   planStructureOf,
   type CrossSubtreeBlocker,
   type PlanComparison,
   type PlanEdge,
+  type PlanLabor,
   type PlanNode,
   type PlanSummary,
 } from "./plan-rollup.js";
@@ -690,6 +701,18 @@ export interface CalibrationQuery extends PageRequest {
   /** Issues to forecast a duration for, from the cohort each one's key reads (`forecasts`). */
   readonly for?: readonly string[];
   /** The model the forecast issues will run on, when the caller knows it: pins their key's model. */
+  readonly model?: string;
+}
+
+/** The arguments of {@link WorkspaceStore.forecast}. */
+export interface ForecastQuery {
+  /** The issue to forecast: a leaf, or a parent whose plan units are forecast. */
+  readonly ref: string;
+  /** The protected reserve, a percent of each limit (`20` or `"20%"`); a provisional default otherwise. */
+  readonly reserve?: string | number;
+  /** Only this provider account's budget. */
+  readonly account?: string;
+  /** The model the work will run on: pins the model of every unit's key, as `calibrate --model` does. */
   readonly model?: string;
 }
 
@@ -5649,16 +5672,201 @@ export class WorkspaceStore {
     const scope = { kind: kinds, priority: priorities, parent: parentRow?.id ?? null, since: query.since ?? null, include, list };
     const after = query.cursor === undefined ? null : decodeKeysetCursor(list === "samples" ? "calibration_samples" : "calibration_cohorts", scope, query.cursor);
 
-    const { inFilter, eligibleRows, ratioParentRows } = this.analyticsPopulation({ kinds, priorities, parentRow, since });
-    const ratioRows = [...eligibleRows.filter((row) => (row.estimated_seconds ?? 0) > 0), ...ratioParentRows];
-    const parentIds = new Set(ratioParentRows.map((row) => row.id));
-    /** The worker attempts behind each member's `workSeconds`, by the rule that sums it. */
-    const behind = new Map<string, string[]>();
     const forRows = (query.for ?? []).map((ref) => this.requireRow(ref));
     const pinnedModel = query.model === undefined ? null : query.model.trim();
     if (pinnedModel === "") throw new StapleError("validation", "model must name a model (as --model on checkout does); got an empty value.");
     if (pinnedModel !== null && forRows.length === 0) throw new StapleError("validation", "model pins the model of the issues to forecast; name them with for.");
     if (forRows.length > limit) throw new StapleError("validation", `for takes at most ${limit} issues (the limit); got ${forRows.length}.`);
+    const { inFilter, ratioParentRows, members, forecastKey } = this.calibrationBasis({ kinds, priorities, parentRow, since, forRows, pinnedModel }, asOf);
+    return calibrationReport({
+      asOf,
+      filter: { kind: kinds, priority: priorities, parent: parentRow?.identifier ?? null, since, include },
+      // As given: a relative `since` resolves against the read's clock, and the members already pin the population.
+      sinceGiven: query.since ?? null,
+      repositoryId: readStoredRepositoryId(this.db),
+      parentId: parentRow?.id ?? null,
+      population: { issues: inFilter.length, ratio: members.length, parents: ratioParentRows.length },
+      members,
+      list,
+      after,
+      limit,
+      scope,
+      forecast: forRows.map((row) => ({
+        identifier: row.identifier,
+        title: row.title,
+        status: row.status,
+        estimateSeconds: row.estimated_seconds,
+        dimensions: forecastKey(row),
+      })),
+    });
+  }
+
+  /**
+   * `staple forecast <ref>` / MCP `forecast` / `GET /api/forecast`: the completion forecast of
+   * an issue (its remaining labor and the longest dependency chain of remaining work over the
+   * certified plan's units, from each unit's calibrated duration, with resampled bands) and,
+   * apart from it, the budget forecast of that work against this machine's provider limits
+   * (`telemetry/forecast.ts`, `telemetry/forecast-budget.ts`, docs/timing-semantics.md
+   * "Forecasts"). A pure read.
+   */
+  forecast(query: ForecastQuery, asOf: string = nowIso(), home: string = stapleHome()): ForecastReport {
+    if (typeof query.ref !== "string" || query.ref.trim() === "") throw new StapleError("validation", "forecast needs ref: the issue to forecast (identifier or id).");
+    const root = this.requireRow(query.ref.trim());
+    const reserve = parseReserve(query.reserve);
+    const pinnedModel = query.model === undefined ? null : query.model.trim();
+    if (pinnedModel === "") throw new StapleError("validation", "model must name a model (as --model on checkout does); got an empty value.");
+
+    // ---- the plan's units, exactly as the certified rollup counts them
+    const rootTiming = this.timingFor([root.id], asOf).get(root.id) ?? this.emptyTiming();
+    const { nodes, edges, outside, labor } = this.planInputsOf(root.id, rootTiming);
+    const graph = planGraphOf(root.id, nodes, edges);
+    const unitRows = graph.units.map((unit) => this.requireRow(unit.id));
+
+    // ---- every unit's calibrated duration, from the unfiltered calibration `staple calibrate` reads
+    const { members, forecastKey, timings } = this.calibrationBasis(
+      { kinds: null, priorities: null, parentRow: null, since: null, forRows: unitRows, pinnedModel },
+      asOf,
+    );
+    const repositoryId = readStoredRepositoryId(this.db);
+    const calibrationId = snapshotId({ repositoryId, selection: { kind: null, priority: null, parentId: null, since: null, include: ["exact"] }, members });
+    const units = new Map<string, ForecastUnitInput>();
+    for (const row of unitRows) {
+      const node = graph.unitById.get(row.id)!;
+      const category = this.categoryOf(row.status);
+      const needsDuration = !node.done && category !== "review" && category !== "gated";
+      const duration = needsDuration
+        ? forecastDuration("exact", { identifier: row.identifier, title: row.title, status: row.status, estimateSeconds: row.estimated_seconds, dimensions: forecastKey(row) }, members)
+        : null;
+      units.set(row.id, {
+        node,
+        title: row.title,
+        category,
+        workSeconds: timings.get(row.id)?.workSeconds ?? null,
+        duration,
+        ratios: duration === null ? [] : classRatios("exact", duration.cohort.class, members),
+      });
+    }
+    const completion = completionForecast({ graph, units, labor, outside, seed: FORECAST_SEED, draws: FORECAST_DRAWS });
+
+    // ---- the budget, from this machine's hub, for that work
+    const view = readBudget(home, { account: query.account, now: asOf });
+    const accounts: BudgetAccountInput[] = view.accounts.map((account) => {
+      const currentWindows = account.limits.filter((limit) => limit.status === "current" && limit.window !== null).map((limit) => limit.window!.id);
+      const readings = windowReadings(home, currentWindows);
+      const attemptRows = this.db
+        .prepare(
+          `SELECT id, issue_id FROM attempts
+            WHERE provider_binding IS NOT NULL AND json_extract(provider_binding, '$.accountRef') = ?
+              AND (? IS NULL OR json_extract(provider_binding, '$.provider') = ?) AND started_at <= ?
+            ORDER BY started_at DESC, id DESC`,
+        )
+        .all(account.accountRef, account.provider, account.provider, asOf) as Array<{ id: string; issue_id: string }>;
+      const byIssue = new Map<string, Set<string>>();
+      for (const row of attemptRows) byIssue.set(row.issue_id, (byIssue.get(row.issue_id) ?? new Set()).add(row.id));
+      const views = [...byIssue.entries()].flatMap(([issueId, ids]) =>
+        qualifyAttempts(this.db, issueId, viewsOfIssue(this.db, issueId, asOf).filter((attempt) => ids.has(attempt.id) && inWorkerLane(attempt))),
+      );
+      views.sort((a, b) => (a.startedAt === b.startedAt ? (a.id < b.id ? 1 : -1) : a.startedAt < b.startedAt ? 1 : -1));
+      /** The hashed sessions each attempt ran in (its harness's, and every one added later), as presence reads them. */
+      const sessionsOf = (attemptId: string): string[] =>
+        (
+          this.db
+            .prepare(
+              `SELECT ref FROM (
+                 SELECT json_extract(a.harness, '$.sessionRef') AS ref FROM attempts a WHERE a.id = ?
+                 UNION
+                 SELECT json_extract(t.detail, '$.sessionRef') FROM attempt_transitions t WHERE t.attempt_id = ? AND t.kind = 'attempt_session_added'
+               ) WHERE ref IS NOT NULL ORDER BY ref`,
+            )
+            .all(attemptId, attemptId) as Array<{ ref: string }>
+        ).map((row) => row.ref);
+      /** The last instant an attempt's record speaks for: its end, a derived end's bound, or `asOf` while it runs. */
+      const endOf = (attempt: (typeof views)[number]): string =>
+        attempt.endedAt ?? attempt.endedAtBound ?? (attempt.state === "ended" ? attempt.lastActivityAt : asOf);
+      return {
+        provider: account.provider,
+        accountRef: account.accountRef,
+        bound: account.bound,
+        missing: account.missing,
+        limits: account.limits.map((reading) => {
+          const window = reading.status === "current" ? reading.window : null;
+          const begins = window === null ? null : (window.startsAt ?? window.firstSampleAt);
+          const inside = window === null || begins === null ? [] : views.filter((attempt) => attempt.startedAt >= begins);
+          const spanning = window === null || begins === null ? 0 : views.filter((attempt) => attempt.startedAt < begins && endOf(attempt) > begins).length;
+          const attempts: AttemptSpanInput[] = inside.slice(0, RATE_ATTEMPT_LIMIT).map((attempt) => ({
+            id: attempt.id,
+            ref: attempt.identifier,
+            startedAt: attempt.startedAt,
+            endAt: endOf(attempt),
+            effortSeconds: attempt.effortSeconds,
+            sessionRefs: sessionsOf(attempt.id),
+          }));
+          return {
+            reading,
+            readings: window === null ? [] : (readings.get(window.id) ?? []),
+            attempts,
+            attemptsTruncated: inside.length > RATE_ATTEMPT_LIMIT,
+            attemptsSpanningReset: spanning,
+          };
+        }),
+      };
+    });
+    const budget = budgetForecast({
+      asOf,
+      budgetCapture: view.budgetCapture,
+      accounts,
+      labor: { expectedSeconds: completion.labor.expectedSeconds, partial: completion.labor.partial, draws: completion.labor.simulated === null ? null : completion.laborDraws },
+      reserve,
+      seed: FORECAST_SEED,
+      absent: view.budgetCapture ? "no_sample_yet" : "source_unavailable",
+    });
+
+    const { laborDraws: _draws, ...published } = completion;
+    return {
+      asOf,
+      subject: { ref: root.identifier, title: root.title, kind: root.kind, status: root.status, scope: graph.units.length === 1 && graph.units[0]!.id === root.id ? "unit" : "subtree" },
+      filter: { model: pinnedModel, account: query.account ?? null },
+      snapshot: {
+        id: completionSnapshotId({ calibrationSnapshotId: calibrationId, rootId: root.id, seed: FORECAST_SEED, draws: FORECAST_DRAWS, units, graph, outside }),
+        algorithm: FORECAST_ALGORITHM,
+        calibration: { id: calibrationId, algorithm: CALIBRATION_ALGORITHM, members: members.length, samples: members.filter((member) => isSample(member, "exact")).length },
+        budget: { id: budgetSnapshotId(asOf, accounts, reserve.percent), machineLocal: true },
+      },
+      method: FORECAST_METHOD,
+      completion: published,
+      budget,
+    };
+  }
+
+  /**
+   * The calibration population of a filter, and the key a forecast issue reads, by the rules
+   * `calibration` states: one derivation for `staple calibrate` and `staple forecast`, so a
+   * forecast's classes and snapshot are exactly the ones `calibrate --for` reads.
+   */
+  private calibrationBasis(
+    filter: {
+      readonly kinds: readonly string[] | null;
+      readonly priorities: readonly string[] | null;
+      readonly parentRow: { readonly id: string } | null;
+      readonly since: string | null;
+      readonly forRows: readonly IssueRow[];
+      readonly pinnedModel: string | null;
+    },
+    asOf: string,
+  ): {
+    inFilter: AnalyticsRow[];
+    ratioParentRows: AnalyticsRow[];
+    members: CalibrationMember[];
+    forecastKey: (row: AnalyticsRow | IssueRow) => CohortKey;
+    /** The timing of every member and every forecast row, at `asOf`. */
+    timings: Map<string, IssueTiming>;
+  } {
+    const { kinds, priorities, parentRow, since, forRows, pinnedModel } = filter;
+    const { inFilter, eligibleRows, ratioParentRows } = this.analyticsPopulation({ kinds, priorities, parentRow, since });
+    const ratioRows = [...eligibleRows.filter((row) => (row.estimated_seconds ?? 0) > 0), ...ratioParentRows];
+    const parentIds = new Set(ratioParentRows.map((row) => row.id));
+    /** The worker attempts behind each member's `workSeconds`, by the rule that sums it. */
+    const behind = new Map<string, string[]>();
     const timings = this.timingFor([...new Set([...ratioRows, ...forRows].map((row) => row.id))], asOf, { contributing: behind });
     /** The worker attempts behind an issue's `workSeconds`, oldest first. */
     const contributingTo = (issueId: string): AttemptRecord[] =>
@@ -5731,27 +5939,7 @@ export class WorkspaceStore {
         },
       };
     });
-    return calibrationReport({
-      asOf,
-      filter: { kind: kinds, priority: priorities, parent: parentRow?.identifier ?? null, since, include },
-      // As given: a relative `since` resolves against the read's clock, and the members already pin the population.
-      sinceGiven: query.since ?? null,
-      repositoryId: readStoredRepositoryId(this.db),
-      parentId: parentRow?.id ?? null,
-      population: { issues: inFilter.length, ratio: members.length, parents: ratioParentRows.length },
-      members,
-      list,
-      after,
-      limit,
-      scope,
-      forecast: forRows.map((row) => ({
-        identifier: row.identifier,
-        title: row.title,
-        status: row.status,
-        estimateSeconds: row.estimated_seconds,
-        dimensions: forecastKey(row),
-      })),
-    });
+    return { inFilter, ratioParentRows, members, forecastKey, timings };
   }
 
   /**
@@ -5866,45 +6054,58 @@ export class WorkspaceStore {
     const timings = this.timingFor(rootIds, undefined, { telemetry: false });
     const out = new Map<string, PlanSummary>();
     for (const rootId of rootIds) {
-      const subtree = this.subtreeRows(rootId);
-      const nodes = new Map(subtree.map((node) => [node.id, node]));
-      const ids = subtree.map((node) => node.id);
-      const placeholders = ids.map(() => "?").join(",");
-      const relationRows = this.db
-        .prepare(
-          `SELECT r.blocker_id AS blocker_id, r.blocked_id AS blocked_id, b.identifier AS blocker_identifier,
-                  b.status AS blocker_status
-             FROM relations r JOIN issues b ON b.id = r.blocker_id
-            WHERE r.type = 'blocks' AND r.blocked_id IN (${placeholders})`,
-        )
-        .all(...(ids as never[])) as Array<{ blocker_id: string; blocked_id: string; blocker_identifier: string; blocker_status: string }>;
-      const edges: PlanEdge[] = [];
-      const outside: CrossSubtreeBlocker[] = [];
-      for (const relation of relationRows) {
-        if (nodes.has(relation.blocker_id)) {
-          edges.push({ blockerId: relation.blocker_id, blockedId: relation.blocked_id });
-        } else if (!nodes.get(relation.blocked_id)!.cancelled) {
-          // A cancelled issue waits on nothing; a live one under a cancelled parent still does.
-          outside.push({
-            blocked: nodes.get(relation.blocked_id)!.identifier,
-            blocker: relation.blocker_identifier,
-            blockerStatus: relation.blocker_status,
-            resolved: this.isResolvedStatus(relation.blocker_status),
-          });
-        }
-      }
-      const plan = (timings.get(rootId) ?? this.emptyTiming()).subtreePlan;
-      // A cancelled issue's own estimate is no labor: named directly, it is what is live beneath it.
-      const rootCancelled = nodes.get(rootId)?.cancelled === true;
-      const labor = {
-        seconds: rootCancelled ? plan.descendantsEstimatedSeconds : plan.estimatedSeconds,
-        source: rootCancelled ? (plan.descendantsEstimatedSeconds != null ? ("descendants" as const) : ("none" as const)) : plan.source,
-        ownSeconds: nodes.get(rootId)?.estimatedSeconds ?? null,
-        descendantsSeconds: plan.descendantsEstimatedSeconds,
-      };
+      const { nodes, edges, outside, labor } = this.planInputsOf(rootId, timings.get(rootId) ?? this.emptyTiming());
       out.set(rootId, { labor, ...planStructureOf(rootId, nodes, edges, outside, labor) });
     }
     return out;
+  }
+
+  /**
+   * What a certified plan is computed over: the subtree's nodes, its in-subtree `blocks` edges,
+   * the blockers outside it, and the labor (`timing.subtreePlan`, never recomputed). Read by
+   * `planSummariesFor` and by `forecast`, which walks the same unit graph with other weights.
+   */
+  private planInputsOf(
+    rootId: string,
+    timing: IssueTiming,
+  ): { nodes: Map<string, PlanNode>; edges: PlanEdge[]; outside: CrossSubtreeBlocker[]; labor: PlanLabor } {
+    const subtree = this.subtreeRows(rootId);
+    const nodes = new Map(subtree.map((node) => [node.id, node]));
+    const ids = subtree.map((node) => node.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const relationRows = this.db
+      .prepare(
+        `SELECT r.blocker_id AS blocker_id, r.blocked_id AS blocked_id, b.identifier AS blocker_identifier,
+                b.status AS blocker_status
+           FROM relations r JOIN issues b ON b.id = r.blocker_id
+          WHERE r.type = 'blocks' AND r.blocked_id IN (${placeholders})`,
+      )
+      .all(...(ids as never[])) as Array<{ blocker_id: string; blocked_id: string; blocker_identifier: string; blocker_status: string }>;
+    const edges: PlanEdge[] = [];
+    const outside: CrossSubtreeBlocker[] = [];
+    for (const relation of relationRows) {
+      if (nodes.has(relation.blocker_id)) {
+        edges.push({ blockerId: relation.blocker_id, blockedId: relation.blocked_id });
+      } else if (!nodes.get(relation.blocked_id)!.cancelled) {
+        // A cancelled issue waits on nothing; a live one under a cancelled parent still does.
+        outside.push({
+          blocked: nodes.get(relation.blocked_id)!.identifier,
+          blocker: relation.blocker_identifier,
+          blockerStatus: relation.blocker_status,
+          resolved: this.isResolvedStatus(relation.blocker_status),
+        });
+      }
+    }
+    const plan = timing.subtreePlan;
+    // A cancelled issue's own estimate is no labor: named directly, it is what is live beneath it.
+    const rootCancelled = nodes.get(rootId)?.cancelled === true;
+    const labor: PlanLabor = {
+      seconds: rootCancelled ? plan.descendantsEstimatedSeconds : plan.estimatedSeconds,
+      source: rootCancelled ? (plan.descendantsEstimatedSeconds != null ? "descendants" : "none") : plan.source,
+      ownSeconds: nodes.get(rootId)?.estimatedSeconds ?? null,
+      descendantsSeconds: plan.descendantsEstimatedSeconds,
+    };
+    return { nodes, edges, outside, labor };
   }
   // ---------- checkout / release ----------
 

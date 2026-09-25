@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 23 &&
+    readOnly.length === 24 &&
       [
         "inbox",
         "list_tasks",
@@ -155,8 +155,10 @@ try {
         "timing_quality",
         // Nor calibration cohorts over the trusted samples.
         "calibration_cohorts",
+        // Nor a forecast of completion and budget.
+        "forecast",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 23 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 24 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   assert(
@@ -692,6 +694,26 @@ try {
       toolError(approximateSet).code === "validation",
     "calibration_cohorts reads trusted samples only, names its snapshot, forecasts with the reason it has no seconds, and refuses an approximate set",
   );
+  // The epic's only unit is done: nothing is left, which reads 0 and certain, not unknown. The
+  // budget half, apart, reads this scratch home's missing budget with the contract's reason.
+  const forecast = JSON.parse(toolText(await rpc("tools/call", { name: "forecast", arguments: { ref: epic.identifier } })));
+  const badReserve = await rpc("tools/call", { name: "forecast", arguments: { ref: epic.identifier, reserve: "120%" } });
+  assert(
+    /^forecast2:[0-9a-f]{32}$/.test(forecast.snapshot.id) &&
+      /^calibration2:[0-9a-f]{32}$/.test(forecast.snapshot.calibration.id) &&
+      forecast.completion.units.done === forecast.completion.units.total &&
+      forecast.completion.labor.expectedSeconds === 0 &&
+      forecast.completion.labor.partial === false &&
+      forecast.completion.path.expectedSeconds === 0 &&
+      forecast.completion.confidence.label === "high" &&
+      forecast.budget.missing.accounts === "source_unavailable" &&
+      forecast.budget.machineLocal === true &&
+      forecast.budget.reserve.source === "provisional_default" &&
+      Array.isArray(forecast.budget.accounts) &&
+      badReserve.isError === true &&
+      toolError(badReserve).code === "validation",
+    "forecast keeps completion and budget apart, reads nothing left as 0, names its snapshots, reads a missing budget with its reason, and refuses a reserve over 100%",
+  );
   const epicEvents = JSON.parse(
     toolText(await rpc("tools/call", { name: "events_since", arguments: { since: 0 } })),
   ).filter((e: any) => e.payload?.identifier === epic.identifier);
@@ -831,8 +853,8 @@ try {
   // attempt reads list_attempts and get_attempt make 43; the budget reads, like
   // record_budget_sample, read this machine's hub and take no ws. set_estimate, the
   // explicit estimate write, makes 44, compare_plans, the certified plan read, 45, and
-  // timing_quality, the cohort quality read, 46, and calibration_cohorts, 47.
-  assert(wsTargetable.length === 47, `47 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // timing_quality, the cohort quality read, 46, calibration_cohorts, 47, and forecast, 48.
+  assert(wsTargetable.length === 48, `48 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&

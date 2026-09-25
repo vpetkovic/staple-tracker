@@ -22,7 +22,8 @@
  * `replay_unavailable` while its effort matches `a`'s. `devices.skew` sets a device's clock
  * off the run's.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { nowIso, setClock, StapleError } from "../../src/core/types.js";
 import { tx } from "../../src/core/db.js";
@@ -206,6 +207,24 @@ export interface Expectation {
     samples?: Array<{ ref: string; set: string; estimateSource: string; ratio: number; model?: string }>;
   };
   /**
+   * `staple forecast <ref>` read at this instant: the completion forecast over the plan's units.
+   * Replicated data only, so it is checked on every device, and the whole completion block and
+   * its snapshot id must read the same on all of them, draws included (the seed is fixed). The
+   * budget half is machine-local and read from an empty home: unknown on every device.
+   */
+  forecast?: {
+    scope?: string;
+    units?: { total: number; done: number; awaitingReview: number; forecast: number; known: number; unknown?: string[] };
+    /** Expected remaining labor and path, whole seconds; null when unknown. */
+    labor?: number | null;
+    path?: number | null;
+    chain?: string[];
+    /** Per unit, by ref: its state, expected remaining seconds and admissible sample count. */
+    items?: Array<{ ref: string; state: string; remaining?: number | null; admissible?: number | null; overrun?: boolean }>;
+    confidence?: string;
+    warnings?: string[];
+  };
+  /**
    * The claim's liveness (`claim.lastActivityAt`, as `show` and the steal guard read it), an
    * offset; `null` when the issue is not held. Checked on the hydrated device too.
    */
@@ -299,6 +318,8 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
   server.now = () => clock;
   const fleet = new Fleet(server, REPOSITORY);
   const checks: Check[] = [];
+  /** A home with no budget in it: a forecast's budget half reads unknown, the same on every device. */
+  const noBudget = mkdtempSync(join(tmpdir(), "staple-controlled-no-budget-"));
   try {
     const machines = new Map<string, Machine>();
     machines.set("a", fleet.machine("a"));
@@ -331,6 +352,8 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
     let hydrated: Machine | null = null;
     /** Each calibration read's snapshot id, as the first device read it. */
     const snapshots = new Map<Expectation, string>();
+    /** Each forecast read's completion block and snapshot id, as the first device read them. */
+    const forecasts = new Map<Expectation, string>();
     let older: OlderBuildDevice | null = null;
     const olderCount = { n: 0 };
     for (const entry of timeline) {
@@ -371,6 +394,7 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         attemptsAgree(checks, where(label), machine, id(expectation.ref), expectation);
         cohortAgrees(checks, where(label), machine, id, expectation, iso, false);
         calibrationAgrees(checks, where(label), machine, id, expectation, iso, snapshots, refs);
+        forecastAgrees(checks, where(label), machine, id, expectation, iso, forecasts, refs, noBudget);
         if (expectation.resumeGaps !== undefined) chainAgrees(checks, where(label), machine, timing);
         if (expectation.claim !== undefined) claimAgrees(checks, where(label), machine, id(expectation.ref), expectation.claim, iso);
       }
@@ -383,6 +407,7 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
         attemptsAgree(checks, where("c"), hydrated, id(expectation.ref), expectation);
         cohortAgrees(checks, where("c"), hydrated, id, expectation, iso, true);
         calibrationAgrees(checks, where("c"), hydrated, id, expectation, iso, snapshots, refs);
+        forecastAgrees(checks, where("c"), hydrated, id, expectation, iso, forecasts, refs, noBudget);
         if (expectation.resumeGaps !== undefined) chainAgrees(checks, where("c"), hydrated, timing);
         if (expectation.claim !== undefined) claimAgrees(checks, where("c"), hydrated, id(expectation.ref), expectation.claim, iso);
       }
@@ -390,6 +415,7 @@ export async function runControlled(run: ControlledRun): Promise<Check[]> {
   } finally {
     setClock(null);
     fleet.close();
+    rmSync(noBudget, { recursive: true, force: true });
   }
   return checks;
 }
@@ -816,6 +842,62 @@ function calibrationAgrees(
   const first = snapshots.get(expectation);
   if (first === undefined) snapshots.set(expectation, report.snapshot.id);
   else check(checks, where, "calibration.snapshot.id (as the first device read it)", first, report.snapshot.id);
+}
+
+/**
+ * `staple forecast <ref>` at the read's instant: the units, the remaining labor and path, each
+ * unit's state, and one completion block, draws included, on every device.
+ */
+function forecastAgrees(
+  checks: Check[],
+  where: Where,
+  machine: Machine,
+  id: (ref: string) => string,
+  expectation: Expectation,
+  iso: (offset: string) => string,
+  firsts: Map<Expectation, string>,
+  runRefs: ReadonlyMap<string, string>,
+  home: string,
+): void {
+  const expected = expectation.forecast;
+  if (expected === undefined) return;
+  const report = machine.store.forecast({ ref: id(expectation.ref) }, iso(expectation.asOf), home);
+  const refOf = new Map<string, string>();
+  for (const [ref, entityId] of runRefs) {
+    const row = machine.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(entityId) as { identifier: string } | undefined;
+    if (row !== undefined) refOf.set(row.identifier, ref);
+  }
+  const refs = (identifiers: readonly string[]): string[] => identifiers.map((identifier) => refOf.get(identifier) ?? identifier);
+  const at = (field: string, want: unknown, got: unknown, tolerance = 0): void => {
+    if (want !== undefined) check(checks, where, `forecast.${field}`, want, got, tolerance);
+  };
+  const { completion } = report;
+  at("scope", expected.scope, report.subject.scope);
+  if (expected.units !== undefined) {
+    const { unknown, ...counts } = expected.units;
+    at("units", counts, { total: completion.units.total, done: completion.units.done, awaitingReview: completion.units.awaitingReview, forecast: completion.units.forecast, known: completion.units.known });
+    at("units.unknownRefs", unknown, refs(completion.units.unknownRefs));
+  }
+  // Work figures carry the effort tolerance: a second per interval behind them.
+  const tolerance = expectation.intervals ?? 1;
+  at("labor.expectedSeconds", expected.labor, completion.labor.expectedSeconds, tolerance);
+  at("path.expectedSeconds", expected.path, completion.path.expectedSeconds, tolerance);
+  at("path.chain", expected.chain, refs(completion.path.chain.map((step) => step.ref)));
+  for (const want of expected.items ?? []) {
+    const got = completion.units.items.find((item) => refOf.get(item.ref) === want.ref);
+    at(`items[${want.ref}].state`, want.state, got?.state ?? null);
+    at(`items[${want.ref}].expected.remainingSeconds`, want.remaining, got?.expected?.remainingSeconds ?? null, tolerance);
+    at(`items[${want.ref}].admissibleSamples`, want.admissible, got?.admissibleSamples ?? null);
+    at(`items[${want.ref}].overrun`, want.overrun, got?.overrun ?? null);
+  }
+  at("confidence.label", expected.confidence, completion.confidence.label);
+  at("warnings", expected.warnings, completion.warnings);
+  at("budget.missing", { accounts: "source_unavailable" }, report.budget.missing);
+  // One forecast, draws and all, whichever device read it: identifiers are the same everywhere.
+  const whole = JSON.stringify({ id: report.snapshot.id, calibration: report.snapshot.calibration.id, completion });
+  const first = firsts.get(expectation);
+  if (first === undefined) firsts.set(expectation, whole);
+  else check(checks, where, "forecast (snapshot and completion, as the first device read them)", first, whole);
 }
 
 /**
