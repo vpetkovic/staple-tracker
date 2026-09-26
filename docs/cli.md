@@ -1238,6 +1238,27 @@ an expired or used ticket is 404; a wrong digest, a ticket for the other
 action, or a plan that no longer reads the same (`plan_changed`) is 409. The
 routes are machine-local and never trigger a sync.
 
+`capture`, `bind`, `unbind` and `bindings` have routes too, for the web
+Settings' *Usage & budget* section ([web-ui.md](web-ui.md#usage--budget)):
+`POST /api/budget/capture` (`{enabled}`), `POST /api/budget/bindings/bind`
+(`{source, account, provider?, configDir? | codexHome?, replacing?}`, `source`
+spelled as `--source`; `replacing` is `bind --replace-source/--replace-dir`,
+the binding an edit swaps out in the same write), `POST
+/api/budget/bindings/unbind` and `GET /api/budget/bindings`. Same store
+methods, same validation and refusal sentences as the CLI, same `config.json`.
+Every refusal of a capture or binding write carries `detail.reason`
+(`invalid_source`, `invalid_account`, `invalid_provider`, `invalid_path`,
+`account_required`, `binding_not_found`, `home_taken`) and `detail.field`, at
+the CLI (`--json`) and over HTTP, so the web page words it without reading the
+sentence. A body on these routes (and on the collection writes and
+`/api/budget/forget`) that is not a JSON object is 400 `validation`, `detail.reason: "invalid_body"`.
+
+```bash
+# Edit: move the Claude link of ~/work/.claude onto a Codex home, in one write.
+staple budget bind --source codex-rollout --account work --codex-home ~/work/.codex \
+  --replace-source claude-statusline --replace-dir ~/work/.claude
+```
+
 ### Removing a wrong reading
 
 A reading that should never have been stored can be removed by id. A common
@@ -1289,7 +1310,9 @@ tool `forget_budget_samples` (`{ids, confirm?}`) and `POST /api/budget/forget`
 (`{ids, confirm?}`) call the same method. `confirm` must be the boolean `true`;
 a string or a number is refused. Without `confirm: true` they answer
 the preview (`applied: false`) rather than refusing. The route is token-gated,
-Origin-checked and POST-only, and never triggers a sync. Budget readings live in
+Origin-checked and POST-only, and never triggers a sync. A body that is not a
+JSON object (`null`, an array, malformed JSON) is 400 `validation` with
+`detail.reason: "invalid_body"`, and nothing is removed. Budget readings live in
 this machine's `hub.db` and never replicate.
 
 ### Reading budget and attempts back

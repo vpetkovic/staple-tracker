@@ -518,6 +518,92 @@ eleven `POST /api/hub/registry/*` routes, each named in the method gate.
 `test/network-silence.test.ts` drives every one of them in the state where it
 must not leave the machine.
 
+### Usage & budget
+
+The *Usage & budget* category (global scope, after *Cloud*) configures
+provider budget capture without the CLI. Like Cloud it is not in the settings
+registry: everything it changes is this computer's (`config.json` `telemetry`,
+the Claude settings file, `~/Library/LaunchAgents`) and nothing of it is
+synced. It is written for a reader who has never seen the CLI, and each plain
+sentence is chosen from a value the server sends (a problem `code`, a plan
+step's `part` and `action`, a wrapper `state`), never parsed out of a message.
+The server's own sentences stay behind *Show details*.
+
+- **At a glance.** On, Off or *Needs attention*, as a word and an icon; the
+  privacy note ("readings stay on this computer; nothing is sent anywhere");
+  *Turn usage tracking on/off* (`staple budget capture on|off`) behind an
+  inline confirmation; *Collect now* (`staple budget collect`) with what it
+  found in words; *Check again*.
+- **Where readings come from.** Each bound source with its account, the age of
+  its newest reading, and how it is fed: the status-line wrapper's state for
+  Claude, the watcher's for Codex. The status's problems follow, in everyday
+  words.
+- **Automatic collection.** *Turn on* opens a short form (the two account
+  labels, pre-filled from existing bindings; the status-line step and the
+  Codex check, both on), then *Show me what will change* asks
+  `POST /api/budget/collection/plan` and shows the plan as sentences ("Turn on
+  usage tracking", "Add a small step to your Claude status line … (a backup of
+  your Claude settings is kept)", "Check your Codex sessions every 5 minutes").
+  *Confirm and turn on* sends back only the plan's single-use consent ticket
+  and digest. *Turn off* shows the unsetup plan the same way. A ticket that
+  went stale (expired, used, or the machine changed under the plan: 404 or
+  409) is never retried: the page asks for the plan again and shows it with
+  the reason, to be confirmed again. A plan that refuses has no Confirm. A
+  setup that stopped partway (`setup_incomplete`) says so and lists what was
+  already done. The flow is `settings/telemetry-flow.ts`.
+- **Account links.** List, add, edit and remove bindings (what it reads, the
+  folder, the account label, and under *Advanced* the provider). Nothing is
+  validated in the browser: the server runs the CLI's own checks, and its
+  refusal's `detail.reason` picks the plain sentence on the form ("The account
+  label can only use lowercase letters, digits and dashes …"); the CLI's own
+  sentence, which names flags, stays under *Show details*. Editing a link is
+  one write that replaces the old binding in place, and it is refused when the
+  new folder already has a link of its own, so an edit never removes another
+  link. Switching what a link reads resets its provider to that source's
+  default.
+
+The section is built from the plain-language cards (`components/plain/*`:
+`PlainCard`, `StatusPill`, *What does this mean?*, *Show details*) and the
+`--plain-*` colour tokens. Its state and handlers live in
+`settings/telemetry-controller.ts`, which `TelemetrySection` subscribes to, so
+`settings/telemetry-e2e.test.tsx` drives the real handlers against the real
+server (with a stub launcher and a stateful fake launchctl in a private HOME,
+so setup really plans, installs, fails and removes the watcher).
+
+**From another device.** The server accepts writes only from its own loopback
+origin, so a page opened through a forwarder (a phone on the tailnet) can read
+everything and change nothing. That refusal carries `detail.reason:
+"cross_origin"`. `lib/api.ts` treats it as an ordinary refusal, not a dead
+token (no token screen), and `describeRefusal` words it once for every view:
+*"Changes can only be made from this computer's browser …"*, with the server's
+sentence kept as `serverMessage`; the refusal strip (`GuardRefusal`) frames it
+as *only from this computer's browser*, not as a store guard. A page not on
+`127.0.0.1` or `localhost` says so up front in this section and turns its
+write buttons off; `/api/bootstrap` also returns the server's `writeOrigins`,
+so a page on `localhost` through a port-forward (another port) is recognised
+as remote before anything is pressed.
+
+Problems about one account or folder are one line each, naming it ("No
+reading yet from claude-max (Claude status line)…", "The Claude folder … is
+linked, but its status line doesn't record usage yet"); a bound folder with no
+Claude settings file says exactly that. The subjects come from the status's
+own `sources` and `statusline` values, never from the message.
+
+Routes (each the same store or service method as the CLI verb):
+`GET /api/budget/collection` (`budget status`), `POST
+/api/budget/collection/{plan,setup,unsetup,collect}`, `GET
+/api/budget/bindings` (`budget bindings`), `POST /api/budget/capture`
+`{enabled}` (`budget capture on|off`), `POST /api/budget/bindings/bind`
+`{source, account, provider?, configDir? | codexHome?, replacing?}` (`budget
+bind`; `source` is `claude-statusline` or `codex-rollout`, and `replacing`
+names the binding an edit replaces) and `POST /api/budget/bindings/unbind`
+`{source, configDir? | codexHome?}` (`budget unbind`). All are POST-only where
+they write, token- and Origin-checked, and skip the post-write sync trigger.
+`test/budget-bindings-http.test.ts` runs each write through the CLI and the
+route and compares the two `config.json` files and answers, refusals included;
+`settings/telemetry-e2e.test.tsx` drives the page's own API functions against
+the real server.
+
 ## Glyph catalog
 
 Every kind wears one **appearance** record — `{ source, value, label, fallback }`

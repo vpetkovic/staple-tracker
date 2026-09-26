@@ -23,6 +23,8 @@ import type { Refusal } from "@/lib/refusal";
 import type { VocabularyOp } from "@/lib/types";
 import { CloudSection } from "./CloudSection";
 import { isCloudCategory } from "./cloud-settings";
+import { isTelemetryCategory } from "./telemetry-settings";
+import { TelemetrySection } from "./TelemetrySection";
 import { FieldsForm } from "./FieldsForm";
 import { VocabularyList } from "./VocabularyList";
 import { servedGlyphMap } from "./glyph-picker/glyph-picker-model";
@@ -61,6 +63,8 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
    * that route could ever legally carry.
    */
   if (isCloudCategory(category.id)) return <CloudSection ws={ws} />;
+  /** "Usage & budget": machine-local like Cloud, matched by id for the same reason (`telemetry-settings.ts`). */
+  if (isTelemetryCategory(category.id)) return <TelemetrySection />;
 
   switch (category.editor) {
     case "statuses":

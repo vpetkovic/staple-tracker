@@ -262,6 +262,19 @@ a list of bindings is not a shape the settings registry has.
   by the home that contains the rollout (`CODEX_HOME`, or `~/.codex`). With no
   binding and no `--account`, ingestion is refused (`validation`,
   `detail.reason: "no_binding_configured"`).
+- **A folder given to `bind`** (`--config-dir`, `--codex-home`, or the same
+  fields from the web Settings) must be an absolute path or start with `~`.
+  A relative path would name a different folder depending on where staple
+  runs next, so it is refused (`detail.reason: "invalid_path"`), at the CLI and
+  in the web Settings alike. Finding an existing binding (`unbind`, or the
+  binding an edit replaces) is not checked, so a binding an older staple
+  stored with a relative folder can still be removed or edited.
+- **Editing a binding** (`bind … --replace-source S [--replace-dir D]`, or
+  *Edit* in the web Settings) swaps that binding for the new one in one write,
+  in its place in the list. It is refused, with nothing written, when the
+  binding is gone (`not_found`) or when the new folder already has a binding
+  of its own (`conflict`, `home_taken`): an edit never removes a binding it
+  was not asked to.
 - A binding for a source this build does not know is kept as written and never
   used for matching, like any other key from a newer staple.
 - **One bad binding does not break the file.** An entry with an invalid field
@@ -294,6 +307,14 @@ staple budget setup --claude-account personal-max --codex-account codex-plus --y
 staple budget status
 staple budget unsetup --yes                                                         # reverse exactly what setup did
 ```
+
+The web app does the same from **Settings → Usage & budget**
+([web-ui.md](web-ui.md#usage--budget)): capture on and off, bindings listed,
+added, edited and removed, and automatic collection turned on and off after
+its plan is shown. It calls the same store methods through
+`POST /api/budget/capture` and `POST /api/budget/bindings/{bind,unbind}`, with
+the CLI's validation, and writes the same `config.json`. Those writes are
+accepted only from this computer's browser.
 
 Automatic collection keeps its own machine-local state in the staple home, none
 of it in `config.json` and none of it replicated:

@@ -576,6 +576,13 @@ describe("CLI, MCP and HTTP call the one method", () => {
     expect((await http("/api/budget/forget", { body: { ids: [id], confirm: true }, token: false })).status).toBe(401);
     expect((await http("/api/budget/forget", { body: { ids: id, confirm: true } })).status).toBe(400);
     expect((await http("/api/budget/forget", { body: { ids: [id], confirm: "yes" } })).status).toBe(400);
+    // A body that is not a JSON object is the caller's mistake: 400 invalid_body, never a 500.
+    for (const raw of ["null", "[]", "7", '"ids"', "{not json"]) {
+      const res = await fetch(`${origin}/api/budget/forget`, { method: "POST", headers: { "x-staple-token": ui.token, "content-type": "application/json" }, body: raw });
+      const answer = (await res.json()) as Record<string, any>;
+      expect(res.status, raw).toBe(400);
+      expect(answer, raw).toMatchObject({ code: "validation", detail: { reason: "invalid_body" } });
+    }
     expect(counts()).toEqual(before);
 
     const spy = vi.spyOn(SurfaceAutoSync.prototype, "postWrite");

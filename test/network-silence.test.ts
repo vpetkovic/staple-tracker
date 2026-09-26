@@ -1086,6 +1086,8 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         "/api/poll",
         // Budget collection: the status the web Settings reads (local files and hub.db).
         "/api/budget/collection",
+        // Budget capture and bindings (config.json).
+        "/api/budget/bindings",
       ];
 
       for (let round = 0; round < 3; round += 1) {
@@ -1185,6 +1187,14 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         ["/api/budget/collection/setup", { consent: "made-up", digest: "made-up" }, 404],
         ["/api/budget/collection/collect", {}, 200],
         ["/api/budget/collection/unsetup", {}, 400],
+        /*
+         * Budget capture and bindings, the web Settings' "Usage & budget": config.json
+         * writes, excluded from the post-write sync trigger like the collection routes.
+         */
+        ["/api/budget/capture", { enabled: true }, 200],
+        ["/api/budget/bindings/bind", { source: "codex-rollout", account: "codex-plus" }, 200],
+        ["/api/budget/bindings/unbind", { source: "codex-rollout" }, 200],
+        ["/api/budget/capture", { enabled: false }, 200],
         /*
          * Removing budget readings: hub.db only, excluded from the post-write sync
          * trigger. A preview and a confirmed removal of an id this home does not hold,

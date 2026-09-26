@@ -147,6 +147,15 @@ import {
   type SetupOptions,
 } from "../core/telemetry/collection/service.js";
 import { PlanConsentStore } from "../core/telemetry/collection/plan-consent.js";
+import {
+  accountRequired,
+  bindBudgetSource,
+  budgetConfig,
+  parseBindingSource,
+  setBudgetCapture,
+  unbindBudgetSource,
+  type BindingHome,
+} from "../core/telemetry/budget-config.js";
 
 interface UiOptions {
   port: number;
@@ -400,6 +409,33 @@ const BUDGET_COLLECTION_WRITES = new Set([
   "/api/budget/collection/unsetup",
   "/api/budget/collection/collect",
 ]);
+
+/**
+ * Budget capture and source bindings, the web Settings' "Usage & budget" section:
+ * `staple budget capture on|off`, `bind` and `unbind`, each the same store method
+ * (`core/telemetry/budget-config.ts`) with the same validation. They write
+ * `<staple home>/config.json`, machine-local and never synced, so like the collection
+ * writes they journal nothing and must not arm the post-write sync trigger.
+ * `GET /api/budget/bindings` is the read (`staple budget bindings --json`).
+ *
+ * No consent ticket: the CLI's `bind` and `capture on` take no `--yes`, and a binding
+ * only names which account a harness home spends from. What the page shows before
+ * turning capture on is its own confirmation; the token and the Origin check are what
+ * keep a foreign page from doing it.
+ */
+const BUDGET_CONFIG_WRITES = new Set(["/api/budget/capture", "/api/budget/bindings/bind", "/api/budget/bindings/unbind"]);
+
+/** A binding home out of a request body: `source` spelled as at the CLI, and its directory. */
+function bindingHomeOf(body: Record<string, unknown>, what: string): BindingHome {
+  const text = (key: string): string | undefined => {
+    const value = body[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "string") throw new StapleError("validation", `${what}${key} must be a string`);
+    return value;
+  };
+  // As at the CLI, the directory that is not the source's own is ignored rather than refused.
+  return { source: parseBindingSource(body.source, what === "" ? "--source" : `${what}source`), configDir: text("configDir"), codexHome: text("codexHome") };
+}
 
 /**
  * What the page shows before a hub restore — the CLI's own disclosure (`runRestore` in
@@ -720,11 +756,16 @@ export function startUiServer(options: UiOptions): UiHandle {
    * alongside 127.0.0.1 because both name the loopback socket this server is
    * bound to — an attacker's page is on neither.
    */
+  /** The page origins this server accepts writes from: its own loopback socket, by either name. */
+  function writeOrigins(): string[] {
+    const port = boundPort();
+    return [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
+  }
+
   function originAllowed(req: IncomingMessage): boolean {
     const origin = req.headers.origin;
     if (!origin) return true;
-    const port = boundPort();
-    return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+    return writeOrigins().includes(origin);
   }
 
   /**
@@ -840,6 +881,12 @@ export function startUiServer(options: UiOptions): UiHandle {
       orchestration: handle.store.orchestrationSummary(context.issue.id),
       planSummary: handle.store.planSummary(context.issue.id),
     };
+  }
+
+  async function readRawBody(req: IncomingMessage): Promise<string> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks).toString("utf8");
   }
 
   async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -1408,6 +1455,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/hub/registry/adopt" ||
           /** Budget collection: named in one set; `/api/budget/collection` itself is the GET read. */
           BUDGET_COLLECTION_WRITES.has(url.pathname) ||
+          /** Budget capture and bindings: machine-local config writes, named in one set. */
+          BUDGET_CONFIG_WRITES.has(url.pathname) ||
           url.pathname === "/api/budget/forget"
             ? ["POST"]
             : url.pathname === "/api/settings"
@@ -1425,7 +1474,15 @@ export function startUiServer(options: UiOptions): UiHandle {
          * same sentence, now stated about the request instead of about the route.
          */
         if (req.method === "POST" && !originAllowed(req)) {
-          deny(res, 403, "forbidden", `Cross-origin request rejected (Origin: ${req.headers.origin})`);
+          /**
+           * `detail.reason` names WHY, so the page can tell this refusal from a dead token:
+           * a phone reaching this server through a forwarder (the tailnet) sends its own
+           * Origin, so it can read everything and write nothing, by design. The page says
+           * so ("changes can only be made from this computer's browser") instead of
+           * treating the refusal as a credential failure.
+           */
+          const message = `Cross-origin request rejected (Origin: ${req.headers.origin})`;
+          json(res, 403, { error: message, message, code: "forbidden", detail: { reason: "cross_origin" }, retryable: false });
           return;
         }
 
@@ -1454,7 +1511,13 @@ export function startUiServer(options: UiOptions): UiHandle {
          * on its session tick. Fixing it properly means threading the resolved
          * handle out of the route, which is not a thin registration.
          */
-        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname) && !BUDGET_COLLECTION_WRITES.has(url.pathname) && url.pathname !== "/api/budget/forget") {
+        if (
+          req.method === "POST" &&
+          !CLOUD_LIFECYCLE_WRITES.has(url.pathname) &&
+          !BUDGET_COLLECTION_WRITES.has(url.pathname) &&
+          !BUDGET_CONFIG_WRITES.has(url.pathname) &&
+          url.pathname !== "/api/budget/forget"
+        ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
             if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
@@ -1472,6 +1535,71 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
       /**
+       * Budget capture and source bindings (`staple budget capture|bind|unbind|bindings`),
+       * one store method each. Machine-local: `<staple home>/config.json`, never a workspace.
+       */
+      if (url.pathname === "/api/budget/bindings") {
+        json(res, 200, budgetConfig(stapleHome()));
+        return;
+      }
+      let budgetBody: Record<string, unknown> | null = null;
+      if (BUDGET_CONFIG_WRITES.has(url.pathname) || BUDGET_COLLECTION_WRITES.has(url.pathname) || url.pathname === "/api/budget/forget") {
+        /**
+         * These bodies are objects. Malformed JSON, `null`, an array or a scalar is the
+         * caller's mistake and answers 400 `validation` with nothing changed, rather than the
+         * 500 a property read of `null` would otherwise become.
+         */
+        const raw = await readRawBody(req);
+        let parsed: unknown = {};
+        let bad: string | null = null;
+        if (raw.trim() !== "") {
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            bad = "The request body is not valid JSON.";
+          }
+        }
+        if (bad === null && (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))) bad = "The request body must be a JSON object.";
+        if (bad !== null) {
+          json(res, 400, { error: bad, message: bad, code: "validation", detail: { reason: "invalid_body" }, retryable: false });
+          return;
+        }
+        budgetBody = parsed as Record<string, unknown>;
+      }
+      if (BUDGET_CONFIG_WRITES.has(url.pathname)) {
+        const body = budgetBody!;
+        const home = stapleHome();
+        if (url.pathname === "/api/budget/capture") {
+          if (typeof body.enabled !== "boolean") throw new StapleError("validation", "enabled must be true or false (budget capture on|off).");
+          json(res, 200, setBudgetCapture(home, body.enabled));
+          return;
+        }
+        if (url.pathname === "/api/budget/bindings/unbind") {
+          json(res, 200, unbindBudgetSource(home, bindingHomeOf(body, "")));
+          return;
+        }
+        if (url.pathname === "/api/budget/bindings/bind") {
+          const target = bindingHomeOf(body, "");
+          if (typeof body.account !== "string") accountRequired();
+          if (body.provider !== undefined && body.provider !== null && typeof body.provider !== "string") throw new StapleError("validation", "provider must be a string");
+          const replacing = body.replacing;
+          if (replacing !== undefined && replacing !== null && (typeof replacing !== "object" || Array.isArray(replacing))) {
+            throw new StapleError("validation", "replacing must be the binding being edited: { source, configDir | codexHome }.", { reason: "invalid_body", field: "replacing" });
+          }
+          json(
+            res,
+            200,
+            bindBudgetSource(home, {
+              ...target,
+              account: body.account,
+              provider: typeof body.provider === "string" ? body.provider : undefined,
+              replacing: replacing ? bindingHomeOf(replacing as Record<string, unknown>, "replacing.") : undefined,
+            }),
+          );
+          return;
+        }
+      }
+      /**
        * `staple budget forget` / MCP `forget_budget_samples`: remove readings from this
        * machine's hub.db through the one method all three call. POST-only, so it is
        * Origin-checked like every write. Like the collection writes, it journals nothing
@@ -1479,7 +1607,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        * (`applied: false`); `{ ids, confirm: true }` is the consent and removes them.
        */
       if (url.pathname === "/api/budget/forget") {
-        const body = await readBody(req);
+        const body = budgetBody!;
         if (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== "string")) {
           deny(res, 400, "validation", "ids must be an array of reading ids.");
           return;
@@ -1492,7 +1620,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
       if (BUDGET_COLLECTION_WRITES.has(url.pathname)) {
-        const body = await readBody(req);
+        const body = budgetBody!;
         const home = stapleHome();
         if (url.pathname === "/api/budget/collection/collect") {
           const maxFiles = body.maxFiles === undefined ? undefined : Number(body.maxFiles);
@@ -1541,6 +1669,13 @@ export function startUiServer(options: UiOptions): UiHandle {
         json(res, 200, {
           mode: options.hub ? "hub" : "workspace",
           workspaces: handles.map((h) => ({ slug: h.slug, prefix: h.prefix })),
+          /**
+           * The origins a write is accepted from (the Origin check below). A page compares
+           * its own origin against these to know, before pressing anything, that it is
+           * open somewhere writes are refused: through the tailnet, or a port-forward to
+           * a different localhost port.
+           */
+          writeOrigins: writeOrigins(),
         });
         return;
       }

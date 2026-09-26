@@ -206,15 +206,23 @@ describe("transport denials keep the envelope shape", () => {
       label: "403 from a cross-origin POST",
       status: 403,
       code: "forbidden",
+      /**
+       * The one denial with a `detail`: `{reason: "cross_origin"}`, so the page can tell a
+       * write refused for its origin (a phone on the tailnet) from a dead token.
+       * `test/budget-bindings-http.test.ts` and `settings/telemetry-e2e.test.tsx` pin it.
+       */
+      detail: { reason: "cross_origin" },
       send: () => post({ type: "checkout", ref: "CON-1" }, { origin: "http://evil.example" }),
     },
   ];
 
-  it.each(denials)("$label answers {error, message, code, retryable}", async ({ status, code, send }) => {
+  it.each(denials)("$label answers {error, message, code, retryable}", async ({ status, code, send, ...rest }) => {
+    const detail = "detail" in rest ? rest.detail : undefined;
     const response = await send();
     expect(response.status).toBe(status);
     const body = (await response.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["code", "error", "message", "retryable"]);
+    expect(Object.keys(body).sort()).toEqual(detail === undefined ? ["code", "error", "message", "retryable"] : ["code", "detail", "error", "message", "retryable"]);
+    expect(body.detail).toEqual(detail);
     expect(body.code).toBe(code);
     expect(body.retryable).toBe(false);
     expect(body.error).toBe(body.message);
@@ -309,6 +317,7 @@ describe("read shapes", () => {
     expect(await (await get("/api/bootstrap")).json()).toEqual({
       mode: "workspace",
       workspaces: [{ slug: WS, prefix: "CON" }],
+      writeOrigins: [origin, origin.replace("127.0.0.1", "localhost")],
     });
   });
 
@@ -391,6 +400,17 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/bootstrap",
       // `staple budget` / MCP `get_budget`: GET-only, a read of this machine's hub, no `ws`.
       "/api/budget",
+      /**
+       * Budget capture and source bindings, the web Settings' "Usage & budget":
+       * `staple budget bindings|bind|unbind|capture`, one store method each. The GET is
+       * the read; the three POSTs are named in `BUDGET_CONFIG_WRITES`, POST-only and
+       * skipped by the post-write sync trigger (config.json is machine-local).
+       * `test/budget-bindings-http.test.ts` pins their parity with the CLI.
+       */
+      "/api/budget/bindings",
+      "/api/budget/bindings/bind",
+      "/api/budget/bindings/unbind",
+      "/api/budget/capture",
       /**
        * Automatic budget collection, machine-local. The GET is the status
        * read; the four POSTs are named in `BUDGET_COLLECTION_WRITES`, which the method
