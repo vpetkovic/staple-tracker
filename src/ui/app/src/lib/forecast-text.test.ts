@@ -234,8 +234,13 @@ describe("effort and projections", () => {
   });
 
   it("marks a breach chance from a lower-bound burn as at least", () => {
-    expect(breachText(0, true)).toBe("at least 0%");
-    expect(breachText(0.5065, false)).toBe("51%");
+    expect(breachText(0.12, true, "the 20% reserve")).toEqual({ figure: "at least 12%", clause: "chance of going under the 20% reserve" });
+    expect(breachText(0.5065, false, "the 20% reserve")).toEqual({ figure: "51%", clause: "chance of going under the 20% reserve" });
+    expect(breachText(0, false, "the 20% reserve")).toEqual({ figure: "0%", clause: "chance of going under the 20% reserve" });
+  });
+
+  it("says a lower-bound breach of 0 as what the draws showed, not as an empty 'at least 0%'", () => {
+    expect(breachText(0, true, "the 20% reserve")).toEqual({ figure: null, clause: "no draw went under the 20% reserve (the burn is a lower bound)" });
   });
 
   it("names excluded states and reasons in words", () => {

@@ -79,7 +79,7 @@ export function WarningChips({ codes, table, label }: { codes: readonly string[]
                     aria-controls={tipId}
                     onClick={() => setOpen((current) => (current === code ? null : code))}
                     className={cn(
-                      "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                      "inline-flex items-center rounded-full border px-2 py-1 text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                       open === code && "text-foreground",
                     )}
                   >
@@ -271,8 +271,13 @@ function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionF
 }
 
 /** What a limit's projection says, as lines; each unknown with its reason. */
+const capitalize = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+const sentenceOf = ({ figure, clause }: { figure: string | null; clause: string }): string => (figure === null ? clause : `${figure} ${clause}`);
+
 function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
   const lowerBound = limit.work?.lowerBound ?? false;
+  const breach =
+    limit.reserve && limit.reserve.breachProbability !== null ? breachText(limit.reserve.breachProbability, lowerBound, reserveLabel(limit.reserve)) : null;
   const rate = limit.workRate;
   const reserve = limit.reserve;
   const work = limit.work;
@@ -308,12 +313,14 @@ function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
             <span className={UNKNOWN} data-unknown>
               Chance of going under {reserveLabel(reserve)} unknown: {limitMissingText(reserve, "breachProbability") ?? "no reason given"}
             </span>
-          ) : (
+          ) : breach === null ? null : (
             <>
-              <span className="font-mono tabular-nums" data-testid="budget-breach-figure">
-                {breachText(reserve.breachProbability, lowerBound)}
-              </span>
-              <span className="text-muted-foreground"> chance of going under {reserveLabel(reserve)}</span>
+              {breach.figure !== null ? (
+                <span className="font-mono tabular-nums" data-testid="budget-breach-figure">
+                  {breach.figure}{" "}
+                </span>
+              ) : null}
+              <span className="text-muted-foreground">{breach.figure !== null ? breach.clause : capitalize(breach.clause)}</span>
               {reserve.alreadyBelow ? <span className="text-muted-foreground"> (already below it)</span> : null}
               <span className="text-muted-foreground"> · {reserve.confidence.label} confidence</span>
             </>
@@ -322,7 +329,7 @@ function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
             {reserve.withOtherUse
               ? reserve.withOtherUse.breachProbability === null
                 ? "With other use of the account: unknown"
-                : `With other use of the account: ${breachText(reserve.withOtherUse.breachProbability, lowerBound)}`
+                : `With other use of the account: ${sentenceOf(breachText(reserve.withOtherUse.breachProbability, lowerBound, "it"))}`
               : `With other use of the account: unknown, ${limitMissingText(reserve, "withOtherUse") ?? "not measured"}`}
           </div>
         </div>

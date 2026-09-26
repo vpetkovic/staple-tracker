@@ -802,7 +802,7 @@ calendar time); the reset countdown is calendar time and keeps days.
   figure that is null reads *Unknown:* and the reason (`no unit's remaining work
   is known`), never 0. The path lists its chain, first to last, as issue links
   with each unit's expected remaining work, and any open blocker outside the
-  subtree is named by reference (`STA-238 waits on STA-203 (backlog)`): that wait
+  subtree is named by reference (`STA-42 waits on STA-7 (backlog)`): that wait
   is not in the path. Identifiers never break across lines. One line gives the confidence, what
   the classes' bounds reach against the 90% target, and why it is not high.
   Low confidence is a dashed amber badge with the word, never a hue alone.
@@ -826,7 +826,8 @@ calendar time); the reset countdown is calendar time and keeps days.
   median); work that runs the limit out before the reset says so in words, never
   as a negative percent. When the burn is a lower bound (the labor is partial or
   a span's rise is), the work *uses at least*, *leaves at most*, and the breach
-  chance reads *at least*. A remaining figure already under the reserve says
+  chance reads *at least*; when that chance is 0 it says *no draw went under the
+  reserve (the burn is a lower bound)* instead of an empty *at least 0%*. A remaining figure already under the reserve says
   *(already below it)*.
   Every unknown figure (no measured work rate, stale reading, unknown labor)
   reads *unknown* with the reason from `missing` and `missingInputs`, never 0%.

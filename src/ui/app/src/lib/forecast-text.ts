@@ -400,9 +400,15 @@ export function workUseText(work: Pick<BudgetWorkProjection, "consumedPercent" |
   return `The work alone ${uses}${across} and ${leftAtResetText(work.remainingAtResetPercent.expected, work.lowerBound)}`;
 }
 
-/** A breach chance, marked "at least" when the burn behind it is a lower bound (it can only be higher). */
-export function breachText(probability: number, lowerBound: boolean): string {
-  return `${lowerBound ? "at least " : ""}${formatProbability(probability)}`;
+/**
+ * A breach chance against `reserve` (its label), marked "at least" when the burn behind it is a
+ * lower bound (it can only be higher). "At least 0%" is true and says nothing, so a lower-bound 0
+ * says what the draws showed instead: none went under, from a burn that may be higher. `figure` is
+ * null then, and `clause` is the whole statement.
+ */
+export function breachText(probability: number, lowerBound: boolean, reserve: string): { figure: string | null; clause: string } {
+  if (lowerBound && probability <= 0) return { figure: null, clause: `no draw went under ${reserve} (the burn is a lower bound)` };
+  return { figure: `${lowerBound ? "at least " : ""}${formatProbability(probability)}`, clause: `chance of going under ${reserve}` };
 }
 
 /** The instant a read was taken, as the local clock time a countdown is measured from: `as of 08:39`. */

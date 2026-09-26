@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { asOfText, forecastMode, formatDuration, formatEffort, formatProbability, spreadText, bandText, warningText } from "@/lib/forecast-text";
+import { asOfText, forecastMode, formatDuration, formatEffort, spreadText, bandText, warningText } from "@/lib/forecast-text";
 import type { CalibrationCohort, CalibrationReport, ForecastReport } from "@/lib/types";
 import { CalibrationReportView, INCLUDE_RECONSTRUCTED_BY_DEFAULT, calibrationRequest } from "@/views/calibration/CalibrationView";
 import { AwaitingForecast, ForecastReportView } from "./ForecastSection";
@@ -228,7 +228,10 @@ describe("an epic's forecast, as the server computed it", () => {
     expect(words).toContain(`low confidence (${limit.workRate!.confidence.spans} of ${limit.workRate!.confidence.minimum} spans)`);
     expect(html).toContain('data-warning="small_sample"');
     // The burn behind it is a lower bound, so the breach chance is one too.
-    expect(words).toContain(`at least ${formatProbability(limit.reserve!.breachProbability!)} chance of going under the provisional 20% reserve`);
+    // Here no draw went under: "at least 0%" would be true and empty, so it says what the draws showed.
+    expect(limit.reserve!.breachProbability).toBe(0);
+    expect(words).toContain("No draw went under the provisional 20% reserve (the burn is a lower bound)");
+    expect(words).not.toContain("at least 0%");
     expect(words).toContain(`(${asOfText(epic.asOf)})`);
     // The labor is partial, so the burn is a lower bound: it says "at least" and "at most".
     expect(limit.work!.lowerBound).toBe(true);
