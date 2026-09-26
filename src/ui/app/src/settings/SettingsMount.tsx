@@ -10,11 +10,13 @@
  * ── THE URL IS THE OPEN FLAG ──────────────────────────────────────────────────────────
  *
  * Since R6b the flag is not a boolean but the `?settings` parameter, read through
- * `readSettingsRoute`. Three things can change it and all three go through the URL first:
+ * `readSettingsRoute`, with `settings-ws` naming the workspace the per-workspace sections
+ * edit. Four things can change them and all four go through the URL first:
  *
  *   the gear / the palette  — pushes ONE history entry carrying `?settings`;
  *   selecting a category    — replaces that entry with `?settings=<id>` (no new entry,
  *                             so Back still means "the page I was on");
+ *   the workspace picker    — replaces it with `settings-ws=<slug>`, same reason;
  *   Back / forward          — `popstate` re-reads the URL, which is what closes the
  *                             shell on Back and reopens it on Forward.
  *
@@ -29,6 +31,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { onOpenSettings } from "@/lib/shell-events";
+import { rememberWorkspace } from "@/lib/session-workspace";
 import { SettingsDialog } from "./SettingsDialog";
 import { closeAction, readSettingsRoute, withSettingsRoute, type SettingsRoute } from "./settings-shell";
 
@@ -39,12 +42,18 @@ export function SettingsMount() {
 
   useEffect(
     () =>
-      onOpenSettings(() => {
-        // Already open (the palette re-dispatching over an open shell): nothing to do.
-        if (readSettingsRoute(window.location.search)) return;
-        window.history.pushState(null, "", withSettingsRoute(window.location.href, ""));
+      onOpenSettings((request) => {
+        const category = request.section ?? "";
+        const workspace = request.workspace ?? "";
+        // Already open (the palette re-dispatching over an open shell): re-point it in place.
+        if (readSettingsRoute(window.location.search)) {
+          window.history.replaceState(null, "", withSettingsRoute(window.location.href, category, workspace || undefined));
+          setRoute(readSettingsRoute(window.location.search));
+          return;
+        }
+        window.history.pushState(null, "", withSettingsRoute(window.location.href, category, workspace || null));
         pushed.current = true;
-        setRoute({ category: "" });
+        setRoute({ category, workspace });
       }),
     [],
   );
@@ -62,7 +71,18 @@ export function SettingsMount() {
 
   const focusCategory = useCallback((category: string) => {
     window.history.replaceState(null, "", withSettingsRoute(window.location.href, category));
-    setRoute({ category });
+    setRoute((current) => ({ category, workspace: current?.workspace ?? "" }));
+  }, []);
+
+  /**
+   * The in-Settings workspace picker. Replaces the entry (Back still means "the page I was
+   * on"), keeps the section, and is remembered as the default answer to "which workspace?".
+   */
+  const focusWorkspace = useCallback((workspace: string) => {
+    rememberWorkspace(workspace);
+    const current = readSettingsRoute(window.location.search);
+    window.history.replaceState(null, "", withSettingsRoute(window.location.href, current?.category ?? "", workspace));
+    setRoute((held) => ({ category: held?.category ?? "", workspace }));
   }, []);
 
   const close = useCallback(() => {
@@ -88,7 +108,9 @@ export function SettingsMount() {
     <SettingsDialog
       open
       category={route.category}
+      workspace={route.workspace}
       onCategoryChange={focusCategory}
+      onWorkspaceChange={focusWorkspace}
       onOpenChange={onOpenChange}
     />
   );

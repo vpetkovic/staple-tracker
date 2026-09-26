@@ -70,7 +70,7 @@ export type CommandAction =
    * verb the header's gear does, so there is one way in with two triggers rather than
    * two ways in.
    */
-  | { type: "settings" };
+  | { type: "settings"; section?: string };
 
 export type PalettePage = "checkout" | "assignee";
 
@@ -370,18 +370,36 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
   commands.push({
     id: "settings",
     group: "view",
-    label: "Workspace settings — statuses and kinds",
+    label: "Settings",
+    hint: "this computer and every workspace",
     keywords:
-      "settings workspace statuses kinds vocabulary configure reorder rename category customise",
+      "settings preferences workspace statuses kinds vocabulary configure reorder rename category customise cloud usage budget machine",
     action: { type: "settings" },
   });
+  /*
+   * The sections people come looking for by name, straight to the section — from any page,
+   * All workspaces included, since Settings is global.
+   */
+  for (const [section, label, keywords] of [
+    ["telemetry", "Settings: Usage & budget", "usage budget telemetry claude codex plan limits tracking"],
+    ["cloud", "Settings: Cloud", "cloud sync hub connect devices backup"],
+    ["statuses", "Settings: Statuses", "statuses status vocabulary workflow states"],
+  ] as const) {
+    commands.push({
+      id: `settings:${section}`,
+      group: "view",
+      label,
+      keywords: `settings ${keywords}`,
+      action: { type: "settings", section },
+    });
+  }
 
   if (context.hub) {
     if (context.ws !== "") {
       commands.push({
         id: "ws:all",
         group: "filter",
-        label: "Workspace → all",
+        label: "Switch to All workspaces",
         keywords: "workspace all every hub",
         action: { type: "workspace", ws: "" },
       });
@@ -391,7 +409,7 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       commands.push({
         id: `ws:${workspace.slug}`,
         group: "filter",
-        label: `Workspace → ${workspace.slug}`,
+        label: `Switch to ${workspace.slug}`,
         hint: workspace.prefix,
         keywords: `workspace ${workspace.slug} ${workspace.prefix}`,
         action: { type: "workspace", ws: workspace.slug },

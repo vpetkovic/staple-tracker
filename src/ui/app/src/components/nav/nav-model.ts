@@ -56,6 +56,11 @@ const ICONS: Record<ViewName, LucideIcon> = {
   budget: BatteryMedium,
 };
 
+/** The icon a view wears everywhere it is listed — the rail row and the phone's tab bar. */
+export function viewIcon(view: ViewName): LucideIcon {
+  return ICONS[view];
+}
+
 function item(view: ViewName): NavItem {
   const base: NavItem = { id: `view:${view}`, label: VIEW_LABELS[view], view, icon: ICONS[view] };
   // Projects hang off Tasks: the `+` makes one, and each one is a sub-row that narrows

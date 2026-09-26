@@ -49,7 +49,14 @@ import { action, getIssues } from "@/lib/api";
 import { projectsForWorkspace } from "@/lib/projects";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
+import {
+  asksForWorkspace,
+  defaultTargetWorkspace,
+  loadRememberedWorkspace,
+  rememberWorkspace,
+} from "@/lib/session-workspace";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
+import { useTargetSettings } from "@/settings/useTargetSettings";
 import { ISSUE_PRIORITIES, type Issue, type IssueKind, type IssuePriority, type IssueRow } from "@/lib/types";
 import { pinnedRef } from "@/lib/write-ref";
 import {
@@ -78,6 +85,20 @@ const PARENT_NOTE = "A parent lives in the same workspace.";
  */
 const CROSS_WORKSPACE_NOTE = "Picks from another workspace become hub links.";
 
+/** Plain words for the priority rungs; `critical` has always read as "Urgent" on screen. */
+const PRIORITY_WORDS: Record<string, string> = { critical: "Urgent", high: "High", medium: "Medium", low: "Low" };
+
+/**
+ * On a phone the form is a full-screen sheet that scrolls, rather than a centred card whose
+ * lower fields sit under the keyboard. Applied over the dialog's centred geometry.
+ */
+export const PHONE_SHEET_CLASS = [
+  "max-md:top-0 max-md:left-0 max-md:h-dvh max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:overflow-y-auto max-md:rounded-none max-md:border-0",
+  "max-md:pt-[max(1.5rem,env(safe-area-inset-top))] max-md:pb-[max(1.5rem,env(safe-area-inset-bottom))]",
+  // The dialog's own close button, grown to a 44px target on a phone.
+  "max-md:[&>[data-slot=dialog-close]]:top-[max(0.5rem,env(safe-area-inset-top))] max-md:[&>[data-slot=dialog-close]]:right-2 max-md:[&>[data-slot=dialog-close]]:flex max-md:[&>[data-slot=dialog-close]]:size-11 max-md:[&>[data-slot=dialog-close]]:items-center max-md:[&>[data-slot=dialog-close]]:justify-center",
+].join(" ");
+
 /** Radix Select forbids an empty item value; this stands for "no project". */
 const NO_PROJECT = "__none__";
 
@@ -89,7 +110,27 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
    * re-renders this tree when it changes, exactly as `StatusIcon` and the settings
    * dialog already rely on. A second subscriber here would be a second fetch.
    */
-  const kinds = configuredKindOrder();
+  /**
+   * WHERE THE TASK GOES. The page's workspace when it is on one. On All workspaces there is
+   * no such thing, and this used to fall back to the FIRST registered workspace — filing
+   * the task somewhere nobody chose. It now starts on the workspace this browser last chose
+   * (lib/session-workspace.ts) or on nothing, and the form asks, at the top.
+   */
+  const [ws, setWs] = useState(() => defaultTargetWorkspace(session, loadRememberedWorkspace()));
+  const asksWhere = asksForWorkspace(session);
+  const [missingWorkspace, setMissingWorkspace] = useState(false);
+
+  /**
+   * The TARGET workspace's kind vocabulary. On a workspace page it is the page's own, read
+   * from the snapshot App already holds; created into another workspace from All
+   * workspaces, it is that workspace's, fetched once (useTargetSettings never repaints the
+   * page with it). Until it arrives the page's vocabulary stands in.
+   */
+  const pageWorkspace = session.ws || (session.mode === "hub" ? "" : ws);
+  const target = useTargetSettings(ws !== "" && ws !== pageWorkspace ? ws : "", session.version);
+  const targetKinds = target.settings?.kinds ?? null;
+  const kinds = targetKinds ? targetKinds.map((kind) => kind.id) : configuredKindOrder();
+  const labelOfKind = (id: string) => targetKinds?.find((kind) => kind.id === id)?.label ?? kindLabel(id);
   const freshForm = (): CreateFormState => ({
     ...EMPTY_CREATE_FORM,
     kind: createFormDefaultKind(configuredKindOrder()),
@@ -97,10 +138,6 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
   const [form, setForm] = useState<CreateFormState>(freshForm);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [busy, setBusy] = useState(false);
-
-  // In hub mode "" means "every workspace", which is not a thing you can create into.
-  // Fall back to the first one so the select always has a real target.
-  const [ws, setWs] = useState(session.ws || session.workspaces[0]?.slug || "");
 
   /**
    * Every issue the server will show us, for the relation dropdowns.
@@ -160,19 +197,26 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
 
   const submit = async () => {
     if (busy) return;
+    // The one thing this form does check: a task sent with no workspace would land in
+    // whichever one the server resolves first — the very fallback this question replaces.
+    if (ws === "") {
+      setMissingWorkspace(true);
+      return;
+    }
     setBusy(true);
     setRefusal(null);
     try {
       // Every pick by id (`lib/write-ref.ts`); another workspace's as `<slug>:<id>`.
       const created = await action<Issue>(
         { ws: ws || undefined },
-        buildCreatePayload(form, (ref) => pinnedRef(rows, ws || session.workspaces[0]?.slug || "", ref)),
+        buildCreatePayload(form, (ref) => pinnedRef(rows, ws, ref)),
       );
+      if (asksWhere) rememberWorkspace(ws);
       // Refetch, then select what was just made: creating a task and then having to
       // find it is the thing that makes a create dialog feel like a form rather than
       // part of the tool.
       session.refresh();
-      session.open(ws || session.workspaces[0]?.slug || "", created.identifier);
+      session.open(ws, created.identifier);
       close();
     } catch (caught) {
       setRefusal(describeRefusal(caught));
@@ -199,11 +243,13 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
-      <DialogContent data-create-dialog className="sm:max-w-xl">
+      <DialogContent data-create-dialog className={`sm:max-w-xl ${PHONE_SHEET_CLASS}`}>
         <DialogHeader>
           <DialogTitle>New task</DialogTitle>
           <DialogDescription>
-            Everything except the title is optional — the store fills in the rest.
+            {asksWhere && ws === ""
+              ? "Choose a workspace and give it a title — everything else is optional."
+              : "Everything except the title is optional — the store fills in the rest."}
           </DialogDescription>
         </DialogHeader>
 
@@ -214,6 +260,46 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
             void submit();
           }}
         >
+          {asksWhere ? (
+            <div className="grid gap-1.5" data-create-workspace-field>
+              <Label htmlFor="create-workspace">Workspace</Label>
+              <Select
+                value={ws || undefined}
+                onValueChange={(next) => {
+                  setWs(next);
+                  setMissingWorkspace(false);
+                  // The parent and the project go; the relations stay. A blocker chosen
+                  // before the switch is still a real task, just a cross-workspace one. The
+                  // parent and the project cannot survive — both are rows of the old
+                  // workspace. See forWorkspaceSwitch().
+                  setForm(forWorkspaceSwitch);
+                }}
+              >
+                <SelectTrigger
+                  id="create-workspace"
+                  data-create-workspace
+                  aria-invalid={missingWorkspace || undefined}
+                  aria-describedby={missingWorkspace ? "create-workspace-missing" : undefined}
+                  className="w-full"
+                >
+                  <SelectValue placeholder="Choose where this task goes" />
+                </SelectTrigger>
+                <SelectContent position="popper" align="start">
+                  {session.workspaces.map((workspace) => (
+                    <SelectItem key={workspace.slug} value={workspace.slug}>
+                      {workspace.slug}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {missingWorkspace ? (
+                <p id="create-workspace-missing" role="alert" className="text-[12px] text-destructive">
+                  Choose which workspace this task goes in.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="grid gap-1.5">
             <Label htmlFor="create-title">Title</Label>
             <Input
@@ -262,7 +348,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                     <SelectItem key={kind} value={kind}>
                       <span className="flex items-center gap-1.5">
                         <KindGlyph kind={kind} size={16} labelled={false} />
-                        {kindLabel(kind)}
+                        {labelOfKind(kind)}
                       </span>
                     </SelectItem>
                   ))}
@@ -282,7 +368,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
                 <SelectContent position="popper" align="start">
                   {ISSUE_PRIORITIES.map((priority) => (
                     <SelectItem key={priority} value={priority}>
-                      {priority}
+                      {PRIORITY_WORDS[priority] ?? priority}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -411,35 +497,6 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
               />
             </div>
           </div>
-
-          {session.mode === "hub" && session.workspaces.length > 1 ? (
-            <div className="grid gap-1.5">
-              <Label htmlFor="create-workspace">Workspace</Label>
-              <Select
-                value={ws}
-                onValueChange={(next) => {
-                  setWs(next);
-                  // The parent and the project go; the relations stay. R7 cleared the
-                  // relations too, which was right while they were workspace-locked and
-                  // is wrong now: a blocker chosen before the switch is still a real task,
-                  // just a cross-workspace one. The parent and the project cannot survive —
-                  // both are rows of the old workspace. See forWorkspaceSwitch().
-                  setForm(forWorkspaceSwitch);
-                }}
-              >
-                <SelectTrigger id="create-workspace" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {session.workspaces.map((workspace) => (
-                    <SelectItem key={workspace.slug} value={workspace.slug}>
-                      {workspace.slug}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
 
           {refusal ? (
             <div className="rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/5 p-3">

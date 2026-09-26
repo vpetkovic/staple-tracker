@@ -22,8 +22,8 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CloudStrip } from "./CloudStrip";
-import type { CloudSurfaceReport } from "@/lib/types";
+import { CloudStrip, hubSyncSummary, syncSummary } from "./CloudStrip";
+import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
 
 function report(over: Partial<CloudSurfaceReport> = {}): CloudSurfaceReport {
   return {
@@ -137,42 +137,55 @@ describe("a disconnected workspace gets no cloud furniture at all", () => {
 
 // -------------------------------------------------------- connected rendering
 
-describe("a connected workspace reports the values, and only the values", () => {
-  it("names the mode, and the device by its human label when it has one", () => {
+/**
+ * DELIBERATELY CHANGED. The strip of field names (`sync automatic  device laptop  cursor
+ * cur-9  epoch 2`) is now a status pill whose card says the state in plain words, keeps the
+ * facts a person acts on, and puts the technical values behind "Show details". The pill is
+ * what renders in the page; the card's words come from `syncSummary`, asserted directly
+ * because Radix renders a closed popover's content nowhere a string render can see.
+ */
+const everything = (summary: ReturnType<typeof syncSummary>) =>
+  summary ? [summary.pill, summary.headline, ...[...summary.facts, ...summary.details].flatMap((f) => [f.label, f.value])].join(" | ") : "";
+
+describe("a connected workspace shows one pill, and its card keeps every value", () => {
+  it("renders a single pill button, no strip of labelled fields", () => {
     const rendered = html(connected());
-    expect(rendered).toContain("manual");
-    expect(rendered).toContain("laptop");
+    expect(rendered).toContain("data-cloud-strip");
+    expect(rendered).toMatch(/^<button/);
+    for (const field of [">sync<", ">device<", ">cursor<", ">epoch<"]) expect(rendered).not.toContain(field);
   });
 
-  /**
-   * The label is what a human chose to call this machine, so it wins — but it is
-   * optional, and falling back to the opaque id is better than a device row that
-   * silently disappears on a connection made without `--label`.
-   */
+  it("names the mode in words, and the device by its human label when it has one", () => {
+    const summary = syncSummary(connected());
+    expect(summary?.pill).toBe("Manual sync");
+    expect(summary?.headline).toContain("only when you ask");
+    expect(summary?.facts).toContainEqual({ label: "This device", value: "laptop" });
+    expect(html(connected())).toContain("Manual sync");
+  });
+
   it("falls back to the device id when no label was given", () => {
-    const rendered = html(connected({ label: null }));
-    expect(rendered).toContain("device-here");
+    expect(syncSummary(connected({ label: null }))?.facts).toContainEqual({ label: "This device", value: "device-here" });
   });
 
-  it("reports pending, cursor and epoch when there is something to report", () => {
-    const rendered = html(connected({ pending: 4, cursor: "cur-9", epoch: 2 }));
-    expect(rendered).toContain("4");
-    expect(rendered).toContain("cur-9");
+  it("keeps pending, the cursor and the epoch — the technical two behind Show details", () => {
+    const summary = syncSummary(connected({ pending: 4, cursor: "cur-9", epoch: 2 }))!;
+    expect(summary.pill).toBe("4 waiting to send");
+    expect(summary.facts).toContainEqual({ label: "Changes waiting to send", value: "4" });
+    expect(summary.details).toContainEqual({ label: "Position in the shared history", value: "cur-9" });
+    expect(summary.details).toContainEqual({ label: "History generation", value: "2" });
+    expect(summary.facts.map((f) => f.value)).not.toContain("cur-9");
   });
 
-  it("automatic mode says automatic, because the two consents are different things", () => {
-    expect(html(connected({ state: "automatic", mode: "automatic", auto: true }))).toContain(
-      "automatic",
-    );
+  it("automatic mode says it syncs automatically, because the two consents are different things", () => {
+    const summary = syncSummary(connected({ state: "automatic", mode: "automatic", auto: true }))!;
+    expect(summary.pill).toBe("Synced");
+    expect(summary.tone).toBe("on_track");
+    expect(summary.headline).toContain("automatically");
+    expect(summary.details).toContainEqual({ label: "Sync mode", value: "automatic" });
   });
 
-  /**
-   * An actionable failure is the one thing that may be loud, and it must carry
-   * its remedy — a surface that reported "revoked" without saying what to do
-   * would be strictly worse than the silence above.
-   */
   it("shows a failure with its remedy", () => {
-    const rendered = html(
+    const summary = syncSummary(
       connected({
         state: "revoked",
         failure: {
@@ -181,17 +194,15 @@ describe("a connected workspace reports the values, and only the values", () => 
           remedy: "Re-enrol this machine with `staple cloud connect`.",
         },
       }),
-    );
-    expect(rendered).toContain("revoked");
-    expect(rendered).toContain("Re-enrol");
+    )!;
+    expect(summary.pill).toBe("Sync stopped");
+    expect(summary.tone).toBe("at_risk");
+    expect(summary.headline).toContain("revoked");
+    expect(summary.headline).toContain("Re-enrol");
   });
 
-  /**
-   * Offline is a status, not an emergency. A page that showed an error banner
-   * for a train journey would train its reader to ignore the banner.
-   */
   it("reports offline without claiming local work is affected", () => {
-    const rendered = html(
+    const summary = syncSummary(
       connected({
         state: "offline",
         failure: {
@@ -200,11 +211,40 @@ describe("a connected workspace reports the values, and only the values", () => 
           remedy: "Run `staple cloud sync` again once this machine has a network.",
         },
       }),
-    );
-    expect(rendered).toContain("Local work is unaffected");
+    )!;
+    expect(summary.pill).toBe("Offline");
+    expect(summary.tone).toBe("tight");
+    expect(everything(summary)).toContain("Local work is unaffected");
   });
 
   it("surfaces open conflicts once connected", () => {
-    expect(html(connected({ conflicts: { open: 2, resolved: 0 } }))).toContain("2");
+    const summary = syncSummary(connected({ conflicts: { open: 2, resolved: 0 } }))!;
+    expect(summary.pill).toBe("2 conflicts");
+    expect(summary.facts).toContainEqual({ label: "Conflicts to resolve", value: "2" });
+  });
+
+  it("on a phone the pill is a 44px icon whose words are its accessible name", () => {
+    const rendered = renderToStaticMarkup(<CloudStrip report={connected()} compact />);
+    expect(rendered).toContain('aria-label="Sync: Manual sync. Show sync details"');
+    expect(rendered).toContain("size-11");
+    expect(rendered).not.toContain(">Manual sync<");
+  });
+});
+
+describe("All workspaces counts the workspaces that sync, and says nothing when none do", () => {
+  const hub = (connected: number, total: number): HubCloudReport =>
+    ({ workspaces: [], counts: { total, connected, disconnected: total - connected, skipped: 0, actionable: total, automatic: connected } }) as unknown as HubCloudReport;
+
+  it("renders nothing for a hub with no connected workspace", () => {
+    expect(hubSyncSummary(hub(0, 8))).toBeNull();
+    expect(renderToStaticMarkup(<CloudStrip report={null} hub={hub(0, 8)} />)).toBe("");
+  });
+
+  it("counts, and never presents one workspace's state as the hub's", () => {
+    const summary = hubSyncSummary(hub(3, 8))!;
+    expect(summary.pill).toBe("3 of 8 syncing");
+    expect(summary.headline).toContain("Pick a workspace");
+    // A per-workspace report always wins over the hub summary.
+    expect(renderToStaticMarkup(<CloudStrip report={connected()} hub={hub(3, 8)} />)).toContain("Manual sync");
   });
 });

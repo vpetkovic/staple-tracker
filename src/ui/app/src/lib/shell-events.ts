@@ -45,14 +45,24 @@ export function onOpenCommandPalette(handler: () => void): () => void {
   return () => window.removeEventListener(COMMAND_PALETTE, handler);
 }
 
-/** Ask whatever owns the settings dialog to open it. No-op if nothing is listening. */
-export function openSettings(): void {
-  window.dispatchEvent(new CustomEvent(SETTINGS));
+/**
+ * Where Settings should open: a section id (`statuses`, `telemetry`, `cloud`, …) and, for a
+ * per-workspace section, which workspace. Both optional — the gear opens on the list.
+ */
+export interface SettingsRequest {
+  section?: string;
+  workspace?: string;
 }
 
-export function onOpenSettings(handler: () => void): () => void {
-  window.addEventListener(SETTINGS, handler);
-  return () => window.removeEventListener(SETTINGS, handler);
+/** Ask whatever owns the settings dialog to open it. No-op if nothing is listening. */
+export function openSettings(request: SettingsRequest = {}): void {
+  window.dispatchEvent(new CustomEvent<SettingsRequest>(SETTINGS, { detail: request }));
+}
+
+export function onOpenSettings(handler: (request: SettingsRequest) => void): () => void {
+  const listener = (event: Event) => handler((event as CustomEvent<SettingsRequest | null>).detail ?? {});
+  window.addEventListener(SETTINGS, listener);
+  return () => window.removeEventListener(SETTINGS, listener);
 }
 
 /**

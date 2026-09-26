@@ -1,44 +1,47 @@
 /**
- * THE "WORK WORKSPACE SETTINGS" SHELL — R6b (STA-177). Presentation only.
+ * THE SETTINGS SHEET — R6b (STA-177), made global. Presentation only.
  *
- * Left, the categories the registry serves; right, the one that is selected. This file
- * knows nothing about what a category CONTAINS — it takes a render function — and
- * nothing about the URL, the fetch or the dialog it sits in, which is what lets a test
- * render it to a string with an invented category and assert the nav grew.
+ * Left, the sections; right, the one that is selected. This file knows nothing about what a
+ * section CONTAINS — it takes a render function — and nothing about the URL, the fetch or
+ * the dialog it sits in, which is what lets a test render it to a string with an invented
+ * section and assert the nav grew.
  *
- * ── NO CATEGORY IS NAMED HERE ─────────────────────────────────────────────────────────
+ * ── TWO GROUPS, IN PLAIN WORDS ────────────────────────────────────────────────────────
  *
- * The nav is `categories` verbatim, in the order the registry sorted them, grouped by
- * the one fact the registry attaches to every category — its scope. Adding a category
- * to src/core/settings-registry.ts is therefore the whole of adding it to this nav.
- * The two scope headings are the only fixed strings, and they are headings for a
- * distinction (workspace versus this machine) that the epic exists to make visible.
+ * The nav is `categories` verbatim, grouped by the one fact each carries — its scope — under
+ * two headings: "Across all workspaces" (Cloud, Hub registry, Usage & budget, This machine)
+ * and "Per workspace" (Statuses, Kinds, Workflow, Cloud sync). Adding a category to
+ * src/core/settings-registry.ts is still the whole of adding it here.
+ *
+ * A per-workspace section shows `workspacePicker` above its content: which workspace it is
+ * editing, changeable in place. The sheet never closes to change it.
  *
  * ── ONE LAYOUT, TWO ARRANGEMENTS ──────────────────────────────────────────────────────
  *
- * Wide: both panes, always. Narrow (`stacked`): one pane at a time, with the Back
- * button in the header as the reliable way out of a category — a swipe, a scrim tap or
- * "you can scroll up to find the list" are not reliable, and a form that is
- * `overflow: hidden` on a phone is a form with a button you cannot press. Both panes
- * scroll independently inside a fixed-height frame, so the header with the title, the
- * scope line and the controls never leaves the screen in either arrangement.
+ * Wide: both panes, always. Narrow (`stacked`, a phone): a full-screen sheet showing the
+ * list of sections, then the section, with Back in the header — the navigation every phone
+ * settings screen uses. Rows are 44px and carry a chevron; the header and the bottom edge
+ * respect the safe areas. Both panes scroll independently inside a fixed-height frame, so
+ * the header never leaves the screen.
  *
  * ── THE TITLE IS A SLOT, THE TEXT IS NOT ──────────────────────────────────────────────
  *
- * Inside the dialog the heading has to be Radix's `DialogTitle` (that is what labels
- * the dialog for assistive tech), and `DialogTitle` cannot render outside a dialog. So
- * the ELEMENT is a prop and the TEXT is the constant `SETTINGS_TITLE`, which is the
- * half the acceptance criterion is about.
+ * Inside the dialog the heading has to be Radix's `DialogTitle` (that is what labels the
+ * dialog for assistive tech), and `DialogTitle` cannot render outside a dialog. So the
+ * ELEMENT is a prop and the TEXT is the constant `SETTINGS_TITLE` — "Settings", which never
+ * claims a workspace.
  */
 import { useEffect, useLayoutEffect, useRef, type ElementType, type ReactNode } from "react";
-import { ArrowLeft, Maximize2, Minimize2, XIcon } from "lucide-react";
+import { ArrowLeft, ChevronRight, Maximize2, Minimize2, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { SettingCategoryView, SettingScope } from "@/lib/settings";
+import type { SettingCategoryView } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import {
+  SCOPE_ORDER,
+  appliesToText,
   recallScroll,
   rememberScroll,
-  scopeLabel,
+  scopeHeading,
   scopeSummaryText,
   type ScopeSummary,
   type ScrollMemory,
@@ -47,10 +50,8 @@ import {
   type ShellPane,
 } from "./settings-shell";
 
-/** Exactly this. The epic's first acceptance criterion, and the dialog's accessible name. */
-export const SETTINGS_TITLE = "Work Workspace Settings";
-
-const SCOPES: readonly SettingScope[] = ["workspace", "global"];
+/** Exactly this, everywhere: the sheet is the computer's, never one workspace's. The dialog's accessible name. */
+export const SETTINGS_TITLE = "Settings";
 
 export interface SettingsShellProps {
   categories: readonly SettingCategoryView[];
@@ -70,6 +71,8 @@ export interface SettingsShellProps {
   renderCategory: (category: SettingCategoryView) => ReactNode;
   /** Shown in the content pane when there is no category yet (loading) or nothing selected. */
   fallback?: ReactNode;
+  /** Shown above a per-workspace section's content: which workspace it edits, changeable in place. */
+  workspacePicker?: ReactNode;
   /** `DialogTitle` inside the dialog; a plain heading anywhere else. */
   TitleTag?: ElementType;
   DescriptionTag?: ElementType;
@@ -88,6 +91,7 @@ export function SettingsShell({
   onClose,
   renderCategory,
   fallback,
+  workspacePicker,
   TitleTag = "h2",
   DescriptionTag = "p",
 }: SettingsShellProps) {
@@ -123,10 +127,19 @@ export function SettingsShell({
       ?.querySelector<HTMLButtonElement>(`[data-settings-category="${active ?? ""}"]`)
       ?.focus({ preventScroll: true });
   };
+  /**
+   * On a phone the list opens with nothing focused — a focus ring on the first row of a
+   * sheet you just tapped open reads as a selection nobody made. Focus follows the two
+   * transitions instead: into the section's heading on the way in, back to the row you
+   * came from on the way out.
+   */
+  const previousPane = useRef(pane);
   useEffect(() => {
+    const was = previousPane.current;
+    previousPane.current = pane;
     if (!stacked) return;
     if (pane === "content") headingRef.current?.focus({ preventScroll: true });
-    else focusActiveNav();
+    else if (was === "content") focusActiveNav();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stacked, pane, active]);
 
@@ -156,22 +169,32 @@ export function SettingsShell({
       data-mode={mode}
       className="flex h-full min-h-0 flex-col"
     >
-      <header className="flex shrink-0 items-start gap-2 border-b px-4 py-3">
+      <header
+        className={cn(
+          "flex shrink-0 items-start gap-2 border-b px-4 py-3",
+          stacked && "items-center pt-[max(0.75rem,env(safe-area-inset-top))]",
+        )}
+      >
         {stacked && pane === "content" ? (
           <Button
             variant="ghost"
             size="icon"
             aria-label="Back to categories"
-            title="Back to categories"
+            title="Back to all settings"
             onClick={onBack}
-            className="-ml-2"
+            className="-ml-2 size-11"
           >
-            <ArrowLeft className="size-4" />
+            <ArrowLeft className="size-5" />
           </Button>
         ) : null}
         <div className="min-w-0 flex-1">
-          <TitleTag className="text-lg leading-tight font-semibold">{SETTINGS_TITLE}</TitleTag>
-          <DescriptionTag data-settings-scope className="text-muted-foreground mt-1 text-xs">
+          <TitleTag className={cn("leading-tight font-semibold", stacked ? "text-[20px] tracking-tight" : "text-lg")}>
+            {SETTINGS_TITLE}
+          </TitleTag>
+          <DescriptionTag
+            data-settings-scope
+            className={cn("text-muted-foreground mt-1 text-xs", stacked && pane === "content" && "sr-only")}
+          >
             {scopeSummaryText(scope)}
           </DescriptionTag>
         </div>
@@ -193,9 +216,9 @@ export function SettingsShell({
           aria-label="Close settings"
           title="Close (Esc)"
           onClick={onClose}
-          className="-mr-2"
+          className={cn("-mr-2", stacked && "size-11")}
         >
-          <XIcon className="size-4" />
+          <XIcon className={stacked ? "size-5" : "size-4"} />
         </Button>
       </header>
 
@@ -205,19 +228,29 @@ export function SettingsShell({
           aria-label="Settings categories"
           hidden={!showNav}
           className={cn(
-            "min-h-0 shrink-0 overflow-y-auto py-2",
-            stacked ? "w-full" : "w-56 border-r",
+            "staple-momentum min-h-0 shrink-0 overflow-y-auto py-2",
+            stacked ? "w-full pb-[max(0.5rem,env(safe-area-inset-bottom))]" : "w-56 border-r",
           )}
         >
-          {SCOPES.map((scope) => {
+          {SCOPE_ORDER.map((scope) => {
             const group = categories.filter((c) => c.scope === scope);
             if (group.length === 0) return null;
             return (
-              <div key={scope} className="px-2 pb-2">
-                <div className="text-muted-foreground px-2 pt-2 pb-1 text-[11px] font-medium tracking-wide uppercase">
-                  {scopeLabel(scope)}
+              <div key={scope} data-settings-group={scope} className={cn("px-2 pb-2", stacked && "px-3 pb-4")}>
+                <div
+                  className={cn(
+                    "text-muted-foreground px-2 pt-2 pb-1 font-medium",
+                    stacked ? "text-[13px]" : "text-[11px] tracking-wide uppercase",
+                  )}
+                >
+                  {scopeHeading(scope)}
                 </div>
-                <ul className="m-0 list-none p-0">
+                <ul
+                  className={cn(
+                    "m-0 list-none p-0",
+                    stacked && "divide-y overflow-hidden rounded-xl border bg-card",
+                  )}
+                >
                   {group.map((category) => {
                     const selected = category.id === active;
                     return (
@@ -228,11 +261,14 @@ export function SettingsShell({
                           aria-current={selected ? "page" : undefined}
                           onClick={() => onSelect(category.id)}
                           className={cn(
-                            "hover:bg-accent focus-visible:ring-ring/50 flex w-full items-center rounded-md px-2 py-1.5 text-left text-sm outline-none focus-visible:ring-2",
-                            selected ? "bg-accent font-medium" : "",
+                            "hover:bg-accent focus-visible:ring-ring/50 flex w-full items-center text-left outline-none focus-visible:ring-2",
+                            stacked
+                              ? "min-h-12 gap-3 px-4 py-3 text-[16px] active:bg-accent"
+                              : cn("rounded-md px-2 py-1.5 text-sm", selected ? "bg-accent font-medium" : ""),
                           )}
                         >
                           <span className="min-w-0 flex-1 truncate">{category.label}</span>
+                          {stacked ? <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" /> : null}
                         </button>
                       </li>
                     );
@@ -251,7 +287,10 @@ export function SettingsShell({
           // `overflow-x-auto` is deliberate: a row wider than a phone (the vocabulary
           // editors' fixed columns, until R6c reflows them) scrolls sideways inside this
           // pane rather than being cut off, so every control on it stays reachable.
-          className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto px-4 py-3"
+          className={cn(
+            "staple-momentum min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto px-4 py-3",
+            stacked && "pb-[max(1rem,env(safe-area-inset-bottom))]",
+          )}
         >
           {current ? (
             <section aria-labelledby={`settings-category-${current.id}`}>
@@ -260,18 +299,23 @@ export function SettingsShell({
                   id={`settings-category-${current.id}`}
                   ref={headingRef}
                   tabIndex={-1}
-                  className="text-base font-semibold outline-none"
+                  className={cn("font-semibold outline-none", stacked ? "text-[18px]" : "text-base")}
                 >
                   {current.label}
                 </h3>
                 <p className="text-muted-foreground text-xs">
                   <span data-settings-category-scope className="text-foreground font-medium">
-                    {scopeLabel(current.scope)} scope
+                    {appliesToText(current.scope, scope.workspace)}
                   </span>
                   {" — "}
                   {current.description}
                 </p>
               </div>
+              {current.scope === "workspace" && workspacePicker ? (
+                <div data-settings-workspace-picker className="mb-4">
+                  {workspacePicker}
+                </div>
+              ) : null}
               {renderCategory(current)}
             </section>
           ) : (

@@ -15,11 +15,13 @@ import { cn } from "@/lib/utils";
 
 export const HEADER_BUTTON_CLASS = cn(
   "h-7 gap-1.5 rounded-md px-2 text-[13px] font-normal [&_svg:not([class*='size-'])]:size-4",
+  // A phone: every control is a 44px target, and the icon grows to match.
+  "max-md:h-11 max-md:min-w-11 max-md:[&_svg:not([class*='size-'])]:size-5",
   "text-muted-foreground hover:text-foreground",
 );
 
 /** The compact form: a 28px square. */
-const HEADER_ICON_CLASS = "size-7 px-0";
+const HEADER_ICON_CLASS = "size-7 px-0 max-md:size-11";
 
 export type HeaderButtonProps = Omit<ComponentProps<typeof Button>, "children"> & {
   icon: ReactNode;

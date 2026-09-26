@@ -177,8 +177,9 @@ describe("every breakpoint holds both kinds of category", () => {
   it("narrow: one pane at a time, and Back is in the header of the content pane", () => {
     const nav = atBreakpoint("stacked", "nav", "drawer");
     const content = atBreakpoint("stacked", "content", "drawer");
-    expect(nav.frame).toBe("inset-0 rounded-none");
-    expect(content.frame).toBe("inset-0 rounded-none");
+    // The whole DYNAMIC viewport on a phone: a collapsing browser toolbar never hides the foot.
+    expect(nav.frame).toBe("inset-x-0 top-0 h-dvh rounded-none");
+    expect(content.frame).toBe("inset-x-0 top-0 h-dvh rounded-none");
 
     for (const [which, html] of Object.entries({ fields: nav.fields, vocabulary: nav.vocabulary })) {
       expect(html, which).toContain(CONTENT_HIDDEN);

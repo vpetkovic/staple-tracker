@@ -125,7 +125,8 @@ describe("the shell", () => {
 
   it("lays the content in an inset card on the sidebar tint, with the inset dropped below md", () => {
     const markup = shell();
-    expect(markup).toMatch(/<div class="flex h-full bg-sidebar/);
+    // `h-dvh`: the frame is the dynamic viewport, so a phone's collapsing toolbar never hides the foot.
+    expect(markup).toMatch(/<div class="flex h-dvh bg-sidebar/);
     const tag = /<div[^>]*data-content-frame[^>]*>/.exec(markup)?.[0] ?? "";
     const frame = /class="([^"]*)"/.exec(tag)?.[1] ?? "";
     for (const cls of ["bg-card", "md:mt-2", "md:mr-2", "md:mb-2", "md:rounded-tl-lg", "md:border"]) {
@@ -150,7 +151,7 @@ describe("the rail", () => {
           'data-nav-item="view:queue"',
           'data-nav-item="view:graph"',
           'data-nav-item="view:milestones"',
-          'aria-label="Work Workspace Settings"',
+          'aria-label="Settings"',
           "data-nav-theme",
         ]),
       ),
@@ -173,12 +174,28 @@ describe("the rail", () => {
     expect(label).toContain("text-muted-foreground");
     expect(label).not.toContain("uppercase");
     expect(label).not.toContain("tracking-");
-    expect(rail()).toMatch(/data-nav-group-label[^>]*>Workspace</);
+    // The workspace group is named for what it is scoped to (single-workspace mode: the workspace).
+    expect(rail()).toMatch(/data-nav-group-label[^>]*><span data-nav-group-name="true" class="truncate">staple</);
+  });
+
+  it("names the workspace group All workspaces on All workspaces — never the first workspace", () => {
+    const markup = rail({
+      mode: "hub",
+      ws: "",
+      workspaces: [
+        { slug: "aardvark", prefix: "AAR" },
+        { slug: "staple", prefix: "STA" },
+      ],
+    });
+    expect(markup).toMatch(/data-nav-group-name="true" class="truncate">All workspaces</);
+    expect(markup).not.toMatch(/data-nav-group-name="true" class="truncate">aardvark</);
   });
 
   it("offers Settings and a Dark mode switch as ordinary rows at the foot", () => {
     const markup = rail();
-    expect(markup).toMatch(/<button[^>]*aria-label="Work Workspace Settings"[^>]*>[\s\S]*?Settings<\/button>/);
+    // DELIBERATELY CHANGED from "Work Workspace Settings": Settings is global now.
+    expect(markup).toMatch(/<button[^>]*aria-label="Settings"[^>]*>[\s\S]*?Settings<\/button>/);
+    expect(markup).not.toContain("Work Workspace Settings");
     expect(markup).toMatch(/<button[^>]*role="switch"[^>]*aria-checked="false"[^>]*data-nav-theme[^>]*>[\s\S]*?Dark mode<\/button>/);
   });
 
@@ -186,7 +203,8 @@ describe("the rail", () => {
     const markup = rail();
     for (const group of NAV_GROUPS) {
       expect(markup).toContain(`data-nav-group="${group.id}"`);
-      expect(markup).toMatch(new RegExp(`aria-expanded="true"[^>]*>${group.label}`));
+      const shown = group.id === "workspace" ? "staple" : group.label;
+      expect(markup).toMatch(new RegExp(`aria-expanded="true"[^>]*><span[^>]*>${shown}`));
       for (const entry of group.items) {
         expect(markup).toMatch(new RegExp(`<button type="button" data-nav-item="${entry.id}"`));
         expect(markup).toContain(`>${entry.label}</span>`);
@@ -392,15 +410,21 @@ describe("projects under Tasks", () => {
 });
 
 describe("the workspace switcher", () => {
+  const trigger = (markup: string) => /<button[^>]*data-workspace-switcher[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
+
   it("names the one workspace outside hub mode, and keeps the prefix off the trigger", () => {
-    const markup = rail();
-    const trigger = /<button[^>]*data-workspace-switcher[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
-    expect(trigger).toContain('aria-label="Workspace"');
-    expect(trigger).toContain(">staple</span>");
-    expect(trigger).not.toContain(">STA<");
+    const button = trigger(rail());
+    expect(button).toContain('aria-label="Workspace: staple. Workspace"');
+    expect(button).toContain(">staple</span>");
+    expect(button).not.toContain(">STA<");
   });
 
-  it("says All workspaces in hub mode until one is chosen, then names it", () => {
+  /**
+   * DELIBERATELY CHANGED. The count caption beside the name is gone from the trigger — it
+   * was what truncated the name to "All wo…" — and the name may wrap to a second line
+   * rather than ever being cut short.
+   */
+  it("says the FULL selection — All workspaces in hub mode until one is chosen, then its name", () => {
     const hub: Partial<StapleSession> = {
       mode: "hub",
       workspaces: [
@@ -408,13 +432,13 @@ describe("the workspace switcher", () => {
         { slug: "pinecone", prefix: "PIN" },
       ],
     };
-    const all = /<button[^>]*data-workspace-switcher[^>]*>[\s\S]*?<\/button>/.exec(rail({ ...hub, ws: "" }))?.[0];
-    expect(all).toContain(">All workspaces</span>");
-    expect(all).toContain(">2 workspaces</span>");
+    const all = trigger(rail({ ...hub, ws: "" }));
+    expect(all).toMatch(/data-workspace-name="true" class="[^"]*line-clamp-2[^"]*">All workspaces<\/span>/);
+    expect(all).not.toContain("truncate");
+    expect(all).not.toContain("workspaces</span><span");
+    expect(all).toContain('aria-label="Workspace: All workspaces. Switch workspace"');
 
-    const one = /<button[^>]*data-workspace-switcher[^>]*>[\s\S]*?<\/button>/.exec(
-      rail({ ...hub, ws: "pinecone" }),
-    )?.[0];
+    const one = trigger(rail({ ...hub, ws: "pinecone" }));
     expect(one).toContain(">pinecone</span>");
     expect(one).not.toContain(">PIN<");
   });

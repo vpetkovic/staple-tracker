@@ -287,3 +287,50 @@ body,
   stroke-dasharray: 5 4;
   opacity: 1;
 }
+
+/* ── The phone shell (AppShell, BottomSheet, the settings sheet) ───────────── */
+
+/* Momentum scrolling inside a scroll container, and no scroll chaining into the page behind. */
+.staple-momentum {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* A sideways chip row scrolls by touch; its scrollbar would only steal height from the chips. */
+.staple-no-scrollbar {
+  scrollbar-width: none;
+}
+.staple-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* A bottom sheet rises from the edge it belongs to; off when the reader asked for less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .staple-sheet[data-state="open"] {
+    animation: staple-sheet-in 220ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .staple-sheet-overlay[data-state="open"] {
+    animation: staple-fade-in 180ms ease-out;
+  }
+}
+@keyframes staple-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes staple-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* No tap flash on the chrome's own buttons; the pressed state is drawn by each control. */
+[data-shell="phone"] button {
+  -webkit-tap-highlight-color: transparent;
+}

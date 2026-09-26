@@ -51,7 +51,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { projectsForWorkspace } from "@/lib/projects";
 import { isResolvedStatus } from "@/lib/settings";
 import { openCommandPalette, openCreateIssue, openProjectDialog, openSettings } from "@/lib/shell-events";
-import { useSession, type ViewName } from "@/lib/session";
+import { scopeName, useSession, type ViewName } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { NAV_GROUPS, projectCaption, type NavGroup, type NavItem } from "./nav-model";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -65,6 +65,8 @@ const THEME_KEY = "staple:theme";
  */
 export const RAIL_ROW_CLASS = cn(
   "flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-[13px] font-normal outline-none",
+  // In the phone's drawer every row is a 44px target at a readable size.
+  "max-md:h-11 max-md:gap-3 max-md:text-[15px]",
   "text-sidebar-foreground/90 transition-colors hover:bg-surface-hover hover:text-foreground",
   "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
   "aria-[current]:bg-surface-selected aria-[current]:text-foreground",
@@ -80,6 +82,8 @@ const ROW_ACTION_CLASS = cn(
   "absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded",
   "text-text-tertiary opacity-0 transition-opacity outline-none",
   "group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-surface-active hover:text-foreground",
+  // A touch screen has no hover: the action is simply always there, at thumb size.
+  "[@media(hover:none)]:opacity-100 max-md:right-0 max-md:size-11",
   "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
 );
 
@@ -144,7 +148,7 @@ function ProjectSubItems({ onNavigate }: { onNavigate?: () => void }) {
                 onNavigate?.();
               }}
               // One indent step: the glyph lands at the parent's icon x plus 16px.
-              className={cn(RAIL_ROW_CLASS, "pr-7 pl-6")}
+              className={cn(RAIL_ROW_CLASS, "pr-7 pl-6 max-md:pr-12")}
             >
               <FolderKanban aria-hidden />
               <span className="truncate">{project.name}</span>
@@ -157,7 +161,7 @@ function ProjectSubItems({ onNavigate }: { onNavigate?: () => void }) {
                 className={cn(
                   "shrink-0 font-mono text-[11px] text-text-tertiary tabular-nums transition-opacity",
                   !caption && "ml-auto",
-                  "group-hover/row:opacity-0 group-focus-within/row:opacity-0",
+                  "group-hover/row:opacity-0 group-focus-within/row:opacity-0 [@media(hover:none)]:opacity-100",
                 )}
               >
                 {open}
@@ -207,7 +211,7 @@ function NavItemRow({
           data-nav-item={entry.id}
           aria-current={active ? "page" : undefined}
           onClick={() => onSelect(entry.view)}
-          className={cn(RAIL_ROW_CLASS, entry.action && "pr-7")}
+          className={cn(RAIL_ROW_CLASS, entry.action && "pr-7 max-md:pr-12")}
         >
           <Icon aria-hidden />
           <span className="truncate">{entry.label}</span>
@@ -245,6 +249,7 @@ function NavGroupSection({
   onSelect: (view: ViewName) => void;
   onNavigate?: () => void;
 }) {
+  const session = useSession();
   const [open, setOpen] = useState(true);
   const headingId = `nav-group-${group.id}`;
   const listId = `nav-group-${group.id}-items`;
@@ -257,9 +262,12 @@ function NavGroupSection({
         aria-controls={listId}
         onClick={() => setOpen((o) => !o)}
         data-nav-group-label
-        className="group flex h-7 w-full items-center gap-1 rounded-md px-2 text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+        className="group flex h-7 w-full items-center gap-1 rounded-md px-2 text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring max-md:h-11 max-md:text-[13px]"
       >
-        {group.label}
+        {/* The workspace group is named for what it is scoped to: the selected workspace, or All workspaces. */}
+        <span data-nav-group-name className="truncate">
+          {group.id === "workspace" ? scopeName(session) : group.label}
+        </span>
         <ChevronDown
           aria-hidden
           className={cn(
@@ -327,10 +335,10 @@ export function NavRail({
     <nav
       aria-label="Primary"
       data-nav-rail
-      className="flex h-full w-[232px] shrink-0 flex-col bg-sidebar text-sidebar-foreground"
+      className="flex h-full w-[232px] shrink-0 flex-col bg-sidebar text-sidebar-foreground max-md:w-[min(18rem,85vw)]"
     >
       {/* ── the switcher, and the way to put the rail away. 40px, level with the content header. ── */}
-      <div className="flex h-10 shrink-0 items-center gap-1 pr-2 pl-2.5">
+      <div className="flex min-h-10 shrink-0 items-center gap-1 py-1 pr-2 pl-2.5">
         <WorkspaceSwitcher />
         <Hint label="Hide navigation" keys="[">
           <Button
@@ -338,7 +346,7 @@ export function NavRail({
             size="icon-xs"
             aria-label="Hide navigation"
             onClick={onHide}
-            className="size-7 text-text-tertiary hover:text-foreground"
+            className="size-7 text-text-tertiary hover:text-foreground max-md:size-11"
           >
             <PanelLeftClose className="size-4" />
           </Button>
@@ -346,7 +354,7 @@ export function NavRail({
       </div>
 
       {/* ── the two global verbs on one row: make a task, find anything ── */}
-      <div className="flex h-7 shrink-0 items-center gap-1.5 px-2.5">
+      <div className="flex h-7 shrink-0 items-center gap-1.5 px-2.5 max-md:h-11">
         <Hint label="New task" keys="C">
           <Button
             variant="outline"
@@ -356,7 +364,7 @@ export function NavRail({
               onNavigate?.();
             }}
             data-nav-new-task
-            className="h-7 flex-1 justify-start gap-2 px-2 text-[13px] font-normal"
+            className="h-7 flex-1 justify-start gap-2 px-2 text-[13px] font-normal max-md:h-11 max-md:text-[15px]"
           >
             <SquarePen className="size-4 text-text-tertiary" aria-hidden />
             New task
@@ -372,7 +380,7 @@ export function NavRail({
               openCommandPalette();
               onNavigate?.();
             }}
-            className="size-7 shrink-0 text-text-tertiary hover:text-foreground"
+            className="size-7 shrink-0 text-text-tertiary hover:text-foreground max-md:size-11"
           >
             <Search className="size-4" aria-hidden />
           </Button>
@@ -396,8 +404,8 @@ export function NavRail({
       <div className="shrink-0 border-t px-2.5 py-2">
         <button
           type="button"
-          aria-label="Work Workspace Settings"
-          title="Work Workspace Settings"
+          aria-label="Settings"
+          title="Settings — this computer and every workspace"
           onClick={() => {
             openSettings();
             onNavigate?.();
