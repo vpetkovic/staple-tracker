@@ -261,7 +261,6 @@ const PROBLEM_WORDS: Record<string, string> = {
   capture_off: "Usage tracking is off, so nothing is recorded.",
   no_binding: "No account is linked yet, so readings have nowhere to go. Add an account link below.",
   invalid_binding: "One account link in the settings file is broken and is being ignored. Edit or remove it, or add it again.",
-  no_reading: "A linked account has no reading yet. Claude records one the next time its status line updates; Codex on the next check.",
   statusline_removed: "The small step staple added to your Claude status line is gone (the settings file was changed). Turn automatic collection on again to put it back.",
   statusline_invalid_json: "Your Claude settings file can't be read (it isn't valid JSON).",
   statusline_not_installed: "A Claude folder is linked, but its status line doesn't record usage yet. Turn on automatic collection to add the step.",
@@ -282,12 +281,35 @@ export interface ProblemRow {
   detail: string;
 }
 
+/**
+ * "No reading yet" is one line PER ACCOUNT, naming it. The server raises `no_reading` once for
+ * each bound source without a reading, in source order; the account and source are read from
+ * `status.sources` (values), not out of the message, and paired with those problems in order
+ * so each line keeps its own server sentence for "Show details".
+ */
+function noReadingText(source: SourceStatus): string {
+  const words = SOURCE_WORDS[source.source];
+  const when = source.source === "claude_code_statusline" ? "Claude records one the next time its status line updates." : "Codex records one on the next check.";
+  return `No reading yet from ${source.accountRef} (${words.what}). ${when}`;
+}
+
 export function problemRows(status: CollectionStatus): ProblemRow[] {
-  return status.problems.map((problem: CollectionProblem) => ({
-    code: problem.code,
-    text: PROBLEM_WORDS[problem.code] ?? problem.message,
-    detail: problem.message,
-  }));
+  const silent = status.budgetCapture ? status.sources.filter((source) => source.lastReading === null) : [];
+  const noReading = status.problems.filter((problem) => problem.code === "no_reading");
+  const rows: ProblemRow[] = [];
+  let paired = false;
+  for (const problem of status.problems as CollectionProblem[]) {
+    if (problem.code !== "no_reading") {
+      rows.push({ code: problem.code, text: PROBLEM_WORDS[problem.code] ?? problem.message, detail: problem.message });
+    } else if (!paired && silent.length === noReading.length) {
+      paired = true;
+      silent.forEach((source, index) => rows.push({ code: "no_reading", text: noReadingText(source), detail: noReading[index]!.message }));
+    } else if (silent.length !== noReading.length) {
+      // A server that raised them differently: its own sentence, never a guessed pairing.
+      rows.push({ code: problem.code, text: problem.message, detail: problem.message });
+    }
+  }
+  return rows;
 }
 
 // ---------------------------------------------------------------- the plan, in plain words

@@ -400,6 +400,24 @@ describe("account links, through the section's handlers, as the CLI sees them", 
   });
 });
 
+describe("needs attention", () => {
+  it("names each account without a reading, once, instead of repeating one sentence", async () => {
+    await setBudgetCapture(true);
+    // Labels no earlier test stored a reading under (readings stay in hub.db).
+    await bindBudgetSource({ source: "claude-statusline", account: "claude-team" });
+    await bindBudgetSource({ source: "codex-rollout", account: "codex-plus" });
+    await bindBudgetSource({ source: "codex-rollout", account: "codex-work", codexHome: join(root, "codex-work") });
+    const markup = html(await section());
+    const lines = [...markup.matchAll(/<li[^>]*data-problem="no_reading"[^>]*>([\s\S]*?)<\/li>/g)].map((match) => text(match[1]!).trim());
+    expect(lines).toEqual([
+      "No reading yet from claude-team (Claude status line). Claude records one the next time its status line updates.",
+      "No reading yet from codex-plus (Codex sessions). Codex records one on the next check.",
+      "No reading yet from codex-work (Codex sessions). Codex records one on the next check.",
+    ]);
+    expect(new Set(lines).size).toBe(lines.length);
+  });
+});
+
 describe("collect now", () => {
   it("runs one collect and says what it found in plain words", async () => {
     const page = await section();
