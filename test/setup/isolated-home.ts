@@ -37,8 +37,9 @@
  *     files, and `snapshots/` and each workspace's own directory are written by normal
  *     operation, so only a new top-level `*.db` counts. A registration leak is G2's.
  */
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -48,7 +49,7 @@ import { FIXTURE_SESSION_IDS } from "../fixtures/budget-support.js";
 
 declare module "vitest" {
   export interface ProvidedContext {
-    isolatedHome: { home: string; stapleHome: string };
+    isolatedHome: { home: string; stapleHome: string; fakeBin: string };
   }
 }
 
@@ -244,6 +245,64 @@ export function describeChanges(stapleHome: string, before: HomeSnapshot, after:
   return changes;
 }
 
+/**
+ * THE MACHINE'S LAUNCHD IS NOT THE TEST'S. Budget collection reaches `launchctl` through a
+ * runner, and a test that forgets to inject a fake one (or runs the CLI as a child, which
+ * cannot be handed one) would otherwise ask the operator's real launchd: on a machine where
+ * `staple budget setup` has loaded the real collection agent, `status` then reports it as a
+ * foreign agent and the test fails, and a `bootout` would unload it. So every worker, and
+ * every child it spawns, finds this fake first on `PATH`, and `STAPLE_TEST_LAUNCHCTL` names it
+ * by absolute path for the default runner (so a child with its own PATH still gets it; the
+ * spawn helpers `bareEnv` and `cleanEnv` pass it on, and a child with an empty environment is
+ * caught by the before/after comparison of the real agent below). It answers `print` as launchd does
+ * for a label nothing loaded (exit 113) and refuses everything else. Every call is logged,
+ * and a call that is not a `print` fails the run at teardown: a test that meant to load or
+ * unload an agent must inject its own runner.
+ */
+const FAKE_LAUNCHCTL = `#!/bin/sh
+printf '%s\n' "$*" >> "$(dirname "$0")/launchctl-calls.log"
+if [ "$1" = "print" ]; then
+  echo "Could not find service \"$2\" in domain for port (the test suite's fake launchctl: nothing is loaded)" >&2
+  exit 113
+fi
+echo "the test suite's fake launchctl refuses: launchctl $*" >&2
+exit 1
+`;
+
+function installFakeLaunchctl(root: string): string {
+  const bin = join(root, "bin");
+  mkdirSync(bin, { recursive: true });
+  const path = join(bin, "launchctl");
+  writeFileSync(path, FAKE_LAUNCHCTL);
+  chmodSync(path, 0o755);
+  return bin;
+}
+
+/** The calls a test made to launchd that were not a read: each one meant to change it. */
+export function launchctlWrites(bin: string): string[] {
+  const log = join(bin, "launchctl-calls.log");
+  if (!existsSync(log)) return [];
+  return readFileSync(log, "utf8")
+    .split("\n")
+    .filter((line) => line !== "" && !line.startsWith("print "));
+}
+
+/**
+ * The operator's real collection agent as launchd reports it, READ-ONLY, reduced to what a
+ * test could change: whether it is loaded, the plist it was loaded from, the program it runs,
+ * and that plist's content. (`runs`, `pid` and `state` move on their own every few minutes.)
+ * A child spawned with an empty environment has neither the fake on PATH nor
+ * STAPLE_TEST_LAUNCHCTL, so this comparison is what catches it. Null off macOS.
+ */
+function realCollectAgent(): string | null {
+  if (process.platform !== "darwin" || typeof process.getuid !== "function") return null;
+  const printed = spawnSync("/bin/launchctl", ["print", `gui/${process.getuid()}/com.staple.budget-collect`], { encoding: "utf8", timeout: 15_000 });
+  const top = (key: string): string | null => new RegExp(`^\\t${key} = (.+)$`, "m").exec(printed.stdout ?? "")?.[1]?.trim() ?? null;
+  const path = top("path");
+  const plist = path !== null && existsSync(path) ? createHash("sha256").update(readFileSync(path)).digest("hex") : null;
+  return JSON.stringify({ loaded: printed.status === 0, path, program: top("program"), plist });
+}
+
 export default function setup(project: TestProject): () => void {
   const realHome = homedir();
   const watched = realStapleHomes(process.env, realHome);
@@ -263,16 +322,27 @@ export default function setup(project: TestProject): () => void {
   process.env.STAPLE_HOME = stapleHome;
   process.env.XDG_CONFIG_HOME = join(home, ".config");
   process.env.APPDATA = join(home, "AppData", "Roaming");
-  project.provide("isolatedHome", { home, stapleHome });
+  const agentBefore = realCollectAgent();
+  const fakeBin = installFakeLaunchctl(root);
+  process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
+  process.env.STAPLE_TEST_LAUNCHCTL = join(fakeBin, "launchctl");
+  project.provide("isolatedHome", { home, stapleHome, fakeBin });
 
   return () => {
     live.endedAt = new Date().toISOString();
     const changes = watched.flatMap((path, i) => describeChanges(path, before[i]!, snapshotHome(path, root), live));
+    const agentAfter = realCollectAgent();
+    if (agentAfter !== agentBefore) {
+      changes.push(`the machine's real launchd agent com.staple.budget-collect changed during the run: before ${agentBefore}, after ${agentAfter}`);
+    }
+    for (const call of launchctlWrites(fakeBin)) {
+      changes.push(`launchctl ${call} was run without an injected runner (it reached the suite's fake; on a real launchd it would have changed the operator's agents)`);
+    }
     rmSync(root, { recursive: true, force: true });
     if (changes.length > 0) {
       throw new Error(
-        `The test run wrote to the operator's real staple home:\n  ${changes.join("\n  ")}\n` +
-          "A test resolved the staple home through the default. Give it an explicit STAPLE_HOME.",
+        `The test run reached outside its isolated home (the operator's real staple home, or the machine's launchd):\n  ${changes.join("\n  ")}\n` +
+          "A test resolved the staple home through the default (give it an explicit STAPLE_HOME), or ran launchctl without injecting a runner.",
       );
     }
   };

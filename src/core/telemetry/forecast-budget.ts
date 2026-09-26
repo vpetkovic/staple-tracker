@@ -85,7 +85,7 @@ export const SPARSE_EDGE_FLOOR_SECONDS = 120;
 /** Other use needs this much time outside the attempts' spans, and this many readings there, to be measured. */
 export const OTHER_USE_MINIMUM = { seconds: 1800, readings: 2 } as const;
 
-const PROVISIONAL_NOTE = "provisional default until the admission policy defines the protected reserve; pass reserve to set it";
+export const PROVISIONAL_RESERVE_NOTE = "provisional default until the admission policy defines the protected reserve; pass reserve to set it";
 
 export type ReserveSource = "argument" | "provisional_default";
 
@@ -328,7 +328,8 @@ function otherUseBesideWork(otherPerHour: number, rest: number, windowSeconds: n
   return (otherPerHour * (windowSeconds - Math.min(rest, windowSeconds))) / HOUR;
 }
 
-function paceOf(readings: readonly WindowReading[]): BudgetPace | null {
+/** The pace of a window's readings (by `observedAt`), or null under two readings or no time between them. */
+export function paceOf(readings: readonly WindowReading[]): BudgetPace | null {
   if (readings.length < 2) return null;
   const first = readings[0]!;
   const last = readings[readings.length - 1]!;
@@ -344,6 +345,18 @@ function paceOf(readings: readonly WindowReading[]): BudgetPace | null {
     spanSeconds,
     readings: readings.length,
   };
+}
+
+/**
+ * When `percent` of the limit is used up at `percentPerHour`, from `asOf`: `never` at a pace of
+ * 0, else `before_reset` or `after_reset` of a reset `secondsToReset` away. The forecast's
+ * exhaustion (all of what is left) and the pressure read's reserve breach (what is left above
+ * the reserve) are both this.
+ */
+export function exhaustionAtPace(percent: number, percentPerHour: number, secondsToReset: number, asOf: string): BudgetExhaustion {
+  if (percentPerHour === 0) return { atPace: "never", seconds: null, at: null };
+  const seconds = (percent / percentPerHour) * HOUR;
+  return { atPace: seconds < secondsToReset ? "before_reset" : "after_reset", seconds, at: new Date(ms(asOf) + seconds * 1000).toISOString() };
 }
 
 /** A merged span of attempts, with the rise the window's readings show over it. */
@@ -455,11 +468,7 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
   else if (pace === null) {
     missing.exhaustion = "input_missing";
     missingInputs.exhaustion = ["pace"];
-  } else if (pace.percentPerHour === 0) exhaustion = { atPace: "never", seconds: null, at: null };
-  else {
-    const seconds = (reading.remainingPercent! / pace.percentPerHour) * HOUR;
-    exhaustion = { atPace: seconds < secondsToReset! ? "before_reset" : "after_reset", seconds, at: new Date(ms(context.asOf) + seconds * 1000).toISOString() };
-  }
+  } else exhaustion = exhaustionAtPace(reading.remainingPercent!, pace.percentPerHour, secondsToReset!, context.asOf);
 
   // ---- the work rate, over the union of the attempts' spans
   const spans = current && window.resetsAt !== null ? spansOf(input.attempts, input.readings) : [];
@@ -645,7 +654,7 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
     reserve = {
       percent: reserveAt,
       source: context.reserve.source,
-      note: context.reserve.source === "provisional_default" ? PROVISIONAL_NOTE : null,
+      note: context.reserve.source === "provisional_default" ? PROVISIONAL_RESERVE_NOTE : null,
       basis: "work_alone",
       scope: "through_the_work",
       breachProbability: alreadyBelow ? 1 : needsWindow ? null : breach / draws,
@@ -729,7 +738,7 @@ export function budgetForecast(input: {
   return {
     machineLocal: true,
     budgetCapture: input.budgetCapture,
-    reserve: { percent: input.reserve.percent, source: input.reserve.source, note: input.reserve.source === "provisional_default" ? PROVISIONAL_NOTE : null },
+    reserve: { percent: input.reserve.percent, source: input.reserve.source, note: input.reserve.source === "provisional_default" ? PROVISIONAL_RESERVE_NOTE : null },
     work: { expectedSeconds: input.labor.expectedSeconds, partial: input.labor.partial, schedule: "serial_from_as_of" },
     accounts: input.accounts.map((account) => ({
       provider: account.provider,

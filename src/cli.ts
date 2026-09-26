@@ -1064,8 +1064,10 @@ Provider budget
   budget ingest --source claude-statusline|codex-rollout|manual …
               record provider usage readings on this machine (opt-in: budget
               capture on; accounts come from budget bind); staple budget --help
-  budget [--account A]                  each account's current windows: latest reading,
-              high-water remaining, status; unknown is never shown as 0
+  budget [--account A] [--reserve P]    each account's current windows: latest reading,
+              high-water remaining, status, and the provisional pressure (observed
+              pace against the pace that keeps P% at the reset; default a
+              provisional 20%); unknown is never shown as 0
   budget history --account A [--since T] [--limit N] [--cursor C]
               one account's readings, bounded, with capture gaps listed
   budget setup [--claude-account A] [--codex-account B] [--yes]

@@ -18,6 +18,8 @@ import { readConfig } from "../../config/file.js";
 import { StapleError, nowIso } from "../types.js";
 import type { AttemptTransition } from "./attempt-records.js";
 import type { AttemptView } from "./attempt-derive.js";
+import { PRESSURE_RULE, limitPressure, type LimitPressure, type PressureRule } from "./budget-pressure.js";
+import { PROVISIONAL_RESERVE_NOTE, parseReserve, type ReserveSource } from "./forecast-budget.js";
 import { BudgetStore, WINDOW_TOLERANCE_SECONDS, type BudgetSample, type LimitWindow, type Missing, type WindowSampleView } from "./budget-store.js";
 import { isKnownBinding, type TelemetryConfig } from "./config.js";
 import { assertAccountRef, normalizeInstant, parseRelativeSeconds } from "./formats.js";
@@ -123,6 +125,8 @@ export interface LimitReading {
   readonly missing: Missing;
   /** The state of `remainingPercent`: provider-unavailable or missing when null, else approximate (stale, estimated, low confidence) or exact. */
   readonly quality: BudgetQuality;
+  /** The limit's session pressure against the view's reserve: PROVISIONAL (`budget-pressure.ts`). */
+  readonly pressure: LimitPressure;
 }
 
 export interface AccountBudget {
@@ -138,12 +142,37 @@ export interface BudgetView {
   /** The instant `status`, `stale` and `window_elapsed` were judged at. */
   readonly asOf: string;
   readonly budgetCapture: boolean;
+  /** The reserve every limit's `pressure` protects: an argument, or the provisional default (with its note). */
+  readonly reserve: { readonly percent: number; readonly source: ReserveSource; readonly note: string | null };
+  /** How pressure is read until the admission policy defines it. */
+  readonly pressureRule: PressureRule;
   readonly accounts: AccountBudget[];
 }
 
-function limitReading(store: BudgetStore, provider: string | null, accountRef: string, limitKey: string, now: string): LimitReading {
-  const reading = limitReadingOf(store, provider, accountRef, limitKey, now);
-  return { ...reading, latestSample: reading.latestSample === null ? null : qualifySample(reading.latestSample), quality: limitReadingQuality(reading) };
+function limitReading(
+  store: BudgetStore,
+  provider: string | null,
+  accountRef: string,
+  limitKey: string,
+  now: string,
+  reserve: { percent: number; source: ReserveSource },
+): LimitReading {
+  const { samples, ...reading } = limitReadingOf(store, provider, accountRef, limitKey, now);
+  const pressure = limitPressure({
+    asOf: now,
+    status: reading.status,
+    window: reading.window,
+    remainingPercent: reading.remainingPercent,
+    stale: reading.stale,
+    regressionCount: reading.regressionCount,
+    missing: reading.missing,
+    readings: samples
+      .filter((sample) => sample.usedPercent !== null)
+      .map((sample) => ({ id: sample.id, observedAt: sample.observedAt, usedPercent: sample.usedPercent!, sessionRef: sample.sessionRef })),
+    latestObservedAt: reading.latestSample?.observedAt ?? null,
+    reserve,
+  });
+  return { ...reading, latestSample: reading.latestSample === null ? null : qualifySample(reading.latestSample), quality: limitReadingQuality(reading), pressure };
 }
 
 function limitReadingOf(
@@ -152,7 +181,7 @@ function limitReadingOf(
   accountRef: string,
   limitKey: string,
   now: string,
-): Omit<LimitReading, "quality" | "latestSample"> & { latestSample: BudgetSample | null } {
+): Omit<LimitReading, "quality" | "latestSample" | "pressure"> & { latestSample: BudgetSample | null; samples: readonly BudgetSample[] } {
   const windows = store.listWindows({ accountRef, limitKey }, now).filter((window) => provider === null || window.provider === provider);
   const missing: Missing = {};
   const current = windows.filter((window) => window.status === "current").sort((a, b) => ((a.resetsAt ?? "") < (b.resetsAt ?? "") ? 1 : -1))[0];
@@ -180,6 +209,7 @@ function limitReadingOf(
       sampleCount: high?.sampleCount ?? null,
       stale: null,
       missing,
+      samples: [],
     };
   }
   const samples = store.samplesInWindow(current.id);
@@ -213,6 +243,7 @@ function limitReadingOf(
     // ago can be two hours old, and it is the age of the value that makes it stale.
     stale: latest === null ? null : ms(now) - ms(latest.observedAt) > GAP_SECONDS * 1000,
     missing,
+    samples,
   };
 }
 
@@ -222,8 +253,9 @@ function limitReadingOf(
  * readings for and those a source binding names (so a bound account nothing has arrived
  * for reads `no_sample_yet`, not an empty success).
  */
-export function readBudget(home: string, query: { account?: string; now?: string } = {}): BudgetView {
+export function readBudget(home: string, query: { account?: string; now?: string; reserve?: string | number } = {}): BudgetView {
   const now = query.now ?? nowIso();
+  const reserve = parseReserve(query.reserve);
   const account = query.account === undefined ? undefined : assertAccountRef(query.account, "--account");
   const telemetry = telemetryOf(home);
   return withHub(home, (hub) => {
@@ -255,6 +287,8 @@ export function readBudget(home: string, query: { account?: string; now?: string
     return {
       asOf: now,
       budgetCapture: telemetry.budgetCapture,
+      reserve: { percent: reserve.percent, source: reserve.source, note: reserve.source === "provisional_default" ? PROVISIONAL_RESERVE_NOTE : null },
+      pressureRule: PRESSURE_RULE,
       accounts: accounts.map((key): AccountBudget => {
         const limitKeys =
           hub === null
@@ -274,7 +308,7 @@ export function readBudget(home: string, query: { account?: string; now?: string
           provider: key.provider,
           accountRef: key.accountRef,
           bound: boundAccounts(telemetry).some((bound) => bound.accountRef === key.accountRef),
-          limits: store === null ? [] : limitKeys.map((limitKey) => limitReading(store, key.provider, key.accountRef, limitKey, now)),
+          limits: store === null ? [] : limitKeys.map((limitKey) => limitReading(store, key.provider, key.accountRef, limitKey, now, reserve)),
           missing,
         };
       }),

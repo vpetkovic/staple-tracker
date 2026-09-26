@@ -491,7 +491,7 @@ describe("an attempt's burn", () => {
 describe("get_budget", () => {
   it("reads each current window by high-water, and unknown as null with its reason", () => {
     const now = new Date().toISOString();
-    expect(readBudget(home, { now })).toEqual({ asOf: now, budgetCapture: false, accounts: [] });
+    expect(readBudget(home, { now })).toMatchObject({ asOf: now, budgetCapture: false, accounts: [] });
     // An account named with no ingestion path at all.
     expect(readBudget(home, { account: "nobody", now }).accounts).toEqual([
       { provider: null, accountRef: "nobody", bound: false, limits: [], missing: { limits: "source_unavailable" } },
