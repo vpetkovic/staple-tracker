@@ -304,7 +304,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         </DialogDescription>
       </DialogHeader>
       <DialogContent
-        className="top-[18%] translate-y-0 overflow-hidden p-0"
+        // A phone: the palette rises from the top safe area and uses the width it has.
+        className="top-[18%] translate-y-0 overflow-hidden p-0 max-md:top-[max(0.75rem,env(safe-area-inset-top))] max-md:max-w-[calc(100vw-1.5rem)]"
         showCloseButton={false}
         aria-label="Command palette"
         // Radix listens for Escape on the document in the capture phase, so it fires
@@ -373,6 +374,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                         value={command.id}
                         disabled={busy}
                         onSelect={() => void run(command)}
+                        className="max-md:min-h-11"
                       >
                         <span className="truncate">{command.label}</span>
                         {command.hint ? (

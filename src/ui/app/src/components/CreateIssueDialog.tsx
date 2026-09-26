@@ -92,8 +92,12 @@ const PRIORITY_WORDS: Record<string, string> = { critical: "Urgent", high: "High
  * On a phone the form is a full-screen sheet that scrolls, rather than a centred card whose
  * lower fields sit under the keyboard. Applied over the dialog's centred geometry.
  */
-export const PHONE_SHEET_CLASS =
-  "max-md:top-0 max-md:left-0 max-md:h-dvh max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:overflow-y-auto max-md:rounded-none max-md:border-0 max-md:pt-[max(1.5rem,env(safe-area-inset-top))] max-md:pb-[max(1.5rem,env(safe-area-inset-bottom))]";
+export const PHONE_SHEET_CLASS = [
+  "max-md:top-0 max-md:left-0 max-md:h-dvh max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:overflow-y-auto max-md:rounded-none max-md:border-0",
+  "max-md:pt-[max(1.5rem,env(safe-area-inset-top))] max-md:pb-[max(1.5rem,env(safe-area-inset-bottom))]",
+  // The dialog's own close button, grown to a 44px target on a phone.
+  "max-md:[&>[data-slot=dialog-close]]:top-[max(0.5rem,env(safe-area-inset-top))] max-md:[&>[data-slot=dialog-close]]:right-2 max-md:[&>[data-slot=dialog-close]]:flex max-md:[&>[data-slot=dialog-close]]:size-11 max-md:[&>[data-slot=dialog-close]]:items-center max-md:[&>[data-slot=dialog-close]]:justify-center",
+].join(" ");
 
 /** Radix Select forbids an empty item value; this stands for "no project". */
 const NO_PROJECT = "__none__";

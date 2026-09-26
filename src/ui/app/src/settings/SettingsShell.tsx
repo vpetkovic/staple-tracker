@@ -127,10 +127,19 @@ export function SettingsShell({
       ?.querySelector<HTMLButtonElement>(`[data-settings-category="${active ?? ""}"]`)
       ?.focus({ preventScroll: true });
   };
+  /**
+   * On a phone the list opens with nothing focused — a focus ring on the first row of a
+   * sheet you just tapped open reads as a selection nobody made. Focus follows the two
+   * transitions instead: into the section's heading on the way in, back to the row you
+   * came from on the way out.
+   */
+  const previousPane = useRef(pane);
   useEffect(() => {
+    const was = previousPane.current;
+    previousPane.current = pane;
     if (!stacked) return;
     if (pane === "content") headingRef.current?.focus({ preventScroll: true });
-    else focusActiveNav();
+    else if (was === "content") focusActiveNav();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stacked, pane, active]);
 

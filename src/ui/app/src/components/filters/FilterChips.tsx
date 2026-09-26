@@ -190,6 +190,39 @@ export function FilterChipStrip({
   );
   const filtering = isFilteringNow(filters);
   const me = presetContext.me;
+  /**
+   * WHAT IS ON COMES FIRST: lit quick filters, then the other active filters, then Clear
+   * all, then the quick filters that are off. On a phone the row scrolls sideways, and a
+   * filter that is narrowing the list must never be the chip scrolled out of sight.
+   */
+  const litPresets = presets.filter((preset) => presetActive(filters, preset));
+  const unlitPresets = presets.filter((preset) => !presetActive(filters, preset));
+
+  /** One quick filter. "My tasks" with nobody known as "me" asks first, once, then filters. */
+  const renderPreset = (preset: FilterPreset) => {
+    const on = presetActive(filters, preset);
+    if (preset.id === MY_TASKS_ID && !me) {
+      // Nobody is "me" yet: the first tap asks, once, and then filters.
+      return (
+        <Popover key={preset.id} open={asking} onOpenChange={setAsking}>
+          <PopoverTrigger asChild>
+            <PresetChip preset={preset} on={false} />
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-[min(18rem,calc(100vw-1.5rem))] p-0">
+            <WhoAmI
+              rows={rows}
+              onChoose={(name) => {
+                setAsking(false);
+                onChooseMe?.(name);
+                setFilters(withDimension(filters, "assignee", [name]));
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+      );
+    }
+    return <PresetChip key={preset.id} preset={preset} on={on} onToggle={() => setFilters(togglePreset(filters, preset))} />;
+  };
 
   return (
     <div
@@ -201,30 +234,7 @@ export function FilterChipStrip({
         "max-md:gap-2 max-md:overflow-x-auto max-md:px-3 md:flex-wrap md:py-1.5",
       )}
     >
-      {presets.map((preset) => {
-        const on = presetActive(filters, preset);
-        if (preset.id === MY_TASKS_ID && !me) {
-          // Nobody is "me" yet: the first tap asks, once, and then filters.
-          return (
-            <Popover key={preset.id} open={asking} onOpenChange={setAsking}>
-              <PopoverTrigger asChild>
-                <PresetChip preset={preset} on={false} />
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-[min(18rem,calc(100vw-1.5rem))] p-0">
-                <WhoAmI
-                  rows={rows}
-                  onChoose={(name) => {
-                    setAsking(false);
-                    onChooseMe?.(name);
-                    setFilters(withDimension(filters, "assignee", [name]));
-                  }}
-                />
-              </PopoverContent>
-            </Popover>
-          );
-        }
-        return <PresetChip key={preset.id} preset={preset} on={on} onToggle={() => setFilters(togglePreset(filters, preset))} />;
-      })}
+      {litPresets.map(renderPreset)}
 
       {me && presets.some((preset) => preset.id === MY_TASKS_ID && presetActive(filters, preset)) ? (
         <button
@@ -239,8 +249,6 @@ export function FilterChipStrip({
           Not {me}?
         </button>
       ) : null}
-
-      {chips.length > 0 ? <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" /> : null}
 
       {chips.map((chip) => {
         const phrase = chipPhrase(chip);
@@ -298,13 +306,41 @@ export function FilterChipStrip({
           data-filter-clear
           className={cn(
             HIT,
-            "ml-auto rounded-md px-2 text-[12px] font-medium whitespace-nowrap text-text-secondary hover:text-foreground max-md:ml-1 max-md:text-[14px]",
+            "rounded-md px-2 text-[12px] font-medium whitespace-nowrap text-text-secondary hover:text-foreground max-md:text-[14px]",
             FOCUS,
           )}
         >
           Clear all
         </button>
       ) : null}
+
+      {filtering && unlitPresets.length > 0 ? <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" /> : null}
+
+      {unlitPresets.map((preset) => {
+        const on = presetActive(filters, preset);
+        if (preset.id === MY_TASKS_ID && !me) {
+          // Nobody is "me" yet: the first tap asks, once, and then filters.
+          return (
+            <Popover key={preset.id} open={asking} onOpenChange={setAsking}>
+              <PopoverTrigger asChild>
+                <PresetChip preset={preset} on={false} />
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-[min(18rem,calc(100vw-1.5rem))] p-0">
+                <WhoAmI
+                  rows={rows}
+                  onChoose={(name) => {
+                    setAsking(false);
+                    onChooseMe?.(name);
+                    setFilters(withDimension(filters, "assignee", [name]));
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
+          );
+        }
+        return <PresetChip key={preset.id} preset={preset} on={on} onToggle={() => setFilters(togglePreset(filters, preset))} />;
+      })}
+
     </div>
   );
 }

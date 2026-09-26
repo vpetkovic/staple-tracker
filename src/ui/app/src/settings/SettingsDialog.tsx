@@ -294,6 +294,12 @@ export function SettingsDialog({
            */
           onOpenAutoFocus={(event) => {
             const root = event.currentTarget as HTMLElement | null;
+            // A phone opening on the list: the sheet itself takes focus, no row does.
+            if (stacked && pane === "nav") {
+              event.preventDefault();
+              root?.focus({ preventScroll: true });
+              return;
+            }
             const button = root?.querySelector<HTMLButtonElement>(`[data-settings-category="${active ?? ""}"]`);
             if (!button) return;
             event.preventDefault();
