@@ -703,3 +703,29 @@ export function windowReadings(home: string, windowIds: readonly string[]): Map<
     return out;
   });
 }
+
+/** One source's newest reading for one account, as `budget status` reports it. */
+export interface SourceLastReading {
+  readonly provider: string;
+  readonly accountRef: string;
+  readonly sourceKind: string;
+  /** When the newest reading was true. */
+  readonly observedAt: string;
+  /** When this machine stored its newest reading. */
+  readonly recordedAt: string;
+  readonly sampleCount: number;
+}
+
+/** The newest reading per account and source on this machine, or none before any. */
+export function lastReadingsBySource(home: string): SourceLastReading[] {
+  return withHub(home, (hub) => {
+    if (hub === null) return [];
+    return hub
+      .prepare(
+        `SELECT provider, account_ref AS accountRef, source_kind AS sourceKind,
+                MAX(observed_at) AS observedAt, MAX(recorded_at) AS recordedAt, COUNT(*) AS sampleCount
+           FROM budget_samples GROUP BY provider, account_ref, source_kind ORDER BY account_ref, provider, source_kind`,
+      )
+      .all() as unknown as SourceLastReading[];
+  });
+}

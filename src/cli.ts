@@ -1068,6 +1068,10 @@ Provider budget
               high-water remaining, status; unknown is never shown as 0
   budget history --account A [--since T] [--limit N] [--cursor C]
               one account's readings, bounded, with capture gaps listed
+  budget setup [--claude-account A] [--codex-account B] [--yes]
+              one consent: capture on, bindings, the Claude status-line wrapper
+              and the Codex watcher; without --yes only the plan. budget unsetup
+              [--yes] reverses it exactly; budget status and budget collect
 
 Durations (<dur>): 90s, 30m, 2h, 3d, or a bare number of seconds.
 Claim liveness: in_progress rows show "held <dur> · silent <dur>" in ls/show; the

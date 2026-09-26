@@ -52,6 +52,8 @@ staple budget ingest --source claude-statusline [--tee] [--account A]   a status
 staple budget ingest --source codex-rollout <file> [--account A]        a Codex rollout's readings
 staple budget ingest --source manual --account A --limit-key K --used P [--resets-at T]
 staple budget capture on|off | bind --source S --account A | unbind | bindings
+staple budget setup [--claude-account A] [--codex-account B] [--yes]   one consent: capture, bindings, wrapper, watcher
+staple budget unsetup [--yes] | status | collect [--max-files N]
 
 staple attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label] [--role R | --attempt ID]
                                                     report on the attempt you hold
@@ -1142,6 +1144,66 @@ with `reason` one of `unchanged`, `fork_copied`, `not_reported_by_source`,
 typed at the CLI is the operator's own and is accepted with capture off; the
 same reading sent by an agent through `record_budget_sample` is refused
 (`capture_disabled`) until the operator runs `staple budget capture on`.
+
+### Automatic collection
+
+One explicit consent turns on everything above and keeps it running
+([execution-telemetry.md](execution-telemetry.md#automatic-collection)):
+
+```bash
+staple budget setup --claude-account personal-max --codex-account codex-plus      # prints the plan, changes nothing (exit 2)
+staple budget setup --claude-account personal-max --codex-account codex-plus --yes
+staple budget status                                                              # sources, wrapper, watcher, problems
+staple budget collect                                                             # one watcher run, by hand
+staple budget unsetup --yes                                                       # reverse exactly what setup did
+```
+
+- **`setup`** turns capture on, binds the Claude config directory
+  (`--claude-config-dir`, default `CLAUDE_CONFIG_DIR` or `~/.claude`) and the
+  Codex home (`--codex-home`, default `CODEX_HOME` or `~/.codex`), puts the
+  status-line wrapper in front of the `statusLine` command `settings.json`
+  already has, and on macOS loads a launch agent that runs `budget collect`
+  every `--interval` minutes (default 5). An account already bound to a home
+  is reused when its flag is left out; a harness with neither is skipped.
+  `--no-statusline` and `--no-watcher` leave those parts alone. Without `--yes`
+  a plan that would change something is refused with exit 2 and the plan
+  (`detail.plan` with `--json`); an already-set-up machine prints "nothing to
+  change" and exits 0. Each step reads `+` (will change), `=` (already so),
+  `-` (skipped, with why) or `!` (refused: nothing at all is changed, for
+  example a `settings.json` that is not valid JSON).
+- **The wrapper** is the rollback-safe recipe above, marked
+  `: staple-statusline-wrapper/v1;` and ending in your original command,
+  verbatim:
+
+  ```bash
+  bash -c ': staple-statusline-wrapper/v1; f=$(mktemp); cat > "$f"; exec 3<"$f" 4<"$f"; rm -f "$f"; '\''/Users/me/.local/bin/staple'\'' budget ingest --source claude-statusline --config-dir '\''/Users/me/.claude'\'' <&3 >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; my-statusline'
+  ```
+
+  `settings.json` is copied to `~/.staple/backups/claude-settings/` first, and
+  only the `command` string changes. A status line that already runs
+  `staple budget ingest` is not wrapped twice. With no status line at all, the
+  wrapper records readings and prints nothing.
+- **`collect`** ingests the rollouts under each bound Codex home's `sessions/`
+  that are new or have grown since the last run, newest first, at most
+  `--max-files` (default 100) per run. `--quiet` prints nothing but failures,
+  which is how the agent runs it. Off macOS, schedule it yourself:
+  `*/5 * * * * ~/.local/bin/staple budget collect --quiet` (`crontab -e`).
+- **`unsetup`** restores the original `statusLine` byte for byte, unloads and
+  deletes the agent, and puts capture and the bindings back as they were before
+  setup, unless you changed them since. Stored readings are kept.
+- **`status`** `--json` is `{budgetCapture, bindings, sources, statusline,
+  watcher, setup, problems}`: each source's `lastReading` (`observedAt`,
+  `recordedAt`, `ageSeconds`), each wrapper's `state` (`installed`,
+  `hand_wrapped`, `not_installed`, `missing_file`, `invalid_json`,
+  `unsupported`), the watcher's `installed`, `loaded`, `lastRun` and
+  `lastError`, and `problems` as `{code, message}`.
+
+The web UI server exposes the same methods: `GET /api/budget/collection` (the
+status), and `POST /api/budget/collection/plan` (`{action: "setup"|"unsetup",
+…options}`), `/setup` and `/unsetup` (both refused with 400 and the plan unless
+the body has `"consent": true`) and `/collect`. Options are `claudeAccount`,
+`codexAccount`, `claudeConfigDir`, `codexHome`, `statusline`, `watcher` and
+`intervalMinutes`. They are machine-local and never trigger a sync.
 
 ### Reading budget and attempts back
 

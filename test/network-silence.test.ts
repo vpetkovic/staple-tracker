@@ -1084,6 +1084,8 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         "/api/queue",
         "/api/settings",
         "/api/poll",
+        // STA-303: the collection status the web Settings reads (local files and hub.db).
+        "/api/budget/collection",
       ];
 
       for (let round = 0; round < 3; round += 1) {
@@ -1170,6 +1172,18 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         ["/api/cloud/workspace/disconnect", { slug: "netsilenceui", confirm: true }],
         ["/api/hub/unregister", { slug: "netsilenceui" }],
         ["/api/hub/unregister", { slug: "no-such-workspace", confirm: true }],
+        /*
+         * STA-303: automatic budget collection. The contract is that it makes no
+         * network call, and these routes are excluded from the post-write sync
+         * trigger for that reason. Setup is sent without consent (refused), with it,
+         * then a collect and an unsetup, so each round ends where it began. Codex only
+         * and no watcher: a Claude settings file and launchd are not this file's subject.
+         */
+        ["/api/budget/collection/plan", { action: "setup", codexAccount: "codex-plus", watcher: false }, 200],
+        ["/api/budget/collection/setup", { codexAccount: "codex-plus", watcher: false }, 400],
+        ["/api/budget/collection/setup", { codexAccount: "codex-plus", watcher: false, consent: true }, 200],
+        ["/api/budget/collection/collect", {}, 200],
+        ["/api/budget/collection/unsetup", { consent: true }, 200],
         /*
          * S18 (STA-279). A hub backup is offered unconditionally — the button is
          * never hidden and never gated on a connection — so it is reachable on a
