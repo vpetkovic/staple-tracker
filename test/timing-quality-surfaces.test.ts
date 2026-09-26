@@ -15,7 +15,7 @@ import { writeEventRow } from "../src/core/event-row.js";
 import { setClock } from "../src/core/types.js";
 import { resolveWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "quality";
 let home: string;
@@ -28,11 +28,11 @@ let epic: string;
 let mixed: string;
 const refs: Record<string, string> = {};
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
-function cliJson(...args: string[]): any {
-  const result = cli(...args, "--ws", WS, "--json");
+async function cliJson(...args: string[]): Promise<any> {
+  const result = await cli(...args, "--ws", WS, "--json");
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 }
@@ -45,7 +45,7 @@ async function tool(name: string, args: Record<string, unknown>): Promise<any> {
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   return toolPayload(result);
 }
-const mint = (title: string, ...args: string[]): string => String(cliJson("new", title, ...args).identifier);
+const mint = async (title: string, ...args: string[]): Promise<string> => String((await cliJson("new", title, ...args)).identifier);
 /** Every field but the read's own instant, which each call stamps. */
 const withoutAsOf = ({ asOf: _asOf, ...rest }: { asOf: string }): Record<string, unknown> => rest;
 
@@ -54,22 +54,22 @@ beforeAll(async () => {
   emptyDir = mkdtempSync(join(tmpdir(), "staple-quality-cwd-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
 
   // An epic with two leaves worked and landed at once (under the floor), one landed without
   // ever starting (missing), one still open and one cancelled: three eligible records.
-  epic = mint("Epic");
+  epic = await mint("Epic");
   for (const name of ["quick", "quicker"]) {
-    refs[name] = mint(name, "--parent", epic, "--estimate", "1h");
-    expect(cli("checkout", refs[name]!, "--ws", WS).status).toBe(0);
-    expect(cli("done", refs[name]!, "--ws", WS).status).toBe(0);
+    refs[name] = await mint(name, "--parent", epic, "--estimate", "1h");
+    expect((await cli("checkout", refs[name]!, "--ws", WS)).status).toBe(0);
+    expect((await cli("done", refs[name]!, "--ws", WS)).status).toBe(0);
   }
-  refs.skipped = mint("skipped", "--parent", epic, "--kind", "bug");
-  expect(cli("status", refs.skipped, "done", "--ws", WS).status).toBe(0);
-  refs.open = mint("open", "--parent", epic);
-  expect(cli("checkout", refs.open, "--ws", WS).status).toBe(0);
-  refs.dropped = mint("dropped", "--parent", epic);
-  expect(cli("cancel", refs.dropped, "--ws", WS).status).toBe(0);
+  refs.skipped = await mint("skipped", "--parent", epic, "--kind", "bug");
+  expect((await cli("status", refs.skipped, "done", "--ws", WS)).status).toBe(0);
+  refs.open = await mint("open", "--parent", epic);
+  expect((await cli("checkout", refs.open, "--ws", WS)).status).toBe(0);
+  refs.dropped = await mint("dropped", "--parent", epic);
+  expect((await cli("cancel", refs.dropped, "--ws", WS)).status).toBe(0);
 
   /**
    * A second epic with the states the CLI cannot produce in real time: exact and sparse work
@@ -135,7 +135,7 @@ afterAll(async () => {
 
 describe("timing quality: one payload through the CLI, MCP and HTTP", () => {
   it("counts each state over the eligible leaves and lists every record with its state", async () => {
-    const viaCli = cliJson("timing", "quality", "--parent", epic);
+    const viaCli = await cliJson("timing", "quality", "--parent", epic);
     const viaMcp = await tool("timing_quality", { parent: epic });
     const viaHttp = await http(`/api/timing/quality?ws=${WS}&parent=${epic}`);
     expect(viaHttp.status).toBe(200);
@@ -156,7 +156,7 @@ describe("timing quality: one payload through the CLI, MCP and HTTP", () => {
   });
 
   it("filters and excludes the same way on every surface", async () => {
-    const viaCli = cliJson("timing", "quality", "--parent", epic, "--kind", "task", "--exclude", "timing-floor", "--exclude-reason", "sparse");
+    const viaCli = await cliJson("timing", "quality", "--parent", epic, "--kind", "task", "--exclude", "timing-floor", "--exclude-reason", "sparse");
     const viaMcp = await tool("timing_quality", { parent: epic, kind: ["task"], exclude: ["timing-floor"], exclude_reasons: ["sparse"] });
     const viaHttp = await http(`/api/timing/quality?ws=${WS}&parent=${epic}&kind=task&exclude=timing-floor&excludeReason=sparse`);
     expect(withoutAsOf(viaMcp)).toEqual(withoutAsOf(viaCli));
@@ -177,28 +177,28 @@ describe("timing quality: one payload through the CLI, MCP and HTTP", () => {
   });
 
   it("walks the same pages with the same cursor", async () => {
-    const first = cliJson("timing", "quality", "--parent", epic, "--limit", "2");
+    const first = await cliJson("timing", "quality", "--parent", epic, "--limit", "2");
     expect(first.truncated).toBe(true);
     const viaMcp = await tool("timing_quality", { parent: epic, limit: 2, cursor: first.nextCursor });
     const viaHttp = await http(`/api/timing/quality?ws=${WS}&parent=${epic}&limit=2&cursor=${encodeURIComponent(first.nextCursor)}`);
-    const viaCli = cliJson("timing", "quality", "--parent", epic, "--limit", "2", "--cursor", first.nextCursor);
+    const viaCli = await cliJson("timing", "quality", "--parent", epic, "--limit", "2", "--cursor", first.nextCursor);
     expect(viaCli.items.map((item: { identifier: string }) => item.identifier)).toEqual([refs.skipped]);
     expect(withoutAsOf(viaMcp)).toEqual(withoutAsOf(viaCli));
     expect(withoutAsOf(viaHttp.body)).toEqual(withoutAsOf(viaCli));
   });
 
   it("refuses a state no issue can carry, on every surface", async () => {
-    const bare = cli("timing", "quality", "--exclude", "provider-unavailable", "--ws", WS);
+    const bare = await cli("timing", "quality", "--exclude", "provider-unavailable", "--ws", WS);
     expect(bare.status).toBe(2);
     expect(bare.stderr).toMatch(/budget state/);
     expect((await mcp.call("timing_quality", { exclude: ["provider-unavailable"], ws: WS })).isError).toBe(true);
     const viaHttp = await http(`/api/timing/quality?ws=${WS}&exclude=provider-unavailable`);
     expect(viaHttp.status).toBe(409);
-    expect(cli("timing", "nonsense", "--ws", WS).status).toBe(2);
+    expect((await cli("timing", "nonsense", "--ws", WS)).status).toBe(2);
   });
 
-  it("prints the counts, the ratio and one line per record", () => {
-    const result = cli("timing", "quality", "--parent", epic, "--ws", WS);
+  it("prints the counts, the ratio and one line per record", async () => {
+    const result = await cli("timing", "quality", "--parent", epic, "--ws", WS);
     expect(result.status, result.stderr).toBe(0);
     const lines = result.stdout.trimEnd().split("\n");
     expect(lines[0]).toBe(`3 eligible (done leaves) of 5 issues · beneath ${epic} · not eligible: 0 parents, 1 open, 1 cancelled`);
@@ -211,14 +211,14 @@ describe("timing quality over a mixed population, on every surface", () => {
   const titles = (report: { items: Array<{ title: string }> }): string[] => report.items.map((item) => item.title);
 
   it("reads each state, and excluding approximate drops the reconstructed record that is sparse", async () => {
-    const all = cliJson("timing", "quality", "--parent", mixed);
+    const all = await cliJson("timing", "quality", "--parent", mixed);
     expect(all.items.map((item: { title: string; work: { state: string; reasons: string[] } }) => [item.title, item.work.state, item.work.reasons])).toEqual([
       ["recon", "reconstructed", ["reconstructed"]],
       ["reconSparse", "reconstructed", ["reconstructed", "sparse"]],
       ["exact", "exact", []],
       ["sparse", "approximate", ["sparse"]],
     ]);
-    const viaCli = cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate");
+    const viaCli = await cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate");
     const viaMcp = await tool("timing_quality", { parent: mixed, exclude: ["approximate"] });
     const viaHttp = await http(`/api/timing/quality?ws=${WS}&parent=${mixed}&exclude=approximate`);
     expect(withoutAsOf(viaMcp)).toEqual(withoutAsOf(viaCli));
@@ -230,19 +230,19 @@ describe("timing quality over a mixed population, on every surface", () => {
   });
 
   it("excludes by a reason that matches, and selects exact alone or with clean reconstructed records", async () => {
-    const byReason = cliJson("timing", "quality", "--parent", mixed, "--exclude-reason", "sparse");
+    const byReason = await cliJson("timing", "quality", "--parent", mixed, "--exclude-reason", "sparse");
     expect(withoutAsOf(await tool("timing_quality", { parent: mixed, exclude_reasons: ["sparse"] }))).toEqual(withoutAsOf(byReason));
     expect(titles(byReason)).toEqual(["recon", "exact"]);
     expect(byReason.excluded.reasons.sparse).toBe(2);
-    const exactOnly = cliJson("timing", "quality", "--parent", mixed, "--include", "exact");
+    const exactOnly = await cliJson("timing", "quality", "--parent", mixed, "--include", "exact");
     expect(withoutAsOf((await http(`/api/timing/quality?ws=${WS}&parent=${mixed}&include=exact`)).body)).toEqual(withoutAsOf(exactOnly));
     expect(titles(exactOnly)).toEqual(["exact"]);
-    expect(titles(cliJson("timing", "quality", "--parent", mixed, "--include", "exact,reconstructed"))).toEqual(["recon", "exact"]);
+    expect(titles(await cliJson("timing", "quality", "--parent", mixed, "--include", "exact,reconstructed"))).toEqual(["recon", "exact"]);
   });
 
   it("takes repeated list flags on the CLI as HTTP takes repeated parameters", async () => {
-    const repeated = cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate", "--exclude", "reconstructed", "--kind", "task", "--kind", "bug");
-    const commas = cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate,reconstructed", "--kind", "task,bug");
+    const repeated = await cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate", "--exclude", "reconstructed", "--kind", "task", "--kind", "bug");
+    const commas = await cliJson("timing", "quality", "--parent", mixed, "--exclude", "approximate,reconstructed", "--kind", "task,bug");
     const viaHttp = await http(`/api/timing/quality?ws=${WS}&parent=${mixed}&exclude=approximate&exclude=reconstructed&kind=task&kind=bug`);
     expect(repeated.filter).toMatchObject({ exclude: ["approximate", "reconstructed"], kind: ["task", "bug"] });
     expect(withoutAsOf(repeated)).toEqual(withoutAsOf(commas));
@@ -251,7 +251,7 @@ describe("timing quality over a mixed population, on every surface", () => {
   });
 
   it("refuses a reason code outside the closed set, naming the field on every surface", async () => {
-    const bare = cli("timing", "quality", "--exclude-reason", "sprase", "--ws", WS);
+    const bare = await cli("timing", "quality", "--exclude-reason", "sprase", "--ws", WS);
     expect(bare.status).toBe(2);
     expect(bare.stderr).toMatch(/excludeReasons takes work reason codes/);
     const viaMcp = await mcp.call("timing_quality", { exclude_reasons: ["sprase"], ws: WS });
@@ -265,7 +265,7 @@ describe("timing quality over a mixed population, on every surface", () => {
 
 describe("the per-record state rides the existing surfaces", () => {
   it("show --json, get_task and /api/issue carry the same work and wall state and reasons", async () => {
-    const viaCli = cliJson("show", refs.quick!).timing.quality;
+    const viaCli = (await cliJson("show", refs.quick!)).timing.quality;
     expect(viaCli.work).toMatchObject({ state: "timing-floor", reasons: ["timing_floor"] });
     expect(viaCli.wall.state).not.toBeNull();
     expect((await tool("get_task", { ref: refs.quick })).timing.quality).toEqual(viaCli);
@@ -273,7 +273,7 @@ describe("the per-record state rides the existing surfaces", () => {
   });
 
   it("attempts --json and list_attempts carry each attempt's effort and its state", async () => {
-    const viaCli = cliJson("attempts", refs.quick!);
+    const viaCli = await cliJson("attempts", refs.quick!);
     expect(viaCli.items[0]).toMatchObject({ quality: { state: "timing-floor", reasons: ["timing_floor"] } });
     expect(typeof viaCli.items[0].effortSeconds).toBe("number");
     expect((await tool("list_attempts", { ref: refs.quick })).items).toEqual(viaCli.items);

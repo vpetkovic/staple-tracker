@@ -29,7 +29,7 @@ import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import {
   cliEnvelope,
   mcpEnvelope,
-  runCli,
+  runCliAsync,
   startMcpClient,
   toolPayload,
   type McpHarness,
@@ -47,19 +47,19 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: RESCUER });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: RESCUER });
 }
 
 /** Create a fresh task and park it under HOLDER's claim. Returns the identifier. */
-function newHeldTask(title: string): string {
-  expect(cli("new", title, "--ws", WS).status).toBe(0);
-  const created = JSON.parse(cli("ls", "--ws", WS, "--json").stdout) as Array<{
+async function newHeldTask(title: string): Promise<string> {
+  expect((await cli("new", title, "--ws", WS)).status).toBe(0);
+  const created = JSON.parse((await cli("ls", "--ws", WS, "--json")).stdout) as Array<{
     identifier: string;
     title: string;
   }>;
   const ref = created.find((i) => i.title === title)!.identifier;
-  expect(cli("start", ref, "--agent", HOLDER, "--ws", WS).status).toBe(0);
+  expect((await cli("start", ref, "--agent", HOLDER, "--ws", WS)).status).toBe(0);
   return ref;
 }
 
@@ -109,7 +109,7 @@ beforeAll(async () => {
   process.env.NODE_NO_WARNINGS = "1";
   dbPath = join(home, "workspaces", `${WS}.db`);
 
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
 
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: RESCUER });
   ui = startUiServer({ port: 0, hub: false, ws: WS });
@@ -136,8 +136,8 @@ const RELEASE_REFUSAL = `Release refused: held by ${HOLDER}, active 3m ago. Pick
 
 describe("a live holder is refused, identically, on every surface", () => {
   let ref: string;
-  beforeAll(() => {
-    ref = newHeldTask("Live holder");
+  beforeAll(async () => {
+    ref = await newHeldTask("Live holder");
     backdate(ref, 180);
   });
 
@@ -153,8 +153,8 @@ describe("a live holder is refused, identically, on every surface", () => {
     expect((envelope.detail as Record<string, unknown>).heldBy).toBe(HOLDER);
   });
 
-  it("CLI --steal-if-stale refuses with exit 4 and the same sentence", () => {
-    const result = cli("start", ref, "--ws", WS, "--steal-if-stale", "1h", "--json");
+  it("CLI --steal-if-stale refuses with exit 4 and the same sentence", async () => {
+    const result = await cli("start", ref, "--ws", WS, "--steal-if-stale", "1h", "--json");
     expect(result.status).toBe(4);
     const envelope = cliEnvelope(result);
     expect(envelope.code).toBe("conflict");
@@ -180,7 +180,7 @@ describe("a live holder is refused, identically, on every surface", () => {
     );
     expect(viaMcp.message).toBe(RELEASE_REFUSAL);
 
-    const viaCli = cli("release", ref, "--ws", WS, "--if-stale", "1h", "--json");
+    const viaCli = await cli("release", ref, "--ws", WS, "--if-stale", "1h", "--json");
     expect(viaCli.status).toBe(4);
     expect(cliEnvelope(viaCli).message).toBe(RELEASE_REFUSAL);
 
@@ -189,8 +189,8 @@ describe("a live holder is refused, identically, on every surface", () => {
     expect(viaHttp.body.message).toBe(RELEASE_REFUSAL);
   });
 
-  it("leaves the claim standing after all of that", () => {
-    const rows = JSON.parse(cli("ls", "--ws", WS, "--json").stdout) as Array<{
+  it("leaves the claim standing after all of that", async () => {
+    const rows = JSON.parse((await cli("ls", "--ws", WS, "--json")).stdout) as Array<{
       identifier: string;
       checkoutAgent: string | null;
     }>;
@@ -202,7 +202,7 @@ describe("a live holder is refused, identically, on every surface", () => {
 
 describe("a dead holder can be taken over, explicitly, on every surface", () => {
   it("MCP checkout_task steals, reassigns, and reports the new holder", async () => {
-    const ref = newHeldTask("MCP takeover");
+    const ref = await newHeldTask("MCP takeover");
     backdate(ref, 7200);
     const issue = toolPayload(
       await mcp.call("checkout_task", { ref, ws: WS, steal_if_idle_seconds: 3600 }),
@@ -212,10 +212,10 @@ describe("a dead holder can be taken over, explicitly, on every surface", () => 
     expect(issue.status).toBe("in_progress");
   });
 
-  it("CLI --steal-if-stale steals and says whose work it took", () => {
-    const ref = newHeldTask("CLI takeover");
+  it("CLI --steal-if-stale steals and says whose work it took", async () => {
+    const ref = await newHeldTask("CLI takeover");
     backdate(ref, 7200);
-    const result = cli("start", ref, "--ws", WS, "--steal-if-stale", "30m");
+    const result = await cli("start", ref, "--ws", WS, "--steal-if-stale", "30m");
     expect(result.status).toBe(0);
     // Not a silent "claimed": a takeover has to read as a takeover.
     expect(result.stdout).toContain("stole");
@@ -223,23 +223,23 @@ describe("a dead holder can be taken over, explicitly, on every surface", () => 
     expect(result.stdout).toContain("silent 2h");
   });
 
-  it("CLI accepts seconds, minutes, and hours for the same threshold", () => {
+  it("CLI accepts seconds, minutes, and hours for the same threshold", async () => {
     for (const duration of ["1800", "30m", "0.5h"]) {
-      const ref = newHeldTask(`CLI duration ${duration}`);
+      const ref = await newHeldTask(`CLI duration ${duration}`);
       backdate(ref, 7200);
-      const result = cli("start", ref, "--ws", WS, "--steal-if-stale", duration, "--json");
+      const result = await cli("start", ref, "--ws", WS, "--steal-if-stale", duration, "--json");
       expect(result.status).toBe(0);
       expect((JSON.parse(result.stdout) as { checkoutAgent: string }).checkoutAgent).toBe(RESCUER);
     }
   });
 
-  it("CLI rejects a malformed duration instead of stealing anything", () => {
-    const ref = newHeldTask("CLI bad duration");
+  it("CLI rejects a malformed duration instead of stealing anything", async () => {
+    const ref = await newHeldTask("CLI bad duration");
     backdate(ref, 7200);
-    const result = cli("start", ref, "--ws", WS, "--steal-if-stale", "soon", "--json");
+    const result = await cli("start", ref, "--ws", WS, "--steal-if-stale", "soon", "--json");
     expect(result.status).toBe(2);
     expect(cliEnvelope(result).code).toBe("validation");
-    const rows = JSON.parse(cli("ls", "--ws", WS, "--json").stdout) as Array<{
+    const rows = JSON.parse((await cli("ls", "--ws", WS, "--json")).stdout) as Array<{
       identifier: string;
       checkoutAgent: string | null;
     }>;
@@ -247,7 +247,7 @@ describe("a dead holder can be taken over, explicitly, on every surface", () => 
   });
 
   it("HTTP /api/action steals and returns the reassigned issue", async () => {
-    const ref = newHeldTask("HTTP takeover");
+    const ref = await newHeldTask("HTTP takeover");
     backdate(ref, 7200);
     const { status, body } = await action({
       type: "checkout",
@@ -261,7 +261,7 @@ describe("a dead holder can be taken over, explicitly, on every surface", () => 
   });
 
   it("HTTP rejects a non-numeric threshold rather than silently plain-checking-out", async () => {
-    const ref = newHeldTask("HTTP bad threshold");
+    const ref = await newHeldTask("HTTP bad threshold");
     backdate(ref, 7200);
     const { status, body } = await action({
       type: "checkout",
@@ -280,18 +280,18 @@ describe("a dead holder can be taken over, explicitly, on every surface", () => 
   });
 
   it("release --if-stale frees a dead claim on every surface", async () => {
-    const viaCli = newHeldTask("CLI stale release");
+    const viaCli = await newHeldTask("CLI stale release");
     backdate(viaCli, 7200);
-    expect(cli("release", viaCli, "--ws", WS, "--if-stale", "30m").status).toBe(0);
+    expect((await cli("release", viaCli, "--ws", WS, "--if-stale", "30m")).status).toBe(0);
 
-    const viaMcp = newHeldTask("MCP stale release");
+    const viaMcp = await newHeldTask("MCP stale release");
     backdate(viaMcp, 7200);
     // release_task declares no outputSchema, so success is "not an error result"
     // rather than a structured payload.
     const mcpResult = await mcp.call("release_task", { ref: viaMcp, ws: WS, if_idle_seconds: 1800 });
     expect(mcpResult.isError ?? false).toBe(false);
 
-    const viaHttp = newHeldTask("HTTP stale release");
+    const viaHttp = await newHeldTask("HTTP stale release");
     backdate(viaHttp, 7200);
     const http = await action({ type: "release", ref: viaHttp, actor: RESCUER, ifIdleSeconds: 1800 });
     expect(http.status).toBe(200);
@@ -299,13 +299,13 @@ describe("a dead holder can be taken over, explicitly, on every surface", () => 
     expect(http.body.checkoutAgent).toBeNull();
   });
 
-  it("logs claim_stolen and claim_released_stale, not a bare checkout or release", () => {
-    const stolen = newHeldTask("Event shape steal");
+  it("logs claim_stolen and claim_released_stale, not a bare checkout or release", async () => {
+    const stolen = await newHeldTask("Event shape steal");
     backdate(stolen, 7200);
-    expect(cli("start", stolen, "--ws", WS, "--steal-if-stale", "30m").status).toBe(0);
-    expect(cli("release", stolen, "--ws", WS, "--if-stale", "0").status).toBe(0);
+    expect((await cli("start", stolen, "--ws", WS, "--steal-if-stale", "30m")).status).toBe(0);
+    expect((await cli("release", stolen, "--ws", WS, "--if-stale", "0")).status).toBe(0);
 
-    const events = cli("events", "--ws", WS, "--json")
+    const events = (await cli("events", "--ws", WS, "--json"))
       .stdout.trim()
       .split("\n")
       .map((l) => JSON.parse(l) as { kind: string; actor: string | null; payload: Record<string, unknown> });
@@ -325,13 +325,13 @@ describe("a dead holder can be taken over, explicitly, on every surface", () => 
 
 describe("held rows carry their liveness on every read surface", () => {
   let ref: string;
-  beforeAll(() => {
-    ref = newHeldTask("Liveness read");
+  beforeAll(async () => {
+    ref = await newHeldTask("Liveness read");
     backdate(ref, 7200);
   });
 
-  it("CLI ls --json carries claim on the held row and null elsewhere", () => {
-    const rows = JSON.parse(cli("ls", "--ws", WS, "--all", "--json").stdout) as Array<{
+  it("CLI ls --json carries claim on the held row and null elsewhere", async () => {
+    const rows = JSON.parse((await cli("ls", "--ws", WS, "--all", "--json")).stdout) as Array<{
       identifier: string;
       status: string;
       claim: { heldBy: string; idleSeconds: number; heldSeconds: number } | null;
@@ -346,9 +346,9 @@ describe("held rows carry their liveness on every read surface", () => {
     }
   });
 
-  it("CLI ls and show render held-for and silent-for as prose", () => {
-    expect(cli("ls", "--ws", WS).stdout).toContain("held 2h · silent 2h");
-    const show = cli("show", ref, "--ws", WS).stdout;
+  it("CLI ls and show render held-for and silent-for as prose", async () => {
+    expect((await cli("ls", "--ws", WS)).stdout).toContain("held 2h · silent 2h");
+    const show = (await cli("show", ref, "--ws", WS)).stdout;
     expect(show).toContain(`held by ${HOLDER}`);
     expect(show).toContain("held 2h · silent 2h");
   });
@@ -386,8 +386,8 @@ describe("held rows carry their liveness on every read surface", () => {
   });
 
   it("an unheld issue reports claim: null rather than omitting the field", async () => {
-    expect(cli("new", "Never started", "--ws", WS).status).toBe(0);
-    const rows = JSON.parse(cli("ls", "--ws", WS, "--json").stdout) as Array<{
+    expect((await cli("new", "Never started", "--ws", WS)).status).toBe(0);
+    const rows = JSON.parse((await cli("ls", "--ws", WS, "--json")).stdout) as Array<{
       identifier: string;
       title: string;
       claim: unknown;
@@ -404,30 +404,30 @@ describe("held rows carry their liveness on every read surface", () => {
 // --------------------------------------------------------- nothing is automatic
 
 describe("no claim ever changes hands without being asked", () => {
-  it("an ordinary checkout of a long-dead claim is still refused", () => {
-    const ref = newHeldTask("No opt-in");
+  it("an ordinary checkout of a long-dead claim is still refused", async () => {
+    const ref = await newHeldTask("No opt-in");
     backdate(ref, 86_400);
-    const result = cli("start", ref, "--ws", WS, "--json");
+    const result = await cli("start", ref, "--ws", WS, "--json");
     expect(result.status).toBe(4);
     expect(cliEnvelope(result).message).toContain("do not retry");
   });
 
-  it("an ordinary release of someone else's dead claim is still refused", () => {
-    const ref = newHeldTask("No opt-in release");
+  it("an ordinary release of someone else's dead claim is still refused", async () => {
+    const ref = await newHeldTask("No opt-in release");
     backdate(ref, 86_400);
-    const result = cli("release", ref, "--ws", WS, "--json");
+    const result = await cli("release", ref, "--ws", WS, "--json");
     expect(result.status).toBe(4);
     expect(cliEnvelope(result).message).toContain(`held by ${HOLDER}`);
   });
 
   it("merely reading a stale claim never mutates it", async () => {
-    const ref = newHeldTask("Read is not a write");
+    const ref = await newHeldTask("Read is not a write");
     backdate(ref, 86_400);
     await mcp.call("get_task", { ref, ws: WS });
     await mcp.call("inbox", { ws: WS, limit: 200 });
     await httpJson("/api/issues");
-    cli("ls", "--ws", WS);
-    const rows = JSON.parse(cli("ls", "--ws", WS, "--json").stdout) as Array<{
+    await cli("ls", "--ws", WS);
+    const rows = JSON.parse((await cli("ls", "--ws", WS, "--json")).stdout) as Array<{
       identifier: string;
       status: string;
       checkoutAgent: string | null;

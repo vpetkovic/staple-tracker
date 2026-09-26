@@ -18,7 +18,9 @@
  *   - an HTTP server the test file started in-process. Its keep-alive timer and the
  *     fetch client's both expire during the stretch, and a request sent right after
  *     it can go out on a socket the server is closing: `UND_ERR_SOCKET other side
- *     closed`.
+ *     closed`. A turn between tests cannot help a test that blocks between two of
+ *     its own requests, so the files that serve HTTP from the worker run the CLI
+ *     with `spawnAsync` (`test/fixtures/spawn-async.ts`) and never block at all.
  *
  * WHAT. Before each test, wait for one timer and then one immediate. The timer
  * lands in the loop's timers phase, so overdue keep-alive timers close their

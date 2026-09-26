@@ -45,7 +45,7 @@ import { initWorkspace } from "../src/core/workspace.js";
 import { readStoredRepositoryId } from "../src/core/repo-identity.js";
 import { recordLocalLease } from "../src/core/cloud/lease-store.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { runCli, startMcpClient, type McpHarness } from "./fixtures/contract-support.js";
+import { runCliAsync, startMcpClient, type McpHarness } from "./fixtures/contract-support.js";
 
 const AGENT = "scope-agent";
 const DEVICE = "device-here";
@@ -61,8 +61,8 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]) {
-  return runCli([...args, "--db", dbPath], { STAPLE_HOME: home, STAPLE_AGENT: AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync([...args, "--db", dbPath], { STAPLE_HOME: home, STAPLE_AGENT: AGENT });
 }
 
 interface Claim {
@@ -72,8 +72,8 @@ interface Claim {
 }
 
 /** The claim as `ls --json` reports it. */
-function claimFromLs(): Claim {
-  const result = cli("ls", "--json");
+async function claimFromLs(): Promise<Claim> {
+  const result = await cli("ls", "--json");
   expect(result.status, result.stderr).toBe(0);
   const rows = JSON.parse(result.stdout) as Array<{ id: string; claim: Claim | null }>;
   const row = rows.find((r) => r.id === issueId);
@@ -83,8 +83,8 @@ function claimFromLs(): Claim {
 }
 
 /** The claim as `show --json` reports it. */
-function claimFromShow(): Claim {
-  const result = cli("show", "SCO-1", "--json");
+async function claimFromShow(): Promise<Claim> {
+  const result = await cli("show", "SCO-1", "--json");
   expect(result.status, result.stderr).toBe(0);
   const body = JSON.parse(result.stdout) as { claim: Claim | null };
   expect(body.claim).not.toBeNull();
@@ -123,8 +123,8 @@ async function claimFromHttpIssue(): Promise<Claim> {
 /** Every everyday read surface, so a scope that reaches only some of them fails. */
 async function everySurface(): Promise<Claim[]> {
   return [
-    claimFromLs(),
-    claimFromShow(),
+    await claimFromLs(),
+    await claimFromShow(),
     await claimFromMcpGetTask(),
     await claimFromMcpListTasks(),
     await claimFromHttpIssue(),
@@ -196,7 +196,7 @@ beforeAll(async () => {
   dbPath = join(repoDir, ".staple", "staple.db");
 
   // Held, because `claimActivity` is null for anything nobody holds.
-  expect(cli("checkout", "SCO-1", "--agent", AGENT).status).toBe(0);
+  expect((await cli("checkout", "SCO-1", "--agent", AGENT)).status).toBe(0);
 
   mcp = await startMcpClient({ home, cwd: repoDir, agent: AGENT });
   ui = startUiServer({ port: 0, hub: false, db: dbPath });
@@ -302,7 +302,7 @@ describe("a connected workspace holding the lease says lease, everywhere", () =>
   it("disconnecting downgrades a lease back to local with no sync in between", async () => {
     connect();
     plantLease(DEVICE);
-    expect(claimFromShow().scope).toBe("lease");
+    expect((await claimFromShow()).scope).toBe("lease");
 
     disconnect();
     for (const claim of await everySurface()) {
@@ -345,8 +345,8 @@ describe("the batched and single-issue paths cannot disagree", () => {
        * so a whole-object equality here would be asserting that two processes
        * started in the same millisecond — a flake, not a contract.
        */
-      const fromLs = claimFromLs();
-      const fromShow = claimFromShow();
+      const fromLs = await claimFromLs();
+      const fromShow = await claimFromShow();
       expect({ scope: fromLs.scope, lease: fromLs.lease }).toEqual({
         scope: fromShow.scope,
         lease: fromShow.lease,
