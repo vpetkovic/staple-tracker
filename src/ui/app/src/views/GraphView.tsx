@@ -115,6 +115,7 @@ import {
 import { GraphToolbar } from "./graph/GraphToolbar";
 import { EpicPicker } from "./graph/EpicPicker";
 import { initialFit } from "./graph/phone-fit";
+import { scopeGraph } from "./graph/graph-scope";
 import { nodeTypes, type GraphFlowNode } from "./graph/node-types";
 import { EmptyState, ViewState } from "./ViewChrome";
 
@@ -1024,7 +1025,13 @@ function GraphCanvas({
 export function GraphView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const load = useCallback(() => getGraph(), []);
-  const resource = useResource(load, [session.version], onAuthError);
+  const loaded = useResource(load, [session.version], onAuthError);
+  // The hub answers with every workspace's graph; a chosen workspace sees its own (graph-scope.ts).
+  const scopedData = useMemo(
+    () => (loaded.data && session.mode === "hub" ? scopeGraph(loaded.data, session.ws) : loaded.data),
+    [loaded.data, session.mode, session.ws],
+  );
+  const resource = useMemo(() => ({ ...loaded, data: scopedData }), [loaded, scopedData]);
 
   /**
    * The global filter, translated into graph terms — V4 (STA-89).

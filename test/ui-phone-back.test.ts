@@ -794,6 +794,19 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     await context.close();
   }, 30_000);
 
+  it("the Graph shows the chosen workspace, not the whole hub", async () => {
+    // alpha has no dependencies of its own; beta does.
+    const alpha = await page("/?ws=alpha&view=graph");
+    await settle(alpha.page, 500);
+    expect(await count(alpha.page, ".react-flow__node")).toBe(0);
+    expect(await alpha.page.locator("main").innerText()).toContain("No dependencies yet");
+    await alpha.context.close();
+    const all = await page("/?view=graph");
+    await settle(all.page, 500);
+    expect(await count(all.page, ".react-flow__node")).toBeGreaterThan(0);
+    await all.context.close();
+  }, 30_000);
+
   it("a Graph the filters emptied says so in the words the task list uses, with the fixes beside it", async () => {
     const { page: p, context } = await page("/?ws=beta&view=graph");
     await settle(p, 500);

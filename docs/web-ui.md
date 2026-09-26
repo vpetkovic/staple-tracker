@@ -35,7 +35,10 @@ tooltips, not in chips — then the views in named groups. Rows are 28px, 13px
 text, no gap; the active row is a fill and nothing else. The first group is
 **Workspace**: *Tasks*, *Queue*, *Graph*, *Milestones*. The groups are data
 (`components/nav/nav-model.ts`, an array of groups of items), so moving a view
-between groups is an edit to that array and not to the rail. The active view
+between groups is an edit to that array and not to the rail. In `--hub` mode a
+Workspace page shows the workspace the switcher names; the Graph keeps, beside
+that workspace's own tickets, each ticket in another workspace joined to one of
+them by a cross-workspace edge. The active view
 carries `aria-current="page"`; a group header is a real disclosure button in
 sentence case whose chevron shows on hover and focus. At the foot of the rail
 sit **Settings** (the Work Workspace Settings dialog) and **Dark mode**, both
