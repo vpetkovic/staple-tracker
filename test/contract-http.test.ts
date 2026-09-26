@@ -403,6 +403,12 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/budget/collection/plan",
       "/api/budget/collection/setup",
       "/api/budget/collection/unsetup",
+      /**
+       * `staple budget forget` / MCP `forget_budget_samples`: POST-only, machine-local,
+       * never arms the sync trigger. `{ ids }` previews and `confirm: true` removes.
+       * `test/budget-forget.test.ts` pins it.
+       */
+      "/api/budget/forget",
       // `staple calibrate` / MCP `calibration_cohorts`: GET-only, a read.
       "/api/calibration",
       /**

@@ -1,0 +1,438 @@
+/**
+ * Removing budget readings (`staple budget forget`, `forget_budget_samples`, `POST
+ * /api/budget/forget`; docs/execution-telemetry.md, "Removing a reading").
+ *
+ * The case this exists for happened on a real machine. While a status-line wrapper was
+ * being verified, a synthetic status-line JSON was piped through the live ingest. It
+ * stored a fake seven_day reading (30% used, resets 02:23:55) whose reset was about
+ * 1.5 h before the real one (35%, resets 04:00). The fake opened a window of its own, and
+ * because it was observed after the real window's first reading, it superseded the real
+ * window. It then read as current ("70% left"), while the real readings kept joining a
+ * window marked superseded.
+ *
+ * Every reading here goes through the real status-line and rollout sources and
+ * `BudgetStore.record`. Every removal goes through `forgetBudgetSamples`. No row is
+ * written by hand.
+ */
+import { spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SurfaceAutoSync } from "../src/core/cloud/auto-triggers.js";
+import type { WorkspaceStore } from "../src/core/store.js";
+import { attemptLinkerFor } from "../src/core/telemetry/attempt-link.js";
+import { bindBudgetSource, setBudgetCapture } from "../src/core/telemetry/budget-config.js";
+import { forgetBudgetSamples, type ForgetResult } from "../src/core/telemetry/budget-forget.js";
+import { collectLogPath } from "../src/core/telemetry/collection/codex-collect.js";
+import { ingestBudget } from "../src/core/telemetry/ingest.js";
+import { listBudgetSamples, readBudget, type LimitReading } from "../src/core/telemetry/read-budget.js";
+import { StapleError, setClock } from "../src/core/types.js";
+import { initWorkspace } from "../src/core/workspace.js";
+import { startUiServer, type UiHandle } from "../src/ui/server.js";
+import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv } from "./fixtures/characterize-support.js";
+import { mcpEnvelope, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { STATUSLINE_SESSION_ID, epoch, sessionMetaLine, statusline, tokenCountLine, writeRollout } from "./fixtures/budget-support.js";
+
+/** The fake payload's session: another Claude Code session on the same config dir. */
+const FAKE_SESSION = "77777777-0000-7000-8000-000000000001";
+
+const REAL_SEVEN_DAY_RESET = "2026-10-01T04:00:00.000Z";
+const FAKE_SEVEN_DAY_RESET = "2026-10-01T02:23:55.000Z";
+const FIVE_HOUR_RESET = "2026-09-26T13:00:00.000Z";
+const FAKE_OBSERVED_AT = "2026-09-26T11:17:15.482Z";
+
+let home: string;
+let claudeDir: string;
+let codexDir: string;
+
+function newHome(): void {
+  home = mkdtempSync(join(tmpdir(), "staple-forget-home-"));
+  claudeDir = join(home, "claude");
+  codexDir = join(home, "codex");
+  mkdirSync(claudeDir);
+  mkdirSync(codexDir);
+  setBudgetCapture(home, true);
+  bindBudgetSource(home, { source: "claude_code_statusline", account: "claude-max", configDir: claudeDir });
+}
+
+/** One status-line render, ingested as Claude Code sends it at `at`. */
+function render(at: string, session: string, sevenDay: [number, string], fiveHour: [number, string]): ReturnType<typeof ingestBudget> {
+  const input = statusline({
+    session_id: session,
+    rate_limits: {
+      five_hour: { used_percentage: fiveHour[0], resets_at: epoch(fiveHour[1]) },
+      seven_day: { used_percentage: sevenDay[0], resets_at: epoch(sevenDay[1]) },
+    },
+  });
+  return ingestBudget({ source: "claude-statusline", input, configDir: claudeDir }, { home, attemptLinker: attemptLinkerFor(home), now: () => at });
+}
+
+/**
+ * The real machine's shape. Two real renders, then the fake one at the observed instant
+ * with its seven_day reset about 1.5 h early, then a real render after it. The fake
+ * five_hour reading carries the real reset, so it joins the real five_hour window. It is
+ * the highest reading there, which makes the high-water mark wrong as well.
+ */
+function scenario(): { fakeIds: string[]; fakeSevenDay: string; fakeFiveHour: string } {
+  render("2026-09-26T09:00:00.000Z", STATUSLINE_SESSION_ID, [34, REAL_SEVEN_DAY_RESET], [10, FIVE_HOUR_RESET]);
+  render("2026-09-26T10:30:00.000Z", STATUSLINE_SESSION_ID, [34.5, REAL_SEVEN_DAY_RESET], [15, FIVE_HOUR_RESET]);
+  const fake = render(FAKE_OBSERVED_AT, FAKE_SESSION, [30, FAKE_SEVEN_DAY_RESET], [55, FIVE_HOUR_RESET]);
+  render("2026-09-26T11:30:00.000Z", STATUSLINE_SESSION_ID, [35, REAL_SEVEN_DAY_RESET], [20, FIVE_HOUR_RESET]);
+  const stored = fake.outcomes.filter((o) => o.stored).map((o) => (o as Extract<typeof o, { stored: true }>).sample);
+  expect(stored.map((s) => s.limitKey).sort()).toEqual(["five_hour", "seven_day"]);
+  const fakeSevenDay = stored.find((s) => s.limitKey === "seven_day")!.id;
+  const fakeFiveHour = stored.find((s) => s.limitKey === "five_hour")!.id;
+  return { fakeIds: [fakeSevenDay, fakeFiveHour], fakeSevenDay, fakeFiveHour };
+}
+
+const NOW = "2026-09-26T11:31:00.000Z";
+
+function limit(key: string, now = NOW): LimitReading {
+  const view = readBudget(home, { now, account: "claude-max" });
+  const found = view.accounts[0]!.limits.find((entry) => entry.limitKey === key);
+  expect(found, key).toBeDefined();
+  return found!;
+}
+
+function counts(): { samples: number; windows: number; forgotten: number } {
+  const db = new DatabaseSync(join(home, "hub.db"), { readOnly: true });
+  try {
+    const n = (table: string): number => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+    return { samples: n("budget_samples"), windows: n("limit_windows"), forgotten: n("budget_forgotten") };
+  } finally {
+    db.close();
+  }
+}
+
+const forget = (ids: readonly string[], confirm: boolean): ForgetResult => forgetBudgetSamples({ ids, confirm, via: "cli" }, { home, now: () => NOW });
+
+function refusal(fn: () => unknown): StapleError {
+  try {
+    fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(StapleError);
+    return error as StapleError;
+  }
+  throw new Error("expected a refusal");
+}
+
+describe("forgetting the fake status-line readings", () => {
+  beforeEach(newHome);
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  it("reproduces the false current window the fake opened", () => {
+    scenario();
+    const sevenDay = limit("seven_day");
+    // The bug: the fake window is current, and the real one is superseded by it.
+    expect(sevenDay).toMatchObject({ status: "current", remainingPercent: 70, highWaterPercent: 30 });
+    expect(sevenDay.window!.resetsAt).toBe(FAKE_SEVEN_DAY_RESET);
+    expect(limit("five_hour")).toMatchObject({ highWaterPercent: 55, remainingPercent: 45 });
+  });
+
+  it("previews without consent: the readings, their windows, and the real window current after; nothing is removed", () => {
+    const { fakeIds, fakeSevenDay } = scenario();
+    const before = counts();
+    const viewBefore = readBudget(home, { now: NOW });
+    const preview = forget(fakeIds.map((id) => id.slice(0, 9)), false);
+    expect(preview.applied).toBe(false);
+    expect(preview.auditLog).toBeNull();
+    expect(preview.readings.map((r) => r.id).sort()).toEqual([...fakeIds].sort());
+    expect(preview.readings.find((r) => r.id === fakeSevenDay)).toMatchObject({ usedPercent: 30, resetsAt: FAKE_SEVEN_DAY_RESET, observedAt: FAKE_OBSERVED_AT });
+    const sevenDay = preview.limits.find((l) => l.limitKey === "seven_day")!;
+    expect(sevenDay.before).toMatchObject({ status: "current", remainingPercent: 70, window: { resetsAt: FAKE_SEVEN_DAY_RESET } });
+    expect(sevenDay.after).toMatchObject({ status: "current", remainingPercent: 65, highWaterPercent: 35, window: { resetsAt: REAL_SEVEN_DAY_RESET, supersededBy: null }, latestSample: { usedPercent: 35 } });
+    const removed = preview.windows.find((w) => w.limitKey === "seven_day")!;
+    expect(removed).toMatchObject({ outcome: "removed", samplesLeft: 0, resetsAt: FAKE_SEVEN_DAY_RESET });
+    expect(removed.released).toEqual([{ windowId: sevenDay.after.window!.id, resetsAt: REAL_SEVEN_DAY_RESET, supersededBy: null }]);
+    expect(preview.windows.find((w) => w.limitKey === "five_hour")).toMatchObject({ outcome: "kept", samplesLeft: 3 });
+    // Nothing changed: rows, the read and the budget log.
+    expect(counts()).toEqual(before);
+    expect(readBudget(home, { now: NOW })).toEqual(viewBefore);
+    expect(existsSync(collectLogPath(home))).toBe(false);
+  });
+
+  it("with consent, the real seven_day window is current again in the summary, the pressure and the forecast", () => {
+    const { fakeIds } = scenario();
+    const result = forget(fakeIds, true);
+    expect(result.applied).toBe(true);
+
+    // The budget summary (`staple budget`, get_budget, GET /api/budget, the pressure panel's data).
+    const sevenDay = limit("seven_day");
+    expect(sevenDay).toMatchObject({ status: "current", highWaterPercent: 35, remainingPercent: 65, regressionCount: 0, sampleCount: 3 });
+    expect(sevenDay.window).toMatchObject({ resetsAt: REAL_SEVEN_DAY_RESET, supersededBy: null, supersededReason: null, status: "current" });
+    expect(sevenDay.latestSample).toMatchObject({ usedPercent: 35, observedAt: "2026-09-26T11:30:00.000Z" });
+    // The pressure is read off the real window: its reset and its readings.
+    expect(sevenDay.pressure.secondsToReset).toBe((Date.parse(REAL_SEVEN_DAY_RESET) - Date.parse(NOW)) / 1000);
+    expect(sevenDay.pressure.observed).toMatchObject({ fromPercent: 34, toPercent: 35, readings: 3 });
+    // The five_hour high-water is recomputed at read from the readings left.
+    expect(limit("five_hour")).toMatchObject({ status: "current", highWaterPercent: 20, remainingPercent: 80, regressionCount: 0, sampleCount: 3 });
+    // History no longer holds them, and no window is left without a reading.
+    const history = listBudgetSamples(home, { account: "claude-max", now: NOW });
+    expect(history.items.map((s) => s.id).filter((id) => fakeIds.includes(id))).toEqual([]);
+    expect(counts()).toEqual({ samples: 6, windows: 2, forgotten: 2 });
+  });
+
+  it("the forecast reports the real window as current", () => {
+    const root = mkdtempSync(join(tmpdir(), "staple-forget-root-"));
+    const saved = { home: process.env.STAPLE_HOME, claude: process.env.CLAUDE_CONFIG_DIR };
+    process.env.STAPLE_HOME = home;
+    process.env.CLAUDE_CONFIG_DIR = claudeDir;
+    setClock(() => Date.parse(NOW));
+    let store: WorkspaceStore | null = null;
+    try {
+      const { fakeIds } = scenario();
+      mkdirSync(join(root, "ws"));
+      store = initWorkspace({ dir: join(root, "ws"), slug: "ws" }).store;
+      const issue = store.createIssue({ title: "next", estimatedSeconds: 3600 });
+      const sevenDayOf = () => store!.forecast({ ref: issue.identifier }, NOW, home).budget.accounts.find((a) => a.accountRef === "claude-max")!.limits.find((l) => l.limitKey === "seven_day")!;
+      expect(sevenDayOf()).toMatchObject({ status: "current", resetsAt: FAKE_SEVEN_DAY_RESET, remainingPercent: 70 });
+      forget(fakeIds, true);
+      expect(sevenDayOf()).toMatchObject({ status: "current", resetsAt: REAL_SEVEN_DAY_RESET, remainingPercent: 65, highWaterPercent: 35 });
+    } finally {
+      setClock(null);
+      store?.db.close();
+      rmSync(root, { recursive: true, force: true });
+      for (const [key, value] of [["STAPLE_HOME", saved.home], ["CLAUDE_CONFIG_DIR", saved.claude]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("writes one audit line to the budget log", () => {
+    const { fakeIds } = scenario();
+    const result = forget(fakeIds, true);
+    expect(result.auditLog).toBe(collectLogPath(home));
+    const lines = readFileSync(collectLogPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, any>);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ at: NOW, action: "forget", via: "cli" });
+    expect(lines[0]!.readings.map((r: { id: string }) => r.id).sort()).toEqual([...fakeIds].sort());
+    expect(lines[0]!.windows.map((w: { outcome: string }) => w.outcome).sort()).toEqual(["kept", "removed"]);
+  });
+
+  it("refuses an unknown id with not_found and removes nothing, even beside a valid one", () => {
+    const { fakeIds } = scenario();
+    const before = counts();
+    const error = refusal(() => forget([fakeIds[0]!, "0000dead0000"], true));
+    expect(error.code).toBe("not_found");
+    expect(error.detail).toMatchObject({ reason: "not_found", ids: ["0000dead0000"] });
+    expect(counts()).toEqual(before);
+    expect(refusal(() => forget(["not-an-id!"], true)).code).toBe("not_found");
+    expect(refusal(() => forget([], true)).code).toBe("validation");
+    expect(counts()).toEqual(before);
+  });
+
+  it("refuses an ambiguous prefix and removes nothing", () => {
+    // Seventeen readings: by pigeonhole, two ids share their first hex digit.
+    for (let i = 0; i < 9; i += 1) render(`2026-09-26T0${i}:00:00.000Z`, STATUSLINE_SESSION_ID, [10 + i, REAL_SEVEN_DAY_RESET], [i, FIVE_HOUR_RESET]);
+    const ids = listBudgetSamples(home, { account: "claude-max", limit: 100, now: NOW }).items.map((s) => s.id);
+    expect(ids.length).toBeGreaterThanOrEqual(17);
+    const shared = [...new Set(ids.map((id) => id[0]!))].find((c) => ids.filter((id) => id.startsWith(c)).length > 1)!;
+    const before = counts();
+    const error = refusal(() => forget([shared], true));
+    expect(error.code).toBe("validation");
+    expect(error.detail).toMatchObject({ reason: "ambiguous_id" });
+    expect(counts()).toEqual(before);
+  });
+
+  it("keeps a forgotten reading forgotten when the same input is replayed, and stores a new observation", () => {
+    // A Codex rollout carries the provider's timestamps, so reading it again re-mints the
+    // same dedup key: the case the tombstone exists for.
+    bindBudgetSource(home, { source: "codex_rollout", account: "codex-plus", codexHome: codexDir });
+    const session = "33333333-0000-7000-8000-000000000001";
+    const file = writeRollout(codexDir, session, "2026-09-26T08:59:00.000Z", [
+      sessionMetaLine({ id: session, timestamp: "2026-09-26T08:59:00.000Z" }),
+      tokenCountLine({
+        timestamp: "2026-09-26T09:00:00.000Z",
+        primary: { used_percent: 12, window_minutes: 300, resets_at: epoch(FIVE_HOUR_RESET) },
+        secondary: { used_percent: 40, window_minutes: 10080, resets_at: epoch(REAL_SEVEN_DAY_RESET) },
+      }),
+    ]);
+    const first = ingestBudget({ source: "codex-rollout", file }, { home, now: () => NOW });
+    expect(first.storedCount).toBe(2);
+    const ids = first.outcomes.map((o) => (o as Extract<typeof o, { stored: true }>).sample.id);
+    forget(ids, true);
+    const replay = ingestBudget({ source: "codex-rollout", file }, { home, now: () => NOW });
+    expect(replay).toMatchObject({ storedCount: 0, skipped: { forgotten: 2 } });
+    expect(readBudget(home, { now: NOW, account: "codex-plus" }).accounts[0]!.limits).toEqual([]);
+
+    // A status-line render is captured when it arrives: the same payload later is a new observation.
+    const { fakeIds } = scenario();
+    forget(fakeIds, true);
+    const again = render("2026-09-26T11:40:00.000Z", FAKE_SESSION, [30, FAKE_SEVEN_DAY_RESET], [55, FIVE_HOUR_RESET]);
+    expect(again.storedCount).toBe(2);
+  });
+
+  it("a window a removed window did NOT displace stays as it was", () => {
+    // Remove only a real reading that shares its window with others: the window is kept,
+    // no supersede link moves, and the fake window stays current.
+    scenario();
+    const real = listBudgetSamples(home, { account: "claude-max", now: NOW }).items.find((s) => s.limitKey === "seven_day" && s.usedPercent === 34.5)!;
+    const result = forget([real.id], true);
+    expect(result.windows).toEqual([expect.objectContaining({ outcome: "kept", samplesLeft: 2, released: [] })]);
+    expect(limit("seven_day").window!.resetsAt).toBe(FAKE_SEVEN_DAY_RESET);
+  });
+
+  it("a released window whose overlap with a standing window is real is superseded again", () => {
+    // Three instances: A (real, first), B (fake, displaced A), C (a later moved reset that
+    // displaced B). Removing B releases A, and A overlaps C, which was first seen later,
+    // so A is superseded again, now by C. The settle is openWindow's rule, not a blanket release.
+    const A = "2026-10-01T04:00:00.000Z";
+    const B = "2026-10-01T02:23:55.000Z";
+    const C = "2026-10-01T06:00:00.000Z";
+    render("2026-09-26T09:00:00.000Z", STATUSLINE_SESSION_ID, [34, A], [10, FIVE_HOUR_RESET]);
+    const fake = render(FAKE_OBSERVED_AT, FAKE_SESSION, [30, B], [10, FIVE_HOUR_RESET]);
+    render("2026-09-26T11:45:00.000Z", STATUSLINE_SESSION_ID, [36, C], [10, FIVE_HOUR_RESET]);
+    const fakeId = fake.outcomes.map((o) => (o as Extract<typeof o, { stored: true }>).sample).find((s) => s?.limitKey === "seven_day")!.id;
+    const result = forget([fakeId], true);
+    const change = result.windows.find((w) => w.limitKey === "seven_day")!;
+    expect(change.outcome).toBe("removed");
+    const standing = readBudget(home, { now: NOW }).accounts[0]!.limits.find((l) => l.limitKey === "seven_day")!.window!;
+    expect(standing.resetsAt).toBe(C);
+    expect(change.released).toEqual([{ windowId: expect.any(String), resetsAt: A, supersededBy: standing.id }]);
+    const windows = readBudget(home, { now: NOW }).accounts[0]!.limits.find((l) => l.limitKey === "seven_day")!;
+    expect(windows.window!.resetsAt).toBe(C);
+  });
+});
+
+// ------------------------------------------------------------------ the three surfaces
+
+function cli(args: string[]): { status: number; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, "budget", ...args], {
+    cwd: REPO_ROOT,
+    env: bareEnv({ STAPLE_HOME: home, HOME: home, CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexDir }),
+    timeout: 30_000,
+  });
+  return { status: result.status ?? -1, stdout: result.stdout.toString("utf8"), stderr: result.stderr.toString("utf8") };
+}
+
+/** A result without the instant it was judged at, which differs between two calls. */
+const shape = (result: Record<string, unknown>): Record<string, unknown> => {
+  const { asOf: _asOf, auditLog: _log, ...rest } = result;
+  return rest;
+};
+
+describe("CLI, MCP and HTTP call the one method", () => {
+  let mcp: McpHarness;
+  let ui: UiHandle;
+  let origin: string;
+  let root: string;
+  const saved: Record<string, string | undefined> = {};
+
+  async function http(path: string, init: { method?: string; body?: unknown; origin?: string; token?: boolean } = {}): Promise<{ status: number; body: Record<string, any> }> {
+    const res = await fetch(`${origin}${path}`, {
+      method: init.method ?? "POST",
+      headers: {
+        ...(init.token === false ? {} : { "x-staple-token": ui.token }),
+        "content-type": "application/json",
+        ...(init.origin ? { origin: init.origin } : {}),
+      },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
+    return { status: res.status, body: (await res.json()) as Record<string, any> };
+  }
+
+  beforeAll(async () => {
+    newHome();
+    root = mkdtempSync(join(tmpdir(), "staple-forget-surfaces-"));
+    for (const key of ["STAPLE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"]) saved[key] = process.env[key];
+    process.env.STAPLE_HOME = home;
+    process.env.CLAUDE_CONFIG_DIR = claudeDir;
+    process.env.CODEX_HOME = codexDir;
+    const ws = initWorkspace({ dir: join(root, "repo"), slug: "forgethttp" });
+    ws.store.db.close();
+    ui = startUiServer({ port: 0, hub: false, db: join(root, "repo", ".staple", "staple.db") });
+    await once(ui.server, "listening");
+    origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
+    mcp = await startMcpClient({ home, cwd: home, env: { HOME: home } });
+  }, 60_000);
+
+  afterAll(async () => {
+    await mcp?.close();
+    ui?.close();
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("previews the same on all three, and applies once", async () => {
+    const { fakeIds } = scenario();
+    const before = counts();
+
+    // CLI without --yes: the preview, and the refusal every consent command gives (exit 2).
+    const cliPreview = cli(["forget", ...fakeIds, "--json"]);
+    expect(cliPreview.status).toBe(2);
+    const envelope = JSON.parse(cliPreview.stderr.trim().split("\n").pop()!) as { code: string; detail: { reason: string; preview: Record<string, unknown> } };
+    expect(envelope).toMatchObject({ code: "validation", detail: { reason: "consent_required" } });
+    const human = cli(["forget", fakeIds[0]!]);
+    expect(human.status).toBe(2);
+    expect(human.stderr).toContain("would remove 1 reading(s)");
+    expect(human.stderr).toContain("Re-run with --yes");
+
+    const mcpPreview = toolPayload(await mcp.call("forget_budget_samples", { ids: fakeIds })) as Record<string, unknown>;
+    const httpPreview = await http("/api/budget/forget", { body: { ids: fakeIds } });
+    expect(httpPreview.status).toBe(200);
+    expect(mcpPreview.applied).toBe(false);
+    expect(shape(mcpPreview)).toEqual(shape(envelope.detail.preview));
+    expect(shape(httpPreview.body)).toEqual(shape(envelope.detail.preview));
+    expect(counts()).toEqual(before);
+
+    // MCP applies with confirm; the rest then find nothing to remove.
+    const applied = toolPayload(await mcp.call("forget_budget_samples", { ids: fakeIds, confirm: true })) as Record<string, unknown>;
+    expect(applied.applied).toBe(true);
+    expect(counts()).toEqual({ samples: before.samples - 2, windows: before.windows - 1, forgotten: 2 });
+    const log = readFileSync(collectLogPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { via: string });
+    expect(log.map((line) => line.via)).toEqual(["mcp"]);
+
+    const gone = await mcp.call("forget_budget_samples", { ids: [fakeIds[0]], confirm: true });
+    expect(gone.isError).toBe(true);
+    expect(mcpEnvelope(gone)).toMatchObject({ code: "not_found" });
+    expect((await http("/api/budget/forget", { body: { ids: [fakeIds[0]], confirm: true } })).status).toBe(404);
+    expect(cli(["forget", fakeIds[0]!, "--yes"]).status).toBe(3);
+  }, 90_000);
+
+  it("the CLI applies with --yes and prints what it did", () => {
+    render("2026-09-26T11:50:00.000Z", FAKE_SESSION, [31, FAKE_SEVEN_DAY_RESET], [56, FIVE_HOUR_RESET]);
+    const id = listBudgetSamples(home, { account: "claude-max", now: NOW }).items.find((s) => s.usedPercent === 31)!.id;
+    const done = cli(["forget", id, "--yes", "--json"]);
+    expect(done.status, done.stderr).toBe(0);
+    expect(JSON.parse(done.stdout)).toMatchObject({ applied: true, readings: [{ id, usedPercent: 31 }], auditLog: collectLogPath(home) });
+  }, 60_000);
+
+  it("the HTTP route is POST-only, Origin-checked, token-gated, type-checked, and never arms the sync trigger", async () => {
+    render("2026-09-26T11:55:00.000Z", FAKE_SESSION, [32, FAKE_SEVEN_DAY_RESET], [57, FIVE_HOUR_RESET]);
+    const id = listBudgetSamples(home, { account: "claude-max", now: NOW }).items.find((s) => s.usedPercent === 32)!.id;
+    const before = counts();
+    expect((await http("/api/budget/forget", { method: "GET" })).status).toBe(405);
+    expect((await http("/api/budget/forget", { body: { ids: [id], confirm: true }, origin: "https://evil.example" })).status).toBe(403);
+    expect((await http("/api/budget/forget", { body: { ids: [id], confirm: true }, token: false })).status).toBe(401);
+    expect((await http("/api/budget/forget", { body: { ids: id, confirm: true } })).status).toBe(400);
+    expect((await http("/api/budget/forget", { body: { ids: [id], confirm: "yes" } })).status).toBe(400);
+    expect(counts()).toEqual(before);
+
+    const spy = vi.spyOn(SurfaceAutoSync.prototype, "postWrite");
+    try {
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+      const svg = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4" fill="#f00"/></svg>';
+      expect((await http("/api/glyph/sanitize", { body: { svg, label: "Dot" } })).status).toBe(200);
+      await settle();
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockClear();
+      const done = await http("/api/budget/forget", { body: { ids: [id], confirm: true } });
+      expect(done.status, JSON.stringify(done.body)).toBe(200);
+      expect(done.body).toMatchObject({ applied: true, readings: [{ id }] });
+      await settle();
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(counts().samples).toBe(before.samples - 1);
+  });
+});

@@ -5,6 +5,7 @@
  *
  *   budget [--account A] [--reserve P]     each account's current windows and pressure (get_budget)
  *   budget history --account A [--since T] [--limit N] [--cursor C]   (list_budget_samples)
+ *   budget forget <reading-id>... [--yes]   (forget_budget_samples)
  *   budget ingest --source claude-statusline [--tee] [--account A] [--config-dir D]
  *   budget ingest --source codex-rollout <file> [--account A]
  *   budget ingest --source manual --account A --limit-key K --used P [--resets-at T] [--provider P]
@@ -38,6 +39,7 @@ import {
 import type { BindingSource } from "../core/telemetry/config.js";
 import { INGEST_SOURCES, ingestBudget, type IngestResult, type IngestSource } from "../core/telemetry/ingest.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
+import { forgetBudgetSamples, type ForgetLimitView, type ForgetResult } from "../core/telemetry/budget-forget.js";
 import { listBudgetSamples, readBudget, type BudgetView, type HistorySample, type LimitReading } from "../core/telemetry/read-budget.js";
 import {
   applyBudgetSetup,
@@ -54,7 +56,7 @@ import type { CollectResult } from "../core/telemetry/collection/codex-collect.j
 import type { TelemetryPage } from "../core/telemetry/read-page.js";
 import { limitFlag } from "./attempts.js";
 
-const USAGE = "Use: history, ingest, capture, bind, unbind, bindings, setup, unsetup, status, collect (staple budget --help)";
+const USAGE = "Use: history, forget, ingest, capture, bind, unbind, bindings, setup, unsetup, status, collect (staple budget --help)";
 
 const HELP = `staple budget — provider budget telemetry on this machine (docs/execution-telemetry.md)
 
@@ -68,6 +70,16 @@ const HELP = `staple budget — provider budget telemetry on this machine (docs/
               one account's readings, oldest first; T is an instant or a duration
               (2h = two hours ago); --limit defaults to 50, at most 500; gaps where
               capture was not running are listed
+  budget forget <reading-id>... [--yes]
+              remove readings that should never have been stored (a test payload
+              piped through the live ingest, say). Ids are full ids from budget
+              history --json, or prefixes that name exactly one reading; an unknown
+              or ambiguous id is refused and nothing is removed. Without --yes it
+              only previews, exit 2: each reading and its window, what the window
+              becomes, and each limit's current window and reading before and
+              after. A window left with no reading is removed, and a window it had
+              superseded stands again. A replay of the same input stays removed; a
+              new observation is stored. One audit line goes to logs/budget-collect.log
   budget ingest --source claude-statusline [--tee] [--account A] [--config-dir D]
               read one Claude Code status-line JSON from stdin; --tee writes the input
               back to stdout byte for byte, so staple can sit in front of the
@@ -295,6 +307,32 @@ function sayHistory(page: TelemetryPage<HistorySample>): void {
   if (page.truncated) console.log(`more: --cursor ${page.nextCursor}`);
 }
 
+const limitViewText = (view: ForgetLimitView): string => {
+  if (view.window === null) return "no window";
+  const reading = view.latestSample === null ? "no reading" : `latest ${view.latestSample.usedPercent}% at ${view.latestSample.observedAt}`;
+  const remaining = view.remainingPercent === null ? "remaining unknown" : `${view.remainingPercent}% left`;
+  return `${view.status ?? "-"} window resets ${view.window.resetsAt ?? "never"}, ${remaining}, ${reading}`;
+};
+
+/** The forget preview, and after --yes the same lines as what was done. */
+function forgetText(result: ForgetResult): string {
+  const lines = [result.applied ? `removed ${result.readings.length} reading(s)` : `would remove ${result.readings.length} reading(s)`];
+  for (const r of result.readings) {
+    lines.push(`  ${r.id}  ${r.accountRef} ${r.limitKey}  ${r.usedPercent}% used  resets ${r.resetsAt ?? "not reported"}  observed ${r.observedAt}`);
+  }
+  for (const w of result.windows) {
+    const what = w.outcome === "removed" ? "removed (no reading left)" : `kept, ${w.samplesLeft} reading(s) left`;
+    lines.push(`  window ${w.windowId} (${w.accountRef} ${w.limitKey}, resets ${w.resetsAt ?? "never"}): ${what}`);
+    for (const r of w.released) lines.push(`    releases ${r.windowId} (resets ${r.resetsAt ?? "never"}): ${r.supersededBy === null ? "stands again" : `still superseded by ${r.supersededBy}`}`);
+  }
+  for (const limit of result.limits) {
+    lines.push(`  ${limit.accountRef} ${limit.limitKey}`);
+    lines.push(`    before: ${limitViewText(limit.before)}`);
+    lines.push(`    after:  ${limitViewText(limit.after)}`);
+  }
+  return lines.join("\n");
+}
+
 function sayConfig(view: BudgetConfigView): void {
   console.log(`capture  ${view.budgetCapture ? "on" : "off"}`);
   if (view.bindings.length === 0) console.log("bindings none");
@@ -390,6 +428,17 @@ export function runBudgetCommand(argv: string[]): void {
       if (values.account === undefined) throw new StapleError("validation", "budget history needs --account: the label of the account to read.");
       const page = listBudgetSamples(home, { account: values.account, since: values.since, limit: limitFlag(values.limit), cursor: values.cursor });
       print(page, () => sayHistory(page));
+      return;
+    }
+    case "forget": {
+      const result = forgetBudgetSamples({ ids: args, confirm: values.yes === true, via: "cli" }, { home });
+      if (!result.applied) {
+        throw new StapleError("validation", `${forgetText(result)}\nRefusing to remove readings without --yes. Nothing was removed. Re-run with --yes to remove them.`, {
+          reason: "consent_required",
+          preview: result,
+        });
+      }
+      print(result, () => console.log(forgetText(result)));
       return;
     }
     case "ingest": {

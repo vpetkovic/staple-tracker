@@ -175,7 +175,7 @@ function limitReading(
   return { ...reading, latestSample: reading.latestSample === null ? null : qualifySample(reading.latestSample), quality: limitReadingQuality(reading), pressure };
 }
 
-function limitReadingOf(
+export function limitReadingOf(
   store: BudgetStore,
   provider: string | null,
   accountRef: string,

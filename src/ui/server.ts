@@ -35,6 +35,7 @@ import { settingDefinitionsFor, settingRegistryView, settingValueView } from "..
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
+import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
 import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
@@ -1406,7 +1407,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/hub/registry/restore" ||
           url.pathname === "/api/hub/registry/adopt" ||
           /** Budget collection: named in one set; `/api/budget/collection` itself is the GET read. */
-          BUDGET_COLLECTION_WRITES.has(url.pathname)
+          BUDGET_COLLECTION_WRITES.has(url.pathname) ||
+          url.pathname === "/api/budget/forget"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1452,7 +1454,7 @@ export function startUiServer(options: UiOptions): UiHandle {
          * on its session tick. Fixing it properly means threading the resolved
          * handle out of the route, which is not a thin registration.
          */
-        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname) && !BUDGET_COLLECTION_WRITES.has(url.pathname)) {
+        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname) && !BUDGET_COLLECTION_WRITES.has(url.pathname) && url.pathname !== "/api/budget/forget") {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
             if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
@@ -1467,6 +1469,26 @@ export function startUiServer(options: UiOptions): UiHandle {
        */
       if (url.pathname === "/api/budget/collection") {
         json(res, 200, budgetCollectionStatus({ home: stapleHome() }));
+        return;
+      }
+      /**
+       * `staple budget forget` / MCP `forget_budget_samples`: remove readings from this
+       * machine's hub.db through the one method all three call. POST-only, so it is
+       * Origin-checked like every write. Like the collection writes, it journals nothing
+       * and never arms the post-write sync trigger. `{ ids }` alone answers the preview
+       * (`applied: false`); `{ ids, confirm: true }` is the consent and removes them.
+       */
+      if (url.pathname === "/api/budget/forget") {
+        const body = await readBody(req);
+        if (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== "string")) {
+          deny(res, 400, "validation", "ids must be an array of reading ids.");
+          return;
+        }
+        if (body.confirm !== undefined && typeof body.confirm !== "boolean") {
+          deny(res, 400, "validation", "confirm must be true or false.");
+          return;
+        }
+        json(res, 200, forgetBudgetSamples({ ids: body.ids as string[], confirm: body.confirm === true, via: "http" }, { home: stapleHome() }));
         return;
       }
       if (BUDGET_COLLECTION_WRITES.has(url.pathname)) {

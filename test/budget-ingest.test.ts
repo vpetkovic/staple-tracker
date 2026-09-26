@@ -769,7 +769,7 @@ describe("budget data does not leave the machine", () => {
 describe("the fixture session list the real-home guard hashes", () => {
   it("names every session id a budget suite ingests, so a leaked row from any of them is recognised", () => {
     const used = new Set<string>();
-    for (const file of ["budget-ingest.test.ts", "budget-surfaces.test.ts", join("fixtures", "budget-support.ts")]) {
+    for (const file of ["budget-ingest.test.ts", "budget-surfaces.test.ts", "budget-forget.test.ts", join("fixtures", "budget-support.ts")]) {
       const source = readFileSync(join(REPO_ROOT, "test", file), "utf8");
       for (const match of source.matchAll(/"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|session-[a-z0-9-]+)"/g)) used.add(match[1]!);
     }

@@ -54,6 +54,7 @@ export const FIXTURE_SESSION_IDS: readonly string[] = Object.freeze([
   "44444444-0000-7000-8000-000000000001",
   "55555555-0000-7000-8000-000000000001",
   "66666666-0000-7000-8000-000000000001",
+  "77777777-0000-7000-8000-000000000001",
 ]);
 
 /** The status-line JSON, optionally with its fields replaced. `rate_limits: undefined` drops the key. */

@@ -135,9 +135,11 @@ describe("version detection", () => {
     // (013-execution-attempts, which replicates) and hub 5 -> 6 (006-attempt-presence,
     // the machine-local index of attempts this machine started). Then workspace
     // 13 -> 14 (014-attempt-role, the attempt's lane) and hub 6 -> 7
-    // (007-presence-role, the lane in the presence index).
+    // (007-presence-role, the lane in the presence index). Then hub 7 -> 8
+    // (008-budget-forgotten, the removed readings a replay must not restore),
+    // workspace still 14.
     expect(latestVersion(WORKSPACE_TARGET)).toBe(14);
-    expect(latestVersion(HUB_TARGET)).toBe(7);
+    expect(latestVersion(HUB_TARGET)).toBe(8);
   });
 });
 
