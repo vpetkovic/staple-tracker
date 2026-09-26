@@ -13,13 +13,13 @@
  * Only the fields that are a reading of the clock (`idleSeconds`, `asOf`, the `to` of a page
  * that runs up to now) are set aside before comparing.
  */
-import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
 import { mcpEnvelope, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { spawnAsync } from "./fixtures/spawn-async.js";
 
 let home: string;
 let mcp: McpHarness;
@@ -28,8 +28,8 @@ let origin: string;
 const WS = "readviews";
 const OTHER = "elsewhere";
 
-function run(args: string[], agent = "agent-cli"): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
+async function run(args: string[], agent = "agent-cli"): Promise<{ status: number; stdout: string; stderr: string }> {
+  const result = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
     cwd: REPO_ROOT,
     env: bareEnv({ STAPLE_HOME: home, HOME: home, STAPLE_AGENT: agent }),
     encoding: "utf8",
@@ -38,8 +38,8 @@ function run(args: string[], agent = "agent-cli"): { status: number; stdout: str
   return { status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
 }
 
-function cli(args: string[], ws: string | null = WS, agent?: string): Record<string, unknown> {
-  const result = run([...args, ...(ws ? ["--ws", ws] : []), "--json"], agent);
+async function cli(args: string[], ws: string | null = WS, agent?: string): Promise<Record<string, unknown>> {
+  const result = await run([...args, ...(ws ? ["--ws", ws] : []), "--json"], agent);
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout.trim()) as Record<string, unknown>;
 }
@@ -94,25 +94,25 @@ let otherAttempt: string;
 beforeAll(async () => {
   home = tempDir("read-surfaces");
   for (const slug of [WS, OTHER]) {
-    const init = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, "init", "--global", slug], {
+    const init = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "init", "--global", slug], {
       cwd: REPO_ROOT,
       env: bareEnv({ STAPLE_HOME: home, HOME: home }),
       encoding: "utf8",
     });
     expect(init.status).toBe(0);
   }
-  run(["budget", "capture", "on"]);
-  expect(run(["budget", "ingest", "--source", "manual", "--account", "personal-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", "20", "--resets-at", "4h", "--json"]).status).toBe(0);
+  await run(["budget", "capture", "on"]);
+  expect((await run(["budget", "ingest", "--source", "manual", "--account", "personal-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", "20", "--resets-at", "4h", "--json"])).status).toBe(0);
 
-  ref = String(cli(["new", "Read me", "--estimate", "2h"]).identifier);
-  const first = cli(["checkout", ref, "--account", "personal-max"]);
+  ref = String((await cli(["new", "Read me", "--estimate", "2h"])).identifier);
+  const first = await cli(["checkout", ref, "--account", "personal-max"]);
   endedId = String((first.attempt as Record<string, unknown>).id);
-  expect(run(["budget", "ingest", "--source", "manual", "--account", "personal-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", "26", "--resets-at", "4h", "--json"]).status).toBe(0);
-  cli(["attempt", "interrupt", ref, "--reason", "provider_limit"]);
-  cli(["checkout", ref, "--account", "personal-max"]);
+  expect((await run(["budget", "ingest", "--source", "manual", "--account", "personal-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", "26", "--resets-at", "4h", "--json"])).status).toBe(0);
+  await cli(["attempt", "interrupt", ref, "--reason", "provider_limit"]);
+  await cli(["checkout", ref, "--account", "personal-max"]);
 
-  otherRef = String(cli(["new", "Elsewhere"], OTHER).identifier);
-  otherAttempt = String((cli(["checkout", otherRef], OTHER).attempt as Record<string, unknown>).id);
+  otherRef = String((await cli(["new", "Elsewhere"], OTHER)).identifier);
+  otherAttempt = String(((await cli(["checkout", otherRef], OTHER)).attempt as Record<string, unknown>).id);
 
   mcp = await startMcpClient({ home, cwd: home, agent: "agent-mcp" });
   const previous = process.env.STAPLE_HOME;
@@ -135,7 +135,7 @@ afterAll(async () => {
 
 describe("the attempts block on every detail surface", () => {
   it("is one value on show --json, get_task, /api/agent-context and /api/issue", async () => {
-    const fromCli = cli(["show", ref]).attempts as Record<string, unknown>;
+    const fromCli = (await cli(["show", ref])).attempts as Record<string, unknown>;
     const fromMcp = (toolPayload(await mcp.call("get_task", { ref, ws: WS })) as Record<string, unknown>).attempts;
     const fromPane = (await http(`/api/agent-context?ref=${ref}`)).attempts;
     const fromDetail = (await http(`/api/issue?ref=${ref}`)).attempts;
@@ -145,8 +145,8 @@ describe("the attempts block on every detail surface", () => {
     expect(steady(fromDetail)).toEqual(steady(fromCli));
   }, 60_000);
 
-  it("reads the human show line from the same summary", () => {
-    const out = run(["show", ref, "--ws", WS]).stdout;
+  it("reads the human show line from the same summary", async () => {
+    const out = (await run(["show", ref, "--ws", WS])).stdout;
     expect(out).toMatch(/attempts 2 · current #2 agent-cli running/);
     expect(out).toMatch(/last #1 agent-cli interrupted \(provider_limit\)/);
   }, 30_000);
@@ -154,20 +154,20 @@ describe("the attempts block on every detail surface", () => {
 
 describe("CLI --json and MCP answer one shape", () => {
   it("staple attempts = list_attempts, and a cursor from one pages the other", async () => {
-    const all = cli(["attempts", ref]);
+    const all = await cli(["attempts", ref]);
     expect(steady(toolPayload(await mcp.call("list_attempts", { ref, ws: WS })))).toEqual(steady(all));
     expect(all).toMatchObject({ truncated: false, nextCursor: null, coverage: { itemCount: 2, gaps: [] } });
 
-    const firstCli = cli(["attempts", ref, "--limit", "1"]);
+    const firstCli = await cli(["attempts", ref, "--limit", "1"]);
     expect(firstCli).toMatchObject({ truncated: true, nextCursor: expect.any(String) });
     const secondMcp = toolPayload(await mcp.call("list_attempts", { ref, ws: WS, limit: 1, cursor: firstCli.nextCursor })) as Record<string, unknown>;
-    const secondCli = cli(["attempts", ref, "--limit", "1", "--cursor", String(firstCli.nextCursor)]);
+    const secondCli = await cli(["attempts", ref, "--limit", "1", "--cursor", String(firstCli.nextCursor)]);
     expect(steady(secondMcp)).toEqual(steady(secondCli));
     expect((secondMcp.items as Array<Record<string, unknown>>)[0]).toMatchObject({ ordinal: 2 });
   }, 60_000);
 
   it("staple attempt <id> = get_attempt, burn included", async () => {
-    const fromCli = cli(["attempt", endedId]);
+    const fromCli = await cli(["attempt", endedId]);
     const fromMcp = toolPayload(await mcp.call("get_attempt", { attempt_id: endedId, ws: WS }));
     expect(steady(fromMcp)).toEqual(steady(fromCli));
     expect(fromCli).toMatchObject({
@@ -178,14 +178,14 @@ describe("CLI --json and MCP answer one shape", () => {
   }, 60_000);
 
   it("staple budget = get_budget, and staple budget history = list_budget_samples", async () => {
-    const view = cli(["budget"], null);
+    const view = await cli(["budget"], null);
     expect(steady(toolPayload(await mcp.call("get_budget", {})))).toEqual(steady(view));
     expect(view).toMatchObject({ budgetCapture: true, accounts: [{ accountRef: "personal-max", limits: [{ limitKey: "five_hour", highWaterPercent: 26, remainingPercent: 74 }] }] });
     // The same read over HTTP, which the page's budget view polls.
     expect(steady(await inHome(() => http("/api/budget")))).toEqual(steady(view));
 
     // The pressure block and its reserve argument, one value on the three surfaces.
-    const reserved = cli(["budget", "--reserve", "30%"], null);
+    const reserved = await cli(["budget", "--reserve", "30%"], null);
     expect(steady(toolPayload(await mcp.call("get_budget", { reserve: "30%" })))).toEqual(steady(reserved));
     expect(steady(await inHome(() => http("/api/budget?reserve=30%25")))).toEqual(steady(reserved));
     expect(reserved).toMatchObject({
@@ -195,12 +195,12 @@ describe("CLI --json and MCP answer one shape", () => {
     });
     expect(view).toMatchObject({ reserve: { percent: 20, source: "provisional_default", note: expect.stringContaining("provisional") } });
     // A reserve out of range is the same refusal everywhere.
-    const refused = run(["budget", "--reserve", "150", "--json"]);
+    const refused = await run(["budget", "--reserve", "150", "--json"]);
     expect(refused.status).toBe(2);
     expect(mcpEnvelope(await mcp.call("get_budget", { reserve: "150" }))).toEqual(JSON.parse(refused.stderr.trim()));
     expect((await inHome(() => fetch(`${origin}/api/budget?reserve=150`, { headers: { "x-staple-token": ui.token } }))).status).toBe(409);
 
-    const history = cli(["budget", "history", "--account", "personal-max", "--limit", "1"], null);
+    const history = await cli(["budget", "history", "--account", "personal-max", "--limit", "1"], null);
     const viaMcp = toolPayload(await mcp.call("list_budget_samples", { account: "personal-max", limit: 1 }));
     expect(steady(viaMcp)).toEqual(steady(history));
     expect(history).toMatchObject({ truncated: true, items: [{ usedPercent: 20 }] });
@@ -225,16 +225,16 @@ describe("ws targeting", () => {
 });
 
 describe("a lower-bound burn", () => {
-  it("prints as at least, when nothing was read before the attempt in its window", () => {
-    const issue = String(cli(["new", "Unseen start"]).identifier);
-    const attempt = String((cli(["checkout", issue, "--account", "team-max"]).attempt as Record<string, unknown>).id);
+  it("prints as at least, when nothing was read before the attempt in its window", async () => {
+    const issue = String((await cli(["new", "Unseen start"])).identifier);
+    const attempt = String(((await cli(["checkout", issue, "--account", "team-max"])).attempt as Record<string, unknown>).id);
     for (const used of ["30", "33"]) {
-      const reading = run(["budget", "ingest", "--source", "manual", "--account", "team-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", used, "--resets-at", "4h", "--json"]);
+      const reading = await run(["budget", "ingest", "--source", "manual", "--account", "team-max", "--provider", "anthropic", "--limit-key", "five_hour", "--used", used, "--resets-at", "4h", "--json"]);
       expect(reading.status, reading.stderr).toBe(0);
     }
-    cli(["release", issue]);
-    expect(cli(["attempt", attempt])).toMatchObject({ burn: { limits: [{ burnPercent: 3, lowerBound: true }] } });
-    expect(run(["attempt", attempt, "--ws", WS]).stdout).toMatch(/burn five_hour\s+≥3%/);
+    await cli(["release", issue]);
+    expect(await cli(["attempt", attempt])).toMatchObject({ burn: { limits: [{ burnPercent: 3, lowerBound: true }] } });
+    expect((await run(["attempt", attempt, "--ws", WS])).stdout).toMatch(/burn five_hour\s+≥3%/);
   }, 60_000);
 });
 
@@ -242,7 +242,7 @@ describe("refusals keep the envelope and exit codes", () => {
   it("refuses a limit that is not a positive integer with one envelope on both surfaces", async () => {
     const viaMcp = await mcp.call("list_attempts", { ref, ws: WS, limit: 1.5 });
     expect(viaMcp.isError).toBe(true);
-    const viaCli = run(["attempts", ref, "--limit", "1.5", "--ws", WS, "--json"]);
+    const viaCli = await run(["attempts", ref, "--limit", "1.5", "--ws", WS, "--json"]);
     expect(viaCli.status).toBe(2);
     expect(mcpEnvelope(viaMcp)).toEqual(JSON.parse(viaCli.stderr.trim()));
     expect(mcpEnvelope(viaMcp)).toMatchObject({ code: "validation" });
@@ -250,14 +250,14 @@ describe("refusals keep the envelope and exit codes", () => {
     expect(mcpEnvelope(budget)).toMatchObject({ code: "validation" });
   }, 60_000);
 
-  it("validation for a missing ref, a bad limit or a foreign cursor; not_found for an unknown attempt", () => {
-    const noRef = run(["attempts", "--ws", WS, "--json"]);
+  it("validation for a missing ref, a bad limit or a foreign cursor; not_found for an unknown attempt", async () => {
+    const noRef = await run(["attempts", "--ws", WS, "--json"]);
     expect(noRef.status).toBe(2);
     expect(JSON.parse(noRef.stderr.trim())).toMatchObject({ code: "validation" });
-    expect(run(["attempts", ref, "--limit", "0", "--ws", WS, "--json"]).status).toBe(2);
-    expect(run(["attempts", ref, "--cursor", "bogus", "--ws", WS, "--json"]).status).toBe(2);
-    const unknown = run(["attempt", "00000000-0000-4000-8000-000000000000", "--ws", WS, "--json"]);
+    expect((await run(["attempts", ref, "--limit", "0", "--ws", WS, "--json"])).status).toBe(2);
+    expect((await run(["attempts", ref, "--cursor", "bogus", "--ws", WS, "--json"])).status).toBe(2);
+    const unknown = await run(["attempt", "00000000-0000-4000-8000-000000000000", "--ws", WS, "--json"]);
     expect(JSON.parse(unknown.stderr.trim())).toMatchObject({ code: "not_found" });
-    expect(run(["budget", "history", "--json"]).status).toBe(2);
+    expect((await run(["budget", "history", "--json"])).status).toBe(2);
   }, 60_000);
 });

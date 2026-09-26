@@ -27,7 +27,7 @@ import {
   REPO_ROOT,
   asStructured,
   mcpEnvelope,
-  runCli,
+  runCliAsync,
   startMcpClient,
   type McpHarness,
 } from "./fixtures/contract-support.js";
@@ -41,8 +41,8 @@ let origin: string;
 let token: string;
 let dbPath: string;
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: AGENT });
 }
 
 /**
@@ -119,9 +119,9 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
-  expect(cli("new", "A task two devices both edited", "--ws", WS).status).toBe(0);
-  expect(cli("new", "A task nobody argued about", "--ws", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("new", "A task two devices both edited", "--ws", WS)).status).toBe(0);
+  expect((await cli("new", "A task nobody argued about", "--ws", WS)).status).toBe(0);
   dbPath = resolveWorkspace({ ws: WS }).dbPath;
   const opened = resolveWorkspace({ ws: WS });
   opened.store.db.close();
@@ -138,15 +138,15 @@ afterAll(() => {
 });
 
 describe("the CLI", () => {
-  it("says so plainly when there is nothing contested", () => {
-    const result = cli("cloud", "conflicts", "--ws", WS);
+  it("says so plainly when there is nothing contested", async () => {
+    const result = await cli("cloud", "conflicts", "--ws", WS);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("No open conflicts.");
   });
 
-  it("shows both values with equal weight and names neither as current", () => {
+  it("shows both values with equal weight and names neither as current", async () => {
     plant(issueId("CON-1"), "title", "Title from here", "Title from there", "cli-conflict");
-    const result = cli("cloud", "conflicts", "--ws", WS);
+    const result = await cli("cloud", "conflicts", "--ws", WS);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Title from here");
     expect(result.stdout).toContain("Title from there");
@@ -155,14 +155,14 @@ describe("the CLI", () => {
     expect(result.stdout.toLowerCase()).not.toContain("winner");
   });
 
-  it("refuses to resolve without a choice rather than defaulting to one", () => {
-    const result = cli("cloud", "resolve", "cli-conflict", "--ws", WS, "--json");
+  it("refuses to resolve without a choice rather than defaulting to one", async () => {
+    const result = await cli("cloud", "resolve", "cli-conflict", "--ws", WS, "--json");
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("Nothing chosen");
   });
 
-  it("refuses --take and --value together, because they are two decisions", () => {
-    const result = cli(
+  it("refuses --take and --value together, because they are two decisions", async () => {
+    const result = await cli(
       "cloud",
       "resolve",
       "cli-conflict",
@@ -177,14 +177,14 @@ describe("the CLI", () => {
     expect(result.status).toBe(2);
   });
 
-  it("refuses a --take that is not a side", () => {
-    const result = cli("cloud", "resolve", "cli-conflict", "--take", "newest", "--ws", WS, "--json");
+  it("refuses a --take that is not a side", async () => {
+    const result = await cli("cloud", "resolve", "cli-conflict", "--take", "newest", "--ws", WS, "--json");
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("newest");
   });
 
-  it("resolves, writes the value, and keeps the record", () => {
-    const result = cli("cloud", "resolve", "cli-conflict", "--take", "remote", "--ws", WS, "--json");
+  it("resolves, writes the value, and keeps the record", async () => {
+    const result = await cli("cloud", "resolve", "cli-conflict", "--take", "remote", "--ws", WS, "--json");
     expect(result.status).toBe(0);
     const outcome = JSON.parse(result.stdout) as { changed: boolean; conflict: ConflictRecord };
     expect(outcome.changed).toBe(true);
@@ -197,19 +197,19 @@ describe("the CLI", () => {
     expect(record.resolvedChoice).toBe("remote");
   });
 
-  it("is idempotent, and refuses to overturn what it already settled", () => {
-    const again = cli("cloud", "resolve", "cli-conflict", "--take", "remote", "--ws", WS, "--json");
+  it("is idempotent, and refuses to overturn what it already settled", async () => {
+    const again = await cli("cloud", "resolve", "cli-conflict", "--take", "remote", "--ws", WS, "--json");
     expect(again.status).toBe(0);
     expect((JSON.parse(again.stdout) as { changed: boolean }).changed).toBe(false);
 
-    const different = cli("cloud", "resolve", "cli-conflict", "--take", "local", "--ws", WS, "--json");
+    const different = await cli("cloud", "resolve", "cli-conflict", "--take", "local", "--ws", WS, "--json");
     expect(different.status).toBe(4);
     expect(different.stderr).toContain("already resolved");
   });
 
-  it("hides settled conflicts by default and keeps them under --all", () => {
-    expect(cli("cloud", "conflicts", "--ws", WS).stdout).toContain("No open conflicts.");
-    expect(cli("cloud", "conflicts", "--all", "--ws", WS).stdout).toContain("cli-conflict");
+  it("hides settled conflicts by default and keeps them under --all", async () => {
+    expect((await cli("cloud", "conflicts", "--ws", WS)).stdout).toContain("No open conflicts.");
+    expect((await cli("cloud", "conflicts", "--all", "--ws", WS)).stdout).toContain("cli-conflict");
   });
 });
 

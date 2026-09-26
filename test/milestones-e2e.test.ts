@@ -49,7 +49,7 @@ import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import {
   cliEnvelope,
   mcpEnvelope,
-  runCli,
+  runCliAsync,
   startMcpClient,
   toolPayload,
   type CliResult,
@@ -82,23 +82,23 @@ let token: string;
 
 // ---------------------------------------------------------------- surfaces
 
-function cli(...args: string[]): CliResult {
-  return runCli([...args, "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: AGENT });
+async function cli(...args: string[]): Promise<CliResult> {
+  return await runCliAsync([...args, "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: AGENT });
 }
 
-function ok(...args: string[]): CliResult {
-  const result = cli(...args);
+async function ok(...args: string[]): Promise<CliResult> {
+  const result = await cli(...args);
   expect(result.status, `${args.join(" ")}: ${result.stderr}`).toBe(0);
   return result;
 }
 
-function cliJson<T>(...args: string[]): T {
-  return JSON.parse(ok(...args, "--json").stdout) as T;
+async function cliJson<T>(...args: string[]): Promise<T> {
+  return JSON.parse((await ok(...args, "--json")).stdout) as T;
 }
 
 /** The single-line JSON envelope `--json` writes to stderr on a refusal. */
-function cliRefusal(...args: string[]): { status: number; code: string; message: string } {
-  const result = cli(...args, "--json");
+async function cliRefusal(...args: string[]): Promise<{ status: number; code: string; message: string }> {
+  const result = await cli(...args, "--json");
   expect(result.status, `expected a refusal from ${args.join(" ")}`).not.toBe(0);
   const envelope = cliEnvelope(result);
   return { status: result.status, code: String(envelope.code), message: String(envelope.message) };
@@ -139,7 +139,7 @@ async function httpJson<T>(path: string, body?: Record<string, unknown>): Promis
  * asserted equal and returned once. Three processes reading one file.
  */
 async function milestoneEverywhere(ref: string): Promise<MilestoneView> {
-  const fromCli = cliJson<MilestoneView>("milestone", "show", ref);
+  const fromCli = await cliJson<MilestoneView>("milestone", "show", ref);
   const fromMcp = await mcpJson<MilestoneView>("get_milestone", { ref });
   const fromHttp = await httpJson<MilestoneView>(`/api/milestone?ws=${WS}&ref=${ref}`);
   expect(fromMcp, "MCP disagrees with the CLI").toEqual(fromCli);
@@ -174,7 +174,7 @@ function snapshotOf(view: { revision: number; effective: EffectiveQueueRow[] }):
 }
 
 async function queueEverywhere(actor = AGENT): Promise<QueueSnapshot> {
-  const fromCli = snapshotOf(cliJson("queue", "--effective", "--actor", actor));
+  const fromCli = snapshotOf(await cliJson("queue", "--effective", "--actor", actor));
   const fromMcp = snapshotOf(await mcpJson("list_queue", { actor }));
   const fromHttp = snapshotOf(await httpJson(`/api/queue?ws=${WS}&actor=${actor}`));
   expect(fromMcp.effective, "MCP disagrees with the CLI").toEqual(fromCli.effective);
@@ -235,7 +235,7 @@ afterAll(async () => {
 
 describe("the scenario", () => {
   it("is two overlapping dated plans over one tree, with a blocker, a gate, a done leaf and a cancelled one", { timeout: 30_000 }, async () => {
-    const rows = cliJson<MilestoneListRow[]>("milestone", "ls", "--all");
+    const rows = await cliJson<MilestoneListRow[]>("milestone", "ls", "--all");
     expect(rows.map((row) => [row.milestone.identifier, row.milestone.planPosition, row.milestone.targetDate])).toEqual([
       [SCENARIO.november, 1, NOVEMBER_TARGET],
       [SCENARIO.october, 2, OCTOBER_TARGET],
@@ -307,8 +307,8 @@ describe("creating a milestone from an epic", () => {
     });
 
     // Nothing was written: no new milestone, no membership, no identifier burned.
-    expect(cliJson<MilestoneListRow[]>("milestone", "ls", "--all")).toHaveLength(2);
-    expect(cliRefusal("show", NEXT_IDENTIFIER).code).toBe("not_found");
+    expect(await cliJson<MilestoneListRow[]>("milestone", "ls", "--all")).toHaveLength(2);
+    expect((await cliRefusal("show", NEXT_IDENTIFIER)).code).toBe("not_found");
     expect(hierarchy(SCENARIO.cloudEpic)).toEqual(before);
   });
 
@@ -344,9 +344,9 @@ describe("creating a milestone from an epic", () => {
     // plans. Emptying it and cancelling it is the whole retreat: there is no
     // `staple rm <issue>`, and there does not need to be, because a cancelled
     // milestone leaves `milestone ls` while its record survives under `--all`.
-    ok("milestone", "rm", NEXT_IDENTIFIER, SCENARIO.cloudEpic);
-    ok("status", NEXT_IDENTIFIER, "cancelled");
-    expect(cliJson<MilestoneListRow[]>("milestone", "ls").map((row) => row.milestone.identifier)).toEqual([
+    await ok("milestone", "rm", NEXT_IDENTIFIER, SCENARIO.cloudEpic);
+    await ok("status", NEXT_IDENTIFIER, "cancelled");
+    expect((await cliJson<MilestoneListRow[]>("milestone", "ls")).map((row) => row.milestone.identifier)).toEqual([
       SCENARIO.november,
       SCENARIO.october,
     ]);
@@ -401,7 +401,7 @@ describe("cross-epic manual membership", () => {
     expect(refusal.message).toContain(`staple milestone mv ${SCENARIO.q3} --to ${SCENARIO.october}`);
 
     // The named move works, keeps the note, and does not touch the parent.
-    const moved = cliJson<MilestoneView>("milestone", "mv", SCENARIO.q3, "--to", SCENARIO.october);
+    const moved = await cliJson<MilestoneView>("milestone", "mv", SCENARIO.q3, "--to", SCENARIO.october);
     expect(moved.milestone.identifier).toBe(SCENARIO.october);
     expect(moved.members.map((member) => member.identifier)).toEqual([
       SCENARIO.queueEpic,
@@ -414,7 +414,7 @@ describe("cross-epic manual membership", () => {
     expect(hierarchy(SCENARIO.queueEpic).find((node) => node.identifier === SCENARIO.q3)!.parent).toBe(SCENARIO.queueEpic);
 
     // Restore: the rest of the file reads MSC-5 as November's second member.
-    ok("milestone", "mv", SCENARIO.q3, "--to", SCENARIO.november);
+    await ok("milestone", "mv", SCENARIO.q3, "--to", SCENARIO.november);
     expect((await milestoneHttp(SCENARIO.november)).members.map((m) => m.identifier)).toEqual([
       SCENARIO.milestonesEpic,
       SCENARIO.q3,
@@ -447,8 +447,8 @@ describe("progress counts each leaf once", () => {
   });
 
   it("moves only the numerator when a leaf lands, and moves it back when the leaf reopens", { timeout: 30_000 }, async () => {
-    ok("checkout", SCENARIO.q1);
-    ok("status", SCENARIO.q1, "done");
+    await ok("checkout", SCENARIO.q1);
+    await ok("status", SCENARIO.q1, "done");
     const landed = await milestoneHttp(SCENARIO.october);
     expect(landed.progress).toMatchObject({ total: 5, countable: 4, percent: 50 });
     expect(landed.progress.counts).toMatchObject({ done: 2, unstarted: 2 });
@@ -466,11 +466,11 @@ describe("progress counts each leaf once", () => {
     expect(queue.effective).not.toContain(`${SCENARIO.q1}:eligible`);
 
     // Reopen: nothing is re-added, the count simply re-derives on the next read.
-    ok("status", SCENARIO.q1, "todo");
+    await ok("status", SCENARIO.q1, "todo");
     const reopened = await milestoneHttp(SCENARIO.october);
     expect(reopened.progress).toMatchObject({ percent: 25, complete: false });
     expect(rowFor(await queueHttp(), SCENARIO.q2).eligibility).toBe("blocked");
-    ok("status", SCENARIO.q1, "backlog");
+    await ok("status", SCENARIO.q1, "backlog");
   });
 });
 
@@ -483,7 +483,7 @@ describe("membership order is the effective pickup order", () => {
     expect(before.effective.slice(3, 5)).toEqual([`${SCENARIO.q1}:eligible`, `${SCENARIO.q2}:blocked`]);
 
     // Pull the blocked member to the head of the plan. `--base` is the CAS.
-    const reordered = cliJson<MilestoneView>(
+    const reordered = await cliJson<MilestoneView>(
       "milestone",
       "reorder",
       SCENARIO.october,
@@ -510,7 +510,7 @@ describe("membership order is the effective pickup order", () => {
     expect(rowFor(after, SCENARIO.q2).eligibility).toBe("blocked");
 
     // Restore the fixture order, again under the CAS.
-    ok(
+    await ok(
       "milestone",
       "reorder",
       SCENARIO.october,
@@ -526,7 +526,7 @@ describe("membership order is the effective pickup order", () => {
     const stale = october.revision - 1;
     const order = [SCENARIO.q2, SCENARIO.queueEpic, SCENARIO.spike, SCENARIO.flake];
 
-    const fromCli = cliRefusal("milestone", "reorder", SCENARIO.october, order.join(","), "--base", String(stale));
+    const fromCli = await cliRefusal("milestone", "reorder", SCENARIO.october, order.join(","), "--base", String(stale));
     expect([fromCli.status, fromCli.code]).toEqual([CLI_EXIT_CODES.revision_conflict, "revision_conflict"]);
 
     const fromMcp = await mcpRefusal("reorder_milestone_members", {
@@ -621,7 +621,7 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
     expect(rowFor(before, SCENARIO.q1).dueAt).toBe(milestoneDateBounds(OCTOBER_TARGET).endsAt);
 
     // Push October past November's date — the plan must not notice.
-    ok("milestone", "set", SCENARIO.october, "--target", "2028-02-29");
+    await ok("milestone", "set", SCENARIO.october, "--target", "2028-02-29");
     const after = await queueHttp();
     for (const identifier of [SCENARIO.q1, SCENARIO.q2, SCENARIO.spike, SCENARIO.flake]) {
       expect(rowFor(after, identifier).dueAt, identifier).toBe("2028-02-29T23:59:59.999Z");
@@ -629,7 +629,7 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
     expect(after.effective).toEqual(before.effective);
     expect(after.revision).toBe(before.revision);
     // And the milestone list order — plan first, then date — is untouched too.
-    expect(cliJson<MilestoneListRow[]>("milestone", "ls").map((row) => row.milestone.identifier)).toEqual([
+    expect((await cliJson<MilestoneListRow[]>("milestone", "ls")).map((row) => row.milestone.identifier)).toEqual([
       SCENARIO.november,
       SCENARIO.october,
     ]);
@@ -640,7 +640,7 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
     // through October and a member of October, says October's new date.
     expect(rowFor(after, SCENARIO.q3).dueAt).toBe(milestoneDateBounds(NOVEMBER_TARGET).endsAt);
 
-    ok("milestone", "set", SCENARIO.october, "--target", OCTOBER_TARGET);
+    await ok("milestone", "set", SCENARIO.october, "--target", OCTOBER_TARGET);
     expect(rowFor(await queueHttp(), SCENARIO.q1).dueAt).toBe(milestoneDateBounds(OCTOBER_TARGET).endsAt);
   });
 
@@ -682,7 +682,7 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
   });
 
   it("clears a date with `none`, and refuses an impossible day and a start after the target on every surface", { timeout: 30_000 }, async () => {
-    const cleared = cliJson<MilestoneView>("milestone", "set", SCENARIO.october, "--start", "none");
+    const cleared = await cliJson<MilestoneView>("milestone", "set", SCENARIO.october, "--start", "none");
     expect(cleared.milestone.startDate).toBeNull();
     // Still `active` with no start date: the calendar said nothing, so the MEMBERS
     // did — one counted leaf (the done spike) has already left the pre-work band.
@@ -690,10 +690,10 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
     expect(cleared.progress.counts.done).toBeGreaterThan(0);
     // November, whose leaves are all still unstarted, is the control.
     expect((await milestoneHttp(SCENARIO.november)).milestone.state).toBe("planned");
-    ok("milestone", "set", SCENARIO.october, "--start", OCTOBER_START);
+    await ok("milestone", "set", SCENARIO.october, "--start", OCTOBER_START);
     expect((await milestoneHttp(SCENARIO.october)).milestone.state).toBe("active");
 
-    const badDay = cliRefusal("milestone", "set", SCENARIO.october, "--target", "2026-02-30");
+    const badDay = await cliRefusal("milestone", "set", SCENARIO.october, "--target", "2026-02-30");
     expect([badDay.status, badDay.code]).toEqual([CLI_EXIT_CODES.validation, "validation"]);
     expect(badDay.message).toContain("calendar days");
 
@@ -739,14 +739,14 @@ describe("a gate over a member epic", () => {
   it("request-changes keeps the children queued; approve re-derives the whole order on the next read", { timeout: 30_000 }, async () => {
     const before = await queueHttp();
 
-    ok("request-changes", SCENARIO.milestonesEpic, "-m", "the store needs the CAS first");
+    await ok("request-changes", SCENARIO.milestonesEpic, "-m", "the store needs the CAS first");
     const changesRequested = await queueHttp();
     expect(changesRequested.effective).toEqual(before.effective);
     expect(rowFor(changesRequested, SCENARIO.m1).eligibility).toBe("gated");
     // No queue write: a gate answer is read on every call, never stored in the plan.
     expect(changesRequested.revision).toBe(before.revision);
 
-    ok("approve", SCENARIO.milestonesEpic);
+    await ok("approve", SCENARIO.milestonesEpic);
     const approved = await queueEverywhere();
     expect(approved.effective.slice(0, 3)).toEqual([
       `${SCENARIO.m1}:eligible`,
@@ -760,7 +760,7 @@ describe("a gate over a member epic", () => {
 
   it("a live claim is skipped and released work comes back, without a plan write", { timeout: 30_000 }, async () => {
     const before = await queueHttp();
-    expect(runCli(["checkout", SCENARIO.m1, "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: "other-agent" }).status).toBe(0);
+    expect((await runCliAsync(["checkout", SCENARIO.m1, "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: "other-agent" })).status).toBe(0);
 
     const held = await queueHttp();
     expect(rowFor(held, SCENARIO.m1).eligibility).toBe("claimed");
@@ -769,7 +769,7 @@ describe("a gate over a member epic", () => {
     // The holder can resume through checkout, but ongoing work is not fresh pickup.
     expect(rowFor(await queueHttp("other-agent"), SCENARIO.m1).eligibility).toBe("claimed");
 
-    expect(runCli(["release", SCENARIO.m1, "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: "other-agent" }).status).toBe(0);
+    expect((await runCliAsync(["release", SCENARIO.m1, "--ws", WS], { STAPLE_HOME: home, STAPLE_AGENT: "other-agent" })).status).toBe(0);
     expect((await queueHttp()).effective).toEqual(before.effective);
   });
 });
@@ -781,8 +781,8 @@ describe("work landing under a milestone", () => {
     // Land everything November counts: the gated epic's two children and the
     // cross-epic member. (MSC-6 derives `done` from its own children, as any parent does.)
     for (const ref of [SCENARIO.m1, SCENARIO.m2, SCENARIO.q3]) {
-      ok("checkout", ref);
-      ok("status", ref, "done");
+      await ok("checkout", ref);
+      await ok("status", ref, "done");
     }
 
     const november = await milestoneHttp(SCENARIO.november);
@@ -798,21 +798,21 @@ describe("work landing under a milestone", () => {
     // Nothing under it is takeable any more, so the queue has no next work for it.
     expect(november.next).toBeNull();
 
-    ok("status", SCENARIO.november, "done");
+    await ok("status", SCENARIO.november, "done");
     const closed = await milestoneHttp(SCENARIO.november);
     expect(closed.milestone.state).toBe("done");
     // A resolved milestone leaves the default listing but keeps its members.
-    expect(cliJson<MilestoneListRow[]>("milestone", "ls").map((row) => row.milestone.identifier)).toEqual([
+    expect((await cliJson<MilestoneListRow[]>("milestone", "ls")).map((row) => row.milestone.identifier)).toEqual([
       SCENARIO.october,
     ]);
     // `--all` still has all three, the cancelled conversion included: a resolved
     // plan leaves the listing, it is never forgotten.
-    expect(cliJson<MilestoneListRow[]>("milestone", "ls", "--all")).toHaveLength(3);
+    expect(await cliJson<MilestoneListRow[]>("milestone", "ls", "--all")).toHaveLength(3);
 
     // Its plan row is resolved, and `prune` forgets it; the members are untouched.
     const queue = await queueHttp();
     expect(queue.effective.some((row) => row.startsWith(`${SCENARIO.november}:`))).toBe(false);
-    ok("queue", "prune");
+    await ok("queue", "prune");
     const pruned = await queueHttp();
     expect(pruned.revision).toBeGreaterThan(queue.revision);
     expect((await milestoneHttp(SCENARIO.november)).milestone.planPosition).toBeNull();
@@ -822,7 +822,7 @@ describe("work landing under a milestone", () => {
   });
 
   it("cancelling a milestone leaves its members open and its progress readable", { timeout: 30_000 }, async () => {
-    ok("status", SCENARIO.october, "cancelled");
+    await ok("status", SCENARIO.october, "cancelled");
     const october = await milestoneHttp(SCENARIO.october);
     expect(october.milestone.state).toBe("cancelled");
     // Two of October's four countable leaves are done now — the spike from the

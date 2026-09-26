@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { setClock } from "../src/core/types.js";
 import { resolveWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "forecasts";
 let home: string;
@@ -24,11 +24,11 @@ let origin: string;
 let token: string;
 const refs: Record<string, string> = {};
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
-function cliJson(...args: string[]): any {
-  const result = cli(...args, "--ws", WS, "--json");
+async function cliJson(...args: string[]): Promise<any> {
+  const result = await cli(...args, "--ws", WS, "--json");
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 }
@@ -55,7 +55,7 @@ beforeAll(async () => {
   emptyDir = mkdtempSync(join(tmpdir(), "staple-forecast-surfaces-cwd-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
 
   /**
    * One epic: five exact task leaves worked 20, 30, 40, 60 and 60 minutes against 2 hours (all
@@ -111,7 +111,7 @@ afterAll(async () => {
 
 describe("forecast: one payload through the CLI, MCP and HTTP", () => {
   it("forecasts the epic's remaining labor and chain, apart from the budget, the same on every surface", async () => {
-    const viaCli = cliJson("forecast", refs.epic!, "--reserve", "25%");
+    const viaCli = await cliJson("forecast", refs.epic!, "--reserve", "25%");
     const viaMcp = await tool("forecast", { ref: refs.epic, reserve: "25%" });
     const viaHttp = await http(`/api/forecast?ws=${WS}&ref=${refs.epic}&reserve=25%25`);
     expect(viaHttp.status).toBe(200);
@@ -122,7 +122,7 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
     expect(viaCli.subject).toMatchObject({ ref: refs.epic, kind: "epic", scope: "subtree" });
     expect(viaCli.snapshot.id).toMatch(/^forecast2:[0-9a-f]{32}$/);
     // The classes came from the calibration `staple calibrate` reads, unfiltered.
-    expect(viaCli.snapshot.calibration.id).toBe(cliJson("calibrate").snapshot.id);
+    expect(viaCli.snapshot.calibration.id).toBe((await cliJson("calibrate")).snapshot.id);
     const { completion } = viaCli;
     expect(completion.units).toMatchObject({ total: 8, done: 5, awaitingReview: 0, forecast: 3, known: 2, unknownRefs: [refs.c] });
     // 0.35 × 4h = 5040 s and 0.35 × 2h = 2520 s, on one chain; C is unknown.
@@ -132,7 +132,7 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
     expect(completion.labor).toMatchObject({ partial: true, missing: ["unknown_units"] });
     expect(completion).not.toHaveProperty("laborDraws");
     // Every unit's own figure agrees with the one `calibrate --for` publishes.
-    const calibrated = cliJson("calibrate", "--for", refs.a!).forecasts[0];
+    const calibrated = (await cliJson("calibrate", "--for", refs.a!)).forecasts[0];
     expect(completion.units.items.find((item: any) => item.ref === refs.a).expected.durationSeconds).toBeCloseTo(calibrated.expected.seconds, 9);
     // The budget half: this home has no budget at all, and says so rather than reading 0.
     expect(viaCli.budget).toMatchObject({ machineLocal: true, budgetCapture: false, accounts: [], missing: { accounts: "source_unavailable" } });
@@ -140,7 +140,7 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
     expect(viaCli.budget.work).toEqual({ expectedSeconds: completion.labor.expectedSeconds, partial: true, schedule: "serial_from_as_of" });
 
     // A pinned model is one filter on every surface.
-    const pinned = cliJson("forecast", refs.a!, "--model", "opus");
+    const pinned = await cliJson("forecast", refs.a!, "--model", "opus");
     expect(stable(await tool("forecast", { ref: refs.a, model: "opus" }))).toEqual(stable(pinned));
     expect(stable((await http(`/api/forecast?ws=${WS}&ref=${refs.a}&model=opus`)).body)).toEqual(stable(pinned));
     expect(pinned.filter).toEqual({ model: "opus", account: null });
@@ -148,12 +148,12 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
   });
 
   it("refuses a missing issue, no issue and a bad reserve on every surface", async () => {
-    expect(cli("forecast", "NOPE-1", "--ws", WS).status).not.toBe(0);
+    expect((await cli("forecast", "NOPE-1", "--ws", WS)).status).not.toBe(0);
     expect((await http(`/api/forecast?ws=${WS}&ref=NOPE-1`)).status).toBe(404);
     expect((await http(`/api/forecast?ws=${WS}`)).status).toBe(409);
-    expect(cli("forecast", "--ws", WS).status).toBe(2);
-    expect(cli("forecast", refs.a!, refs.b!, "--ws", WS).status).toBe(2);
-    const bare = cli("forecast", refs.a!, "--reserve", "150", "--ws", WS);
+    expect((await cli("forecast", "--ws", WS)).status).toBe(2);
+    expect((await cli("forecast", refs.a!, refs.b!, "--ws", WS)).status).toBe(2);
+    const bare = await cli("forecast", refs.a!, "--reserve", "150", "--ws", WS);
     expect(bare.status).toBe(2);
     expect(bare.stderr).toMatch(/reserve takes a percent/);
     const viaMcp = await mcp.call("forecast", { ref: refs.a, reserve: "150", ws: WS });
@@ -161,8 +161,8 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
     expect((await http(`/api/forecast?ws=${WS}&ref=${refs.a}&reserve=150`)).status).toBe(409);
   });
 
-  it("prints the subject, completion and budget in a few lines", () => {
-    const result = cli("forecast", refs.epic!, "--ws", WS);
+  it("prints the subject, completion and budget in a few lines", async () => {
+    const result = await cli("forecast", refs.epic!, "--ws", WS);
     expect(result.status, result.stderr).toBe(0);
     const lines = result.stdout.trimEnd().split("\n");
     expect(lines[0]).toMatch(new RegExp(`^${refs.epic} · Forecast me \\(epic, backlog\\) · snapshot forecast2:[0-9a-f]{32} over calibration2:[0-9a-f]{32}$`));
@@ -176,7 +176,7 @@ describe("forecast: one payload through the CLI, MCP and HTTP", () => {
     expect(lines[6]).toBe("  no account: source_unavailable");
 
     // With a unit in review, the labor line says its wait is not in the figure.
-    const reviewed = cli("forecast", refs.reviewed!, "--ws", WS);
+    const reviewed = await cli("forecast", refs.reviewed!, "--ws", WS);
     expect(reviewed.status, reviewed.stderr).toBe(0);
     const reviewedLines = reviewed.stdout.trimEnd().split("\n");
     expect(reviewedLines[1]).toBe("completion  2 units · 0 done · 1 awaiting review · 1 to forecast, 1 known");

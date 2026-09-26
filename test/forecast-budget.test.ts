@@ -126,6 +126,7 @@ describe("the budget forecast of a piece of work", () => {
     const limit = limitOf(report);
     expect(limit).toMatchObject({ status: "current", resetsAt: RESET, remainingPercent: 78, highWaterPercent: 22, stale: false, missing: {}, missingInputs: {} });
     expect(limit.secondsToReset).toBe(239 * 60);
+    expect(limit).toMatchObject({ observedAt: iso(60), readingAgeSeconds: 60 });
     expect(limit.pace).toMatchObject({ fromPercent: 10, toPercent: 22, readings: 3, spanSeconds: 3600 });
     expect(limit.pace!.percentPerHour).toBeCloseTo(12, 9);
     // 78% at 12%/h is 6.5 hours, after the reset 3h59m away.
@@ -527,6 +528,9 @@ describe("the budget forecast of a piece of work", () => {
     expect(limit.stale).toBe(true);
     expect(limit.remainingPercent).toBe(78);
     expect(limit).toMatchObject({ exhaustion: null, work: null, reserve: null, missing: { exhaustion: "stale", work: "stale", reserve: "stale" } });
+    // It says how old it is: the newest sample, and its age at the read.
+    expect(limit.observedAt).toBe(iso(60));
+    expect(limit.readingAgeSeconds).toBe(15 * 60);
     // The measured rates still stand: they describe the window's past.
     expect(limit.pace!.percentPerHour).toBeCloseTo(12, 9);
   });
@@ -534,7 +538,8 @@ describe("the budget forecast of a piece of work", () => {
   it("carries nothing across a reset", () => {
     const { next } = history();
     const limit = limitOf(store.forecast({ ref: next }, iso(301), home));
-    expect(limit).toMatchObject({ status: "elapsed", remainingPercent: null, pace: null, workRate: null, work: null, reserve: null });
+    expect(limit).toMatchObject({ status: "elapsed", remainingPercent: null, pace: null, workRate: null, work: null, reserve: null, observedAt: null, readingAgeSeconds: null });
+    expect(limit.missing).toMatchObject({ observedAt: "window_elapsed", readingAgeSeconds: "window_elapsed" });
     expect(limit.missing).toMatchObject({ remainingPercent: "window_elapsed", resetsAt: "window_elapsed", pace: "window_elapsed", workRate: "window_elapsed", work: "window_elapsed", reserve: "window_elapsed" });
   });
 

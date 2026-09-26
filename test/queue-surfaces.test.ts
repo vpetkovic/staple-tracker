@@ -22,7 +22,7 @@ import {
   cliEnvelope,
   mcpEnvelope,
   normalize,
-  runCli,
+  runCliAsync,
   startMcpClient,
   toolPayload,
   type CliResult,
@@ -39,12 +39,12 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]): CliResult {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]): Promise<CliResult> {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
-function cliJson(...args: string[]): Record<string, unknown> {
-  const result = cli(...args, "--json");
+async function cliJson(...args: string[]): Promise<Record<string, unknown>> {
+  const result = await cli(...args, "--json");
   expect(result.stderr, result.stderr).toBe("");
   expect(result.status).toBe(0);
   return JSON.parse(result.stdout) as Record<string, unknown>;
@@ -88,7 +88,7 @@ function shape(view: Record<string, unknown>): {
 
 async function everySurface(): Promise<Array<ReturnType<typeof shape>>> {
   return [
-    shape(cliJson("queue", "--ws", WS)),
+    shape(await cliJson("queue", "--ws", WS)),
     shape(await mcpJson("list_queue", {})),
     shape(await httpJson(`/api/queue?ws=${WS}`)),
   ];
@@ -100,14 +100,14 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
   // QUE-1 epic > QUE-2, QUE-3; QUE-4 a standalone task; QUE-5 blocks QUE-3.
-  expect(cli("new", "S: continuity", "--kind", "epic", "--ws", WS).status).toBe(0);
-  expect(cli("new", "S1", "--parent", "QUE-1", "--ws", WS).status).toBe(0);
-  expect(cli("new", "S2", "--parent", "QUE-1", "--ws", WS).status).toBe(0);
-  expect(cli("new", "Flake under load", "--ws", WS).status).toBe(0);
-  expect(cli("new", "Upstream fix", "--ws", WS).status).toBe(0);
-  expect(cli("blocked-by", "QUE-3", "QUE-5", "--ws", WS).status).toBe(0);
+  expect((await cli("new", "S: continuity", "--kind", "epic", "--ws", WS)).status).toBe(0);
+  expect((await cli("new", "S1", "--parent", "QUE-1", "--ws", WS)).status).toBe(0);
+  expect((await cli("new", "S2", "--parent", "QUE-1", "--ws", WS)).status).toBe(0);
+  expect((await cli("new", "Flake under load", "--ws", WS)).status).toBe(0);
+  expect((await cli("new", "Upstream fix", "--ws", WS)).status).toBe(0);
+  expect((await cli("blocked-by", "QUE-3", "QUE-5", "--ws", WS)).status).toBe(0);
 
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: true });
@@ -127,7 +127,7 @@ describe("every mutation has the same shape and refusal on every surface", () =>
   it("CLI, MCP, HTTP and inbox return the same revision and the same order", async () => {
     // One enqueue, read three ways. Nothing is normalised away here except the
     // shape reduction itself: the revision is compared as a number.
-    expect(cli("queue", "add", "QUE-1", "--ws", WS).status).toBe(0);
+    expect((await cli("queue", "add", "QUE-1", "--ws", WS)).status).toBe(0);
     const [fromCli, fromMcp, fromHttp] = await everySurface();
     expect(fromCli).toEqual({
       revision: 1,
@@ -144,37 +144,37 @@ describe("every mutation has the same shape and refusal on every surface", () =>
       ready: Array<{ identifier: string; position: number | null }>;
     };
     expect(inbox.ready.map((row) => row.identifier)).toEqual(["QUE-1", "QUE-2", "QUE-4", "QUE-5"]);
-    expect(cli("queue", "rm", "QUE-1", "--ws", WS).status).toBe(0);
+    expect((await cli("queue", "rm", "QUE-1", "--ws", WS)).status).toBe(0);
   });
 
   it("enqueue, move, reorder, dequeue and prune agree on all three", async () => {
     // Each surface performs ONE verb and the next surface reads the result, so
     // a projection that quietly did something else would break the next step.
-    expect(cliJson("queue", "add", "QUE-4", "--ws", WS).revision).toBe(3);
+    expect((await cliJson("queue", "add", "QUE-4", "--ws", WS)).revision).toBe(3);
     expect((await mcpJson("enqueue_task", { ref: "QUE-1" })).revision).toBe(4);
     expect((await httpJson("/api/queue/enqueue", { ref: "QUE-5" })).revision).toBe(5);
     expect((await everySurface())[0]!.entries).toEqual(["QUE-4", "QUE-1", "QUE-5"]);
 
     // move on CLI, reorder on MCP, prune on HTTP.
-    expect(cliJson("queue", "mv", "QUE-5", "--at", "1", "--ws", WS).revision).toBe(6);
+    expect((await cliJson("queue", "mv", "QUE-5", "--at", "1", "--ws", WS)).revision).toBe(6);
     expect((await everySurface())[0]!.entries).toEqual(["QUE-5", "QUE-4", "QUE-1"]);
     await mcpJson("reorder_queue", { order: ["QUE-1", "QUE-4", "QUE-5"], base_revision: 6 });
     expect((await everySurface())[0]!.entries).toEqual(["QUE-1", "QUE-4", "QUE-5"]);
 
-    expect(cli("done", "QUE-4", "--ws", WS).status).toBe(0);
+    expect((await cli("done", "QUE-4", "--ws", WS)).status).toBe(0);
     const pruned = await httpJson("/api/queue/prune", {});
     expect(shape(pruned).entries).toEqual(["QUE-1", "QUE-5"]);
 
     // Dequeue the rest, on the third surface again, and land back at empty.
     await mcpJson("dequeue_task", { ref: "QUE-1" });
-    expect(cliJson("queue", "rm", "QUE-5", "--ws", WS).entries).toEqual([]);
+    expect((await cliJson("queue", "rm", "QUE-5", "--ws", WS)).entries).toEqual([]);
     for (const view of await everySurface()) expect(view.entries).toEqual([]);
-    expect(cli("status", "QUE-4", "todo", "--ws", WS).status).toBe(0);
+    expect((await cli("status", "QUE-4", "todo", "--ws", WS)).status).toBe(0);
   });
 
   it("reports plan position and effective position separately", async () => {
-    expect(cli("queue", "add", "QUE-1", "--ws", WS).status).toBe(0);
-    expect(cli("queue", "add", "QUE-4", "--ws", WS).status).toBe(0);
+    expect((await cli("queue", "add", "QUE-1", "--ws", WS)).status).toBe(0);
+    expect((await cli("queue", "add", "QUE-4", "--ws", WS)).status).toBe(0);
     const view = await httpJson(`/api/queue?ws=${WS}`);
     const rows = view.effective as Array<Record<string, unknown>>;
     // QUE-4 is PLAN row 2 and EFFECTIVE row 3, because the epic above it
@@ -198,7 +198,7 @@ describe("every mutation has the same shape and refusal on every surface", () =>
   });
 
   it("next is one shape on CLI, MCP and HTTP", async () => {
-    const fromCli = normalize(cliJson("queue", "next", "--actor", "agent-1", "--ws", WS), [home]);
+    const fromCli = normalize(await cliJson("queue", "next", "--actor", "agent-1", "--ws", WS), [home]);
     const fromMcp = normalize(await mcpJson("next_task", { actor: "agent-1" }), [home]);
     const fromHttp = normalize(await httpJson(`/api/queue/next?ws=${WS}&actor=agent-1`), [home]);
     expect((fromCli as { next: { identifier: string } }).next.identifier).toBe("QUE-2");
@@ -209,9 +209,9 @@ describe("every mutation has the same shape and refusal on every surface", () =>
   it("a stale base is the same revision_conflict triple on every surface", async () => {
     // Read the base rather than counting the mutations above: what is pinned is
     // that all three surfaces answer the SAME triple, not which number it holds.
-    const current = Number(cliJson("queue", "--ws", WS).revision);
+    const current = Number((await cliJson("queue", "--ws", WS)).revision);
     const expected = ERROR_CONTRACT.revisionConflict(current);
-    const fromCli = cli("queue", "rm", "QUE-4", "--base", "0", "--ws", WS, "--json");
+    const fromCli = await cli("queue", "rm", "QUE-4", "--base", "0", "--ws", WS, "--json");
     expect(fromCli.status).toBe(CLI_EXIT_CODES.revision_conflict);
     expect(tripleOf(cliEnvelope(fromCli))).toEqual(expected);
     expect(tripleOf(mcpEnvelope(await mcp.call("dequeue_task", { ws: WS, ref: "QUE-4", base_revision: 0 })))).toEqual(
@@ -236,14 +236,14 @@ describe("every mutation has the same shape and refusal on every surface", () =>
 });
 
 describe("strict refuses the same way on every surface", () => {
-  beforeAll(() => {
-    expect(cli("settings", "set", "queue.policy", "strict", "--ws", WS).status).toBe(0);
+  beforeAll(async () => {
+    expect((await cli("settings", "set", "queue.policy", "strict", "--ws", WS)).status).toBe(0);
   });
 
-  it("exits 10 with the out_of_order triple", () => {
+  it("exits 10 with the out_of_order triple", async () => {
     // QUE-4 is plan row 2; QUE-2 is the head of the effective order.
     const expected = ERROR_CONTRACT.checkoutOutOfOrder(["QUE-2"], 3, 1);
-    const result = cli("checkout", "QUE-4", "--agent", "agent-1", "--ws", WS, "--json");
+    const result = await cli("checkout", "QUE-4", "--agent", "agent-1", "--ws", WS, "--json");
     expect(result.status).toBe(CLI_EXIT_CODES.out_of_order);
     expect(result.status).toBe(10);
     expect(tripleOf(cliEnvelope(result))).toEqual(expected);
@@ -262,8 +262,8 @@ describe("strict refuses the same way on every surface", () => {
     expect(body.retryable).toBe(false);
   });
 
-  it("--override without -m is refused", () => {
-    const result = cli("checkout", "QUE-4", "--override", "--ws", WS, "--json");
+  it("--override without -m is refused", async () => {
+    const result = await cli("checkout", "QUE-4", "--override", "--ws", WS, "--json");
     expect(result.status).toBe(CLI_EXIT_CODES.validation);
     expect(tripleOf(cliEnvelope(result))).toEqual(ERROR_CONTRACT.missingActor());
     expect(cliEnvelope(result).message).toContain("An override needs a reason");
@@ -272,9 +272,9 @@ describe("strict refuses the same way on every surface", () => {
   it("an override with a reason succeeds on every surface and is recorded", async () => {
     // The override runs as the CLI's own identity, which is also what releases
     // it between the three attempts — `release` is the holder's command.
-    expect(cli("checkout", "QUE-4", "--override", "-m", "CI is red for everyone", "--ws", WS).status).toBe(0);
+    expect((await cli("checkout", "QUE-4", "--override", "-m", "CI is red for everyone", "--ws", WS)).status).toBe(0);
     // `events --json` is NDJSON, one event per line, as it has always been.
-    const log = cli("events", "--ws", WS, "--json");
+    const log = await cli("events", "--ws", WS, "--json");
     expect(log.status).toBe(0);
     const events = log.stdout
       .split("\n")
@@ -293,7 +293,7 @@ describe("strict refuses the same way on every surface", () => {
     );
 
     // The MCP twin: override_reason on checkout_task, on a different row.
-    expect(cli("release", "QUE-4", "--ws", WS).status).toBe(0);
+    expect((await cli("release", "QUE-4", "--ws", WS)).status).toBe(0);
     const viaMcp = await mcp.call("checkout_task", {
       ws: WS,
       ref: "QUE-4",
@@ -302,7 +302,7 @@ describe("strict refuses the same way on every surface", () => {
     });
     expect(viaMcp.isError).toBeFalsy();
     // …and the HTTP twin, which is the UI's confirm dialog.
-    expect(cli("release", "QUE-4", "--ws", WS).status).toBe(0);
+    expect((await cli("release", "QUE-4", "--ws", WS)).status).toBe(0);
     const { status } = await http("/api/action", {
       type: "checkout",
       ref: "QUE-4",
@@ -310,7 +310,7 @@ describe("strict refuses the same way on every surface", () => {
       overrideReason: "third surface",
     });
     expect(status).toBe(200);
-    expect(cli("release", "QUE-4", "--ws", WS).status).toBe(0);
+    expect((await cli("release", "QUE-4", "--ws", WS)).status).toBe(0);
   });
 });
 
@@ -318,7 +318,7 @@ describe("the inbox is derived from the shared resolver", () => {
   it("READY is in effective order and carries positions", async () => {
     // The plan is QUE-1 (the epic) then QUE-4. QUE-4's priority and created_at
     // would put it elsewhere under presentation sort; the plan wins.
-    expect(cli("queue", "mv", "QUE-4", "--at", "1", "--ws", WS).status).toBe(0);
+    expect((await cli("queue", "mv", "QUE-4", "--at", "1", "--ws", WS)).status).toBe(0);
     const inbox = (await mcpJson("inbox", {})) as {
       ready: Array<{ identifier: string; position: number | null; planPosition: number | null }>;
     };
@@ -332,11 +332,11 @@ describe("the inbox is derived from the shared resolver", () => {
       // Unqueued work keeps presentation sort, after the plan.
       ["QUE-5", 4, null],
     ]);
-    expect(cli("queue", "mv", "QUE-4", "--at", "2", "--ws", WS).status).toBe(0);
+    expect((await cli("queue", "mv", "QUE-4", "--at", "2", "--ws", WS)).status).toBe(0);
   });
 
   it("a queued-but-gated row stays in QUEUED with its plan position", async () => {
-    expect(cli("gate", "QUE-1", "--owner", "vp", "--ws", WS).status).toBe(0);
+    expect((await cli("gate", "QUE-1", "--owner", "vp", "--ws", WS)).status).toBe(0);
     const inbox = (await mcpJson("inbox", {})) as {
       ready: Array<{ identifier: string }>;
       queued: Array<{ identifier: string; planPosition: number | null; queuedBy: unknown }>;
@@ -345,7 +345,7 @@ describe("the inbox is derived from the shared resolver", () => {
     expect(inbox.queued.map((row) => row.identifier)).toEqual(["QUE-1", "QUE-2", "QUE-3"]);
     expect(inbox.queued.find((row) => row.identifier === "QUE-2")).toMatchObject({ planPosition: 1 });
     expect(inbox.ready.map((row) => row.identifier)).toEqual(["QUE-4", "QUE-5"]);
-    expect(cli("approve", "QUE-1", "--ws", WS).status).toBe(0);
+    expect((await cli("approve", "QUE-1", "--ws", WS)).status).toBe(0);
   });
 });
 
@@ -358,9 +358,9 @@ describe("the milestone and epic path ride on every effective row", () => {
   it("reports the milestone and epic path for every effective row on every surface", async () => {
     // QUE-1 is the epic over QUE-2/QUE-3; a milestone holds it, so both leaves
     // inherit the milestone and name the epic they came through. (R3d, STA-174.)
-    expect(cli("kinds", "add", "milestone", "--label", "Milestone", "--ws", WS).status).toBe(0);
-    expect(cli("milestone", "new", "October cut", "--ws", WS).status).toBe(0);
-    expect(cli("milestone", "add", "QUE-6", "QUE-1", "--ws", WS).status).toBe(0);
+    expect((await cli("kinds", "add", "milestone", "--label", "Milestone", "--ws", WS)).status).toBe(0);
+    expect((await cli("milestone", "new", "October cut", "--ws", WS)).status).toBe(0);
+    expect((await cli("milestone", "add", "QUE-6", "QUE-1", "--ws", WS)).status).toBe(0);
 
     const paths = (view: Record<string, unknown>): Array<[string, string[], string[]]> =>
       (view.effective as Array<{ identifier: string; milestonePath: string[]; epicPath: string[] }>).map((row) => [
@@ -368,7 +368,7 @@ describe("the milestone and epic path ride on every effective row", () => {
         row.milestonePath,
         row.epicPath,
       ]);
-    const fromCli = paths(cliJson("queue", "--ws", WS));
+    const fromCli = paths(await cliJson("queue", "--ws", WS));
     expect(fromCli).toEqual([
       ["QUE-2", ["QUE-6"], ["QUE-1"]],
       ["QUE-3", ["QUE-6"], ["QUE-1"]],
@@ -390,10 +390,10 @@ describe("fresh pickup contract", () => {
   it("CLI and MCP exclude review and held rows, expose claim context, and return a checkoutable leaf", async () => {
     // The existing queue has QUE-2 before QUE-4, with QUE-3 blocked. A review
     // status and a same-actor claim must both be skipped under strict policy.
-    expect(cli("status", "QUE-2", "in_review", "--ws", WS).status).toBe(0);
-    expect(cli("checkout", "QUE-4", "--agent", "agent-1", "--override", "-m", "fixture", "--ws", WS).status).toBe(0);
+    expect((await cli("status", "QUE-2", "in_review", "--ws", WS)).status).toBe(0);
+    expect((await cli("checkout", "QUE-4", "--agent", "agent-1", "--override", "-m", "fixture", "--ws", WS)).status).toBe(0);
 
-    const cliView = cliJson("queue", "--actor", "agent-1", "--ws", WS);
+    const cliView = await cliJson("queue", "--actor", "agent-1", "--ws", WS);
     const mcpView = await mcpJson("list_queue", { actor: "agent-1" });
     expect(normalize(mcpView, [home])).toEqual(normalize(cliView, [home]));
     const actionable = (cliView.effective as Array<{ identifier: string; eligibility: string }>)
@@ -401,7 +401,7 @@ describe("fresh pickup contract", () => {
       .map((row) => row.identifier);
     expect(actionable).toEqual(["QUE-5"]);
 
-    const fromCli = cliJson("queue", "next", "--actor", "agent-1", "--ws", WS);
+    const fromCli = await cliJson("queue", "next", "--actor", "agent-1", "--ws", WS);
     const fromMcp = await mcpJson("next_task", { actor: "agent-1" });
     expect(normalize(fromMcp, [home])).toEqual(normalize(fromCli, [home]));
     const skipped = fromCli.skipped as Array<Record<string, unknown>>;
@@ -418,9 +418,9 @@ describe("fresh pickup contract", () => {
     expect(next).toMatchObject({ identifier: "QUE-5", kind: "task", eligibility: "eligible", claim: null });
     const viaMcp = await mcp.call("checkout_task", { ws: WS, ref: next.identifier, actor: "agent-1" });
     expect(viaMcp.isError, JSON.stringify(viaMcp.content)).toBeFalsy();
-    expect(cli("release", next.identifier, "--agent", "agent-1", "--ws", WS).status).toBe(0);
-    expect(cli("checkout", next.identifier, "--agent", "agent-1", "--ws", WS).status).toBe(0);
+    expect((await cli("release", next.identifier, "--agent", "agent-1", "--ws", WS)).status).toBe(0);
+    expect((await cli("checkout", next.identifier, "--agent", "agent-1", "--ws", WS)).status).toBe(0);
     // Checkout keeps its separate crash-recovery contract.
-    expect(cli("checkout", "QUE-4", "--agent", "agent-1", "--ws", WS).status).toBe(0);
+    expect((await cli("checkout", "QUE-4", "--agent", "agent-1", "--ws", WS)).status).toBe(0);
   });
 });

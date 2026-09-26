@@ -20,6 +20,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnAsync } from "./spawn-async.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -513,6 +514,21 @@ export interface CliResult {
 /** Run the real CLI in a child process, exactly as an agent shells out to it. */
 export function runCli(args: string[], env: Record<string, string>): CliResult {
   const result = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
+    cwd: REPO_ROOT,
+    env: cleanEnv(env),
+    encoding: "utf8",
+  });
+  return { status: result.status ?? 0, stdout: result.stdout, stderr: result.stderr };
+}
+
+/**
+ * `runCli`, without blocking this process's event loop while the child runs. Use it
+ * in a file that serves HTTP from this process (`startUiServer`): a blocked loop
+ * freezes that server between two requests, which production never does (see
+ * `spawn-async.ts`).
+ */
+export async function runCliAsync(args: string[], env: Record<string, string>): Promise<CliResult> {
+  const result = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
     cwd: REPO_ROOT,
     env: cleanEnv(env),
     encoding: "utf8",

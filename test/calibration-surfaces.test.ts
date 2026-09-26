@@ -14,7 +14,7 @@ import { writeEventRow } from "../src/core/event-row.js";
 import { setClock } from "../src/core/types.js";
 import { resolveWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "calibration";
 let home: string;
@@ -26,11 +26,11 @@ let token: string;
 let epic: string;
 const refs: Record<string, string> = {};
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
-function cliJson(...args: string[]): any {
-  const result = cli(...args, "--ws", WS, "--json");
+async function cliJson(...args: string[]): Promise<any> {
+  const result = await cli(...args, "--ws", WS, "--json");
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 }
@@ -51,7 +51,7 @@ beforeAll(async () => {
   emptyDir = mkdtempSync(join(tmpdir(), "staple-calibration-cwd-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
 
   /**
    * One epic: three exact task leaves by opus and two by sonnet (all area:ui), one exact bug,
@@ -116,7 +116,7 @@ afterAll(async () => {
 
 describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () => {
   it("lists the cohorts of trusted samples, with the fallback, coverage and one snapshot id", async () => {
-    const viaCli = cliJson("calibrate", "--parent", epic);
+    const viaCli = await cliJson("calibrate", "--parent", epic);
     const viaMcp = await tool("calibration_cohorts", { parent: epic });
     const viaHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}`);
     expect(viaHttp.status).toBe(200);
@@ -157,7 +157,7 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
   });
 
   it("adds reconstructed history as its own set only when asked, the same way on every surface", async () => {
-    const viaCli = cliJson("calibrate", "--parent", epic, "--include", "reconstructed");
+    const viaCli = await cliJson("calibrate", "--parent", epic, "--include", "reconstructed");
     const viaMcp = await tool("calibration_cohorts", { parent: epic, include: ["reconstructed"] });
     const viaHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}&include=reconstructed`);
     expect(withoutAsOf(viaMcp)).toEqual(withoutAsOf(viaCli));
@@ -169,12 +169,12 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     const reconstructed = viaCli.items.filter((cohort: any) => cohort.set === "reconstructed");
     expect(reconstructed).toHaveLength(1);
     expect(reconstructed[0]).toMatchObject({ samples: 1, fallback: "below_minimum_everywhere", warnings: ["small_sample", "bounds_below_confidence", "quantile_below_confidence", "fallback_used", "reconstructed_only"], members: { total: 1, refs: [refs.legacy], truncated: false } });
-    expect(viaCli.snapshot.id).not.toBe(cliJson("calibrate", "--parent", epic).snapshot.id);
+    expect(viaCli.snapshot.id).not.toBe((await cliJson("calibrate", "--parent", epic)).snapshot.id);
   });
 
   it("filters by kind and priority, with commas or repeats, on every surface", async () => {
-    const viaCli = cliJson("calibrate", "--parent", epic, "--kind", "task", "--kind", "bug", "--priority", "high,low");
-    const commas = cliJson("calibrate", "--parent", epic, "--kind", "task,bug", "--priority", "high", "--priority", "low");
+    const viaCli = await cliJson("calibrate", "--parent", epic, "--kind", "task", "--kind", "bug", "--priority", "high,low");
+    const commas = await cliJson("calibrate", "--parent", epic, "--kind", "task,bug", "--priority", "high", "--priority", "low");
     const viaMcp = await tool("calibration_cohorts", { parent: epic, kind: ["task", "bug"], priority: ["high", "low"] });
     const viaHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}&kind=task&kind=bug&priority=high,low`);
     expect(withoutAsOf(commas)).toEqual(withoutAsOf(viaCli));
@@ -183,28 +183,28 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(viaCli.filter).toEqual({ kind: ["bug", "task"], priority: ["high", "low"], parent: epic, since: null, include: ["exact"] });
     // The legacy leaf is medium: outside the filter.
     expect(viaCli.population.ratio).toBe(7);
-    expect(cliJson("calibrate", "--parent", epic, "--kind", "bug").items.map((cohort: any) => cohort.levelName)).toEqual(["all"]);
+    expect((await cliJson("calibrate", "--parent", epic, "--kind", "bug")).items.map((cohort: any) => cohort.levelName)).toEqual(["all"]);
   });
 
   it("lists the samples and walks the same pages with the same cursor", async () => {
-    const first = cliJson("calibrate", "--parent", epic, "--samples", "--limit", "4");
+    const first = await cliJson("calibrate", "--parent", epic, "--samples", "--limit", "4");
     expect(first.list).toBe("samples");
     expect(first.truncated).toBe(true);
     expect(first.items.map((sample: any) => sample.identifier)).toEqual([refs["opus 1"], refs["opus 2"], refs["opus 3"], refs["sonnet 1"]]);
     expect(first.items[0]).toMatchObject({ set: "exact", workSeconds: 1200, estimate: { seconds: 7200, source: "at_start" }, dimensions: { kind: "task", priority: "high", workType: "unknown", area: "ui", model: "opus" } });
-    const viaCli = cliJson("calibrate", "--parent", epic, "--samples", "--limit", "4", "--cursor", first.nextCursor);
+    const viaCli = await cliJson("calibrate", "--parent", epic, "--samples", "--limit", "4", "--cursor", first.nextCursor);
     const viaMcp = await tool("calibration_cohorts", { parent: epic, list: "samples", limit: 4, cursor: first.nextCursor });
     const viaHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}&list=samples&limit=4&cursor=${encodeURIComponent(first.nextCursor)}`);
     expect(viaCli.items.map((sample: any) => sample.identifier)).toEqual([refs["sonnet 2"], refs.bug]);
     expect(withoutAsOf(viaMcp)).toEqual(withoutAsOf(viaCli));
     expect(withoutAsOf(viaHttp.body)).toEqual(withoutAsOf(viaCli));
     // One snapshot for the cohorts and the samples of the same data.
-    expect(viaCli.snapshot).toEqual(cliJson("calibrate", "--parent", epic).snapshot);
+    expect(viaCli.snapshot).toEqual((await cliJson("calibrate", "--parent", epic)).snapshot);
   });
 
   it("forecasts the issues asked for, from the cohort each key reads, the same on every surface", async () => {
-    const viaCli = cliJson("calibrate", "--parent", epic, "--for", refs.next!, "--for", refs.unplanned!, "--include", "reconstructed");
-    const commas = cliJson("calibrate", "--parent", epic, "--for", `${refs.next},${refs.unplanned}`, "--include", "reconstructed");
+    const viaCli = await cliJson("calibrate", "--parent", epic, "--for", refs.next!, "--for", refs.unplanned!, "--include", "reconstructed");
+    const commas = await cliJson("calibrate", "--parent", epic, "--for", `${refs.next},${refs.unplanned}`, "--include", "reconstructed");
     const viaMcp = await tool("calibration_cohorts", { parent: epic, for: [refs.next, refs.unplanned], include: ["reconstructed"] });
     const viaHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}&for=${refs.next}&for=${refs.unplanned}&include=reconstructed`);
     expect(withoutAsOf(commas)).toEqual(withoutAsOf(viaCli));
@@ -227,7 +227,7 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(next.warnings).toEqual(["bounds_below_confidence", "quantile_below_confidence"]);
     expect(viaCli.forecasts[1].warnings).toEqual(["small_sample", "bounds_below_confidence", "quantile_below_confidence", "fallback_used", "reconstructed_only"]);
     // A pinned model, the same on every surface.
-    const pinned = cliJson("calibrate", "--parent", epic, "--for", refs.next!, "--model", "opus");
+    const pinned = await cliJson("calibrate", "--parent", epic, "--for", refs.next!, "--model", "opus");
     const pinnedMcp = await tool("calibration_cohorts", { parent: epic, for: [refs.next], model: "opus" });
     const pinnedHttp = await http(`/api/calibration?ws=${WS}&parent=${epic}&for=${refs.next}&model=opus`);
     expect(withoutAsOf(pinnedMcp)).toEqual(withoutAsOf(pinned));
@@ -236,14 +236,14 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(pinned.forecasts[0]).toMatchObject({ key: { model: "opus" }, cohort: { levelName: "without_model", fallback: "below_minimum" } });
     expect(pinned.forecasts[0].cohort.path[0]).toEqual({ level: 0, name: "full", samples: 3, floors: 0 });
     // Asking for a forecast leaves the data's identity alone.
-    expect(viaCli.snapshot.id).toBe(cliJson("calibrate", "--parent", epic, "--include", "reconstructed").snapshot.id);
-    const missing = cli("calibrate", "--for", "NOPE-1", "--ws", WS);
+    expect(viaCli.snapshot.id).toBe((await cliJson("calibrate", "--parent", epic, "--include", "reconstructed")).snapshot.id);
+    const missing = await cli("calibrate", "--for", "NOPE-1", "--ws", WS);
     expect(missing.status).not.toBe(0);
     expect((await http(`/api/calibration?ws=${WS}&for=NOPE-1`)).status).toBe(404);
   });
 
   it("refuses an approximate set on every surface, naming the field", async () => {
-    const bare = cli("calibrate", "--include", "approximate", "--ws", WS);
+    const bare = await cli("calibrate", "--include", "approximate", "--ws", WS);
     expect(bare.status).toBe(2);
     expect(bare.stderr).toMatch(/never calibration samples/);
     const viaMcp = await mcp.call("calibration_cohorts", { include: ["approximate"], ws: WS });
@@ -252,11 +252,11 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     const viaHttp = await http(`/api/calibration?ws=${WS}&include=approximate`);
     expect(viaHttp.status).toBe(409);
     expect((await http(`/api/calibration?ws=${WS}&list=nothing`)).status).toBe(409);
-    expect(cli("calibrate", "stray", "--ws", WS).status).toBe(2);
+    expect((await cli("calibrate", "stray", "--ws", WS)).status).toBe(2);
   });
 
-  it("prints the snapshot, the sets and three lines per cohort", () => {
-    const result = cli("calibrate", "--parent", epic, "--ws", WS);
+  it("prints the snapshot, the sets and three lines per cohort", async () => {
+    const result = await cli("calibrate", "--parent", epic, "--ws", WS);
     expect(result.status, result.stderr).toBe(0);
     const lines = result.stdout.trimEnd().split("\n");
     expect(lines[0]).toMatch(new RegExp(`^snapshot calibration2:[0-9a-f]{32} · beneath ${epic}$`));
@@ -267,7 +267,7 @@ describe("calibration cohorts: one payload through the CLI, MCP and HTTP", () =>
     expect(lines[8]).toBe(
       "              ratio p10 0.167 p25 0.250 p50 0.333 p75 0.500 p90 0.500 · bounds 0.167–0.500 (66.7%, below target) · expected 0.350 (pooled) · tail untested",
     );
-    const forecast = cli("calibrate", "--parent", epic, "--for", refs.next!, "--ws", WS).stdout.trimEnd().split("\n").at(-1);
+    const forecast = (await cli("calibrate", "--parent", epic, "--for", refs.next!, "--ws", WS)).stdout.trimEnd().split("\n").at(-1);
     expect(forecast).toBe(
       `forecast      ${refs.next} exact · est 4h · kind=task priority=high workType=unknown area=ui n 5 → p50 1h20m, p10–p90 40m–2h · bounds 40m–2h (66.7%, below target) · expected 1h24m (pooled) · bounds_below_confidence, quantile_below_confidence`,
     );

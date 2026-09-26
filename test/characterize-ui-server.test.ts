@@ -24,7 +24,7 @@ import {
   freePort,
   REPO_ROOT,
   removeDir,
-  runCliAt,
+  runCliAtAsync,
   spawnStaple,
   tempDir,
 } from "./fixtures/characterize-support.js";
@@ -41,12 +41,12 @@ let repo: string;
 
 const LISTENING = /staple ui — .* at http:\/\/localhost:\d+\/\n/;
 
-beforeAll(() => {
+beforeAll(async () => {
   home = tempDir("char-ui-home");
   root = tempDir("char-ui-root");
   repo = join(root, "uirepo");
   mkdirSync(repo, { recursive: true });
-  expect(runCliAt(repo, ["init"], { STAPLE_HOME: home }).status).toBe(0);
+  expect((await runCliAtAsync(repo, ["init"], { STAPLE_HOME: home })).status).toBe(0);
 }, 60_000);
 
 afterAll(() => {
@@ -112,10 +112,10 @@ describe("startup logging", () => {
 });
 
 describe("port binding", () => {
-  it("uses 4400 as the default port when --port is absent", () => {
+  it("uses 4400 as the default port when --port is absent", async () => {
     // Read off the help text rather than by binding 4400, which would collide
     // with a developer's own running instance.
-    expect(runCliAt(repo, ["help"], { STAPLE_HOME: home }).stdout).toContain("ui [--port 4400]");
+    expect((await runCliAtAsync(repo, ["help"], { STAPLE_HOME: home })).stdout).toContain("ui [--port 4400]");
   });
 
   it("takes an OS-assigned port for --port 0 and prints the one it got", async () => {
@@ -162,8 +162,8 @@ describe("port binding", () => {
    * as ERR_SOCKET_BAD_PORT, and was caught only as an unclassified error — exit
    * 1, where every other bad flag value in this CLI is validation exit 2.
    */
-  it("--port abc is validation exit 2, like every other bad flag value", () => {
-    const result = runCliAt(repo, ["ui", "--port", "abc", "--no-open"], { STAPLE_HOME: home }, 25_000);
+  it("--port abc is validation exit 2, like every other bad flag value", async () => {
+    const result = await runCliAtAsync(repo, ["ui", "--port", "abc", "--no-open"], { STAPLE_HOME: home }, 25_000);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("error(validation): --port must be an integer");
     expect(result.stderr).not.toContain("ERR_SOCKET_BAD_PORT");

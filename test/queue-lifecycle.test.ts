@@ -34,7 +34,7 @@ import { StapleError } from "../src/core/types.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import {
   CONTRACT_AGENT,
-  runCli,
+  runCliAsync,
   startMcpClient,
   toolPayload,
   type CliResult,
@@ -51,12 +51,12 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]): CliResult {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]): Promise<CliResult> {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
-function ok(...args: string[]): CliResult {
-  const result = cli(...args, "--ws", WS);
+async function ok(...args: string[]): Promise<CliResult> {
+  const result = await cli(...args, "--ws", WS);
   expect(result.status, `${args.join(" ")}: ${result.stderr}`).toBe(0);
   return result;
 }
@@ -90,7 +90,7 @@ async function mcpJson(name: string, args: Record<string, unknown>): Promise<Rec
  * once. Three processes' worth of derivation from one file, at one instant.
  */
 async function everySurface(actor: string): Promise<Snapshot> {
-  const fromCli = snapshotOf(JSON.parse(ok("queue", "--effective", "--actor", actor, "--json").stdout));
+  const fromCli = snapshotOf(JSON.parse((await ok("queue", "--effective", "--actor", actor, "--json")).stdout));
   const fromMcp = snapshotOf(await mcpJson("list_queue", { actor }));
   const response = await fetch(`${origin}/api/queue?ws=${WS}&actor=${actor}`, {
     headers: { "x-staple-token": token },
@@ -125,16 +125,16 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
   // QLI-1 (epic) > QLI-2, QLI-3; QLI-4 standalone. Plan: the epic, then QLI-4,
   // which resolves to the three leaves QLI-2, QLI-3, QLI-4.
-  ok("new", "R: orchestration", "--kind", "epic");
-  ok("new", "R1: resolver", "--parent", "QLI-1");
-  ok("new", "R2: surfaces", "--parent", "QLI-1");
-  ok("new", "Flake under full-suite load");
-  ok("queue", "add", "QLI-1");
-  ok("queue", "add", "QLI-4");
-  ok("settings", "set", "queue.policy", "strict");
+  await ok("new", "R: orchestration", "--kind", "epic");
+  await ok("new", "R1: resolver", "--parent", "QLI-1");
+  await ok("new", "R2: surfaces", "--parent", "QLI-1");
+  await ok("new", "Flake under full-suite load");
+  await ok("queue", "add", "QLI-1");
+  await ok("queue", "add", "QLI-4");
+  await ok("settings", "set", "queue.policy", "strict");
 
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: true });
@@ -161,7 +161,7 @@ describe("answering a gate re-derives the effective order", () => {
 
     // The gate. Everything under QLI-1 leaves READY on the next read; the plan
     // is untouched, so QLI-4 — plan row 2 — becomes what an agent is handed.
-    ok("gate", "QLI-1", "--owner", "vp");
+    await ok("gate", "QLI-1", "--owner", "vp");
     const gated = await everySurface("agent-a");
     expect(gated.effective).toEqual(["QLI-2:gated", "QLI-3:gated", "QLI-4:eligible"]);
     expect(gated.next).toBe("QLI-4");
@@ -172,20 +172,20 @@ describe("answering a gate re-derives the effective order", () => {
     expect(rowFor(gated, "QLI-2").planPosition).toBe(1);
 
     // …and it is refused at checkout, by name, with no queue write either.
-    const refused = cli("checkout", "QLI-2", "--agent", "agent-a", "--ws", WS, "--json");
+    const refused = await cli("checkout", "QLI-2", "--agent", "agent-a", "--ws", WS, "--json");
     expect(refused.status).toBe(CLI_EXIT_CODES.gated);
     expect((await everySurface("agent-a")).revision).toBe(before.revision);
 
     // request-changes returns the PARENT and keeps the children parked — the
     // one release the queue does not get. Nothing moves.
-    ok("request-changes", "QLI-1", "-m", "split the resolver out");
+    await ok("request-changes", "QLI-1", "-m", "split the resolver out");
     const sentBack = await everySurface("agent-a");
     expect(sentBack.effective).toEqual(gated.effective);
     expect(sentBack.next).toBe("QLI-4");
     expect(sentBack.revision).toBe(before.revision);
 
     // Approval is the release, and it re-derives everything on the next read.
-    ok("approve", "QLI-1");
+    await ok("approve", "QLI-1");
     const approved = await everySurface("agent-a");
     expect(approved.effective).toEqual(before.effective);
     expect(approved.next).toBe("QLI-2");
@@ -201,7 +201,7 @@ describe("a claim taken, stolen and released re-derives the order", () => {
     const before = await everySurface("agent-b");
     expect(before.next).toBe("QLI-2");
 
-    ok("checkout", "QLI-2", "--agent", "agent-a");
+    await ok("checkout", "QLI-2", "--agent", "agent-a");
     // Both agents see ongoing work as claimed and are handed the next fresh row.
     const held = await everySurface("agent-b");
     expect(held.effective).toEqual(["QLI-2:claimed", "QLI-3:eligible", "QLI-4:eligible"]);
@@ -212,7 +212,7 @@ describe("a claim taken, stolen and released re-derives the order", () => {
 
     // A takeover is a claim change, not a plan change: the head is still the
     // head, it is simply held by somebody else now.
-    ok("checkout", "QLI-2", "--agent", "agent-b", "--steal-if-stale", "0");
+    await ok("checkout", "QLI-2", "--agent", "agent-b", "--steal-if-stale", "0");
     const stolen = await everySurface("agent-a");
     expect(stolen.effective).toEqual(["QLI-2:claimed", "QLI-3:eligible", "QLI-4:eligible"]);
     expect(stolen.next).toBe("QLI-3");
@@ -222,7 +222,7 @@ describe("a claim taken, stolen and released re-derives the order", () => {
 
     // And releasing it hands the head back to whoever reads next, with nothing
     // re-queued and nothing recomputed in advance.
-    ok("release", "QLI-2", "--if-stale", "0");
+    await ok("release", "QLI-2", "--if-stale", "0");
     const released = await everySurface("agent-a");
     expect(released.effective).toEqual(["QLI-2:eligible", "QLI-3:eligible", "QLI-4:eligible"]);
     expect(released.next).toBe("QLI-2");
@@ -243,7 +243,7 @@ describe("reopened work resumes its plan position until the entry is pruned", ()
   it("resumes at its rank, and lands in the unqueued band only after prune", async () => {
     // A row created LATER and never queued: the yardstick for "resumed its
     // position" versus "went to the back".
-    ok("new", "Later, unqueued work");
+    await ok("new", "Later, unqueued work");
     const before = await everySurface("agent-a");
     expect(before.effective).toEqual([
       "QLI-2:eligible",
@@ -253,22 +253,22 @@ describe("reopened work resumes its plan position until the entry is pruned", ()
     ]);
     expect(rowFor(before, "QLI-5").unqueued).toBe(true);
 
-    ok("done", "QLI-4", "-m", "fixed");
+    await ok("done", "QLI-4", "-m", "fixed");
     const done = await everySurface("agent-a");
     expect(rowFor(done, "QLI-4").eligibility).toBe("resolved");
     // Kept at its rank and hidden from the default listing; --all still shows it.
     expect(
-      (JSON.parse(ok("queue", "--json").stdout).entries as Array<{ identifier: string }>).map((e) => e.identifier),
+      (JSON.parse((await ok("queue", "--json")).stdout).entries as Array<{ identifier: string }>).map((e) => e.identifier),
     ).toEqual(["QLI-1"]);
     expect(
-      (JSON.parse(ok("queue", "--all", "--json").stdout).entries as Array<{ identifier: string }>).map(
+      (JSON.parse((await ok("queue", "--all", "--json")).stdout).entries as Array<{ identifier: string }>).map(
         (e) => e.identifier,
       ),
     ).toEqual(["QLI-1", "QLI-4"]);
     expect(done.revision).toBe(before.revision);
 
     // Reopened: plan row 2 again, ahead of the unqueued row, with no re-queue.
-    ok("status", "QLI-4", "todo");
+    await ok("status", "QLI-4", "todo");
     const reopened = await everySurface("agent-a");
     expect(reopened.effective).toEqual(before.effective);
     expect(rowFor(reopened, "QLI-4")).toMatchObject({ planPosition: 2, unqueued: false });
@@ -276,9 +276,9 @@ describe("reopened work resumes its plan position until the entry is pruned", ()
 
     // Prune is the one thing that forgets. It IS a plan write, so the revision
     // moves — the only bump in this file.
-    ok("done", "QLI-4", "-m", "fixed again");
-    ok("queue", "prune");
-    ok("status", "QLI-4", "todo");
+    await ok("done", "QLI-4", "-m", "fixed again");
+    await ok("queue", "prune");
+    await ok("status", "QLI-4", "todo");
     const pruned = await everySurface("agent-a");
     expect(pruned.revision).toBe(before.revision + 1);
     expect(rowFor(pruned, "QLI-4")).toMatchObject({ planPosition: null, unqueued: true });

@@ -25,7 +25,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import type { KindWithAppearance } from "../src/core/kind-appearance.js";
 import { sanitizeSvg } from "../src/core/svg-sanitize.js";
-import { CONTRACT_AGENT, runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "contract";
 
@@ -36,12 +36,12 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
-function cliKinds(): KindWithAppearance[] {
-  const result = cli("kinds", "ls", "--ws", WS, "--json");
+async function cliKinds(): Promise<KindWithAppearance[]> {
+  const result = await cli("kinds", "ls", "--ws", WS, "--json");
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout) as KindWithAppearance[];
 }
@@ -74,7 +74,7 @@ const setAppearance = (value: unknown) =>
 
 /** The three reads, which must agree with each other exactly. */
 async function everySurface(): Promise<KindWithAppearance[]> {
-  const fromCli = cliKinds();
+  const fromCli = await cliKinds();
   const fromMcp = await mcpKinds();
   const fromHttp = await httpKinds();
   expect(fromMcp).toEqual(fromCli);
@@ -88,10 +88,10 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
   // One kind with a built-in mark that is not seeded, one with none at all.
-  expect(cli("kinds", "add", "milestone", "--ws", WS).status).toBe(0);
-  expect(cli("kinds", "add", "research", "--ws", WS).status).toBe(0);
+  expect((await cli("kinds", "add", "milestone", "--ws", WS)).status).toBe(0);
+  expect((await cli("kinds", "add", "research", "--ws", WS)).status).toBe(0);
 
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: false, ws: WS });
@@ -138,8 +138,8 @@ describe("the same typed appearance on CLI, MCP and HTTP", () => {
     expect(byId.bug).toEqual({ source: "lucide", value: "bug", label: "Bug", fallback: "✱" });
   });
 
-  it("the CLI's human list prints the terminal fallback for every kind", () => {
-    const result = cli("kinds", "ls", "--ws", WS);
+  it("the CLI's human list prints the terminal fallback for every kind", async () => {
+    const result = await cli("kinds", "ls", "--ws", WS);
     expect(result.status).toBe(0);
     const lines = result.stdout.trim().split("\n");
     expect(lines).toHaveLength(7);
@@ -173,7 +173,7 @@ describe("the same typed appearance on CLI, MCP and HTTP", () => {
     }
     const after = await everySurface();
     expect(after).toEqual(before);
-    for (const text of [JSON.stringify(after), cli("kinds", "ls", "--ws", WS).stdout]) {
+    for (const text of [JSON.stringify(after), (await cli("kinds", "ls", "--ws", WS)).stdout]) {
       expect(text).not.toMatch(/<script|onload|evil\.example|foreignObject|javascript:/i);
     }
   });
@@ -198,13 +198,13 @@ describe("the same typed appearance on CLI, MCP and HTTP", () => {
     expect(research.value).toContain("<title>Box</title>");
     expect(research.value).not.toMatch(/width="24"|#f00|style=|class=/);
     // The CLI's human list prints the terminal fallback, never the markup.
-    const listed = cli("kinds", "ls", "--ws", WS).stdout;
+    const listed = (await cli("kinds", "ls", "--ws", WS)).stdout;
     expect(listed.split("\n").find((line) => line.includes(" research "))).toMatch(/^▣ research/);
     expect(listed).not.toContain("<svg");
   });
 
   it("removing a kind drops its entry, and the rest survive on every surface", async () => {
-    expect(cli("kinds", "rm", "research", "--ws", WS).status).toBe(0);
+    expect((await cli("kinds", "rm", "research", "--ws", WS)).status).toBe(0);
     const { body } = await httpSettings();
     expect(Object.keys(body.values["kinds.appearance"].value)).toEqual(["epic"]);
     const kinds = await everySurface();
