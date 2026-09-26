@@ -302,6 +302,16 @@ Rules that hold on all four:
   `hub.db`. The attempt tools take `ws`. The budget tools read this machine's
   hub and take none, like `record_budget_sample`.
 
+Collecting budget readings is the operator's decision, not an agent's. There is
+no MCP tool for `staple budget setup`, `unsetup` or `collect`: they turn on a
+consent and edit files outside the staple home (`settings.json`, a launch agent),
+so they run only when a person types `--yes` or presses the web Settings button.
+An agent that finds `get_budget` empty can read `staple budget status --json`
+(capture, each source's newest reading, and `problems` with codes such as
+`capture_off`, `statusline_not_installed`, `watcher_stale`) and tell the operator
+what is missing, and must not work around it
+([execution-telemetry.md](execution-telemetry.md#automatic-collection)).
+
 ### Comparing plans
 
 `compare_plans {refs, ws?}` (1 to 20 refs) is `staple compare <ref> ... --json`.

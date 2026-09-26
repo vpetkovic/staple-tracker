@@ -1001,6 +1001,64 @@ never reach the key, because they are skipped, not deduplicated. Samples live
 in `hub.db`, not in the events table, so the key is a plain digest and not an
 event key.
 
+### Automatic collection
+
+Capture stays opt-in and off by default. What automatic collection adds is that
+the opt-in is **one explicit action** rather than five manual steps:
+`staple budget setup … --yes` (or `consent: true` on the UI server's
+`POST /api/budget/collection/setup`). Without that, nothing below is enabled,
+installed or run, and `staple budget setup` alone only prints its plan.
+
+Setup does four things, each only when it is not already so, and records what
+it changed in the staple home (`telemetry/collection.json`):
+
+- **Capture on, and the two bindings** (`--claude-account`, `--codex-account`),
+  exactly as `budget capture on` and `budget bind` would.
+- **A status-line wrapper** in the Claude config directory's `settings.json`.
+  The existing `statusLine` command keeps running unchanged, as the tail of a
+  plain POSIX command list that first hands staple its own copy of the input in
+  the background: the [rollback-safe recipe](cli.md#provider-budget) plus a
+  marker (`: staple-statusline-wrapper/v2;`) so it is never wrapped twice. No
+  shell is nested, so the command means what it meant in the shell Claude Code
+  runs it with. Nothing waits on staple and nothing it prints reaches the
+  status line. Every edit is computed and checked when the plan is made: the
+  file is refused if it is not valid JSON or not writable, a symlink is
+  followed to the file it points at, the file is copied to
+  `backups/claude-settings/` in the staple home first and written as a
+  temporary file renamed over the original, changing only the `command` string
+  (or inserting one `statusLine` member when there was none). A status line
+  that already runs `staple budget ingest` (the hand-installed recipe or the
+  `--tee` pipeline) is left alone.
+- **A Codex watcher**: on macOS a user launch agent
+  (`~/Library/LaunchAgents/com.staple.budget-collect.plist`) that runs
+  `staple budget collect --quiet` every 5 minutes (`--interval`). Elsewhere
+  setup prints the equivalent cron line and installs nothing. A collect run
+  stats every `rollout-*.jsonl` under each bound Codex home's `sessions/` and
+  ingests only those that are new or whose size or mtime changed since the last
+  successful run (a cursor in `telemetry/codex-cursor.json`), newest first and
+  at most 100 per run (`--max-files`), so a backlog drains over several runs.
+  A grown file is read from where the last read stopped when its head is
+  unchanged and the last read saw the end of any leading fork-copy run (the
+  copy rule needs nothing before that point); otherwise it is read whole.
+  Replays store nothing twice, so a lost cursor costs one re-read. One run at a
+  time (`telemetry/collect.lock`). Each run appends one line to
+  `logs/budget-collect.log`, rotated at 256 KiB. A launch agent another staple
+  home loaded under the same label is never touched: setup refuses at plan
+  time and names the `launchctl bootout` that frees it.
+
+`staple budget unsetup --yes` reverses exactly what setup did: the original
+`statusLine` command comes back byte for byte (or the member or file staple
+added is removed), the agent is unloaded and its plist deleted, and capture and
+each binding go back to what they were **before** setup, but only while they
+still hold what setup wrote. A later change by hand is left alone. Readings
+already stored are kept. `staple budget status` reports capture, each source's
+newest reading and its age, the wrapper and watcher state, and the problems
+among them. The web page's consent is a single-use ticket bound to a digest of
+the plan it showed, so what is applied is what was read.
+
+Everything here is machine-local and makes no network call. The UI routes are
+excluded from the post-write sync trigger for that reason.
+
 ## Missingness
 
 An unknown value is never zero, never the previous value and never an

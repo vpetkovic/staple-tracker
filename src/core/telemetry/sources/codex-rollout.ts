@@ -26,7 +26,7 @@
  * The walk stops at the first line that passes neither test. Nothing after it is
  * skipped, whatever it matches.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { StapleError } from "../../types.js";
 import type { BudgetReading, Confidence, Missing } from "../budget-store.js";
@@ -40,7 +40,7 @@ const MAX_ANCESTOR_DEPTH = 64;
 
 const ROLLOUT_ID = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/;
 
-interface SessionMeta {
+export interface SessionMeta {
   readonly id: string | null;
   readonly forkedFromId: string | null;
   readonly cliVersion: string | null;
@@ -58,6 +58,8 @@ interface RolloutLines {
   readonly tokenCounts: TokenCountLine[];
   /** token_count lines that could not be parsed as JSON. */
   readonly unparseable: number;
+  /** Bytes up to and including the last newline read: where a later tail read resumes. */
+  readonly completeBytes: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -65,9 +67,34 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /** Read the few fields ingestion is allowed to read, and nothing else. */
-function readRollout(path: string): RolloutLines {
-  const text = readFileSync(path, "utf8");
-  let meta: SessionMeta | null = null;
+function readRollout(path: string, from: { offset: number; meta: SessionMeta | null } | null = null): RolloutLines {
+  let text: string;
+  let completeBytes: number;
+  if (from === null) {
+    const bytes = readFileSync(path);
+    text = bytes.toString("utf8");
+    completeBytes = bytes.lastIndexOf(0x0a) + 1;
+  } else {
+    // Only the lines appended since `offset`, and only whole ones: a line still being
+    // written is read on the next pass.
+    const size = statSync(path).size;
+    const bytes = Buffer.alloc(Math.max(0, size - from.offset));
+    const fd = openSync(path, "r");
+    try {
+      let read = 0;
+      while (read < bytes.length) {
+        const n = readSync(fd, bytes, read, bytes.length - read, from.offset + read);
+        if (n === 0) break;
+        read += n;
+      }
+    } finally {
+      closeSync(fd);
+    }
+    const end = bytes.lastIndexOf(0x0a) + 1;
+    text = bytes.subarray(0, end).toString("utf8");
+    completeBytes = from.offset + end;
+  }
+  let meta: SessionMeta | null = from?.meta ?? null;
   const tokenCounts: TokenCountLine[] = [];
   let unparseable = 0;
   for (const line of text.split("\n")) {
@@ -97,7 +124,7 @@ function readRollout(path: string): RolloutLines {
       tokenCounts.push({ timestamp: normalizeInstant(record.timestamp), rateLimits: asRecord(payload.rate_limits) });
     }
   }
-  return { meta, tokenCounts, unparseable };
+  return { meta, tokenCounts, unparseable, completeBytes };
 }
 
 /** Keys sorted at every level, so two equal objects serialize equally. */
@@ -271,10 +298,37 @@ export interface CodexRolloutOptions {
   readonly sessionsRoot?: string | null;
 }
 
+/** What a scan found beyond its readings, for a caller that will read the file again later. */
+export interface RolloutScan {
+  readonly items: ParsedItem[];
+  readonly meta: SessionMeta | null;
+  readonly completeBytes: number;
+  /**
+   * Whether the leading run of fork copies is known to have ended inside what was read
+   * (or the file is not a fork). Only then can a later read start after `completeBytes`
+   * without the copy rule needing the lines before it.
+   */
+  readonly leadingRunEnded: boolean;
+}
+
+export interface CodexTailOptions extends CodexRolloutOptions {
+  /**
+   * Resume after `offset` (a previous scan's `completeBytes`) with that scan's metadata.
+   * Valid only when that scan reported `leadingRunEnded`: every line after it is the
+   * session's own, so no copy test applies.
+   */
+  readonly from?: { readonly offset: number; readonly meta: SessionMeta | null } | null;
+}
+
 export function parseCodexRollout(file: string, options: CodexRolloutOptions = {}): ParsedItem[] {
+  return scanCodexRollout(file, options).items;
+}
+
+export function scanCodexRollout(file: string, options: CodexTailOptions = {}): RolloutScan {
+  const from = options.from ?? null;
   let rollout: RolloutLines;
   try {
-    rollout = readRollout(file);
+    rollout = readRollout(file, from);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") throw new StapleError("not_found", `No rollout file at ${file}.`);
@@ -284,7 +338,9 @@ export function parseCodexRollout(file: string, options: CodexRolloutOptions = {
   const meta = rollout.meta;
   const sessionRef = meta?.id ? sessionRefOf("codex", meta.id) : null;
   const harnessVersion = meta?.cliVersion ?? null;
-  const copies = leadingCopyCount(rollout, options.sessionsRoot !== undefined ? options.sessionsRoot : sessionsRootOf(file));
+  const copies = from !== null ? 0 : leadingCopyCount(rollout, options.sessionsRoot !== undefined ? options.sessionsRoot : sessionsRootOf(file));
+  const isFork = meta !== null && meta.forkedFromId !== null;
+  const leadingRunEnded = from !== null || !isFork || copies < rollout.tokenCounts.length;
 
   const items: ParsedItem[] = [];
   for (let i = 0; i < rollout.unparseable; i += 1) items.push(skip("parse_error", null, null));
@@ -306,5 +362,5 @@ export function parseCodexRollout(file: string, options: CodexRolloutOptions = {
       items.push(subLimitReading({ rateLimits: line.rateLimits, position, observedAt: line.timestamp, sessionRef, harnessVersion }));
     }
   });
-  return items;
+  return { items, meta, completeBytes: rollout.completeBytes, leadingRunEnded };
 }

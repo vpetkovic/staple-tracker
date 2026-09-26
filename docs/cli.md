@@ -52,6 +52,8 @@ staple budget ingest --source claude-statusline [--tee] [--account A]   a status
 staple budget ingest --source codex-rollout <file> [--account A]        a Codex rollout's readings
 staple budget ingest --source manual --account A --limit-key K --used P [--resets-at T]
 staple budget capture on|off | bind --source S --account A | unbind | bindings
+staple budget setup [--claude-account A] [--codex-account B] [--yes]   one consent: capture, bindings, wrapper, watcher
+staple budget unsetup [--yes] | status | collect [--max-files N]
 
 staple attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label] [--role R | --attempt ID]
                                                     report on the attempt you hold
@@ -1111,8 +1113,14 @@ staple budget ingest --source manual --account personal-max --provider anthropic
 
   ```bash
   # statusLine command; my-statusline is the status line you already had
-  bash -c 'f=$(mktemp); cat > "$f"; exec 3<"$f" 4<"$f"; rm -f "$f"; staple budget ingest --source claude-statusline <&3 >/dev/null 2>&1 & my-statusline <&4'
+  f=$(mktemp); cat >| "$f"; exec 3<"$f" 4<"$f"; rm -f "$f"; unset f; staple budget ingest --source claude-statusline <&3 >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; my-statusline
   ```
+
+  A plain command list rather than a `bash -c '…'`, so `my-statusline` runs in
+  the same shell Claude Code already gives it (under `sh` or `zsh`, `echo`
+  reads `\033` as an escape, where a nested bash would print it literally).
+  `>|` because `mktemp` has already created the file and a shell with
+  `set -C` (noclobber) refuses `>` onto it.
 
   Both readers open the file before it is unlinked, so nothing is left in the
   temp directory and neither reader can lose it to the other. Nothing waits on
@@ -1142,6 +1150,91 @@ with `reason` one of `unchanged`, `fork_copied`, `not_reported_by_source`,
 typed at the CLI is the operator's own and is accepted with capture off; the
 same reading sent by an agent through `record_budget_sample` is refused
 (`capture_disabled`) until the operator runs `staple budget capture on`.
+
+### Automatic collection
+
+One explicit consent turns on everything above and keeps it running
+([execution-telemetry.md](execution-telemetry.md#automatic-collection)):
+
+```bash
+staple budget setup --claude-account personal-max --codex-account codex-plus      # prints the plan, changes nothing (exit 2)
+staple budget setup --claude-account personal-max --codex-account codex-plus --yes
+staple budget status                                                              # sources, wrapper, watcher, problems
+staple budget collect                                                             # one watcher run, by hand
+staple budget unsetup --yes                                                       # reverse exactly what setup did
+```
+
+- **`setup`** turns capture on, binds the Claude config directory
+  (`--claude-config-dir`, default `CLAUDE_CONFIG_DIR` or `~/.claude`) and the
+  Codex home (`--codex-home`, default `CODEX_HOME` or `~/.codex`), puts the
+  status-line wrapper in front of the `statusLine` command `settings.json`
+  already has, and on macOS loads a launch agent that runs `budget collect`
+  every `--interval` minutes (default 5). An account already bound to a home
+  is reused when its flag is left out; a harness with neither is skipped.
+  `--no-statusline` and `--no-watcher` leave those parts alone. Without `--yes`
+  a plan that would change something is refused with exit 2 and the plan
+  (`detail.plan` with `--json`); an already-set-up machine prints "nothing to
+  change" and exits 0. Each step reads `+` (will change), `=` (already so),
+  `-` (skipped, with why) or `!` (refused: nothing at all is changed, for
+  example a `settings.json` that is not valid JSON or not writable, or a watcher
+  another staple home already loaded). Every edit is computed and checked when
+  the plan is made, so apply does not stop half way for a reason the plan could
+  have seen. If the outside world still fails it (launchctl, say), the refusal
+  names the step and what was already applied, and `unsetup --yes` reverses it.
+- **The wrapper** is the rollback-safe recipe above as a plain POSIX command
+  list, marked `: staple-statusline-wrapper/v2;` and ending in your original
+  command, verbatim:
+
+  ```bash
+  : staple-statusline-wrapper/v2; __stf=$(mktemp); cat >| "$__stf"; exec 3<"$__stf" 4<"$__stf"; rm -f "$__stf"; unset __stf; '/Users/me/.local/bin/staple' budget ingest --source claude-statusline --config-dir '/Users/me/.claude' <&3 >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; my-statusline
+  ```
+
+  It is not wrapped in another shell: the shell Claude Code runs the status
+  line with runs your command exactly as before (`echo "\033[32m…"` means
+  the same thing to it), and nothing needs bash. A version-1 wrapper (the same
+  script inside `bash -c '…'`) is still recognised; `setup` upgrades it and
+  `unsetup` removes it. `settings.json` is copied to
+  `~/.staple/backups/claude-settings/` first, and only the `command` string
+  changes. A symlinked `settings.json` is followed: the file it points at is
+  edited and the link stays a link. A read-only file or directory is refused.
+  A status line that already runs `staple budget ingest` is not wrapped twice.
+  With no status line at all, the wrapper records readings and prints nothing.
+- **`collect`** ingests the rollouts under each bound Codex home's `sessions/`
+  that are new or have grown since the last run, newest first, at most
+  `--max-files` (default 100) per run. A grown file is read from where the
+  last read stopped when its first bytes are unchanged and any leading run of
+  fork copies has ended; otherwise it is read whole. One run at a time: a
+  second run while one holds `~/.staple/telemetry/collect.lock` returns
+  `skippedReason: "locked"` and reads nothing. `--quiet` prints nothing but
+  failures, which is how the agent runs it. The agent's `PATH` is the node
+  setup ran under, then `/opt/homebrew/bin` and `/usr/local/bin`. Off macOS, schedule it yourself:
+  `*/5 * * * * ~/.local/bin/staple budget collect --quiet` (`crontab -e`).
+- **`unsetup`** restores the original `statusLine` byte for byte, unloads and
+  deletes the agent, and puts capture and the bindings back as they were before
+  setup, unless you changed them since. Capture goes back off even if bindings
+  were added since (they stay, recording nothing). Stored readings are kept.
+- **`status`** `--json` is `{budgetCapture, bindings, sources, statusline,
+  watcher, setup, problems}`: each source's `lastReading` (`observedAt`,
+  `recordedAt`, `ageSeconds`), each wrapper's `state` (`installed`,
+  `hand_wrapped`, `not_installed`, `missing_file`, `invalid_json`,
+  `unsupported`), the watcher's `installed`, `loaded`, `lastRun` and
+  `lastError`, and `problems` as `{code, message}`, among them
+  `watcher_foreign` (another home's agent holds the label; the message names
+  the `launchctl bootout` that frees it) and `watcher_node_missing` (no node on
+  the agent's `PATH`).
+
+The web UI server exposes the same methods: `GET /api/budget/collection` (the
+status), `POST /api/budget/collection/plan` (`{action: "setup"|"unsetup",
+…options}`, answering `{plan, consent}`), `/setup` and `/unsetup`, and
+`/collect`. Options are `claudeAccount`, `codexAccount`, `claudeConfigDir`,
+`codexHome`, `statusline`, `watcher` and `intervalMinutes`. The consent is tied
+to the plan that was shown, in the pattern of the cloud connect consent: the
+plan route mints a single-use ticket (`{id, digest, expiresAt}`, five
+minutes) and keeps the options server-side, and `/setup` or `/unsetup` takes
+only `{consent: id, digest}`. Without one they answer 400 and change nothing;
+an expired or used ticket is 404; a wrong digest, a ticket for the other
+action, or a plan that no longer reads the same (`plan_changed`) is 409. The
+routes are machine-local and never trigger a sync.
 
 ### Reading budget and attempts back
 

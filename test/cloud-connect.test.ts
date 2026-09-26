@@ -348,8 +348,14 @@ describe("credentials: repository-scoped, machine-local, redacted, protected", (
   describe("the OS store, and the fallback when it will not answer", () => {
     it("prefers the keychain on darwin when the probe round-trips", () => {
       const stored = new Map<string, string>();
+      const calls: string[] = [];
       const exec: ExecFn = (file, args) => {
         expect(file).toBe("security");
+        calls.push(args[0]!);
+        if (args[0] === "default-keychain") {
+          expect(args).toEqual(["default-keychain", "-d", "user"]);
+          return '    "/Users/test/Library/Keychains/login.keychain-db"\n';
+        }
         if (args[0] === "add-generic-password") {
           stored.set(args[args.indexOf("-a") + 1]!, args[args.indexOf("-w") + 1]!);
           return "";
@@ -375,10 +381,35 @@ describe("credentials: repository-scoped, machine-local, redacted, protected", (
       expect(selection.fallbackReason).toBeNull();
       // The probe cleaned up after itself rather than leaving a sentinel behind.
       expect(stored.size).toBe(0);
+      expect(calls).toEqual([
+        "default-keychain",
+        "add-generic-password",
+        "find-generic-password",
+        "delete-generic-password",
+      ]);
+    });
+
+    it("falls back without attempting a write when macOS has no default keychain", () => {
+      const calls: string[] = [];
+      const exec: ExecFn = (_file, args) => {
+        calls.push(args[0]!);
+        expect(args).toEqual(["default-keychain", "-d", "user"]);
+        const error = new Error("no default keychain") as Error & { stderr: string };
+        error.stderr = "A default keychain could not be found.";
+        throw error;
+      };
+
+      const selection = selectCredentialStore(home, { platform: "darwin", exec });
+      expect(selection.store.mechanism).toBe("file");
+      expect(selection.fallbackReason).toMatch(/keychain/);
+      expect(calls).toEqual(["default-keychain"]);
     });
 
     it("falls back to the 0600 file when the keychain is locked, and SAYS SO", () => {
-      const exec: ExecFn = () => {
+      const exec: ExecFn = (_file, args) => {
+        if (args[0] === "default-keychain") {
+          return '    "/Users/test/Library/Keychains/login.keychain-db"\n';
+        }
         const error = new Error("locked") as Error & { stderr: string };
         error.stderr = "SecKeychainAddGenericPassword: User interaction is not allowed.";
         throw error;

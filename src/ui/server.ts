@@ -135,6 +135,17 @@ import { ConsentTicketStore, MAX_OUTSTANDING_CONSENTS, previewDigest } from "../
 import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
 import { readConnection, setConsent } from "../core/cloud/connection.js";
 import { readConfig, stapleHome } from "../config/index.js";
+import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
+import {
+  applyBudgetSetup,
+  applyBudgetUnsetup,
+  budgetCollectionStatus,
+  collectBudget,
+  planBudgetSetup,
+  planBudgetUnsetup,
+  type SetupOptions,
+} from "../core/telemetry/collection/service.js";
+import { PlanConsentStore } from "../core/telemetry/collection/plan-consent.js";
 
 interface UiOptions {
   port: number;
@@ -340,6 +351,53 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
   "/api/hub/registry/backup/create",
   "/api/hub/registry/restore",
   "/api/hub/registry/adopt",
+]);
+
+/**
+ * Automatic budget collection, machine-local. The four writes change this
+ * machine's staple home, its Claude settings file and its launch agents, never the
+ * tracker, so they journal nothing and must not arm the post-write sync trigger: the
+ * contract is that budget collection makes no network call, and a sync fired on the
+ * way out of a setup would be one. `GET /api/budget/collection` is the read.
+ *
+ * `plan` only reads (a POST because it takes the options as a body) and returns, with
+ * the plan, a single-use consent ticket bound to its digest. `setup` and `unsetup`
+ * apply only with that ticket and digest, the page's equivalent of `--yes`; without it
+ * they answer 400 and change nothing, and a plan that changed since it was shown is
+ * refused (409).
+ */
+/** The setup options a request body may carry, each checked for its type. */
+function budgetSetupOptions(body: Record<string, unknown>): SetupOptions {
+  const text = (key: string): string | undefined => {
+    const value = body[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "string") throw new StapleError("validation", `${key} must be a string`);
+    return value;
+  };
+  const flag = (key: string): boolean | undefined => {
+    const value = body[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "boolean") throw new StapleError("validation", `${key} must be true or false`);
+    return value;
+  };
+  const interval = body.intervalMinutes;
+  if (interval !== undefined && interval !== null && typeof interval !== "number") throw new StapleError("validation", "intervalMinutes must be a number");
+  return {
+    claudeAccount: text("claudeAccount"),
+    codexAccount: text("codexAccount"),
+    claudeConfigDir: text("claudeConfigDir"),
+    codexHome: text("codexHome"),
+    statusline: flag("statusline"),
+    watcher: flag("watcher"),
+    intervalMinutes: typeof interval === "number" ? interval : undefined,
+  };
+}
+
+const BUDGET_COLLECTION_WRITES = new Set([
+  "/api/budget/collection/plan",
+  "/api/budget/collection/setup",
+  "/api/budget/collection/unsetup",
+  "/api/budget/collection/collect",
 ]);
 
 /**
@@ -803,6 +861,8 @@ export function startUiServer(options: UiOptions): UiHandle {
    * from that id rather than from anything the request said.
    */
   const consents = new ConsentTicketStore();
+  /** Budget collection's plan consents: the same pattern, bound to the plan shown (`plan-consent.ts`). */
+  const planConsents = new PlanConsentStore();
 
   /**
    * S10: this server's automatic-sync registration, and all of it.
@@ -1344,7 +1404,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/hub/registry/backups" ||
           url.pathname === "/api/hub/registry/backup/create" ||
           url.pathname === "/api/hub/registry/restore" ||
-          url.pathname === "/api/hub/registry/adopt"
+          url.pathname === "/api/hub/registry/adopt" ||
+          /** Budget collection: named in one set; `/api/budget/collection` itself is the GET read. */
+          BUDGET_COLLECTION_WRITES.has(url.pathname)
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1390,12 +1452,66 @@ export function startUiServer(options: UiOptions): UiHandle {
          * on its session tick. Fixing it properly means threading the resolved
          * handle out of the route, which is not a thin registration.
          */
-        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname)) {
+        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname) && !BUDGET_COLLECTION_WRITES.has(url.pathname)) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
             if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
           });
         }
+      }
+
+      /**
+       * Automatic budget collection. One service method per route, the same
+       * ones `staple budget setup|unsetup|status|collect` call. Machine-local: nothing
+       * here reads or writes a workspace, and nothing replicates.
+       */
+      if (url.pathname === "/api/budget/collection") {
+        json(res, 200, budgetCollectionStatus({ home: stapleHome() }));
+        return;
+      }
+      if (BUDGET_COLLECTION_WRITES.has(url.pathname)) {
+        const body = await readBody(req);
+        const home = stapleHome();
+        if (url.pathname === "/api/budget/collection/collect") {
+          const maxFiles = body.maxFiles === undefined ? undefined : Number(body.maxFiles);
+          json(res, 200, collectBudget({ maxFiles }, { home, attemptLinker: attemptLinkerFor(home) }));
+          return;
+        }
+        const action =
+          url.pathname === "/api/budget/collection/plan"
+            ? body.action
+            : url.pathname === "/api/budget/collection/unsetup"
+              ? "unsetup"
+              : url.pathname === "/api/budget/collection/setup"
+                ? "setup"
+                : null;
+        if (action !== "setup" && action !== "unsetup") {
+          deny(res, 400, "validation", 'action must be "setup" or "unsetup".');
+          return;
+        }
+        const deps = { home, attemptLinker: attemptLinkerFor(home) };
+        const planFor = (options: SetupOptions) => (action === "setup" ? planBudgetSetup(options, deps) : planBudgetUnsetup(deps));
+        if (url.pathname === "/api/budget/collection/plan") {
+          const options = budgetSetupOptions(body);
+          const plan = planFor(options);
+          // A ticket only for a plan that would change something and refuses nothing.
+          const consent = plan.changes > 0 && plan.refusals === 0 ? planConsents.mint(plan, options) : null;
+          json(res, 200, { plan, consent });
+          return;
+        }
+        /**
+         * The consent is the ticket minted with the plan the page showed, and its digest.
+         * The options come from the ticket, not from this body, and the plan is rebuilt
+         * and compared, so what is applied is what was read.
+         */
+        if (typeof body.consent !== "string" || body.consent === "") {
+          const message = `${action} changes this machine's settings and needs consent: POST /api/budget/collection/plan, show the plan, then send back its consent id and digest. Nothing was changed.`;
+          json(res, 400, { error: message, message, code: "validation", detail: { reason: "consent_required" }, retryable: false });
+          return;
+        }
+        const { options } = planConsents.redeem(body.consent, body.digest, action, planFor);
+        json(res, 200, action === "setup" ? applyBudgetSetup(options, deps) : applyBudgetUnsetup(deps));
+        return;
       }
 
       if (url.pathname === "/api/bootstrap") {
@@ -4612,6 +4728,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       // ticket is a record that somebody was looking at a preview a moment ago,
       // not a stored permission; see `core/cloud/consent.ts`.
       consents.clear();
+      planConsents.clear();
       for (const handle of stores.values()) {
         try {
           handle.store.db.close();

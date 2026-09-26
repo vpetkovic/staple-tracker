@@ -167,8 +167,13 @@ const COMMANDS: ReadonlyArray<{
   {
     name: "budget",
     // The reads added `--since`, `--limit` and `--cursor` (`budget history`).
-    strings: ["source", "account", "provider", "config-dir", "codex-home", "limit-key", "used", "resets-at", "since", "limit", "cursor"],
-    booleans: ["json", "help", "tee"],
+    // Automatic collection (`budget setup|unsetup|status|collect`) added the account,
+    // directory, interval and bound flags, and the consent and opt-out booleans.
+    strings: [
+      "source", "account", "provider", "config-dir", "codex-home", "limit-key", "used", "resets-at", "since", "limit", "cursor",
+      "claude-account", "codex-account", "claude-config-dir", "interval", "max-files",
+    ],
+    booleans: ["json", "help", "tee", "no-statusline", "no-watcher", "yes", "quiet"],
     shorts: [],
   },
   // Execution attempts: `attempt` reports on the attempt the caller holds, or, given an
