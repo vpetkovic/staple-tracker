@@ -144,6 +144,7 @@ import {
   planBudgetUnsetup,
   type SetupOptions,
 } from "../core/telemetry/collection/service.js";
+import { PlanConsentStore } from "../core/telemetry/collection/plan-consent.js";
 
 interface UiOptions {
   port: number;
@@ -358,9 +359,11 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
  * contract is that budget collection makes no network call, and a sync fired on the
  * way out of a setup would be one. `GET /api/budget/collection` is the read.
  *
- * `setup` and `unsetup` require `consent: true` in the body, the page's equivalent of
- * `--yes`; without it they answer 400 with the plan and change nothing. `plan` only
- * reads, and is a POST because it takes the same body as the action it previews.
+ * `plan` only reads (a POST because it takes the options as a body) and returns, with
+ * the plan, a single-use consent ticket bound to its digest. `setup` and `unsetup`
+ * apply only with that ticket and digest, the page's equivalent of `--yes`; without it
+ * they answer 400 and change nothing, and a plan that changed since it was shown is
+ * refused (409).
  */
 /** The setup options a request body may carry, each checked for its type. */
 function budgetSetupOptions(body: Record<string, unknown>): SetupOptions {
@@ -857,6 +860,8 @@ export function startUiServer(options: UiOptions): UiHandle {
    * from that id rather than from anything the request said.
    */
   const consents = new ConsentTicketStore();
+  /** Budget collection's plan consents: the same pattern, bound to the plan shown (`plan-consent.ts`). */
+  const planConsents = new PlanConsentStore();
 
   /**
    * S10: this server's automatic-sync registration, and all of it.
@@ -1483,18 +1488,27 @@ export function startUiServer(options: UiOptions): UiHandle {
           deny(res, 400, "validation", 'action must be "setup" or "unsetup".');
           return;
         }
-        const options = budgetSetupOptions(body);
         const deps = { home, attemptLinker: attemptLinkerFor(home) };
-        const plan = action === "setup" ? planBudgetSetup(options, deps) : planBudgetUnsetup(deps);
+        const planFor = (options: SetupOptions) => (action === "setup" ? planBudgetSetup(options, deps) : planBudgetUnsetup(deps));
         if (url.pathname === "/api/budget/collection/plan") {
-          json(res, 200, { plan });
+          const options = budgetSetupOptions(body);
+          const plan = planFor(options);
+          // A ticket only for a plan that would change something and refuses nothing.
+          const consent = plan.changes > 0 && plan.refusals === 0 ? planConsents.mint(plan, options) : null;
+          json(res, 200, { plan, consent });
           return;
         }
-        if (body.consent !== true) {
-          const message = `${action} changes this machine's settings and needs consent: send "consent": true after showing the plan. Nothing was changed.`;
-          json(res, 400, { error: message, message, code: "validation", detail: { reason: "consent_required", plan }, retryable: false });
+        /**
+         * The consent is the ticket minted with the plan the page showed, and its digest.
+         * The options come from the ticket, not from this body, and the plan is rebuilt
+         * and compared, so what is applied is what was read.
+         */
+        if (typeof body.consent !== "string" || body.consent === "") {
+          const message = `${action} changes this machine's settings and needs consent: POST /api/budget/collection/plan, show the plan, then send back its consent id and digest. Nothing was changed.`;
+          json(res, 400, { error: message, message, code: "validation", detail: { reason: "consent_required" }, retryable: false });
           return;
         }
+        const { options } = planConsents.redeem(body.consent, body.digest, action, planFor);
         json(res, 200, action === "setup" ? applyBudgetSetup(options, deps) : applyBudgetUnsetup(deps));
         return;
       }
@@ -4696,6 +4710,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       // ticket is a record that somebody was looking at a preview a moment ago,
       // not a stored permission; see `core/cloud/consent.ts`.
       consents.clear();
+      planConsents.clear();
       for (const handle of stores.values()) {
         try {
           handle.store.db.close();

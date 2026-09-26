@@ -8,8 +8,8 @@
  * collector is portable and the docs give a cron line for it.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { accessSync, constants, existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { writeFileAtomic } from "../../../config/atomic.js";
 import { StapleError } from "../../types.js";
 
@@ -41,12 +41,43 @@ export interface AgentSpec {
   readonly logPath: string;
 }
 
+/** Where a node is commonly installed when the one setup ran under is gone. */
+export const FALLBACK_NODE_DIRS: readonly string[] = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/** The PATH a plist staple wrote gives its agent, or null when it cannot be read. */
+export function plistPathEnv(plistPath: string): string | null {
+  try {
+    const match = /<key>PATH<\/key><string>([^<]*)<\/string>/.exec(readFileSync(plistPath, "utf8"));
+    return match ? match[1]!.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"') : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The first executable `node` on a PATH string, or null. */
+export function nodeOnPath(path: string): string | null {
+  for (const dir of path.split(":")) {
+    if (dir === "") continue;
+    const candidate = join(dir, "node");
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // not here
+    }
+  }
+  return null;
+}
+
 function xml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 export function agentPlist(spec: AgentSpec): string {
-  const path = [dirname(spec.nodePath), "/usr/bin", "/bin", "/usr/sbin", "/sbin"].filter((dir, i, all) => all.indexOf(dir) === i).join(":");
+  // The node setup ran under first (an nvm install, say), then the usual system homes of
+  // a node, so the launcher's `#!/usr/bin/env node` still finds one after that version
+  // is removed. `budget status` reports watcher_node_missing when none of them has one.
+  const path = [dirname(spec.nodePath), ...FALLBACK_NODE_DIRS, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].filter((dir, i, all) => all.indexOf(dir) === i).join(":");
   const env = [
     `    <key>PATH</key><string>${xml(path)}</string>`,
     `    <key>HOME</key><string>${xml(spec.userHome)}</string>`,
@@ -108,19 +139,47 @@ export function loadedAgent(input: { uid: number; launchctl: LaunchctlRunner }):
   return { path: match ? match[1]!.trim() : null };
 }
 
+/** A path with symlinks resolved as far as it exists, so `/var/…` and `/private/var/…` compare equal. */
+function canonical(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    try {
+      return join(realpathSync(dirname(path)), basename(path));
+    } catch {
+      return resolve(path);
+    }
+  }
+}
+
+export function samePlist(a: string | null, b: string): boolean {
+  return a !== null && canonical(a) === canonical(b);
+}
+
 /** Whether THIS plist is the one loaded. */
 export function agentLoaded(input: { uid: number; launchctl: LaunchctlRunner; plistPath: string }): boolean {
-  return loadedAgent(input)?.path === input.plistPath;
+  const loaded = loadedAgent(input);
+  return loaded !== null && samePlist(loaded.path, input.plistPath);
+}
+
+/** The plist another staple home's agent was loaded from, when one holds the label; else null. */
+export function foreignAgent(input: { uid: number; launchctl: LaunchctlRunner; plistPath: string }): { path: string | null } | null {
+  const loaded = loadedAgent(input);
+  return loaded !== null && !samePlist(loaded.path, input.plistPath) ? loaded : null;
+}
+
+/** The refusal for a label another home holds, naming the command that frees it. */
+export function foreignAgentMessage(uid: number, loadedFrom: string | null, plistPath: string): string {
+  return (
+    `launchd already runs ${COLLECT_AGENT_LABEL} from ${loadedFrom ?? "an unknown plist"}, not ${plistPath}: another staple home's watcher. ` +
+    `Remove it from that home (staple budget unsetup --yes there), or unload it with \`launchctl bootout ${domain(uid)}/${COLLECT_AGENT_LABEL}\`, then run setup again.`
+  );
 }
 
 function refuseForeign(input: { uid: number; launchctl: LaunchctlRunner; plistPath: string }): void {
-  const loaded = loadedAgent(input);
-  if (loaded !== null && loaded.path !== input.plistPath) {
-    throw new StapleError(
-      "conflict",
-      `launchd already runs ${COLLECT_AGENT_LABEL} from ${loaded.path ?? "an unknown plist"}, not ${input.plistPath}: another staple home's watcher. Remove it from that home (staple budget unsetup --yes) first.`,
-      { reason: "foreign_agent", loadedFrom: loaded.path },
-    );
+  const foreign = foreignAgent(input);
+  if (foreign !== null) {
+    throw new StapleError("conflict", foreignAgentMessage(input.uid, foreign.path, input.plistPath), { reason: "foreign_agent", loadedFrom: foreign.path });
   }
 }
 

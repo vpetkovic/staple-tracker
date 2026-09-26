@@ -77,41 +77,62 @@ describe("/api/budget/collection", () => {
     expect(body.problems.map((problem: { code: string }) => problem.code)).toEqual(["capture_off", "no_binding"]);
   });
 
-  it("plan previews and changes nothing", async () => {
+  it("plan previews, changes nothing, and returns a consent ticket bound to it", async () => {
     const { status, body } = await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } });
     expect(status).toBe(200);
     expect(body.plan.changes).toBe(4);
+    expect(body.consent).toMatchObject({ id: expect.any(String), digest: expect.stringMatching(/^[0-9a-f]{64}$/) });
     expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
     expect(budgetConfig(home).budgetCapture).toBe(false);
   });
 
-  it("setup without consent answers 400 with the plan and changes nothing", async () => {
+  it("setup without a consent ticket answers 400 and changes nothing", async () => {
     const { status, body } = await call("/api/budget/collection/setup", { body: SETUP });
     expect(status).toBe(400);
     expect(body.code).toBe("validation");
     expect(body.detail.reason).toBe("consent_required");
-    expect(body.detail.plan.action).toBe("setup");
-    // `consent: "yes"` is not `true`.
-    expect((await call("/api/budget/collection/setup", { body: { ...SETUP, consent: "yes" } })).status).toBe(400);
+    // A boolean is not a ticket.
+    expect((await call("/api/budget/collection/setup", { body: { ...SETUP, consent: true } })).status).toBe(400);
     expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
     expect(budgetConfig(home)).toMatchObject({ budgetCapture: false, bindings: [] });
   });
 
-  it("setup with consent applies, collect runs, unsetup restores the file byte for byte", async () => {
-    const setup = await call("/api/budget/collection/setup", { body: { ...SETUP, consent: true } });
-    expect(setup.status).toBe(200);
+  it("setup with the ticket applies the plan that was shown; collect runs; unsetup restores the file byte for byte", async () => {
+    const shown = await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } });
+    // The body's options are ignored: the ticket carries the ones the plan was made from.
+    const setup = await call("/api/budget/collection/setup", { body: { consent: shown.body.consent.id, digest: shown.body.consent.digest, claudeAccount: "someone-else" } });
+    expect(setup.status, JSON.stringify(setup.body)).toBe(200);
     expect(setup.body.applied.map((step: { part: string }) => step.part)).toEqual(["capture", "claude_binding", "statusline", "codex_binding"]);
-    expect(readFileSync(SETTINGS(), "utf8")).toContain("staple-statusline-wrapper/v1");
+    expect(budgetConfig(home).bindings.map((binding) => binding.accountRef)).toEqual(["claude-max", "codex-plus"]);
+    expect(readFileSync(SETTINGS(), "utf8")).toContain("staple-statusline-wrapper/v2");
+    // Single use.
+    expect((await call("/api/budget/collection/setup", { body: { consent: shown.body.consent.id, digest: shown.body.consent.digest } })).status).toBe(404);
 
     const collect = await call("/api/budget/collection/collect", { body: {} });
     expect(collect.status).toBe(200);
     expect(collect.body).toMatchObject({ ok: true, skippedReason: null });
 
-    const unsetup = await call("/api/budget/collection/unsetup", { body: { consent: true } });
+    const undo = await call("/api/budget/collection/plan", { body: { action: "unsetup" } });
+    const unsetup = await call("/api/budget/collection/unsetup", { body: { consent: undo.body.consent.id, digest: undo.body.consent.digest } });
     expect(unsetup.status).toBe(200);
     expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
     expect(budgetConfig(home)).toMatchObject({ budgetCapture: false, bindings: [] });
     expect(existsSync(join(home, "telemetry", "collection.json"))).toBe(false);
+  });
+
+  it("refuses a ticket whose plan changed since it was shown, a wrong digest, and a ticket for the other action", async () => {
+    const shown = await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } });
+    writeFileSync(SETTINGS(), `{"statusLine": {"type": "command", "command": "other"}}`);
+    const changed = await call("/api/budget/collection/setup", { body: { consent: shown.body.consent.id, digest: shown.body.consent.digest } });
+    expect(changed.status).toBe(409);
+    expect(changed.body.detail.reason).toBe("plan_changed");
+
+    const again = await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } });
+    expect((await call("/api/budget/collection/setup", { body: { consent: again.body.consent.id, digest: "0".repeat(64) } })).status).toBe(409);
+
+    const third = await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } });
+    expect((await call("/api/budget/collection/unsetup", { body: { consent: third.body.consent.id, digest: third.body.consent.digest } })).status).toBe(409);
+    expect(budgetConfig(home)).toMatchObject({ budgetCapture: false, bindings: [] });
   });
 
   it("refuses a body field of the wrong type", async () => {
@@ -123,7 +144,8 @@ describe("/api/budget/collection", () => {
   it("the writes are POST-only and Origin-checked; the read is GET-only", async () => {
     expect((await call("/api/budget/collection/setup", { method: "GET" })).status).toBe(405);
     expect((await call("/api/budget/collection", { body: {} })).status).toBe(405);
-    const cross = await call("/api/budget/collection/setup", { body: { ...SETUP, consent: true }, origin: "https://evil.example" });
+    const shown = await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } });
+    const cross = await call("/api/budget/collection/setup", { body: { consent: shown.body.consent.id, digest: shown.body.consent.digest }, origin: "https://evil.example" });
     expect(cross.status).toBe(403);
     expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
   });
@@ -139,10 +161,11 @@ describe("/api/budget/collection", () => {
       await settle();
       expect(spy).toHaveBeenCalledTimes(1);
       spy.mockClear();
-      expect((await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } })).status).toBe(200);
-      expect((await call("/api/budget/collection/setup", { body: { ...SETUP, consent: true } })).status).toBe(200);
+      const shown = await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } });
+      expect((await call("/api/budget/collection/setup", { body: { consent: shown.body.consent.id, digest: shown.body.consent.digest } })).status).toBe(200);
       expect((await call("/api/budget/collection/collect", { body: {} })).status).toBe(200);
-      expect((await call("/api/budget/collection/unsetup", { body: { consent: true } })).status).toBe(200);
+      const undo = await call("/api/budget/collection/plan", { body: { action: "unsetup" } });
+      expect((await call("/api/budget/collection/unsetup", { body: { consent: undo.body.consent.id, digest: undo.body.consent.digest } })).status).toBe(200);
       await settle();
       expect(spy).not.toHaveBeenCalled();
     } finally {

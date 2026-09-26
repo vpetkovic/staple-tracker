@@ -301,7 +301,8 @@ of it in `config.json` and none of it replicated:
 | Path | What |
 |---|---|
 | `telemetry/collection.json` | what setup changed, so `unsetup` can reverse exactly that |
-| `telemetry/codex-cursor.json` | each rollout's size and mtime at its last ingestion, and the last run's summary and error |
+| `telemetry/codex-cursor.json` | each rollout's size, mtime and where its last read stopped, and the last run's summary and error |
+| `telemetry/collect.lock` | held while a collect runs, so the agent and a hand-run collect never overlap |
 | `logs/budget-collect.log`, `logs/budget-collect.agent.log` | one line per collect run, and the launch agent's own output; each rotated at 256 KiB |
 | `backups/claude-settings/` | a copy of `settings.json` before each edit; the newest 10 are kept |
 

@@ -160,6 +160,9 @@ export function memberIndent(text: string, object: JsonNode): string {
   const first = object.members?.[0];
   if (first === undefined) return "  ";
   const lineStart = text.lastIndexOf("\n", first.keyStart - 1);
-  if (lineStart < 0) return "";
-  return text.slice(lineStart + 1, first.keyStart);
+  // The first key on the brace's own line (`{"a": 1,\n "b": 2}`): the text before it is
+  // not indentation, so fall back to two spaces rather than copying a brace.
+  if (lineStart < object.start) return "  ";
+  const before = text.slice(lineStart + 1, first.keyStart);
+  return /^[ \t]*$/.test(before) ? before : "  ";
 }

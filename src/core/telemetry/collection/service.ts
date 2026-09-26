@@ -38,6 +38,10 @@ import {
   DEFAULT_INTERVAL_MINUTES,
   agentLoaded,
   agentPlist,
+  foreignAgent,
+  foreignAgentMessage,
+  nodeOnPath,
+  plistPathEnv,
   agentPlistPath,
   cronLine,
   installAgent,
@@ -275,6 +279,11 @@ function watcherStep(r: Resolved, intervalMinutes: number): PlanStep {
       path: null,
     };
   }
+  const foreign = foreignAgent({ uid: r.uid, launchctl: r.launchctl, plistPath: r.plistPath });
+  if (foreign !== null) {
+    // Found at plan time, so the whole setup is refused before capture or a binding is written.
+    return { part: "watcher", action: "refuse", summary: foreignAgentMessage(r.uid, foreign.path, r.plistPath), path: r.plistPath };
+  }
   const wanted = agentPlistFor(r, intervalMinutes);
   const present = existsSync(r.plistPath);
   const same = present && readFileSync(r.plistPath, "utf8") === wanted;
@@ -323,9 +332,11 @@ export function planBudgetSetup(options: SetupOptions, deps: CollectionDeps): Co
   if (options.statusline === false) steps.push({ part: "statusline", action: "skip", summary: "--no-statusline: the Claude status line is left alone.", path: null });
   else if (t.claudeAccount === null) steps.push({ part: "statusline", action: "skip", summary: "No Claude account, so no status-line wrapper.", path: null });
   else {
-    const status = planStatuslineInstall({ configDir: t.claudeDir, staple: r.staple ?? "staple" });
-    const action: StepAction = status.action === "install" ? "change" : status.action === "refuse" ? "refuse" : "unchanged";
-    const backup = status.action === "install" && existsSync(status.settingsPath) ? ` A copy is kept in ${backupDir(r.home)} first.` : "";
+    const record = readSetupRecord(r.home);
+    const status = planStatuslineInstall({ configDir: t.claudeDir, staple: r.staple ?? "staple", record: record?.statusline?.configDir === t.claudeDir ? record.statusline : null });
+    const changes = status.action === "install" || status.action === "upgrade";
+    const action: StepAction = changes ? "change" : status.action === "refuse" ? "refuse" : "unchanged";
+    const backup = changes && existsSync(status.settingsPath) ? ` A copy is kept in ${backupDir(r.home)} first.` : "";
     const current = status.currentCommand !== null && status.action === "install" ? ` Wrapped command: ${status.currentCommand}` : "";
     steps.push({ part: "statusline", action, summary: `${status.reason}${backup}${current}`, path: status.settingsPath, target: t.claudeDir });
   }
@@ -369,6 +380,24 @@ export function applyBudgetSetup(options: SetupOptions, deps: CollectionDeps): C
 
   for (const step of result.steps) {
     if (step.action !== "change") continue;
+    try {
+      applySetupStep(step);
+    } catch (error) {
+      // Every step was validated by the plan; what can still fail is the outside world
+      // (launchctl, a file changed in between). Say exactly what was done, which the
+      // record already holds, so unsetup reverses it.
+      const done = applied.map((s) => s.part).join(", ") || "nothing";
+      throw new StapleError(
+        error instanceof StapleError ? error.code : "conflict",
+        `setup stopped at ${step.part}: ${(error as Error).message} Already applied: ${done}. \`staple budget unsetup --yes\` reverses what was applied.`,
+        { reason: "setup_incomplete", failedStep: step.part, applied, plan: result },
+      );
+    }
+    applied.push(step);
+  }
+  return { plan: result, applied, status: budgetCollectionStatus(deps) };
+
+  function applySetupStep(step: PlanStep): void {
     switch (step.part) {
       case "capture": {
         setBudgetCapture(r.home, true);
@@ -391,7 +420,13 @@ export function applyBudgetSetup(options: SetupOptions, deps: CollectionDeps): C
         break;
       }
       case "statusline": {
-        const installed = installStatusline({ configDir: t.claudeDir, staple: r.staple ?? "staple", backupDir: backupDir(r.home), now: r.now() });
+        const installed = installStatusline({
+          configDir: t.claudeDir,
+          staple: r.staple ?? "staple",
+          backupDir: backupDir(r.home),
+          now: r.now(),
+          record: record.statusline?.configDir === t.claudeDir ? record.statusline : null,
+        });
         if (installed !== null) save({ ...record, statusline: installed });
         break;
       }
@@ -403,9 +438,7 @@ export function applyBudgetSetup(options: SetupOptions, deps: CollectionDeps): C
       case "record":
         break;
     }
-    applied.push(step);
   }
-  return { plan: result, applied, status: budgetCollectionStatus(deps) };
 }
 
 function sameBinding(a: KnownBinding | null, b: KnownBinding | null): boolean {
@@ -469,7 +502,7 @@ export function planBudgetUnsetup(deps: CollectionDeps): CollectionPlan {
     }
   }
   if (record.capture?.before === false && telemetry.budgetCapture) {
-    steps.push({ part: "capture", action: "change", summary: "Turn budget capture off, as it was before setup. Readings already stored are kept.", path: null });
+    steps.push({ part: "capture", action: "change", summary: "Turn budget capture off, as it was before setup, even if bindings were added since (they stay, and record nothing until capture is on again). Readings already stored are kept.", path: null });
   } else {
     steps.push({ part: "capture", action: "unchanged", summary: `Budget capture stays ${telemetry.budgetCapture ? "on" : "off"}${record.capture === null ? " (setup did not change it)" : ""}.`, path: null });
   }
@@ -652,6 +685,17 @@ export function budgetCollectionStatus(deps: CollectionDeps): CollectionStatus {
   };
   const codexBound = config.bindings.some((binding) => binding.source === "codex_rollout");
   if (installed && loaded === false) problems.push({ code: "watcher_not_loaded", message: `${r.plistPath} exists but launchd has not loaded it (\`staple budget setup --yes\` reloads it).` });
+  const foreign = supported ? foreignAgent({ uid: r.uid, launchctl: r.launchctl, plistPath: r.plistPath }) : null;
+  if (foreign !== null) problems.push({ code: "watcher_foreign", message: foreignAgentMessage(r.uid, foreign.path, r.plistPath) });
+  if (installed) {
+    const agentPath = plistPathEnv(r.plistPath);
+    if (agentPath !== null && nodeOnPath(agentPath) === null) {
+      problems.push({
+        code: "watcher_node_missing",
+        message: `No node on the watcher's PATH (${agentPath}), so its \`#!/usr/bin/env node\` launcher cannot start. \`staple budget setup --yes\` rewrites it for the node staple runs under now.`,
+      });
+    }
+  }
   if (supported && !installed && loaded === true) problems.push({ code: "watcher_orphaned", message: "The watcher is loaded but its plist is gone; `staple budget unsetup --yes` unloads it." });
   if (supported && codexBound && !installed) problems.push({ code: "watcher_not_installed", message: "A Codex home is bound but no watcher collects its rollouts (`staple budget setup` installs one)." });
   if (installed && intervalMinutes !== null && lastRunAgeSeconds !== null && lastRunAgeSeconds > intervalMinutes * 60 * 3 + 60) {

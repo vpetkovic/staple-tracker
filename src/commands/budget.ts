@@ -155,7 +155,8 @@ function sayStatus(status: CollectionStatus): void {
 
 function sayCollect(result: CollectResult): void {
   if (result.skippedReason !== null) {
-    console.log(`collect: nothing read (${result.skippedReason === "capture_disabled" ? "budget capture is off" : "no codex-rollout binding"})`);
+    const why = { capture_disabled: "budget capture is off", no_codex_binding: "no codex-rollout binding", locked: "another collect is running" }[result.skippedReason];
+    console.log(`collect: nothing read (${why})`);
     return;
   }
   console.log(`collect: ${result.scanned} rollout(s) seen, ${result.changed} new or grown, ${result.ingested} read, ${result.storedCount} reading(s) stored, ${result.deferred} left for the next run`);

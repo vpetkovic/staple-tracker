@@ -1175,15 +1175,16 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         /*
          * Automatic budget collection. The contract is that it makes no
          * network call, and these routes are excluded from the post-write sync
-         * trigger for that reason. Setup is sent without consent (refused), with it,
-         * then a collect and an unsetup, so each round ends where it began. Codex only
-         * and no watcher: a Claude settings file and launchd are not this file's subject.
+         * trigger for that reason. The plan, setup without a ticket and with a made-up
+         * one (both refused from local state), a collect and an unsetup without a ticket.
+         * The applying path is driven with real tickets, and pinned as never arming the
+         * sync trigger, in `test/budget-collection-http.test.ts`.
          */
         ["/api/budget/collection/plan", { action: "setup", codexAccount: "codex-plus", watcher: false }, 200],
         ["/api/budget/collection/setup", { codexAccount: "codex-plus", watcher: false }, 400],
-        ["/api/budget/collection/setup", { codexAccount: "codex-plus", watcher: false, consent: true }, 200],
+        ["/api/budget/collection/setup", { consent: "made-up", digest: "made-up" }, 404],
         ["/api/budget/collection/collect", {}, 200],
-        ["/api/budget/collection/unsetup", { consent: true }, 200],
+        ["/api/budget/collection/unsetup", {}, 400],
         /*
          * S18 (STA-279). A hub backup is offered unconditionally — the button is
          * never hidden and never gated on a connection — so it is reachable on a

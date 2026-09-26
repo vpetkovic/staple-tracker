@@ -15,6 +15,9 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  lstatSync,
+  readlinkSync,
+  symlinkSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -29,6 +32,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bindBudgetSource, budgetConfig, setBudgetCapture } from "../src/core/telemetry/budget-config.js";
 import { readCursor, LOG_MAX_BYTES } from "../src/core/telemetry/collection/codex-collect.js";
 import { agentPlist, COLLECT_AGENT_LABEL, type LaunchctlRunner } from "../src/core/telemetry/collection/launchd.js";
+import { lockPath } from "../src/core/telemetry/collection/codex-collect.js";
 import {
   applyBudgetSetup,
   applyBudgetUnsetup,
@@ -41,6 +45,7 @@ import {
   type CollectionDeps,
 } from "../src/core/telemetry/collection/service.js";
 import {
+  WRAPPER_MARKER,
   classifyCommand,
   installStatusline,
   readSettingsState,
@@ -159,6 +164,8 @@ describe("the status-line wrapper round-trips settings.json", () => {
     ["a one-line file with no statusLine", `{"theme":"dark"}`],
     ["an empty object", `{}\n`],
     ["an empty multi-line object", `{\n}\n`],
+    // The first key on the brace's own line after a leading newline: no indentation to copy.
+    ["a leading newline and the first key on the brace's line", `\n{"theme": "dark",\n "model": "opus"\n}\n`],
     ["a duplicated statusLine key (JSON.parse keeps the last)", `{"statusLine":{"type":"command","command":"first"},"statusLine":{"type":"command","command":"second"}}`],
   ];
 
@@ -323,7 +330,7 @@ describe("budget collect reads new and grown rollouts only", () => {
     const file = rollout(A, "2026-09-26T08:00:00.000Z", [10, 12]);
     const first = collectBudget({}, deps());
     expect(first).toMatchObject({ ok: true, scanned: 1, changed: 1, ingested: 1, storedCount: 2, deferred: 0 });
-    expect(readCursor(home).files[file]).toEqual({ size: statSync(file).size, mtimeMs: statSync(file).mtimeMs });
+    expect(readCursor(home).files[file]).toMatchObject({ size: statSync(file).size, mtimeMs: statSync(file).mtimeMs, completeBytes: statSync(file).size, leadingRunEnded: true });
 
     const second = collectBudget({}, deps());
     expect(second).toMatchObject({ scanned: 1, changed: 0, ingested: 0, storedCount: 0 });
@@ -332,8 +339,9 @@ describe("budget collect reads new and grown rollouts only", () => {
     appendFileSync(file, `${tokenCountLine({ timestamp: "2026-09-26T08:05:00.000Z", primary: five(15), secondary: null })}\n`);
     const third = collectBudget({}, deps());
     expect(third).toMatchObject({ changed: 1, ingested: 1, storedCount: 1 });
-    // The two readings already stored are recognised; only the appended one is new.
-    expect(third.files[0]!.skipped).toMatchObject({ unchanged: 2 });
+    // Read from where the last read stopped: only the appended line, nothing re-parsed.
+    expect(third.files[0]!.mode).toBe("tail");
+    expect(third.files[0]!.skipped).toEqual({ not_reported_by_source: 1 });
   });
 
   it("reads a file whose mtime moved even at the same size", () => {
@@ -574,11 +582,20 @@ describe("setup and unsetup", () => {
     expect(budgetConfig(home).bindings).toHaveLength(2);
   });
 
-  it("never touches a watcher another staple home loaded under the same label", () => {
+  it("never touches a watcher another staple home loaded under the same label, and refuses at plan time", () => {
     loaded = "/Users/someone/Library/LaunchAgents/com.staple.budget-collect.plist";
-    const error = refusal(() => applyBudgetSetup({ codexAccount: "codex-plus" }, deps()));
-    expect(error.detail).toMatchObject({ reason: "foreign_agent" });
+    writeFileSync(SETTINGS(), PRETTY);
+    const before = snapshot();
+    const plan = planBudgetSetup(SETUP, deps());
+    const watcher = plan.steps.find((step) => step.part === "watcher")!;
+    expect(watcher.action).toBe("refuse");
+    expect(watcher.summary).toContain("launchctl bootout gui/501/com.staple.budget-collect");
+    const error = refusal(() => applyBudgetSetup(SETUP, deps()));
+    expect(error.detail).toMatchObject({ reason: "plan_refused" });
+    // Refused before capture, a binding, the wrapper or a setup record was written.
+    expect(snapshot()).toEqual(before);
     expect(calls.some((call) => call[0] === "bootout" || call[0] === "bootstrap")).toBe(false);
+    expect(budgetCollectionStatus(deps()).problems.map((problem) => problem.code)).toContain("watcher_foreign");
     expect(planBudgetUnsetup(deps()).steps.find((step) => step.part === "watcher")).toMatchObject({ action: "unchanged" });
     expect(budgetCollectionStatus(deps()).watcher.loaded).toBe(false);
   });
@@ -663,4 +680,239 @@ describe("budget status", () => {
     expect(status.budgetCapture).toBe(false);
     expect(status.problems.map((problem) => problem.code)).toEqual(["capture_off", "no_binding"]);
   }, 30_000);
+});
+
+// ------------------------------------------------------------------ round 1 review
+
+/** The wrapper version 1 installed: the same script inside `bash -c '…'`. */
+function v1Wrapper(staple: string, configDir: string, original: string | null): string {
+  const q = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  const inner = `: staple-statusline-wrapper/v1; f=$(mktemp); cat > "$f"; exec 3<"$f" 4<"$f"; rm -f "$f"; ${q(staple)} budget ingest --source claude-statusline --config-dir ${q(configDir)} <&3 >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-;${original === null ? "" : ` ${original}`}`;
+  return `bash -c ${q(inner)}`;
+}
+
+const SHELLS = ["/bin/sh", "/bin/zsh", "/bin/bash", "/usr/bin/zsh", "/usr/bin/bash"].filter((shell) => existsSync(shell));
+
+describe("the wrapper runs in the caller's own shell", () => {
+  it("is a plain command list, not a nested shell", () => {
+    const command = wrapperCommand({ staple: STAPLE, configDir: claudeDir, original: ORIGINAL });
+    expect(command.startsWith(`: ${WRAPPER_MARKER}; `)).toBe(true);
+    expect(command).not.toContain("bash -c");
+    expect(command.endsWith(`; ${ORIGINAL}`)).toBe(true);
+  });
+
+  const originals = [
+    `echo "\\033[32mgreen\\033[0m\\ttab"`,
+    `printf '%s\\n' "$HOME" | tr a-z A-Z`,
+    `head -c 20; echo " it's done"`,
+    `cat | wc -c; exit 3`,
+    `echo 'naïve ✓' && echo "$(echo nested)"`,
+  ];
+  for (const shell of SHELLS) {
+    for (const original of originals) {
+      it(`${shell}: prints the same bytes and exits the same as ${JSON.stringify(original)} run directly`, () => {
+        const out = join(root, "ingested");
+        const fake = join(root, "fake staple");
+        writeFileSync(fake, `#!/bin/sh\ncat > "${out}.tmp"; mv "${out}.tmp" "${out}"\n`);
+        chmodSync(fake, 0o755);
+        const input = statusline();
+        const direct = spawnSync(shell, ["-c", original], { input, env: { PATH: process.env.PATH, HOME: "/home/x" } });
+        const wrapped = spawnSync(shell, ["-c", wrapperCommand({ staple: fake, configDir: claudeDir, original })], { input, env: { PATH: process.env.PATH, HOME: "/home/x" } });
+        expect(Buffer.compare(wrapped.stdout, direct.stdout)).toBe(0);
+        expect(wrapped.stderr.toString()).toBe(direct.stderr.toString());
+        expect(wrapped.status).toBe(direct.status);
+        const deadline = Date.now() + 10_000;
+        while (!existsSync(out) && Date.now() < deadline) spawnSync("sleep", ["0.05"]);
+        expect(readFileSync(out, "utf8")).toBe(input);
+      });
+    }
+  }
+
+  it("still unwraps a version-1 (bash -c) wrapper, and setup upgrades it; unsetup restores the original byte for byte", () => {
+    // A v1 install as the first release wrote it, with its record.
+    const original = `{\n  "statusLine": { "type": "command", "command": "echo \\"\\\\033[1mx\\"" }\n}\n`;
+    writeFileSync(SETTINGS(), original);
+    const command = (JSON.parse(original) as { statusLine: { command: string } }).statusLine.command;
+    expect(unwrapCommand(v1Wrapper(STAPLE, claudeDir, command))).toBe(command);
+    expect(classifyCommand(v1Wrapper(STAPLE, claudeDir, command))).toBe("staple");
+    const v1Text = original.replace(JSON.stringify(command), JSON.stringify(v1Wrapper(STAPLE, claudeDir, command)));
+    writeFileSync(SETTINGS(), v1Text);
+
+    const plan = planBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps());
+    expect(plan.steps.find((step) => step.part === "statusline")).toMatchObject({ action: "change", summary: expect.stringContaining("older staple wrapper") });
+    applyBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps());
+    const upgraded = (JSON.parse(readFileSync(SETTINGS(), "utf8")) as { statusLine: { command: string } }).statusLine.command;
+    expect(upgraded.startsWith(`: ${WRAPPER_MARKER}; `)).toBe(true);
+    expect(unwrapCommand(upgraded)).toBe(command);
+    // A second setup leaves the current wrapper alone.
+    expect(planBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps()).steps.find((step) => step.part === "statusline")).toMatchObject({ action: "unchanged" });
+    applyBudgetUnsetup(deps());
+    expect(readFileSync(SETTINGS(), "utf8")).toBe(original);
+  });
+
+  it("unsetup takes a version-1 wrapper out directly too", () => {
+    const text = JSON.stringify({ statusLine: { type: "command", command: v1Wrapper(STAPLE, claudeDir, ORIGINAL) } }, null, 2);
+    writeFileSync(SETTINGS(), text);
+    applyBudgetUnsetup(deps());
+    expect(JSON.parse(readFileSync(SETTINGS(), "utf8"))).toEqual({ statusLine: { type: "command", command: ORIGINAL } });
+  });
+});
+
+describe("settings.json that is a symlink, read-only, or oddly laid out", () => {
+  it("edits the file a symlink points at and keeps the link; unsetup restores the target byte for byte", () => {
+    const dotfiles = join(root, "dotfiles");
+    mkdirSync(dotfiles);
+    const real = join(dotfiles, "claude-settings.json");
+    writeFileSync(real, PRETTY);
+    symlinkSync(real, SETTINGS());
+    applyBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps());
+    expect(lstatSync(SETTINGS()).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(SETTINGS())).toBe(real);
+    expect(readSettingsState(real)).toMatchObject({ state: "command", kind: "staple" });
+    expect(readdirSync(dotfiles)).toEqual(["claude-settings.json"]);
+    applyBudgetUnsetup(deps());
+    expect(lstatSync(SETTINGS()).isSymbolicLink()).toBe(true);
+    expect(readFileSync(real, "utf8")).toBe(PRETTY);
+  });
+
+  it("refuses a dangling symlink", () => {
+    symlinkSync(join(root, "nowhere.json"), SETTINGS());
+    const plan = planBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps());
+    expect(plan.steps.find((step) => step.part === "statusline")).toMatchObject({ action: "refuse" });
+  });
+
+  it("refuses a read-only settings.json at plan time and changes nothing", () => {
+    writeFileSync(SETTINGS(), PRETTY);
+    chmodSync(SETTINGS(), 0o444);
+    try {
+      const before = snapshot();
+      const plan = planBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps());
+      expect(plan.steps.find((step) => step.part === "statusline")).toMatchObject({ action: "refuse", summary: expect.stringContaining("not writable") });
+      expect(() => applyBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps())).toThrow(/refused, nothing was changed/);
+      expect(snapshot()).toEqual(before);
+    } finally {
+      chmodSync(SETTINGS(), 0o644);
+    }
+  });
+
+  it("refuses when the directory holding settings.json is read-only (the rename would fail)", () => {
+    writeFileSync(SETTINGS(), PRETTY);
+    chmodSync(claudeDir, 0o555);
+    try {
+      const plan = planBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps());
+      expect(plan.steps.find((step) => step.part === "statusline")).toMatchObject({ action: "refuse", summary: expect.stringContaining("not writable") });
+    } finally {
+      chmodSync(claudeDir, 0o755);
+    }
+  });
+});
+
+describe("launchd, beyond the happy path", () => {
+  it("unsetup with a stale local plist never unloads another home's agent", () => {
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(PLIST(), "<plist/>");
+    loaded = "/Users/someone/Library/LaunchAgents/com.staple.budget-collect.plist";
+    const outcome = applyBudgetUnsetup(deps());
+    expect(outcome.applied.map((step) => step.part)).toContain("watcher");
+    expect(calls.some((call) => call[0] === "bootout")).toBe(false);
+    expect(loaded).toBe("/Users/someone/Library/LaunchAgents/com.staple.budget-collect.plist");
+    expect(existsSync(PLIST())).toBe(false);
+  });
+
+  it("recognises its own agent through a symlinked path (/var vs /private/var)", () => {
+    const realAgents = join(root, "real-agents");
+    mkdirSync(realAgents, { recursive: true });
+    mkdirSync(join(userHome, "Library"), { recursive: true });
+    symlinkSync(realAgents, agentsDir);
+    applyBudgetSetup({ codexAccount: "codex-plus" }, deps());
+    // launchd reports the resolved path.
+    loaded = join(realAgents, `${COLLECT_AGENT_LABEL}.plist`);
+    calls = [];
+    const again = applyBudgetSetup({ codexAccount: "codex-plus" }, deps());
+    expect(again.applied).toEqual([]);
+    expect(budgetCollectionStatus(deps()).watcher).toMatchObject({ installed: true, loaded: true });
+    applyBudgetUnsetup(deps());
+    expect(calls).toContainEqual(["bootout", `gui/501/${COLLECT_AGENT_LABEL}`]);
+  });
+
+  it("reports what was applied when launchctl fails part way, and unsetup reverses it", () => {
+    const failing: LaunchctlRunner = (args) => (args[0] === "bootstrap" ? { status: 5, stdout: "", stderr: "Bootstrap failed: 5: Input/output error" } : fakeLaunchctl(args));
+    const error = refusal(() => applyBudgetSetup({ codexAccount: "codex-plus" }, deps({ launchctl: failing })));
+    expect(error.message).toContain("setup stopped at watcher");
+    expect(error.detail).toMatchObject({ reason: "setup_incomplete", failedStep: "watcher" });
+    expect(readSetupRecord(home)).not.toBeNull();
+    applyBudgetUnsetup(deps());
+    expect(budgetConfig(home)).toMatchObject({ budgetCapture: false, bindings: [] });
+    expect(existsSync(PLIST())).toBe(false);
+  });
+
+  it("flags a watcher whose PATH has no node", () => {
+    applyBudgetSetup({ codexAccount: "codex-plus" }, deps());
+    const plist = readFileSync(PLIST(), "utf8").replace(/<key>PATH<\/key><string>[^<]*<\/string>/, `<key>PATH</key><string>${join(root, "no-node")}</string>`);
+    writeFileSync(PLIST(), plist);
+    expect(budgetCollectionStatus(deps()).problems.map((problem) => problem.code)).toContain("watcher_node_missing");
+  });
+
+  it("puts the fallback node homes on the agent's PATH after the node setup ran under", () => {
+    const plist = agentPlist({ staple: STAPLE, nodePath: "/Users/x/.nvm/versions/node/v22/bin/node", userHome, stapleHomeEnv: null, intervalMinutes: 5, logPath: "/tmp/l" });
+    expect(plist).toContain("<key>PATH</key><string>/Users/x/.nvm/versions/node/v22/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>");
+  });
+});
+
+describe("budget collect: one run at a time, and tail reads", () => {
+  beforeEach(optIn);
+
+  it("returns locked while another live run holds the lock, and takes over a stale one", () => {
+    rollout(A, "2026-09-26T08:00:00.000Z", [10]);
+    mkdirSync(join(home, "telemetry"), { recursive: true });
+    writeFileSync(lockPath(home), JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+    const locked = collectBudget({}, deps());
+    expect(locked).toMatchObject({ skippedReason: "locked", storedCount: 0 });
+    expect(existsSync(lockPath(home))).toBe(true);
+    // A dead holder: taken over.
+    writeFileSync(lockPath(home), JSON.stringify({ pid: 2 ** 22 + 12345, at: new Date().toISOString() }));
+    expect(collectBudget({}, deps())).toMatchObject({ skippedReason: null, storedCount: 1 });
+    expect(existsSync(lockPath(home))).toBe(false);
+  });
+
+  it("reads a line that was half-written at the last read once it is complete", () => {
+    const file = rollout(A, "2026-09-26T08:00:00.000Z", [10]);
+    const line = tokenCountLine({ timestamp: "2026-09-26T08:05:00.000Z", primary: five(15), secondary: null });
+    collectBudget({}, deps());
+    appendFileSync(file, line.slice(0, 40));
+    expect(collectBudget({}, deps())).toMatchObject({ storedCount: 0 });
+    appendFileSync(file, `${line.slice(40)}\n`);
+    const done = collectBudget({}, deps());
+    expect(done.files[0]).toMatchObject({ mode: "tail", storedCount: 1 });
+  });
+
+  it("reads a rewritten file whole", () => {
+    const file = rollout(A, "2026-09-26T08:00:00.000Z", [10, 11]);
+    collectBudget({}, deps());
+    writeFileSync(file, readFileSync(file, "utf8").replace('"plus"', '"pro"') + `${tokenCountLine({ timestamp: "2026-09-26T08:09:00.000Z", primary: five(30), secondary: null })}\n`);
+    const again = collectBudget({}, deps());
+    expect(again.files[0]!.mode).toBe("full");
+  });
+
+  it("reads a fork whole until its copied history has ended, then resumes at the tail", () => {
+    const parentStart = "2026-09-26T07:00:00.000Z";
+    writeRollout(codexDir, A, parentStart, [
+      sessionMetaLine({ id: A, timestamp: parentStart }),
+      tokenCountLine({ timestamp: "2026-09-26T07:10:00.000Z", primary: five(20), secondary: null }),
+    ]);
+    const fork = "2026-09-26T07:30:00.000Z";
+    // Only copies so far: the leading run has not ended.
+    const child = writeRollout(codexDir, B, fork, [sessionMetaLine({ id: B, timestamp: fork, forkedFromId: A }), tokenCountLine({ timestamp: after(fork, 1), primary: five(20), secondary: null })]);
+    collectBudget({}, deps());
+    appendFileSync(child, `${tokenCountLine({ timestamp: after(fork, 2), primary: five(20), secondary: null })}\n`);
+    const second = collectBudget({}, deps());
+    const whole = second.files.find((file) => file.file === child)!;
+    expect(whole.mode).toBe("full");
+    expect(whole.skipped.fork_copied).toBe(2);
+    appendFileSync(child, `${tokenCountLine({ timestamp: after(fork, 60_000), primary: five(26), secondary: null })}\n`);
+    const third = collectBudget({}, deps());
+    expect(third.files.find((file) => file.file === child)).toMatchObject({ mode: "full", storedCount: 1 });
+    appendFileSync(child, `${tokenCountLine({ timestamp: after(fork, 120_000), primary: five(27), secondary: null })}\n`);
+    expect(collectBudget({}, deps()).files.find((file) => file.file === child)).toMatchObject({ mode: "tail", storedCount: 1 });
+  });
 });
