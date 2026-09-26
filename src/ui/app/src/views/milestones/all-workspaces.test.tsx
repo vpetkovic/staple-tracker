@@ -73,7 +73,8 @@ describe("every workspace's milestones, grouped", () => {
     const results = await readAllMilestones(
       [{ slug: "a" }, { slug: "b" }],
       false,
-      async ({ ws }) => {
+      async (params) => {
+        const ws = params?.ws;
         asked.push(ws!);
         if (ws === "a") throw missingKindError();
         return [row("B-1")];
