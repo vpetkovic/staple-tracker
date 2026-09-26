@@ -8,6 +8,7 @@
  *
  * Nothing here renders, reads a clock, or touches storage.
  */
+import { LINE_GEOMETRY, type RowGeometry } from "./row-layout";
 import { isStaleClaim } from "@/lib/claim";
 import type {
   ClaimActivity,
@@ -50,8 +51,8 @@ export const INDENT_STEP = 20;
  */
 export const MAX_INDENT_DEPTH = 6;
 
-export function indentPx(depth: number): number {
-  return Math.min(Math.max(depth, 0), MAX_INDENT_DEPTH) * INDENT_STEP;
+export function indentPx(depth: number, geometry: RowGeometry = LINE_GEOMETRY): number {
+  return Math.min(Math.max(depth, 0), geometry.maxIndentDepth) * geometry.indentStep;
 }
 
 /**
@@ -90,9 +91,17 @@ export const COL_GAP = 8;
  * Handling it here rather than at each call site is the difference between one arithmetic
  * fact and three copies of it.
  */
-export function guideX(level: number, hasSelectColumn = true): number {
+export function guideX(level: number, hasSelectColumn = true, geometry: RowGeometry = LINE_GEOMETRY): number {
   const select = hasSelectColumn ? COL_SELECT + COL_GAP : 0;
-  return ROW_PAD_LEFT + indentPx(level) + select + COL_DISCLOSURE / 2;
+  return ROW_PAD_LEFT + indentPx(level, geometry) + select + geometry.disclosure / 2;
+}
+
+/**
+ * How far the elbow runs right from a parent's rail: to the left edge of the child's
+ * disclosure column. 12px on desktop (20 − 16/2), 8px on a phone (14 − 12/2).
+ */
+export function elbowWidth(geometry: RowGeometry = LINE_GEOMETRY): number {
+  return geometry.indentStep - geometry.disclosure / 2;
 }
 
 /** The parent chip a cross-group child wears instead of an indent. */

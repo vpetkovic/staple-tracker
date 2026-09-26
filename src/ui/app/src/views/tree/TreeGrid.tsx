@@ -48,6 +48,8 @@ import {
   type TaskRow,
 } from "@/components/task-list";
 import { clampIndex, useRovingFocus } from "@/components/task-list/roving";
+import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
+import { useRowPlan } from "@/components/task-list/useRowPlan";
 import "@/components/task-list/task-list.css";
 import type { Selection } from "@/lib/session";
 import { statusLabel } from "@/lib/settings";
@@ -57,32 +59,6 @@ import { useTreeExpansion } from "./expansion";
 import { EMPTY_PICKUP_INDEX, type PickupIndex, type PickupSectionId } from "./pickup-model";
 import { DEFAULT_SORT, type SortPref } from "@/lib/sort-modes";
 import { buildList, sectionsOf, visibleOrder, type GroupKey, type ListShape } from "./tree-model";
-
-/**
- * How many label pills fit — §14's degradation, decided in JS rather than CSS.
- *
- * It has to be JS: the `+N` count changes with the cap, and no media query can recount. The
- * rest of §14 (the date, the "Working…" word, the two-line layout under 720px) is pure CSS,
- * because none of those change their content when they change their size.
- */
-function useLabelCapacity(): number {
-  const query = useCallback(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return 2;
-    if (window.matchMedia("(min-width: 1280px)").matches) return 2;
-    if (window.matchMedia("(min-width: 1024px)").matches) return 1;
-    return 0;
-  }, []);
-
-  const [capacity, setCapacity] = useState(query);
-
-  useEffect(() => {
-    const onResize = () => setCapacity(query());
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [query]);
-
-  return capacity;
-}
 
 /**
  * A pickup header's glyph must weigh the same as a status header's — STA-118.
@@ -387,21 +363,26 @@ export function TreeGrid({
    * `⋯` keeps its original behaviour — it opens the drawer — which is what the palette and
    * every static-markup test still want.
    */
-  rowActionsMenu?: (row: TaskRow, trigger: ReactNode) => ReactNode;
+  rowActionsMenu?: (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => ReactNode;
   onCloseDrawer: () => void;
   /** R6's contract (STA-106): the visible rows, in screen order. See lib/session.ts. */
   onVisibleOrder: (order: readonly Selection[]) => void;
 }) {
   const expansion = useTreeExpansion();
-  const labelMax = useLabelCapacity();
+  /**
+   * What the row keeps at this width — row-layout.ts. It replaces the label cap this file
+   * used to measure on its own: the cap is one rung of the same ladder now, so the labels,
+   * the date and the one-line compact row cannot disagree about how wide the screen is.
+   */
+  const plan = useRowPlan();
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   /**
-   * The tree is the `tree` preset — the full row — with one live override: the label cap,
+   * The tree is the `tree` preset — the full row — with one live override: the row plan,
    * which is a measurement of the viewport and cannot be a constant.
    */
-  const config = useMemo(() => resolveTaskListConfig("tree", { labelMax }), [labelMax]);
+  const config = useMemo(() => resolveTaskListConfig("tree", { plan }), [plan]);
 
   // One clock reading per render rather than one per row, so twenty rows cannot disagree
   // about what "3h" means. The 1.5s poll re-renders and refreshes it.
@@ -774,7 +755,7 @@ export function TreeGrid({
       onOpen={() => openIssue(row)}
       onOpenParent={(identifier) => onOpen(row.workspace, identifier)}
       onOpenMilestone={onOpenMilestone}
-      actionsMenu={rowActionsMenu ? (trigger) => rowActionsMenu(row, trigger) : undefined}
+      actionsMenu={rowActionsMenu ? (trigger, control) => rowActionsMenu(row, trigger, control) : undefined}
       onToggleExpand={() => expansion.toggleRow(row.issue, row.isExpanded)}
       onToggleSelect={() => toggleSelect(row.issue.id)}
       onFocus={() => focus.set(navKeyOf(row))}

@@ -274,8 +274,13 @@ export function movedOrder(members: readonly MilestoneMemberRow[], from: number,
 
 export type MilestonesLayout = "stacked" | "split";
 
-/** Tailwind's `md` (48rem at 16px): below it the list and the detail stack, above it they split. */
-export const SPLIT_MIN_WIDTH_PX = 768;
+/**
+ * Tailwind's `lg` (64rem at 16px): below it the list and the detail stack, above it they
+ * split. It was `md` (768px), which measured the VIEWPORT while the page only gets what the
+ * navigation rail leaves: at 768px that is ~536px, split into a 256px list and a ~280px
+ * detail whose member rows had no title left at all. Stacked, the detail gets the page.
+ */
+export const SPLIT_MIN_WIDTH_PX = 1024;
 
 export function layoutFor(widthPx: number): MilestonesLayout {
   return widthPx >= SPLIT_MIN_WIDTH_PX ? "split" : "stacked";

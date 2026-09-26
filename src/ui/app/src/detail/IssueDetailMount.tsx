@@ -41,13 +41,13 @@
  * for this file is the part that is actually staple's: which mode, how wide, and the
  * two places Radix's defaults are wrong for this panel (see onEscapeKeyDown).
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Dialog as DialogPrimitive, VisuallyHidden } from "radix-ui";
 import type { AuthError } from "@/lib/api";
 import { isTyping } from "@/lib/keyboard";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { loadMode, otherMode, panelClass, saveMode, type DetailMode } from "./drawer";
+import { loadMode, otherMode, panelClass, presentationFor, saveMode, SHEET_BELOW, type DetailMode } from "./drawer";
 import { IssueDetailPanel } from "./IssueDetailPanel";
 import { neighbours, type NavTarget } from "./navigation";
 import "./detail.css";
@@ -70,6 +70,28 @@ function safeStorage(): Storage | undefined {
  * is data loss with a keyboard shortcut.
  */
 
+/**
+ * The viewport width as the sheet rule sees it: below `SHEET_BELOW` or not. Asked through
+ * `matchMedia` and kept live, so rotating a tablet moves between sheet and drawer.
+ */
+function readViewportWidth(): number {
+  const narrow =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(`(max-width: ${SHEET_BELOW - 1}px)`).matches;
+  return narrow ? 0 : Number.POSITIVE_INFINITY;
+}
+
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(readViewportWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(readViewportWidth());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return width;
+}
+
 export function IssueDetailMount() {
   const session = useSession();
   const selection = session.selection;
@@ -81,6 +103,7 @@ export function IssueDetailMount() {
    * It is a preference about how you are working, not a property of the ticket.
    */
   const [mode, setMode] = useState<DetailMode>(() => loadMode(safeStorage()));
+  const presentation = presentationFor(useViewportWidth(), mode);
   const toggleMode = useCallback(() => {
     setMode((current) => {
       const next = otherMode(current);
@@ -145,10 +168,10 @@ export function IssueDetailMount() {
       }}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay data-mode={mode} className="staple-detail-scrim" />
+        <DialogPrimitive.Overlay data-mode={presentation} className="staple-detail-scrim" />
 
         <DialogPrimitive.Content
-          data-mode={mode}
+          data-mode={presentation}
           data-detail-overlay=""
           // Radix warns when a dialog has no description. There is nothing here that
           // would honestly serve as one — the panel's content IS the description —
@@ -157,7 +180,7 @@ export function IssueDetailMount() {
           aria-describedby={undefined}
           className={cn(
             "staple-detail-panel bg-card text-foreground fixed z-50 flex flex-col overflow-hidden shadow-xl outline-none",
-            panelClass(mode),
+            panelClass(presentation),
           )}
           /**
            * Radix's default sends focus to the first tabbable thing, which here is
@@ -252,6 +275,7 @@ export function IssueDetailMount() {
               key={`${selection.workspace}:${selection.ref}`}
               selection={selection}
               mode={mode}
+              presentation={presentation}
               onToggleMode={toggleMode}
               nav={nav}
               onNavigate={navigate}

@@ -30,6 +30,7 @@ import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
 import { TaskRowLine } from "./TaskRowLine";
 import { resolveTaskListConfig } from "./config";
+import { rowPlan } from "./row-layout";
 import { flatRow } from "./model";
 import { claim, row, worklog } from "./fixtures";
 import type { Issue, ClaimActivity, WorklogSummary, IssueDeps, QueueView } from "@/lib/types";
@@ -784,6 +785,7 @@ describe("parent rollup plan", () => {
       density?: "comfortable" | "compact";
       parentEstimate?: number | null;
       estimates?: (number | null)[];
+      width?: number;
     } = {},
   ): string {
     const {
@@ -791,6 +793,7 @@ describe("parent rollup plan", () => {
       density = "comfortable",
       parentEstimate = null,
       estimates = [14_400, 10_800, 14_400],
+      width,
     } = over;
 
     const all = [
@@ -809,7 +812,11 @@ describe("parent rollup plan", () => {
     return renderToStaticMarkup(
       <TaskRowLine
         row={built}
-        config={resolveTaskListConfig("tree", { density, labelMax: 2 })}
+        config={resolveTaskListConfig("tree", {
+          density,
+          labelMax: 2,
+          ...(width === undefined ? {} : { plan: rowPlan(width) }),
+        })}
         semantics="grid"
         isExpanded={expanded}
         now={NOW}
@@ -819,7 +826,7 @@ describe("parent rollup plan", () => {
 
   /** The whole element, attribute by attribute, so a stray one cannot slip in. */
   const PLAN =
-    /<span class="staple-rollup-count max-\[719px\]:hidden" data-testid="parent-rollup-plan" data-plan-source="(\w+)" aria-label="([^"]+)" title="([^"]+)">est ([^<]+)<\/span>/;
+    /<span class="staple-rollup-count" data-testid="parent-rollup-plan" data-plan-source="(\w+)" aria-label="([^"]+)" title="([^"]+)">est ([^<]+)<\/span>/;
 
   it("shows the rolled-up 11h beside the bar when folded, in the O3 slot", () => {
     const markup = renderPlanned();
@@ -847,9 +854,9 @@ describe("parent rollup plan", () => {
     expect(plan.startsWith("<span ")).toBe(true);
     expect(plan).not.toContain("style=");
     expect(plan).not.toContain("<div");
-    // The class list is the count's class plus the narrow-width utility — nothing that
-    // task-list.css does not already size at 11px, nowrap, inline.
-    expect(plan).toContain('class="staple-rollup-count max-[719px]:hidden"');
+    // The class list is the count's class — nothing that task-list.css does not already
+    // size at 11px, nowrap, inline. The narrow-width drop is the row plan's, not a class's.
+    expect(plan).toContain('class="staple-rollup-count"');
     expect(markup).not.toContain("staple-rollup-plan");
   });
 
@@ -890,10 +897,14 @@ describe("parent rollup plan", () => {
     expect(markup).toContain('data-testid="parent-rollup-bar"');
   });
 
-  it("hides below the two-line breakpoint with a utility class, not a new rule in the sheet", () => {
-    // Below 720px §14 gives the title track the whole row width and there is no room for an
-    // aside; the plan yields there and the count and the bar stay.
-    expect(PLAN.exec(renderPlanned())![0]).toContain("max-[719px]:hidden");
+  it("is dropped below 720px by the row plan — absent from the DOM, the count stays", () => {
+    // The compact one-line row has no room for an aside; the ladder's `rollupPlan` rung
+    // takes it off the row, and `x/y` stays because a folded epic must say it at any width.
+    expect(PLAN.exec(renderPlanned({ width: 720 }))).not.toBeNull();
+    const narrow = renderPlanned({ width: 719 });
+    expect(narrow).not.toContain('data-testid="parent-rollup-plan"');
+    expect(narrow).toContain('aria-label="0 of 3 done"');
+    expect(narrow).toContain("0/3");
   });
 });
 

@@ -42,7 +42,7 @@
  * For the same reason the row transitions `background-color` and `opacity` only, never a
  * transform and never a layout property.
  */
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { DependencyBadges } from "./DependencyBadges";
 import { KindGlyph } from "./KindGlyph";
@@ -55,8 +55,10 @@ import { StatusIcon } from "./StatusIcon";
 import { Avatar, RowClaimSlot } from "./WorkingPill";
 import { WorklogCue } from "./WorklogCue";
 import type { TaskListConfig } from "./config";
-import { guideX, indentPx, isSubtask, ROW_PAD_LEFT, type TaskRow } from "./model";
+import { useLongPress } from "./long-press";
+import { elbowWidth, guideX, indentPx, isSubtask, ROW_PAD_LEFT, type TaskRow } from "./model";
 import { formatRowDate } from "./row-date";
+import { FULL_ROW_PLAN, type RowGeometry } from "./row-layout";
 
 function Chevron() {
   return (
@@ -128,7 +130,15 @@ function SubtaskGlyph() {
  * this row's own level: true means more siblings follow, so the vertical carries on past
  * the elbow to the bottom of the row. False is what makes the elbow read as a terminal.
  */
-function Connectors({ guides, hasSelectColumn }: { guides: boolean[]; hasSelectColumn: boolean }) {
+function Connectors({
+  guides,
+  hasSelectColumn,
+  geometry,
+}: {
+  guides: boolean[];
+  hasSelectColumn: boolean;
+  geometry: RowGeometry;
+}) {
   if (guides.length === 0) return null;
   const own = guides.length - 1;
 
@@ -139,16 +149,16 @@ function Connectors({ guides, hasSelectColumn }: { guides: boolean[]; hasSelectC
           <span
             key={level}
             className="staple-guide-rail"
-            style={{ left: guideX(level, hasSelectColumn) }}
+            style={{ left: guideX(level, hasSelectColumn, geometry) }}
           />
         ) : null,
       )}
-      <span className="staple-guide-elbow" style={{ left: guideX(own, hasSelectColumn) }} />
+      <span className="staple-guide-elbow" style={{ left: guideX(own, hasSelectColumn, geometry) }} />
       {guides[own] ? (
         <span
           key="own"
           className="staple-guide-rail staple-guide-rail-lower"
-          style={{ left: guideX(own, hasSelectColumn) }}
+          style={{ left: guideX(own, hasSelectColumn, geometry) }}
         />
       ) : null}
     </span>
@@ -164,6 +174,15 @@ function Connectors({ guides, hasSelectColumn }: { guides: boolean[]; hasSelectC
  *          already owns focus; adding a second role would nest two options.
  */
 export type TaskRowSemantics = "grid" | "list" | "bare";
+
+/**
+ * The row's own hold on its menu, so a long-press on a phone can open the same menu the `⋯`
+ * opens. A caller that ignores it still gets a working `⋯`; it only loses the long-press.
+ */
+export interface RowMenuControl {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
 
 export interface TaskRowLineProps {
   row: TaskRow;
@@ -216,7 +235,7 @@ export interface TaskRowLineProps {
    * Absent means the `⋯` keeps its original behaviour exactly: it opens the detail drawer,
    * which is what every surface without a menu still wants.
    */
-  actionsMenu?: (trigger: ReactNode) => ReactNode;
+  actionsMenu?: (trigger: ReactNode, control: RowMenuControl) => ReactNode;
   onToggleSelect?: () => void;
   onFocus?: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -253,6 +272,25 @@ export function TaskRowLine({
    */
   const cues = row.cues ?? null;
   const { columns, labelMax } = config;
+  /**
+   * What this width keeps — row-layout.ts. Every element below that the ladder can drop is
+   * gated on the plan AND its column: the column is the container's decision ("this surface
+   * never shows a date"), the plan is the width's ("not at 390px").
+   */
+  const plan = config.plan ?? FULL_ROW_PLAN;
+  /**
+   * On a compact row the claim is an avatar, and when the holder IS the assignee the second
+   * avatar would repeat the same initials beside it. One is drawn; the claim's carries more.
+   */
+  const claimHolder = claim?.heldBy ?? issue.checkoutAgent;
+  const geometry = plan.geometry;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuControl: RowMenuControl = { open: menuOpen, onOpenChange: setMenuOpen };
+  // Long-press opens the row's menu on touch. Only where there IS a menu: a row whose `⋯`
+  // would only open the drawer already does that on a plain tap.
+  // `bare` rows get it too: the Queue's plan rows are bare (the reorder list owns their
+  // role) and they are the rows whose menu carries the moves.
+  const longPress = useLongPress(actionsMenu ? () => setMenuOpen(true) : null);
   const collapsedParent = columns.disclosure && hasChildren && !isExpanded;
   const bare = semantics === "bare";
   /**
@@ -390,9 +428,13 @@ export function TaskRowLine({
           <KindGlyph kind={issue.kind} />
           {isSubtask(row) ? (
             <>
-              <span className="staple-row-kin" data-testid="subtask-glyph" aria-hidden="true">
-                <SubtaskGlyph />
-              </span>
+              {/* Compact rows drop the glyph: the indent and the guide line already draw the
+                  relation, and 15px of identifier cluster is 15px of title on a phone. */}
+              {plan.subtaskGlyph ? (
+                <span className="staple-row-kin" data-testid="subtask-glyph" aria-hidden="true">
+                  <SubtaskGlyph />
+                </span>
+              ) : null}
               {/* The glyph is decoration; THIS is the relation. A flat surface (the pickup
                   queue, the palette) has no indent and may have no breadcrumb chip, so
                   without this a screen reader gets no parent signal at all. */}
@@ -417,7 +459,7 @@ export function TaskRowLine({
           them and the only place they can go without a new grid track. They cost no
           height: see RowCues.tsx.
         */}
-        {cues?.pickup ? <PickupCue cue={cues.pickup} /> : null}
+        {cues?.pickup ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
         {cues?.milestone ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
@@ -467,7 +509,8 @@ export function TaskRowLine({
             collapsed={collapsedParent}
             // R7c (STA-194): the rolled-up plan rides beside the bar only where density
             // permits — the comfortable preset. Compact rows keep the count and the bar.
-            showPlan={config.density === "comfortable"}
+            showPlan={config.density === "comfortable" && plan.rollupPlan}
+            progress={plan.rollup}
           />
         ) : null}
         {/* Last in the cell, so it reads as an aside on the title and never as part of it —
@@ -488,9 +531,9 @@ export function TaskRowLine({
           trailing it. It also puts the two most diagnostic elements on the row furthest from
           the edge that gets clipped first.
         */}
-        {columns.deps ? <DependencyBadges row={row} /> : null}
-        {columns.pr ? <PrBadge pullRequests={row.pullRequests} /> : null}
-        {columns.labels ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
+        {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} /> : null}
+        {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
+        {columns.labels && plan.labels !== "none" ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
         {/*
           W4 (STA-116). Immediately LEFT of the claim slot, which is where §3C's mockup
           puts it and where its §14 drop position says it belongs: more diagnostic than a
@@ -502,7 +545,7 @@ export function TaskRowLine({
           different fact from a different clock, and the moment one component owned both
           they would start agreeing with each other instead of with the server.
         */}
-        {columns.worklog ? (
+        {columns.worklog && plan.worklog ? (
           <WorklogCue
             worklog={row.worklog}
             claim={claim}
@@ -510,11 +553,19 @@ export function TaskRowLine({
             now={now}
           />
         ) : null}
-        {columns.claim ? <RowClaimSlot claim={claim} checkoutAgent={issue.checkoutAgent} /> : null}
-        {columns.assignee && issue.assignee ? (
+        {columns.claim ? (
+          <RowClaimSlot
+            claim={claim}
+            checkoutAgent={issue.checkoutAgent}
+            variant={plan.claim}
+            showLabel={plan.workingLabel}
+            staleShort={plan.staleClaim === "short"}
+          />
+        ) : null}
+        {columns.assignee && issue.assignee && !(plan.claim === "avatar" && claimHolder === issue.assignee) ? (
           <Avatar name={issue.assignee} kind="human" size={20} className="staple-row-assignee" />
         ) : null}
-        {columns.date ? (
+        {columns.date && plan.date ? (
           <time className="staple-row-date" dateTime={issue.updatedAt} title={issue.updatedAt}>
             {formatRowDate(issue.updatedAt, now)}
           </time>
@@ -528,7 +579,7 @@ export function TaskRowLine({
           and it will be where a real menu hangs the day one exists. Off in every narrow
           preset, where the whole row is already a single-purpose target.
         */}
-        {columns.actions && ghost ? (
+        {columns.actions && ghost && plan.layout === "line" ? (
           /* Reserved, never drawn: the `⋯` is a second way to do the one thing the whole
              ghost row already does, but its 20px is what keeps this row's date aligned
              with the dates above and below it. */
@@ -547,8 +598,10 @@ export function TaskRowLine({
               >
                 <ActionsDots />
               </button>,
+              menuControl,
             )
-          ) : (
+          ) : plan.layout === "compact" ? /* The whole row opens the details on a phone; a
+               second `⋯` that does the same would only take width from the title. */ null : (
             <button
               type="button"
               className="staple-row-actions"
@@ -589,6 +642,7 @@ export function TaskRowLine({
       // Also on the row, not only on the list root, so a row rendered `bare` inside a host
       // that knows nothing about this module (cmdk) still gets its own geometry.
       data-density={config.density}
+      data-layout={plan.layout}
       aria-level={semantics === "grid" ? depth + 1 : undefined}
       aria-expanded={semantics === "grid" && hasChildren ? isExpanded : undefined}
       // A ghost is not in this bucket, so it cannot be part of a selection made in it, and
@@ -599,6 +653,12 @@ export function TaskRowLine({
       // arrow keys do the moving — the standard treegrid/listbox contract.
       tabIndex={bare ? undefined : isFocused ? 0 : -1}
       onClick={bare ? undefined : onOpen}
+      onClickCapture={longPress.onClickCapture}
+      onPointerDown={longPress.onPointerDown}
+      onPointerMove={longPress.onPointerMove}
+      onPointerUp={longPress.onPointerEnd}
+      onPointerCancel={longPress.onPointerEnd}
+      onContextMenu={longPress.onContextMenu}
       onFocus={bare ? undefined : onFocus}
       onKeyDown={bare ? undefined : onKeyDown}
       className={cn(
@@ -607,9 +667,19 @@ export function TaskRowLine({
         bare && "staple-row-bare",
         ghost && "staple-row-ghost",
       )}
-      style={{ paddingLeft: ROW_PAD_LEFT + indentPx(columns.disclosure ? depth : 0) } as CSSProperties}
+      style={
+        {
+          paddingLeft: ROW_PAD_LEFT + indentPx(columns.disclosure ? depth : 0, geometry),
+          // The geometry the rails were positioned from, handed to the grid, so the chevron
+          // column and the elbow cannot disagree with `guideX` at any width.
+          "--col-disclosure-w": `${geometry.disclosure}px`,
+          "--guide-elbow-w": `${elbowWidth(geometry)}px`,
+        } as CSSProperties
+      }
     >
-      {columns.disclosure ? <Connectors guides={guides} hasSelectColumn={columns.select} /> : null}
+      {columns.disclosure ? (
+        <Connectors guides={guides} hasSelectColumn={columns.select} geometry={geometry} />
+      ) : null}
       {cell}
     </div>
   );

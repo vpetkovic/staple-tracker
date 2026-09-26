@@ -37,7 +37,7 @@
  * removal that raced a checkout is refused there, and `GuardRefusal` says so. This only
  * stops the UI from advertising an action it can see will fail.
  */
-import { ArrowDownToLine, ArrowUpRight, ArrowUpToLine, ListPlus, ListX, SquareArrowUp } from "lucide-react";
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpRight, ArrowUpToLine, ListPlus, ListX, SquareArrowUp } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   DropdownMenu,
@@ -88,6 +88,8 @@ export function queueRowMenuState(
 
 export function QueueRowMenu({
   trigger,
+  open,
+  onOpenChange,
   identifier,
   state,
   disabled,
@@ -97,9 +99,17 @@ export function QueueRowMenu({
   onDequeue,
   onMoveToTop,
   onMoveToBottom,
+  onMoveUp,
+  onMoveDown,
 }: {
   /** The ready-made `⋯` button `TaskRowLine` hands us. */
   trigger: ReactNode;
+  /**
+   * Controlled by the row when it can long-press (TaskRowLine's `RowMenuControl`), so a
+   * touch hold and the `⋯` open the same menu. Absent, the menu keeps its own state.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** The only thing this component needed off the row — the caller keeps the row. */
   identifier: string;
   state: QueueRowMenuState;
@@ -116,10 +126,17 @@ export function QueueRowMenu({
    */
   onMoveToTop?: () => void;
   onMoveToBottom?: () => void;
+  /**
+   * One step up or down — offered where the row's own arrow buttons are not drawn (the
+   * Queue on a phone, where the title needs their width). Absent means absent: the item
+   * is not rendered, so a desktop menu is unchanged.
+   */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }) {
   const held = state.heldBy;
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent aria-label={`Actions for ${identifier}`} data-queue-row-menu={identifier}>
         <DropdownMenuItem data-menu-item="open" onSelect={onOpen}>
@@ -127,6 +144,18 @@ export function QueueRowMenu({
           Open details
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        {state.queued && onMoveUp ? (
+          <DropdownMenuItem data-menu-item="move-up" disabled={disabled} onSelect={onMoveUp}>
+            <ArrowUp aria-hidden />
+            Move up
+          </DropdownMenuItem>
+        ) : null}
+        {state.queued && onMoveDown ? (
+          <DropdownMenuItem data-menu-item="move-down" disabled={disabled} onSelect={onMoveDown}>
+            <ArrowDown aria-hidden />
+            Move down
+          </DropdownMenuItem>
+        ) : null}
         {state.queued && onMoveToTop ? (
           <DropdownMenuItem data-menu-item="move-top" disabled={disabled} onSelect={onMoveToTop}>
             <ArrowUpToLine aria-hidden />
