@@ -59,7 +59,7 @@ staple attempt open|end <ref> --role orchestrator   coordinate an issue without 
 staple attempt reconstruct                          rebuild attempts from events recorded before them
 staple attempts <ref> [--limit N] [--cursor C]      every attempt on the issue, as it reads now
 staple attempt <attempt-id>                         one attempt: transitions, chain, budget burn
-staple budget [--account A]                         each account's current windows and remaining budget
+staple budget [--account A] [--reserve P]           each account's current windows, remaining budget and pressure
 staple budget history --account A [--since T]       one account's readings, with capture gaps
 staple checkout|status|done ... [--harness H --harness-session ID] [--model M] [--account A] [--attempt-key K]
 staple release|status|done ... --outcome failed --reason R   only the agent says it failed
@@ -1148,6 +1148,7 @@ same reading sent by an agent through `record_budget_sample` is refused
 ```bash
 staple budget                                   # every account, each limit's current window
 staple budget --account personal-max --json
+staple budget --reserve 30                      # pressure against a 30% reserve
 staple budget history --account personal-max --since 2h --limit 100
 staple attempts STA-42                          # every attempt on the issue, oldest first
 staple attempt 0b6f2c1e-6d0a-4f7e-9d38-2f3b8a1c9e44 --json
@@ -1163,6 +1164,18 @@ staple attempt 0b6f2c1e-6d0a-4f7e-9d38-2f3b8a1c9e44 --json
   reads `source_unavailable`. Neither is shown as 0. `stale: true` means the
   latest reading's value is over 10 minutes old, judged on `observedAt`, which
   is also how `budget history` finds its gaps.
+- **Pressure.** Every limit also carries `pressure`, PROVISIONAL until the
+  admission policy defines it ([execution-telemetry.md](execution-telemetry.md#pressure)).
+  Measured: `observed` (the window's pace, `%/hour` of wall clock),
+  `lastReadingAgeSeconds`, `secondsToReset`. Forecast:
+  `sustainablePercentPerHour` = `(remaining − reserve) / hours to reset`,
+  `ratio` = observed / sustainable, `state` `unsafe` at 1 or over (or when the
+  remaining figure is already at or under the reserve) and `within` below,
+  `exhaustion` and `reserveReach` at the pace, and `confidence` with its
+  warnings. `safeConcurrency` is always `null` (`policy_not_defined`).
+  `--reserve P` (`20` or `20%`) sets the reserve; without it a provisional
+  20% applies, and `reserve.source` says which. The human output adds one
+  line per limit: `pace 4%/h  sustainable 16.6%/h  pressure x0.24 WITHIN`.
 - **`staple budget history`** lists one account's readings oldest first by
   `observedAt`, each with a derived `regression` flag. `--since` takes an
   instant or a duration meaning that long ago.

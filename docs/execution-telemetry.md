@@ -1050,6 +1050,8 @@ shown verbatim):
 | `no_worker_attempt` | The issue started and has no worker attempt: work before capture, or a capture gap |
 | `no_orchestrator_attempt` | `orchestrationSeconds` when no issue in the subtree has an orchestrator attempt |
 | `replay_unavailable` | `wall` on a device whose event replay does not reach the row's status |
+| `policy_not_defined` | A figure the admission policy will define (`pressure.safeConcurrency`); it is not built yet |
+| `reserve_reached` | `pressure.ratio` when the remaining figure is already at or under the reserve: no pace is sustainable, so there is nothing to divide by |
 | `no_eligible_records` | A cohort coverage figure or ratio aggregate over a population with no eligible record ([timing semantics](timing-semantics.md#cohort-coverage)) |
 
 **Propagation.** Any value derived from a missing input is itself `null`, with
@@ -1191,7 +1193,7 @@ tests catching drift. The names are proposals. The single-method rule is not.
 | `staple attempt pause\|resume\|milestone\|interrupt <ref> [--reason R] [-m label] [--role R \| --attempt ID]` | `record_attempt_event` | The updated attempt. `--role` or `--attempt` is required when the actor holds an attempt in each lane |
 | `staple attempt open\|end <ref> --role orchestrator` | `record_attempt_event` with `event: "open"`/`"end"`, `role: "orchestrator"` | The orchestrator attempt ([timing semantics](timing-semantics.md#the-orchestrator-lane)). The only way to set a role; `checkout`, `status`, `done`, `release` and the MCP claim tools refuse one |
 | `checkout`, `status`, `done` gain optional `--harness-session`, `--harness claude_code\|codex\|other`, `--model`, `--account`, `--attempt-key K` (the attempt's idempotency key), and the claim-clearing verbs (`release`, `status`, `done`) gain `--outcome failed --reason R` | the same fields on `checkout_task`, `release_task`, `update_task` (`harness_session`, `harness`, `model`, `account`, `attempt_idempotency_key`, `outcome`, `reason`) | Unchanged payloads, plus `attempt` |
-| `staple budget [--account A]` | `get_budget` | Per account, each current window with its latest sample, `status`, `missing` |
+| `staple budget [--account A] [--reserve P]` (HTTP `GET /api/budget?account=&reserve=`) | `get_budget` | Per account, each current window with its latest sample, `status`, `missing`, and each limit's provisional [pressure](#pressure) |
 | `staple budget history --account A [--since T] [--limit N]` | `list_budget_samples` | `{items, truncated, nextCursor, coverage}` |
 | `staple timing quality [--kind K] [--parent REF] [--since T] [--include S] [--exclude S] [--exclude-reason R]` | `timing_quality` | Counts and coverage of the timing quality states over the eligible population, the ratio aggregates, and the eligible records, bounded ([timing semantics](timing-semantics.md#cohort-coverage)) |
 | `staple calibrate [--kind K] [--priority P] [--parent REF] [--since T] [--include reconstructed] [--samples] [--for REF [--model M]]` | `calibration_cohorts` | Calibration cohorts over exact samples (reconstructed as its own set on request), each with its fallback level, coverage, medians, quantiles, intervals and bounds, heavy-tail test, timing floors, warnings and a snapshot id; or the samples, bounded; `--for` adds per-issue duration forecasts ([timing semantics](timing-semantics.md#calibration-cohorts), [confidence ranges](timing-semantics.md#confidence-ranges)) |
@@ -1204,6 +1206,42 @@ Field names are the camelCase names on this page on every surface. `--json`
 emits the store objects unformatted, and errors use the existing envelope and
 exit codes: an event on an attempt that is not open is `conflict`, and a
 malformed reading is `validation`. No new code is added.
+
+### Pressure
+
+`get_budget` gives every limit a `pressure` block: how fast the current window
+is being used against how fast it could be used and still keep the protected
+reserve at the reset. It reads this machine's readings of the window and
+nothing else (no workspace, no attempt), so it is the same on every surface
+and in every workspace, and it never synchronizes.
+
+**Everything here is provisional.** Sustainable burn, pressure and safe
+concurrency belong to the admission policy, which is not built. Until it is,
+the read states one provisional definition of the first two and says so on
+every report (`pressureRule: {provisional: true, unsafeAtRatio: 1, note}`),
+the way the budget forecast states its provisional reserve. The reserve is a
+parameter (`--reserve P`, MCP `reserve`, HTTP `reserve=`), and without one the
+same provisional 20% as the forecast applies, named on `reserve.source`.
+
+| Field | Kind | Meaning |
+|---|---|---|
+| `observed` | measured | The window's pace: its high-water rise from the instance's first reading to its latest, per hour of wall clock ([the forecast's pace](timing-semantics.md#budget)). Needs two readings |
+| `lastReadingAgeSeconds` | measured | How old the latest reading's value is at `asOf` (judged on `observedAt`) |
+| `secondsToReset` | measured | From `asOf` to the reset the provider reported |
+| `sustainablePercentPerHour` | forecast | `max(0, remaining − reserve) / hours to reset`: the pace that lands exactly on the reserve at the reset |
+| `ratio` | forecast | `observed / sustainable`. Null with `reserve_reached` when the remaining figure is at or under the reserve |
+| `state` | forecast | `unsafe` when the ratio is 1 or over (the pace reaches the reserve before the reset) or the remaining figure is at or under the reserve; `within` otherwise; null with the reason when either side is unknown |
+| `exhaustion`, `reserveReach` | forecast | When the pace uses up what is left, and what is left above the reserve: `before_reset`, `after_reset`, `never` (a pace of 0), or for the reserve `already` |
+| `safeConcurrency` | policy | Always null, `policy_not_defined`. How many agents a pressure admits is the admission policy's decision, and a number here would read as one |
+| `confidence` | of `observed` | `low` with any warning, `medium` otherwise (never `high`: the rule is provisional). `small_sample` under 5 readings, `short_span` under 30 minutes, `regressions` when the provider's figure went down inside the window |
+
+Unknown is never 0 and never `within`. A reading that is not current (the
+window elapsed, the reading reported no reset) or a sliding window makes every
+figure null with the reading's reason. A stale reading keeps `observed` (it
+describes the window's past) and makes every forecast figure null with
+`stale`. One reading makes `observed` null (`input_missing`, `second_reading`)
+and everything that needs it null (`input_missing`, `observed`), while
+`sustainablePercentPerHour` still reads.
 
 ### Bounded reads, coverage and truncation
 
@@ -1297,7 +1335,7 @@ samples, "no change" still does not mean the provider measured again (see
 | Timing semantics, lifecycle gaps, controlled validation, quality states | Attempt `activeSeconds` vs issue `timing` ([The attempt record](#the-attempt-record)), pause vs interruption ([Lifecycle](#lifecycle)), `provenance`/`endDetection` and [History before capture](#history-before-capture) as quality inputs |
 | Calibration and forecasting | `estimateAtStart`, outcomes, `chain`, per-attempt burn and `attribution`, the no-conversion rule ([Units](#units)), resolution caveat |
 | Admission policy, ranking, checkpointing, dry runs | Current windows and `resetsAt`, high-water `remainingPercent` with `missing`, `storedOpenAttemptsOnAccountStartedHere`, `attempt_paused` with `checkpoint_before_reset`, milestone pointers to the worklog |
-| Pressure panel, decision history, guidance | `get_budget` shape, `missing` reasons to show as unknown, attempt `id` as the join key from a decision to its outcome, the `sessionRef` rule for guidance |
+| Pressure panel, decision history, guidance | `get_budget` shape and its provisional [`pressure`](#pressure) block (the web UI's Budget view renders it), `missing` reasons to show as unknown, attempt `id` as the join key from a decision to its outcome, the `sessionRef` rule for guidance |
 | Fixtures, policy comparisons, cold-agent trials, release gate | Every record here is plain JSON with explicit instants, so a fixture is a list of records. `source.kind: "fixture"` is refused outside disposable databases. |
 
 ## Open questions

@@ -262,7 +262,7 @@ method:
 |---|---|---|
 | `list_attempts {ref, limit?, cursor?, ws?}` | `staple attempts <ref>` | The issue's attempts, oldest first, each as it reads now: `state`, `outcome` and `endReason` are the effective values, with `storedState` beside them |
 | `get_attempt {attempt_id, limit?, cursor?, ws?}` | `staple attempt <id>` | `{attempt, transitions, chain, burn}` |
-| `get_budget {account?}` | `staple budget` | Per account, each limit's current window, latest sample, `status`, high-water `remainingPercent` and `missing` |
+| `get_budget {account?, reserve?}` | `staple budget` | Per account, each limit's current window, latest sample, `status`, high-water `remainingPercent`, `missing`, and its provisional `pressure` (observed and sustainable pace, ratio, `unsafe`/`within` state, exhaustion and reserve reach at the pace; `safeConcurrency` null until the admission policy) |
 | `list_budget_samples {account, since?, limit?, cursor?}` | `staple budget history` | One account's readings, oldest first, each with a derived `regression` flag |
 
 `get_task` carries `attempts: {current, last, count}` beside `claim` and
