@@ -450,6 +450,68 @@ export function usageCount(kind: "statuses" | "kinds", id: string): number | nul
   return current.usage[kind][id] ?? null;
 }
 
+// ---------------------------------------------------------------- All workspaces (the union)
+
+/** The store's list-rank tiers (`store.statusOrder()`), category by category. */
+const LIST_TIERS: readonly StatusCategory[] = ["active", "review", "gated", "blocked", "ready", "unstarted", "done", "cancelled"];
+/** The agent inbox's pickup tiers (`store.inboxPickupOrder()`). */
+const PICKUP_TIERS: readonly StatusCategory[] = ["active", "review", "ready", "unstarted"];
+
+/**
+ * THE VOCABULARY OF "ALL WORKSPACES" — every workspace's statuses and kinds, as one list.
+ *
+ * On All workspaces the page shows every workspace's rows, so the vocabulary it paints them
+ * with, groups them by and offers in the filter menu and quick filters must be the UNION of
+ * every workspace's vocabulary — not the first workspace's, which is what an unscoped
+ * `/api/settings` answers. A status only `pinecone` has would otherwise render as an
+ * unknown id, and "In progress" would miss `pinecone`'s custom `pairing`.
+ *
+ * THE DEDUPLICATION RULE, in one sentence: an id is one entry, and the FIRST workspace in
+ * hub order that defines it decides its label and category (its kind glyph too), while the
+ * list keeps every id in order of first appearance. Two workspaces that both have `todo`
+ * therefore show one "Todo"; if they disagree about what `todo` means, the earlier
+ * workspace's meaning stands — the same workspace the switcher lists first.
+ *
+ * Group, open and pickup orders are re-derived the way the store derives them — by
+ * category tier, ties broken by the merged configured order — because they are properties
+ * of the vocabulary, and a union of per-workspace orders is not an order. Usage counts
+ * add up. The registry, the global values and everything else that is the same for every
+ * workspace are taken from the first envelope. `workspace` is "" — the union is nobody's.
+ *
+ * With one envelope the answer is that envelope; with none it is `null`.
+ */
+export function mergeWorkspaceVocabularies(
+  envelopes: readonly WorkspaceSettingsEnvelope[],
+): WorkspaceSettingsEnvelope | null {
+  const [first] = envelopes;
+  if (!first) return null;
+  if (envelopes.length === 1) return first;
+
+  const statuses = new Map<string, WorkspaceStatus>();
+  const kinds = new Map<string, KindRow>();
+  const usage = { statuses: {} as Record<string, number>, kinds: {} as Record<string, number> };
+  for (const envelope of envelopes) {
+    for (const status of envelope.statuses) if (!statuses.has(status.id)) statuses.set(status.id, status);
+    for (const kind of envelope.kinds) if (!kinds.has(kind.id)) kinds.set(kind.id, kind);
+    for (const [id, count] of Object.entries(envelope.usage.statuses)) usage.statuses[id] = (usage.statuses[id] ?? 0) + count;
+    for (const [id, count] of Object.entries(envelope.usage.kinds)) usage.kinds[id] = (usage.kinds[id] ?? 0) + count;
+  }
+  const mergedStatuses = [...statuses.values()].map((status, index) => ({ ...status, sortOrder: index }));
+  const tiered = (tiers: readonly StatusCategory[]) =>
+    tiers.flatMap((tier) => mergedStatuses.filter((status) => status.category === tier).map((status) => status.id));
+  const groupOrder = tiered(LIST_TIERS);
+  return {
+    ...first,
+    workspace: "",
+    statuses: mergedStatuses,
+    kinds: [...kinds.values()].map((kind, index) => ({ ...kind, sortOrder: index })),
+    groupOrder,
+    openOrder: groupOrder.filter((id) => !RESOLVED_CATEGORIES.includes(statuses.get(id)!.category)),
+    pickupOrder: tiered(PICKUP_TIERS),
+    usage,
+  };
+}
+
 // ---------------------------------------------------------------- the React window
 
 export interface SettingsResource {
@@ -477,10 +539,17 @@ export interface SettingsResource {
  */
 export function useWorkspaceSettings(options: {
   ws?: string;
+  /**
+   * All workspaces: every workspace's slug, in hub order. Each is fetched and the page is
+   * given their union (`mergeWorkspaceVocabularies`) instead of the server's default
+   * workspace. Absent or empty: the one workspace `ws` names.
+   */
+  all?: readonly string[];
   version?: number;
   onAuthError?: (error: AuthError) => void;
 } = {}): SettingsResource {
   const { ws, version, onAuthError } = options;
+  const allKey = (options.all ?? []).join(",");
   const [snapshot, setSnapshot] = useState<WorkspaceSettingsEnvelope>(current);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | undefined>(undefined);
@@ -490,7 +559,14 @@ export function useWorkspaceSettings(options: {
 
   useEffect(() => {
     let alive = true;
-    getSettings({ ws })
+    const slugs = allKey ? allKey.split(",") : [];
+    const read =
+      slugs.length > 0
+        ? Promise.all(slugs.map((slug) => getSettings({ ws: slug }))).then(
+            (envelopes) => mergeWorkspaceVocabularies(envelopes as WorkspaceSettingsEnvelope[])!,
+          )
+        : getSettings({ ws });
+    read
       .then((next) => {
         if (!alive) return;
         setError(undefined);
@@ -513,7 +589,7 @@ export function useWorkspaceSettings(options: {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws, version, nonce]);
+  }, [ws, allKey, version, nonce]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   return { settings: snapshot, loading, error, reload };

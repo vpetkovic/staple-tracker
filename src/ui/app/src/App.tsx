@@ -272,7 +272,17 @@ export function App() {
    * `version` re-runs it on the fingerprint poll, so a vocabulary changed by an agent
    * through MCP or by a shell through the CLI reaches an open page within 1.5s.
    */
-  const settings = useWorkspaceSettings({ ws: ws || undefined, version, onAuthError });
+  /**
+   * All workspaces paints every workspace's rows, so it gets every workspace's vocabulary —
+   * their union, with the first workspace in hub order deciding a shared id's label and
+   * category (`mergeWorkspaceVocabularies`) — rather than the first workspace's alone.
+   */
+  const vocabularyOfAll = useMemo(
+    () =>
+      bootstrap.data?.mode === "hub" && ws === "" ? bootstrap.data.workspaces.map((entry) => entry.slug) : undefined,
+    [bootstrap.data, ws],
+  );
+  const settings = useWorkspaceSettings({ ws: ws || undefined, all: vocabularyOfAll, version, onAuthError });
 
   /**
    * THE MILESTONES, FOR THE FILTER — R4b (STA-187).

@@ -58,7 +58,7 @@ import {
   type SettingOp,
   type WorkspaceSettingsEnvelope,
 } from "@/lib/settings";
-import { useSession } from "@/lib/session";
+import { isAllWorkspaces, useSession } from "@/lib/session";
 import { asksForWorkspace, loadRememberedWorkspace } from "@/lib/session-workspace";
 import type { VocabularyOp } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -148,8 +148,10 @@ export function SettingsDialog({
             ? await putSettings(kind, ops as SettingOp[], { ws })
             : await putSettings(kind, ops as VocabularyOp[], { ws });
         if (forWorkspace !== undefined) targetSettings.replace(next as WorkspaceSettingsEnvelope);
-        // The page's snapshot takes the answer only when it is the page's own workspace.
-        if (ws === (session.ws || undefined)) publishWorkspaceSettings(next);
+        // The page's snapshot takes the answer only when it is the page's own workspace. On
+        // All workspaces the snapshot is the union of every workspace's vocabulary, which
+        // one workspace's answer must not replace: the refresh below re-reads the union.
+        if (!isAllWorkspaces(session) && ws === (session.ws || undefined)) publishWorkspaceSettings(next);
         // A migrate-to removal rewrote issue rows. Everything on screen refetches.
         session.refresh();
         return null;

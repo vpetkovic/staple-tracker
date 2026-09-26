@@ -1,35 +1,30 @@
 /**
- * WHY THE PAGE IS EMPTY, IN WORDS — R4b (STA-187).
+ * WHY THE PAGE IS EMPTY, IN WORDS — R4b, rewritten in plain language.
  *
- * ── The failure this exists to prevent ────────────────────────────────────────────────
+ * With a dozen filters on offer, an empty list is not self-explanatory: the reader's real
+ * question is WHICH filter to take off. So under the standard empty state this says, in the
+ * chips' own words, what went wrong — "“Done” and “Ready to pick up” cannot both be true",
+ * or "Removing “In progress” would show 12 tasks" — and puts the fix one tap away: a button
+ * per filter worth removing, and Clear all. The model's own sentence, which names the
+ * filters by their menu names, stays behind "Show details" for whoever wants it.
  *
- * With eleven dimensions on offer, an empty list is no longer self-explanatory. "no tasks
- * match these filters" is true and useless: the reader's actual question is WHICH chip to
- * take off, and with five on the strip the honest answer is a specific one. Worse, some
- * combinations cannot match anything at all — done work that is also pickable — and a page
- * that says "no tasks match" about an impossible question reads as a tracker that lost the
- * work rather than as a question with no answer.
+ * The decision is still `explainNoMatches`, a pure function over the same rows and filter
+ * the view just applied (see empty-words.ts), so it can never describe a page that is not
+ * on screen.
  *
- * So this renders the standard empty state and then one sentence from
- * `explainNoMatches`: either "these two cannot both be true", or "removing Milestone (4)
- * would bring rows back", or "they exclude every row together". The sentence is computed by
- * a pure function over the SAME rows and the SAME filter the view just applied, so it can
- * never describe a page that is not on screen.
- *
- * ── Why it wraps `NoMatchesState` instead of replacing it ─────────────────────────────
- *
- * That component owns the headline, the count and the "Clear filters" button, and the graph
- * view renders it too. Re-implementing it here to insert one paragraph in the middle would
- * be two copies of an empty state that must not drift. The explanation goes underneath it,
- * where it reads as the detail behind the summary — which is what it is.
+ * `NoMatchesState` (views/ViewChrome) still supplies the headline and the count; its own
+ * "Clear filters" button is hidden here because this block's "Clear all" sits beside the
+ * other fixes, and two clear buttons on one screen would ask the reader to choose between
+ * identical things.
  */
-import {
-  explainNoMatches,
-  type FilterContext,
-} from "@/lib/filter-dimensions";
-import type { FilterState } from "@/lib/filters";
+import { ShowDetails } from "@/components/plain/PlainCard";
+import { Button } from "@/components/ui/button";
+import type { FilterContext } from "@/lib/filter-dimensions";
+import { clearFilters, type FilterState } from "@/lib/filters";
+import { useOptionalSession } from "@/lib/session";
 import type { IssueRow } from "@/lib/types";
 import { NoMatchesState } from "@/views/ViewChrome";
+import { plainEmptyExplanation } from "./empty-words";
 
 export interface FilterEmptyStateProps {
   /** The UNFILTERED rows — the explanation asks what each dimension is costing. */
@@ -41,31 +36,69 @@ export interface FilterEmptyStateProps {
 }
 
 export function FilterEmptyState({ rows, state, context, noun }: FilterEmptyStateProps) {
+  const session = useOptionalSession();
   return (
-    <div data-filter-empty-explained>
+    <div data-filter-empty-explained className="[&_[data-filter-empty]>button]:hidden">
       <NoMatchesState noun={noun} />
-      <FilterExplanation rows={rows} state={state} context={context} />
+      <FilterExplanation rows={rows} state={state} context={context} onChange={session?.setFilters} />
     </div>
   );
 }
 
 /**
- * The sentence on its own, reading no context — so a render test can ask what it says
- * without standing up a session for `NoMatchesState`'s count and Clear button.
+ * The explanation on its own, taking everything as props — so a render test can ask what
+ * it says without a session. Without `onChange` it is a readout with no buttons.
  *
  * `data-filter-explanation` carries WHICH KIND of answer it is, because the two are acted on
  * differently: an impossible pair has to be broken, a narrowed one only has to be loosened.
  */
-export function FilterExplanation({ rows, state, context }: Omit<FilterEmptyStateProps, "noun">) {
-  const explanation = explainNoMatches(rows, state, context);
-  if (!explanation.sentence) return null;
+export function FilterExplanation({
+  rows,
+  state,
+  context,
+  onChange,
+}: Omit<FilterEmptyStateProps, "noun"> & { onChange?: (next: FilterState) => void }) {
+  const explanation = plainEmptyExplanation(rows, state, context);
+  if (!explanation) return null;
 
   return (
-    <p
-      data-filter-explanation={explanation.impossible ? "impossible" : "narrowed"}
-      className="mx-auto max-w-[36rem] px-4 pb-8 text-center text-[13px] text-muted-foreground"
+    <div
+      data-filter-explanation={explanation.kind === "impossible" ? "impossible" : "narrowed"}
+      className="mx-auto flex max-w-[36rem] flex-col items-center gap-3 px-4 pb-8 text-center max-md:[&_summary]:min-h-11"
     >
-      {explanation.sentence}
-    </p>
+      <p data-filter-explanation-headline className="text-[14px] leading-relaxed text-pretty">
+        {explanation.headline}
+      </p>
+      {onChange ? (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {explanation.actions.map((action) => (
+            <Button
+              key={action.id}
+              variant="outline"
+              size="sm"
+              data-filter-explanation-action={action.id}
+              onClick={() => onChange(action.apply(state))}
+              className="max-md:h-11"
+            >
+              {action.label}
+            </Button>
+          ))}
+          <Button
+            variant={explanation.actions.length > 0 ? "ghost" : "outline"}
+            size="sm"
+            data-filter-explanation-clear
+            onClick={() => onChange(clearFilters())}
+            className="max-md:h-11"
+          >
+            Clear all
+          </Button>
+        </div>
+      ) : null}
+      <ShowDetails>
+        <p data-filter-explanation-detail className="text-[12px] text-muted-foreground">
+          {explanation.detail}
+        </p>
+      </ShowDetails>
+    </div>
   );
 }

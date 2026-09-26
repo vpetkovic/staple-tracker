@@ -206,7 +206,7 @@ export function CloudStrip({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[min(22rem,calc(100vw-1.5rem))] space-y-3 rounded-xl p-4"
+        className="w-[min(22rem,calc(100vw-1.5rem))] space-y-3 rounded-xl p-4 max-md:[&_summary]:min-h-11 max-md:[&_[data-sync-settings]]:min-h-11"
         data-sync-card
       >
         <div className="flex items-center gap-2">
