@@ -24,8 +24,14 @@ export interface LaunchctlResult {
 
 export type LaunchctlRunner = (args: readonly string[]) => LaunchctlResult;
 
+/**
+ * The default runner: `launchctl` from PATH. `STAPLE_TEST_LAUNCHCTL` replaces it with an
+ * absolute path, and only the test suite sets it (test/setup/isolated-home.ts points it at a
+ * fake), so a test or a child it spawns with its own PATH still never reaches the machine's
+ * launchd. Nothing outside the suite sets or documents it.
+ */
 export const realLaunchctl: LaunchctlRunner = (args) => {
-  const result = spawnSync("launchctl", [...args], { encoding: "utf8", timeout: 15_000 });
+  const result = spawnSync(process.env.STAPLE_TEST_LAUNCHCTL || "launchctl", [...args], { encoding: "utf8", timeout: 15_000 });
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? (result.error?.message ?? "") };
 };
 

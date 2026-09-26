@@ -14,3 +14,4 @@ process.env.XDG_CONFIG_HOME = join(home, ".config");
 process.env.APPDATA = join(home, "AppData", "Roaming");
 // The fake `launchctl` first on PATH, here and in every child: see isolated-home.ts.
 if (!(process.env.PATH ?? "").split(":").includes(fakeBin)) process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
+process.env.STAPLE_TEST_LAUNCHCTL = join(fakeBin, "launchctl");
