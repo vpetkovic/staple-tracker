@@ -58,19 +58,21 @@ import {
   AWAITING_HEADLINE,
   CONFIDENCE_WORDS,
   confidenceHeadline,
-  count,
   forecastHeadline,
   gaugeDescription,
-  inTen,
-  limitSentence,
+  leftFigure,
+  limitHelp,
   limitName,
+  limitSentence,
   limitStatus,
-  pathHeadline,
-  plainDuration,
   plainLeft,
+  notCountedText,
+  pathHeadline,
   plainMissing,
-  plainRange,
-  rangeDescription,
+  plainReasons,
+  providerName,
+  rangeWords,
+  unreadableLine,
 } from "@/lib/plain-language";
 import type { AuthError } from "@/lib/api";
 import { useOptionalSession } from "@/lib/session";
@@ -175,15 +177,16 @@ function RemainingRow({ label, text, testId, children }: { label: string; text: 
 }
 
 /**
- * The likely-range bar of a remaining figure: the draws' p10–p90 (likely, 8 in 10), the 90% band
- * (p5–p95, its nominal in tens), and the expected figure. Scaled from 0 to a little past the
- * band's upper end so the band never touches the edge. Nothing without draws or an expected figure.
+ * The likely-range bar of a remaining figure. ONE range in words (`rangeWords`): the draws'
+ * p10–p90 as the strong band, "Most likely between 14 and 19 hours (8 in 10 chances)"; the 90%
+ * band (p5–p95) drawn as the pale edge and named only as "rarely beyond …" when that says
+ * something new; the expected figure as the marker. Scaled from 0 to a little past the band's
+ * upper end so the band never touches the edge. Nothing without draws or an expected figure.
  */
 function FigureRange({ figure, testId }: { figure: RemainingFigure; testId: string }) {
   const spread = figure.simulated;
-  const description = rangeDescription(figure);
-  if (!spread || figure.expectedSeconds === null || description === null) return null;
-  const more = figure.partial ? ", or more" : "";
+  const words = rangeWords(figure);
+  if (!spread || figure.expectedSeconds === null || words === null) return null;
   return (
     <RangeBar
       testId={testId}
@@ -191,15 +194,17 @@ function FigureRange({ figure, testId }: { figure: RemainingFigure; testId: stri
       wide={spread.band}
       likely={{ lower: spread.p10, upper: spread.p90 }}
       marker={figure.expectedSeconds}
-      description={description}
-      legend={{
-        likely: `Likely: ${plainRange(spread.p10, spread.p90)}${more}`,
-        wide: `${inTen(spread.band.nominal)} chances: ${plainRange(spread.band.lower, spread.band.upper)}${more}`,
-        marker: `Expected: ${figure.partial ? "at least" : "about"} ${plainDuration(figure.expectedSeconds).text}`,
-      }}
+      description={words.description}
+      legend={[
+        { mark: "likely", text: words.likely },
+        ...(words.beyond ? [{ mark: "wide" as const, text: upperFirstWord(words.beyond) }] : []),
+        { mark: "marker", text: "Expected" },
+      ]}
     />
   );
 }
+
+const upperFirstWord = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** The pill of the work-left card: Done when settled, Unknown when there is no figure, else the confidence. */
 function CompletionPill({ completion }: { completion: CompletionForecast }) {
@@ -232,9 +237,7 @@ function CompletionBlock({
   const headline = forecastHeadline(completion, mode);
   const order = pathHeadline(completion.path);
 
-  const notCounted: string[] = [];
-  if (awaiting.length > 0) notCounted.push(`${count(awaiting.length, "task")} waiting for review`);
-  if (unknown.length > 0) notCounted.push(`${count(unknown.length, "task")} that can't be estimated yet`);
+  const notCounted = notCountedText(awaiting.length, unknown.length);
 
   return (
     <section aria-label="Completion forecast" data-block="completion" className="grid gap-3 @xl:grid-cols-2">
@@ -309,9 +312,9 @@ function CompletionBlock({
         }
       >
         {completion.settled ? null : <FigureRange figure={completion.labor} testId="forecast-range" />}
-        {notCounted.length > 0 ? (
+        {notCounted !== null ? (
           <p className="text-[13px] text-muted-foreground" data-testid="forecast-not-counted">
-            Not counted: {notCounted.join(" and ")}.
+            {notCounted}
           </p>
         ) : null}
       </PlainCard>
@@ -472,49 +475,20 @@ function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
  * the other budget views to reuse.
  */
 export function LimitCard({ limit, asOf, account }: { limit: BudgetLimitForecast; asOf: string; account?: string }) {
-  const remaining = limitRemainingText(limit);
   const { status } = limitStatus(limit);
-  const left = plainLeft(limit);
-  // The figure says what is left; the sentence goes on from there (limitHeadline is the whole).
+  // The figure says what is left (and how old a stale reading is); the sentence goes on from
+  // there (limitHeadline is the whole).
   const sentence = limitSentence(limit);
   return (
     <PlainCard
       data-limit={limit.limitKey}
       title={account ? `${limitName(limit)} · ${account}` : limitName(limit)}
       pill={<StatusPill status={status} />}
-      figure={left}
+      figure={plainLeft(limit) === null ? null : <LeftFigure limit={limit} />}
       headline={sentence.opening === null ? sentence.verdict : `${sentence.reset ? `${sentence.reset} ` : ""}${sentence.verdict}`}
       headlineTestId="budget-headline"
-      help={
-        <>
-          A subscription allows a certain amount of use in each window, then resets. The bar is that allowance: blue is what
-          is left, stripes are what this work is expected to use, grey is already used. The dashed line is the safety reserve
-          we try not to dip into, so there is always room to finish or pause cleanly.
-        </>
-      }
-      details={
-        <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 text-[11px]">
-          <div className="min-w-0">
-            <div className="truncate font-mono" title={limit.limitKey}>
-              {limit.limitKey}
-            </div>
-            {remaining.value !== null ? (
-              <div className="font-mono text-[13px] tabular-nums" data-testid="budget-remaining">
-                {remaining.value}
-              </div>
-            ) : (
-              <div className={UNKNOWN} data-unknown data-testid="budget-remaining">
-                {remaining.absent}
-              </div>
-            )}
-            <div className="text-[10px] text-muted-foreground" title={limit.resetsAt ?? undefined} data-testid="budget-reset">
-              {resetText(limit)}
-              {limit.secondsToReset !== null ? ` (${asOfText(asOf)})` : null}
-            </div>
-          </div>
-          <LimitLines limit={limit} />
-        </div>
-      }
+      help={limitHelp(limit)}
+      details={<LimitDetails limit={limit} asOf={asOf} />}
     >
       {limit.remainingPercent !== null ? (
         <BudgetGauge
@@ -530,6 +504,100 @@ export function LimitCard({ limit, asOf, account }: { limit: BudgetLimitForecast
   );
 }
 
+/**
+ * What is left, as the card's figure; a stale reading's age beside it, smaller, so the number
+ * stays the thing read first. The words are `leftFigure`'s ("93% left · 12 min ago").
+ */
+function LeftFigure({ limit }: { limit: BudgetLimitForecast }) {
+  const whole = leftFigure(limit);
+  const left = plainLeft(limit);
+  if (whole === null || left === null) return null;
+  if (whole === left) return <>{left}</>;
+  return (
+    <>
+      {left}
+      <span className="text-[15px] font-normal text-muted-foreground" data-testid="budget-age">
+        {whole.slice(left.length)}
+      </span>
+    </>
+  );
+}
+
+/** A limit's technical rows, exactly as before: key, what is left, the reset, and the projection lines. */
+function LimitDetails({ limit, asOf }: { limit: BudgetLimitForecast; asOf: string }) {
+  const remaining = limitRemainingText(limit);
+  return (
+    <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 text-[11px]" data-limit={limit.limitKey}>
+      <div className="min-w-0">
+        <div className="truncate font-mono" title={limit.limitKey}>
+          {limit.limitKey}
+        </div>
+        {remaining.value !== null ? (
+          <div className="font-mono text-[13px] tabular-nums" data-testid="budget-remaining">
+            {remaining.value}
+          </div>
+        ) : (
+          <div className={UNKNOWN} data-unknown data-testid="budget-remaining">
+            {remaining.absent}
+          </div>
+        )}
+        <div className="text-[10px] text-muted-foreground" title={limit.resetsAt ?? undefined} data-testid="budget-reset">
+          {resetText(limit)}
+          {limit.secondsToReset !== null ? ` (${asOfText(asOf)})` : null}
+        </div>
+      </div>
+      <LimitLines limit={limit} />
+    </div>
+  );
+}
+
+/**
+ * One account: its everyday name ("Claude (Anthropic)") with the operator's own label beside it,
+ * a card per limit that has a reading, and ONE line for the limits that can't be read, whose
+ * technical rows (and the raw account reference) are behind the account's Show details.
+ */
+function AccountBudget({ account, asOf }: { account: BudgetForecast["accounts"][number]; asOf: string }) {
+  const names = providerName(account.provider, account.accountRef);
+  const readable = account.limits.filter((limit) => limit.remainingPercent !== null);
+  const unreadable = account.limits.filter((limit) => limit.remainingPercent === null);
+  const line = unreadableLine(unreadable, names.short, readable.length > 0);
+  return (
+    <div data-account={account.accountRef} className="space-y-2">
+      <div className="flex flex-wrap items-baseline gap-x-2 text-[13px]">
+        <span className="font-medium">{names.name}</span>
+        {names.name !== account.accountRef ? <span className="text-muted-foreground">{account.accountRef}</span> : null}
+      </div>
+      {account.limits.length === 0 ? (
+        <p className="text-[13px]" data-unknown>
+          No limits read yet{Object.values(account.missing).length > 0 ? `: ${plainReasons(Object.values(account.missing))}` : ""}.
+        </p>
+      ) : null}
+      {readable.length > 0 ? (
+        <div className="grid items-start gap-3 @xl:grid-cols-2">
+          {readable.map((limit) => (
+            <LimitCard key={limit.limitKey} limit={limit} asOf={asOf} />
+          ))}
+        </div>
+      ) : null}
+      {line !== null ? (
+        <p className="text-[13px] text-muted-foreground" data-testid="budget-unreadable">
+          {line}
+        </p>
+      ) : null}
+      <ShowDetails testId="budget-account-details" label="Show account details">
+        <p className="font-mono text-[10px] text-muted-foreground" data-testid="budget-account-ref">
+          {account.accountRef}
+          {account.provider ? ` · ${account.provider}` : ""}
+          {Object.values(account.missing).length > 0 ? ` · ${Object.values(account.missing).map(missingText).join("; ")}` : ""}
+        </p>
+        {unreadable.map((limit) => (
+          <LimitDetails key={limit.limitKey} limit={limit} asOf={asOf} />
+        ))}
+      </ShowDetails>
+    </div>
+  );
+}
+
 function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string }) {
   const reserve = budget.reserve;
   return (
@@ -537,11 +605,13 @@ function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string })
       <div className="space-y-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
           <h3 className={HEADING}>Budget</h3>
-          <span className="text-[12px] text-muted-foreground">this machine only, apart from the forecast above</span>
+          <span className="text-[12px] text-muted-foreground" data-testid="budget-subtitle">
+            Usage measured on this computer
+          </span>
         </div>
         <p className="text-[14px] leading-relaxed" data-testid="budget-intro">
           {budget.accounts.length === 0
-            ? `We can't tell yet: ${budget.missing.accounts ? plainMissing(budget.missing.accounts) : "no usage has been measured on this machine"}.`
+            ? `We can't tell yet: ${budget.missing.accounts ? plainMissing(budget.missing.accounts) : "no usage has been measured on this computer"}.`
             : `How this work fits your subscription limits. We aim to keep ${Math.round(reserve.percent)}% of each limit in reserve${
                 reserve.source === "provisional_default" ? " (a default until you set one)" : ""
               }.`}
@@ -549,33 +619,18 @@ function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string })
       </div>
 
       {budget.accounts.length === 0 ? null : (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {budget.accounts.map((account) => (
-            <div key={`${account.provider}:${account.accountRef}`} data-account={account.accountRef} className="space-y-2">
-              <div className="text-[13px] font-medium">
-                {account.accountRef}
-                {account.provider ? <span className="font-normal text-muted-foreground"> · {account.provider}</span> : null}
-              </div>
-              {account.limits.length === 0 ? (
-                <p className={UNKNOWN} data-unknown>
-                  No limits read{Object.values(account.missing).length > 0 ? `: ${Object.values(account.missing).map(missingText).join("; ")}` : ""}.
-                </p>
-              ) : (
-                <div className="grid gap-3 @xl:grid-cols-2">
-                  {account.limits.map((limit) => (
-                    <LimitCard key={limit.limitKey} limit={limit} asOf={asOf} />
-                  ))}
-                </div>
-              )}
-            </div>
+            <AccountBudget key={`${account.provider}:${account.accountRef}`} account={account} asOf={asOf} />
           ))}
         </div>
       )}
 
-      <ShowDetails testId="budget-details">
+      <ShowDetails testId="budget-details" label="Show reserve details">
         <p className="text-[10px] text-muted-foreground" data-testid="budget-reserve">
           Measured against {reserveLabel(reserve)}
-          {reserve.source === "provisional_default" ? " (provisional until an admission policy sets one)" : null}. The work runs serially from now.
+          {reserve.source === "provisional_default" ? " (provisional until an admission policy sets one)" : null}. The work runs serially from
+          now. This machine only, apart from the forecast above.
         </p>
         {budget.accounts.length === 0 ? (
           <p className={UNKNOWN} data-unknown data-testid="budget-none">

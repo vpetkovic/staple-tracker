@@ -58,7 +58,7 @@ export function PlainCard({
         {pill}
       </header>
       <div className="space-y-1">
-        {figure !== undefined && figure !== null ? (
+        {figure !== undefined && figure !== null && figure !== false ? (
           <p className="text-[26px] leading-tight font-semibold tracking-tight" data-figure>
             {figure}
           </p>

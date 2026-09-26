@@ -801,8 +801,8 @@ card (`components/plain/`), built the same way so it reads at a glance:
 
 1. a small title and, where the block has one, a **pill**;
 2. **one headline figure** (`16 hours`, `78% left`, `About ¾ of the estimate`);
-3. **the answer sentence**, in everyday words
-   (`This should take about 16 hours of work — probably between 14 and 20 hours.`);
+3. **the answer sentence**, in everyday words (`This should take about 16 hours
+   of work.`), which never repeats the figure's own words where it can help it;
 4. a **visual** with a text alternative (below);
 5. **What does this mean?**, a button that opens two or three sentences inline
    (inline rather than a tooltip, so a touch screen gets it too);
@@ -818,20 +818,25 @@ validated steps (below).
 
 **Rounding and phrasing, never meaning** (`lib/plain-language.ts`, pure and
 tested in `lib/plain-language.test.ts`). Effort durations round by band: under a
-minute says *less than a minute*; under 50 minutes, the nearest 5 minutes; under
-10 hours, the nearest half hour (`8½ hours`); under 100 hours, the nearest hour;
-beyond, the nearest 5 hours. Effort is never written in days. A range shares its
-unit (`between 14 and 21 hours`) and collapses to `about 15 hours` when both ends
-round alike. A reset countdown reads like a clock (`3h 56m`, `4 days 1h`). An
-estimate ratio (work / estimate) is the nearest everyday fraction by ratio —
-*half*, *a third*, *a quarter*, *a fifth*, *two thirds*, *three quarters*, else
-`1/12` — *about as long as estimated* from 0.9 to 1.1, and multiples above
-(*1½ times*, *twice*). A lower bound always keeps *at least* (and *at most* for
-what is left, *or more* on a range); an unknown is always *We can't tell yet*
-with the payload's reason in everyday words (`no usage has been measured on
-this machine`), never 0. Confidence is a word: high *Quite sure*, medium
-*Fairly sure*, low *Rough guess*, with what it rests on (`based on 8 finished
-tasks with measured time`) and why it is not surer.
+minute says *less than a minute*; under 5 minutes, *a few minutes*; under 50
+minutes, the nearest 5 minutes; under 10 hours, the nearest half hour (`8½
+hours`); under 100 hours, the nearest hour; beyond, the nearest 5 hours. Effort is
+never written in days. A range shares its unit (`between 14 and 21 hours`) and
+collapses to `about 15 hours` when both ends round alike. A reset countdown reads
+like a clock (`3h 56m`, `4 days 1h`); a stale reading's age is short (`12 min
+ago`). An estimate ratio (work / estimate) reads *about as long as estimated*
+from 0.9 to 1.1; *a little less than estimated* from 0.85, *a little longer than
+estimated* up to 1.125 (a 10% overrun is never hidden as "1 times"); from a fifth
+up to 0.85, the nearest of *half*, *a third*, *a quarter*, *a fifth*, *two
+thirds*, *three quarters*; below a fifth, concretely on a 10-hour estimate (*a
+10-hour estimate usually takes about 50 minutes*), never `1/12`; from 1.125 the
+nearest quarter to 1.5 (*1¼ times*), then halves to 3 (*twice*), then wholes. A
+lower bound always keeps *at least* (and *at most* for what is left, *or more* on
+a range); an unknown is always *We can't tell yet* with the payload's reason in
+everyday words (`no usage has been measured on this computer`), never 0.
+Confidence is a word — high *Quite sure*, medium *Fairly sure*, low *Rough
+guess* — shown once, as the card's figure, with a sentence of what it rests on
+(`Based on 8 finished tasks with measured time.`) and why it is not surer.
 
 **The status word** (`limitStatus`, the one mapping, tested on both sides of each
 threshold). A provider limit is:
@@ -842,23 +847,38 @@ threshold). A provider limit is:
 | **At risk** | octagon | already under the reserve (`reserve.alreadyBelow`) |
 | **Unknown** | question mark | no projection of this work (`work`, `reserve` or `reserve.breachProbability` null) |
 | **At risk** | octagon | the work alone runs the limit out (`work.remainingAtResetPercent.expected` < 0) |
-| **At risk** | octagon | breach probability ≥ 50% |
-| **Tight** | triangle | breach probability ≥ 10% |
-| **On track** | check | breach probability < 10% |
+| **At risk** | octagon | the worse breach probability (alone, or with other use) ≥ 50% |
+| **Tight** | triangle | the worse breach probability ≥ 10% |
+| **On track** | check | the worse breach probability < 10% |
+| then one step worse | | the burn is a lower bound (`work.lowerBound`) |
+| then at least **Tight** | triangle | the account's pace runs out before the reset (`exhaustion.atPace` = `before_reset`) |
 
-A lower-bound burn (`work.lowerBound`: part of the work could not be measured, so
-the real use can only be higher) moves the result one step worse (On track →
-Tight, Tight → At risk): *On track* is never claimed from part of the work. A
-low-confidence work rate does not change the word; the sentence adds *(a rough
-guess: little usage measured so far)*. The completion card's pill is its
+The breach probability is the **worse** of the work alone
+(`reserve.breachProbability`) and, when the payload has it, the work with the
+account's other use (`reserve.withOtherUse.breachProbability`); the sentence says
+*Counting other use of this account, …* when the other use is what made it worse.
+Then, in order: a lower-bound burn (`work.lowerBound`: part of the work could not
+be measured, so the real use can only be higher) moves the result one step worse
+(On track → Tight, Tight → At risk), because *On track* is never claimed from part
+of the work (*Probably fits, but we could only measure part of this work, so it
+may need more.*); and when the account's own pace runs the limit out before the
+reset (`exhaustion.atPace` is `before_reset`) the result is at least **Tight**
+(*This work fits, but at the account's current pace this limit runs out before it
+resets.*). A low-confidence work rate does not change the word; the sentence adds
+*(a rough guess: little usage measured so far)*. The completion card's pill is its
 confidence word (a neutral outline, dashed for *Rough guess*), *Unknown* when
 there is no figure, *Done* when settled. Every pill is a word plus an icon of its
 own shape, never colour alone.
 
 **Visuals.** The **likely-range bar** starts at 0 and draws the draws' p10–p90
-as the strong *likely* band (8 in 10), the 90% band (p5–p95) as a pale band with
-a ≥3:1 edge, and the expected figure as an ink marker with a card-coloured ring;
-on estimate accuracy it adds the estimate itself as a dashed line. The **budget
+as the strong *likely* band, the 90% band (p5–p95) as a pale edge with a ≥3:1
+outline, and the expected figure as an ink marker with a card-coloured ring; on
+estimate accuracy it adds the estimate itself as a dashed line. Its legend says
+ONE range, *Most likely between 14 and 19 hours (8 in 10 chances)* (*, or more*
+on a lower bound); the pale edge is named only as *Rarely beyond 20 hours*, and
+only when that rounds to different words and the figure is not a lower bound,
+whose upper ends promise nothing. The exact quantiles and band are under *Show
+details*. The **budget
 gauge** is the whole allowance, read left to right as what is left: solid for
 what this work leaves at the reset, striped for what this work is expected to use
 (stripes, not a second hue, so it reads under colour-blindness and in print),
@@ -872,7 +892,8 @@ only position them, so any other analytics view can reuse them.
 **Colour and access** (theme-tokens.css, `--plain-*` and `--viz-*`). Status
 tones are tints whose text clears 4.5:1 on its own background in both modes; the
 visuals are one blue ramp whose likely band, fill and wide-band edge clear 3:1 on
-the card, light and dark each chosen and checked against its own surface. The
+the card, and the track's outline is drawn at full strength (≥3:1 on the card),
+light and dark each chosen and checked against its own surface. The
 help button and the details summary are at least 24 px tall (44 px on a coarse
 pointer) with a visible focus ring; the disclosure chevron's turn is the only
 motion and is off under reduced motion.
@@ -881,7 +902,8 @@ motion and is off under reduced motion.
 
 - **Work left** (full width): the headline figure, the answer sentence, the
   likely-range bar of the remaining labor, and a *Not counted* line naming how
-  many units are in review or cannot be estimated. A lower bound reads *At least
+  many units are in review (*time waiting for review isn't work*) or cannot be
+  estimated. A lower bound reads *At least
   1½ hours of work is left, probably more: 1 task can't be estimated yet.* Under
   *Show details*: *Remaining labor* (or *Remaining work* for a leaf) with the
   expected figure, the draws' `p10–p90` and the `90% band`, *(lower bounds)*
@@ -901,14 +923,22 @@ motion and is off under reduced motion.
   is not high, and the warning chips in the payload's order. Each chip is a
   button: hover or keyboard focus shows its sentence in the app's tooltip, a
   press opens it inline, and the sentence is in the button's accessible name.
-- **Budget**, in its own dashed frame under its own heading, marked *this machine
-  only*: budget data never synchronizes and never blends with the completion
-  figures. It opens with *How this work fits your subscription limits. We aim to
-  keep 20% of each limit in reserve (a default until you set one).*, or *We can't
-  tell yet: no usage has been measured on this machine.* Then one card per
-  account and limit, named from its window (*5-hour limit*, *Weekly limit*):
-  the status pill, what is left as the figure, the reset and the verdict as the
-  sentence (*Resets in 3h 56m. This work fits comfortably.*), and the gauge.
+- **Budget**, in its own dashed frame under its own heading, subtitled *Usage
+  measured on this computer*: budget data never synchronizes and never blends
+  with the completion figures. It opens with *How this work fits your
+  subscription limits. We aim to keep 20% of each limit in reserve (a default
+  until you set one).*, or *We can't tell yet: no usage has been measured on this
+  computer.* Each account is named for people, *Claude (Anthropic)* or *Codex
+  (OpenAI)*, with the operator's own label beside it and the raw account
+  reference behind the account's *Show account details*. Each limit with a
+  reading gets a card, named from its window (*5-hour limit*, *Weekly limit*):
+  the status pill, what is left as the figure (with its age when the reading is
+  stale, *93% left · 12 min ago*), the reset and the verdict as the sentence
+  (*Resets in 3h 56m. This work fits comfortably.*), the gauge, and a *What does
+  this mean?* that describes only the marks that card draws. Cards keep their own
+  height. The limits that can't be read at all collapse into one line per account
+  (*2 other Codex limits can't be read yet: the provider doesn't report them.*),
+  their technical rows behind the account's *Show account details*.
   Under each card's *Show details*, unchanged: the limit key, what is left, the
   reset countdown with the read's clock time (`resets in 3h58m (as of 11:02)`),
   the work rate in %/work-hour with its confidence and warnings, what the work
@@ -918,8 +948,9 @@ motion and is off under reduced motion.
   lower-bound burn, *no draw went under the reserve (the burn is a lower bound)*
   instead of an empty *at least 0%*, *(already below it)* when it is. Every
   unknown reads *unknown* with the reason from `missing` and `missingInputs`,
-  never 0%. The budget block's own *Show details* names the reserve, provisional
-  or not, and that the work runs serially from now.
+  never 0%. The budget block's own *Show reserve details* names the reserve,
+  provisional or not, that the work runs serially from now, and that the data is
+  this machine's only.
 - **Where these numbers come from**, a closed disclosure: the forecast,
   calibration and budget snapshot ids, the instant, and whether the scope is the
   subtree or the issue itself.
@@ -942,24 +973,33 @@ one. The page asks for the workspace it names, so the label and the data cannot
 diverge.
 
 **The answer first.** A card opens the page with one sentence, the first three
-groups in the payload's order: *Tasks, high priority usually take about a fifth
-of the estimate; bug fixes, high priority about 1/12.* (and how many more groups
-follow). It holds the switch, **Include older history (rebuilt from logs, less
+cards of the measured history in display order: *Tasks (high priority) usually
+take about a fifth of the estimate; all finished work usually takes about a fifth
+of the estimate.* (and how many more groups follow). It reads only the measured
+history, so it is the same with the older-history switch on or off. It holds the switch, **Include older history (rebuilt from logs, less
 precise)**; its *Show details* keeps the population line and the snapshot id with
 its member count and instant.
 
-**Each group is a card.** Title (*Bug fixes, high priority*; dimensions nobody
-recorded are left out), a confidence pill, the figure (*About 1/12 of the
-estimate*, the ratio a forecast scales by), and plain sentences: *Bug fixes, high
-priority: usually take about 1/12 of the estimate. Based on 13 finished tasks.
-Rough guess: not enough data to be sure.*, plus *Too few of these alone, so this
-uses all finished work.* when the group fell back. A group's confidence reads
-only its own fields: no samples or no bounds is *Unknown*; bounds under the 90%
-target or `small_sample` is *Rough guess*; a quantile under the target is *Fairly
-sure*; otherwise *Quite sure*. The bar shows where 8 in 10 past tasks landed (the
-ratio's p10–p90) inside where the next one will likely land (the prediction
-bounds, at the confidence they reach, in tens), the typical ratio as the marker,
-and the estimate itself as a dashed line. Under *Show details*, unchanged: the
+**Each group is a card.** A cohort that read its own key: title (*Bug fixes
+(high priority)*; dimensions nobody recorded are left out), a confidence pill,
+the figure (*About ⅕ of the estimate*, the ratio a forecast scales by; below a
+fifth, *About 50 minutes per 10 estimated hours*), and plain sentences: *Tasks
+(high priority) usually take about a fifth of the estimate. Based on 8 finished
+tasks. Rough guess: not enough data to be sure.* Its confidence reads only its
+own fields: no samples or no bounds is *Unknown*; bounds under the 90% target or
+`small_sample` is *Rough guess*; a quantile under the target is *Fairly sure*;
+otherwise *Quite sure*. **Cohorts that fell back** to a broader class never get a
+card of their own, because the figure is the class's, not theirs: the cohorts
+that share a class are ONE card named for it (*All finished work*, *All bug
+fixes*), with the class's figure and count (*Based on 9 finished tasks.*) and
+*Also used for: Bug fixes (high priority): too few of their own (1)*, the own
+count being the fallback path's first level. Its pill is always *Rough guess*
+(the kinds it stands in for have too few of their own), never *Quite sure*. The
+bar shows where 8 in 10 past tasks landed (the ratio's p10–p90) inside where the
+next one will likely land (the prediction bounds, at the confidence they reach,
+in tens; under 50% it says *Too little data to say where the next one lands* and
+draws no band), the typical ratio as the marker, and the estimate itself as a
+dashed line. Under *Show details*, unchanged: the
 key (`task · high · type unknown · area unknown · model unknown`), `n`, the class
 it read and how (`read at full, its own key`, or `fell back to all: its key has 1
 sample`) with the whole fallback path, coverage (`7 of 10 eligible (70%)`), the
@@ -970,8 +1010,12 @@ floors and heavy tails when present, and the warning chips.
 
 **Exact by default; older history only when asked, and apart.** The page opens
 on the `exact` set, *Finished tasks with measured time*, with a plain line
-(*Based on 8 finished tasks with measured time, out of 11 finished with an
-estimate, in 2 groups.*) and the technical set line behind *Show details*. The
+(*Based on 9 finished tasks with measured time, out of 138 finished with an
+estimate.*) and what is not used, by the state the payload counts, said for that
+set (*Not used here: 2 have only approximate timing and 127 have timing rebuilt
+from logs (see older history).*); the older history says *10 are in the measured
+history above, 2 have only approximate timing and 19 couldn't be rebuilt
+reliably*. The technical set line is behind *Show details*. The
 switch re-reads with `include=reconstructed`; the reconstructed groups then
 appear in their own section, *Older history (rebuilt from logs, less precise)*,
 *kept separate: never mixed with the history above*, after the exact one. The
@@ -987,12 +1031,14 @@ during a real attempt, a Codex account with no attempt), plus an empty
 workspace. It renders `ForecastReportView` and `CalibrationReportView` from the
 responses and pins the separate blocks, the lower bounds, the chain, the
 confidence and warnings, the unknowns with their reasons, the provisional
-reserve, the reconstructed toggle leaving the exact section byte-identical, and
-the plain layer over the same payloads: each headline, each pill's word and
-icon, each visual's text alternative, and every technical figure sitting inside
-a closed *Show details*. `lib/plain-language.test.ts` pins the rounding, the
-phrasing and the status mapping on both sides of each threshold, including
-unknown, lower bound, low confidence, in review and no samples;
+reserve, the reconstructed toggle leaving the exact section and the opening
+answer identical, and the plain layer over the same payloads: each headline, each
+pill's word and icon, each visual's text alternative and legend, the fallback
+cohort grouped under its class, each set's per-state summary, and every technical
+figure sitting inside a closed *Show details*. `lib/plain-language.test.ts` pins the rounding, the
+phrasing and the status mapping on both sides of each threshold (other use and
+pace included), including unknown, lower bound, low confidence, in review and no
+samples;
 `lib/forecast-text.test.ts` pins the technical formats and the rule for which
 issues get a forecast. The type mirror is pinned against the store's types in
 `test/contract-ui-types.test.ts`.

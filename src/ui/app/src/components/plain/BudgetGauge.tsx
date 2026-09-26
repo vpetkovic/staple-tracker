@@ -35,7 +35,7 @@ export function BudgetGauge({ remaining, after, reserve, lowerBound, description
   return (
     <div className="space-y-2" data-testid={testId}>
       <div role="img" aria-label={description} className="relative h-7 pt-2">
-        <div className="absolute inset-x-0 top-2 h-3.5 overflow-hidden rounded-full border border-[var(--viz-track-edge)]/60 bg-[var(--viz-track)]">
+        <div className="absolute inset-x-0 top-2 h-3.5 overflow-hidden rounded-full border border-[var(--viz-track-edge)] bg-[var(--viz-track)]">
           <div data-mark="left-after" className="absolute inset-y-0 left-0 bg-[var(--viz-likely)]" style={{ width: `${afterAt}%` }} />
           {after !== null ? (
             <div
@@ -61,7 +61,7 @@ export function BudgetGauge({ remaining, after, reserve, lowerBound, description
           </li>
         ) : null}
         <li className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-4 rounded-sm border border-[var(--viz-track-edge)]/60 bg-[var(--viz-track)]" />
+          <span className="inline-block h-2.5 w-4 rounded-sm border border-[var(--viz-track-edge)] bg-[var(--viz-track)]" />
           Already used
         </li>
         {reserve !== null ? (

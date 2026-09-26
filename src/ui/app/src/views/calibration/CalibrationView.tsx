@@ -10,7 +10,9 @@
  * finished tasks that rests on, and how sure it is, with a bar against the estimate itself. The
  * figures the page showed before (key, n, class and fallback path, coverage, median and pooled
  * ratio, p10–p90, the bounds with the confidence reached, work medians, warnings, snapshot id)
- * are all still there, unchanged, behind each card's "Show details".
+ * are all still there, unchanged, behind each card's "Show details". A cohort that fell back to a
+ * broader class never gets a card of its own: the cohorts sharing a class are ONE card named for
+ * the class, "Also used for" them with their own counts, and always a "Rough guess".
  *
  * ## Exact by default, older history only when asked, never pooled
  *
@@ -45,17 +47,17 @@ import {
   missingText,
 } from "@/lib/forecast-text";
 import {
+  FALLBACK_CONFIDENCE,
+  accuracyGroups,
   accuracyHeadline,
   cohortConfidence,
   cohortName,
-  cohortRangeDescription,
-  cohortSentence,
-  count,
-  inTen,
+  cohortRangeWords,
+  groupSentence,
   plainMissing,
-  plainRatio,
-  plainRatioRange,
   ratioFigure,
+  setSummaryText,
+  type AccuracyGroup,
 } from "@/lib/plain-language";
 import { useSession } from "@/lib/session";
 import type { CalibrationCohort, CalibrationReport, CalibrationSetSummary, EvidenceSet } from "@/lib/types";
@@ -94,7 +96,7 @@ function Reached({ confidence, reached }: { confidence: number; reached: boolean
 function CohortFacts({ cohort }: { cohort: CalibrationCohort }) {
   const { ratio, workSeconds } = cohort;
   return (
-    <div className="space-y-1.5 text-[12px]">
+    <div className="space-y-1.5 text-[12px]" data-cohort-facts={cohort.set}>
       <div className="flex items-start gap-3">
         <span className="min-w-0 flex-1 font-medium break-words">{cohortKeyText(cohort.key)}</span>
         <span className="shrink-0 font-mono text-[11px] tabular-nums" data-testid="cohort-n" title="samples in the class read">
@@ -173,60 +175,102 @@ function CohortFacts({ cohort }: { cohort: CalibrationCohort }) {
 }
 
 /**
- * The bar of a cohort: 8 in 10 past tasks (the ratio's p10–p90) inside where the next one lands
- * (the prediction bounds), the typical ratio as the marker, and the estimate itself (a ratio of
+ * The bar of a cohort (or of the class a group fell back to): 8 in 10 past tasks (the ratio's
+ * p10–p90), where the next one lands (the prediction bounds, drawn and said only from
+ * `NEXT_ONE_MIN_CONFIDENCE`), the typical ratio as the marker, and the estimate itself (a ratio of
  * 1) as a dashed line. Scaled from 0 to a little past the furthest of them.
  */
 function CohortRange({ cohort }: { cohort: CalibrationCohort }) {
   const { quantiles, bounds, expected } = cohort.ratio;
-  const description = cohortRangeDescription(cohort);
-  if (!quantiles || !bounds || description === null) return null;
+  const words = cohortRangeWords(cohort);
+  if (!quantiles || !bounds || words === null) return null;
   return (
     <RangeBar
       testId="cohort-range"
-      max={Math.max(bounds.upper, quantiles.p90, expected.value, 1) * 1.1}
-      wide={bounds}
+      max={Math.max(words.nextKnown ? bounds.upper : 0, quantiles.p90, expected.value, 1) * 1.1}
+      wide={words.nextKnown ? bounds : null}
       likely={{ lower: quantiles.p10, upper: quantiles.p90 }}
       marker={expected.value}
-      reference={{ value: 1, label: "The estimate" }}
-      description={description}
-      legend={{
-        likely: `8 in 10 past tasks: ${plainRatioRange(quantiles.p10, quantiles.p90)}`,
-        wide: `Next one, about ${inTen(bounds.confidence)}: ${plainRatioRange(bounds.lower, bounds.upper)}`,
-        marker: `Typical: ${plainRatio(expected.value).words}`,
-        reference: "The estimate",
-      }}
+      reference={1}
+      description={words.description}
+      legend={[
+        { mark: "likely", text: words.past },
+        ...(words.nextKnown ? [{ mark: "wide" as const, text: words.next }] : []),
+        { mark: "marker", text: "Typical" },
+        { mark: "reference", text: "The estimate" },
+      ]}
     />
   );
 }
 
-export function CohortRow({ cohort }: { cohort: CalibrationCohort }) {
-  const sentence = cohortSentence(cohort);
-  const confidence = cohortConfidence(cohort);
+const HELP = (
+  <>
+    A task estimated at 10 hours that &ldquo;usually takes about a fifth of the estimate&rdquo; usually took about 2 hours of
+    work. The dashed line on the bar is the estimate itself: marks to its left finished faster than estimated, marks to its
+    right took longer.
+  </>
+);
+
+/**
+ * One card: a cohort that read its own key, or ONE card for the cohorts that fell back to the
+ * same broader class, named for that class, with the kinds it stands in for and their own counts.
+ */
+export function GroupCard({ group }: { group: AccuracyGroup }) {
+  const sentence = groupSentence(group);
+  if (group.kind === "own") {
+    const { cohort } = group;
+    const confidence = cohortConfidence(cohort);
+    return (
+      <article data-cohort-set={cohort.set} data-group="own" className="min-w-0">
+        <PlainCard
+          title={cohortName(cohort.key)}
+          pill={confidence.level === "unknown" ? <StatusPill status="unknown" /> : <ConfidencePill level={confidence.level} word={confidence.word} />}
+          figure={ratioFigure(cohort.ratio.expected.value)}
+          headlineTestId="cohort-sentence"
+          headline={`${sentence.answer} ${sentence.basis} ${sentence.confidence}`}
+          help={HELP}
+          details={<CohortFacts cohort={cohort} />}
+        >
+          <CohortRange cohort={cohort} />
+        </PlainCard>
+      </article>
+    );
+  }
+  const { figure, members } = group;
   return (
-    <article data-cohort-set={cohort.set} className="min-w-0">
+    <article data-cohort-set={figure.set} data-group="class" className="min-w-0">
       <PlainCard
-        className="h-full"
-        title={cohortName(cohort.key)}
-        pill={confidence.level === "unknown" ? <StatusPill status="unknown" /> : <ConfidencePill level={confidence.level} word={confidence.word} />}
-        figure={ratioFigure(cohort.ratio.expected.value)}
+        title={group.name}
+        pill={<ConfidencePill level={FALLBACK_CONFIDENCE.level} word={FALLBACK_CONFIDENCE.word} />}
+        figure={ratioFigure(figure.ratio.expected.value)}
         headlineTestId="cohort-sentence"
-        headline={
-          <>
-            {sentence.answer} {sentence.basis} {sentence.confidence}
-            {sentence.fallback ? ` ${sentence.fallback}` : null}
-          </>
-        }
+        headline={`${sentence.answer} ${sentence.basis} ${sentence.confidence}`}
         help={
           <>
-            A task estimated at 10 hours that &ldquo;usually takes about a fifth of the estimate&rdquo; usually took about 2
-            hours of work. The dashed line on the bar is the estimate itself: marks to its left finished faster than
-            estimated, marks to its right took longer.
+            Some kinds of work have too few finished tasks to say anything on their own, so their forecasts use this broader
+            group instead. {HELP}
           </>
         }
-        details={<CohortFacts cohort={cohort} />}
+        details={
+          <>
+            {members.map((member) => (
+              <CohortFacts key={JSON.stringify(member.key)} cohort={member} />
+            ))}
+          </>
+        }
       >
-        <CohortRange cohort={cohort} />
+        <CohortRange cohort={figure} />
+        <div className="text-[13px]" data-testid="cohort-also-for">
+          <span className="text-muted-foreground">Also used for: </span>
+          <ul className="inline">
+            {sentence.alsoFor.map((line, index) => (
+              <li key={line} className="inline">
+                {index > 0 ? "; " : null}
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
       </PlainCard>
     </article>
   );
@@ -245,12 +289,6 @@ function SetSummary({ summary }: { summary: CalibrationSetSummary }) {
   );
 }
 
-/** The same line in everyday words. */
-function plainSetSummary(summary: CalibrationSetSummary): string {
-  const left = summary.excluded.count > 0 ? ` ${count(summary.excluded.count, "other finished task")} ${summary.excluded.count === 1 ? "isn't" : "aren't"} counted here because ${summary.excluded.count === 1 ? "its" : "their"} timing isn't exact.` : "";
-  return `Based on ${count(summary.samples, "finished task")} with measured time, out of ${summary.coverage.eligible} finished with an estimate, in ${count(summary.cohorts, "group")}.${left}`;
-}
-
 const SET_HEADING: Record<EvidenceSet, string> = {
   exact: "Finished tasks with measured time",
   reconstructed: "Older history (rebuilt from logs, less precise)",
@@ -265,12 +303,13 @@ function SetSection({ set, report }: { set: EvidenceSet; report: CalibrationRepo
   const summary = report.sets.find((entry) => entry.set === set);
   // `list` is always `cohorts` here: the page never asks for samples.
   const cohorts = (report.items as CalibrationCohort[]).filter((cohort) => cohort.set === set);
+  const plain = summary ? setSummaryText(summary) : null;
   return (
     <section aria-label={SET_HEADING[set]} data-set={set} className="space-y-3">
       <div className="space-y-1">
         <h2 className="text-[15px] font-semibold">{SET_HEADING[set]}</h2>
         <p className="text-[13px] text-muted-foreground" data-testid={`set-plain-${set}`}>
-          {SET_NOTE[set]} {summary ? plainSetSummary(summary) : null}
+          {SET_NOTE[set]} {plain ? `${plain.basis}${plain.notUsed ? ` ${plain.notUsed}` : ""}` : null}
         </p>
         {summary ? (
           <ShowDetails>
@@ -288,9 +327,9 @@ function SetSection({ set, report }: { set: EvidenceSet; report: CalibrationRepo
           </p>
         </div>
       ) : (
-        <div className="grid gap-3 @2xl:grid-cols-2">
-          {cohorts.map((cohort) => (
-            <CohortRow key={`${cohort.set}:${JSON.stringify(cohort.key)}`} cohort={cohort} />
+        <div className="grid items-start gap-3 @2xl:grid-cols-2">
+          {accuracyGroups(cohorts).map((group) => (
+            <GroupCard key={group.kind === "own" ? JSON.stringify(group.cohort.key) : `class:${group.figure.set}:${JSON.stringify(group.figure.class)}`} group={group} />
           ))}
         </div>
       )}

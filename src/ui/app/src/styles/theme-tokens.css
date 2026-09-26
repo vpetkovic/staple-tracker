@@ -218,7 +218,7 @@
   --viz-wide: #bfdbfe;
   --viz-wide-edge: #3b82f6;    /* 3.68:1 */
   --viz-track: #f5f5f5;
-  --viz-track-edge: #8a8a8a;
+  --viz-track-edge: #8a8a8a;   /* 3.45:1 on the card, drawn at full opacity */
   --viz-marker: #0a0a0a;
 
   --folder-color-indigo: #6366f1;
@@ -419,7 +419,7 @@
   --viz-wide: #1e3a8a;
   --viz-wide-edge: #3b82f6;    /* 4.11:1 */
   --viz-track: #2e2e2e;
-  --viz-track-edge: #737373;
+  --viz-track-edge: #737373;   /* 3.19:1 on the dark card, full opacity */
   --viz-marker: #fafafa;
 }
 

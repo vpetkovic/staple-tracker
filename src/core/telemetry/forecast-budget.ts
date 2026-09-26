@@ -284,6 +284,13 @@ export interface BudgetLimitForecast {
   readonly remainingPercent: number | null;
   readonly highWaterPercent: number | null;
   readonly stale: boolean | null;
+  /**
+   * When the newest sample of the current window was observed, and how old it was at `asOf`
+   * (seconds, never negative): what a stale reading's age is said with. Null, with the reason in
+   * `missing`, when the current window has no sample.
+   */
+  readonly observedAt: string | null;
+  readonly readingAgeSeconds: number | null;
   /** The quality of the reading. */
   readonly quality: BudgetQuality;
   readonly pace: BudgetPace | null;
@@ -691,6 +698,10 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
   unknown("remainingPercent", reading.remainingPercent, reading.missing.remainingPercent);
   unknown("highWaterPercent", reading.highWaterPercent, reading.missing.highWaterPercent);
   unknown("stale", reading.stale, reading.missing.stale);
+  const observedAt = reading.latestSample?.observedAt ?? null;
+  const readingAgeSeconds = observedAt === null ? null : Math.max(0, (ms(context.asOf) - ms(observedAt)) / 1000);
+  unknown("observedAt", observedAt, reading.missing.remainingPercent ?? reading.missing.window ?? "no_sample_yet");
+  unknown("readingAgeSeconds", readingAgeSeconds, reading.missing.remainingPercent ?? reading.missing.window ?? "no_sample_yet");
   return {
     limitKey: reading.limitKey,
     windowId: window?.id ?? null,
@@ -701,6 +712,8 @@ function limitForecast(input: BudgetLimitInput, context: LimitContext): BudgetLi
     remainingPercent: reading.remainingPercent,
     highWaterPercent: reading.highWaterPercent,
     stale: reading.stale,
+    observedAt,
+    readingAgeSeconds,
     quality: reading.quality,
     pace,
     exhaustion,

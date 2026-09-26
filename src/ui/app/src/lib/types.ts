@@ -2649,6 +2649,8 @@ export interface BudgetLimitForecast {
   readonly remainingPercent: number | null;
   readonly highWaterPercent: number | null;
   readonly stale: boolean | null;
+  readonly observedAt: string | null;
+  readonly readingAgeSeconds: number | null;
   readonly quality: { readonly state: BudgetState; readonly reasons: string[] };
   readonly pace: BudgetPace | null;
   readonly exhaustion: BudgetExhaustion | null;

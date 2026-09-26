@@ -6,13 +6,14 @@
  *
  * Every figure here is a field of `GET /api/forecast` or `GET /api/calibration` (the payloads of
  * `staple forecast --json` and `staple calibrate --json`). This module ROUNDS and PHRASES them:
- * 56 340 seconds of expected work reads "about 16 hours", a ratio of 0.083 reads "about 1/12 of
- * the estimate", a probability of 0.12 reads "12%". It never adds two figures, never derives a
+ * 56 340 seconds of expected work reads "about 16 hours", a ratio of 0.083 reads "a 10-hour
+ * estimate usually takes about 50 minutes", a probability of 0.12 reads "12%". It never derives a
  * new quantity, and never hides a caveat the payload states:
  *
  * - a lower bound (`partial`, `lowerBound`) always says "at least" (or "at most" for what is left);
  * - a null figure is "We can't tell yet", with the payload's reason in everyday words, never 0;
- * - a low confidence is said in words ("Rough guess"), never by colour alone.
+ * - a low confidence is said in words ("Rough guess"), never by colour alone;
+ * - a cohort that fell back to a broader class is presented as THAT class, never as its own key.
  *
  * The exact figures stay on the page behind each card's "Show details", formatted by
  * lib/forecast-text.ts exactly as before, so an engineer or an agent loses nothing.
@@ -22,14 +23,23 @@
  * (plain-language.test.ts).
  */
 // Relative, like forecast-text.ts: a pure module stays resolvable without the alias.
+import { QUALITY_LABEL } from "../detail/analytics";
 import { formatProbability, missingText, warningText } from "./forecast-text";
 import type {
   BudgetLimitForecast,
   CalibrationCohort,
+  CalibrationSetSummary,
   CompletionConfidence,
   CompletionForecast,
   RemainingFigure,
 } from "./types";
+
+const upperFirst = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** "1 task", "3 tasks". */
+export function count(n: number, noun: string, plural = `${noun}s`): string {
+  return `${n} ${n === 1 ? noun : plural}`;
+}
 
 // ------------------------------------------------------------------ durations
 
@@ -37,31 +47,34 @@ import type {
  * A duration, rounded the way a person says it. Rounding only, per band:
  *
  * - under a minute: "less than a minute";
- * - under 50 minutes: the nearest 5 minutes ("40 minutes"; never "0 minutes");
+ * - under 5 minutes: "a few minutes";
+ * - under 50 minutes: the nearest 5 minutes ("40 minutes");
  * - under 10 hours: the nearest half hour ("1 hour", "8½ hours");
  * - under 100 hours: the nearest hour ("15 hours");
  * - from 100 hours: the nearest 5 hours ("140 hours").
  *
- * `number` and `unit` are split so a range can share its unit ("between 14 and 21 hours").
+ * `number` and `unit` are split so a range can share its unit ("between 14 and 21 hours"); the
+ * two phrases without a number have a null unit.
  */
 export interface PlainDuration {
   readonly number: string;
-  readonly unit: "minute" | "minutes" | "hour" | "hours" | null;
-  /** The whole phrase: "8½ hours", "less than a minute". */
+  readonly unit: "minutes" | "hour" | "hours" | null;
+  /** The whole phrase: "8½ hours", "a few minutes". */
   readonly text: string;
 }
 
 export function plainDuration(seconds: number): PlainDuration {
   if (!Number.isFinite(seconds) || seconds < 60) return { number: "", unit: null, text: "less than a minute" };
+  if (seconds < 300) return { number: "", unit: null, text: "a few minutes" };
   if (seconds < 3000) {
-    const minutes = Math.max(5, Math.round(seconds / 300) * 5);
+    const minutes = Math.round(seconds / 300) * 5;
     return { number: String(minutes), unit: "minutes", text: `${minutes} minutes` };
   }
   let hours: string;
   if (seconds < 36_000) {
     const halves = Math.round(seconds / 1800);
     const whole = Math.floor(halves / 2);
-    hours = halves % 2 === 0 ? String(whole) : whole === 0 ? "½" : `${whole}½`;
+    hours = halves % 2 === 0 ? String(whole) : `${whole}½`;
   } else if (seconds < 360_000) {
     hours = String(Math.round(seconds / 3600));
   } else {
@@ -98,72 +111,116 @@ export function plainCountdown(seconds: number): string {
   return hours ? `${dayText} ${hours}h` : dayText;
 }
 
-/** "1 task", "3 tasks". */
-export function count(n: number, noun: string, plural = `${noun}s`): string {
-  return `${n} ${n === 1 ? noun : plural}`;
+/** How old a reading is, short: "12 min", "3h", "2 days". */
+export function plainAge(seconds: number): string {
+  const s = Math.max(0, seconds);
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min`;
+  if (s < 86_400) return `${Math.round(s / 3600)}h`;
+  const days = Math.round(s / 86_400);
+  return days === 1 ? "1 day" : `${days} days`;
 }
 
 // ------------------------------------------------------------------ ratios
 
 /**
- * An estimate ratio (work / estimate) in words. Rounding to the nearest everyday fraction or
- * multiple; the ratio itself is the payload's.
+ * An estimate ratio (work / estimate) in words. Rounding only; the ratio itself is the payload's.
  *
  * - 0.9 to 1.1: "about as long as estimated";
- * - under 0.9: the nearest of 1/2 … 1/20, 2/3 and 3/4 (by ratio, so 0.083 is 1/12, not 1/10);
- *   halves to fifths in words ("half", "a third", "a quarter", "a fifth", "two thirds",
- *   "three quarters"), the rest as "1/12"; under 1/20 is "less than 1/20";
- * - over 1.1: the nearest half up to 3 ("1½ times", "twice", "2½ times"), then the nearest
- *   whole ("4 times").
- *
- * `sentence` completes "Tasks usually take …": "about a fifth of the estimate".
+ * - 0.85 to 0.9: "a little less than estimated"; over 1.1 to 1.125: "a little longer than
+ *   estimated" (so a 10% overrun is never hidden as "1 times");
+ * - 0.18 up to 0.85: the nearest of half, a third, a quarter, a fifth, two thirds and three
+ *   quarters (by ratio);
+ * - under 0.18 (below a fifth): concretely, on a 10-hour estimate — "a 10-hour estimate usually
+ *   takes about 50 minutes" — never "1/11" or "1/17";
+ * - 1.125 to 1.5: the nearest quarter ("1¼ times", "1½ times"); from 1.5 the nearest half up to 3
+ *   ("twice", "2½ times"), then the nearest whole ("4 times").
  */
 export interface PlainRatio {
-  readonly kind: "fraction" | "same" | "times";
+  readonly kind: "fraction" | "same" | "near" | "times" | "small";
+  /** "a fifth", "1¼ times", "as long as estimated", or for `small` the duration ("50 minutes"). */
   readonly words: string;
-  readonly sentence: string;
+  /** Completes "… usually take": "about a fifth of the estimate". Null for `small`, said as a whole clause. */
+  readonly sentence: string | null;
 }
 
-const FRACTION_WORDS: Record<string, string> = {
-  "1/2": "half",
-  "1/3": "a third",
-  "1/4": "a quarter",
-  "1/5": "a fifth",
-  "2/3": "two thirds",
-  "3/4": "three quarters",
-};
+/** The yardstick a small ratio is said on: a 10-hour estimate. */
+const YARDSTICK_SECONDS = 36_000;
+const SMALL_BELOW = 0.18;
 
-/** The same fractions as one glyph where Unicode has one, for a card's headline figure. */
-export const FRACTION_GLYPH: Record<string, string> = {
-  half: "½",
-  "a third": "⅓",
-  "a quarter": "¼",
-  "a fifth": "⅕",
-  "two thirds": "⅔",
-  "three quarters": "¾",
-};
-
-const FRACTIONS: Array<{ name: string; value: number }> = [
-  { name: "3/4", value: 3 / 4 },
-  { name: "2/3", value: 2 / 3 },
-  ...Array.from({ length: 19 }, (_, index) => ({ name: `1/${index + 2}`, value: 1 / (index + 2) })),
+const FRACTIONS: Array<{ words: string; glyph: string; value: number }> = [
+  { words: "three quarters", glyph: "¾", value: 3 / 4 },
+  { words: "two thirds", glyph: "⅔", value: 2 / 3 },
+  { words: "half", glyph: "½", value: 1 / 2 },
+  { words: "a third", glyph: "⅓", value: 1 / 3 },
+  { words: "a quarter", glyph: "¼", value: 1 / 4 },
+  { words: "a fifth", glyph: "⅕", value: 1 / 5 },
 ];
 
 export function plainRatio(ratio: number): PlainRatio {
   if (ratio >= 0.9 && ratio <= 1.1) return { kind: "same", words: "as long as estimated", sentence: "about as long as estimated" };
-  if (ratio < 0.9) {
-    if (ratio < 1 / 20) return { kind: "fraction", words: "less than 1/20", sentence: "less than 1/20 of the estimate" };
+  if (ratio >= 0.85 && ratio < 0.9) return { kind: "near", words: "a little less than estimated", sentence: "a little less than estimated" };
+  if (ratio > 1.1 && ratio < 1.125) return { kind: "near", words: "a little longer than estimated", sentence: "a little longer than estimated" };
+  if (ratio < SMALL_BELOW) {
+    const words = plainDuration(ratio * YARDSTICK_SECONDS).text;
+    return { kind: "small", words, sentence: null };
+  }
+  if (ratio < 1) {
     let best = FRACTIONS[0]!;
     for (const candidate of FRACTIONS) {
       if (Math.abs(Math.log(ratio / candidate.value)) < Math.abs(Math.log(ratio / best.value))) best = candidate;
     }
-    const words = FRACTION_WORDS[best.name] ?? best.name;
-    return { kind: "fraction", words, sentence: `about ${words} of the estimate` };
+    return { kind: "fraction", words: best.words, sentence: `about ${best.words} of the estimate` };
   }
-  const rounded = ratio < 3.25 ? Math.round(ratio * 2) / 2 : Math.round(ratio);
-  const whole = Math.floor(rounded);
-  const words = rounded === 2 ? "twice" : rounded % 1 === 0 ? `${rounded} times` : `${whole}½ times`;
+  let words: string;
+  if (ratio < 1.5) {
+    const quarters = Math.round(ratio * 4) / 4;
+    words = quarters === 1.5 ? "1½ times" : "1¼ times";
+  } else {
+    const rounded = ratio < 3.25 ? Math.round(ratio * 2) / 2 : Math.round(ratio);
+    words = rounded === 2 ? "twice" : rounded % 1 === 0 ? `${rounded} times` : `${Math.floor(rounded)}½ times`;
+  }
   return { kind: "times", words, sentence: `about ${words} as long as estimated` };
+}
+
+/** "Bug fixes (high priority) usually take about a fifth of the estimate", or the concrete clause below a fifth. */
+export function ratioClause(name: string, ratio: number): string {
+  const plain = plainRatio(ratio);
+  if (plain.kind === "small") return `${name}: a 10-hour estimate usually takes about ${plain.words}`;
+  return `${name} usually take ${plain.sentence}`;
+}
+
+/** A card's headline figure: "About ¾ of the estimate", "About 50 minutes per 10 estimated hours", "About 1¼ times the estimate". */
+export function ratioFigure(ratio: number): string {
+  const plain = plainRatio(ratio);
+  if (plain.kind === "same") return "About as estimated";
+  if (plain.kind === "near") return upperFirst(plain.words);
+  if (plain.kind === "small") return `About ${plain.words} per 10 estimated hours`;
+  if (plain.kind === "times") return `About ${plain.words} the estimate`;
+  const glyph = FRACTIONS.find((fraction) => fraction.words === plain.words)?.glyph ?? plain.words;
+  return `About ${glyph} of the estimate`;
+}
+
+/**
+ * Two ratios as a range in words. When either end is below a fifth, the range is said on the
+ * 10-hour yardstick ("for a 10-hour estimate, between 30 minutes and 3 hours"); otherwise
+ * "between a third and three quarters of the estimate", "between half the estimate and 1½ times
+ * the estimate", or one phrase when both ends round alike.
+ */
+export function plainRatioRange(lower: number, upper: number): string {
+  if (lower < SMALL_BELOW || upper < SMALL_BELOW) return `for a 10-hour estimate, ${plainRange(lower * YARDSTICK_SECONDS, upper * YARDSTICK_SECONDS)}`;
+  const low = plainRatio(lower);
+  const high = plainRatio(upper);
+  const standalone = (ratio: PlainRatio): string =>
+    ratio.kind === "same"
+      ? "the full estimate"
+      : ratio.kind === "near"
+        ? ratio.words.replace(/estimated$/, "the estimate")
+        : ratio.kind === "fraction"
+          ? `${ratio.words} of the estimate`
+          : `${ratio.words} the estimate`;
+  if (low.words === high.words) return low.sentence ?? low.words;
+  if (low.kind === "fraction" && high.kind === "fraction") return `between ${low.words} and ${high.words} of the estimate`;
+  return `between ${standalone(low)} and ${standalone(high)}`;
 }
 
 // ------------------------------------------------------------------ reasons
@@ -174,12 +231,12 @@ export function plainRatio(ratio: number): PlainRatio {
  * "Forecasts"); an unlisted code falls back to forecast-text's wording, never to nothing.
  */
 export const PLAIN_MISSING: Record<string, string> = {
-  source_unavailable: "no usage has been measured on this machine",
+  source_unavailable: "no usage has been measured on this computer",
   attempt_burn: "no usage has been measured for this project on this account yet",
   work_rate: "no usage has been measured for this project on this account yet",
   stale: "the last reading is more than 10 minutes old",
   window_elapsed: "the limit has reset since the last reading",
-  reset_not_reported: "the provider doesn't say when this limit resets",
+  reset_not_reported: "the provider doesn't report when this limit resets",
   sliding_window: "this limit has no fixed reset time",
   no_sample_yet: "nothing has been read yet",
   second_reading: "there is only one reading so far",
@@ -218,8 +275,6 @@ export function plainLimitReason(limit: Pick<BudgetLimitForecast, "missing" | "m
   return plainMissing(code);
 }
 
-const upperFirst = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
-
 // ------------------------------------------------------------------ confidence
 
 /** A confidence label in everyday words. */
@@ -232,7 +287,8 @@ export const CONFIDENCE_WORDS: Record<CompletionConfidence["label"], string> = {
 /**
  * Why the forecast is not "Quite sure", in everyday words. The codes are
  * `CompletionConfidence.reasons` (warning codes); a code without a phrase here falls back to its
- * chip label, so a newer server's reason still shows.
+ * chip label, so a newer server's reason still shows. `awaiting_review` is not a doubt about the
+ * figure but something left out of it, so it is said under "Not counted", not here.
  */
 const PLAIN_CONFIDENCE_REASON: Record<string, string> = {
   bounds_below_confidence: "there isn't enough history yet to be sure",
@@ -240,7 +296,6 @@ const PLAIN_CONFIDENCE_REASON: Record<string, string> = {
   small_sample: "there isn't enough history yet to be sure",
   no_samples: "there are no finished tasks to learn from yet",
   unknown_units: "some tasks can't be estimated yet",
-  awaiting_review: "time waiting for review isn't included",
   fallback_used: "some tasks are compared with a broader group of work",
   heavy_tail: "a few past tasks took much longer than the rest",
   beyond_class_range: "a task has already run longer than any similar one",
@@ -254,33 +309,34 @@ const PLAIN_CONFIDENCE_REASON: Record<string, string> = {
   reconstructed_only: "the history was rebuilt from older records",
 };
 
+const NOT_A_DOUBT = new Set(["awaiting_review"]);
+
 export function plainConfidenceReasons(codes: readonly string[]): string[] {
-  return [...new Set(codes.map((code) => PLAIN_CONFIDENCE_REASON[code] ?? warningText(code).label.toLowerCase()))];
+  return [...new Set(codes.filter((code) => !NOT_A_DOUBT.has(code)).map((code) => PLAIN_CONFIDENCE_REASON[code] ?? warningText(code).label.toLowerCase()))];
 }
 
 /**
- * The confidence sentence: the word, what it rests on, and why it is not higher.
- * `samples` is `snapshot.calibration.samples`: the finished tasks with measured time the forecast
- * learned from.
+ * The confidence sentence under the confidence word (which the card shows as its figure, so the
+ * sentence does not repeat it): what it rests on, and why it is not surer. `samples` is
+ * `snapshot.calibration.samples`: the finished tasks with measured time the forecast learned from.
  */
 export function confidenceHeadline(confidence: CompletionConfidence, samples: number): string {
-  const word = CONFIDENCE_WORDS[confidence.label];
-  const basis =
-    samples === 0 ? "there are no finished tasks with measured time to learn from yet" : `based on ${count(samples, "finished task")} with measured time`;
+  const basis = samples === 0 ? "There are no finished tasks with measured time to learn from yet" : `Based on ${count(samples, "finished task")} with measured time`;
   const reasons = plainConfidenceReasons(confidence.reasons);
-  return `${word}: ${basis}.${reasons.length > 0 ? ` Why not surer: ${reasons.join("; ")}.` : ""}`;
+  return `${basis}.${reasons.length > 0 ? ` Why not surer: ${reasons.join("; ")}.` : ""}`;
 }
 
 // ------------------------------------------------------------------ completion
 
 /**
- * The first sentence of the forecast card, and the figure it leads with.
+ * The first sentence of the forecast card, and the figure it leads with. The likely range is said
+ * once, by the range bar's legend (`rangeLegend`), not here.
  *
  * - settled: every unit is done;
  * - unknown: "We can't tell yet how long this will take", with the payload's reasons;
- * - a lower bound (`partial`): "At least about X of work is left, and probably more", with how
- *   many tasks can't be estimated (`units.unknownRefs`, the full report's);
- * - otherwise: "about X", and "probably between A and B" from the draws' p10 and p90.
+ * - a lower bound (`partial`): "At least X of work is left, probably more", with how many tasks
+ *   can't be estimated (`units.unknownRefs`, the full report's);
+ * - otherwise: "about X".
  *
  * `figure` is the rounded headline number ("15 hours"), or null when there is none.
  */
@@ -301,9 +357,8 @@ export function forecastHeadline(completion: CompletionForecast, mode: "full" | 
     const why = unknown > 0 ? `${count(unknown, "task")} can't be estimated yet` : "part of it can't be estimated yet";
     return { sentence: `At least ${figure} of work is left, probably more: ${why}.`, figure: `at least ${figure}` };
   }
-  const range = labor.simulated ? ` — probably ${plainRange(labor.simulated.p10, labor.simulated.p90)}` : "";
-  if (mode === "compact") return { sentence: `About ${figure} of work is left on this task${range}.`, figure };
-  return { sentence: `This should take about ${figure} of work${range}.`, figure };
+  if (mode === "compact") return { sentence: `About ${figure} of work is left on this task.`, figure };
+  return { sentence: `This should take about ${figure} of work.`, figure };
 }
 
 /** The critical path's sentence: how much of the work has to happen one step after another. */
@@ -316,8 +371,48 @@ export function pathHeadline(path: RemainingFigure): Headline {
   return { sentence: `About ${figure} of it has to happen one step after another, however many people work on it.`, figure };
 }
 
+/**
+ * What is left out of the forecast, in words: tasks waiting for review (whose wait is not work)
+ * and tasks that can't be estimated. Null when nothing is.
+ */
+export function notCountedText(awaiting: number, unknown: number): string | null {
+  const parts: string[] = [];
+  if (awaiting > 0) parts.push(`${count(awaiting, "task")} waiting for review (time waiting for review isn't work)`);
+  if (unknown > 0) parts.push(`${count(unknown, "task")} that can't be estimated yet`);
+  return parts.length > 0 ? `Not counted: ${parts.join(" and ")}.` : null;
+}
+
 /** A leaf in review: its work was handed over; the wait is not work. */
 export const AWAITING_HEADLINE = "This task is waiting for review, so there's no work left to forecast. Time spent waiting for a review isn't counted as work.";
+
+// ------------------------------------------------------------------ the range bar's words
+
+/**
+ * The range bar says ONE range: the draws' p10–p90, "Most likely between 14 and 19 hours (8 in 10
+ * chances)", with "or more" on a lower bound. The 90% band is drawn as the pale edge; in words it
+ * is only its upper end, "rarely beyond 20 hours", and only when that rounds to different words
+ * than the likely range's upper end and the figure is not a lower bound (whose upper ends promise
+ * nothing). The exact quantiles and band are under Show details.
+ */
+export interface RangeWords {
+  readonly likely: string;
+  readonly beyond: string | null;
+  readonly expected: string;
+  /** The text alternative: all of it in one sentence. */
+  readonly description: string;
+}
+
+export function rangeWords(figure: RemainingFigure): RangeWords | null {
+  const spread = figure.simulated;
+  if (!spread || figure.expectedSeconds === null) return null;
+  const more = figure.partial ? ", or more" : "";
+  const likely = `Most likely ${plainRange(spread.p10, spread.p90)}${more} (8 in 10 chances)`;
+  const upper = plainDuration(spread.band.upper).text;
+  const beyond = !figure.partial && upper !== plainDuration(spread.p90).text ? `rarely beyond ${upper}` : null;
+  const expected = `Expected: ${figure.partial ? "at least" : "about"} ${plainDuration(figure.expectedSeconds).text}`;
+  const description = `${likely}${beyond ? `; ${beyond}` : ""}. ${expected}${figure.partial ? "; the real figure can only be higher" : ""}.`;
+  return { likely, beyond, expected, description };
+}
 
 // ------------------------------------------------------------------ the status word
 
@@ -332,7 +427,7 @@ export const STATUS_WORDS: Record<PlainStatus, string> = {
 
 /**
  * The thresholds of `limitStatus`, on the payload's own breach probability (the chance, over the
- * simulated draws, that the work alone takes the limit under its reserve before the work ends).
+ * simulated draws, that the work takes the limit under its reserve before the work ends).
  * docs/web-ui.md states them.
  */
 export const STATUS_THRESHOLDS = {
@@ -342,7 +437,12 @@ export const STATUS_THRESHOLDS = {
   atRisk: 0.5,
 } as const;
 
-export type StatusReason = "no_reading" | "already_below" | "no_projection" | "runs_out" | "breach" | "lower_bound";
+export type StatusReason = "no_reading" | "already_below" | "no_projection" | "runs_out" | "breach" | "other_use" | "lower_bound" | "pace";
+
+const RANK: Record<PlainStatus, number> = { unknown: -1, on_track: 0, tight: 1, at_risk: 2 };
+const byRank = (rank: number): PlainStatus => (rank >= 2 ? "at_risk" : rank === 1 ? "tight" : "on_track");
+const fromProbability = (probability: number): PlainStatus =>
+  probability >= STATUS_THRESHOLDS.atRisk ? "at_risk" : probability >= STATUS_THRESHOLDS.tight ? "tight" : "on_track";
 
 /**
  * THE status mapping of a budget limit. Reads only payload fields, in this order:
@@ -353,11 +453,15 @@ export type StatusReason = "no_reading" | "already_below" | "no_projection" | "r
  *    what is left is known, what this work does to it is not.
  * 4. `work.remainingAtResetPercent.expected` under 0 (the work alone runs the limit out before
  *    the reset) → At risk (`runs_out`).
- * 5. The breach probability: from `STATUS_THRESHOLDS.atRisk` At risk, from
- *    `STATUS_THRESHOLDS.tight` Tight, below it On track (`breach`).
+ * 5. The breach probability — the WORSE of the work alone and, when the payload has it, the work
+ *    with the account's other use (`reserve.withOtherUse.breachProbability`): from
+ *    `STATUS_THRESHOLDS.atRisk` At risk, from `STATUS_THRESHOLDS.tight` Tight, below it On track
+ *    (`breach`, or `other_use` when the other use is what made it worse).
  * 6. A lower-bound burn (`work.lowerBound`: the real use can only be higher) moves that one step
  *    worse (On track → Tight, Tight → At risk; `lower_bound`), because "On track" would be a
  *    claim the data does not make.
+ * 7. When the account's own pace runs the limit out before the reset
+ *    (`exhaustion.atPace === "before_reset"`), the result is at least Tight (`pace`).
  *
  * The work rate's confidence does not change the word; the sentence says "a rough guess" beside it.
  */
@@ -365,15 +469,41 @@ export function limitStatus(limit: BudgetLimitForecast): { status: PlainStatus; 
   if (limit.remainingPercent === null) return { status: "unknown", reason: "no_reading" };
   if (limit.reserve?.alreadyBelow) return { status: "at_risk", reason: "already_below" };
   const work = limit.work;
-  const probability = limit.reserve?.breachProbability ?? null;
-  if (work === null || limit.reserve === null || probability === null) return { status: "unknown", reason: "no_projection" };
+  const alone = limit.reserve?.breachProbability ?? null;
+  if (work === null || limit.reserve === null || alone === null) return { status: "unknown", reason: "no_projection" };
   if (work.remainingAtResetPercent.expected < 0) return { status: "at_risk", reason: "runs_out" };
-  const base: PlainStatus = probability >= STATUS_THRESHOLDS.atRisk ? "at_risk" : probability >= STATUS_THRESHOLDS.tight ? "tight" : "on_track";
-  if (!work.lowerBound) return { status: base, reason: "breach" };
-  return { status: base === "on_track" ? "tight" : "at_risk", reason: "lower_bound" };
+  const other = limit.reserve.withOtherUse?.breachProbability ?? null;
+  let status = fromProbability(alone);
+  let reason: StatusReason = "breach";
+  if (other !== null && RANK[fromProbability(other)] > RANK[status]) {
+    status = fromProbability(other);
+    reason = "other_use";
+  }
+  if (work.lowerBound) {
+    status = byRank(RANK[status] + 1);
+    reason = "lower_bound";
+  }
+  if (limit.exhaustion?.atPace === "before_reset" && RANK[status] < RANK.tight) {
+    status = "tight";
+    reason = "pace";
+  }
+  return { status, reason };
 }
 
 // ------------------------------------------------------------------ budget sentences
+
+/** A provider's everyday name. */
+const PROVIDER_NAME: Record<string, { name: string; short: string }> = {
+  anthropic: { name: "Claude (Anthropic)", short: "Claude" },
+  openai: { name: "Codex (OpenAI)", short: "Codex" },
+};
+
+/** "Claude (Anthropic)", "Codex (OpenAI)", else the provider or the account's own label. */
+export function providerName(provider: string | null, accountRef: string): { name: string; short: string } {
+  if (provider && PROVIDER_NAME[provider]) return PROVIDER_NAME[provider]!;
+  if (provider) return { name: upperFirst(provider), short: upperFirst(provider) };
+  return { name: accountRef, short: accountRef };
+}
 
 /** A limit's everyday name, from its window length when the provider reports one. */
 export function limitName(limit: Pick<BudgetLimitForecast, "limitKey" | "windowSeconds">): string {
@@ -393,6 +523,13 @@ export function plainLeft(limit: BudgetLimitForecast): string | null {
   return limit.remainingPercent === null ? null : `${Math.round(limit.remainingPercent)}% left`;
 }
 
+/** The card's figure: "78% left", and for a stale reading its age, "93% left · 12 min ago". */
+export function leftFigure(limit: BudgetLimitForecast): string | null {
+  const left = plainLeft(limit);
+  if (left === null) return null;
+  return limit.stale === true && limit.readingAgeSeconds !== null ? `${left} · ${plainAge(limit.readingAgeSeconds)} ago` : left;
+}
+
 /** The safety reserve, named once per card: "the 20% safety reserve". */
 export function plainReserve(reserve: { percent: number }): string {
   return `the ${Math.round(reserve.percent)}% safety reserve`;
@@ -410,12 +547,12 @@ export function limitHeadline(limit: BudgetLimitForecast): string {
 /**
  * `limitHeadline` in two parts, so a card that already shows "78% left" as its figure can say the
  * rest without repeating it: `opening` ("78% left, resets in 3h 56m.", null when nothing is known
- * to be left) and `verdict` (the status's reason in words, with the reset when there is an opening).
+ * to be left), `reset` ("Resets in 3h 56m.") and `verdict` (the status's reason in words).
  */
 export function limitSentence(limit: BudgetLimitForecast): { opening: string | null; reset: string | null; verdict: string } {
   const { status, reason } = limitStatus(limit);
   const left = plainLeft(limit);
-  if (left === null) return { opening: null, reset: null, verdict: `We can't tell how much is left: ${plainLimitReason(limit, "remainingPercent")}.` };
+  if (left === null) return { opening: null, reset: null, verdict: `We can't read this limit yet: ${plainLimitReason(limit, "remainingPercent")}.` };
   const reset = limit.secondsToReset !== null ? `Resets in ${plainCountdown(limit.secondsToReset)}.` : null;
   const opening = `${upperFirst(left)}${reset ? `, ${reset.charAt(0).toLowerCase()}${reset.slice(1, -1)}` : ""}.`;
   const reserve = limit.reserve;
@@ -435,11 +572,18 @@ export function limitSentence(limit: BudgetLimitForecast): { opening: string | n
         if (status === "tight") return `This work might dip into ${plainReserve(reserve!)} (${chance(probability, false)})${rough}.`;
         return `This work will probably dip into ${plainReserve(reserve!)} (${chance(probability, false)})${rough}.`;
       }
-      case "lower_bound": {
-        const probability = reserve!.breachProbability!;
-        if (status === "tight") return `This work should fit, but only part of it could be measured, so it may use more${rough}.`;
-        return `This work might dip into ${plainReserve(reserve!)} (${chance(probability, true)}), and it may use more than we could measure${rough}.`;
+      case "other_use": {
+        const probability = reserve!.withOtherUse!.breachProbability!;
+        const verb = status === "tight" ? "might" : "will probably";
+        return `Counting other use of this account, this work ${verb} dip into ${plainReserve(reserve!)} (${chance(probability, false)})${rough}.`;
       }
+      case "lower_bound": {
+        if (status === "tight") return `Probably fits, but we could only measure part of this work, so it may need more${rough}.`;
+        const worse = Math.max(reserve!.breachProbability!, reserve!.withOtherUse?.breachProbability ?? 0);
+        return `This work might dip into ${plainReserve(reserve!)} (${chance(worse, true)}), and it may need more than we could measure${rough}.`;
+      }
+      case "pace":
+        return `This work fits, but at the account's current pace this limit runs out before it resets${rough}.`;
       default:
         return "";
     }
@@ -471,19 +615,63 @@ export function gaugeDescription(limit: BudgetLimitForecast): string {
   return parts.join(" ");
 }
 
+/** "What does this mean?" for a limit card: it describes only the marks the gauge actually draws. */
+export function limitHelp(limit: BudgetLimitForecast): string {
+  const lines = ["A subscription allows a certain amount of use in each window, then resets."];
+  if (limit.remainingPercent === null) return `${lines[0]} We have no current reading of this limit, so there is nothing to draw.`;
+  const marks = ["the blue part is what is left"];
+  if (limit.work) marks.push("the stripes are what this work is expected to use");
+  marks.push("the grey part is already used");
+  lines.push(`The bar is the whole allowance: ${marks.join(", ")}.`);
+  if (limit.reserve) lines.push("The dashed line is the safety reserve we try not to dip into, so there is always room to finish or pause cleanly.");
+  if (limit.stale === true) lines.push("The reading is not recent, so the figure may have moved since.");
+  return lines.join(" ");
+}
+
+/**
+ * The one line for an account's limits that can't be read at all (`remainingPercent` null):
+ * "2 other Codex limits can't be read yet: the provider doesn't report them." Their reasons are
+ * the payload's `missing.remainingPercent`, said once each.
+ */
+const UNREADABLE_REASON: Record<string, [one: string, many: string]> = {
+  reset_not_reported: ["the provider doesn't report it", "the provider doesn't report them"],
+  window_elapsed: ["it has reset since the last reading", "they have reset since the last reading"],
+  no_sample_yet: ["nothing has been read yet", "nothing has been read yet"],
+  sliding_window: ["it has no fixed reset time", "they have no fixed reset time"],
+  source_unavailable: ["no usage has been measured on this computer", "no usage has been measured on this computer"],
+};
+
+export function unreadableLine(limits: readonly BudgetLimitForecast[], short: string, others: boolean): string | null {
+  if (limits.length === 0) return null;
+  const many = limits.length > 1;
+  const codes = [...new Set(limits.map((limit) => limit.missing.remainingPercent ?? limit.quality.reasons[0] ?? "no_sample_yet"))];
+  const reasons = codes.map((code) => UNREADABLE_REASON[code]?.[many ? 1 : 0] ?? plainMissing(code));
+  const noun = `${others ? "other " : ""}${short} limit`;
+  return `${count(limits.length, noun)} can't be read yet: ${reasons.join("; ")}.`;
+}
+
 // ------------------------------------------------------------------ estimate accuracy
 
-/** A cohort key as a noun phrase: "Bug fixes, high priority"; `*` dimensions are left out. */
+const KIND_NAMES: Record<string, string> = { bug: "Bug fixes", task: "Tasks", epic: "Epics", feature: "Features", chore: "Chores", spike: "Spikes" };
+const known = (value: string): boolean => value !== "*" && value !== "unknown";
+
+/** A cohort key as a noun phrase: "Bug fixes (high priority)"; dimensions nobody recorded are left out. */
 export function cohortName(key: CalibrationCohort["key"]): string {
-  const kinds: Record<string, string> = { bug: "Bug fixes", task: "Tasks", epic: "Epics", feature: "Features", chore: "Chores", "*": "All work" };
-  const kind = kinds[key.kind] ?? `${upperFirst(key.kind)}${key.kind.endsWith("s") ? "" : "s"}`;
-  const known = (value: string): boolean => value !== "*" && value !== "unknown";
-  const parts = [kind];
-  if (known(key.priority)) parts.push(`${key.priority} priority`);
-  if (known(key.workType)) parts.push(`type ${key.workType}`);
-  if (known(key.area)) parts.push(`area ${key.area}`);
-  if (known(key.model)) parts.push(`model ${key.model}`);
-  return parts.join(", ");
+  if (key.kind === "*") return "All finished work";
+  const kind = KIND_NAMES[key.kind] ?? `${upperFirst(key.kind)}${key.kind.endsWith("s") ? "" : "s"}`;
+  const rest: string[] = [];
+  if (known(key.priority)) rest.push(`${key.priority} priority`);
+  if (known(key.workType)) rest.push(`type ${key.workType}`);
+  if (known(key.area)) rest.push(`area ${key.area}`);
+  if (known(key.model)) rest.push(`model ${key.model}`);
+  return rest.length > 0 ? `${kind} (${rest.join(", ")})` : kind;
+}
+
+/** A class a cohort fell back to, named as the group it is: "All finished work", "All bug fixes". */
+export function className(key: CalibrationCohort["class"]): string {
+  if (key.kind === "*") return "All finished work";
+  const name = cohortName(key);
+  return `All ${name.charAt(0).toLowerCase()}${name.slice(1)}`;
 }
 
 /**
@@ -494,75 +682,128 @@ export function cohortName(key: CalibrationCohort["key"]): string {
  * - some quantile's interval under the target: "Fairly sure";
  * - otherwise: "Quite sure".
  */
-export function cohortConfidence(cohort: Pick<CalibrationCohort, "samples" | "ratio" | "warnings">): { word: string; note: string; level: "high" | "medium" | "low" | "unknown" } {
+export type ConfidenceLevel = "high" | "medium" | "low" | "unknown";
+
+export function cohortConfidence(cohort: Pick<CalibrationCohort, "samples" | "ratio" | "warnings">): { word: string; note: string; level: ConfidenceLevel } {
   if (cohort.samples === 0 || cohort.ratio.bounds === null) return { word: "Unknown", note: "not enough data to say", level: "unknown" };
   if (!cohort.ratio.bounds.reached || cohort.warnings.includes("small_sample")) return { word: "Rough guess", note: "not enough data to be sure", level: "low" };
   if (cohort.warnings.includes("quantile_below_confidence")) return { word: "Fairly sure", note: "more data would make it firmer", level: "medium" };
   return { word: "Quite sure", note: "enough data to rely on", level: "high" };
 }
 
-/** A cohort card's headline figure: "About ¾ of the estimate", "About 1/12 of the estimate", "About twice the estimate". */
-export function ratioFigure(ratio: number): string {
-  const plain = plainRatio(ratio);
-  if (plain.kind === "same") return "About as estimated";
-  if (plain.kind === "times") return `About ${plain.words} the estimate`;
-  if (plain.words.startsWith("less than")) return "Under 1/20 of the estimate";
-  return `About ${FRACTION_GLYPH[plain.words] ?? plain.words} of the estimate`;
+/**
+ * The cards of a set: a cohort that read its own key is its own card; cohorts that FELL BACK are
+ * grouped under ONE card per class they fell back to, named for that class, since the figure is
+ * the class's and not theirs. Own cards first in the payload's order, then the class groups in
+ * the order their first member appears.
+ */
+export type AccuracyGroup =
+  | { readonly kind: "own"; readonly cohort: CalibrationCohort }
+  | { readonly kind: "class"; readonly name: string; readonly figure: CalibrationCohort; readonly members: CalibrationCohort[] };
+
+export function accuracyGroups(cohorts: readonly CalibrationCohort[]): AccuracyGroup[] {
+  const own: AccuracyGroup[] = [];
+  const classes = new Map<string, { name: string; figure: CalibrationCohort; members: CalibrationCohort[] }>();
+  for (const cohort of cohorts) {
+    if (cohort.fallback === "none") {
+      own.push({ kind: "own", cohort });
+      continue;
+    }
+    // The set is part of the key: an exact and a reconstructed class are never one group.
+    const key = `${cohort.set}:${JSON.stringify(cohort.class)}`;
+    const group = classes.get(key) ?? { name: className(cohort.class), figure: cohort, members: [] };
+    group.members.push(cohort);
+    classes.set(key, group);
+  }
+  return [...own, ...[...classes.values()].map((group) => ({ kind: "class" as const, ...group }))];
 }
 
 /**
- * Two ratios as a range in words: "between 1/7 and 1/4 of the estimate", "between half the
- * estimate and twice the estimate", or "about a fifth of the estimate" when both round alike.
+ * A fallback group's confidence comes from the members' own counts, which are under the minimum
+ * by definition: always "Rough guess", never "Quite sure", however many the broader class holds.
  */
-export function plainRatioRange(lower: number, upper: number): string {
-  const low = plainRatio(lower);
-  const high = plainRatio(upper);
-  const standalone = (ratio: PlainRatio): string =>
-    ratio.kind === "same" ? "the full estimate" : ratio.kind === "fraction" ? `${ratio.words} of the estimate` : `${ratio.words} the estimate`;
-  if (low.words === high.words) return low.sentence;
-  if (low.kind === "fraction" && high.kind === "fraction") return `between ${low.words} and ${high.words} of the estimate`;
-  return `between ${standalone(low)} and ${standalone(high)}`;
-}
-
-/** Where a cohort's figure comes from when its own group was too small. */
-function fallbackPlain(cohort: Pick<CalibrationCohort, "fallback" | "levelName" | "key">): string | null {
-  if (cohort.fallback === "none") return null;
-  if (cohort.levelName === "all") return "Too few of these alone, so this uses all finished work.";
-  if (cohort.levelName === "kind") return `Too few of these alone, so this uses all ${cohortName({ ...cohort.key, priority: "*", workType: "*", area: "*", model: "*" }).toLowerCase()}.`;
-  return "Too few of these alone, so this uses a broader group of similar work.";
-}
+export const FALLBACK_CONFIDENCE = { word: "Rough guess", note: "these kinds have too few finished tasks of their own", level: "low" as const };
 
 /**
- * The cohort card's sentences: "Bug fixes, high priority: usually take about 1/12 of the
- * estimate. Based on 13 finished tasks. Rough guess: not enough data to be sure."
- * The ratio phrased is `ratio.expected.value`, the one a forecast scales an estimate by.
+ * The card's sentences. An own cohort: "Bug fixes (high priority) usually take about a fifth of
+ * the estimate. Based on 13 finished tasks. Rough guess: not enough data to be sure." A class
+ * group: "All finished work usually takes …. Based on 9 finished tasks." and, per member, "Bug
+ * fixes (high priority): too few of their own (1)", the own count being the fallback path's first
+ * level. The ratio phrased is `ratio.expected.value`, the one a forecast scales an estimate by.
  */
-export function cohortSentence(cohort: CalibrationCohort): { answer: string; basis: string; confidence: string; fallback: string | null } {
-  const name = cohortName(cohort.key);
-  const confidence = cohortConfidence(cohort);
+export function groupSentence(group: AccuracyGroup): { answer: string; basis: string; confidence: string; alsoFor: string[] } {
+  if (group.kind === "own") {
+    const { cohort } = group;
+    const confidence = cohortConfidence(cohort);
+    return {
+      answer: `${ratioClause(cohortName(cohort.key), cohort.ratio.expected.value)}.`,
+      basis: `Based on ${count(cohort.samples, "finished task")}.`,
+      confidence: `${confidence.word}: ${confidence.note}.`,
+      alsoFor: [],
+    };
+  }
+  const answer = ratioClause(group.name, group.figure.ratio.expected.value).replace(/ usually take /, " usually takes ");
   return {
-    answer: `${name}: usually take ${plainRatio(cohort.ratio.expected.value).sentence}.`,
-    basis: `Based on ${count(cohort.samples, "finished task")}.`,
-    confidence: `${confidence.word}: ${confidence.note}.`,
-    fallback: fallbackPlain(cohort),
+    answer: `${answer}.`,
+    basis: `Based on ${count(group.figure.samples, "finished task")}.`,
+    confidence: `${FALLBACK_CONFIDENCE.word}: ${FALLBACK_CONFIDENCE.note}.`,
+    alsoFor: group.members.map((member) => `${cohortName(member.key)}: too few of their own (${member.path[0]?.samples ?? member.keySamples})`),
   };
 }
 
 /**
- * The page's opening answer: up to three cohorts in the payload's order, each as its ratio in
- * words ("Tasks, high priority usually take about a fifth of the estimate; bug fixes, high
- * priority about 1/12"), and how many more follow. No cohort is picked by a figure.
+ * The page's opening answer: up to three cards in display order, each as its ratio in words, a
+ * fallback group named for the class it is ("all finished work"), and how many more follow. The
+ * exact set only, so it reads the same whether older history is shown or not.
  */
 export function accuracyHeadline(cohorts: readonly CalibrationCohort[]): string {
-  if (cohorts.length === 0) return "We can't tell yet: there are no finished tasks with measured time to compare with their estimates.";
-  const shown = cohorts.slice(0, 3).map((cohort, index) => {
-    const ratio = plainRatio(cohort.ratio.expected.value);
-    const name = index === 0 ? cohortName(cohort.key) : cohortName(cohort.key).toLowerCase();
-    if (index === 0) return `${name} usually take ${ratio.sentence}`;
-    return ratio.kind === "same" ? `${name} ${ratio.sentence}` : `${name} about ${ratio.words}`;
+  const groups = accuracyGroups(cohorts);
+  if (groups.length === 0) return "We can't tell yet: there are no finished tasks with measured time to compare with their estimates.";
+  const shown = groups.slice(0, 3).map((group, index) => {
+    const name = group.kind === "own" ? cohortName(group.cohort.key) : group.name;
+    const ratio = group.kind === "own" ? group.cohort.ratio.expected.value : group.figure.ratio.expected.value;
+    const clause = ratioClause(index === 0 ? name : `${name.charAt(0).toLowerCase()}${name.slice(1)}`, ratio);
+    return group.kind === "class" ? clause.replace(/ usually take /, " usually takes ") : clause;
   });
-  const more = cohorts.length > 3 ? `, and ${count(cohorts.length - 3, "more group")} below` : "";
+  const more = groups.length > 3 ? `; and ${count(groups.length - 3, "more group")} below` : "";
   return `${shown.join("; ")}${more}.`;
+}
+
+/**
+ * A set's summary in words: what it rests on, and what is not used here, by the state the
+ * payload counts (`excluded.counts`), said for the set it belongs to. For the older history,
+ * `exact` members are "in the measured history above"; for the measured history, `reconstructed`
+ * members were "rebuilt from logs"; the older history's own `reconstructed` members that are not
+ * samples "couldn't be rebuilt reliably".
+ */
+export function setSummaryText(summary: CalibrationSetSummary): { basis: string; notUsed: string | null } {
+  const how = summary.set === "exact" ? "with measured time" : "with timing rebuilt from logs";
+  const basis = `Based on ${count(summary.samples, "finished task")} ${how}, out of ${summary.coverage.eligible} finished with an estimate.`;
+  const verb = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+  const parts = Object.entries(summary.excluded.counts)
+    .filter(([, n]) => (n ?? 0) > 0)
+    .map(([state, n]) => {
+      const k = n!;
+      switch (state) {
+        case "exact":
+          return verb(k, "is in the measured history above", "are in the measured history above");
+        case "approximate":
+          return verb(k, "has only approximate timing", "have only approximate timing");
+        case "reconstructed":
+          return summary.set === "exact"
+            ? verb(k, "has timing rebuilt from logs (see older history)", "have timing rebuilt from logs (see older history)")
+            : `${k} couldn't be rebuilt reliably`;
+        case "timing-floor":
+          return `${k} took under a minute`;
+        case "missing":
+          return verb(k, "has no measured time", "have no measured time");
+        default:
+          return `${k} ${QUALITY_LABEL[state] ?? state}`;
+      }
+    });
+  if (parts.length === 0) return { basis, notUsed: null };
+  const list = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+  return { basis, notUsed: `Not used here: ${list}.` };
 }
 
 // ------------------------------------------------------------------ visual geometry
@@ -576,39 +817,28 @@ export function barPercent(value: number, max: number): number {
   return Math.min(100, Math.max(0, (value / max) * 100));
 }
 
-/** "8 in 10": a nominal coverage (0..1) as a count out of ten, for the bands' legend. */
+/** "8 in 10": a coverage (0..1) as a count out of ten, never "0 in 10". */
 export function inTen(nominal: number): string {
   const tens = Math.round(nominal * 10);
   return tens === 0 ? "under 1 in 10" : `${tens} in 10`;
 }
 
-/**
- * The likely-range bar's text alternative: the likely band (the draws' p10 to p90, 8 in 10), the
- * wider band (p5 to p95 at its nominal coverage) and the expected figure, with "at least" when
- * the figure is a lower bound.
- */
-export function rangeDescription(figure: RemainingFigure): string | null {
-  const spread = figure.simulated;
-  if (!spread || figure.expectedSeconds === null) return null;
-  const more = figure.partial ? ", or more" : "";
-  return (
-    `Likely ${plainRange(spread.p10, spread.p90)}${more} (8 in 10 chances). ` +
-    `Very likely ${plainRange(spread.band.lower, spread.band.upper)}${more} (${inTen(spread.band.nominal)}). ` +
-    `Expected: ${figure.partial ? "at least" : "about"} ${plainDuration(figure.expectedSeconds).text}.`
-  );
-}
+/** Below this confidence, where the next one lands is not said at all. */
+export const NEXT_ONE_MIN_CONFIDENCE = 0.5;
 
 /**
- * The estimate-accuracy bar's text alternative: how 8 in 10 past tasks compared with their
- * estimate (the ratio's p10–p90), where the next one lands (the prediction bounds, at the
- * confidence they reach, in tens), and the typical figure (`ratio.expected.value`).
+ * The estimate-accuracy bar's words: how 8 in 10 past tasks compared with their estimate (the
+ * ratio's p10–p90), where the next one lands (the prediction bounds, at the confidence they
+ * reach, in tens) — or, under `NEXT_ONE_MIN_CONFIDENCE`, that there is too little data to say —
+ * and the typical figure (`ratio.expected.value`).
  */
-export function cohortRangeDescription(cohort: Pick<CalibrationCohort, "ratio">): string | null {
+export function cohortRangeWords(cohort: Pick<CalibrationCohort, "ratio">): { past: string; next: string; nextKnown: boolean; description: string } | null {
   const { quantiles, bounds, expected } = cohort.ratio;
   if (!quantiles || !bounds) return null;
-  return (
-    `8 in 10 past tasks took ${plainRatioRange(quantiles.p10, quantiles.p90)}. ` +
-    `The next one will likely take ${plainRatioRange(bounds.lower, bounds.upper)} (about ${inTen(bounds.confidence)} chances). ` +
-    `Typical: ${plainRatio(expected.value).sentence}. The dashed line is the estimate itself.`
-  );
+  const past = `8 in 10 past tasks: ${plainRatioRange(quantiles.p10, quantiles.p90)}`;
+  const nextKnown = bounds.confidence >= NEXT_ONE_MIN_CONFIDENCE;
+  const next = nextKnown ? `Next one, about ${inTen(bounds.confidence)}: ${plainRatioRange(bounds.lower, bounds.upper)}` : "Too little data to say where the next one lands";
+  const typical = plainRatio(expected.value);
+  const typicalText = typical.kind === "small" ? `a 10-hour estimate usually takes about ${typical.words}` : typical.sentence;
+  return { past, next, nextKnown, description: `${past}. ${next}. Typical: ${typicalText}. The dashed line is the estimate itself.` };
 }
