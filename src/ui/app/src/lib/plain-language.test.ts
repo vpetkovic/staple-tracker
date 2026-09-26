@@ -43,7 +43,16 @@ import {
   ratioFigure,
   setSummaryText,
   unreadableLine,
+  pressureStatus,
+  pressureSentence,
+  measuredLine,
+  forecastLine,
+  plainPace,
+  budgetAbsentPlain,
+  boundText,
+  readingGaugeDescription,
 } from "./plain-language";
+import type { BudgetLimitReading, LimitPressure } from "./types";
 import type { BudgetLimitForecast, BudgetReserveCheck, BudgetWorkProjection, CalibrationCohort, CalibrationSetSummary, CompletionForecast, RemainingFigure } from "./types";
 
 const H = 3600;
@@ -717,5 +726,100 @@ describe("geometry", () => {
     expect(inTen(0.9)).toBe("9 in 10");
     expect(inTen(0.778)).toBe("8 in 10");
     expect(inTen(0.02)).toBe("under 1 in 10");
+  });
+});
+
+// ------------------------------------------------------------------ the Budget view
+
+function pressure(over: Partial<LimitPressure> = {}): LimitPressure {
+  return {
+    provisional: true,
+    observed: { percentPerHour: 4.2, fromPercent: 10, toPercent: 14, from: "a", to: "b", spanSeconds: 3600, readings: 6 },
+    lastReadingAgeSeconds: 60,
+    secondsToReset: 3 * H + 56 * 60,
+    reservePercent: 20,
+    sustainablePercentPerHour: 15.4,
+    ratio: 0.27,
+    state: "within",
+    exhaustion: null,
+    reserveReach: { atPace: "after_reset", seconds: 20 * H, at: null },
+    safeConcurrency: null,
+    confidence: null,
+    missing: {},
+    missingInputs: {},
+    ...over,
+  };
+}
+
+function reading(over: Partial<BudgetLimitReading> = {}, pressureOver: Partial<LimitPressure> = {}): BudgetLimitReading {
+  return {
+    limitKey: "five_hour",
+    status: "current",
+    window: null,
+    latestSample: null,
+    highWaterPercent: 22,
+    remainingPercent: 78,
+    regressionCount: 0,
+    sampleCount: 6,
+    stale: false,
+    missing: {},
+    quality: { state: "exact", reasons: [] },
+    pressure: pressure(pressureOver),
+    ...over,
+  };
+}
+
+describe("the Budget view's status: the store's provisional state, said honestly", () => {
+  it("maps within to On track, unsafe to At risk, and no state or no window to Unknown", () => {
+    expect(pressureStatus(reading())).toEqual({ status: "on_track", reason: "within" });
+    expect(pressureStatus(reading({}, { state: "unsafe", ratio: 1.4 }))).toEqual({ status: "at_risk", reason: "unsafe" });
+    expect(pressureStatus(reading({}, { state: null, missing: { state: "stale" } }))).toEqual({ status: "unknown", reason: "unknown" });
+    expect(pressureStatus(reading({ status: "elapsed" }))).toEqual({ status: "unknown", reason: "no_reading" });
+    expect(pressureStatus(reading({ remainingPercent: null }))).toEqual({ status: "unknown", reason: "no_reading" });
+  });
+
+  it("says each state in a sentence, the reset first", () => {
+    expect(pressureSentence(reading(), 3 * H + 56 * 60)).toBe("Resets in 3h 56m. At your current pace you'll stay above the reserve.");
+    expect(pressureSentence(reading({}, { state: "unsafe", ratio: null, reserveReach: { atPace: "already", seconds: null, at: null } }), null)).toBe("It's already at or below the 20% reserve.");
+    expect(pressureSentence(reading({}, { state: "unsafe", ratio: 1.4, reserveReach: { atPace: "before_reset", seconds: 70 * 60, at: null } }), H)).toBe(
+      "Resets in 1h. At your current pace you'll reach the 20% reserve in 1h 10m, before it resets.",
+    );
+    expect(pressureSentence(reading({}, { state: "unsafe", ratio: 1.4, reserveReach: null }), null)).toBe("Your current pace is faster than this limit can keep up until it resets.");
+    expect(pressureSentence(reading({}, { state: null, missing: { state: "stale" } }), null)).toBe("We can't tell where your pace is heading: the last reading is more than 10 minutes old.");
+    expect(pressureSentence(reading({}, { state: null, missing: { state: "input_missing" }, missingInputs: { state: ["second_reading"] } }), null)).toBe(
+      "We can't tell where your pace is heading: there is only one reading so far.",
+    );
+  });
+
+  it("keeps the measured line to what was measured, and the forecast line to the rule of thumb", () => {
+    expect(measuredLine(reading(), 60)).toBe("Using about 4% an hour lately; last read 1 min ago.");
+    expect(measuredLine(reading({}, { observed: null, missing: { observed: "input_missing" }, missingInputs: { observed: ["second_reading"] } }), null)).toBe(
+      "No pace measured yet: there is only one reading so far.",
+    );
+    expect(forecastLine(reading())).toBe("To keep the 20% reserve until it resets, stay under about 15% an hour. At the current pace you'd only reach it after the reset.");
+    expect(forecastLine(reading({}, { reserveReach: { atPace: "before_reset", seconds: 2 * H, at: null } }))).toContain("you'd reach the reserve in 2h, before it resets.");
+    expect(forecastLine(reading({}, { reserveReach: { atPace: "never", seconds: null, at: null } }))).toContain("you won't reach it.");
+    expect(forecastLine(reading({}, { sustainablePercentPerHour: null, missing: { sustainablePercentPerHour: "stale" } }))).toBe(
+      "We can't work out a safe pace yet: the last reading is more than 10 minutes old.",
+    );
+  });
+
+  it("says paces, the gauge, the binding and an empty account in plain words", () => {
+    expect(plainPace(12.4)).toBe("about 12% an hour");
+    expect(plainPace(0.4)).toBe("under 1% an hour");
+    expect(plainPace(0)).toBe("none");
+    expect(readingGaugeDescription(78, 12.5)).toBe("78% left now. Safety reserve: 12.5%.");
+    expect(boundText(true)).toBe("measured on this computer");
+    expect(boundText(false)).toBe("not set up on this computer");
+    expect(budgetAbsentPlain(undefined, false, false)).toMatch(/^Budget tracking is off on this computer/);
+    expect(budgetAbsentPlain("no_sample_yet", true, true)).toMatch(/^Set up, but no reading has arrived yet/);
+    expect(budgetAbsentPlain("source_unavailable", true, true)).toMatch(/^Set up, but nothing is collecting/);
+    expect(budgetAbsentPlain("source_unavailable", true, false)).toMatch(/^Not set up on this computer yet/);
+  });
+
+  it("collapses a Budget view limit with no window by its window reason too", () => {
+    expect(unreadableLine([reading({ status: "elapsed", remainingPercent: null, missing: { window: "window_elapsed" } })], "Claude", true)).toBe(
+      "1 other Claude limit can't be read yet: it has reset since the last reading.",
+    );
   });
 });

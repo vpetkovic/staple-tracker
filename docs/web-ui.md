@@ -1062,6 +1062,32 @@ machine's hub and never synchronize: the view takes no workspace and shows
 the same figures whichever one the switcher names. The header's group, sort
 and filter controls are hidden, as on Calibration.
 
+**Plain first.** The view opens with one sentence: *Your subscription limits on
+this computer, and whether your recent pace keeps a safety reserve of 20% (a
+default until you set one). The pace check is an early rule of thumb until a
+budget policy is set.*, a pill counting the limits at risk, and the rule's
+technical wording behind *Show rule details*. Accounts are named for people
+(*Claude (Anthropic)*, *Codex (OpenAI)*) with the operator's label and *measured
+on this computer* / *not set up on this computer*. Each limit with a current
+reading is a plain card (the same components as the forecast's, see
+[Plain-language cards](#plain-language-cards)): a status pill, what is left as
+the figure (*78% left*, with its age when stale, *· 12 min ago*), a sentence
+with the reset and the verdict (*Resets in 3h 56m. At your current pace you'll
+stay above the reserve.*), a solid **Measured** frame (the gauge with the reserve
+line; *Using about 4% an hour lately; last read 1 min ago.*) and a dashed
+**Forecast** frame labelled *an early rule of thumb until a budget policy is
+set* (*To keep the 20% reserve until it resets, stay under about 15% an hour.*).
+The status is `pressureStatus`, the store's own provisional state and no
+threshold of the page's: *unsafe* is **At risk** (with the hatched edge; the
+sentence says when the pace reaches the reserve, or that it already has),
+*within* is **On track**, no state is **Unknown** with its reason in words. Limits
+with no current window collapse into one line per account (*1 Claude limit can't
+be read yet: the provider doesn't say when it resets.*); an account or a machine
+with nothing says why in plain words (*Set up, but no reading has arrived yet.*,
+*Budget tracking is off on this computer…*), with `staple budget setup` behind
+*Show details*. Everything below is what each card's (or account's) *Show
+details* holds, unchanged.
+
 **One card per limit, two blocks per card.** Accounts are listed as the read
 returns them, each limit a card. **Measured**, in a solid frame, is what the
 provider reported: the high-water remaining figure, the reset countdown and

@@ -27,6 +27,7 @@ import { QUALITY_LABEL } from "../detail/analytics";
 import { formatProbability, missingText, warningText } from "./forecast-text";
 import type {
   BudgetLimitForecast,
+  BudgetLimitReading,
   CalibrationCohort,
   CalibrationSetSummary,
   CompletionConfidence,
@@ -652,10 +653,14 @@ const UNREADABLE_REASON: Record<string, [one: string, many: string]> = {
   source_unavailable: ["no usage has been measured on this computer", "no usage has been measured on this computer"],
 };
 
-export function unreadableLine(limits: readonly BudgetLimitForecast[], short: string, others: boolean): string | null {
+export function unreadableLine(
+  limits: ReadonlyArray<{ readonly missing: Record<string, string>; readonly quality: { readonly reasons: readonly string[] } }>,
+  short: string,
+  others: boolean,
+): string | null {
   if (limits.length === 0) return null;
   const many = limits.length > 1;
-  const codes = [...new Set(limits.map((limit) => limit.missing.remainingPercent ?? limit.quality.reasons[0] ?? "no_sample_yet"))];
+  const codes = [...new Set(limits.map((limit) => limit.missing.remainingPercent ?? limit.missing.window ?? limit.quality.reasons[0] ?? "no_sample_yet"))];
   const reasons = codes.map((code) => UNREADABLE_REASON[code]?.[many ? 1 : 0] ?? plainMissing(code));
   const noun = `${others ? "other " : ""}${short} limit`;
   return `${count(limits.length, noun)} can't be read yet: ${reasons.join("; ")}.`;
@@ -873,4 +878,125 @@ export function cohortRangeWords(cohort: Pick<CalibrationCohort, "ratio">): { pa
   const typical = plainRatio(expected.value);
   const typicalText = typical.kind === "small" ? `a 10-hour estimate usually takes about ${typical.words}` : typical.sentence;
   return { past, next, nextKnown, description: `${past}. ${next}. Typical: ${typicalText}. The dashed line is the estimate itself.` };
+}
+
+// ------------------------------------------------------------------ the budget pressure view
+
+/**
+ * THE status mapping of the Budget view's limits (`GET /api/budget`), from the store's own
+ * provisional pressure state only — no threshold of its own:
+ *
+ * - no current window, or no remaining figure → Unknown (`no_reading`);
+ * - `pressure.state === "unsafe"` → At risk (the pace is at or over the sustainable pace, or the
+ *   limit is already at the reserve);
+ * - `pressure.state === "within"` → On track (the pace keeps the reserve to the reset);
+ * - `pressure.state === null` → Unknown (`pressure.missing.state` says why: a stale reading, only
+ *   one reading so far …).
+ *
+ * The rule behind unsafe/within is provisional (`pressureRule.provisional`), which the page says in
+ * words beside it.
+ */
+export function pressureStatus(limit: Pick<BudgetLimitReading, "status" | "remainingPercent" | "pressure">): { status: PlainStatus; reason: "no_reading" | "unsafe" | "within" | "unknown" } {
+  if (limit.status !== "current" || limit.remainingPercent === null) return { status: "unknown", reason: "no_reading" };
+  if (limit.pressure.state === "unsafe") return { status: "at_risk", reason: "unsafe" };
+  if (limit.pressure.state === "within") return { status: "on_track", reason: "within" };
+  return { status: "unknown", reason: "unknown" };
+}
+
+/** Why a pressure figure is unknown, in everyday words (the store's pressure codes first). */
+const PLAIN_PRESSURE_MISSING: Record<string, string> = {
+  stale: "the last reading is more than 10 minutes old",
+  second_reading: "there is only one reading so far",
+  observed: "there is no measured pace yet",
+  reserve_reached: "it is already at the reserve",
+  policy_not_defined: "that needs a budget policy, which isn't set up yet",
+  not_reported_by_source: "the provider doesn't report it",
+};
+
+function plainPressureReason(pressure: BudgetLimitReading["pressure"], field: string): string {
+  const code = pressure.missing[field];
+  if (code === undefined) return "no reason was given";
+  const inputs = pressure.missingInputs[field];
+  if (code === "input_missing" && inputs && inputs.length > 0) return [...new Set(inputs.map((input) => PLAIN_PRESSURE_MISSING[input] ?? plainMissing(input)))].join("; ");
+  return PLAIN_PRESSURE_MISSING[code] ?? plainMissing(code);
+}
+
+/** A pace in everyday words: "about 12% an hour", "under 1% an hour". */
+export function plainPace(percentPerHour: number): string {
+  if (percentPerHour < 1) return percentPerHour <= 0 ? "none" : "under 1% an hour";
+  return `about ${Math.round(percentPerHour)}% an hour`;
+}
+
+/**
+ * The Budget card's sentence after its figure ("78% left"): the reset (ticked by the page's own
+ * clock, as the technical block does) and the verdict, from the pressure's own fields:
+ *
+ * - On track: "At your current pace you'll stay above the reserve."
+ * - At risk, already at the reserve: "It's already at or below the 20% reserve."
+ * - At risk, the reserve reached before the reset: "At your current pace you'll reach the 20%
+ *   reserve in 1h 10m, before it resets."
+ * - At risk otherwise: "Your current pace is faster than this limit can keep up until it resets."
+ * - Unknown: "We can't tell where your pace is heading: …" with the reason.
+ */
+export function pressureSentence(limit: BudgetLimitReading, resetSeconds: number | null): string {
+  const { pressure } = limit;
+  const reserve = `the ${Math.round(pressure.reservePercent * 10) / 10}% reserve`;
+  const reset = resetSeconds !== null ? `Resets in ${plainCountdown(resetSeconds)}. ` : "";
+  const { reason } = pressureStatus(limit);
+  if (reason === "within") return `${reset}At your current pace you'll stay above the reserve.`;
+  if (reason === "unsafe") {
+    const reach = pressure.reserveReach;
+    if (reach?.atPace === "already") return `${reset}It's already at or below ${reserve}.`;
+    if (reach?.atPace === "before_reset" && reach.seconds !== null) {
+      return `${reset}At your current pace you'll reach ${reserve} in ${plainCountdown(reach.seconds)}, before it resets.`;
+    }
+    return `${reset}Your current pace is faster than this limit can keep up until it resets.`;
+  }
+  return `${reset}We can't tell where your pace is heading: ${plainPressureReason(pressure, "state")}.`;
+}
+
+/** The measured line: "Using about 12% an hour lately" and how old the last reading is. */
+export function measuredLine(limit: BudgetLimitReading, ageSeconds: number | null): string {
+  const pace = limit.pressure.observed ? `Using ${plainPace(limit.pressure.observed.percentPerHour)} lately` : `No pace measured yet: ${plainPressureReason(limit.pressure, "observed")}`;
+  const age = ageSeconds !== null ? `; last read ${plainAge(ageSeconds)} ago` : "";
+  return `${pace}${age}.`;
+}
+
+/** The forecast line (provisional): the sustainable pace in words, and when the pace reaches the reserve. */
+export function forecastLine(limit: BudgetLimitReading): string {
+  const { pressure } = limit;
+  const reserve = `the ${Math.round(pressure.reservePercent * 10) / 10}% reserve`;
+  if (pressure.sustainablePercentPerHour === null) return `We can't work out a safe pace yet: ${plainPressureReason(pressure, "sustainablePercentPerHour")}.`;
+  const keep = `To keep ${reserve} until it resets, stay under ${plainPace(pressure.sustainablePercentPerHour)}.`;
+  const reach = pressure.reserveReach;
+  if (!reach) return keep;
+  if (reach.atPace === "before_reset" && reach.seconds !== null) return `${keep} At the current pace you'd reach the reserve in ${plainCountdown(reach.seconds)}, before it resets.`;
+  if (reach.atPace === "after_reset") return `${keep} At the current pace you'd only reach it after the reset.`;
+  if (reach.atPace === "never") return `${keep} At the current pace you won't reach it.`;
+  return keep;
+}
+
+/** The gauge's text alternative for a reading: what is left now and the reserve. */
+export function readingGaugeDescription(remaining: number, reservePercent: number): string {
+  return `${Math.round(remaining)}% left now. Safety reserve: ${Math.round(reservePercent * 10) / 10}%.`;
+}
+
+/** The words the page uses for the provisional rule, wherever it states a forecast or a status. */
+export const PROVISIONAL_WORDS = "an early rule of thumb until a budget policy is set";
+
+/** Whether this computer is set up to measure an account, in words. */
+export function boundText(bound: boolean): string {
+  return bound ? "measured on this computer" : "not set up on this computer";
+}
+
+/** Why an account (or the whole machine) shows nothing, in everyday words; the exact command stays under details. */
+export function budgetAbsentPlain(code: string | undefined, budgetCapture: boolean, bound: boolean): string {
+  if (!budgetCapture) return "Budget tracking is off on this computer, so there is nothing to show yet. The one-time setup is under Show details.";
+  if (code === "no_sample_yet") return "Set up, but no reading has arrived yet. It should appear the next time the tool reports its usage.";
+  if (code === "source_unavailable" || code === undefined) {
+    return bound
+      ? "Set up, but nothing is collecting readings for it yet. The setup is under Show details."
+      : "Not set up on this computer yet. The one-time setup is under Show details.";
+  }
+  return `We can't tell yet: ${plainMissing(code)}.`;
 }

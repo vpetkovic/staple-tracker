@@ -18,7 +18,8 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { formatDuration } from "@/lib/forecast-text";
-import { perHourText, pressureRatioText } from "@/lib/budget-text";
+import { perHourText, pressureRatioText, SETUP_HINT } from "@/lib/budget-text";
+import { PROVISIONAL_WORDS, measuredLine, plainCountdown, pressureSentence, pressureStatus, readingGaugeDescription } from "@/lib/plain-language";
 import type { BudgetLimitReading, BudgetView } from "@/lib/types";
 import { BudgetReportView } from "./BudgetView";
 import { PRESSURE_ACCOUNTS, seedBudgetPressureScenario } from "../../../../../../test/fixtures/budget-pressure-scenario.ts";
@@ -149,7 +150,8 @@ describe("an unsafe limit", () => {
     expect(html).toMatch(/data-pressure-badge="unsafe"[^>]*><svg[\s\S]*?<\/svg>Unsafe<span class="sr-only"> \(provisional\)<\/span><\/span>/);
     expect(text(html)).toContain(`Unsafe (provisional): pace is ${pressureRatioText(limit.pressure.ratio!)} the sustainable pace (unsafe at ×1.00)`);
     expect(text(section(html, 'data-block="forecast"'))).toContain("before the reset");
-    // The header counts it.
+    // The header counts it, in words with an icon, and in the rule details.
+    expect(text(render(view))).toContain("1 limit at risk");
     expect(text(render(view))).toContain("1 unsafe limit");
     // Its weekly limit, on the same account, is within.
     expect(card(render(view), PRESSURE_ACCOUNTS.unsafe, "codex.secondary")).toContain('data-pressure-state="within"');
@@ -182,7 +184,9 @@ describe("unknown telemetry is visibly unknown", () => {
     expect(empty).toContain("No reading yet: capture is on and a source is bound");
     const unbound = section(render(view), `data-account="${PRESSURE_ACCOUNTS.unbound}"`);
     expect(unbound).toContain('data-bound="no"');
-    expect(unbound).toContain('data-pressure-state="unknown"');
+    // A limit with no current window gets no card: one plain line, the technical row behind details.
+    expect(unbound).not.toContain("data-pressure-state");
+    expect(text(section(unbound, 'data-testid="budget-unreadable"'))).toBe("1 Claude limit can't be read yet: the provider doesn't say when it resets.");
     // One line says why, rather than every figure repeating it.
     expect(text(section(unbound, 'data-testid="budget-no-window"'))).toBe(
       "Unknown: the provider reports no reset time.The source gave usage without a reset instant (older Codex lines, or a reading typed without --resets-at), so it joins no window.",
@@ -196,5 +200,107 @@ describe("unknown telemetry is visibly unknown", () => {
     const html = text(section(render(bare), 'data-testid="budget-none"'));
     expect(html).toContain("Budget capture is off on this machine");
     expect(html).toContain("`staple budget setup --claude-account <label> --codex-account <label>`: it prints the plan, and the same command with `--yes` applies it.");
+  });
+});
+
+// ------------------------------------------------------------------ the plain-language layer
+
+/** Whether the element carrying `attribute` sits inside a closed <details> ("Show details"). */
+function insideClosedDetails(html: string, attribute: string): boolean {
+  const at = html.indexOf(attribute);
+  expect(at, attribute).toBeGreaterThan(-1);
+  const stack: boolean[] = [];
+  for (const match of html.slice(0, at).matchAll(/<details([^>]*)>|<\/details>/g)) {
+    if (match[0] === "</details>") stack.pop();
+    else stack.push(/\sopen[\s=>]/.test(`${match[1]}>`));
+  }
+  return stack.length > 0 && stack.every((open) => !open);
+}
+
+/** The status pill inside a markup fragment: its state, its word, and whether it has an icon. */
+function pill(html: string): { status: string; word: string; icon: boolean } {
+  const match = /<span data-status="([^"]+)"[^>]*>(<svg[\s\S]*?<\/svg>)?([^<]*)<\/span>/.exec(html);
+  expect(match, "status pill").not.toBeNull();
+  return { status: match![1]!, icon: Boolean(match![2]), word: match![3]! };
+}
+
+const imgLabel = (html: string): string => text(/role="img" aria-label="([^"]*)"/.exec(html)?.[1] ?? "");
+
+describe("the plain-language layer of the Budget view", () => {
+  it("says a limit within its sustainable pace is On track, in words, with the reserve on its gauge", () => {
+    const limit = limitOf(view, PRESSURE_ACCOUNTS.within, "five_hour");
+    expect(pressureStatus(limit)).toEqual({ status: "on_track", reason: "within" });
+    const html = card(render(view), PRESSURE_ACCOUNTS.within, "five_hour");
+    expect(pill(html)).toEqual({ status: "on_track", word: "On track", icon: true });
+    const headline = text(section(html, 'data-testid="budget-headline"'));
+    expect(headline).toBe(pressureSentence(limit, limit.pressure.secondsToReset));
+    expect(headline).toBe(`Resets in ${plainCountdown(limit.pressure.secondsToReset!)}. At your current pace you'll stay above the reserve.`);
+    expect(imgLabel(section(html, 'data-testid="budget-gauge"'))).toBe(readingGaugeDescription(limit.remainingPercent!, limit.pressure.reservePercent));
+    expect(section(html, 'data-testid="budget-gauge"')).toContain('data-mark="reserve"');
+  });
+
+  it("keeps the measured facts and the provisional forecast in two distinct frames, and says provisional in words", () => {
+    const limit = limitOf(view, PRESSURE_ACCOUNTS.within, "five_hour");
+    const html = card(render(view), PRESSURE_ACCOUNTS.within, "five_hour");
+    const measured = section(html, 'data-plain-block="measured"');
+    const forecast = section(html, 'data-plain-block="forecast"');
+    // The frames themselves: solid for measured, dashed for forecast.
+    expect(/^<section[^>]*class="([^"]*)"/.exec(measured)![1]).not.toContain("border-dashed");
+    expect(/^<section[^>]*class="([^"]*)"/.exec(forecast)![1]).toContain("border-dashed");
+    expect(text(measured)).toContain(measuredLine(limit, limit.pressure.lastReadingAgeSeconds));
+    expect(text(forecast)).toContain(`Forecast · ${PROVISIONAL_WORDS}`);
+    // "Provisional", in plain words, on the forecast frame and in the page's opening sentence.
+    expect(text(forecast)).toContain("Forecast · an early rule of thumb until a budget policy is set");
+    expect(text(section(render(view), 'data-testid="budget-intro"'))).toContain("The pace check is an early rule of thumb until a budget policy is set.");
+    expect(text(forecast)).toMatch(/To keep the 20% reserve until it resets, stay under about \d+% an hour\./);
+    // No figure crosses: the measured pace is not in the forecast frame, the sustainable one not in the measured.
+    expect(text(forecast)).not.toContain("lately");
+    expect(text(measured)).not.toContain("stay under");
+  });
+
+  it("keeps every technical figure of the panel, unchanged, behind a closed Show details", () => {
+    const html = render(view);
+    for (const attribute of ['data-block="measured"', 'data-block="forecast"', 'data-pressure-badge="within"', 'data-testid="budget-reserve"', 'data-testid="budget-rule"', 'data-testid="budget-no-window"']) {
+      expect(insideClosedDetails(html, attribute), attribute).toBe(true);
+    }
+    for (const attribute of ['data-testid="budget-headline"', 'data-testid="budget-gauge"', 'data-plain-block="forecast"']) {
+      expect(insideClosedDetails(html, attribute), attribute).toBe(false);
+    }
+  });
+
+  it("says At risk for the store's unsafe state, with an icon and the hatch, and why", () => {
+    const limit = limitOf(view, PRESSURE_ACCOUNTS.unsafe, "codex.primary");
+    expect(pressureStatus(limit)).toEqual({ status: "at_risk", reason: "unsafe" });
+    const html = card(render(view), PRESSURE_ACCOUNTS.unsafe, "codex.primary");
+    expect(pill(html)).toEqual({ status: "at_risk", word: "At risk", icon: true });
+    expect(html).toContain("data-unsafe-hatch");
+    expect(text(section(html, 'data-testid="budget-headline"'))).toBe(pressureSentence(limit, limit.pressure.secondsToReset));
+    expect(limit.pressure.reserveReach?.atPace).toBe("before_reset");
+    expect(text(section(html, 'data-testid="budget-headline"'))).toMatch(/At your current pace you'll reach the 20% reserve in .+, before it resets\.$/);
+  });
+
+  it("says Unknown with the reason for a stale reading, and gives the figure its age", () => {
+    const limit = limitOf(view, PRESSURE_ACCOUNTS.stale, "five_hour");
+    const html = card(render(view), PRESSURE_ACCOUNTS.stale, "five_hour");
+    expect(pill(html)).toEqual({ status: "unknown", word: "Unknown", icon: true });
+    expect(text(section(html, 'data-testid="budget-headline"'))).toContain("We can't tell where your pace is heading: the last reading is more than 10 minutes old.");
+    expect(text(section(html, 'data-testid="budget-age"'))).toMatch(/· \d+ min ago$/);
+    expect(limit.pressure.lastReadingAgeSeconds).toBeGreaterThan(600);
+  });
+
+  it("names accounts for people, and says in plain words why one shows nothing, with the setup behind details", () => {
+    const html = render(view);
+    const empty = section(html, `data-account="${PRESSURE_ACCOUNTS.empty}"`);
+    expect(text(section(empty, 'data-testid="budget-account-plain"'))).toBe(
+      "Set up, but no reading has arrived yet. It should appear the next time the tool reports its usage.",
+    );
+    expect(insideClosedDetails(empty, 'data-testid="budget-account-unknown"')).toBe(true);
+    expect(text(section(html, `data-account="${PRESSURE_ACCOUNTS.within}"`))).toMatch(/^(Claude \(Anthropic\)|Codex \(OpenAI\))/);
+    const none = render(bare);
+    expect(text(section(none, 'data-testid="budget-none-plain"'))).toBe(
+      "Budget tracking is off on this computer, so there is nothing to show yet. The one-time setup is under Show details.",
+    );
+    expect(insideClosedDetails(none, 'data-testid="budget-none"')).toBe(true);
+    expect(text(section(none, 'data-testid="budget-none"'))).toContain(SETUP_HINT);
   });
 });
