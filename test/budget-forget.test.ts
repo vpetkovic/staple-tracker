@@ -15,7 +15,7 @@
  * written by hand.
  */
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +36,20 @@ import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv } from "./fixtures/characterize-
 import { spawnAsync } from "./fixtures/spawn-async.js";
 import { mcpEnvelope, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import { STATUSLINE_SESSION_ID, epoch, sessionMetaLine, statusline, tokenCountLine, writeRollout } from "./fixtures/budget-support.js";
+
+/**
+ * Ids are random UUIDs, so two sharing an 8-character prefix cannot be arranged by chance.
+ * While `uuid.prefix` is set, every id minted in this process starts with it; otherwise
+ * ids are the real random ones. The CLI and MCP children are not affected.
+ */
+const uuid = vi.hoisted(() => ({ prefix: null as string | null, n: 0 }));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomUUID: () => (uuid.prefix === null ? actual.randomUUID() : `${uuid.prefix}-0000-4000-8000-${(uuid.n++).toString(16).padStart(12, "0")}`),
+  };
+});
 
 /** The fake payload's session: another Claude Code session on the same config dir. */
 const FAKE_SESSION = "77777777-0000-7000-8000-000000000001";
@@ -227,16 +241,112 @@ describe("forgetting the fake status-line readings", () => {
   });
 
   it("refuses an ambiguous prefix and removes nothing", () => {
-    // Seventeen readings: by pigeonhole, two ids share their first hex digit.
-    for (let i = 0; i < 9; i += 1) render(`2026-09-26T0${i}:00:00.000Z`, STATUSLINE_SESSION_ID, [10 + i, REAL_SEVEN_DAY_RESET], [i, FIVE_HOUR_RESET]);
-    const ids = listBudgetSamples(home, { account: "claude-max", limit: 100, now: NOW }).items.map((s) => s.id);
-    expect(ids.length).toBeGreaterThanOrEqual(17);
-    const shared = [...new Set(ids.map((id) => id[0]!))].find((c) => ids.filter((id) => id.startsWith(c)).length > 1)!;
+    uuid.prefix = "97379345";
+    try {
+      scenario();
+    } finally {
+      uuid.prefix = null;
+    }
     const before = counts();
-    const error = refusal(() => forget([shared], true));
+    const error = refusal(() => forget(["97379345"], true));
     expect(error.code).toBe("validation");
     expect(error.detail).toMatchObject({ reason: "ambiguous_id" });
+    expect(error.message).toContain("Nothing was removed");
     expect(counts()).toEqual(before);
+  });
+
+  it("refuses a prefix shorter than 8 characters, even one that names a single reading", () => {
+    const { fakeSevenDay } = scenario();
+    const before = counts();
+    for (const ref of [fakeSevenDay.slice(0, 3), fakeSevenDay.slice(0, 7), "%", "_"]) {
+      const error = refusal(() => forget([ref], true));
+      expect(error.code, ref).toBe("validation");
+      expect(error.detail, ref).toMatchObject({ reason: "id_too_short" });
+      expect(error.message, ref).toContain("at least 8 characters");
+    }
+    // Exactly 8 is enough.
+    expect(forget([fakeSevenDay.slice(0, 8)], false).readings.map((r) => r.id)).toEqual([fakeSevenDay]);
+    expect(counts()).toEqual(before);
+  });
+
+  it("never lets LIKE wildcards match: %, _ and a 9737934_ prefix name nothing", () => {
+    // Every id starts 97379345, so a wildcard that reached LIKE would match all of them.
+    uuid.prefix = "97379345";
+    try {
+      scenario();
+    } finally {
+      uuid.prefix = null;
+    }
+    const before = counts();
+    for (const ref of ["9737934_", "973793%%", "%%%%%%%%", "________", "97379345%"]) {
+      const error = refusal(() => forget([ref], true));
+      expect(error.code, ref).toBe("not_found");
+    }
+    expect(counts()).toEqual(before);
+  });
+
+  it("re-derives a kept window's fields when its opening reading is the one removed", () => {
+    // Two Codex sessions on one account. The first line read opens the five-hour window
+    // with its own reset (60 s late, inside the tolerance), window length and plan; the
+    // other session's two readings then join it. Removing the opening reading must not
+    // leave the window carrying the fields only that reading reported.
+    bindBudgetSource(home, { source: "codex_rollout", account: "codex-plus", codexHome: codexDir });
+    const reset = "2026-09-26T14:00:00.000Z";
+    const late = "2026-09-26T14:01:00.000Z";
+    const line = (at: string, used: number, primaryReset: string, planType: string) =>
+      tokenCountLine({
+        timestamp: at,
+        planType,
+        primary: { used_percent: used, window_minutes: 300, resets_at: epoch(primaryReset) },
+        secondary: { used_percent: 40, window_minutes: 10080, resets_at: epoch(REAL_SEVEN_DAY_RESET) },
+      });
+    const first = "33333333-0000-7000-8000-000000000001";
+    const second = "33333333-0000-7000-8000-000000000002";
+    const opener = writeRollout(codexDir, first, "2026-09-26T09:59:00.000Z", [
+      sessionMetaLine({ id: first, timestamp: "2026-09-26T09:59:00.000Z" }),
+      line("2026-09-26T10:00:00.000Z", 50, late, "pro"),
+    ]);
+    const rest = writeRollout(codexDir, second, "2026-09-26T10:04:00.000Z", [
+      sessionMetaLine({ id: second, timestamp: "2026-09-26T10:04:00.000Z" }),
+      line("2026-09-26T10:05:00.000Z", 10, reset, "plus"),
+      line("2026-09-26T10:10:00.000Z", 12, reset, "plus"),
+    ]);
+    const openedBy = ingestBudget({ source: "codex-rollout", file: opener }, { home, now: () => NOW });
+    ingestBudget({ source: "codex-rollout", file: rest }, { home, now: () => NOW });
+    const openerId = openedBy.outcomes.map((o) => (o as Extract<typeof o, { stored: true }>).sample).find((s) => s.limitKey === "codex.primary")!.id;
+    const primary = () => readBudget(home, { now: NOW, account: "codex-plus" }).accounts[0]!.limits.find((l) => l.limitKey === "codex.primary")!;
+    expect(primary().window).toMatchObject({ resetsAt: late, planTier: "pro", startsAt: "2026-09-26T09:01:00.000Z", windowSeconds: 18_000 });
+
+    const result = forget([openerId], true);
+    const change = result.windows[0]!;
+    expect(change).toMatchObject({ outcome: "kept", samplesLeft: 2, resetsAt: reset });
+    const next = listBudgetSamples(home, { account: "codex-plus", now: NOW }).items.find((s) => s.limitKey === "codex.primary" && s.usedPercent === 10)!;
+    expect(change.rederivedFrom).toBe(next.id);
+    const after = primary();
+    expect(after.window).toMatchObject({ resetsAt: reset, startsAt: "2026-09-26T09:00:00.000Z", windowSeconds: 18_000, windowSecondsSource: "observed", planTier: null });
+    expect(after.window!.missing).toMatchObject({ planTier: "opening_reading_removed" });
+    expect(after).toMatchObject({ highWaterPercent: 12, remainingPercent: 88 });
+    // Removing a reading that did not open its window leaves the fields alone.
+    const later = listBudgetSamples(home, { account: "codex-plus", now: NOW }).items.find((s) => s.limitKey === "codex.primary" && s.usedPercent === 12)!;
+    const plain = forget([later.id], true);
+    expect(plain.windows[0]).toMatchObject({ outcome: "kept", rederivedFrom: null });
+  });
+
+  it("keeps the removal when the audit line cannot be written, and says so", () => {
+    const { fakeIds } = scenario();
+    // `logs` is a file, so the log directory cannot be made: a real unwritable path.
+    writeFileSync(join(home, "logs"), "not a directory");
+    const result = forget(fakeIds, true);
+    expect(result).toMatchObject({ applied: true, auditLog: null });
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("The readings were removed, but the audit line could not be written");
+    expect(counts()).toMatchObject({ forgotten: 2 });
+    expect(limit("seven_day").window!.resetsAt).toBe(REAL_SEVEN_DAY_RESET);
+  });
+
+  it("says on the preview that a removal cannot be undone", () => {
+    const { fakeIds } = scenario();
+    expect(forget(fakeIds, false).note).toMatch(/cannot be undone.*Codex rollout re-read does not bring it back/);
   });
 
   it("keeps a forgotten reading forgotten when the same input is replayed, and stores a new observation", () => {
@@ -376,6 +486,7 @@ describe("CLI, MCP and HTTP call the one method", () => {
     expect(human.status).toBe(2);
     expect(human.stderr).toContain("would remove 1 reading(s)");
     expect(human.stderr).toContain("Re-run with --yes");
+    expect(human.stderr).toContain("A removal cannot be undone");
 
     const mcpPreview = toolPayload(await mcp.call("forget_budget_samples", { ids: fakeIds })) as Record<string, unknown>;
     const httpPreview = await http("/api/budget/forget", { body: { ids: fakeIds } });
@@ -406,6 +517,55 @@ describe("CLI, MCP and HTTP call the one method", () => {
     expect(done.status, done.stderr).toBe(0);
     expect(JSON.parse(done.stdout)).toMatchObject({ applied: true, readings: [{ id, usedPercent: 31 }], auditLog: collectLogPath(home) });
   }, 60_000);
+
+  it("MCP consent is the boolean true: a string, a number or null is refused and removes nothing", async () => {
+    render("2026-09-26T11:52:00.000Z", FAKE_SESSION, [33, FAKE_SEVEN_DAY_RESET], [58, FIVE_HOUR_RESET]);
+    const id = listBudgetSamples(home, { account: "claude-max", now: NOW }).items.find((s) => s.usedPercent === 33)!.id;
+    const before = counts();
+    for (const confirm of ["true", "false", 1, null]) {
+      const result = await mcp.call("forget_budget_samples", { ids: [id], confirm });
+      expect(result.isError, JSON.stringify(confirm)).toBe(true);
+      expect(counts(), JSON.stringify(confirm)).toEqual(before);
+    }
+    const preview = toolPayload(await mcp.call("forget_budget_samples", { ids: [id], confirm: false })) as { applied: boolean };
+    expect(preview.applied).toBe(false);
+    expect((await http("/api/budget/forget", { body: { ids: [id], confirm: "true" } })).status).toBe(400);
+    expect(counts()).toEqual(before);
+    const done = toolPayload(await mcp.call("forget_budget_samples", { ids: [id], confirm: true })) as { applied: boolean };
+    expect(done.applied).toBe(true);
+  });
+
+  it("an audit line that cannot be written is a warning on all three surfaces, and the removal stands", async () => {
+    const readings = [34, 35, 36].map((used, i) => {
+      render(`2026-09-26T12:0${i}:00.000Z`, FAKE_SESSION, [used, FAKE_SEVEN_DAY_RESET], [60 + i, FIVE_HOUR_RESET]);
+      return listBudgetSamples(home, { account: "claude-max", now: NOW }).items.find((s) => s.usedPercent === used)!.id;
+    });
+    const logs = join(home, "logs");
+    renameSync(logs, `${logs}.kept`);
+    writeFileSync(logs, "not a directory");
+    try {
+      const before = counts().samples;
+      const cliDone = await cli(["forget", readings[0]!, "--yes", "--json"]);
+      expect(cliDone.status, cliDone.stderr).toBe(0);
+      expect(JSON.parse(cliDone.stdout)).toMatchObject({ applied: true, auditLog: null });
+      expect(cliDone.stderr).toContain("warning: The readings were removed, but the audit line could not be written");
+      const human = await cli(["forget", readings[1]!, "--yes"]);
+      expect(human.status, human.stderr).toBe(0);
+      expect(human.stderr).not.toContain("    at ");
+      const mcpDone = await mcp.call("forget_budget_samples", { ids: [readings[2]], confirm: true });
+      expect(mcpDone.isError).toBeFalsy();
+      expect(toolPayload(mcpDone)).toMatchObject({ applied: true, auditLog: null, warnings: [expect.stringContaining("could not be written")] });
+      expect(counts().samples).toBe(before - 3);
+      render("2026-09-26T12:10:00.000Z", FAKE_SESSION, [37, FAKE_SEVEN_DAY_RESET], [70, FIVE_HOUR_RESET]);
+      const id = listBudgetSamples(home, { account: "claude-max", now: NOW }).items.find((s) => s.usedPercent === 37)!.id;
+      const httpDone = await http("/api/budget/forget", { body: { ids: [id], confirm: true } });
+      expect(httpDone.status, JSON.stringify(httpDone.body)).toBe(200);
+      expect(httpDone.body).toMatchObject({ applied: true, auditLog: null, warnings: [expect.stringContaining("could not be written")] });
+    } finally {
+      rmSync(logs, { force: true });
+      renameSync(`${logs}.kept`, logs);
+    }
+  }, 90_000);
 
   it("the HTTP route is POST-only, Origin-checked, token-gated, type-checked, and never arms the sync trigger", async () => {
     render("2026-09-26T11:55:00.000Z", FAKE_SESSION, [32, FAKE_SEVEN_DAY_RESET], [57, FIVE_HOUR_RESET]);

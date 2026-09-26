@@ -63,9 +63,16 @@ export interface ForgetResult {
   readonly readings: ForgottenReading[];
   readonly windows: ForgetWindowChange[];
   readonly limits: ReadonlyArray<LimitKey & { readonly before: ForgetLimitView; readonly after: ForgetLimitView }>;
-  /** Where the audit line was written, when applied. */
+  /** Where the audit line was written, when applied; null for a preview or when it could not be written. */
   readonly auditLog: string | null;
+  /** What went wrong after the removal was committed (the audit line), in plain words. Empty when nothing did. */
+  readonly warnings: string[];
+  /** A removal cannot be undone: said on every answer, the preview first. */
+  readonly note: string;
 }
+
+export const FORGET_NOTE =
+  "A removal cannot be undone. A forgotten reading is never stored again from the same input: a Codex rollout re-read does not bring it back. Only a new observation is stored.";
 
 export interface ForgetDeps {
   /** The staple home: its `hub.db` and its `logs/`. */
@@ -120,26 +127,38 @@ export function forgetBudgetSamples(request: ForgetRequest, deps: ForgetDeps): F
       windows: outcome.windows,
       limits: outcome.limits,
       auditLog: null,
+      warnings: [],
+      note: FORGET_NOTE,
     };
   } finally {
     hub.close();
   }
   if (!result.applied) return result;
   // The audit line: what was removed, when, and through which surface. Written after the
-  // commit, so it never names a removal that did not happen.
+  // commit, so it never names a removal that did not happen. The removal has happened by
+  // now, so a log that cannot be written is a warning on the answer, not a failure: a
+  // caller told "failed" would retry and be told the readings do not exist.
   const logPath = collectLogPath(deps.home);
-  mkdirSync(join(deps.home, "logs"), { recursive: true, mode: 0o700 });
-  rotateLog(logPath);
-  appendFileSync(
-    logPath,
-    `${JSON.stringify({
-      at,
-      action: "forget",
-      via: request.via,
-      readings: result.readings,
-      windows: result.windows.map((w) => ({ windowId: w.windowId, outcome: w.outcome, released: w.released })),
-    })}\n`,
-    { mode: 0o600 },
-  );
+  try {
+    mkdirSync(join(deps.home, "logs"), { recursive: true, mode: 0o700 });
+    rotateLog(logPath);
+    appendFileSync(
+      logPath,
+      `${JSON.stringify({
+        at,
+        action: "forget",
+        via: request.via,
+        readings: result.readings,
+        windows: result.windows.map((w) => ({ windowId: w.windowId, outcome: w.outcome, rederivedFrom: w.rederivedFrom, released: w.released })),
+      })}\n`,
+      { mode: 0o600 },
+    );
+  } catch (error) {
+    const why = (error as NodeJS.ErrnoException).code ?? (error as Error).message;
+    return {
+      ...result,
+      warnings: [`The readings were removed, but the audit line could not be written to ${logPath} (${why}).`],
+    };
+  }
   return { ...result, auditLog: logPath };
 }

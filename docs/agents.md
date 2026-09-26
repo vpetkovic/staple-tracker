@@ -319,9 +319,12 @@ Removing a wrong reading is the operator's decision too.
 `confirm: true` it only returns the preview (`applied: false`): each reading
 and its window, what the window becomes, and each limit's current window and
 reading before and after. Show that preview to the operator, and send
-`confirm: true` only when they say so. An unknown id is refused with
-`not_found` and an ambiguous prefix with `validation`, and nothing is removed.
-The tool is `destructiveHint: true`.
+`confirm: true` (the boolean) only when they say so. A removal cannot be
+undone: a forgotten reading is never read back, not even from a Codex rollout.
+An unknown id is refused with `not_found`, and a prefix under 8 characters or an
+ambiguous one with `validation`. Either way nothing is removed. If the audit
+line cannot be written, the removal still stands and `warnings` says so. The
+tool is `destructiveHint: true`.
 
 ### Comparing plans
 

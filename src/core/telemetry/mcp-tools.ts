@@ -73,10 +73,10 @@ export function registerBudgetTools(server: McpServer, helpers: { run: Run }): v
     "forget_budget_samples",
     {
       description:
-        "Remove budget readings that should never have been stored from THIS machine's hub.db (docs/execution-telemetry.md, \"Removing a reading\"), e.g. a test status-line payload piped through the live ingest that opened a false window. ids are reading ids from list_budget_samples, full or a prefix naming exactly one; an unknown id is refused with not_found and an ambiguous prefix with validation, and nothing is removed. WITHOUT confirm=true nothing is removed: the result is the preview (applied=false): each reading and its window, what the window becomes, and each affected limit's current window and reading before and after. Show it to the operator and send confirm=true only on their say-so. A window left with no reading is removed, and a window it had superseded stands again; high-water and regressions follow at read. A replay of the same input stays removed (skipped as forgotten); a new observation is stored. One audit line goes to the budget log. Machine-local: never replicates, no network request.",
+        "Remove budget readings that should never have been stored from THIS machine's hub.db (docs/execution-telemetry.md, \"Removing a reading\"), e.g. a test status-line payload piped through the live ingest that opened a false window. ids are reading ids from list_budget_samples, full or a prefix of at least 8 characters naming exactly one; an unknown id is refused with not_found and an ambiguous prefix with validation, and nothing is removed. WITHOUT confirm=true nothing is removed: the result is the preview (applied=false): each reading and its window, what the window becomes, and each affected limit's current window and reading before and after. Show it to the operator and send confirm=true only on their say-so. A window left with no reading is removed, and a window it had superseded stands again; high-water and regressions follow at read. A replay of the same input stays removed (skipped as forgotten); a new observation is stored. A removal cannot be undone. One audit line goes to the budget log; if it cannot be written the removal still stands, auditLog is null and warnings says why. Machine-local: never replicates, no network request.",
       inputSchema: {
         ids: z.array(z.string()).min(1).describe("reading ids (full, or a unique prefix)"),
-        confirm: z.boolean().optional().describe("the operator's consent; without it only the preview is returned"),
+        confirm: z.boolean().optional().describe("the operator's consent, the literal true; without it only the preview is returned"),
       },
       outputSchema: {
         applied: z.boolean(),
@@ -85,6 +85,8 @@ export function registerBudgetTools(server: McpServer, helpers: { run: Run }): v
         windows: z.array(z.record(z.unknown())),
         limits: z.array(z.record(z.unknown())),
         auditLog: z.string().nullable(),
+        warnings: z.array(z.string()),
+        note: z.string(),
       },
       annotations: {
         title: "Forget budget samples",

@@ -73,8 +73,10 @@ const HELP = `staple budget — provider budget telemetry on this machine (docs/
   budget forget <reading-id>... [--yes]
               remove readings that should never have been stored (a test payload
               piped through the live ingest, say). Ids are full ids from budget
-              history --json, or prefixes that name exactly one reading; an unknown
-              or ambiguous id is refused and nothing is removed. Without --yes it
+              history --json, or prefixes of 8+ characters that name exactly one
+              reading; an unknown, short or ambiguous id is refused and nothing is
+              removed. Cannot be undone: a forgotten reading is never re-read,
+              not even from a Codex rollout. Without --yes it
               only previews, exit 2: each reading and its window, what the window
               becomes, and each limit's current window and reading before and
               after. A window left with no reading is removed, and a window it had
@@ -321,7 +323,10 @@ function forgetText(result: ForgetResult): string {
     lines.push(`  ${r.id}  ${r.accountRef} ${r.limitKey}  ${r.usedPercent}% used  resets ${r.resetsAt ?? "not reported"}  observed ${r.observedAt}`);
   }
   for (const w of result.windows) {
-    const what = w.outcome === "removed" ? "removed (no reading left)" : `kept, ${w.samplesLeft} reading(s) left`;
+    const what =
+      w.outcome === "removed"
+        ? "removed (no reading left)"
+        : `kept, ${w.samplesLeft} reading(s) left${w.rederivedFrom === null ? "" : `; its opening reading goes, so it takes its reset from ${w.rederivedFrom}`}`;
     lines.push(`  window ${w.windowId} (${w.accountRef} ${w.limitKey}, resets ${w.resetsAt ?? "never"}): ${what}`);
     for (const r of w.released) lines.push(`    releases ${r.windowId} (resets ${r.resetsAt ?? "never"}): ${r.supersededBy === null ? "stands again" : `still superseded by ${r.supersededBy}`}`);
   }
@@ -330,6 +335,7 @@ function forgetText(result: ForgetResult): string {
     lines.push(`    before: ${limitViewText(limit.before)}`);
     lines.push(`    after:  ${limitViewText(limit.after)}`);
   }
+  lines.push(result.note);
   return lines.join("\n");
 }
 
@@ -439,6 +445,8 @@ export function runBudgetCommand(argv: string[]): void {
         });
       }
       print(result, () => console.log(forgetText(result)));
+      // The removal was committed; only its audit line failed. Said, and still exit 0.
+      for (const warning of result.warnings) console.error(`warning: ${warning}`);
       return;
     }
     case "ingest": {
