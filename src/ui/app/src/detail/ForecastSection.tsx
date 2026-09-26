@@ -2,6 +2,15 @@
  * The forecast in the Analytics tab: what is left under this issue, and, apart from it, what that
  * work does to this machine's provider limits.
  *
+ * ## Plain first, exact behind "Show details"
+ *
+ * Each block is a card (components/plain) that opens with ONE headline figure and a
+ * plain-language sentence (lib/plain-language.ts), draws the figure as a visual with a text
+ * alternative (the likely-range bar, the budget gauge), says its status in a word with an icon,
+ * and explains itself under "What does this mean?". Every technical figure the page showed before
+ * (quantiles, bands, the chain, confidence achieved, warning chips, reason codes, snapshot ids) is
+ * still here, unchanged, behind each card's "Show details".
+ *
  * ## One payload, two blocks, never blended
  *
  * Both blocks are drawn from ONE `GET /api/forecast?ref=` (`staple forecast --json`), and they stay
@@ -12,9 +21,9 @@
  *
  * ## Rendered, never recomputed
  *
- * Every figure is a field of the payload, formatted by lib/forecast-text.ts. An unknown figure is
- * the word "Unknown" with the payload's reason, in the placeholder style, never a 0 and never a
- * dash; a lower bound says "at least". Low confidence is a visible badge, not a colour alone.
+ * Every figure is a field of the payload, rounded and phrased by lib/plain-language.ts or
+ * formatted by lib/forecast-text.ts. An unknown figure is "We can't tell yet" with the payload's
+ * reason, never a 0; a lower bound says "at least".
  *
  * `ForecastReportView` takes the payload as a prop and reads no context, so the e2e test renders it
  * from the real server's answer; `IssueForecast` is the fetch around it.
@@ -22,6 +31,10 @@
 import { getForecast } from "@/lib/api";
 import { useId, useState } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { BudgetGauge } from "@/components/plain/BudgetGauge";
+import { PlainCard, ShowDetails } from "@/components/plain/PlainCard";
+import { RangeBar } from "@/components/plain/RangeBar";
+import { ConfidencePill, StatusPill } from "@/components/plain/StatusPill";
 import {
   asOfText,
   breachText,
@@ -41,13 +54,31 @@ import {
   RATE_WARNING_TEXT,
   type RemainingText,
 } from "@/lib/forecast-text";
+import {
+  AWAITING_HEADLINE,
+  CONFIDENCE_WORDS,
+  confidenceHeadline,
+  count,
+  forecastHeadline,
+  gaugeDescription,
+  inTen,
+  limitSentence,
+  limitName,
+  limitStatus,
+  pathHeadline,
+  plainDuration,
+  plainLeft,
+  plainMissing,
+  plainRange,
+  rangeDescription,
+} from "@/lib/plain-language";
 import type { AuthError } from "@/lib/api";
 import { useOptionalSession } from "@/lib/session";
-import type { BudgetForecast, BudgetLimitForecast, CompletionForecast, ForecastReport } from "@/lib/types";
+import type { BudgetForecast, BudgetLimitForecast, CompletionForecast, ForecastReport, RemainingFigure } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 
-const HEADING = "mb-1.5 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase";
+const HEADING = "text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase";
 /** The placeholder a missing figure wears: the interface face, small, muted, italic. Never a figure. */
 const UNKNOWN = "text-[11px] text-muted-foreground italic";
 
@@ -79,7 +110,7 @@ export function WarningChips({ codes, table, label }: { codes: readonly string[]
                     aria-controls={tipId}
                     onClick={() => setOpen((current) => (current === code ? null : code))}
                     className={cn(
-                      "inline-flex items-center rounded-full border px-2 py-1 text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                      "inline-flex min-h-6 items-center rounded-full border px-2 py-1 text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                       open === code && "text-foreground",
                     )}
                   >
@@ -102,22 +133,6 @@ export function WarningChips({ codes, table, label }: { codes: readonly string[]
   );
 }
 
-/** The confidence badge. Low is marked with a dashed border and the word; colour never carries it alone. */
-export function ConfidenceBadge({ label, text }: { label: "high" | "medium" | "low"; text: string }) {
-  return (
-    <span
-      data-confidence={label}
-      className={cn(
-        "inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
-        label === "low" && "border-dashed border-[var(--status-task-todo)] text-[var(--status-task-todo)]",
-        label === "medium" && "text-muted-foreground",
-      )}
-    >
-      {text}
-    </span>
-  );
-}
-
 /** A clickable identifier that opens the issue, or plain text where nothing can open it. */
 function RefLink({ refId, onOpen }: { refId: string; onOpen?: (ref: string) => void }) {
   // Never broken across lines: `STA-` on one line and `303` on the next is not an identifier.
@@ -131,10 +146,10 @@ function RefLink({ refId, onOpen }: { refId: string; onOpen?: (ref: string) => v
   );
 }
 
-/** One remaining figure: a label, the value (or its named absence), and its ranges beneath. */
+/** One remaining figure, the technical way: a label, the value (or its named absence), and its ranges beneath. */
 function RemainingRow({ label, text, testId, children }: { label: string; text: RemainingText; testId: string; children?: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 py-2 text-[11px]" data-testid={testId}>
+    <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 py-1 text-[11px]" data-testid={testId}>
       <span className="font-medium">{label}</span>
       <div className="min-w-0 space-y-0.5">
         {text.value === null ? (
@@ -142,7 +157,7 @@ function RemainingRow({ label, text, testId, children }: { label: string; text: 
             {text.absent}
           </div>
         ) : (
-          <div data-figure>
+          <div>
             {text.lowerBound ? <span className="text-[11px] text-muted-foreground">at least </span> : null}
             <span className="font-mono text-[13px] tabular-nums">{text.figure}</span>
           </div>
@@ -159,7 +174,52 @@ function RemainingRow({ label, text, testId, children }: { label: string; text: 
   );
 }
 
-function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionForecast; mode: "full" | "compact"; onOpen?: (ref: string) => void }) {
+/**
+ * The likely-range bar of a remaining figure: the draws' p10–p90 (likely, 8 in 10), the 90% band
+ * (p5–p95, its nominal in tens), and the expected figure. Scaled from 0 to a little past the
+ * band's upper end so the band never touches the edge. Nothing without draws or an expected figure.
+ */
+function FigureRange({ figure, testId }: { figure: RemainingFigure; testId: string }) {
+  const spread = figure.simulated;
+  const description = rangeDescription(figure);
+  if (!spread || figure.expectedSeconds === null || description === null) return null;
+  const more = figure.partial ? ", or more" : "";
+  return (
+    <RangeBar
+      testId={testId}
+      max={Math.max(spread.band.upper, figure.expectedSeconds) * 1.08}
+      wide={spread.band}
+      likely={{ lower: spread.p10, upper: spread.p90 }}
+      marker={figure.expectedSeconds}
+      description={description}
+      legend={{
+        likely: `Likely: ${plainRange(spread.p10, spread.p90)}${more}`,
+        wide: `${inTen(spread.band.nominal)} chances: ${plainRange(spread.band.lower, spread.band.upper)}${more}`,
+        marker: `Expected: ${figure.partial ? "at least" : "about"} ${plainDuration(figure.expectedSeconds).text}`,
+      }}
+    />
+  );
+}
+
+/** The pill of the work-left card: Done when settled, Unknown when there is no figure, else the confidence. */
+function CompletionPill({ completion }: { completion: CompletionForecast }) {
+  if (completion.settled) return <StatusPill status="on_track" label="Done" />;
+  if (completion.labor.expectedSeconds === null) return <StatusPill status="unknown" />;
+  const level = completion.confidence.label;
+  return <ConfidencePill level={level} word={CONFIDENCE_WORDS[level]} />;
+}
+
+function CompletionBlock({
+  completion,
+  calibrationSamples,
+  mode,
+  onOpen,
+}: {
+  completion: CompletionForecast;
+  calibrationSamples: number;
+  mode: "full" | "compact";
+  onOpen?: (ref: string) => void;
+}) {
   const confidence = confidenceText(completion.confidence);
   const labor = remainingText(completion.labor);
   const path = remainingText(completion.path);
@@ -169,23 +229,106 @@ function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionF
   const awaiting = full ? completion.units.items.filter((unit) => unit.treatment === "awaiting_review") : [];
   const outside = full ? completion.path.crossSubtreeBlockers.filter((blocker) => !blocker.resolved) : [];
   const chain = completion.path.chain;
+  const headline = forecastHeadline(completion, mode);
+  const order = pathHeadline(completion.path);
+
+  const notCounted: string[] = [];
+  if (awaiting.length > 0) notCounted.push(`${count(awaiting.length, "task")} waiting for review`);
+  if (unknown.length > 0) notCounted.push(`${count(unknown.length, "task")} that can't be estimated yet`);
 
   return (
-    <section aria-label="Completion forecast" data-block="completion">
-      <div className="mb-1.5 flex items-center gap-2">
-        <h3 className={cn(HEADING, "mb-0")}>Forecast</h3>
-        <span className="ml-auto" />
-        <ConfidenceBadge label={completion.confidence.label} text={confidence.label} />
-      </div>
+    <section aria-label="Completion forecast" data-block="completion" className="grid gap-3 @xl:grid-cols-2">
+      <PlainCard
+        title={full ? "Work left" : "Work left on this task"}
+        className="@xl:col-span-2"
+        pill={<CompletionPill completion={completion} />}
+        figure={headline.figure}
+        headline={headline.sentence}
+        headlineTestId="forecast-headline"
+        help={
+          <>
+            This is hands-on work time, not a date on the calendar: time waiting for someone, for a review or for other work
+            is not in it. The bar starts at zero and shows where the total will most likely land: the strong middle band is
+            the likely range (8 in 10 chances), the fainter outer band the wider range (9 in 10), and the upright line is
+            the expected figure.
+          </>
+        }
+        detailsTestId="forecast-labor-details"
+        details={
+          completion.settled ? (
+            <p className="text-[11px] text-muted-foreground" data-testid="forecast-settled">
+              Every unit is done: nothing is left to forecast.
+            </p>
+          ) : (
+            <>
+              <RemainingRow label={full ? "Remaining labor" : "Remaining work"} text={labor} testId="forecast-labor" />
+              {awaiting.length > 0 ? (
+                <div data-testid="forecast-awaiting">
+                  <div className="text-[10px] text-muted-foreground">Not forecast: in review or awaiting approval ({missingText("not_forecast")})</div>
+                  <ul className="text-[11px]">
+                    {awaiting.map((unit) => (
+                      <li key={unit.ref} className="flex min-w-0 gap-2">
+                        <RefLink refId={unit.ref} onOpen={onOpen} />
+                        <span className="truncate text-muted-foreground" title={unit.title}>
+                          {unit.title}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {unknown.length > 0 ? (
+                <div data-testid="forecast-unknown">
+                  <div className="text-[10px] text-muted-foreground">Unknown: not counted, so the sums above are lower bounds</div>
+                  <ul className="text-[11px]">
+                    {unknown.map((unit) => (
+                      <li key={unit.ref} className="flex min-w-0 flex-wrap gap-x-2">
+                        <RefLink refId={unit.ref} onOpen={onOpen} />
+                        <span className="min-w-0 truncate text-muted-foreground" title={unit.title}>
+                          {unit.title}
+                        </span>
+                        <span className={cn(UNKNOWN, "ml-auto shrink-0 pr-0.5")}>{unknownUnitReason(unit)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {full ? (
+                <p className="text-[10px] text-muted-foreground" data-testid="forecast-units">
+                  {completion.units.forecast} of {completion.units.total} units forecast ({completion.units.known} known) ·{" "}
+                  {completion.units.done} done · {completion.units.awaitingReview} in review
+                  {completion.plan.seconds !== null ? ` · the plan's estimates add up to ${formatEffort(completion.plan.seconds)} (a plan, not a forecast)` : null}
+                  {completion.units.truncated ? " · units listed up to the limit" : null}
+                </p>
+              ) : null}
+              <p className="text-[10px] text-muted-foreground">
+                Effort along the work, not calendar time: waits for an agent, a review or an outside blocker are not in it.
+              </p>
+            </>
+          )
+        }
+      >
+        {completion.settled ? null : <FigureRange figure={completion.labor} testId="forecast-range" />}
+        {notCounted.length > 0 ? (
+          <p className="text-[13px] text-muted-foreground" data-testid="forecast-not-counted">
+            Not counted: {notCounted.join(" and ")}.
+          </p>
+        ) : null}
+      </PlainCard>
 
-      {completion.settled ? (
-        <p className="text-[11px] text-muted-foreground" data-testid="forecast-settled">
-          Every unit is done: nothing is left to forecast.
-        </p>
-      ) : (
-        <div className="divide-y border-t border-b">
-          <RemainingRow label={mode === "full" ? "Remaining labor" : "Remaining work"} text={labor} testId="forecast-labor" />
-          {mode === "full" ? (
+      {full && !completion.settled ? (
+        <PlainCard
+          title="What has to happen in order"
+          figure={order.figure}
+          headline={order.sentence}
+          headlineTestId="forecast-path-headline"
+          help={
+            <>
+              Some tasks can only start when others finish. This is the longest such chain: even with several people or agents
+              working at once, the work can't finish sooner than this.
+            </>
+          }
+          details={
             <RemainingRow label="Critical path" text={path} testId="forecast-path">
               {chain.length > 0 ? (
                 <ol aria-label="Critical path chain" className="flex flex-wrap items-center gap-x-1 text-[10px] text-muted-foreground">
@@ -212,60 +355,41 @@ function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionF
                 </ul>
               ) : null}
             </RemainingRow>
+          }
+        >
+          <FigureRange figure={completion.path} testId="forecast-path-range" />
+          {outside.length > 0 ? (
+            <p className="text-[13px] text-muted-foreground" data-testid="forecast-outside-plain">
+              {outside.length === 1 ? "1 task also waits" : `${outside.length} tasks also wait`} on work outside this, which isn&apos;t counted here.
+            </p>
           ) : null}
-        </div>
-      )}
-
-      <p className="mt-1.5 text-[11px] text-muted-foreground" data-testid="forecast-confidence">
-        {confidence.label}: {confidence.achieved}.
-        {confidence.reasons.length > 0 ? ` Not high because: ${confidence.reasons.join(", ").toLowerCase()}.` : null}
-      </p>
-      <WarningChips codes={completion.warnings} label="Forecast warnings" />
-
-      {awaiting.length > 0 ? (
-        <div className="mt-2" data-testid="forecast-awaiting">
-          <div className="text-[10px] text-muted-foreground">Not forecast: in review or awaiting approval ({missingText("not_forecast")})</div>
-          <ul className="text-[11px]">
-            {awaiting.map((unit) => (
-              <li key={unit.ref} className="flex min-w-0 gap-2">
-                <RefLink refId={unit.ref} onOpen={onOpen} />
-                <span className="truncate text-muted-foreground" title={unit.title}>
-                  {unit.title}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
+        </PlainCard>
       ) : null}
 
-      {unknown.length > 0 ? (
-        <div className="mt-2" data-testid="forecast-unknown">
-          <div className="text-[10px] text-muted-foreground">Unknown: not counted, so the sums above are lower bounds</div>
-          <ul className="text-[11px]">
-            {unknown.map((unit) => (
-              <li key={unit.ref} className="flex min-w-0 flex-wrap gap-x-2">
-                <RefLink refId={unit.ref} onOpen={onOpen} />
-                <span className="min-w-0 truncate text-muted-foreground" title={unit.title}>
-                  {unit.title}
-                </span>
-                <span className={cn(UNKNOWN, "ml-auto shrink-0 pr-0.5")}>{unknownUnitReason(unit)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {mode === "full" ? (
-        <p className="mt-2 text-[10px] text-muted-foreground" data-testid="forecast-units">
-          {completion.units.forecast} of {completion.units.total} units forecast ({completion.units.known} known) ·{" "}
-          {completion.units.done} done · {completion.units.awaitingReview} in review
-          {completion.plan.seconds !== null ? ` · the plan's estimates add up to ${formatEffort(completion.plan.seconds)} (a plan, not a forecast)` : null}
-          {completion.units.truncated ? " · units listed up to the limit" : null}
-        </p>
-      ) : null}
-      <p className="mt-1 text-[10px] text-muted-foreground">
-        Effort along the work, not calendar time: waits for an agent, a review or an outside blocker are not in it.
-      </p>
+      <PlainCard
+        data-confidence={completion.confidence.label}
+        title="How sure we are"
+        className={full && !completion.settled ? undefined : "@xl:col-span-2"}
+        figure={CONFIDENCE_WORDS[completion.confidence.label]}
+        headline={confidenceHeadline(completion.confidence, calibrationSamples)}
+        headlineTestId="forecast-confidence-headline"
+        help={
+          <>
+            The forecast learns from how long finished tasks really took compared with their estimates. The more finished tasks
+            like these there are, the surer it gets. &ldquo;Quite sure&rdquo;, &ldquo;Fairly sure&rdquo; and &ldquo;Rough
+            guess&rdquo; say how much to lean on it.
+          </>
+        }
+        details={
+          <>
+            <p className="text-[11px] text-muted-foreground" data-testid="forecast-confidence">
+              {confidence.label}: {confidence.achieved}.
+              {confidence.reasons.length > 0 ? ` Not high because: ${confidence.reasons.join(", ").toLowerCase()}.` : null}
+            </p>
+            <WarningChips codes={completion.warnings} label="Forecast warnings" />
+          </>
+        }
+      />
     </section>
   );
 }
@@ -342,28 +466,93 @@ function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
   );
 }
 
+/**
+ * One provider limit as a card: its status word, what is left and when it resets, what this work
+ * does to it (the gauge), and the technical lines, unchanged, behind "Show details". Exported for
+ * the other budget views to reuse.
+ */
+export function LimitCard({ limit, asOf, account }: { limit: BudgetLimitForecast; asOf: string; account?: string }) {
+  const remaining = limitRemainingText(limit);
+  const { status } = limitStatus(limit);
+  const left = plainLeft(limit);
+  // The figure says what is left; the sentence goes on from there (limitHeadline is the whole).
+  const sentence = limitSentence(limit);
+  return (
+    <PlainCard
+      data-limit={limit.limitKey}
+      title={account ? `${limitName(limit)} · ${account}` : limitName(limit)}
+      pill={<StatusPill status={status} />}
+      figure={left}
+      headline={sentence.opening === null ? sentence.verdict : `${sentence.reset ? `${sentence.reset} ` : ""}${sentence.verdict}`}
+      headlineTestId="budget-headline"
+      help={
+        <>
+          A subscription allows a certain amount of use in each window, then resets. The bar is that allowance: blue is what
+          is left, stripes are what this work is expected to use, grey is already used. The dashed line is the safety reserve
+          we try not to dip into, so there is always room to finish or pause cleanly.
+        </>
+      }
+      details={
+        <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 text-[11px]">
+          <div className="min-w-0">
+            <div className="truncate font-mono" title={limit.limitKey}>
+              {limit.limitKey}
+            </div>
+            {remaining.value !== null ? (
+              <div className="font-mono text-[13px] tabular-nums" data-testid="budget-remaining">
+                {remaining.value}
+              </div>
+            ) : (
+              <div className={UNKNOWN} data-unknown data-testid="budget-remaining">
+                {remaining.absent}
+              </div>
+            )}
+            <div className="text-[10px] text-muted-foreground" title={limit.resetsAt ?? undefined} data-testid="budget-reset">
+              {resetText(limit)}
+              {limit.secondsToReset !== null ? ` (${asOfText(asOf)})` : null}
+            </div>
+          </div>
+          <LimitLines limit={limit} />
+        </div>
+      }
+    >
+      {limit.remainingPercent !== null ? (
+        <BudgetGauge
+          testId="budget-gauge"
+          remaining={limit.remainingPercent}
+          after={limit.work ? limit.work.remainingAtResetPercent.expected : null}
+          reserve={limit.reserve ? limit.reserve.percent : null}
+          lowerBound={limit.work?.lowerBound ?? false}
+          description={gaugeDescription(limit)}
+        />
+      ) : null}
+    </PlainCard>
+  );
+}
+
 function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string }) {
   const reserve = budget.reserve;
   return (
-    <section aria-label="Budget forecast" data-block="budget" className="rounded-md border border-dashed px-3 py-2.5">
-      <div className="mb-1 flex flex-wrap items-baseline gap-x-2">
-        <h3 className={cn(HEADING, "mb-0")}>Budget</h3>
-        <span className="text-[10px] text-muted-foreground">this machine only, apart from the forecast above</span>
-      </div>
-      <p className="text-[10px] text-muted-foreground" data-testid="budget-reserve">
-        Measured against {reserveLabel(reserve)}
-        {reserve.source === "provisional_default" ? " (provisional until an admission policy sets one)" : null}. The work runs serially from now.
-      </p>
-
-      {budget.accounts.length === 0 ? (
-        <p className={cn(UNKNOWN, "mt-1.5")} data-unknown data-testid="budget-none">
-          No budget forecast: {budget.missing.accounts ? missingText(budget.missing.accounts) : "no accounts"}.
+    <section aria-label="Budget forecast" data-block="budget" className="space-y-3 rounded-xl border border-dashed p-3">
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <h3 className={HEADING}>Budget</h3>
+          <span className="text-[12px] text-muted-foreground">this machine only, apart from the forecast above</span>
+        </div>
+        <p className="text-[14px] leading-relaxed" data-testid="budget-intro">
+          {budget.accounts.length === 0
+            ? `We can't tell yet: ${budget.missing.accounts ? plainMissing(budget.missing.accounts) : "no usage has been measured on this machine"}.`
+            : `How this work fits your subscription limits. We aim to keep ${Math.round(reserve.percent)}% of each limit in reserve${
+                reserve.source === "provisional_default" ? " (a default until you set one)" : ""
+              }.`}
         </p>
-      ) : (
-        <div className="mt-1.5 space-y-2">
+      </div>
+
+      {budget.accounts.length === 0 ? null : (
+        <div className="space-y-3">
           {budget.accounts.map((account) => (
-            <div key={`${account.provider}:${account.accountRef}`} data-account={account.accountRef}>
-              <div className="text-[11px] font-medium">
+            <div key={`${account.provider}:${account.accountRef}`} data-account={account.accountRef} className="space-y-2">
+              <div className="text-[13px] font-medium">
                 {account.accountRef}
                 {account.provider ? <span className="font-normal text-muted-foreground"> · {account.provider}</span> : null}
               </div>
@@ -372,39 +561,28 @@ function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string })
                   No limits read{Object.values(account.missing).length > 0 ? `: ${Object.values(account.missing).map(missingText).join("; ")}` : ""}.
                 </p>
               ) : (
-                <div className="divide-y border-t border-b">
-                  {account.limits.map((limit) => {
-                    const remaining = limitRemainingText(limit);
-                    return (
-                      <div key={limit.limitKey} data-limit={limit.limitKey} className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 py-2 text-[11px]">
-                        <div className="min-w-0">
-                          <div className="truncate font-mono" title={limit.limitKey}>
-                            {limit.limitKey}
-                          </div>
-                          {remaining.value !== null ? (
-                            <div className="font-mono text-[13px] tabular-nums" data-testid="budget-remaining">
-                              {remaining.value}
-                            </div>
-                          ) : (
-                            <div className={UNKNOWN} data-unknown data-testid="budget-remaining">
-                              {remaining.absent}
-                            </div>
-                          )}
-                          <div className="text-[10px] text-muted-foreground" title={limit.resetsAt ?? undefined} data-testid="budget-reset">
-                            {resetText(limit)}
-                            {limit.secondsToReset !== null ? ` (${asOfText(asOf)})` : null}
-                          </div>
-                        </div>
-                        <LimitLines limit={limit} />
-                      </div>
-                    );
-                  })}
+                <div className="grid gap-3 @xl:grid-cols-2">
+                  {account.limits.map((limit) => (
+                    <LimitCard key={limit.limitKey} limit={limit} asOf={asOf} />
+                  ))}
                 </div>
               )}
             </div>
           ))}
         </div>
       )}
+
+      <ShowDetails testId="budget-details">
+        <p className="text-[10px] text-muted-foreground" data-testid="budget-reserve">
+          Measured against {reserveLabel(reserve)}
+          {reserve.source === "provisional_default" ? " (provisional until an admission policy sets one)" : null}. The work runs serially from now.
+        </p>
+        {budget.accounts.length === 0 ? (
+          <p className={UNKNOWN} data-unknown data-testid="budget-none">
+            No budget forecast: {budget.missing.accounts ? missingText(budget.missing.accounts) : "no accounts"}.
+          </p>
+        ) : null}
+      </ShowDetails>
     </section>
   );
 }
@@ -413,7 +591,9 @@ function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string })
 function DataDisclosure({ report }: { report: ForecastReport }) {
   return (
     <details className="text-[10px] text-muted-foreground" data-testid="forecast-data">
-      <summary className="cursor-pointer select-none">Data</summary>
+      <summary className="inline-flex min-h-6 cursor-pointer items-center rounded-md select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+        Where these numbers come from
+      </summary>
       <dl className="mt-1 grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-0.5">
         <dt>as of</dt>
         <dd className="font-mono break-all">{report.asOf}</dd>
@@ -432,13 +612,20 @@ function DataDisclosure({ report }: { report: ForecastReport }) {
   );
 }
 
-/** The whole forecast, from one payload. */
+/**
+ * The whole forecast, from one payload. `@container`: the cards reflow on the width the detail
+ * panel gives them (one column in a narrow panel or on a phone, two when there is room), not on
+ * the window's width.
+ */
 export function ForecastReportView({ report, mode, onOpen }: { report: ForecastReport; mode: "full" | "compact"; onOpen?: (ref: string) => void }) {
   return (
-    <div className="space-y-3" data-forecast-mode={mode}>
-      <CompletionBlock completion={report.completion} mode={mode} onOpen={onOpen} />
-      <BudgetBlock budget={report.budget} asOf={report.asOf} />
-      <DataDisclosure report={report} />
+    <div className="@container" data-forecast-mode={mode}>
+      <div className="space-y-3">
+        <h3 className={HEADING}>Forecast</h3>
+        <CompletionBlock completion={report.completion} calibrationSamples={report.snapshot.calibration.samples} mode={mode} onOpen={onOpen} />
+        <BudgetBlock budget={report.budget} asOf={report.asOf} />
+        <DataDisclosure report={report} />
+      </div>
     </div>
   );
 }
@@ -463,7 +650,7 @@ export function IssueForecast({
   if (forecast.error) {
     return (
       <section aria-label="Completion forecast">
-        <h3 className={HEADING}>Forecast</h3>
+        <h3 className={cn(HEADING, "mb-1.5")}>Forecast</h3>
         <p className={UNKNOWN}>The forecast could not be read: {forecast.error.message}</p>
       </section>
     );
@@ -471,8 +658,8 @@ export function IssueForecast({
   if (!forecast.data) {
     return (
       <section aria-label="Completion forecast">
-        <h3 className={HEADING}>Forecast</h3>
-        <p className="text-[11px] text-muted-foreground">Reading the forecast…</p>
+        <h3 className={cn(HEADING, "mb-1.5")}>Forecast</h3>
+        <p className="text-[12px] text-muted-foreground">Reading the forecast…</p>
       </section>
     );
   }
@@ -481,15 +668,23 @@ export function IssueForecast({
 
 /**
  * A leaf in review or awaiting approval: its work was handed over, and what is left is a wait that
- * is not work and is not forecast. One line, and no request.
+ * is not work and is not forecast. One card, and no request.
  */
 export function AwaitingForecast() {
   return (
-    <section aria-label="Completion forecast" data-forecast-mode="awaiting">
+    <section aria-label="Completion forecast" data-forecast-mode="awaiting" className="space-y-3">
       <h3 className={HEADING}>Forecast</h3>
-      <p className="text-[11px] text-muted-foreground" data-testid="forecast-awaiting-self">
-        In review: not forecast. {missingText("not_forecast").replace(/^./, (c) => c.toUpperCase())}.
-      </p>
+      <PlainCard
+        title="Work left on this task"
+        pill={<StatusPill status="unknown" label="In review" />}
+        headline={AWAITING_HEADLINE}
+        headlineTestId="forecast-awaiting-plain"
+        details={
+          <p className="text-[11px] text-muted-foreground" data-testid="forecast-awaiting-self">
+            In review: not forecast. {missingText("not_forecast").replace(/^./, (c) => c.toUpperCase())}.
+          </p>
+        }
+      />
     </section>
   );
 }

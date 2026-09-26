@@ -20,6 +20,18 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { asOfText, forecastMode, formatDuration, formatEffort, spreadText, bandText, warningText } from "@/lib/forecast-text";
+import {
+  AWAITING_HEADLINE,
+  accuracyHeadline,
+  cohortSentence,
+  confidenceHeadline,
+  forecastHeadline,
+  gaugeDescription,
+  limitSentence,
+  limitStatus,
+  pathHeadline,
+  rangeDescription,
+} from "@/lib/plain-language";
 import type { CalibrationCohort, CalibrationReport, ForecastReport } from "@/lib/types";
 import { CalibrationReportView, INCLUDE_RECONSTRUCTED_BY_DEFAULT, calibrationRequest } from "@/views/calibration/CalibrationView";
 import { AwaitingForecast, ForecastReportView } from "./ForecastSection";
@@ -399,9 +411,10 @@ describe("the workspace calibration report", () => {
     expect(withReconstructed.filter.include).toEqual(["exact", "reconstructed"]);
     const off = renderCalibration(exact, false);
     const on = renderCalibration(withReconstructed, true);
-    expect(on).toMatch(/data-testid="include-reconstructed" checked=""/);
+    expect(on).toMatch(/data-testid="include-reconstructed"[^>]*checked=""/);
     const reconstructed = section(on, 'data-set="reconstructed"');
-    expect(text(reconstructed)).toContain("Reconstructed history: backfilled, never pooled with exact");
+    expect(text(reconstructed)).toContain("Older history (rebuilt from logs, less precise)");
+    expect(text(reconstructed)).toContain("kept separate: never mixed with the history above");
     const rows = [...reconstructed.matchAll(/<article data-cohort-set="([^"]+)"/g)].map((match) => match[1]);
     expect(rows.length).toBeGreaterThan(0);
     expect(new Set(rows)).toEqual(new Set(["reconstructed"]));
@@ -426,5 +439,200 @@ describe("the workspace calibration report", () => {
     expect(none).toContain("data-unknown");
     expect(text(none)).toBe("No cohorts: nothing eligible to calibrate from.");
     expect(text(section(html, 'data-testid="set-summary-exact"'))).toContain("0 samples, 0 of 0 eligible (no eligible records)");
+  });
+});
+
+// ------------------------------------------------------------------ the plain-language layer
+
+/** Whether the element carrying `attribute` sits inside a closed <details> ("Show details"). */
+function insideClosedDetails(html: string, attribute: string): boolean {
+  const at = html.indexOf(attribute);
+  expect(at, attribute).toBeGreaterThan(-1);
+  const stack: boolean[] = [];
+  for (const match of html.slice(0, at).matchAll(/<details([^>]*)>|<\/details>/g)) {
+    if (match[0] === "</details>") stack.pop();
+    else stack.push(/\sopen[\s=>]/.test(`${match[1]}>`));
+  }
+  return stack.length > 0 && stack.every((open) => !open);
+}
+
+/** The status pill inside a markup fragment: its state, its word, and whether it has an icon. */
+function pill(html: string): { status: string; word: string; icon: boolean } {
+  const match = /<span data-status="([^"]+)"[^>]*>(<svg[\s\S]*?<\/svg>)?([^<]*)<\/span>/.exec(html);
+  expect(match, "status pill").not.toBeNull();
+  return { status: match![1]!, icon: Boolean(match![2]), word: match![3]! };
+}
+
+/** The accessible name of the first `role="img"` in a fragment: the visual's text alternative. */
+const imgLabel = (html: string): string => text(/role="img" aria-label="([^"]*)"/.exec(html)?.[1] ?? "");
+
+describe("the plain-language layer, over the same payloads", () => {
+  it("opens the work-left card with a plain answer that keeps the lower bound and names what is not counted", () => {
+    const html = render(epic);
+    const expected = forecastHeadline(epic.completion, "full");
+    const headline = text(section(html, 'data-testid="forecast-headline"'));
+    expect(headline).toBe(expected.sentence);
+    // The labor is partial: "at least", and why, from the payload's unknown units.
+    expect(headline).toMatch(/^At least .* of work is left, probably more: 1 task can't be estimated yet\.$/);
+    expect(epic.completion.units.unknownRefs.length).toBe(1);
+    expect(text(section(html, 'data-testid="forecast-not-counted"'))).toBe("Not counted: 1 task waiting for review and 1 task that can't be estimated yet.");
+    // The pill says the confidence in a word with an icon, dashed when a rough guess.
+    expect(html).toMatch(/<span data-confidence="low"[^>]*border-dashed[^>]*><svg[\s\S]*?<\/svg>Rough guess<\/span>/);
+  });
+
+  it("draws the likely range with a text alternative carrying every mark, lower bounds included", () => {
+    const html = section(render(epic), 'data-testid="forecast-range"');
+    const label = imgLabel(html);
+    expect(label).toBe(rangeDescription(epic.completion.labor));
+    expect(label).toMatch(/^Likely between .*, or more \(8 in 10 chances\)\. Very likely .*, or more \(9 in 10\)\. Expected: at least /);
+    for (const mark of ["wide", "likely", "expected"]) expect(html).toContain(`data-mark="${mark}"`);
+  });
+
+  it("says the critical path in words, and the outside wait, without its identifiers up front", () => {
+    const html = render(epic);
+    expect(text(section(html, 'data-testid="forecast-path-headline"'))).toBe(pathHeadline(epic.completion.path).sentence);
+    expect(text(section(html, 'data-testid="forecast-path-headline"'))).toMatch(/^At least .* of it has to happen one step after another\.$/);
+    expect(text(section(html, 'data-testid="forecast-outside-plain"'))).toBe("1 task also waits on work outside this, which isn't counted here.");
+  });
+
+  it("states confidence as a word, what it rests on, and why it is not surer", () => {
+    const html = render(epic);
+    const line = text(section(html, 'data-testid="forecast-confidence-headline"'));
+    expect(line).toBe(confidenceHeadline(epic.completion.confidence, epic.snapshot.calibration.samples));
+    expect(line).toMatch(new RegExp(`^Rough guess: based on ${epic.snapshot.calibration.samples} finished tasks with measured time\\. Why not surer: `));
+  });
+
+  it("keeps every technical figure, unchanged, behind a closed Show details", () => {
+    const html = render(epic);
+    for (const attribute of [
+      'data-testid="forecast-labor"',
+      'data-testid="forecast-path"',
+      'aria-label="Critical path chain"',
+      'data-testid="forecast-outside"',
+      'data-testid="forecast-confidence"',
+      'aria-label="Forecast warnings"',
+      'data-testid="forecast-awaiting"',
+      'data-testid="forecast-unknown"',
+      'data-testid="forecast-units"',
+      'data-testid="budget-rate"',
+      'data-testid="budget-breach"',
+      'data-testid="budget-reserve"',
+    ]) {
+      expect(insideClosedDetails(html, attribute), attribute).toBe(true);
+    }
+    // And the plain layer is outside every disclosure.
+    for (const attribute of ['data-testid="forecast-headline"', 'data-testid="forecast-range"', 'data-testid="budget-headline"', 'data-testid="budget-gauge"']) {
+      expect(insideClosedDetails(html, attribute), attribute).toBe(false);
+    }
+  });
+
+  it("gives each limit a status word with an icon, a plain sentence and a gauge with its text alternative", () => {
+    const limit = epic.budget.accounts.find((a) => a.accountRef === "personal-max")!.limits.find((l) => l.limitKey === "five_hour")!;
+    // The burn is a lower bound and no draw went under: not "On track", which the data does not claim.
+    expect(limit.work!.lowerBound).toBe(true);
+    expect(limit.reserve!.breachProbability).toBe(0);
+    expect(limitStatus(limit)).toEqual({ status: "tight", reason: "lower_bound" });
+    const card = section(render(epic), 'data-limit="five_hour"');
+    expect(pill(card)).toEqual({ status: "tight", word: "Tight", icon: true });
+    expect(text(card)).toContain(`${Math.round(limit.remainingPercent!)}% left`);
+    const sentence = limitSentence(limit);
+    expect(sentence.reset).toBe("Resets in 3h 58m.");
+    expect(text(section(card, 'data-testid="budget-headline"'))).toBe(`Resets in 3h 58m. ${sentence.verdict}`);
+    expect(sentence.verdict).toBe("This work should fit, but only part of it could be measured, so it may use more (a rough guess: little usage measured so far).");
+    const gauge = section(card, 'data-testid="budget-gauge"');
+    expect(imgLabel(gauge)).toBe(gaugeDescription(limit));
+    expect(imgLabel(gauge)).toContain(`This work would use at least ${Math.round(limit.work!.consumedPercent.expected)}%, leaving at most ${Math.round(limit.work!.remainingAtResetPercent.expected)}% when it resets.`);
+    for (const mark of ["left-after", "this-work", "reserve"]) expect(gauge).toContain(`data-mark="${mark}"`);
+  });
+
+  it("says Unknown, with the reason in everyday words, where the work's use was never measured", () => {
+    const codex = epic.budget.accounts.find((a) => a.accountRef === "codex-plus")!;
+    for (const limit of codex.limits) {
+      const card = section(render(epic), `data-limit="${limit.limitKey}"`);
+      expect(pill(card)).toEqual({ status: "unknown", word: "Unknown", icon: true });
+      expect(text(section(card, 'data-testid="budget-headline"'))).toContain(
+        "We can't tell yet what this work does to it: no usage has been measured for this project on this account yet.",
+      );
+      expect(text(section(card, 'data-testid="budget-headline"'))).not.toMatch(/\b0%/);
+    }
+  });
+
+  it("says At risk when the limit is already under the reserve asked for", () => {
+    const limit = highReserve.budget.accounts.find((a) => a.accountRef === "personal-max")!.limits.find((l) => l.limitKey === "five_hour")!;
+    const card = section(render(highReserve), 'data-limit="five_hour"');
+    expect(pill(card)).toEqual({ status: "at_risk", word: "At risk", icon: true });
+    expect(text(section(card, 'data-testid="budget-headline"'))).toContain("It's already below the 90% safety reserve.");
+    expect(limitStatus(limit).reason).toBe("already_below");
+  });
+
+  it("with no samples, says it can't tell yet, with Unknown and the reason, never a figure", () => {
+    const html = render(empty);
+    const headline = text(section(html, 'data-testid="forecast-headline"'));
+    expect(headline).toBe("We can't tell yet how long this will take: none of the remaining tasks can be estimated yet.");
+    expect(pill(section(html, 'data-block="completion"'))).toEqual({ status: "unknown", word: "Unknown", icon: true });
+    expect(html).not.toContain('data-testid="forecast-range"');
+    expect(text(section(html, 'data-testid="forecast-confidence-headline"'))).toMatch(/^Rough guess: /);
+  });
+
+  it("gives the compact leaf a plain answer with its likely range", () => {
+    const html = render(leaf, "compact");
+    const headline = text(section(html, 'data-testid="forecast-headline"'));
+    expect(headline).toBe(forecastHeadline(leaf.completion, "compact").sentence);
+    expect(headline).toMatch(/^About .* of work is left on this task — probably (between .*|about .*)\.$/);
+    expect(html).not.toContain('data-testid="forecast-path-headline"');
+  });
+
+  it("says a settled forecast is done, and a leaf in review is waiting, in words and a pill", () => {
+    const settledHtml = render(settled);
+    expect(text(section(settledHtml, 'data-testid="forecast-headline"'))).toBe("Everything here is done: there is nothing left to forecast.");
+    expect(pill(section(settledHtml, 'data-block="completion"'))).toEqual({ status: "on_track", word: "Done", icon: true });
+    const awaiting = renderToStaticMarkup(<AwaitingForecast />);
+    expect(text(section(awaiting, 'data-testid="forecast-awaiting-plain"'))).toBe(AWAITING_HEADLINE);
+    expect(pill(awaiting)).toEqual({ status: "unknown", word: "In review", icon: true });
+  });
+
+  it("with no budget data, opens the budget block with a plain 'can't tell yet'", () => {
+    expect(text(section(render(noBudget), 'data-testid="budget-intro"'))).toBe("We can't tell yet: no usage has been measured on this machine.");
+    expect(render(noBudget)).not.toContain('data-testid="budget-gauge"');
+  });
+});
+
+describe("estimate accuracy, in everyday words", () => {
+  it("opens with one answer sentence and presents each cohort as plain sentences, with details behind", () => {
+    const html = renderCalibration(exact, false);
+    const cohorts = exact.items as CalibrationCohort[];
+    expect(text(section(html, 'data-testid="accuracy-headline"'))).toBe(accuracyHeadline(cohorts));
+    const sentences = [...html.matchAll(/data-testid="cohort-sentence"/g)];
+    expect(sentences.length).toBe(cohorts.length);
+    for (const cohort of cohorts) {
+      const parts = cohortSentence(cohort);
+      expect(text(html)).toContain(`${parts.answer} ${parts.basis} ${parts.confidence}`);
+      expect(parts.basis).toBe(`Based on ${cohort.samples} finished tasks.`);
+    }
+    const bug = cohorts.find((cohort) => cohort.key.kind === "bug")!;
+    const bugParts = cohortSentence(bug);
+    expect(bugParts.answer).toMatch(/^Bug fixes, high priority: usually take about /);
+    expect(bugParts.confidence).toBe("Rough guess: not enough data to be sure.");
+    expect(bugParts.fallback).toBe("Too few of these alone, so this uses all finished work.");
+    expect(cohortSentence(cohorts.find((cohort) => cohort.key.kind === "task")!).fallback).toBeNull();
+    // The technical figures of every cohort are behind Show details.
+    for (const attribute of ['data-testid="cohort-n"', 'data-testid="cohort-quantiles"', 'data-testid="cohort-bounds"', 'data-testid="calibration-snapshot"']) {
+      expect(insideClosedDetails(html, attribute), attribute).toBe(true);
+    }
+    // The bar reads against the estimate itself, with its text alternative.
+    expect(html).toContain('data-mark="reference"');
+    expect(imgLabel(section(html, 'data-testid="cohort-range"'))).toMatch(/^8 in 10 past tasks took .*The dashed line is the estimate itself\.$/);
+  });
+
+  it("calls the switch 'Include older history (rebuilt from logs, less precise)'", () => {
+    expect(text(renderCalibration(exact, false))).toContain("Include older history (rebuilt from logs, less precise)");
+  });
+
+  it("with no samples, says it can't tell yet", () => {
+    const html = renderCalibration(emptyCalibration, false, EMPTY_WS);
+    expect(text(section(html, 'data-testid="accuracy-headline"'))).toBe(
+      "We can't tell yet: there are no finished tasks with measured time to compare with their estimates.",
+    );
+    expect(text(section(html, 'data-testid="no-groups-exact"'))).toBe("We can't tell yet: there are no finished tasks with an estimate yet.");
   });
 });

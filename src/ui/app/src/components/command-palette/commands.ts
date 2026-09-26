@@ -357,7 +357,7 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
   }
 
   /*
-   * The issue filters, only where they filter something: the Calibration report is not an issue
+   * The issue filters, only where they filter something: the Estimate accuracy report is not an issue
    * list, and the header hides the same controls there (`viewUsesIssueFilters`).
    */
   if (viewUsesIssueFilters(context.view)) pushIssueFilters(commands, context);
