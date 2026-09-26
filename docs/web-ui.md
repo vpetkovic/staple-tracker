@@ -882,7 +882,7 @@ makes no request: its work was handed over, and the wait is not work.
 
 ### Plain-language cards
 
-Every block of the forecast and of [Estimate accuracy](#estimate-accuracy) is a
+Every block of the forecast and of [Estimates](#estimates) is a
 card (`components/plain/`), built the same way so it reads at a glance:
 
 1. a small title and, where the block has one, a **pill**;
@@ -1015,8 +1015,8 @@ motion and is off under reduced motion.
   is not high, and the warning chips in the payload's order. Each chip is a
   button: hover or keyboard focus shows its sentence in the app's tooltip, a
   press opens it inline, and the sentence is in the button's accessible name.
-- **Budget**, in its own dashed frame under its own heading, subtitled *Usage
-  measured on this computer*: budget data never synchronizes and never blends
+- **Usage**, in its own dashed frame under its own heading, subtitled *Usage
+  measured on this computer*: usage data never synchronizes and never blends
   with the completion figures. It opens with *How this work fits your
   subscription limits. We aim to keep 20% of each limit in reserve (a default
   until you set one).*, or *We can't tell yet: no usage has been measured on this
@@ -1050,10 +1050,11 @@ motion and is off under reduced motion.
 
 The forecast re-reads on the page's refresh fingerprint.
 
-## Estimate accuracy
+## Estimates
 
-The fifth destination in the rail, **Estimate accuracy** (also "Go to Estimate
-accuracy" in the command palette, which still finds it by *calibration*), is the
+The fifth destination in the rail, **Estimates** (also "Go to Estimates" in
+the command palette, which still finds it by *estimate accuracy* and
+*calibration*), is the
 workspace's calibration report: `GET /api/calibration`, the payload of `staple
 calibrate --json` and MCP `calibration_cohorts`
 ([timing-semantics.md](timing-semantics.md), "Calibration cohorts" and
@@ -1139,10 +1140,10 @@ samples;
 issues get a forecast. The type mirror is pinned against the store's types in
 `test/contract-ui-types.test.ts`.
 
-## Budget
+## Usage
 
-The rail's **Machine** group holds one destination, **Budget** (also "Go to
-Budget" in the command palette): this machine's provider limits and each
+The rail's **Machine** group holds one destination, **Usage** (also "Go to
+Usage" in the command palette, which still finds it by *budget*): this machine's provider limits and each
 one's session pressure, `GET /api/budget`, the payload of `staple budget
 --json` and MCP `get_budget` ([execution-telemetry.md](execution-telemetry.md#pressure)).
 It sits apart from the Workspace group because budget readings live in this
@@ -1181,7 +1182,7 @@ sentence says when the pace reaches the reserve, or that it already has),
 with no current window collapse into one line per account (*1 Claude limit can't
 be read yet: the provider doesn't say when it resets.*); an account or a machine
 with nothing says why in plain words (*Set up, but no reading has arrived yet.*,
-*Budget tracking is off on this computer…*), with `staple budget setup` behind
+*Usage tracking is off on this computer…*), with `staple budget setup` behind
 *Show details*. Everything below is what each card's (or account's) *Show
 details* holds, unchanged.
 

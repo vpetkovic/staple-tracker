@@ -888,7 +888,7 @@ describe("the Budget view's status: the store's provisional state, said honestly
     expect(readingGaugeDescription(78, 12.5)).toBe("78% left now. Safety reserve: 12.5%.");
     expect(boundText(true)).toBe("measured on this computer");
     expect(boundText(false)).toBe("not set up on this computer");
-    expect(budgetAbsentPlain(undefined, false, false)).toMatch(/^Budget tracking is off on this computer/);
+    expect(budgetAbsentPlain(undefined, false, false)).toMatch(/^Usage tracking is off on this computer/);
     expect(budgetAbsentPlain("no_sample_yet", true, true)).toMatch(/^Set up, but no reading has arrived yet/);
     expect(budgetAbsentPlain("source_unavailable", true, true)).toMatch(/^Set up, but nothing is collecting/);
     expect(budgetAbsentPlain("source_unavailable", true, false)).toMatch(/^Not set up on this computer yet/);

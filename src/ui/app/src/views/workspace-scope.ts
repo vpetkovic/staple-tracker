@@ -1,7 +1,7 @@
 /**
  * WHICH WORKSPACE A PER-WORKSPACE PAGE READS — and when it must ask instead.
  *
- * Queue, Milestones and Estimate accuracy each read one workspace: `/api/queue`,
+ * Queue, Milestones and Estimates each read one workspace: `/api/queue`,
  * `/api/milestones` and `/api/calibration` answer for a single store (a plan's positions and
  * revision, a milestone's membership, a workspace's own estimate history), and in hub mode
  * with no `ws` the server answers for ITS first registered workspace. These pages used to do

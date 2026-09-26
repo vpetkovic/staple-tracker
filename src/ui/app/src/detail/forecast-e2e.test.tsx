@@ -150,6 +150,10 @@ describe("an epic's forecast, as the server computed it", () => {
     // The budget block is framed apart and says whose data it is.
     expect(budget).toContain("border-dashed");
     expect(text(section(budget, 'data-testid="budget-subtitle"'))).toBe("Usage measured on this computer");
+    // Headed with the same word as the page it reads from (the rail's "Usage"), never "Budget".
+    expect(html).toContain('aria-label="Usage forecast"');
+    expect(budget).toMatch(/<h3[^>]*>Usage<\/h3>/);
+    expect(text(budget)).not.toMatch(/\bBudget\b/);
     expect(text(budget)).toContain("This machine only");
     // No budget figure in the completion block, and no completion figure in the budget block.
     const labor = formatDuration(epic.completion.labor.expectedSeconds!);
@@ -358,7 +362,7 @@ describe("the other forecast states", () => {
     expect(noBudget.budget.accounts).toEqual([]);
     const none = section(render(noBudget), 'data-testid="budget-none"');
     expect(none).toContain("data-unknown");
-    expect(text(none)).toBe("No budget forecast: this machine has no budget readings or bindings.");
+    expect(text(none)).toBe("No usage forecast: this computer has no usage readings or bindings.");
     // The completion block is unchanged by the budget: the two never blend.
     expect(section(render(noBudget), 'data-block="completion"')).toBe(section(render(epic), 'data-block="completion"'));
   });

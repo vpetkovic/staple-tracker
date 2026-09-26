@@ -208,7 +208,7 @@ export const MISSING_TEXT: Record<string, string> = {
   no_sample_yet: "no reading yet",
   reset_not_reported: "the provider reports no reset time",
   sliding_window: "a sliding window has no single reset",
-  source_unavailable: "this machine has no budget readings or bindings",
+  source_unavailable: "this computer has no usage readings or bindings",
   no_eligible_records: "nothing eligible to calibrate from",
   // missingInputs
   attempt_burn: "no attempt of this workspace was measured on this account",

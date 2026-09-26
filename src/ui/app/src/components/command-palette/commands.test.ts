@@ -190,7 +190,7 @@ describe("buildCommands", () => {
     expect(command.keywords).toContain("estimate accuracy");
   });
 
-  it("offers no issue filter commands on the Estimate accuracy report, which is not an issue list", () => {
+  it("offers no issue filter commands on the Estimates report, which is not an issue list", () => {
     const onCalibration = buildCommands(context({ view: "calibration" })).map((c) => c.id);
     expect(onCalibration.filter((id) => id.startsWith("filter:"))).toEqual([]);
     const onTasks = buildCommands(context({ view: "tree" })).map((c) => c.id);

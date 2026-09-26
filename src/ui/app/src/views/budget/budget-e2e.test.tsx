@@ -181,7 +181,7 @@ describe("unknown telemetry is visibly unknown", () => {
 
   it("names a bound account with no reading, and an unbound one with no reset, with their reasons and the setup hint", () => {
     const empty = text(section(render(view), `data-account="${PRESSURE_ACCOUNTS.empty}"`));
-    expect(empty).toContain("No reading yet: capture is on and a source is bound");
+    expect(empty).toContain("No reading yet: usage tracking is on and a source is bound");
     const unbound = section(render(view), `data-account="${PRESSURE_ACCOUNTS.unbound}"`);
     expect(unbound).toContain('data-bound="no"');
     // A limit with no current window gets no card: one plain line, the technical row behind details.
@@ -198,7 +198,7 @@ describe("unknown telemetry is visibly unknown", () => {
   it("says why a machine with no budget data shows nothing, and what to run", () => {
     expect(bare).toMatchObject({ budgetCapture: false, accounts: [] });
     const html = text(section(render(bare), 'data-testid="budget-none"'));
-    expect(html).toContain("Budget capture is off on this machine");
+    expect(html).toContain("Usage tracking is off on this computer");
     expect(html).toContain("`staple budget setup --claude-account <label> --codex-account <label>`: it prints the plan, and the same command with `--yes` applies it.");
   });
 });
@@ -299,7 +299,7 @@ describe("the plain-language layer of the Budget view", () => {
     expect(text(section(html, `data-account="${PRESSURE_ACCOUNTS.within}"`))).toMatch(/^(Claude \(Anthropic\)|Codex \(OpenAI\))/);
     const none = render(bare);
     expect(text(section(none, 'data-testid="budget-none-plain"'))).toBe(
-      "Budget tracking is off on this computer, so there is nothing to show yet. The one-time setup is under Show details.",
+      "Usage tracking is off on this computer, so there is nothing to show yet. The one-time setup is under Show details.",
     );
     expect(insideClosedDetails(none, 'data-testid="budget-none"')).toBe(true);
     expect(text(section(none, 'data-testid="budget-none"'))).toContain(SETUP_HINT);

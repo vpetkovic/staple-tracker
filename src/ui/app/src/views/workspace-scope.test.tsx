@@ -44,7 +44,7 @@ describe("workspaceScope", () => {
  */
 const PAGES: Array<[string, () => ReactElement]> = [
   ["Queue", () => <QueueView onAuthError={() => {}} />],
-  ["Estimate accuracy", () => <CalibrationView onAuthError={() => {}} />],
+  ["Estimates", () => <CalibrationView onAuthError={() => {}} />],
 ];
 
 /**

@@ -66,9 +66,9 @@ describe("budget text", () => {
   it("explains an account or a machine with nothing, with the setup hint", () => {
     const account = (missing: Record<string, string>, bound: boolean): BudgetAccountView => ({ provider: null, accountRef: "a", bound, limits: [], missing });
     expect(accountAbsentText(account({ limits: "source_unavailable" }, false), true)).toMatchObject({ reason: "Unknown: no source is bound to it.", hint: expect.stringContaining("`staple budget setup --claude-account <label> --codex-account <label>`") });
-    expect(accountAbsentText(account({ limits: "source_unavailable" }, true), false).reason).toBe("Unknown: budget capture is off.");
+    expect(accountAbsentText(account({ limits: "source_unavailable" }, true), false).reason).toBe("Unknown: usage tracking is off.");
     expect(accountAbsentText(account({ limits: "no_sample_yet" }, true), true).reason).toMatch(/^No reading yet/);
-    expect(machineAbsentText({ budgetCapture: false, accounts: [] })?.reason).toMatch(/capture is off/);
+    expect(machineAbsentText({ budgetCapture: false, accounts: [] })?.reason).toMatch(/^Usage tracking is off on this computer/);
     expect(machineAbsentText({ budgetCapture: true, accounts: [account({}, true)] })).toBeNull();
   });
 });

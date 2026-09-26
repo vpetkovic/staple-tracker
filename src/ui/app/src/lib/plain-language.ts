@@ -1053,7 +1053,7 @@ export function boundText(bound: boolean): string {
 
 /** Why an account (or the whole machine) shows nothing, in everyday words; the exact command stays under details. */
 export function budgetAbsentPlain(code: string | undefined, budgetCapture: boolean, bound: boolean): string {
-  if (!budgetCapture) return "Budget tracking is off on this computer, so there is nothing to show yet. The one-time setup is under Show details.";
+  if (!budgetCapture) return "Usage tracking is off on this computer, so there is nothing to show yet. The one-time setup is under Show details.";
   if (code === "no_sample_yet") return "Set up, but no reading has arrived yet. It should appear the next time the tool reports its usage.";
   if (code === "source_unavailable" || code === undefined) {
     return bound

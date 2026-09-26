@@ -3,7 +3,7 @@
  * quietly reading the first one. See workspace-scope.ts for why these pages cannot
  * aggregate.
  *
- * Built from the plain-language card the Budget and Estimate accuracy pages use: a plain
+ * Built from the plain-language card the Usage and Estimates pages use: a plain
  * sentence saying what this is and what to do, the answer one tap away, and the why behind
  * "What does this mean?". Picking a workspace here is `session.setWs`, the same call the
  * switcher makes, so the rest of the app follows. The choice is also remembered as the

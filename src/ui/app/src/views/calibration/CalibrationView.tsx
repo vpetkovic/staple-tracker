@@ -1,7 +1,7 @@
 /**
- * The Estimate accuracy destination (the `calibration` view): how long finished work really took
+ * The Estimates destination (the `calibration` view): how long finished work really took
  * against its estimate, by group, as `staple calibrate` reads it (docs/timing-semantics.md,
- * "Calibration cohorts" and "Confidence ranges"; docs/web-ui.md, "Estimate accuracy").
+ * "Calibration cohorts" and "Confidence ranges"; docs/web-ui.md, "Estimates").
  *
  * ## Plain first, exact behind "Show details"
  *
@@ -423,8 +423,8 @@ export function CalibrationView({ onAuthError }: { onAuthError: (error: AuthErro
   if (scope.kind === "choose") {
     return (
       <ChooseWorkspace
-        page="Estimate accuracy"
-        sentence="Estimate accuracy is worked out for each workspace on its own. Choose a workspace to see how its estimates compare with the time the work really took."
+        page="Estimates"
+        sentence="Estimates are checked for each workspace on its own. Choose a workspace to see how its estimates compare with the time the work really took."
         workspaces={scope.workspaces}
         onChoose={session.setWs}
       />
