@@ -174,7 +174,10 @@ export function limitPressure(input: PressureInput): LimitPressure {
     if (observed.spanSeconds < PRESSURE_MIN_SPAN_SECONDS) warnings.push("short_span");
     if ((input.regressionCount ?? 0) > 0) warnings.push("regressions");
     confidence = { label: warnings.length > 0 ? "low" : "medium", readings: observed.readings, spanSeconds: observed.spanSeconds, warnings };
-  } else missing.confidence = missing.observed!;
+  } else {
+    missing.confidence = missing.observed!;
+    if (missingInputs.observed !== undefined) missingInputs.confidence = missingInputs.observed;
+  }
 
   // ---- forecast
   const reserve = input.reserve.percent;

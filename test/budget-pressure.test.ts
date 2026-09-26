@@ -225,7 +225,7 @@ describe("unknown pressure is unknown, with its reason, and never within", () =>
     const { pressure } = limit(1, "personal-max", "five_hour");
     expect(pressure.observed).toBeNull();
     expect(pressure.missing).toMatchObject({ observed: "input_missing", confidence: "input_missing", state: "input_missing", ratio: "input_missing" });
-    expect(pressure.missingInputs).toMatchObject({ observed: ["second_reading"], state: ["observed"], ratio: ["observed"] });
+    expect(pressure.missingInputs).toMatchObject({ observed: ["second_reading"], confidence: ["second_reading"], state: ["observed"], ratio: ["observed"] });
     // What does not need the pace is known.
     expect(pressure.sustainablePercentPerHour).toBeCloseTo((50 / (239 * 60)) * HOUR, 9);
     expect(pressure.state).toBeNull();
