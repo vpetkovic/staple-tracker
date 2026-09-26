@@ -29,7 +29,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { deriveOpId } from "../src/core/journal.js";
 import { startMcpClient, type McpHarness } from "./fixtures/contract-support.js";
-import { runCliAt } from "./fixtures/characterize-support.js";
+import { runCliAtAsync } from "./fixtures/characterize-support.js";
 
 const AGENT = "seam-agent";
 const DEVICE = "device-characterize";
@@ -86,8 +86,8 @@ function repositoryId(): string {
   }
 }
 
-function cli(...args: string[]) {
-  return runCliAt(repoDir, args, {
+async function cli(...args: string[]) {
+  return await runCliAtAsync(repoDir, args, {
     STAPLE_HOME: home,
     STAPLE_AGENT: AGENT,
     STAPLE_DEVICE_ID: DEVICE,
@@ -95,8 +95,8 @@ function cli(...args: string[]) {
 }
 
 /** Run a CLI command with --json and return the parsed stdout. */
-function cliJson(...args: string[]): Record<string, unknown> {
-  const result = cli(...args, "--json");
+async function cliJson(...args: string[]): Promise<Record<string, unknown>> {
+  const result = await cli(...args, "--json");
   expect(result.status, `${args.join(" ")} failed: ${result.stderr}`).toBe(0);
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
@@ -123,7 +123,7 @@ beforeAll(async () => {
   // what arms the journal. A global workspace has no `.staple/repository.json`
   // and therefore no identity, which is itself pinned at the bottom of this file.
   expect(
-    runCliAt(repoDir, ["init"], { STAPLE_HOME: home, STAPLE_AGENT: AGENT, STAPLE_DEVICE_ID: DEVICE })
+    (await runCliAtAsync(repoDir, ["init"], { STAPLE_HOME: home, STAPLE_AGENT: AGENT, STAPLE_DEVICE_ID: DEVICE }))
       .status,
   ).toBe(0);
   dbPath = join(repoDir, ".staple", "staple.db");
@@ -145,17 +145,17 @@ afterAll(async () => {
 });
 
 describe("the seam is on every surface", () => {
-  it("journals a CLI create, update, comment, document and claim", () => {
+  it("journals a CLI create, update, comment, document and claim", async () => {
     const before = outbox().length;
 
-    cliIssue = cliJson("new", "From the CLI").identifier as string;
-    expect(cli("status", cliIssue, "todo").status).toBe(0);
-    expect(cli("comment", cliIssue, "a note").status).toBe(0);
+    cliIssue = (await cliJson("new", "From the CLI")).identifier as string;
+    expect((await cli("status", cliIssue, "todo")).status).toBe(0);
+    expect((await cli("comment", cliIssue, "a note")).status).toBe(0);
     const plan = join(home, "plan.md");
     writeFileSync(plan, "# plan\n");
-    expect(cli("doc", cliIssue, "plan", "--put", plan).status).toBe(0);
-    expect(cli("checkout", cliIssue).status).toBe(0);
-    expect(cli("release", cliIssue).status).toBe(0);
+    expect((await cli("doc", cliIssue, "plan", "--put", plan)).status).toBe(0);
+    expect((await cli("checkout", cliIssue)).status).toBe(0);
+    expect((await cli("release", cliIssue)).status).toBe(0);
 
     const added = outbox().slice(before);
     const shapes = added.map((row) => `${row.entity}.${row.verb}`);
@@ -221,9 +221,9 @@ describe("the seam is on every surface", () => {
     expect(added.map((row) => `${row.entity}.${row.verb}`)).toContain("project.create");
   });
 
-  it("journals a queue mutation from the CLI as one plan replace", () => {
+  it("journals a queue mutation from the CLI as one plan replace", async () => {
     const before = outbox().length;
-    expect(cli("queue", "add", cliIssue).status).toBe(0);
+    expect((await cli("queue", "add", cliIssue)).status).toBe(0);
 
     const added = outbox().slice(before);
     const queueOps = added.filter((row) => row.entity === "queue");

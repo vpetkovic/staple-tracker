@@ -26,7 +26,7 @@ import {
   CONTRACT_AGENT,
   cliEnvelope,
   mcpEnvelope,
-  runCli,
+  runCliAsync,
   startMcpClient,
   toolPayload,
   type McpHarness,
@@ -70,8 +70,8 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
 async function httpEnvelope(init?: RequestInit): Promise<{ status: number; body: WorkspaceSettingsEnvelope }> {
@@ -89,7 +89,7 @@ async function httpEnvelope(init?: RequestInit): Promise<{ status: number; body:
 
 /** The setting as each surface answers it, read fresh — no caching between doors. */
 async function readEverywhere(): Promise<Record<"cli" | "mcp" | "http" | "ui", SettingView>> {
-  const fromCli = cli("settings", "get", KEY, "--ws", WS, "--json");
+  const fromCli = await cli("settings", "get", KEY, "--ws", WS, "--json");
   expect(fromCli.status, fromCli.stderr).toBe(0);
   const fromMcp = toolPayload(await mcp.call("get_setting", { key: KEY, ws: WS })) as SettingView;
   const served = await httpEnvelope();
@@ -115,7 +115,7 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
 
   ({ settingValueIn } = (await import(UI_SETTINGS_MODULE)) as UiSettingsModule);
 
@@ -143,7 +143,7 @@ describe("the queue policy is the same object on every surface", () => {
   });
 
   it("a CLI write is answered with the new view and every surface reads it back", async () => {
-    const written = cli("settings", "set", KEY, "strict", "--ws", WS, "--json");
+    const written = await cli("settings", "set", KEY, "strict", "--ws", WS, "--json");
     expect(written.status, written.stderr).toBe(0);
     expect(JSON.parse(written.stdout)).toEqual(STRICT);
     expectAllEqual(await readEverywhere(), STRICT);
@@ -165,11 +165,11 @@ describe("the queue policy is the same object on every surface", () => {
     expectAllEqual(await readEverywhere(), STRICT);
   });
 
-  it("the human CLI line carries the same value and source as the JSON", () => {
-    const shown = cli("settings", "get", KEY, "--ws", WS);
+  it("the human CLI line carries the same value and source as the JSON", async () => {
+    const shown = await cli("settings", "get", KEY, "--ws", WS);
     expect(shown.status).toBe(0);
     expect(shown.stdout.trim()).toBe("queue.policy = strict  (workspace)");
-    const listed = cli("settings", "--ws", WS);
+    const listed = await cli("settings", "--ws", WS);
     expect(listed.stdout.trim().split("\n")).toEqual([
       "kinds.default = task  (default)",
       // R5a's glyph map is structured, so the line prints it as JSON.
@@ -180,8 +180,8 @@ describe("the queue policy is the same object on every surface", () => {
 });
 
 describe("every write is recorded with actor, previous value and new value", () => {
-  it("in surface order: the CLI's agent, the MCP server's agent, the UI's default actor", () => {
-    const events = cli("events", "--ws", WS, "--json");
+  it("in surface order: the CLI's agent, the MCP server's agent, the UI's default actor", async () => {
+    const events = await cli("events", "--ws", WS, "--json");
     expect(events.status).toBe(0);
     const changes = events.stdout
       .trim()
@@ -201,8 +201,8 @@ describe("every write is recorded with actor, previous value and new value", () 
 describe("a value outside the contract is refused the same way everywhere", () => {
   const MESSAGE = `workspace ${WS}: "queue.policy" must be one of advisory, strict, got "lenient"`;
 
-  it("CLI: exit 2 with the validation envelope", () => {
-    const refused = cli("settings", "set", KEY, "lenient", "--ws", WS, "--json");
+  it("CLI: exit 2 with the validation envelope", async () => {
+    const refused = await cli("settings", "set", KEY, "lenient", "--ws", WS, "--json");
     expect(refused.status).toBe(CLI_EXIT_CODES.validation);
     expect(cliEnvelope(refused)).toMatchObject({ code: "validation", message: MESSAGE, retryable: false });
   });

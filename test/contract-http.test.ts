@@ -36,7 +36,7 @@ import {
   commentGolden,
   issueGolden,
   normalize,
-  runCli,
+  runCliAsync,
 } from "./fixtures/contract-support.js";
 import { ERROR_CONTRACT, httpStatusFor, tripleOf, type ErrorTriple } from "./fixtures/error-contract.js";
 
@@ -47,8 +47,8 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
 function get(path: string): Promise<Response> {
@@ -70,18 +70,18 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
-  expect(cli("new", "Contract root task", "--ws", WS).status).toBe(0);
-  expect(cli("start", "CON-1", "--agent", CONTRACT_AGENT, "--ws", WS).status).toBe(0);
-  expect(cli("comment", "CON-1", "contract comment", "--ws", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("new", "Contract root task", "--ws", WS)).status).toBe(0);
+  expect((await cli("start", "CON-1", "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
+  expect((await cli("comment", "CON-1", "contract comment", "--ws", WS)).status).toBe(0);
 
   // CON-2 carries a document, so the revision_conflict projection has something to
   // conflict with. It has to be a different issue from CON-1: the "not_found
   // (document revision)" case above depends on CON-1 having no `plan`.
-  expect(cli("new", "Contract documented task", "--ws", WS).status).toBe(0);
+  expect((await cli("new", "Contract documented task", "--ws", WS)).status).toBe(0);
   const docFile = join(home, "plan.md");
   writeFileSync(docFile, "# plan\n\nrevision one\n");
-  expect(cli("doc", "CON-2", "plan", "--put", docFile, "--summary", "first", "--ws", WS).status).toBe(0);
+  expect((await cli("doc", "CON-2", "plan", "--put", docFile, "--summary", "first", "--ws", WS)).status).toBe(0);
 
   ui = startUiServer({ port: 0, hub: false, ws: WS });
   await once(ui.server, "listening");

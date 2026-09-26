@@ -18,7 +18,6 @@
  * pair every surface has an independent chance to conflate — `if (body.x)` is
  * one keystroke from silently discarding a deliberate clear.
  */
-import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -34,11 +33,12 @@ import {
   cleanEnv,
   cliEnvelope,
   mcpEnvelope,
-  runCli,
+  runCliAsync,
   startMcpClient,
   toolPayload,
   type McpHarness,
 } from "./fixtures/contract-support.js";
+import { spawnAsync } from "./fixtures/spawn-async.js";
 
 const WS = "contract";
 
@@ -49,13 +49,13 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
 /** `staple show <ref> --json`, parsed. The CLI's read of the timing pair. */
-function cliShow(ref: string): Record<string, any> {
-  const result = cli("show", ref, "--ws", WS, "--json");
+async function cliShow(ref: string): Promise<Record<string, any>> {
+  const result = await cli("show", ref, "--ws", WS, "--json");
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout) as Record<string, any>;
 }
@@ -87,7 +87,7 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
 
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: false, ws: WS });
@@ -107,11 +107,11 @@ afterAll(async () => {
 
 describe("an estimate written through one surface is readable through the others", () => {
   it("CLI writes it; MCP and HTTP both read the same number back", async () => {
-    expect(cli("new", "Written by CLI", "--ws", WS, "--estimate", "90m").status).toBe(0);
+    expect((await cli("new", "Written by CLI", "--ws", WS, "--estimate", "90m")).status).toBe(0);
 
     // 90m is 5400 seconds on every surface. A surface that parsed the duration
     // differently, or stored minutes, shows up right here.
-    expect(cliShow("CON-1").issue.estimatedSeconds).toBe(5400);
+    expect((await cliShow("CON-1")).issue.estimatedSeconds).toBe(5400);
     expect((await mcpGet("CON-1")).issue.estimatedSeconds).toBe(5400);
     expect((await httpJson("/api/issue?ref=CON-1")).body.issue.estimatedSeconds).toBe(5400);
   });
@@ -125,7 +125,7 @@ describe("an estimate written through one surface is readable through the others
     expect(created.isError, JSON.stringify(created.content)).toBeFalsy();
     expect((toolPayload(created) as Record<string, any>).estimatedSeconds).toBe(7200);
 
-    expect(cliShow("CON-2").issue.estimatedSeconds).toBe(7200);
+    expect((await cliShow("CON-2")).issue.estimatedSeconds).toBe(7200);
     expect((await httpJson("/api/issue?ref=CON-2")).body.issue.estimatedSeconds).toBe(7200);
   });
 
@@ -138,7 +138,7 @@ describe("an estimate written through one surface is readable through the others
     expect(created.status).toBe(200);
     expect(created.body.estimatedSeconds).toBe(1800);
 
-    expect(cliShow("CON-3").issue.estimatedSeconds).toBe(1800);
+    expect((await cliShow("CON-3")).issue.estimatedSeconds).toBe(1800);
     expect((await mcpGet("CON-3")).issue.estimatedSeconds).toBe(1800);
   });
 });
@@ -185,24 +185,24 @@ describe("absent leaves it alone, null clears it — on every surface", () => {
     expect(only.body.estimatedSeconds).toBe(2400);
   });
 
-  it("CLI: --no-estimate clears it, and --estimate sets it again", () => {
-    expect(cli("status", "CON-1", "backlog", "--ws", WS, "--no-estimate").status).toBe(0);
-    expect(cliShow("CON-1").issue.estimatedSeconds).toBeNull();
-    expect(cli("status", "CON-1", "backlog", "--ws", WS, "--estimate", "2h").status).toBe(0);
-    expect(cliShow("CON-1").issue.estimatedSeconds).toBe(7200);
+  it("CLI: --no-estimate clears it, and --estimate sets it again", async () => {
+    expect((await cli("status", "CON-1", "backlog", "--ws", WS, "--no-estimate")).status).toBe(0);
+    expect((await cliShow("CON-1")).issue.estimatedSeconds).toBeNull();
+    expect((await cli("status", "CON-1", "backlog", "--ws", WS, "--estimate", "2h")).status).toBe(0);
+    expect((await cliShow("CON-1")).issue.estimatedSeconds).toBe(7200);
   });
 
-  it("CLI: a status change with no estimate flag leaves the estimate alone", () => {
-    expect(cli("status", "CON-1", "todo", "--ws", WS).status).toBe(0);
-    expect(cliShow("CON-1").issue.estimatedSeconds).toBe(7200);
+  it("CLI: a status change with no estimate flag leaves the estimate alone", async () => {
+    expect((await cli("status", "CON-1", "todo", "--ws", WS)).status).toBe(0);
+    expect((await cliShow("CON-1")).issue.estimatedSeconds).toBe(7200);
   });
 
-  it("CLI: --estimate accepts every duration shape parseDuration does", () => {
+  it("CLI: --estimate accepts every duration shape parseDuration does", async () => {
     // Shared with --steal-if-stale/--if-stale, so a caller who learned the
     // vocabulary once does not have to learn a second one here.
     for (const [flag, seconds] of [["45s", 45], ["30m", 1800], ["12h", 43_200], ["3600", 3600]] as const) {
-      expect(cli("status", "CON-1", "todo", "--ws", WS, "--estimate", flag).status).toBe(0);
-      expect(cliShow("CON-1").issue.estimatedSeconds).toBe(seconds);
+      expect((await cli("status", "CON-1", "todo", "--ws", WS, "--estimate", flag)).status).toBe(0);
+      expect((await cliShow("CON-1")).issue.estimatedSeconds).toBe(seconds);
     }
   });
 });
@@ -226,25 +226,25 @@ describe("a bad estimate is refused identically wherever it arrives", () => {
     expect(String(refused.body.message)).toMatch(/positive whole number of seconds/);
   });
 
-  it("CLI refuses a malformed duration before it ever reaches the store", () => {
+  it("CLI refuses a malformed duration before it ever reaches the store", async () => {
     // parseDuration's refusal, not the store's: `--estimate xyz` collapsing to a
     // silent 0 or NaN is exactly the failure the flag must not have.
-    const result = cli("new", "Garbage", "--ws", WS, "--estimate", "xyz", "--json");
+    const result = await cli("new", "Garbage", "--ws", WS, "--estimate", "xyz", "--json");
     expect(result.status).toBe(2);
     expect(String(cliEnvelope(result).message)).toMatch(/must be a duration like/);
   });
 
-  it("CLI refuses --estimate and --no-estimate together rather than picking one", () => {
-    const result = cli("status", "CON-1", "todo", "--ws", WS, "--estimate", "1h", "--no-estimate", "--json");
+  it("CLI refuses --estimate and --no-estimate together rather than picking one", async () => {
+    const result = await cli("status", "CON-1", "todo", "--ws", WS, "--estimate", "1h", "--no-estimate", "--json");
     expect(result.status).toBe(2);
     expect(String(cliEnvelope(result).message)).toMatch(/cannot be used together/);
   });
 
-  it("refuses the whole write — a bad estimate does not half-apply a patch", () => {
-    const before = cliShow("CON-1").issue;
-    const refused = cli("status", "CON-1", "in_review", "--ws", WS, "--estimate", "xyz", "--json");
+  it("refuses the whole write — a bad estimate does not half-apply a patch", async () => {
+    const before = (await cliShow("CON-1")).issue;
+    const refused = await cli("status", "CON-1", "in_review", "--ws", WS, "--estimate", "xyz", "--json");
     expect(refused.status).toBe(2);
-    const after = cliShow("CON-1").issue;
+    const after = (await cliShow("CON-1")).issue;
     expect(after.status).toBe(before.status);
     expect(after.estimatedSeconds).toBe(before.estimatedSeconds);
   });
@@ -258,19 +258,19 @@ describe("the derived numbers reach every read surface", () => {
   beforeAll(async () => {
     // A small epic: one child estimated and finished, one estimated and running,
     // one with no estimate at all.
-    expect(cli("new", "Analytics epic", "--ws", WS, "--estimate", "4h").status).toBe(0);
+    expect((await cli("new", "Analytics epic", "--ws", WS, "--estimate", "4h")).status).toBe(0);
     parent = "CON-4";
-    expect(cli("new", "Child done", "--ws", WS, "--parent", parent, "--estimate", "90m").status).toBe(0);
-    expect(cli("new", "Child running", "--ws", WS, "--parent", parent, "--estimate", "2h").status).toBe(0);
-    expect(cli("new", "Child unplanned", "--ws", WS, "--parent", parent).status).toBe(0);
+    expect((await cli("new", "Child done", "--ws", WS, "--parent", parent, "--estimate", "90m")).status).toBe(0);
+    expect((await cli("new", "Child running", "--ws", WS, "--parent", parent, "--estimate", "2h")).status).toBe(0);
+    expect((await cli("new", "Child unplanned", "--ws", WS, "--parent", parent)).status).toBe(0);
 
-    expect(cli("start", "CON-5", "--agent", CONTRACT_AGENT, "--ws", WS).status).toBe(0);
-    expect(cli("done", "CON-5", "--ws", WS).status).toBe(0);
-    expect(cli("start", "CON-6", "--agent", CONTRACT_AGENT, "--ws", WS).status).toBe(0);
+    expect((await cli("start", "CON-5", "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
+    expect((await cli("done", "CON-5", "--ws", WS)).status).toBe(0);
+    expect((await cli("start", "CON-6", "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
     // The running child needs evidence of work after its claim: STA-90 counts an
     // open interval through the HOLDER'S last activity, so a claim with nothing
     // after it is honestly worth zero seconds.
-    expect(cli("comment", "CON-6", "working", "--author", CONTRACT_AGENT, "--ws", WS).status).toBe(0);
+    expect((await cli("comment", "CON-6", "working", "--author", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
 
     /**
      * Backdate through the CLI's own database file. No clock injection in
@@ -341,31 +341,31 @@ describe("the derived numbers reach every read surface", () => {
     expect(body.childrenTiming["CON-5"].activeSeconds).toBe(3600);
   });
 
-  it("CLI show --json carries them too", () => {
-    const payload = cliShow(parent);
+  it("CLI show --json carries them too", async () => {
+    const payload = await cliShow(parent);
     expect(payload.timing.childrenEstimatedSeconds).toBe(12_600);
     expect(payload.timing.childrenActiveSeconds).toBe(15_000);
     expect(payload.childrenTiming["CON-6"].activeSeconds).toBe(11_400);
   });
 
-  it("CLI show renders the compact human line, and only when there is something to say", () => {
+  it("CLI show renders the compact human line, and only when there is something to say", async () => {
     // The line the ticket asked for, verbatim in shape: `est <dur> · ran <dur>`.
-    const child = cli("show", "CON-6", "--ws", WS);
+    const child = await cli("show", "CON-6", "--ws", WS);
     expect(child.status).toBe(0);
     expect(child.stdout).toContain("time   est 2h · ran 3h10m");
 
     // A rollup line on the parent, which has children. Its `ran` is labelled
     // `(aggregated)` rather than left to read as an epic's own stopwatch — the
     // CLI half of STA-90's "no parent stopwatch".
-    const epic = cli("show", parent, "--ws", WS);
+    const epic = await cli("show", parent, "--ws", WS);
     expect(epic.stdout).toContain("ran 4h10m (aggregated)");
     expect(epic.stdout).toContain("children est 3h30m");
     expect(epic.stdout).toContain("children ran 4h10m");
 
     // …and nothing at all on an issue with neither an estimate nor a start, so
     // every pinned `show` rendering that predates this feature is unchanged.
-    expect(cli("new", "Bare task", "--ws", WS).status).toBe(0);
-    expect(cli("show", "CON-8", "--ws", WS).stdout).not.toContain("time   ");
+    expect((await cli("new", "Bare task", "--ws", WS)).status).toBe(0);
+    expect((await cli("show", "CON-8", "--ws", WS)).stdout).not.toContain("time   ");
   });
 
   it("list surfaces carry the scalar estimate but not the rollup object", async () => {
@@ -418,13 +418,13 @@ describe("the derived numbers reach every read surface", () => {
     // this measures an agent's WRITE CADENCE. A claim taken and then never
     // spoken to has produced no evidence of work, so the store reports none —
     // rather than the hours of wall clock the old scheme would have billed.
-    const created = cli("new", "Claimed and silent", "--ws", WS, "--estimate", "1h", "--json");
+    const created = await cli("new", "Claimed and silent", "--ws", WS, "--estimate", "1h", "--json");
     expect(created.status).toBe(0);
     // Read the identifier back rather than hardcoding one: this suite's other
     // cases also mint issues, and a literal here would depend on test order.
     const ref = String((JSON.parse(created.stdout) as { identifier?: string }).identifier);
     expect(ref).toMatch(/^CON-\d+$/);
-    expect(cli("start", ref, "--agent", "silent-agent", "--ws", WS).status).toBe(0);
+    expect((await cli("start", ref, "--agent", "silent-agent", "--ws", WS)).status).toBe(0);
 
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(join(home, "workspaces", `${WS}.db`));
@@ -461,21 +461,21 @@ describe("the recursive plan reaches every read surface across three levels", ()
   let mid: string;
   const ELEVEN_HOURS = 39_600;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     // Identifiers are read back rather than hardcoded: the suites above mint
     // issues too, and a literal here would depend on test order.
-    const mint = (...args: string[]): string => {
-      const result = cli("new", ...args, "--ws", WS, "--json");
+    const mint = async (...args: string[]): Promise<string> => {
+      const result = await cli("new", ...args, "--ws", WS, "--json");
       expect(result.status, result.stderr).toBe(0);
       const ref = String((JSON.parse(result.stdout) as { identifier?: string }).identifier);
       expect(ref).toMatch(/^CON-\d+$/);
       return ref;
     };
-    epic = mint("Recursive epic");
-    mid = mint("Middle, unestimated", "--parent", epic);
-    mint("Leaf 4h", "--parent", mid, "--estimate", "4h");
-    mint("Leaf 3h", "--parent", mid, "--estimate", "3h");
-    mint("Leaf 4h again", "--parent", mid, "--estimate", "4h");
+    epic = await mint("Recursive epic");
+    mid = await mint("Middle, unestimated", "--parent", epic);
+    await mint("Leaf 4h", "--parent", mid, "--estimate", "4h");
+    await mint("Leaf 3h", "--parent", mid, "--estimate", "3h");
+    await mint("Leaf 4h again", "--parent", mid, "--estimate", "4h");
   });
 
   /** The plan a level with no own estimate inherits from the three leaves. */
@@ -507,26 +507,26 @@ describe("the recursive plan reaches every read surface across three levels", ()
     expect((await httpJson(`/api/issue?ref=${mid}`)).body.timing.subtreePlan).toEqual(inherited(3));
   });
 
-  it("CLI show --json carries it too", () => {
-    expect(cliShow(epic).timing.subtreePlan).toEqual(inherited(4));
-    expect(cliShow(mid).timing.subtreePlan).toEqual(inherited(3));
+  it("CLI show --json carries it too", async () => {
+    expect((await cliShow(epic)).timing.subtreePlan).toEqual(inherited(4));
+    expect((await cliShow(mid)).timing.subtreePlan).toEqual(inherited(3));
   });
 
-  it("CLI show renders the inherited plan and its coverage on the human line", () => {
-    expect(cli("show", mid, "--ws", WS).stdout).toContain(
+  it("CLI show renders the inherited plan and its coverage on the human line", async () => {
+    expect((await cli("show", mid, "--ws", WS)).stdout).toContain(
       "time   children est 11h · plan 11h (3 of 3 units planned)",
     );
     // No `children est` on the epic — its direct child has none — but a plan. Coverage
     // is over plan units: the unestimated middle level is a container, not a gap.
-    expect(cli("show", epic, "--ws", WS).stdout).toContain(
+    expect((await cli("show", epic, "--ws", WS)).stdout).toContain(
       "time   plan 11h (3 of 3 units planned)",
     );
     // And the certified plan beneath it: labor with coverage, then the path.
-    expect(cli("show", epic, "--ws", WS).stdout).toMatch(/\nlabor 11h \(descendants\) · 3 of 3 units planned\nplanned path 4h · CON-\d+\nremaining path 4h · CON-\d+\n/);
+    expect((await cli("show", epic, "--ws", WS)).stdout).toMatch(/\nlabor 11h \(descendants\) · 3 of 3 units planned\nplanned path 4h · CON-\d+\nremaining path 4h · CON-\d+\n/);
   });
 
   it("an estimate on the middle level shadows the leaves for the epic — never both", async () => {
-    expect(cli("status", mid, "backlog", "--ws", WS, "--estimate", "10h").status).toBe(0);
+    expect((await cli("status", mid, "backlog", "--ws", WS, "--estimate", "10h")).status).toBe(0);
 
     // The middle level shows both directions…
     expect((await mcpGet(mid)).timing.subtreePlan).toEqual({
@@ -550,7 +550,7 @@ describe("the recursive plan reaches every read surface across three levels", ()
     // Direct-child compatibility now sees the middle level's own estimate,
     // exactly as it did before STA-192.
     expect(top.timing.childrenEstimatedSeconds).toBe(36_000);
-    expect(cli("show", mid, "--ws", WS).stdout).toContain(
+    expect((await cli("show", mid, "--ws", WS)).stdout).toContain(
       "time   est 10h · children est 11h · descendants est 11h (3 of 3 units planned)",
     );
   });
@@ -568,9 +568,9 @@ describe("the explicit estimate write: one store method, three doors, no status 
   let ref: string;
 
   /** `staple estimate <ref> "$EST"` typed into a real shell, so the expansion is the shell's. */
-  function viaShell(script: string, env: Record<string, string> = {}) {
+  async function viaShell(script: string, env: Record<string, string> = {}) {
     const staple = `"${process.execPath}" "${TSX_CLI}" "${CLI_ENTRY}"`;
-    const result = spawnSync("/bin/sh", ["-c", script.replaceAll("staple ", `${staple} `)], {
+    const result = await spawnAsync("/bin/sh", ["-c", script.replaceAll("staple ", `${staple} `)], {
       cwd: REPO_ROOT,
       env: cleanEnv({ STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT, ...env }),
       encoding: "utf8",
@@ -578,16 +578,16 @@ describe("the explicit estimate write: one store method, three doors, no status 
     return { status: result.status ?? 0, stdout: result.stdout, stderr: result.stderr };
   }
 
-  beforeAll(() => {
-    const created = cli("new", "Explicit estimate target", "--ws", WS, "--estimate", "1h", "--json");
+  beforeAll(async () => {
+    const created = await cli("new", "Explicit estimate target", "--ws", WS, "--estimate", "1h", "--json");
     expect(created.status, created.stderr).toBe(0);
     ref = String((JSON.parse(created.stdout) as { identifier?: string }).identifier);
-    expect(cli("checkout", ref, "--agent", CONTRACT_AGENT, "--ws", WS).status).toBe(0);
+    expect((await cli("checkout", ref, "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
   });
 
   it("CLI: `staple estimate <ref> <dur>` changes only the estimate, and answers estimateChange", async () => {
-    const before = cliShow(ref).issue;
-    const result = cli("estimate", ref, "2h", "--ws", WS, "--json");
+    const before = (await cliShow(ref)).issue;
+    const result = await cli("estimate", ref, "2h", "--ws", WS, "--json");
     expect(result.status, result.stderr).toBe(0);
     const payload = JSON.parse(result.stdout) as Record<string, any>;
     expect(payload.estimateChange).toEqual({ from: 3600, to: 7200, changed: true });
@@ -600,45 +600,45 @@ describe("the explicit estimate write: one store method, three doors, no status 
     expect((await httpJson(`/api/issue?ref=${ref}`)).body.issue.estimatedSeconds).toBe(7200);
   });
 
-  it("CLI: the identical repeat is a no-op that says changed: false", () => {
-    const before = cliShow(ref).issue;
-    const result = cli("estimate", ref, "120m", "--ws", WS, "--json");
+  it("CLI: the identical repeat is a no-op that says changed: false", async () => {
+    const before = (await cliShow(ref)).issue;
+    const result = await cli("estimate", ref, "120m", "--ws", WS, "--json");
     expect(result.status, result.stderr).toBe(0);
     const payload = JSON.parse(result.stdout) as Record<string, any>;
     expect(payload.estimateChange).toEqual({ from: 7200, to: 7200, changed: false });
     expect(payload.updatedAt).toBe(before.updatedAt);
     // The human line says so too.
-    expect(cli("estimate", ref, "2h", "--ws", WS).stdout).toContain("est 2h (unchanged)");
+    expect((await cli("estimate", ref, "2h", "--ws", WS)).stdout).toContain("est 2h (unchanged)");
   });
 
-  it("CLI: --clear clears it, and the human line names both values", () => {
-    const result = cli("estimate", ref, "--clear", "--ws", WS);
+  it("CLI: --clear clears it, and the human line names both values", async () => {
+    const result = await cli("estimate", ref, "--clear", "--ws", WS);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("est 2h -> none");
-    expect(cliShow(ref).issue.estimatedSeconds).toBeNull();
-    expect(cli("estimate", ref, "90m", "--ws", WS).stdout).toContain("est none -> 1h30m");
+    expect((await cliShow(ref)).issue.estimatedSeconds).toBeNull();
+    expect((await cli("estimate", ref, "90m", "--ws", WS)).stdout).toContain("est none -> 1h30m");
   });
 
-  it('shell: an unset variable, quoted or not, never erases the estimate', () => {
-    const quoted = viaShell(`staple estimate ${ref} "$EST" --ws ${WS} --json`);
+  it('shell: an unset variable, quoted or not, never erases the estimate', async () => {
+    const quoted = await viaShell(`staple estimate ${ref} "$EST" --ws ${WS} --json`);
     expect(quoted.status).toBe(2);
     expect(cliEnvelope(quoted)).toMatchObject({ code: "validation", retryable: false });
     expect(String(cliEnvelope(quoted).message)).toMatch(/^<dur> must be a duration like/);
 
-    const bare = viaShell(`staple estimate ${ref} $EST --ws ${WS} --json`);
+    const bare = await viaShell(`staple estimate ${ref} $EST --ws ${WS} --json`);
     expect(bare.status).toBe(2);
     expect(String(cliEnvelope(bare).message)).toBe(
       "usage: staple estimate <ref> <dur> | staple estimate <ref> --clear (no duration given; an estimate is only cleared by --clear)",
     );
-    expect(cliShow(ref).issue.estimatedSeconds).toBe(5400);
+    expect((await cliShow(ref)).issue.estimatedSeconds).toBe(5400);
 
     // …while the same line with the variable set does what it says.
-    const set = viaShell(`staple estimate ${ref} "$EST" --ws ${WS} --json`, { EST: "45m" });
+    const set = await viaShell(`staple estimate ${ref} "$EST" --ws ${WS} --json`, { EST: "45m" });
     expect(set.status, set.stderr).toBe(0);
-    expect(cliShow(ref).issue.estimatedSeconds).toBe(2700);
+    expect((await cliShow(ref)).issue.estimatedSeconds).toBe(2700);
   });
 
-  it("CLI: every other malformed call is refused as validation (exit 2) and writes nothing", () => {
+  it("CLI: every other malformed call is refused as validation (exit 2) and writes nothing", async () => {
     const refusals: Array<[string[], RegExp]> = [
       [["estimate", ref, "1h", "--clear"], /a duration and --clear cannot be used together/],
       [["estimate", ref, "1h", "extra"], /unexpected argument "extra"/],
@@ -648,12 +648,12 @@ describe("the explicit estimate write: one store method, three doors, no status 
       [["estimate"], /no issue given/],
     ];
     for (const [args, message] of refusals) {
-      const result = cli(...args, "--ws", WS, "--json");
+      const result = await cli(...args, "--ws", WS, "--json");
       expect(result.status, args.join(" ")).toBe(2);
       expect(String(cliEnvelope(result).message), args.join(" ")).toMatch(message);
     }
-    expect(cliShow(ref).issue.estimatedSeconds).toBe(2700);
-    const missing = cli("estimate", "CON-9999", "1h", "--ws", WS, "--json");
+    expect((await cliShow(ref)).issue.estimatedSeconds).toBe(2700);
+    const missing = await cli("estimate", "CON-9999", "1h", "--ws", WS, "--json");
     expect(missing.status).toBe(3);
     expect(cliEnvelope(missing).code).toBe("not_found");
   });
@@ -662,7 +662,7 @@ describe("the explicit estimate write: one store method, three doors, no status 
     const set = await mcp.call("set_estimate", { ref, estimate_seconds: 3600, ws: WS });
     expect(set.isError, JSON.stringify(set.content)).toBeFalsy();
     expect((toolPayload(set) as Record<string, any>).estimateChange).toEqual({ from: 2700, to: 3600, changed: true });
-    expect(cliShow(ref).issue.estimatedSeconds).toBe(3600);
+    expect((await cliShow(ref)).issue.estimatedSeconds).toBe(3600);
 
     /**
      * Absent or mistyped, the value never reaches the store: the SDK's input-schema check
@@ -674,7 +674,7 @@ describe("the explicit estimate write: one store method, three doors, no status 
       expect(refused.isError).toBe(true);
       expect(String(refused.content[0]?.text)).toMatch(/^MCP error -32602: Input validation error/);
     }
-    expect(cliShow(ref).issue.estimatedSeconds).toBe(3600);
+    expect((await cliShow(ref)).issue.estimatedSeconds).toBe(3600);
 
     const cleared = await mcp.call("set_estimate", { ref, estimate_seconds: null, ws: WS });
     expect((toolPayload(cleared) as Record<string, any>).estimateChange).toEqual({ from: 3600, to: null, changed: true });
@@ -697,14 +697,14 @@ describe("the explicit estimate write: one store method, three doors, no status 
     const zero = await httpAction({ type: "estimate", ref, estimateSeconds: 0 });
     expect(zero.status).toBe(409);
     expect(String(zero.body.message)).toMatch(/positive whole number of seconds/);
-    expect(cliShow(ref).issue.estimatedSeconds).toBe(1800);
+    expect((await cliShow(ref)).issue.estimatedSeconds).toBe(1800);
 
     const cleared = await httpAction({ type: "estimate", ref, estimateSeconds: null });
     expect(cleared.body.estimateChange).toEqual({ from: 1800, to: null, changed: true });
   });
 
-  it("help documents ONE form for an estimate-only change: the verb, not a restated status", () => {
-    const help = cli("help").stdout;
+  it("help documents ONE form for an estimate-only change: the verb, not a restated status", async () => {
+    const help = (await cli("help")).stdout;
     expect(help).toContain("  estimate <ref> <dur> | estimate <ref> --clear   [--agent A]");
     expect(help).toContain("change ONLY the estimate: no status to restate, no claim needed.");
     expect(help).toContain('Re-estimate later\n              with "staple estimate <ref> <dur>".');
@@ -713,9 +713,9 @@ describe("the explicit estimate write: one store method, three doors, no status 
   });
 
   it("back-compat: `status <ref> <same status> --estimate` still works and emits the same event", async () => {
-    expect(cli("status", ref, "in_progress", "--ws", WS, "--estimate", "2h").status).toBe(0);
-    expect(cliShow(ref).issue.estimatedSeconds).toBe(7200);
-    expect(cli("estimate", ref, "3h", "--ws", WS).status).toBe(0);
+    expect((await cli("status", ref, "in_progress", "--ws", WS, "--estimate", "2h")).status).toBe(0);
+    expect((await cliShow(ref)).issue.estimatedSeconds).toBe(7200);
+    expect((await cli("estimate", ref, "3h", "--ws", WS)).status).toBe(0);
 
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(join(home, "workspaces", `${WS}.db`));
