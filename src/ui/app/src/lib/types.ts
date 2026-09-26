@@ -2232,3 +2232,472 @@ export interface HubAdoptResult {
   retiresOptOuts: string[];
   report: HubCloudReport;
 }
+
+// ------------------------------------------------------------------ calibration and forecasts
+
+/**
+ * `GET /api/calibration` and `GET /api/forecast`, mirroring `CalibrationReport` in
+ * src/core/telemetry/calibration.ts and `ForecastReport` in src/core/telemetry/forecast-report.ts
+ * (both pinned in test/contract-ui-types.test.ts). docs/timing-semantics.md, "Calibration
+ * cohorts", "Confidence ranges" and "Forecasts", says what every field means. The browser renders
+ * these; it never recomputes one of them.
+ */
+export type QuantileName = "p10" | "p25" | "p50" | "p75" | "p90";
+export type EvidenceSet = "exact" | "reconstructed";
+export type CalibrationWarning =
+  | "small_sample"
+  | "bounds_below_confidence"
+  | "quantile_below_confidence"
+  | "fallback_used"
+  | "heavy_tail"
+  | "floor_dominated"
+  | "floors_excluded"
+  | "reconstructed_only"
+  | "no_samples";
+export type ForecastWarning =
+  | "unknown_units"
+  | "beyond_class_range"
+  | "overrun"
+  | "few_admissible"
+  | "awaiting_review"
+  | "independent_draws"
+  | "dependency_cycle"
+  | "unresolved_outside_blockers";
+export type CohortDimension = "kind" | "priority" | "workType" | "area" | "model";
+export type CohortKey = Record<CohortDimension, string>;
+export type EstimateAtStartMissing = "parent" | "no_worker_attempt" | "not_recorded" | "not_own";
+
+export interface SampleEstimate {
+  readonly seconds: number;
+  readonly source: "at_start" | "current";
+  readonly atStartSeconds: number | null;
+  readonly currentSeconds: number;
+  readonly missing: { readonly atStart?: EstimateAtStartMissing };
+}
+
+export interface SampleEvidence {
+  readonly state: WorkState;
+  readonly reasons: string[];
+  readonly workerAttempts: number;
+  readonly provenance: string[];
+  readonly harnessSupplied: number;
+}
+
+export interface CalibrationSample {
+  readonly set: EvidenceSet;
+  readonly identifier: string;
+  readonly title: string;
+  readonly completedAt: string | null;
+  readonly workSeconds: number;
+  readonly estimate: SampleEstimate;
+  readonly ratio: number;
+  readonly dimensions: CohortKey;
+  readonly evidence: SampleEvidence;
+}
+
+export interface CalibrationExcluded {
+  readonly count: number;
+  readonly counts: Partial<Record<WorkState, number>>;
+  readonly reasons: Record<string, number>;
+}
+
+/** `samples / eligible`, with the denominator named. */
+export interface CalibrationCoverage {
+  readonly samples: number;
+  readonly eligible: number;
+  readonly fraction: number | null;
+  readonly denominator: "ratio_population";
+}
+
+export type ExpectedMethod = "pooled" | "fence_clipped_pooled";
+
+/** A distribution-free interval between two order statistics, with the confidence it reaches. */
+export interface OrderInterval {
+  readonly lower: number;
+  readonly upper: number;
+  readonly ranks: readonly [number, number];
+  readonly confidence: number;
+  readonly reached: boolean;
+}
+
+export interface CalibrationTail {
+  readonly tested: boolean;
+  readonly outliers: { readonly lower: number; readonly upper: number };
+  readonly share: number | null;
+  readonly heavy: boolean;
+  readonly fences: { readonly lower: number; readonly upper: number } | null;
+  readonly scale: "mad" | "mean_absolute_deviation" | null;
+  readonly fenceClippedPooled: number | null;
+}
+
+export interface CalibrationFloors {
+  readonly count: number;
+  readonly share: number | null;
+  readonly dominated: boolean;
+  readonly seconds: number;
+  readonly refs: string[];
+  readonly truncated: boolean;
+}
+
+/** One cohort: an observed key, and the class (possibly broader) it reads. */
+export interface CalibrationCohort {
+  readonly set: EvidenceSet;
+  readonly key: CohortKey;
+  readonly keySamples: number;
+  readonly level: number;
+  readonly levelName: string;
+  readonly class: CohortKey;
+  readonly path: Array<{ readonly level: number; readonly name: string; readonly samples: number; readonly floors: number }>;
+  readonly fallback: "none" | "below_minimum" | "below_minimum_everywhere";
+  readonly samples: number;
+  readonly coverage: CalibrationCoverage;
+  readonly ratio: {
+    readonly median: number;
+    readonly pooled: number;
+    readonly min: number;
+    readonly max: number;
+    readonly expected: { readonly value: number; readonly method: ExpectedMethod };
+    readonly quantiles: Record<QuantileName, number> | null;
+    readonly intervals: Record<QuantileName, OrderInterval> | null;
+    readonly bounds: OrderInterval | null;
+  };
+  readonly workSeconds: {
+    readonly median: number;
+    readonly total: number;
+    readonly min: number;
+    readonly max: number;
+    readonly quantiles: Record<QuantileName, number> | null;
+    readonly intervals: Record<QuantileName, OrderInterval> | null;
+    readonly bounds: OrderInterval | null;
+  };
+  readonly tail: CalibrationTail;
+  readonly floors: CalibrationFloors;
+  readonly rangeConfidence: number;
+  readonly estimatedSeconds: { readonly total: number };
+  readonly estimateSources: { readonly at_start: number; readonly current: number };
+  readonly members: { readonly total: number; readonly refs: string[]; readonly truncated: boolean };
+  readonly excluded: CalibrationExcluded;
+  readonly warnings: CalibrationWarning[];
+}
+
+/** A duration forecast for one issue from one evidence set (`for=`). */
+export interface DurationForecast {
+  readonly set: EvidenceSet;
+  readonly identifier: string;
+  readonly title: string;
+  readonly status: string;
+  readonly estimate: { readonly seconds: number | null };
+  readonly key: CohortKey;
+  readonly cohort: Pick<CalibrationCohort, "level" | "levelName" | "class" | "path" | "fallback" | "samples" | "coverage">;
+  readonly state: "ratio" | "floor" | "no_samples" | "no_estimate";
+  readonly seconds: Record<QuantileName, number> | null;
+  readonly bounds: OrderInterval | null;
+  readonly expected: { readonly seconds: number; readonly ratio: number | null; readonly method: ExpectedMethod | "floor_bound" } | null;
+  readonly heavyTail: boolean;
+  readonly floors: Pick<CalibrationFloors, "count" | "share" | "dominated" | "seconds">;
+  readonly warnings: CalibrationWarning[];
+  readonly missing: Record<string, string>;
+}
+
+export interface CalibrationSetSummary {
+  readonly set: EvidenceSet;
+  readonly samples: number;
+  readonly coverage: CalibrationCoverage;
+  readonly excluded: CalibrationExcluded;
+  readonly cohorts: number;
+}
+
+export interface CalibrationReport {
+  readonly asOf: string;
+  readonly filter: {
+    readonly kind: string[] | null;
+    readonly priority: string[] | null;
+    readonly parent: string | null;
+    readonly since: string | null;
+    readonly include: EvidenceSet[];
+  };
+  /** The identity of the data the report was computed from. */
+  readonly snapshot: {
+    readonly id: string;
+    readonly algorithm: string;
+    readonly repositoryId: string | null;
+    readonly members: number;
+    readonly samples: Partial<Record<EvidenceSet, number>>;
+  };
+  readonly method: {
+    readonly minSamples: number;
+    readonly levels: string[];
+    readonly median: "lower";
+    readonly estimate: "at_start_else_current";
+    readonly quantile: "lower";
+    readonly quantiles: QuantileName[];
+    readonly confidence: number;
+    readonly intervals: "order_statistic";
+    readonly minBoundsSamples: number;
+    readonly heavyTail: {
+      readonly rule: "log_mad_z";
+      readonly z: 3.5;
+      readonly minSamples: 10;
+      readonly minOutliers: 3;
+      readonly minShare: 0.05;
+      readonly minLogDeviation: number;
+    };
+    readonly floorSeconds: number;
+  };
+  readonly population: { readonly issues: number; readonly ratio: number; readonly parents: number };
+  readonly sets: CalibrationSetSummary[];
+  readonly list: "cohorts" | "samples";
+  readonly items: CalibrationCohort[] | CalibrationSample[];
+  readonly forecasts: DurationForecast[];
+  readonly truncated: boolean;
+  readonly nextCursor: string | null;
+  readonly missing: Record<string, string>;
+}
+
+/** The spread of a set of draws: the mean, the lower quantiles, and the 90% band (p5 to p95). */
+export interface SimulatedSpread {
+  readonly mean: number;
+  readonly p10: number;
+  readonly p50: number;
+  readonly p90: number;
+  readonly band: { readonly lower: number; readonly upper: number; readonly nominal: number };
+}
+
+/** One plan unit's remaining work. */
+export interface UnitForecast {
+  readonly ref: string;
+  readonly title: string;
+  readonly status: string;
+  readonly treatment: "done" | "awaiting_review" | "forecast";
+  readonly estimateSeconds: number | null;
+  readonly workSeconds: number | null;
+  readonly state: DurationForecast["state"] | "done" | "awaiting_review" | "beyond_class_range";
+  readonly expected: { readonly durationSeconds: number; readonly remainingSeconds: number; readonly method: string } | null;
+  readonly simulated: SimulatedSpread | null;
+  readonly cohort: { readonly levelName: string; readonly class: CohortKey; readonly samples: number } | null;
+  readonly admissibleSamples: number | null;
+  readonly overrun: boolean;
+  readonly warnings: Array<CalibrationWarning | ForecastWarning>;
+  readonly missing: Record<string, string>;
+}
+
+/** A sum or path of remaining work. `partial`: some unit is unknown, so it is a lower bound. */
+export interface RemainingFigure {
+  readonly expectedSeconds: number | null;
+  readonly partial: boolean;
+  readonly missing: string[];
+  readonly simulated: SimulatedSpread | null;
+}
+
+export interface ForecastPathStep {
+  ref: string;
+  seconds: number | null;
+  status: string;
+}
+
+export interface CrossSubtreeBlocker {
+  blocked: string;
+  blocker: string;
+  blockerStatus: string;
+  resolved: boolean;
+}
+
+export interface CompletionPath extends RemainingFigure {
+  readonly chain: ForecastPathStep[];
+  readonly chainLength: number;
+  readonly edgeCount: number;
+  readonly cycle: string[];
+  readonly crossSubtreeBlockerCount: number;
+  readonly unresolvedCrossSubtreeBlockerCount: number;
+  readonly crossSubtreeBlockers: CrossSubtreeBlocker[];
+}
+
+export interface CompletionConfidence {
+  readonly label: "high" | "medium" | "low";
+  readonly nominal: number;
+  readonly achieved: number | null;
+  readonly reached: boolean;
+  readonly reasons: string[];
+}
+
+export interface PlanLabor {
+  seconds: number | null;
+  source: PlanSource;
+  ownSeconds: number | null;
+  descendantsSeconds: number | null;
+}
+
+export interface CompletionForecast {
+  readonly set: "exact";
+  readonly units: {
+    readonly total: number;
+    readonly done: number;
+    readonly awaitingReview: number;
+    readonly forecast: number;
+    readonly known: number;
+    readonly unknownRefs: string[];
+    readonly awaitingReviewRefs: string[];
+    readonly items: UnitForecast[];
+    readonly truncated: boolean;
+  };
+  readonly settled: boolean;
+  readonly review: { readonly units: number; readonly refs: string[]; readonly seconds: number | null; readonly missing: Record<string, string> };
+  readonly plan: PlanLabor;
+  readonly labor: RemainingFigure;
+  readonly path: CompletionPath;
+  readonly confidence: CompletionConfidence;
+  readonly warnings: Array<CalibrationWarning | ForecastWarning>;
+}
+
+export type BudgetState = "provider-unavailable" | "missing" | "approximate" | "exact";
+export type ReserveSource = "argument" | "provisional_default";
+
+export interface BudgetPace {
+  readonly percentPerHour: number;
+  readonly fromPercent: number;
+  readonly toPercent: number;
+  readonly from: string;
+  readonly to: string;
+  readonly spanSeconds: number;
+  readonly readings: number;
+}
+
+export interface BudgetExhaustion {
+  readonly atPace: "before_reset" | "after_reset" | "never";
+  readonly seconds: number | null;
+  readonly at: string | null;
+}
+
+export interface RateConfidence {
+  readonly label: "low" | "medium";
+  readonly spans: number;
+  readonly minimum: number;
+  readonly warnings: string[];
+}
+
+export interface BudgetWorkRate {
+  readonly percentPerWorkHour: number;
+  readonly spans: number;
+  readonly attempts: number;
+  readonly concurrentSpans: number;
+  readonly sparseSpans: number;
+  readonly sharedSpans: number;
+  readonly sharedExcluded: number;
+  readonly burnPercent: number;
+  readonly workSeconds: number;
+  readonly lowerBound: boolean;
+  readonly excluded: number;
+  readonly spanningReset: number;
+  readonly truncated: boolean;
+  readonly simulated: SimulatedSpread;
+  readonly confidence: RateConfidence;
+}
+
+export interface BudgetOtherUse {
+  readonly percentPerHour: number;
+  readonly risePercent: number;
+  readonly seconds: number;
+  readonly readings: number;
+  readonly confidence: { readonly label: "low" | "medium"; readonly warnings: string[] };
+}
+
+type ExpectedSpread = { readonly expected: number; readonly simulated: SimulatedSpread };
+
+export interface BudgetWorkProjection {
+  readonly consumedPercent: ExpectedSpread;
+  readonly beforeResetPercent: ExpectedSpread;
+  readonly remainingAtResetPercent: ExpectedSpread;
+  readonly outlastsResetProbability: number;
+  readonly nextWindowRemainingPercent: ExpectedSpread | null;
+  readonly windows: SimulatedSpread;
+  readonly exhaustionProbability: number;
+  readonly currentWindowExhaustionProbability: number;
+  readonly lowerBound: boolean;
+}
+
+export interface BudgetReserveCheck {
+  readonly percent: number;
+  readonly source: ReserveSource;
+  readonly note: string | null;
+  readonly basis: "work_alone";
+  readonly scope: "through_the_work";
+  readonly breachProbability: number | null;
+  readonly currentWindowBreachProbability: number;
+  readonly alreadyBelow: boolean;
+  readonly draws: number;
+  readonly withOtherUse: {
+    readonly basis: "work_and_other_use";
+    readonly otherPercentPerHour: number;
+    readonly otherConfidence: BudgetOtherUse["confidence"];
+    readonly breachProbability: number | null;
+    readonly currentWindowBreachProbability: number;
+    readonly remainingAtResetPercent: ExpectedSpread;
+    readonly nextWindowRemainingPercent: ExpectedSpread | null;
+  } | null;
+  readonly confidence: RateConfidence;
+  readonly missing: Record<string, string>;
+  readonly missingInputs: Record<string, string[]>;
+}
+
+export interface BudgetLimitForecast {
+  readonly limitKey: string;
+  readonly windowId: string | null;
+  readonly status: string | null;
+  readonly resetsAt: string | null;
+  readonly secondsToReset: number | null;
+  readonly windowSeconds: number | null;
+  readonly remainingPercent: number | null;
+  readonly highWaterPercent: number | null;
+  readonly stale: boolean | null;
+  readonly quality: { readonly state: BudgetState; readonly reasons: string[] };
+  readonly pace: BudgetPace | null;
+  readonly exhaustion: BudgetExhaustion | null;
+  readonly workRate: BudgetWorkRate | null;
+  readonly otherUse: BudgetOtherUse | null;
+  readonly work: BudgetWorkProjection | null;
+  readonly reserve: BudgetReserveCheck | null;
+  readonly missing: Record<string, string>;
+  readonly missingInputs: Record<string, string[]>;
+}
+
+export interface BudgetAccountForecast {
+  readonly provider: string | null;
+  readonly accountRef: string;
+  readonly bound: boolean;
+  readonly limits: BudgetLimitForecast[];
+  readonly missing: Record<string, string>;
+}
+
+export interface BudgetForecast {
+  readonly machineLocal: true;
+  readonly budgetCapture: boolean;
+  readonly reserve: { readonly percent: number; readonly source: ReserveSource; readonly note: string | null };
+  readonly work: { readonly expectedSeconds: number | null; readonly partial: boolean; readonly schedule: "serial_from_as_of" };
+  readonly accounts: BudgetAccountForecast[];
+  readonly missing: Record<string, string>;
+}
+
+/**
+ * The forecast report. `method` (the rules as prose constants) is not mirrored field by field:
+ * the page renders none of it, and the contract test pins every other field exactly.
+ */
+export interface ForecastReport {
+  readonly asOf: string;
+  readonly subject: {
+    readonly ref: string;
+    readonly title: string;
+    readonly kind: string;
+    readonly status: string;
+    readonly scope: "unit" | "subtree";
+  };
+  readonly filter: { readonly model: string | null; readonly account: string | null };
+  readonly snapshot: {
+    readonly id: string;
+    readonly algorithm: string;
+    readonly calibration: { readonly id: string; readonly algorithm: string; readonly members: number; readonly samples: number };
+    readonly budget: { readonly id: string; readonly machineLocal: true };
+  };
+  readonly method: Readonly<Record<string, unknown>>;
+  readonly completion: CompletionForecast;
+  readonly budget: BudgetForecast;
+}

@@ -72,6 +72,7 @@ import {
   type ViewPrefs,
 } from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
+import { CalibrationView } from "@/views/calibration/CalibrationView";
 import { GraphView } from "@/views/GraphView";
 import { MilestonesView } from "@/views/milestones/MilestonesView";
 import { QueueView } from "@/views/queue/QueueView";
@@ -89,6 +90,7 @@ const VIEW_COMPONENTS: Record<ViewName, typeof TreeView> = {
   graph: GraphView,
   milestones: MilestonesView,
   queue: QueueView,
+  calibration: CalibrationView,
 };
 
 /**

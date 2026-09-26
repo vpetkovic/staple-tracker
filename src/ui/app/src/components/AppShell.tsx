@@ -49,7 +49,7 @@ import {
 } from "@/components/nav/nav-model";
 import { Button } from "@/components/ui/button";
 import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
-import { useSession, viewLabel } from "@/lib/session";
+import { useSession, viewLabel, viewUsesIssueFilters } from "@/lib/session";
 
 /** Above this the rail is a column; below it, a sheet. */
 const WIDE_QUERY = "(min-width: 768px)";
@@ -213,7 +213,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             )}
             <h1 className="truncate text-[13px] font-medium">{title}</h1>
             {/* `FilterBar` owns its own `ml-auto`, so this row says nothing about its right. */}
-            <FilterBar />
+            {viewUsesIssueFilters(session.view) ? <FilterBar /> : null}
           </div>
         </header>
 
@@ -221,7 +221,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           The active-filter strip, directly under the header. Renders nothing — no border,
           no height — when no filter is on, which is the app's usual state. See FilterChips.
         */}
-        <FilterChips />
+        {viewUsesIssueFilters(session.view) ? <FilterChips /> : null}
 
         {/*
           Cloud state, and NOTHING when this workspace is not connected — which
