@@ -55,6 +55,8 @@ import type {
   StapleEvent,
   VocabularyOp,
   TimingQualityReport,
+  CalibrationReport,
+  ForecastReport,
 } from "./types";
 // Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
 import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
@@ -687,6 +689,21 @@ export const getAgentContext = (params: { ws?: string; ref: string; documents?: 
  */
 export const getTimingQuality = (params: { ws?: string; parent?: string; limit?: number }) =>
   request<TimingQualityReport>(`/api/timing/quality${qs(params)}`);
+
+/**
+ * `GET /api/forecast` — the completion forecast of `ref` and, apart from it, the budget forecast
+ * of that work on this machine (`staple forecast --json`, MCP `forecast`). Rendered as returned.
+ */
+export const getForecast = (params: { ws?: string; ref: string }) =>
+  request<ForecastReport>(`/api/forecast${qs(params)}`);
+
+/**
+ * `GET /api/calibration` — the workspace's calibration cohorts (`staple calibrate --json`, MCP
+ * `calibration_cohorts`). `include: "reconstructed"` adds the reconstructed set beside the exact
+ * one, never pooled; `cursor` reads the next page of the same selection.
+ */
+export const getCalibration = (params: { ws?: string; include?: "reconstructed"; limit?: number; cursor?: string }) =>
+  request<CalibrationReport>(`/api/calibration${qs(params)}`);
 
 export const getGraph = () => request<Graph>("/api/graph");
 

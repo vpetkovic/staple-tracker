@@ -36,6 +36,8 @@
  */
 import { StatusBadge } from "@/components/StatusBadge";
 import { getTimingQuality } from "@/lib/api";
+import { forecastMode } from "@/lib/forecast-text";
+import { isResolvedStatus } from "@/lib/settings";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import {
@@ -60,6 +62,7 @@ import {
   totalsCaveat,
   type Delta,
 } from "../analytics";
+import { IssueForecast } from "../ForecastSection";
 import type { TabProps } from "./registry";
 
 function Eyebrow({ children }: { children: React.ReactNode }) {
@@ -291,6 +294,14 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   const wallQuality = qualityText(timing.quality?.wall);
   const beneath = cohort.data ? cohortLine(cohort.data) : null;
 
+  /**
+   * The forecast (docs/web-ui.md, "Analytics"): what is left and what it costs a provider limit,
+   * from `GET /api/forecast`. After the estimate-versus-actual headline and its breakdown, before
+   * the per-child list, which can be long. Full for an open parent, compact for an open leaf with
+   * its own estimate, absent otherwise.
+   */
+  const mode = forecastMode({ childCount: timing.childCount, estimatedSeconds: issue.estimatedSeconds, resolved: isResolvedStatus(issue.status) });
+
   return (
     <div className="space-y-4 text-sm">
       {/* ----------------------------------------------------------- headline */}
@@ -347,6 +358,16 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
             the children&apos;s — the two are alternatives, never added together.
           </p>
         </section>
+      ) : null}
+
+      {/* -------------------------------------------------------- forecast */}
+      {mode !== null ? (
+        <IssueForecast
+          workspace={workspace}
+          refId={issue.identifier}
+          mode={mode}
+          onAuthError={onAuthError}
+        />
       ) : null}
 
       {/* ------------------------------------------------------- per child */}

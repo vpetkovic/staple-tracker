@@ -40,6 +40,9 @@
 import { describe, expect, it } from "vitest";
 import type { ClaimActivity, ClaimLease, ClaimScope, TimingQuality } from "../src/core/types.js";
 import type { TimingQualityReport } from "../src/core/telemetry/cohort.js";
+import type { CalibrationReport } from "../src/core/telemetry/calibration.js";
+import type { ForecastReport } from "../src/core/telemetry/forecast-report.js";
+import type { CalibrationReport as UiCalibrationReport, ForecastReport as UiForecastReport } from "../src/ui/app/src/lib/types.js";
 import type { TimingQuality as UiTimingQuality, TimingQualityReport as UiTimingQualityReport } from "../src/ui/app/src/lib/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
 import type { HubCloudReport, HubWorkspaceOutcome } from "../src/core/cloud/hub-surface.js";
@@ -202,6 +205,14 @@ type _PublishReportMatches = Expect<Equals<PublishReport, UiPublishReport>>;
  */
 type _TimingQualityMatches = Expect<Equals<TimingQuality, UiTimingQuality>>;
 type _TimingQualityReportMatches = Expect<Equals<TimingQualityReport, UiTimingQualityReport>>;
+/**
+ * The calibration report and the forecast report the Analytics pages render. The forecast's
+ * `method` is the rules as prose constants, which the page never reads: it is typed loosely in
+ * the mirror and left out of the check; every other field, the completion and budget blocks
+ * whole, must match exactly.
+ */
+type _CalibrationReportMatches = Expect<Equals<CalibrationReport, UiCalibrationReport>>;
+type _ForecastReportMatches = Expect<Equals<Omit<ForecastReport, "method">, Omit<UiForecastReport, "method">>>;
 
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
@@ -231,6 +242,8 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _HubRestoreReportMatches,
       true satisfies _RemoteBackupMatches,
       true satisfies _PublishReportMatches,
+      true satisfies _CalibrationReportMatches,
+      true satisfies _ForecastReportMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
     // preview and the device row; see the comment above them.
@@ -249,6 +262,8 @@ describe("the browser app's mirror of the wire vocabulary", () => {
     // services.
     // GOLDEN, moved by STA-289: 9 -> 13. The hub registry leg's adoption preview,
     // restore report, backup row and publish report; see the comment above them.
-    expect(proofs).toHaveLength(13);
+    // GOLDEN, moved by the forecast report: 13 -> 15. The calibration report and
+    // the forecast report the Analytics pages render; see the comment above them.
+    expect(proofs).toHaveLength(15);
   });
 });
