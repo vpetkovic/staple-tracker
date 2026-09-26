@@ -14,9 +14,10 @@
  * Pure and tested (forecast-text.test.ts), like detail/analytics.ts; the components are layout.
  */
 // Relative, as detail/analytics.ts explains: a pure module stays resolvable without the alias.
-import { formatDuration } from "../detail/analytics";
+import { QUALITY_LABEL, REASON_TEXT, formatDuration } from "../detail/analytics";
 import type {
   BudgetLimitForecast,
+  BudgetWorkProjection,
   CalibrationCohort,
   CalibrationCoverage,
   CompletionConfidence,
@@ -27,6 +28,19 @@ import type {
 } from "./types";
 
 export { formatDuration };
+
+/**
+ * An EFFORT duration: hours past a day, never days. `formatDuration` writes 139 hours of work as
+ * `5d19h`, which reads as calendar time; effort figures (labor, path, plan, bands, work medians)
+ * are hours of work, so they say `139h`. Calendar figures (a reset countdown) keep days.
+ */
+export function formatEffort(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 86_400) return formatDuration(seconds);
+  const s = Math.floor(seconds);
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  return minutes ? `${hours}h${minutes}m` : `${hours}h`;
+}
 
 // ------------------------------------------------------------------ number formats
 
@@ -249,18 +263,18 @@ export function remainingText(figure: RemainingFigure): RemainingText {
     const reasons = figure.missing.length > 0 ? figure.missing.map(missingText).join("; ") : "no reason given";
     return { value: null, figure: null, absent: `Unknown: ${reasons}`, lowerBound: figure.partial, spread, band };
   }
-  const value = formatDuration(figure.expectedSeconds);
+  const value = formatEffort(figure.expectedSeconds);
   return { value: figure.partial ? `at least ${value}` : value, figure: value, absent: null, lowerBound: figure.partial, spread, band };
 }
 
 /** `p10–p90 1h25m–2h10m`: the lower quantiles of the draws. */
 export function spreadText(spread: SimulatedSpread): string {
-  return `p10–p90 ${formatRange(spread.p10, spread.p90, formatDuration)}`;
+  return `p10–p90 ${formatRange(spread.p10, spread.p90, formatEffort)}`;
 }
 
 /** `90% band 1h20m–2h30m`: the 5th to 95th percentile of the draws, at its nominal coverage. */
 export function bandText(spread: SimulatedSpread): string {
-  return `${formatConfidence(spread.band.nominal)} band ${formatRange(spread.band.lower, spread.band.upper, formatDuration)}`;
+  return `${formatConfidence(spread.band.nominal)} band ${formatRange(spread.band.lower, spread.band.upper, formatEffort)}`;
 }
 
 export const CONFIDENCE_LABEL: Record<CompletionConfidence["label"], string> = {
@@ -347,15 +361,67 @@ export function intervalText(interval: OrderInterval, format: (value: number) =>
 // ------------------------------------------------------------------ which issues get one
 
 /**
- * Which forecast the Analytics tab asks for. A parent that is still open gets the full report
- * (labor, path, units, budget). An open leaf gets the compact one only when it has its own
- * estimate: without one its forecast is "unknown: no estimate", which the headline above already
- * says as "No estimate". A resolved issue has nothing left to forecast.
+ * Which forecast the Analytics tab asks for. An open parent gets the full report (labor, path,
+ * units, budget). An open leaf gets the compact one only when it has its own estimate: without one
+ * its forecast is "unknown: no estimate", which the headline above already says as "No estimate".
+ * A leaf in review or awaiting approval has handed its work over: there is nothing to forecast
+ * about it, only a wait that is not work, so it gets one line saying so (`awaiting`) and no
+ * request. A resolved issue has nothing left to forecast.
  */
-export type ForecastMode = "full" | "compact" | null;
+export type ForecastMode = "full" | "compact" | "awaiting" | null;
 
-export function forecastMode(input: { childCount: number; estimatedSeconds: number | null; resolved: boolean }): ForecastMode {
-  if (input.resolved) return null;
+export function forecastMode(input: { childCount: number; estimatedSeconds: number | null; category: string }): ForecastMode {
+  if (input.category === "done" || input.category === "cancelled") return null;
   if (input.childCount > 0) return "full";
+  if (input.category === "review" || input.category === "gated") return "awaiting";
   return input.estimatedSeconds !== null && input.estimatedSeconds > 0 ? "compact" : null;
+}
+
+// ------------------------------------------------------------------ budget projections
+
+/**
+ * What the work alone leaves at the reset. Under 0 the work alone runs the limit out before the
+ * reset, which is said in words rather than as a negative percent. A lower-bound burn leaves at
+ * most this much.
+ */
+export function leftAtResetText(expected: number, lowerBound: boolean): string {
+  if (expected < 0) return "runs the limit out before the reset";
+  return `leaves ${lowerBound ? "at most " : ""}${formatPercent(expected)} at the reset`;
+}
+
+/**
+ * What the work alone does to a limit, as one sentence: what it uses (across about the draws'
+ * median number of windows when it needs more than one window's worth) and what it leaves at the
+ * reset.
+ */
+export function workUseText(work: Pick<BudgetWorkProjection, "consumedPercent" | "remainingAtResetPercent" | "windows" | "lowerBound">): string {
+  const uses = `${work.lowerBound ? "uses at least" : "uses"} ${formatPercent(work.consumedPercent.expected)}`;
+  const across = work.consumedPercent.expected > 100 ? ` across about ${work.windows.p50} windows` : "";
+  return `The work alone ${uses}${across} and ${leftAtResetText(work.remainingAtResetPercent.expected, work.lowerBound)}`;
+}
+
+/** A breach chance, marked "at least" when the burn behind it is a lower bound (it can only be higher). */
+export function breachText(probability: number, lowerBound: boolean): string {
+  return `${lowerBound ? "at least " : ""}${formatProbability(probability)}`;
+}
+
+/** The instant a read was taken, as the local clock time a countdown is measured from: `as of 08:39`. */
+export function asOfText(iso: string): string {
+  return `as of ${new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+// ------------------------------------------------------------------ calibration sets
+
+/** `3 reconstructed, 2 approximate`: the states a set leaves out, in words. */
+export function excludedStatesText(counts: Partial<Record<string, number>>): string {
+  return Object.entries(counts)
+    .map(([state, count]) => `${count} ${QUALITY_LABEL[state] ?? state}`)
+    .join(", ");
+}
+
+/** `3 rebuilt from history, 2 silences over 30 min`: the reasons behind them, in words. */
+export function excludedReasonsText(reasons: Record<string, number>): string {
+  return Object.entries(reasons)
+    .map(([reason, count]) => `${count} ${REASON_TEXT[reason] ?? reason.replace(/_/g, " ")}`)
+    .join(", ");
 }

@@ -41,8 +41,10 @@ export interface ForecastScenario {
   epic: string;
   /** In progress, worked an hour against 2h, in the status line's session. */
   inProgress: string;
-  /** Blocked by `inProgress`, 1h, not started. */
+  /** Blocked by `inProgress` and by `outside`, 1h, not started. */
   blocked: string;
+  /** Open, outside the epic, blocking `blocked`. */
+  outside: string;
   /** Worked, then handed to review. */
   review: string;
   /** No estimate: unknown, never 0. */
@@ -174,7 +176,9 @@ function seedMain(
   const unestimated = store.createIssue({ title: "Polish the narrow layout", parent: epic, priority: "high" }).identifier;
   const inProgressIssue = store.createIssue({ title: "Build the forecast block", parent: epic, estimatedSeconds: 7200, priority: "high" });
   const blocked = store.createIssue({ title: "Wire the calibration view", parent: epic, estimatedSeconds: 3600, priority: "high" }).identifier;
-  store.setBlockedBy(blocked, [inProgressIssue.identifier], "w");
+  // It also waits on open work outside the epic: an unresolved outside blocker.
+  const outside = store.createIssue({ title: "Outside dependency", priority: "high" }).identifier;
+  store.setBlockedBy(blocked, [inProgressIssue.identifier, outside], "w");
   const leaf = store.createIssue({ title: "Standalone estimate", estimatedSeconds: 10_800, priority: "high" }).identifier;
 
   // The attempt the work rate is measured from: an hour in the status line's session, the
@@ -189,5 +193,5 @@ function seedMain(
   store.addComment(inProgressIssue.id, "still going", "agent", "agent");
   reading(60, 22);
 
-  return { epic, inProgress: inProgressIssue.identifier, blocked, review, unestimated, done, leaf };
+  return { epic, inProgress: inProgressIssue.identifier, blocked, outside, review, unestimated, done, leaf };
 }

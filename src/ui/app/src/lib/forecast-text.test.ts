@@ -6,8 +6,15 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  asOfText,
+  breachText,
   coverageText,
   confidenceText,
+  excludedReasonsText,
+  excludedStatesText,
+  formatEffort,
+  leftAtResetText,
+  workUseText,
   fallbackText,
   forecastMode,
   formatConfidence,
@@ -75,6 +82,7 @@ describe("remaining figures", () => {
     expect(text.lowerBound).toBe(true);
     expect(text.spread).toBe("p10–p90 1h–2h40m");
     expect(text.band).toBe("90% band 50m–2h50m");
+    expect(asOfText("2026-09-25T11:02:00.000Z")).toMatch(/^as of \d{2}[:.]\d{2}/);
   });
 
   it("reads a whole figure as it is", () => {
@@ -180,19 +188,58 @@ describe("calibration lines", () => {
 });
 
 describe("which issues get a forecast", () => {
-  it("gives an open parent the full forecast, estimated or not", () => {
-    expect(forecastMode({ childCount: 3, estimatedSeconds: null, resolved: false })).toBe("full");
-    expect(forecastMode({ childCount: 3, estimatedSeconds: 7200, resolved: false })).toBe("full");
+  it("gives an open parent the full forecast, estimated or not, whatever its own status", () => {
+    expect(forecastMode({ childCount: 3, estimatedSeconds: null, category: "active" })).toBe("full");
+    expect(forecastMode({ childCount: 3, estimatedSeconds: 7200, category: "unstarted" })).toBe("full");
+    expect(forecastMode({ childCount: 3, estimatedSeconds: null, category: "review" })).toBe("full");
   });
 
   it("gives an open leaf the compact one only with its own estimate", () => {
-    expect(forecastMode({ childCount: 0, estimatedSeconds: 7200, resolved: false })).toBe("compact");
-    expect(forecastMode({ childCount: 0, estimatedSeconds: null, resolved: false })).toBeNull();
-    expect(forecastMode({ childCount: 0, estimatedSeconds: 0, resolved: false })).toBeNull();
+    expect(forecastMode({ childCount: 0, estimatedSeconds: 7200, category: "active" })).toBe("compact");
+    expect(forecastMode({ childCount: 0, estimatedSeconds: null, category: "active" })).toBeNull();
+    expect(forecastMode({ childCount: 0, estimatedSeconds: 0, category: "unstarted" })).toBeNull();
+  });
+
+  it("gives a leaf in review or awaiting approval one line, not a forecast of 0", () => {
+    expect(forecastMode({ childCount: 0, estimatedSeconds: 7200, category: "review" })).toBe("awaiting");
+    expect(forecastMode({ childCount: 0, estimatedSeconds: 7200, category: "gated" })).toBe("awaiting");
   });
 
   it("gives nothing to a resolved issue", () => {
-    expect(forecastMode({ childCount: 3, estimatedSeconds: null, resolved: true })).toBeNull();
-    expect(forecastMode({ childCount: 0, estimatedSeconds: 7200, resolved: true })).toBeNull();
+    expect(forecastMode({ childCount: 3, estimatedSeconds: null, category: "done" })).toBeNull();
+    expect(forecastMode({ childCount: 0, estimatedSeconds: 7200, category: "cancelled" })).toBeNull();
+  });
+});
+
+describe("effort and projections", () => {
+  it("writes effort past a day in hours, never as calendar days", () => {
+    expect(formatEffort(139 * 3600)).toBe("139h");
+    expect(formatEffort(26 * 3600 + 30 * 60)).toBe("26h30m");
+    expect(formatEffort(9128)).toBe("2h32m");
+  });
+
+  it("says a limit run out before the reset in words, never as a negative percent", () => {
+    expect(leftAtResetText(-12.4, false)).toBe("runs the limit out before the reset");
+    expect(leftAtResetText(58.2, true)).toBe("leaves at most 58% at the reset");
+    expect(leftAtResetText(58.2, false)).toBe("leaves 58% at the reset");
+  });
+
+  it("says how many windows a large piece of work spans, from the draws' median", () => {
+    const simulated = (value: number) => ({ mean: value, p10: value, p50: value, p90: value, band: { lower: value, upper: value, nominal: 0.9 } });
+    const work = { consumedPercent: { expected: 180, simulated: simulated(180) }, remainingAtResetPercent: { expected: -12, simulated: simulated(-12) }, windows: simulated(3), lowerBound: false };
+    expect(workUseText(work)).toBe("The work alone uses 180% across about 3 windows and runs the limit out before the reset");
+    expect(workUseText({ ...work, consumedPercent: { expected: 20, simulated: simulated(20) }, remainingAtResetPercent: { expected: 58, simulated: simulated(58) }, windows: simulated(1) })).toBe(
+      "The work alone uses 20% and leaves 58% at the reset",
+    );
+  });
+
+  it("marks a breach chance from a lower-bound burn as at least", () => {
+    expect(breachText(0, true)).toBe("at least 0%");
+    expect(breachText(0.5065, false)).toBe("51%");
+  });
+
+  it("names excluded states and reasons in words", () => {
+    expect(excludedStatesText({ reconstructed: 3, approximate: 2, "timing-floor": 1 })).toBe("3 reconstructed, 2 approximate, 1 under a minute");
+    expect(excludedReasonsText({ sparse: 2, reconstructed: 3 })).toBe("2 silences over 30 min, 3 rebuilt from history");
   });
 });

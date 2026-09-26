@@ -25,9 +25,11 @@ import { getCalibration, type AuthError } from "@/lib/api";
 import {
   coverageText,
   cohortKeyText,
+  excludedReasonsText,
+  excludedStatesText,
+  formatEffort,
   fallbackText,
   formatConfidence,
-  formatDuration,
   formatRange,
   formatRatio,
   intervalText,
@@ -127,8 +129,8 @@ export function CohortRow({ cohort }: { cohort: CalibrationCohort }) {
         </Fact>
         <Fact label="Work">
           <span className="font-mono tabular-nums" data-testid="cohort-work">
-            median {formatDuration(workSeconds.median)}
-            {workSeconds.quantiles ? ` · p10–p90 ${formatRange(workSeconds.quantiles.p10, workSeconds.quantiles.p90, formatDuration)}` : ""}
+            median {formatEffort(workSeconds.median)}
+            {workSeconds.quantiles ? ` · p10–p90 ${formatRange(workSeconds.quantiles.p10, workSeconds.quantiles.p90, formatEffort)}` : ""}
           </span>
         </Fact>
         {cohort.floors.count > 0 || cohort.tail.heavy ? (
@@ -148,13 +150,13 @@ export function CohortRow({ cohort }: { cohort: CalibrationCohort }) {
 
 /** One set's line: samples, coverage over the whole population, cohorts, and what is not a sample and why. */
 function SetSummary({ summary }: { summary: CalibrationSetSummary }) {
-  const excluded = Object.entries(summary.excluded.counts).map(([state, count]) => `${state} ${count}`);
-  const reasons = Object.entries(summary.excluded.reasons).map(([reason, count]) => `${reason.replace(/_/g, " ")} ${count}`);
+  const excluded = excludedStatesText(summary.excluded.counts);
+  const reasons = excludedReasonsText(summary.excluded.reasons);
   return (
     <p className="text-[11px] text-muted-foreground" data-testid={`set-summary-${summary.set}`}>
       {summary.samples} sample{summary.samples === 1 ? "" : "s"}, {coverageText(summary.coverage)} · {summary.cohorts} cohort{summary.cohorts === 1 ? "" : "s"}
-      {excluded.length > 0 ? ` · not samples: ${excluded.join(", ")}` : ""}
-      {reasons.length > 0 ? ` (reasons: ${reasons.join(", ")})` : ""}
+      {excluded ? ` · not samples: ${excluded}` : ""}
+      {reasons ? ` (why: ${reasons})` : ""}
     </p>
   );
 }
@@ -225,7 +227,7 @@ export function CalibrationReportView({
       {includeReconstructed ? <SetSection set="reconstructed" report={report} /> : null}
       {report.truncated ? (
         <p className="text-[10px] text-muted-foreground">
-          Showing the first {report.items.length} cohorts; `staple calibrate --cursor` reads the rest.
+          Showing the first {report.items.length} cohorts; <code className="font-mono">staple calibrate --cursor</code> reads the rest.
         </p>
       ) : null}
     </div>
@@ -241,13 +243,14 @@ const COHORT_LIMIT = 500;
 export function CalibrationView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const [includeReconstructed, setIncludeReconstructed] = useState(INCLUDE_RECONSTRUCTED_BY_DEFAULT);
-  const ws = session.ws || undefined;
   const workspace = session.ws || session.workspaces[0]?.slug || "";
   const load = useCallback(
-    () => getCalibration({ ws, include: includeReconstructed ? "reconstructed" : undefined, limit: COHORT_LIMIT }),
-    [ws, includeReconstructed],
+    // `ws` is the workspace the page is labelled with, always: in hub mode with none chosen the
+    // server would pick its own first, which need not be the one named here.
+    () => getCalibration({ ws: workspace, include: includeReconstructed ? "reconstructed" : undefined, limit: COHORT_LIMIT }),
+    [workspace, includeReconstructed],
   );
-  const report = useResource(load, [ws, includeReconstructed, session.version], onAuthError);
+  const report = useResource(load, [workspace, includeReconstructed, session.version], onAuthError);
   // While a toggle re-reads, the report on hand answers the other question: show the skeleton, not it.
   const data = report.data && report.data.filter.include.includes("reconstructed") === includeReconstructed ? report.data : undefined;
 

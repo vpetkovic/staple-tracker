@@ -37,7 +37,7 @@
 import { StatusBadge } from "@/components/StatusBadge";
 import { getTimingQuality } from "@/lib/api";
 import { forecastMode } from "@/lib/forecast-text";
-import { isResolvedStatus } from "@/lib/settings";
+import { statusCategory } from "@/lib/settings";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import {
@@ -62,7 +62,7 @@ import {
   totalsCaveat,
   type Delta,
 } from "../analytics";
-import { IssueForecast } from "../ForecastSection";
+import { AwaitingForecast, IssueForecast } from "../ForecastSection";
 import type { TabProps } from "./registry";
 
 function Eyebrow({ children }: { children: React.ReactNode }) {
@@ -298,9 +298,9 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
    * The forecast (docs/web-ui.md, "Analytics"): what is left and what it costs a provider limit,
    * from `GET /api/forecast`. After the estimate-versus-actual headline and its breakdown, before
    * the per-child list, which can be long. Full for an open parent, compact for an open leaf with
-   * its own estimate, absent otherwise.
+   * its own estimate, one line for a leaf in review, absent otherwise.
    */
-  const mode = forecastMode({ childCount: timing.childCount, estimatedSeconds: issue.estimatedSeconds, resolved: isResolvedStatus(issue.status) });
+  const mode = forecastMode({ childCount: timing.childCount, estimatedSeconds: issue.estimatedSeconds, category: statusCategory(issue.status) });
 
   return (
     <div className="space-y-4 text-sm">
@@ -361,7 +361,8 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
       ) : null}
 
       {/* -------------------------------------------------------- forecast */}
-      {mode !== null ? (
+      {mode === "awaiting" ? <AwaitingForecast /> : null}
+      {mode === "full" || mode === "compact" ? (
         <IssueForecast
           workspace={workspace}
           refId={issue.identifier}

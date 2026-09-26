@@ -19,10 +19,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { formatDuration, formatProbability, spreadText, bandText, warningText } from "@/lib/forecast-text";
+import { asOfText, forecastMode, formatDuration, formatEffort, formatProbability, spreadText, bandText, warningText } from "@/lib/forecast-text";
 import type { CalibrationCohort, CalibrationReport, ForecastReport } from "@/lib/types";
 import { CalibrationReportView, INCLUDE_RECONSTRUCTED_BY_DEFAULT } from "@/views/calibration/CalibrationView";
-import { ForecastReportView } from "./ForecastSection";
+import { AwaitingForecast, ForecastReportView } from "./ForecastSection";
 import { EMPTY_WS, FORECAST_WS, seedForecastScenario, type ForecastScenario } from "../../../../../test/fixtures/forecast-scenario.ts";
 import { setClock } from "../../../../core/types.ts";
 import { resolveWorkspace } from "../../../../core/workspace.ts";
@@ -40,6 +40,8 @@ let leaf: ForecastReport;
 let empty: ForecastReport;
 let settled: ForecastReport;
 let noBudget: ForecastReport;
+let reviewLeaf: ForecastReport;
+let highReserve: ForecastReport;
 let exact: CalibrationReport;
 let withReconstructed: CalibrationReport;
 let emptyCalibration: CalibrationReport;
@@ -63,6 +65,8 @@ beforeAll(async () => {
   epic = await get(`/api/forecast?ws=${FORECAST_WS}&ref=${scenario.epic}`);
   leaf = await get(`/api/forecast?ws=${FORECAST_WS}&ref=${scenario.leaf}`);
   empty = await get(`/api/forecast?ws=${EMPTY_WS}&ref=${scenario.emptyEpic}`);
+  reviewLeaf = await get(`/api/forecast?ws=${FORECAST_WS}&ref=${scenario.review}`);
+  highReserve = await get(`/api/forecast?ws=${FORECAST_WS}&ref=${scenario.epic}&reserve=90`);
   settled = await get(`/api/forecast?ws=${EMPTY_WS}&ref=${scenario.settledEpic}`);
   exact = await get(`/api/calibration?ws=${FORECAST_WS}&limit=500`);
   withReconstructed = await get(`/api/calibration?ws=${FORECAST_WS}&include=reconstructed&limit=500`);
@@ -155,7 +159,17 @@ describe("an epic's forecast, as the server computed it", () => {
     const html = section(render(epic), 'aria-label="Critical path chain"');
     const buttons = [...html.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map((match) => match[1]);
     expect(buttons).toEqual(chain.map((step) => step.ref));
-    for (const step of chain) expect(text(html)).toContain(formatDuration(step.seconds!));
+    for (const step of chain) expect(text(html)).toContain(formatEffort(step.seconds!));
+  });
+
+  it("names the open outside blocker by reference, not only as a chip", () => {
+    const open = epic.completion.path.crossSubtreeBlockers.filter((blocker) => !blocker.resolved);
+    expect(open.map((blocker) => [blocker.blocked, blocker.blocker])).toEqual([[scenario.blocked, scenario.outside]]);
+    const list = section(render(epic), 'data-testid="forecast-outside"');
+    const buttons = [...list.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map((match) => match[1]);
+    expect(buttons).toEqual([scenario.blocked, scenario.outside]);
+    expect(text(list)).toContain("waits on");
+    expect(render(epic)).toContain('data-warning="unresolved_outside_blockers"');
   });
 
   it("marks low confidence visibly, with what the bounds reach and why it is not high", () => {
@@ -174,8 +188,10 @@ describe("an epic's forecast, as the server computed it", () => {
     expect(codes).toEqual(epic.completion.warnings);
     for (const code of epic.completion.warnings) {
       const { label, tip } = warningText(code);
-      expect(html).toContain(`title="${tip.replace(/'/g, "&#x27;")}"`);
-      expect(text(html)).toContain(label);
+      // A focusable button, whose accessible name carries the sentence; the tooltip and the
+      // inline disclosure (both client-side) show the same sentence.
+      expect(html).toMatch(new RegExp(`<button type="button" data-warning="${code}" aria-expanded="false"`));
+      expect(text(html)).toContain(`${label}: ${tip}`);
     }
   });
 
@@ -206,7 +222,9 @@ describe("an epic's forecast, as the server computed it", () => {
     expect(words).toContain(`${Math.round(limit.workRate!.percentPerWorkHour)}%/work-hour`);
     expect(words).toContain(`low confidence (${limit.workRate!.confidence.spans} of ${limit.workRate!.confidence.minimum} spans)`);
     expect(html).toContain('data-warning="small_sample"');
-    expect(words).toContain(`${formatProbability(limit.reserve!.breachProbability!)} chance of going under the provisional 20% reserve`);
+    // The burn behind it is a lower bound, so the breach chance is one too.
+    expect(words).toContain(`at least ${formatProbability(limit.reserve!.breachProbability!)} chance of going under the provisional 20% reserve`);
+    expect(words).toContain(`(${asOfText(epic.asOf)})`);
     // The labor is partial, so the burn is a lower bound: it says "at least" and "at most".
     expect(limit.work!.lowerBound).toBe(true);
     expect(words).toContain(`uses at least ${Math.round(limit.work!.consumedPercent.expected)}% and leaves at most ${Math.round(limit.work!.remainingAtResetPercent.expected)}% at the reset`);
@@ -249,9 +267,35 @@ describe("the other forecast states", () => {
     expect(row).not.toContain("at least");
     expect(html).not.toContain('data-testid="forecast-path"');
     expect(html).not.toContain('data-testid="forecast-units"');
+    expect(html).not.toContain('data-testid="forecast-awaiting"');
+    expect(html).not.toContain('data-testid="forecast-unknown"');
     expect(html).toContain(`data-confidence="${leaf.completion.confidence.label}"`);
     // The budget block comes with it.
     expect(html).toContain('data-block="budget"');
+  });
+
+  it("gives a leaf in review one line, not a forecast of 0 that lists itself", () => {
+    // The payload for the leaf in review: nothing left as work, and itself awaiting review.
+    expect(reviewLeaf.completion.labor.expectedSeconds).toBe(0);
+    expect(reviewLeaf.completion.units.awaitingReviewRefs).toEqual([scenario.review]);
+    // The tab never draws that as a forecast: the leaf gets one line and no request.
+    expect(forecastMode({ childCount: 0, estimatedSeconds: 3600, category: "review" })).toBe("awaiting");
+    const line = renderToStaticMarkup(<AwaitingForecast />);
+    expect(text(line)).toContain("In review: not forecast.");
+    expect(text(line)).not.toMatch(/\b0s\b/);
+    // And the unit lists are the full report's: a compact rendering never lists the issue itself.
+    const compact = render(reviewLeaf, "compact");
+    expect(compact).not.toContain('data-testid="forecast-awaiting"');
+    expect(compact).not.toContain('data-testid="forecast-unknown"');
+  });
+
+  it("with the remaining figure already under the reserve, says so, against the reserve that was asked for", () => {
+    const limit = highReserve.budget.accounts.find((a) => a.accountRef === "personal-max")!.limits.find((l) => l.limitKey === "five_hour")!;
+    expect(limit.reserve!.alreadyBelow).toBe(true);
+    expect(limit.reserve!.source).toBe("argument");
+    const words = text(section(render(highReserve), 'data-limit="five_hour"'));
+    expect(words).toContain("chance of going under the 90% reserve (already below it)");
+    expect(words).not.toContain("provisional");
   });
 
   it("with no samples at all, reads every sum as unknown with its reason, never 0", () => {

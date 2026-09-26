@@ -788,7 +788,12 @@ shows its forecast, and an open leaf with its own estimate a compact one: both
 read `GET /api/forecast?ref=` (`staple forecast --json`, MCP `forecast`; see
 [timing-semantics.md](timing-semantics.md), "Forecasts") and render it as
 returned. The page computes nothing: every figure is a field of the payload,
-formatted. A resolved issue, or a leaf with no estimate, shows no forecast.
+formatted. A resolved issue, or a leaf with no estimate, shows no forecast. A
+leaf in review or awaiting approval shows one line, *In review: not forecast*,
+and makes no request: its work was handed over, and the wait is not work.
+Effort figures (labor, path, bands, the plan, work medians) are hours of work
+and are written in hours past a day (`139h`, never `5d19h`, which reads as
+calendar time); the reset countdown is calendar time and keeps days.
 
 - **Completion**, under a *Forecast* heading with a confidence badge. *Remaining
   labor* and *Critical path* each give the expected figure, then the draws'
@@ -796,21 +801,33 @@ formatted. A resolved issue, or a leaf with no estimate, shows no forecast.
   lower bound and says *at least*, with its bands marked *(lower bounds)*; a
   figure that is null reads *Unknown:* and the reason (`no unit's remaining work
   is known`), never 0. The path lists its chain, first to last, as issue links
-  with each unit's expected remaining work. One line gives the confidence, what
+  with each unit's expected remaining work, and any open blocker outside the
+  subtree is named by reference (`STA-238 waits on STA-203 (backlog)`): that wait
+  is not in the path. Identifiers never break across lines. One line gives the confidence, what
   the classes' bounds reach against the 90% target, and why it is not high.
   Low confidence is a dashed amber badge with the word, never a hue alone.
-  Warnings are small chips in the payload's order, each with a plain-language
-  tooltip (also read to a screen reader). Units in review are listed as *Not
-  forecast*; units whose remaining work is unknown are listed with their reason.
+  Warnings are small chips in the payload's order. Each is a button: hover or
+  keyboard focus shows its plain-language sentence in the app's tooltip, and a
+  press (tap, Enter or Space) opens the same sentence inline under the chips;
+  the sentence is also in the button's accessible name. Units in review are
+  listed as *Not forecast*; units whose remaining work is unknown are listed
+  with their reason (both only in the full, parent forecast).
   A compact (leaf) forecast shows the remaining work only: no path, no unit
   lists. A settled forecast says every unit is done.
 - **Budget**, in its own dashed frame under its own heading, marked *this machine
   only*: budget data never synchronizes and never blends with the completion
   figures. It names the reserve it is measured against, and says when that is
   the *provisional* 20% default. Per account and limit: what is left, the reset
-  countdown as the server measured it, the work rate in %/work-hour with its
+  countdown as the server measured it with the read's clock time beside it
+  (`resets in 3h58m (as of 11:02)`), the work rate in %/work-hour with its
   confidence and warnings, what the work alone uses and leaves at the reset, and
   the chance of going under the reserve, alone and with other use of the account.
+  Work that needs more than one window's worth says across how many (the draws'
+  median); work that runs the limit out before the reset says so in words, never
+  as a negative percent. When the burn is a lower bound (the labor is partial or
+  a span's rise is), the work *uses at least*, *leaves at most*, and the breach
+  chance reads *at least*. A remaining figure already under the reserve says
+  *(already below it)*.
   Every unknown figure (no measured work rate, stale reading, unknown labor)
   reads *unknown* with the reason from `missing` and `missingInputs`, never 0%.
   With no readings on the machine the block says so.
@@ -827,8 +844,9 @@ payload of `staple calibrate --json` and MCP `calibration_cohorts`
 ([timing-semantics.md](timing-semantics.md), "Calibration cohorts" and
 "Confidence ranges"). Calibration is per workspace; in hub mode with no
 workspace chosen it reads the first and says which. The header's group, sort
-and filter controls are hidden here: they narrow the issue list, and this report
-is not one.
+and filter controls, and the palette's filter commands, are hidden here: they
+narrow the issue list, and this report is not one. The page asks for the
+workspace it names, so the label and the data cannot diverge.
 
 **Header.** The population (issues, and how many are in the ratio population),
 the *Include reconstructed history* switch, and the snapshot id with its member

@@ -181,6 +181,13 @@ describe("buildCommands", () => {
     expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones", "view:calibration"]);
   });
 
+  it("offers no issue filter commands on the Calibration report, which is not an issue list", () => {
+    const onCalibration = buildCommands(context({ view: "calibration" })).map((c) => c.id);
+    expect(onCalibration.filter((id) => id.startsWith("filter:"))).toEqual([]);
+    const onTasks = buildCommands(context({ view: "tree" })).map((c) => c.id);
+    expect(onTasks).toContain("filter:assignee");
+  });
+
   it("names the views as the rail does, and still answers to the internal value", () => {
     const commands = buildCommands(context({ view: "graph" }));
     const tasks = commands.find((c) => c.id === "view:tree");

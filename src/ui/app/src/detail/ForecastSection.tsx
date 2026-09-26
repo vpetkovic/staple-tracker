@@ -20,9 +20,14 @@
  * from the real server's answer; `IssueForecast` is the fetch around it.
  */
 import { getForecast } from "@/lib/api";
+import { useId, useState } from "react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  asOfText,
+  breachText,
   confidenceText,
-  formatDuration,
+  formatEffort,
+  workUseText,
   formatPercent,
   formatProbability,
   limitMissingText,
@@ -34,7 +39,6 @@ import {
   unknownUnitReason,
   warningText,
   RATE_WARNING_TEXT,
-  type ForecastMode,
   type RemainingText,
 } from "@/lib/forecast-text";
 import type { AuthError } from "@/lib/api";
@@ -47,29 +51,53 @@ const HEADING = "mb-1.5 text-[11px] font-medium tracking-[var(--tracking-eyebrow
 /** The placeholder a missing figure wears: the interface face, small, muted, italic. Never a figure. */
 const UNKNOWN = "text-[11px] text-muted-foreground italic";
 
-/** A warning as a calm chip: the short label on the page, the plain sentence in the tooltip and for a screen reader. */
-export function WarningChip({ code, table }: { code: string; table?: Record<string, { label: string; tip: string }> }) {
-  const { label, tip } = warningText(code, table);
-  return (
-    <li
-      data-warning={code}
-      title={tip}
-      className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground"
-    >
-      {label}
-      <span className="sr-only">: {tip}</span>
-    </li>
-  );
-}
-
+/**
+ * Warnings as calm chips. Each chip is a button: hovering or focusing it shows the plain sentence in
+ * the app's tooltip, and pressing it (a tap, Enter or Space) opens the same sentence inline under
+ * the chips, which is what a touch screen gets. The sentence is also in the button's accessible
+ * name, so a screen reader hears it without opening anything.
+ */
 export function WarningChips({ codes, table, label }: { codes: readonly string[]; table?: Record<string, { label: string; tip: string }>; label: string }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const tipId = useId();
   if (codes.length === 0) return null;
+  const shown = open !== null && codes.includes(open) ? warningText(open, table) : null;
   return (
-    <ul aria-label={label} className="mt-1.5 flex flex-wrap gap-1">
-      {codes.map((code) => (
-        <WarningChip key={code} code={code} table={table} />
-      ))}
-    </ul>
+    <div className="mt-1.5">
+      <ul aria-label={label} className="flex flex-wrap gap-1">
+        {codes.map((code) => {
+          const { label: chip, tip } = warningText(code, table);
+          return (
+            <li key={code}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    data-warning={code}
+                    aria-expanded={open === code}
+                    aria-controls={tipId}
+                    onClick={() => setOpen((current) => (current === code ? null : code))}
+                    className={cn(
+                      "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                      open === code && "text-foreground",
+                    )}
+                  >
+                    {chip}
+                    <span className="sr-only">: {tip}</span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-72">
+                  {tip}
+                </TooltipContent>
+              </Tooltip>
+            </li>
+          );
+        })}
+      </ul>
+      <p id={tipId} data-testid="warning-tip" className="mt-1 text-[10px] text-muted-foreground" hidden={shown === null}>
+        {shown ? `${shown.label}: ${shown.tip}` : null}
+      </p>
+    </div>
   );
 }
 
@@ -91,9 +119,10 @@ export function ConfidenceBadge({ label, text }: { label: "high" | "medium" | "l
 
 /** A clickable identifier that opens the issue, or plain text where nothing can open it. */
 function RefLink({ refId, onOpen }: { refId: string; onOpen?: (ref: string) => void }) {
-  if (!onOpen) return <span className="font-mono">{refId}</span>;
+  // Never broken across lines: `STA-` on one line and `303` on the next is not an identifier.
+  if (!onOpen) return <span className="shrink-0 font-mono whitespace-nowrap">{refId}</span>;
   return (
-    <button type="button" className="font-mono underline-offset-2 hover:underline" onClick={() => onOpen(refId)}>
+    <button type="button" className="shrink-0 font-mono whitespace-nowrap underline-offset-2 hover:underline" onClick={() => onOpen(refId)}>
       {refId}
     </button>
   );
@@ -127,12 +156,15 @@ function RemainingRow({ label, text, testId, children }: { label: string; text: 
   );
 }
 
-function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionForecast; mode: Exclude<ForecastMode, null>; onOpen?: (ref: string) => void }) {
+function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionForecast; mode: "full" | "compact"; onOpen?: (ref: string) => void }) {
   const confidence = confidenceText(completion.confidence);
   const labor = remainingText(completion.labor);
   const path = remainingText(completion.path);
-  const unknown = completion.units.items.filter((unit) => unit.treatment === "forecast" && unit.expected === null);
-  const awaiting = completion.units.items.filter((unit) => unit.treatment === "awaiting_review");
+  // The unit lists are the full report's: a compact (leaf) forecast is one unit, the issue itself.
+  const full = mode === "full";
+  const unknown = full ? completion.units.items.filter((unit) => unit.treatment === "forecast" && unit.expected === null) : [];
+  const awaiting = full ? completion.units.items.filter((unit) => unit.treatment === "awaiting_review") : [];
+  const outside = full ? completion.path.crossSubtreeBlockers.filter((blocker) => !blocker.resolved) : [];
   const chain = completion.path.chain;
 
   return (
@@ -158,11 +190,23 @@ function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionF
                     <li key={step.ref} className="inline-flex items-center gap-1">
                       {index > 0 ? <span aria-hidden>→</span> : null}
                       <RefLink refId={step.ref} onOpen={onOpen} />
-                      <span className="tabular-nums">{step.seconds === null ? "unknown" : formatDuration(step.seconds)}</span>
+                      <span className="whitespace-nowrap tabular-nums">{step.seconds === null ? "unknown" : formatEffort(step.seconds)}</span>
                     </li>
                   ))}
-                  {completion.path.chainLength > chain.length ? <li>and {completion.path.chainLength - chain.length} more</li> : null}
+                  {completion.path.chainLength > chain.length ? <li>(the first {chain.length} of {completion.path.chainLength})</li> : null}
                 </ol>
+              ) : null}
+              {outside.length > 0 ? (
+                <ul aria-label="Open outside blockers" className="text-[10px] text-muted-foreground" data-testid="forecast-outside">
+                  {outside.map((blocker) => (
+                    <li key={`${blocker.blocked}:${blocker.blocker}`} className="flex flex-wrap items-center gap-x-1">
+                      <RefLink refId={blocker.blocked} onOpen={onOpen} />
+                      <span>waits on</span>
+                      <RefLink refId={blocker.blocker} onOpen={onOpen} />
+                      <span>({blocker.blockerStatus}), outside this subtree: not in the path</span>
+                    </li>
+                  ))}
+                </ul>
               ) : null}
             </RemainingRow>
           ) : null}
@@ -212,7 +256,7 @@ function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionF
         <p className="mt-2 text-[10px] text-muted-foreground" data-testid="forecast-units">
           {completion.units.forecast} of {completion.units.total} units forecast ({completion.units.known} known) ·{" "}
           {completion.units.done} done · {completion.units.awaitingReview} in review
-          {completion.plan.seconds !== null ? ` · the plan's estimates add up to ${formatDuration(completion.plan.seconds)} (a plan, not a forecast)` : null}
+          {completion.plan.seconds !== null ? ` · the plan's estimates add up to ${formatEffort(completion.plan.seconds)} (a plan, not a forecast)` : null}
           {completion.units.truncated ? " · units listed up to the limit" : null}
         </p>
       ) : null}
@@ -225,6 +269,7 @@ function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionF
 
 /** What a limit's projection says, as lines; each unknown with its reason. */
 function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
+  const lowerBound = limit.work?.lowerBound ?? false;
   const rate = limit.workRate;
   const reserve = limit.reserve;
   const work = limit.work;
@@ -246,9 +291,7 @@ function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
       )}
       {work ? (
         <div className="text-muted-foreground" data-testid="budget-work">
-          The work alone {work.lowerBound ? "uses at least" : "uses"} {formatPercent(work.consumedPercent.expected)} and leaves{" "}
-          {work.lowerBound ? "at most " : ""}
-          {formatPercent(work.remainingAtResetPercent.expected)} at the reset
+          {workUseText(work)}
           {work.outlastsResetProbability > 0 ? `; ${formatProbability(work.outlastsResetProbability)} chance it runs past the reset` : null}
         </div>
       ) : (
@@ -264,7 +307,9 @@ function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
             </span>
           ) : (
             <>
-              <span className="font-mono tabular-nums">{formatProbability(reserve.breachProbability)}</span>
+              <span className="font-mono tabular-nums" data-testid="budget-breach-figure">
+                {breachText(reserve.breachProbability, lowerBound)}
+              </span>
               <span className="text-muted-foreground"> chance of going under {reserveLabel(reserve)}</span>
               {reserve.alreadyBelow ? <span className="text-muted-foreground"> (already below it)</span> : null}
               <span className="text-muted-foreground"> · {reserve.confidence.label} confidence</span>
@@ -274,7 +319,7 @@ function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
             {reserve.withOtherUse
               ? reserve.withOtherUse.breachProbability === null
                 ? "With other use of the account: unknown"
-                : `With other use of the account: ${formatProbability(reserve.withOtherUse.breachProbability)}`
+                : `With other use of the account: ${breachText(reserve.withOtherUse.breachProbability, lowerBound)}`
               : `With other use of the account: unknown, ${limitMissingText(reserve, "withOtherUse") ?? "not measured"}`}
           </div>
         </div>
@@ -287,7 +332,7 @@ function LimitLines({ limit }: { limit: BudgetLimitForecast }) {
   );
 }
 
-function BudgetBlock({ budget }: { budget: BudgetForecast }) {
+function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string }) {
   const reserve = budget.reserve;
   return (
     <section aria-label="Budget forecast" data-block="budget" className="rounded-md border border-dashed px-3 py-2.5">
@@ -337,6 +382,7 @@ function BudgetBlock({ budget }: { budget: BudgetForecast }) {
                           )}
                           <div className="text-[10px] text-muted-foreground" title={limit.resetsAt ?? undefined} data-testid="budget-reset">
                             {resetText(limit)}
+                            {limit.secondsToReset !== null ? ` (${asOfText(asOf)})` : null}
                           </div>
                         </div>
                         <LimitLines limit={limit} />
@@ -377,11 +423,11 @@ function DataDisclosure({ report }: { report: ForecastReport }) {
 }
 
 /** The whole forecast, from one payload. */
-export function ForecastReportView({ report, mode, onOpen }: { report: ForecastReport; mode: Exclude<ForecastMode, null>; onOpen?: (ref: string) => void }) {
+export function ForecastReportView({ report, mode, onOpen }: { report: ForecastReport; mode: "full" | "compact"; onOpen?: (ref: string) => void }) {
   return (
     <div className="space-y-3" data-forecast-mode={mode}>
       <CompletionBlock completion={report.completion} mode={mode} onOpen={onOpen} />
-      <BudgetBlock budget={report.budget} />
+      <BudgetBlock budget={report.budget} asOf={report.asOf} />
       <DataDisclosure report={report} />
     </div>
   );
@@ -396,7 +442,7 @@ export function IssueForecast({
 }: {
   workspace: string;
   refId: string;
-  mode: Exclude<ForecastMode, null>;
+  mode: "full" | "compact";
   onAuthError: (error: AuthError) => void;
 }) {
   // Re-read on the page's fingerprint, like every other view: new work moves the forecast.
@@ -421,4 +467,19 @@ export function IssueForecast({
     );
   }
   return <ForecastReportView report={forecast.data} mode={mode} onOpen={onOpen} />;
+}
+
+/**
+ * A leaf in review or awaiting approval: its work was handed over, and what is left is a wait that
+ * is not work and is not forecast. One line, and no request.
+ */
+export function AwaitingForecast() {
+  return (
+    <section aria-label="Completion forecast" data-forecast-mode="awaiting">
+      <h3 className={HEADING}>Forecast</h3>
+      <p className="text-[11px] text-muted-foreground" data-testid="forecast-awaiting-self">
+        In review: not forecast. {missingText("not_forecast").replace(/^./, (c) => c.toUpperCase())}.
+      </p>
+    </section>
+  );
 }
