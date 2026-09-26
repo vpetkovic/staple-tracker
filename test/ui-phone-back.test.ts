@@ -77,6 +77,7 @@ const usesHook = (file: string) => {
   return existsSync(path) && readFileSync(path, "utf8").includes("useBackToClose");
 };
 const detailSheetWired = usesHook("detail/IssueDetailMount.tsx");
+const milestoneMenuWired = usesHook("views/milestones/MilestonesView.tsx");
 const rowMenuWired = usesHook("components/QueueRowMenu.tsx") || usesHook("views/TreeView.tsx") || usesHook("components/task-list/TaskRowLine.tsx");
 
 let home: string;
@@ -94,6 +95,12 @@ beforeAll(async () => {
     const ws = initWorkspace({ global: true, slug });
     for (const title of ["Set up the repository", "Write the README", "Fix the login", "Plan the release"]) {
       ws.store.createIssue({ title: `${title} (${slug})` });
+    }
+    if (slug === "alpha") {
+      // A milestone with one member, for the Milestones view's member menu (ALP-5 holds ALP-4).
+      ws.store.addKind({ id: "milestone", label: "Milestone" }, null);
+      ws.store.milestones().create({ title: "October cut" }, null);
+      ws.store.milestones().addMember("ALP-5", "ALP-4", {}, null);
     }
     ws.store.db.close();
   }
@@ -294,12 +301,18 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await context.close();
   }, 30_000);
 
-  it.skipIf(!detailSheetWired)("[task-list overlay] a desk: a view chosen with the task drawer open closes the drawer first; Back returns to Tasks", async () => {
+  it.skipIf(!detailSheetWired)("[task-list overlay] a desk: going to another view from the palette with the task drawer open closes the drawer first; Back returns to Tasks", async () => {
     const { page: p, context } = await page("/?view=tasks", DESK);
     await p.locator('[data-testid="task-row"]').first().click();
     await settle(p, 800);
     expect(await count(p, "[data-detail-overlay]")).toBe(1);
-    await p.locator('[data-nav-item="view:graph"]').click({ force: true });
+    // The palette opens over the drawer; its command closes the palette and navigates while
+    // the drawer is still open underneath — the drawer's entry must be stepped past first.
+    await p.keyboard.press("ControlOrMeta+k");
+    await settle(p, 400);
+    await p.keyboard.type("Go to Graph");
+    await settle(p, 300);
+    await p.keyboard.press("Enter");
     await settle(p, 900);
     expect(viewOf(p)).toBe("graph");
     expect(await count(p, "[data-detail-overlay]")).toBe(0);
@@ -307,6 +320,63 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await back(p);
     expect(viewOf(p)).toBe("tasks");
     expect(await count(p, "[data-detail-overlay]")).toBe(0);
+    await context.close();
+  }, 30_000);
+
+  it.skipIf(!rowMenuWired)("[task-list overlay] a row's menu opened by a long press", async () => {
+    const { page: p, context } = await page("/?ws=alpha&view=tasks");
+    const cdp = await context.newCDPSession(p);
+    const box = (await p.locator('[data-testid="task-row"]').first().boundingBox())!;
+    const point = { x: box.x + box.width * 0.55, y: box.y + box.height / 2 };
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+    await settle(p, 700);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await settle(p, 500);
+    expect(await count(p, "[data-queue-row-menu]")).toBe(1);
+    await back(p);
+    expect(await count(p, "[data-queue-row-menu]")).toBe(0);
+    expect(viewOf(p)).toBe("tasks");
+    await context.close();
+  }, 30_000);
+
+  it.skipIf(!rowMenuWired || !detailSheetWired)("[task-list overlay] the row menu's Open hands over to the sheet: one Back closes the sheet, the next leaves the page", async () => {
+    const { page: p, context } = await page("/?ws=alpha&view=tasks");
+    await tap(p, '[data-view-tab="graph"]');
+    await settle(p, 600);
+    await tap(p, '[data-view-tab="tree"]');
+    await settle(p, 600);
+    await tap(p, 'button[aria-label^="Actions for"]');
+    await settle(p);
+    // One tap closes the menu and opens the sheet: the sheet's entry must land after the
+    // menu's is gone (lib/back-to-close.ts, `whenHistoryIsFree`).
+    await tap(p, '[data-queue-row-menu] [data-menu-item="open"]');
+    await settle(p, 800);
+    expect(await count(p, "[data-queue-row-menu]")).toBe(0);
+    expect(await count(p, "[data-detail-overlay]")).toBe(1);
+    expect(await overlayIds(p)).toBe(1);
+    await back(p);
+    expect(await count(p, "[data-detail-overlay]")).toBe(0);
+    expect(viewOf(p)).toBe("tasks");
+    // No dead entry left by the menu: the next Back is the page before.
+    await back(p);
+    expect(viewOf(p)).toBe("graph");
+    await context.close();
+  }, 30_000);
+
+  it.skipIf(!milestoneMenuWired)("[task-list overlay] a milestone member's menu", async () => {
+    const { page: p, context } = await page("/?ws=alpha&view=milestones");
+    await settle(p, 500);
+    // A phone lists the milestones first; the plan (and its members) is one tap in.
+    if ((await count(p, '[data-member-actions="ALP-4"]')) === 0) {
+      await p.getByRole("button", { name: /October cut/ }).first().tap();
+      await settle(p, 600);
+    }
+    await tap(p, '[data-member-actions="ALP-4"]');
+    await settle(p);
+    expect(await count(p, "[role=menu]")).toBe(1);
+    await back(p);
+    expect(await count(p, "[role=menu]")).toBe(0);
+    expect(viewOf(p)).toBe("milestones");
     await context.close();
   }, 30_000);
 
