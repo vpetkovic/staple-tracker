@@ -60,7 +60,7 @@ export default defineConfig({
      * workspaces (`test/setup/isolated-home.ts`). A test that forgets its own
      * STAPLE_HOME lands in the temp home instead of the live one.
      */
-    setupFiles: ["test/setup/isolate-env.ts"],
+    setupFiles: ["test/setup/isolate-env.ts", "test/setup/turn-event-loop.ts"],
 
     /**
      * Vitest's default is 5000ms, which is wrong for this suite.
