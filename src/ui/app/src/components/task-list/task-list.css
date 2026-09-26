@@ -1309,12 +1309,85 @@
   inset: -12px -3px;
 }
 
+/*
+ * THE `⋯` AND THE BADGE BESIDE IT MUST NOT SHARE A TARGET. A badge's target reaches 3px past
+ * its right edge; the `⋯` stands 14px clear of a dependency or PR badge before it (the 6px gap plus 8px of
+ * margin) and its target reaches 11px left, so the two targets meet and never overlap. The
+ * button is 24px wide, so its target is still 24 + 11 + 10 = 45px across.
+ */
+.staple-row[data-layout="compact"] .staple-row-actions {
+  width: 24px;
+}
+
+.staple-row[data-layout="compact"] .staple-row-meta > :is(.staple-dep-badges, .staple-pr-badge) + .staple-row-actions {
+  margin-left: 8px;
+}
+
 .staple-row[data-layout="compact"] .staple-row-actions::before {
   content: "";
   position: absolute;
   /* Right edge stops at the row's own 10px padding: past it the target would widen the
      list's scroll area by the overhang. */
-  inset: -12px -10px -12px -14px;
+  inset: -12px -10px -12px -11px;
+}
+
+/*
+ * ── The phone row (below 480px) ────────────────────────────────────────────────────────
+ *
+ * No identifier track: the sheet header carries the identifier and the row keeps it as
+ * screen-reader text. What the track held for a non-task kind (its glyph) leads the title.
+ */
+.staple-row[data-layout="compact"][data-id-column="off"] {
+  grid-template-columns:
+    var(--col-select)
+    var(--col-disclosure)
+    [priority] 16px
+    [status] 16px
+    [title] minmax(0, 1fr)
+    [meta] auto;
+  /* Four gaps instead of five, and 2px narrower each: the phone's title is the point. */
+  column-gap: 4px;
+}
+
+.staple-row-kind-lead {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  color: var(--text-tertiary);
+}
+
+/* "Next" / "Queued" — one plain word in place of the pickup marks. Neutral, not a status
+   colour: it says where the task stands in the plan, not how the task is. */
+.staple-row-pickup-pill {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.staple-row-pickup-pill[data-pickup-pill="next"] {
+  border-color: color-mix(in oklab, var(--foreground) 30%, transparent);
+  color: var(--foreground);
+}
+
+/*
+ * A long-press on a touch screen opens the row menu. Without this, iOS also starts a text
+ * selection on the title under the finger, and the menu opens over a blue highlight.
+ */
+@media (pointer: coarse) {
+  .staple-row {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
 }
 
 @media (pointer: coarse) {
@@ -1327,12 +1400,20 @@
     position: absolute;
     inset: -12px -3px;
   }
+  /* The same separation as the compact row above: the `⋯` target meets the badge's, it
+     never overlaps it. */
+  .staple-row .staple-row-actions {
+    width: 24px;
+  }
+  .staple-row .staple-row-meta > :is(.staple-dep-badges, .staple-pr-badge) + .staple-row-actions {
+    margin-left: 8px;
+  }
   .staple-row .staple-row-actions::before {
     content: "";
     position: absolute;
     /* Right edge stops at the row's own 10px padding: past it the target would widen the
-     list's scroll area by the overhang. */
-  inset: -12px -10px -12px -14px;
+       list's scroll area by the overhang. */
+    inset: -12px -10px -12px -11px;
   }
 }
 

@@ -86,7 +86,9 @@ describe("the milestone list", () => {
 
   it("is honest when there are no milestones", () => {
     const html = renderToStaticMarkup(<MilestoneListPane rows={[]} selectedRef={null} onSelect={noop} />);
-    expect(html).toContain("no milestones yet");
+    expect(html).toContain("No milestones here yet.");
+    // Plain words: no command line for a reader who is not at one.
+    expect(html).not.toContain("staple milestone");
     expect(html).not.toContain("data-milestone-list");
   });
 });

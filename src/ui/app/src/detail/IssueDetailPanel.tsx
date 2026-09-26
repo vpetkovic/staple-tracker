@@ -189,6 +189,7 @@ export function IssueDetailPanel({
             nav={nav}
             onNavigate={onNavigate}
             icon={<ChevronUp className="size-4" />}
+            large={sheet}
           />
           <NavButton
             direction="next"
@@ -196,6 +197,7 @@ export function IssueDetailPanel({
             nav={nav}
             onNavigate={onNavigate}
             icon={<ChevronDown className="size-4" />}
+            large={sheet}
           />
           {sheet ? null : (
             <>
@@ -412,7 +414,10 @@ function NavButton({
   nav,
   onNavigate,
   icon,
+  large = false,
 }: {
+  /** The phone sheet: a full 44×44 target, as every control on a touch screen gets. */
+  large?: boolean;
   direction: "prev" | "next";
   target: NavTarget | null;
   nav: NavState;
@@ -436,6 +441,8 @@ function NavButton({
       aria-label={label}
       title={title}
       disabled={!target}
+      data-detail-nav={direction}
+      className={cn("pointer-coarse:min-w-11", large && "size-11")}
       onClick={() => onNavigate(target)}
     >
       {icon}

@@ -51,6 +51,8 @@ import {
   type AuthError,
 } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
+import { useBackToClose } from "@/lib/back-to-close";
+import { afterOverlayCloses } from "@/components/task-list/overlay-handoff";
 import { useSession } from "@/lib/session";
 import type {
   EffectiveQueueRow,
@@ -61,11 +63,12 @@ import type {
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState, SectionHeading } from "@/views/ViewChrome";
-import { ChooseWorkspace } from "@/views/ChooseWorkspace";
 import { workspaceScope } from "@/views/workspace-scope";
 import { idsOf, pinnedRef } from "@/lib/write-ref";
+import { AllWorkspacesMilestones, MilestonesOff } from "./AllWorkspacesMilestones";
 import {
   dateLabel,
+  isMissingMilestoneKind,
   layoutFor,
   memberListRows,
   milestoneRisk,
@@ -159,7 +162,11 @@ export function MilestoneListPane({
   onSelect: (identifier: string) => void;
 }) {
   if (rows.length === 0) {
-    return <EmptyState>no milestones yet — `staple milestone new "…" --target YYYY-MM-DD`</EmptyState>;
+    return (
+      <EmptyState>
+        No milestones here yet. A milestone gathers tasks that should be finished by a date; your agents can create one.
+      </EmptyState>
+    );
   }
   return (
     <ul aria-label="Milestones" data-milestone-list className="flex flex-col gap-1">
@@ -218,6 +225,17 @@ function useMemberRowConfig() {
   return useMemo(() => resolveTaskListConfig("panel", { columns: MEMBER_ROW_COLUMNS, plan }), [plan]);
 }
 
+/** The member `⋯` menu, held open by its own state so phone Back can close it. */
+function MemberMenu({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  useBackToClose(open, () => setOpen(false));
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      {children}
+    </DropdownMenu>
+  );
+}
+
 function MemberRow({
   entry,
   count,
@@ -266,7 +284,7 @@ function MemberRow({
       {compact && role === "member" ? (
         /* On a phone the four buttons cost the title ~110px. One `⋯` holds the same four
            acts, with words, and a 44px target. */
-        <DropdownMenu>
+        <MemberMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -278,8 +296,12 @@ function MemberRow({
               <MoreHorizontal aria-hidden />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" aria-label={`Actions for ${identifier}`}>
-            <DropdownMenuItem onSelect={() => onOpen(row.workspace, identifier)}>
+          <DropdownMenuContent
+            align="end"
+            aria-label={`Actions for ${identifier}`}
+            className="pointer-coarse:[&_[role=menuitem]]:min-h-11 pointer-coarse:[&_[role=menuitem]]:text-[15px]"
+          >
+            <DropdownMenuItem onSelect={() => afterOverlayCloses(() => onOpen(row.workspace, identifier))}>
               <ArrowUpRight aria-hidden />
               Open details
             </DropdownMenuItem>
@@ -297,7 +319,7 @@ function MemberRow({
               Remove from this milestone
             </DropdownMenuItem>
           </DropdownMenuContent>
-        </DropdownMenu>
+        </MemberMenu>
       ) : (
       <div className="flex shrink-0 items-center">
         <Button
@@ -595,14 +617,7 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
   const session = useSession();
   const scope = workspaceScope(session.mode, session.ws, session.workspaces);
   if (scope.kind === "choose") {
-    return (
-      <ChooseWorkspace
-        page="Milestones"
-        sentence="Milestones belong to one workspace each. Choose a workspace to see its milestones and what is left in them."
-        workspaces={scope.workspaces}
-        onChoose={session.setWs}
-      />
-    );
+    return <AllWorkspacesMilestones workspaces={scope.workspaces} onAuthError={onAuthError} />;
   }
   return <WorkspaceMilestones key={scope.slug} workspace={scope.slug} onAuthError={onAuthError} />;
 }
@@ -743,6 +758,9 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
     (rowWorkspace: string, identifier: string) => session.open(rowWorkspace || workspace, identifier),
     [session, workspace],
   );
+
+  // The workspace has no milestone kind: the whole page says so, in words, with the fix.
+  if (list.error && isMissingMilestoneKind(list.error)) return <MilestonesOff workspace={workspace} />;
 
   const listPane = list.error ? (
     <ErrorState error={list.error} />

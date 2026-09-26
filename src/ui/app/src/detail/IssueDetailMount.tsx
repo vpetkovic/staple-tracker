@@ -41,14 +41,16 @@
  * for this file is the part that is actually staple's: which mode, how wide, and the
  * two places Radix's defaults are wrong for this panel (see onEscapeKeyDown).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog as DialogPrimitive, VisuallyHidden } from "radix-ui";
 import type { AuthError } from "@/lib/api";
+import { useBackToClose } from "@/lib/back-to-close";
 import { isTyping } from "@/lib/keyboard";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { loadMode, otherMode, panelClass, presentationFor, saveMode, SHEET_BELOW, type DetailMode } from "./drawer";
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { focusRow } from "./focus-return";
 import { neighbours, type NavTarget } from "./navigation";
 import "./detail.css";
 
@@ -156,6 +158,21 @@ export function IssueDetailMount() {
     [session],
   );
 
+  /**
+   * PHONE BACK CLOSES THE DETAIL. One history entry while the detail is open, whatever it
+   * shows: Previous/Next and a blocker chip change the selection, not whether it is open,
+   * so they add no Back steps. Back pops the entry and closes; the Back button, the X and
+   * Escape close through `session.close` and the hook takes the entry back out.
+   */
+  useBackToClose(selection !== null, session.close);
+
+  /**
+   * The task the detail showed last, for focus return. Kept past the close, because the
+   * close is what clears `selection` and the focus decision runs after it.
+   */
+  const lastRef = useRef<string | null>(null);
+  if (selection) lastRef.current = selection.ref;
+
   return (
     <DialogPrimitive.Root
       open={selection !== null}
@@ -209,6 +226,14 @@ export function IssueDetailMount() {
            * expects; it is only a special case because Radix cannot know which of
            * its descendants are editors.
            */
+          /**
+           * FOCUS GOES BACK TO THE ROW of the task that was showing — not to whatever held
+           * focus when the detail opened (on a phone, nothing; from the row menu, its `⋯`;
+           * after Previous/Next, a different task's row). See focus-return.ts.
+           */
+          onCloseAutoFocus={(event) => {
+            if (focusRow(document, lastRef.current)) event.preventDefault();
+          }}
           onEscapeKeyDown={(event) => {
             if (isTyping(event.target)) event.preventDefault();
           }}

@@ -43,6 +43,7 @@ import { useSession } from "@/lib/session";
 import type { InboxRow, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
+import { rowQueueMenu, type RowQueue } from "./tree/row-queue";
 import { TreeGrid } from "./tree/TreeGrid";
 import { EmptyState, ViewState } from "./ViewChrome";
 
@@ -153,9 +154,71 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
     [queue.data],
   );
 
+  /**
+   * ALL WORKSPACES: THE ROW QUEUES INTO ITS OWN WORKSPACE.
+   *
+   * There is no cross-workspace plan to read here (see the note on `wantQueue`), but every
+   * row knows which workspace it lives in, and that workspace's plan is one request away. So
+   * instead of a menu of greyed-out queue actions, opening the menu reads the row's own
+   * workspace plan, and the actions write to it. Read on every open, not polled: the list
+   * can hold rows from many workspaces and only the one being acted on needs a plan.
+   */
+  const [rowQueues, setRowQueues] = useState<Record<string, RowQueue>>({});
+  const loadRowQueue = useCallback(
+    (ws: string) => {
+      setRowQueues((current) => ({ ...current, [ws]: { kind: "loading" } }));
+      getQueue({ ws, all: true }).then(
+        (view) => setRowQueues((current) => ({ ...current, [ws]: { kind: "ready", view } })),
+        (error: unknown) =>
+          setRowQueues((current) => ({ ...current, [ws]: { kind: "failed", refusal: describeRefusal(error) } })),
+      );
+    },
+    [],
+  );
+  const rowQueueWrite = useCallback(
+    async (ws: string, run: (baseRevision: number) => Promise<unknown>) => {
+      const { revision } = rowQueueMenu(rowQueues[ws], ws);
+      if (revision === null) return;
+      setQueueBusy(true);
+      try {
+        await run(revision);
+        session.refresh();
+      } catch (error) {
+        setQueueRefusal(describeRefusal(error));
+      } finally {
+        setQueueBusy(false);
+        loadRowQueue(ws);
+      }
+    },
+    [rowQueues, loadRowQueue, session],
+  );
+
   const rowActionsMenu = useCallback(
     (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => {
       const ref = row.issue.identifier;
+      if (!wantQueue) {
+        const ws = row.workspace;
+        const menu = rowQueueMenu(rowQueues[ws], ws);
+        return (
+          <QueueRowMenu
+            trigger={trigger}
+            open={control?.open}
+            onOpenChange={(open) => {
+              if (open) loadRowQueue(ws);
+              control?.onOpenChange(open);
+            }}
+            identifier={ref}
+            queueWorkspace={ws}
+            state={queueRowMenuState(row, menu.planIds)}
+            disabled={queueBusy || menu.revision === null}
+            disabledReason={menu.reason}
+            onOpen={() => session.open(ws, ref)}
+            onQueueNext={() => void rowQueueWrite(ws, (baseRevision) => enqueueTask({ ws, ref: row.issue.id, at: 1, baseRevision }))}
+            onQueueLast={() => void rowQueueWrite(ws, (baseRevision) => enqueueTask({ ws, ref: row.issue.id, baseRevision }))}
+            onDequeue={() => void rowQueueWrite(ws, (baseRevision) => dequeueTask({ ws, ref: row.issue.id, baseRevision }))}
+          />
+        );
+      }
       const ws = session.ws || undefined;
       return (
         <QueueRowMenu
@@ -166,8 +229,6 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
           state={queueRowMenuState(row, queuedIds)}
           disabled={queueBusy || queueRevision === undefined}
           onOpen={() => session.open(row.workspace, ref)}
-          // `at: 1` is the wire's own "put it in front", not a reorder computed here.
-          // Writes by the row's id, never its number (`lib/write-ref.ts`).
           onQueueNext={() =>
             void queueWrite((baseRevision) => enqueueTask({ ws, ref: row.issue.id, at: 1, baseRevision }))
           }
@@ -176,7 +237,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
         />
       );
     },
-    [queuedIds, queueBusy, queueRevision, queueWrite, session],
+    [wantQueue, rowQueues, loadRowQueue, rowQueueWrite, queuedIds, queueBusy, queueRevision, queueWrite, session],
   );
 
   /**

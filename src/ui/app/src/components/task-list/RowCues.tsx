@@ -30,6 +30,7 @@ import {
   MILESTONE_CUE_GLYPH,
   ROW_CUE_PRESENTATION,
   milestoneCueSentence,
+  rowCuePill,
   rowCueShort,
   rowCueSentence,
 } from "./row-cues";
@@ -77,6 +78,26 @@ export function PickupCue({ cue, compact = false }: { cue: RowPickupCue; compact
  * of work is the badge wall the ticket exists to avoid; the glyph says "there is a
  * commitment here" and the tooltip and the accessible name say which one.
  */
+/**
+ * The phone's pickup cue: one word in a pill, or nothing. See `rowCuePill`.
+ */
+export function PickupPill({ cue }: { cue: RowPickupCue }) {
+  const pill = rowCuePill(cue);
+  if (!pill) return null;
+  return (
+    <span
+      className="staple-row-pickup-pill"
+      data-testid="row-pickup-pill"
+      data-pickup-pill={pill.toLowerCase()}
+      data-pickup-cue={cue.state}
+      title={rowCueSentence(cue)}
+    >
+      <span aria-hidden="true">{pill}</span>
+      <span className="sr-only">{rowCueSentence(cue)}</span>
+    </span>
+  );
+}
+
 export function MilestoneCue({
   cue,
   onOpen,

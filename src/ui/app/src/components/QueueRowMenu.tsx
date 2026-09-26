@@ -38,16 +38,19 @@
  * stops the UI from advertising an action it can see will fail.
  */
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpRight, ArrowUpToLine, ListPlus, ListX, SquareArrowUp } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useBackToClose } from "@/lib/back-to-close";
 import { statusCategory } from "@/lib/settings";
 import type { TaskRow } from "@/components/task-list";
+import { afterOverlayCloses } from "@/components/task-list/overlay-handoff";
 
 /** What the menu may offer for one row, and what it must refuse. */
 export interface QueueRowMenuState {
@@ -93,6 +96,8 @@ export function QueueRowMenu({
   identifier,
   state,
   disabled,
+  disabledReason,
+  queueWorkspace,
   onOpen,
   onQueueNext,
   onQueueLast,
@@ -115,6 +120,17 @@ export function QueueRowMenu({
   state: QueueRowMenuState;
   /** A write is already in flight; the plan's revision is not safe to build on. */
   disabled: boolean;
+  /**
+   * Why the queue items are off, when that is something other than a write in flight — the
+   * row's workspace plan still loading, or unreadable, in All workspaces.
+   */
+  disabledReason?: string;
+  /**
+   * All workspaces: the workspace whose queue these items write to — the row's own. Named
+   * above the items, because in a list mixing workspaces "Add to queue" alone does not say
+   * which queue.
+   */
+  queueWorkspace?: string;
   onOpen: () => void;
   onQueueNext: () => void;
   onQueueLast: () => void;
@@ -135,15 +151,40 @@ export function QueueRowMenu({
   onMoveDown?: () => void;
 }) {
   const held = state.heldBy;
+  /**
+   * Always controlled from here, so phone Back can close it: the row's long-press state
+   * when the row hands one over, this component's own otherwise.
+   */
+  const [ownOpen, setOwnOpen] = useState(false);
+  const isOpen = open ?? ownOpen;
+  const setOpen = (next: boolean) => {
+    if (open === undefined) setOwnOpen(next);
+    onOpenChange?.(next);
+  };
+  useBackToClose(isOpen, () => setOpen(false));
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
+    <DropdownMenu open={isOpen} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent aria-label={`Actions for ${identifier}`} data-queue-row-menu={identifier}>
-        <DropdownMenuItem data-menu-item="open" onSelect={onOpen}>
+      <DropdownMenuContent
+        aria-label={`Actions for ${identifier}`}
+        data-queue-row-menu={identifier}
+        // Touch screens get finger-sized rows; a mouse keeps the compact desktop menu.
+        className="pointer-coarse:[&_[role=menuitem]]:min-h-11 pointer-coarse:[&_[role=menuitem]]:text-[15px]"
+      >
+        <DropdownMenuItem
+          data-menu-item="open"
+          // The detail opens once the menu's Back entry is gone — see overlay-handoff.ts.
+          onSelect={() => afterOverlayCloses(onOpen)}
+        >
           <ArrowUpRight aria-hidden />
           Open details
         </DropdownMenuItem>
         <DropdownMenuSeparator />
+        {queueWorkspace ? (
+          <DropdownMenuLabel data-menu-queue-workspace={queueWorkspace} className="normal-case tracking-normal">
+            Queue in {queueWorkspace}
+          </DropdownMenuLabel>
+        ) : null}
         {state.queued && onMoveUp ? (
           <DropdownMenuItem data-menu-item="move-up" disabled={disabled} onSelect={onMoveUp}>
             <ArrowUp aria-hidden />
@@ -172,7 +213,7 @@ export function QueueRowMenu({
           <DropdownMenuItem
             data-menu-item="dequeue"
             disabled={disabled || held !== null}
-            reason={held ? `In flight — ${held} is working on ${identifier}` : undefined}
+            reason={held ? `${held} is working on this, so it stays in the queue` : disabled ? disabledReason : undefined}
             onSelect={onDequeue}
           >
             <ListX aria-hidden />
@@ -180,7 +221,12 @@ export function QueueRowMenu({
           </DropdownMenuItem>
         ) : (
           <>
-            <DropdownMenuItem data-menu-item="queue-next" disabled={disabled} onSelect={onQueueNext}>
+            <DropdownMenuItem
+              data-menu-item="queue-next"
+              disabled={disabled}
+              reason={disabled ? disabledReason : undefined}
+              onSelect={onQueueNext}
+            >
               <SquareArrowUp aria-hidden />
               Queue next
             </DropdownMenuItem>

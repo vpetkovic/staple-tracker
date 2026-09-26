@@ -50,7 +50,7 @@ import { LabelPills } from "./LabelPills";
 import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
-import { MilestoneCue, PickupCue } from "./RowCues";
+import { MilestoneCue, PickupCue, PickupPill } from "./RowCues";
 import { StatusIcon } from "./StatusIcon";
 import { Avatar, RowClaimSlot } from "./WorkingPill";
 import { WorklogCue } from "./WorklogCue";
@@ -325,6 +325,19 @@ export function TaskRowLine({
    * liveness is written down. See views/tree/tree-model.ts.
    */
   const ghost = row.ghost === true;
+  /**
+   * PHONE ROWS (row-layout.ts, the 480px rung): the identifier column goes — the sheet's
+   * header carries it and the row keeps it as screen-reader text — and a plain task's kind
+   * glyph goes with it. Any other kind keeps its glyph, moved to the front of the title.
+   */
+  const idColumn = columns.identifier && plan.identifier;
+  const kindGlyph = plan.plainKindGlyph || issue.kind !== "task" ? <KindGlyph kind={issue.kind} /> : null;
+  const relationText = (
+    <>
+      {isSubtask(row) ? <span className="sr-only">Subtask</span> : null}
+      {ghost ? <span className="sr-only"> parent shown for context</span> : null}
+    </>
+  );
 
   const cell = (
     <div role={semantics === "grid" ? "gridcell" : undefined} className="staple-row-cell">
@@ -405,7 +418,7 @@ export function TaskRowLine({
         therefore sits one glyph right of a top-level one until O1b (STA-125) gives every row
         a real kind glyph and restores the edge by filling the space rather than reserving it.
       */}
-      {columns.identifier ? (
+      {idColumn ? (
         <span className="staple-row-id">
           {/*
             THE KIND GLYPH — O1b (STA-125). First child, so it is left of everything.
@@ -425,7 +438,7 @@ export function TaskRowLine({
             preset that draws an identifier wants the type of the thing it identifies,
             and the palette (R5) gets it through this component with no code of its own.
           */}
-          <KindGlyph kind={issue.kind} />
+          {kindGlyph}
           {isSubtask(row) ? (
             <>
               {/* Compact rows drop the glyph: the indent and the guide line already draw the
@@ -459,8 +472,15 @@ export function TaskRowLine({
           them and the only place they can go without a new grid track. They cost no
           height: see RowCues.tsx.
         */}
-        {cues?.pickup ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
-        {cues?.milestone ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
+        {columns.identifier && !idColumn ? (
+          <>
+            {kindGlyph ? <span className="staple-row-kind-lead">{kindGlyph}</span> : null}
+            <span className="sr-only">{issue.identifier} </span>
+            {relationText}
+          </>
+        ) : null}
+        {cues?.pickup && plan.cues === "marks" ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
+        {cues?.milestone && plan.milestoneMark ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
             {row.workspace}
@@ -488,6 +508,7 @@ export function TaskRowLine({
         {/* A collapsed parent still declares what it is hiding. `+N` is DIRECT children in
             this bucket — literally the rows the fold removed — and it stays collapsed-only,
             because "+3" printed above three visible children would be a lie. */}
+        {cues?.pickup && plan.cues === "pill" ? <PickupPill cue={cues.pickup} /> : null}
         {collapsedParent ? <span className="staple-row-childcount">+{childCount}</span> : null}
         {/*
           O3b (STA-127). Immediately after `+N` and inside the title cell, which is the slot
@@ -643,6 +664,7 @@ export function TaskRowLine({
       // that knows nothing about this module (cmdk) still gets its own geometry.
       data-density={config.density}
       data-layout={plan.layout}
+      data-id-column={columns.identifier && !idColumn ? "off" : undefined}
       aria-level={semantics === "grid" ? depth + 1 : undefined}
       aria-expanded={semantics === "grid" && hasChildren ? isExpanded : undefined}
       // A ghost is not in this bucket, so it cannot be part of a selection made in it, and

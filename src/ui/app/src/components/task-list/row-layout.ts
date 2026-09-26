@@ -18,8 +18,9 @@
  *
  * ── WHAT NEVER DROPS ───────────────────────────────────────────────────────────────────
  *
- * Chevron, priority, kind, identifier, status and title, left to right, on one line at any
- * width. Right of the title: the blocker/warning cue (merged into one chip when narrow), the
+ * Chevron, priority, status and title, left to right, on one line at any width; the kind
+ * glyph of anything that is not a plain task; the identifier everywhere but a phone held
+ * upright, where the detail sheet's header carries it. Right of the title: the blocker/warning cue (merged into one chip when narrow), the
  * claim (an avatar when narrow), the assignee, and a parent's `x/y` count. The title gets
  * every pixel the ladder frees.
  */
@@ -57,7 +58,22 @@ export type RowDrop =
   /** The label colour dots. */
   | "labelDots"
   /** The parent's 36px progress bar: it becomes a 12px ring beside the count. */
-  | "rollupBar";
+  | "rollupBar"
+  /**
+   * The identifier column. On a phone the detail sheet's header carries it, and 62px of
+   * `STA-123` on every row is 62px of title; the identifier stays the row's screen-reader text.
+   */
+  | "identifier"
+  /** The kind glyph of a plain task. An epic's or a bug's glyph stays: that one says something. */
+  | "plainKindGlyph"
+  /**
+   * The pickup marks (`·` `▸` `⋯` `#2`): one plain pill takes their place, "Next" for the
+   * task an agent would pick up now and "Queued" for a task in the plan. Every other state
+   * says nothing on the row; the full sentence stays the pill's accessible text.
+   */
+  | "cueMarks"
+  /** The milestone `◇`. The milestone is one tap away on the detail sheet. */
+  | "milestoneMark";
 
 export interface RowRung {
   /** The rung applies when the viewport is narrower than this, in CSS px. */
@@ -71,7 +87,9 @@ export interface RowRung {
  * The first four rungs are §14's existing ladder, unchanged in width and order, so every
  * desktop and tablet width renders what it rendered before. The last two are the phone:
  * below 720px the row stays ONE line (the two-line reflow is gone) and pays for it by
- * merging and shrinking rather than wrapping; below 480px the purely decorative markers go.
+ * merging and shrinking rather than wrapping; below 480px — a phone held upright — the purely
+ * decorative markers go, and so do the identifier column and a plain task's kind glyph (the
+ * sheet header carries both), with the pickup marks replaced by one plain pill.
  */
 export const COLLAPSE_LADDER: readonly RowRung[] = [
   { below: 1280, drops: ["secondLabel"] },
@@ -79,7 +97,7 @@ export const COLLAPSE_LADDER: readonly RowRung[] = [
   { below: 960, drops: ["worklog"] },
   { below: 880, drops: ["date", "workingLabel"] },
   { below: 720, drops: ["rollupPlan", "subtaskGlyph", "cueWords", "splitDeps"] },
-  { below: 480, drops: ["prBadge", "labelDots", "rollupBar"] },
+  { below: 480, drops: ["prBadge", "labelDots", "rollupBar", "identifier", "plainKindGlyph", "cueMarks", "milestoneMark"] },
 ];
 
 /** Below this the row switches to the compact one-line geometry (48px, tighter indent). */
@@ -139,6 +157,14 @@ export interface RowPlan {
   cueWords: boolean;
   /** A stale claim as its whole sentence, or as initials and silence. */
   staleClaim: "sentence" | "short";
+  /** The identifier column is drawn (it is always in the accessible text). */
+  identifier: boolean;
+  /** A plain task's kind glyph is drawn. Other kinds always keep theirs. */
+  plainKindGlyph: boolean;
+  /** The pickup cue as its marks, or as one plain "Next"/"Queued" pill. */
+  cues: "marks" | "pill";
+  /** The milestone marker is drawn. */
+  milestoneMark: boolean;
 }
 
 /** Every drop that applies at `width`. */
@@ -172,6 +198,10 @@ export function rowPlan(width: number): RowPlan {
     claim: compact ? "avatar" : "pill",
     cueWords: has("cueWords"),
     staleClaim: has("staleSentence") ? "sentence" : "short",
+    identifier: has("identifier"),
+    plainKindGlyph: has("plainKindGlyph"),
+    cues: has("cueMarks") ? "marks" : "pill",
+    milestoneMark: has("milestoneMark"),
   };
 }
 

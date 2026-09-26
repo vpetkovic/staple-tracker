@@ -30,6 +30,8 @@ import {
 } from "@/lib/types";
 import { GateReview } from "./GateReview";
 import { idsOf } from "@/lib/write-ref";
+import { configuredStatusOrder, statusLabel } from "@/lib/settings";
+import { ACTION_WORDS, statusChoices } from "./plain-actions";
 
 /**
  * Who is doing this? Asked, remembered, and asked again with the remembered answer
@@ -146,19 +148,24 @@ export function IssueActions({
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <Select value={status} onValueChange={(v) => setStatus(v as IssueStatus)}>
-          <SelectTrigger size="sm" className="w-[9.5rem]" aria-label="Status">
+          <SelectTrigger size="sm" className="w-[11rem]" aria-label="Status">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {ISSUE_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                {s}
+            {statusChoices(configuredStatusOrder(), ISSUE_STATUSES, issue.status).map((s) => (
+              <SelectItem key={s} value={s} data-status-choice={s}>
+                {statusLabel(s)}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <Button size="sm" disabled={busy || status === issue.status} onClick={() => void run({ type: "status", status })}>
-          set status
+        <Button
+          size="sm"
+          data-action="status"
+          disabled={busy || status === issue.status}
+          onClick={() => void run({ type: "status", status })}
+        >
+          {ACTION_WORDS.status}
         </Button>
         {/*
           THE CLAIM BUTTON, DISABLED WHILE THIS ROW IS QUEUED — Q2 (STA-144).
@@ -180,18 +187,37 @@ export function IssueActions({
           disabled={busy || queuedBy !== null}
           title={queuedBy ? gateRefusalReason(queuedBy) : undefined}
           aria-description={queuedBy ? gateRefusalReason(queuedBy) : undefined}
+          data-action="checkout"
           onClick={() => {
-            const name = askActor("Check out as (agent/user name):");
+            const name = askActor(ACTION_WORDS.checkoutPrompt);
             if (!name) return;
             void run({ type: "checkout" }, name);
           }}
         >
-          claim
+          {ACTION_WORDS.checkout}
         </Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void run({ type: "release" })}>
-          release
+        <Button size="sm" variant="outline" data-action="release" disabled={busy} onClick={() => void run({ type: "release" })}>
+          {ACTION_WORDS.release}
         </Button>
       </div>
+
+      {/* The words above are for people; the names the tracker and its agents use are here,
+          one tap away, for whoever needs to type them. */}
+      <details className="text-[12px] text-muted-foreground" data-technical-details="">
+        <summary className="cursor-pointer select-none py-1">Show details</summary>
+        <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+          <dt>Status name</dt>
+          <dd className="font-mono">{issue.status}</dd>
+          <dt>Who is working on it</dt>
+          <dd className="font-mono">{issue.checkoutAgent ?? "nobody (not checked out)"}</dd>
+          <dt>Reference</dt>
+          <dd className="font-mono break-all">{issue.identifier} · {issue.id}</dd>
+        </dl>
+        <p className="mt-1">
+          {ACTION_WORDS.checkout} is a checkout (<span className="font-mono">staple checkout</span>);{" "}
+          {ACTION_WORDS.release.toLowerCase()} is a release (<span className="font-mono">staple release</span>).
+        </p>
+      </details>
 
       {/*
         C3 — the takeover affordance, and the only place in this app that can move a claim
@@ -218,12 +244,12 @@ export function IssueActions({
             className="ml-auto"
             disabled={busy}
             onClick={() => {
-              const name = askActor(`Take over from ${claim.heldBy} as (agent/user name):`);
+              const name = askActor(ACTION_WORDS.takeOverPrompt(claim.heldBy));
               if (!name) return;
               void run({ type: "checkout", stealIfIdleSeconds: STALE_CLAIM_SECONDS }, name);
             }}
           >
-            take over
+            {ACTION_WORDS.takeOver}
           </Button>
           <Button
             size="sm"
@@ -235,7 +261,7 @@ export function IssueActions({
             // gone — and it still refuses if that stops being true.
             onClick={() => void run({ type: "release", ifIdleSeconds: STALE_CLAIM_SECONDS })}
           >
-            release stale claim
+            {ACTION_WORDS.releaseStale}
           </Button>
         </div>
       ) : null}
