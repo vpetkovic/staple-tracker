@@ -85,12 +85,15 @@ beforeAll(async () => {
     ].join("\n"),
   );
   chmodSync(fake, 0o755);
-  for (const key of ["HOME", "STAPLE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "STAPLE_TEST_LAUNCHCTL"]) saved[key] = process.env[key];
+  for (const key of ["HOME", "STAPLE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "STAPLE_TEST_LAUNCHCTL", "STAPLE_TEST_PLATFORM"]) saved[key] = process.env[key];
   process.env.HOME = userHome;
   process.env.STAPLE_HOME = home;
   process.env.CLAUDE_CONFIG_DIR = claudeDir;
   process.env.CODEX_HOME = codexDir;
   process.env.STAPLE_TEST_LAUNCHCTL = fake;
+  // The watcher is a launch agent, so the server plans as macOS on every runner (the fake
+  // launchctl above is its launchd); one test below plans as Linux.
+  process.env.STAPLE_TEST_PLATFORM = "darwin";
   const ws = initWorkspace({ dir: join(root, "repo"), slug: "telemetrye2e" });
   ws.store.db.close();
   ui = startUiServer({ port: 0, hub: false, db: join(root, "repo", ".staple", "staple.db") });
@@ -256,6 +259,27 @@ describe("automatic collection, through the section's handlers", () => {
     expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
     expect(existsSync(plistPath)).toBe(false);
     expect(existsSync(loadedFile)).toBe(false);
+  });
+
+  it("on Linux the watcher is not installed: the plan says so in plain words and gives the cron line", async () => {
+    process.env.STAPLE_TEST_PLATFORM = "linux";
+    try {
+      const page = await section();
+      await turnOn(page, { claudeAccount: "", codexAccount: "codex-plus", statusline: false, watcher: true });
+      const watcher = page.get().plan!.response.plan.steps.find((step) => step.part === "watcher")!;
+      expect(watcher.action).toBe("skip");
+      expect(watcher.summary).toContain("budget collect");
+      const markup = html(page);
+      expect(visible(markup)).toContain("Codex sessions won't be checked in the background (see details); Collect now still works.");
+      expect(text(markup)).toContain("crontab -e");
+      await page.handlers.onConfirmPlan();
+      expect(page.get().notice?.tone).toBe("ok");
+      expect(existsSync(plistPath)).toBe(false);
+      expect(page.get().status?.watcher).toMatchObject({ supported: false, loaded: null });
+      expect(text(html(page))).toContain("Automatic checks aren't available on this system");
+    } finally {
+      process.env.STAPLE_TEST_PLATFORM = "darwin";
+    }
   });
 
   it("a plan made stale by a change on the machine comes back as a NEW plan to confirm; nothing is applied", async () => {

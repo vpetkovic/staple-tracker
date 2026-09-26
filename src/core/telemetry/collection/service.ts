@@ -92,9 +92,22 @@ interface Resolved {
   readonly attemptLinker?: AttemptLinker;
 }
 
+/**
+ * The platform a test runs the UI server's collection routes as, which cannot be handed a
+ * `platform` dep. Honoured ONLY together with `STAPLE_TEST_LAUNCHCTL` (the suite's fake
+ * launchctl, `launchd.ts`), so outside the suite it can never make staple believe it is on
+ * macOS and reach for a launchd that is not there, or skip the one that is. Nothing outside
+ * the suite sets or documents it.
+ */
+function testPlatform(): NodeJS.Platform | undefined {
+  const forced = process.env.STAPLE_TEST_PLATFORM;
+  if (!forced || !process.env.STAPLE_TEST_LAUNCHCTL) return undefined;
+  return forced === "darwin" || forced === "linux" || forced === "win32" ? forced : undefined;
+}
+
 function resolveDeps(deps: CollectionDeps): Resolved {
   const env = deps.env ?? process.env;
-  const platform = deps.platform ?? process.platform;
+  const platform = deps.platform ?? testPlatform() ?? process.platform;
   const home = deps.userHome ?? osUserHome();
   let staple = deps.staple;
   if (staple === undefined) {
