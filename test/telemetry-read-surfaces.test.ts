@@ -185,7 +185,7 @@ describe("CLI --json and MCP answer one shape", () => {
     expect(steady(await inHome(() => http("/api/budget")))).toEqual(steady(view));
 
     // The pressure block and its reserve argument, one value on the three surfaces.
-    const reserved = cli(["budget", "--reserve", "30%"], null);
+    const reserved = await cli(["budget", "--reserve", "30%"], null);
     expect(steady(toolPayload(await mcp.call("get_budget", { reserve: "30%" })))).toEqual(steady(reserved));
     expect(steady(await inHome(() => http("/api/budget?reserve=30%25")))).toEqual(steady(reserved));
     expect(reserved).toMatchObject({
@@ -195,7 +195,7 @@ describe("CLI --json and MCP answer one shape", () => {
     });
     expect(view).toMatchObject({ reserve: { percent: 20, source: "provisional_default", note: expect.stringContaining("provisional") } });
     // A reserve out of range is the same refusal everywhere.
-    const refused = run(["budget", "--reserve", "150", "--json"]);
+    const refused = await run(["budget", "--reserve", "150", "--json"]);
     expect(refused.status).toBe(2);
     expect(mcpEnvelope(await mcp.call("get_budget", { reserve: "150" }))).toEqual(JSON.parse(refused.stderr.trim()));
     expect((await inHome(() => fetch(`${origin}/api/budget?reserve=150`, { headers: { "x-staple-token": ui.token } }))).status).toBe(409);
