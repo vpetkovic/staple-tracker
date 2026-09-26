@@ -112,6 +112,7 @@ import {
 } from "./graph/graph-share";
 import { GraphToolbar } from "./graph/GraphToolbar";
 import { EpicPicker } from "./graph/EpicPicker";
+import { initialFit } from "./graph/phone-fit";
 import { nodeTypes, type GraphFlowNode } from "./graph/node-types";
 import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
 
@@ -140,7 +141,14 @@ function Legend() {
         </svg>
         blocks (cross-workspace)
       </span>
-      <span className="text-muted-foreground/70">hover or select a task to trace its chain</span>
+      {/* Two sentences, one shown: a touch screen has no hover, and on a phone a tap opens the
+          task full screen rather than tracing its chain beside it. */}
+      <span className="text-muted-foreground/70 pointer-coarse:hidden" data-graph-hint="pointer">
+        Hover over a task or select it to trace what it waits on
+      </span>
+      <span className="hidden text-muted-foreground/70 pointer-coarse:inline" data-graph-hint="touch">
+        Tap a task to open it. Pinch to zoom, drag to move around.
+      </span>
     </div>
   );
 }
@@ -562,7 +570,6 @@ function GraphCanvas({
     const node = graph.nodes.find((candidate) => candidate.id === shared.target);
     // A target that no longer exists is not an error — the link simply outlived it.
     if (node) session.open(node.workspace, node.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shared, graph.nodes]);
 
   /**
@@ -907,13 +914,20 @@ function GraphCanvas({
   );
   const onNodeMouseLeave = useCallback(() => setHovered(null), []);
 
+  // React Flow applies these once, on its first fit; kept current until then so that fit
+  // sees the laid-out positions rather than the placeholders before layout.
+  const fitOptions = useMemo(
+    () => initialFit(flowNodes, window.innerWidth, Math.max(window.innerWidth - 32, 200)),
+    [flowNodes],
+  );
+
   if (nodes.length === 0) {
     // Same distinction the tree makes: a graph with nothing in it and a graph the filter
     // emptied are different facts, and only one of them is fixed by clearing filters.
     return hidden.size > 0 ? (
       <NoMatchesState noun="dependencies" />
     ) : (
-      <EmptyState>no dependencies yet — add some with blocked-by or a cross-workspace link</EmptyState>
+      <EmptyState>No dependencies yet. When one task has to wait for another, the two show up here, joined by a line.</EmptyState>
     );
   }
 
@@ -971,7 +985,8 @@ function GraphCanvas({
           // Only on the first arrangement: re-fitting after every poll would yank the
           // viewport out from under someone who had zoomed in on a corner.
           fitView
-          fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
+          // A phone frames the first screen of the graph at a readable zoom — phone-fit.ts.
+          fitViewOptions={fitOptions}
         >
           <Background gap={20} size={1} />
           <Controls showInteractive={false} />

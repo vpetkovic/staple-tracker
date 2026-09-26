@@ -37,9 +37,13 @@ describe("workspaceScope", () => {
   });
 });
 
+/**
+ * The pages that ASK in All workspaces. Milestones is not one of them any more: it lists every
+ * workspace's milestones read-only (see its own block below), because reading them does not
+ * need a workspace — only opening one does.
+ */
 const PAGES: Array<[string, () => ReactElement]> = [
   ["Queue", () => <QueueView onAuthError={() => {}} />],
-  ["Milestones", () => <MilestonesView onAuthError={() => {}} />],
   ["Estimate accuracy", () => <CalibrationView onAuthError={() => {}} />],
 ];
 
@@ -85,6 +89,31 @@ describe("per-workspace pages in All workspaces", () => {
       });
     });
   }
+
+  describe("Milestones", () => {
+    const page = () => <MilestonesView onAuthError={() => {}} />;
+
+    it("lists every workspace's milestones instead of asking, and names none as current", () => {
+      const markup = render(page, { mode: "hub", ws: "", workspaces: THREE });
+      expect(markup).toContain("data-all-milestones");
+      expect(markup).not.toContain("data-choose-workspace");
+      expect(markup).toContain("Milestones in every workspace");
+      // The old tell: a page that silently read the first workspace named it.
+      expect(markup).not.toMatch(/in exercises-api/);
+    });
+
+    it("goes straight to one workspace's page when a workspace is chosen, or there is only one", () => {
+      for (const over of [
+        { mode: "hub" as const, ws: "workshop", workspaces: THREE },
+        { mode: "hub" as const, ws: "", workspaces: [THREE[1]!] },
+        { mode: "workspace" as const, ws: "", workspaces: [THREE[1]!] },
+      ]) {
+        const markup = render(page, over);
+        expect(markup).not.toContain("data-all-milestones");
+        expect(markup).not.toContain("data-choose-workspace");
+      }
+    });
+  });
 
   it("chooses by calling onChoose with the tapped workspace's slug", () => {
     // A static render carries no handlers, so the element tree is walked instead: every

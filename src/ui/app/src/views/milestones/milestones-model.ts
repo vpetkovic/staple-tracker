@@ -285,3 +285,55 @@ export const SPLIT_MIN_WIDTH_PX = 1024;
 export function layoutFor(widthPx: number): MilestonesLayout {
   return widthPx >= SPLIT_MIN_WIDTH_PX ? "split" : "stacked";
 }
+
+// ---------- All workspaces ----------
+
+/**
+ * "This workspace has no milestone kind", told apart from every other failure.
+ *
+ * The store refuses a milestone read in a workspace whose vocabulary has no `milestone`
+ * kind, with a `validation` error whose detail names the kind and a message written for the
+ * command line (`Run staple kinds add milestone …`). That sentence must never reach the
+ * page: a person using the web UI turns the kind on in Settings, not in a terminal. Matched
+ * on the code and the detail, never on the wording.
+ */
+export function isMissingMilestoneKind(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { code, detail } = error as { code?: unknown; detail?: unknown };
+  return code === "validation" && (detail as { kind?: unknown } | undefined)?.kind === "milestone";
+}
+
+/** One workspace's milestone read, as the All-workspaces page receives it. */
+export type WorkspaceMilestonesResult =
+  | { workspace: string; ok: true; rows: readonly MilestoneListRow[] }
+  | { workspace: string; ok: false; error: unknown };
+
+export interface MilestoneGroup {
+  workspace: string;
+  rows: MilestoneListRow[];
+}
+
+export interface AllMilestones {
+  /** Workspaces that have milestones, in the order given, each list sorted like one workspace's page. */
+  groups: MilestoneGroup[];
+  /** Workspaces whose read failed for a reason other than "milestones are not turned on". */
+  failed: { workspace: string; error: unknown }[];
+}
+
+/**
+ * Every workspace's milestones, grouped. A workspace with none — including one that has not
+ * turned milestones on — is left out rather than shown as an empty heading or an error: the
+ * page is about milestones that exist, and "this workspace has none" is not news.
+ */
+export function groupAllMilestones(results: readonly WorkspaceMilestonesResult[]): AllMilestones {
+  const groups: MilestoneGroup[] = [];
+  const failed: { workspace: string; error: unknown }[] = [];
+  for (const result of results) {
+    if (result.ok) {
+      if (result.rows.length > 0) groups.push({ workspace: result.workspace, rows: sortMilestones(result.rows) });
+    } else if (!isMissingMilestoneKind(result.error)) {
+      failed.push({ workspace: result.workspace, error: result.error });
+    }
+  }
+  return { groups, failed };
+}

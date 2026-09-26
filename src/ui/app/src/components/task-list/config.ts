@@ -154,6 +154,10 @@ export interface TaskListColumns {
  * icon, the title, the assignee avatar and the working pill's dot. Title is not listed
  * because it is not optional — there is no switch for it.
  *
+ * The identifier's one exception is the phone (row-layout.ts, below 480px): the column stays
+ * ON in every preset and the identifier stays in the row's accessible text, but it is not
+ * drawn, because the detail sheet's header prints it and the title needs the 62px.
+ *
  * Not enforced at runtime; a preset is a literal, and a test is the right place to catch a
  * literal that got it wrong. `task-list.test.tsx` asserts every preset against this, which
  * is what stops "the palette one can lose the status icon, it's only a popup" from ever

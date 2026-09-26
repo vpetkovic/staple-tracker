@@ -136,7 +136,10 @@ describe("every grouping renders at both widths and says the same thing", () => 
         expect(NEVER_DROPPED).toEqual(["priority", "identifier", "status", "assignee", "claim"]);
         const epic = rows(narrow).get("STA-1")!;
         expect(epic).toContain("staple-row-priority");
-        expect(epic).toContain(">STA-1<");
+        // At 400px (a phone) the identifier is no longer DRAWN — the sheet header carries it
+        // and the title gets its 62px — but it is still the row's text for a screen reader.
+        expect(epic).toMatch(/<span class="sr-only">STA-1 <\/span>/);
+        expect(epic).not.toContain("staple-row-id");
         expect(epic).toContain("staple-row-status");
         const live = rows(narrow).get("STA-2");
         // The live claim survives wherever the row is drawn on this axis — as an avatar
@@ -155,16 +158,24 @@ describe("the cues survive every width, because they live in the title cell", ()
    * The alternative — a track — would have changed the column template for all three presets
    * at every breakpoint to say one thing about one surface.
    */
-  it("draws the pickup cue and the milestone marker at 400px exactly as at 1440px", () => {
+  it("carries the same pickup state at 400px as at 1440px (a pill on the phone, marks on the desk)", () => {
     const narrow = rows(atWidth(NARROW, "none"));
     const wide = rows(atWidth(WIDE, "none"));
 
     for (const id of ["STA-1", "STA-2", "STA-5", "STA-8"]) {
+      const wideCue = /data-pickup-cue="([^"]+)"/.exec(wide.get(id)!)?.[1];
       const cue = /data-pickup-cue="([^"]+)"/.exec(narrow.get(id)!)?.[1];
-      expect(cue, id).toBe(/data-pickup-cue="([^"]+)"/.exec(wide.get(id)!)?.[1]);
+      // Work in progress gets no pill on a phone: its claim avatar already says someone is
+      // on it. Every other state the pill draws is the state the wide row's marks draw.
+      if (wideCue === "in_flight") expect(narrow.get(id), id).toContain('data-testid="working-pill"');
+      else if (cue !== undefined) expect(cue, id).toBe(wideCue);
     }
-    expect(narrow.get("STA-2")).toContain('data-testid="row-milestone-cue"');
+    // A phone draws one plain pill in place of the marks, and no milestone ◇; the state the
+    // pill carries is the same state the wide row's marks carry.
+    expect(narrow.get("STA-2")).not.toContain('data-testid="row-milestone-cue"');
+    expect(wide.get("STA-2")).toContain('data-testid="row-milestone-cue"');
     expect(narrow.get("STA-8")).toContain('data-pickup-cue="pickable"');
+    expect(narrow.get("STA-8")).toContain('data-pickup-pill="next"');
   });
 
   it("is never touched by a media query — no rule hides either cue, or any row element", () => {

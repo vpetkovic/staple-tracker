@@ -144,7 +144,11 @@ export function IssueDetailPanel({
             Back
           </Button>
         ) : null}
-        <span className="font-mono text-[11px] text-text-tertiary">{issue?.identifier ?? selection.ref}</span>
+        {/* Never wraps: on a phone this is the only place the identifier is drawn (the row
+            gives its column to the title), so it has to read as one word. */}
+        <span className="shrink-0 font-mono text-[11px] whitespace-nowrap text-text-tertiary" data-detail-identifier="">
+          {issue?.identifier ?? selection.ref}
+        </span>
         {issue ? <StatusBadge status={issue.status} /> : null}
 
         {/* Ancestry as a breadcrumb, and clickable — the old panel printed the same
@@ -163,7 +167,7 @@ export function IssueDetailPanel({
                   type="button"
                   title={ancestor.title}
                   onClick={() => session.open(detail.workspace, ancestor.identifier)}
-                  className="hover:bg-surface-hover truncate rounded-sm px-1 py-0.5 font-mono text-text-tertiary hover:text-foreground focus-visible:outline-1 focus-visible:outline-ring"
+                  className="hover:bg-surface-hover truncate rounded-sm px-1 py-0.5 font-mono text-text-tertiary hover:text-foreground focus-visible:outline-1 focus-visible:outline-ring pointer-coarse:min-w-11"
                 >
                   {ancestor.identifier}
                 </button>
@@ -189,6 +193,7 @@ export function IssueDetailPanel({
             nav={nav}
             onNavigate={onNavigate}
             icon={<ChevronUp className="size-4" />}
+            large={sheet}
           />
           <NavButton
             direction="next"
@@ -196,6 +201,7 @@ export function IssueDetailPanel({
             nav={nav}
             onNavigate={onNavigate}
             icon={<ChevronDown className="size-4" />}
+            large={sheet}
           />
           {sheet ? null : (
             <>
@@ -412,7 +418,10 @@ function NavButton({
   nav,
   onNavigate,
   icon,
+  large = false,
 }: {
+  /** The phone sheet: a full 44×44 target, as every control on a touch screen gets. */
+  large?: boolean;
   direction: "prev" | "next";
   target: NavTarget | null;
   nav: NavState;
@@ -436,6 +445,8 @@ function NavButton({
       aria-label={label}
       title={title}
       disabled={!target}
+      data-detail-nav={direction}
+      className={cn("pointer-coarse:min-w-11", large && "size-11")}
       onClick={() => onNavigate(target)}
     >
       {icon}

@@ -126,6 +126,23 @@ export function rowCueShort(cue: RowPickupCue, compact = false): string {
 }
 
 /**
+ * The phone's one pill in place of the pickup marks, or null for a row that gets none.
+ *
+ *   Next    — the task an agent would pick up now (`pickable`).
+ *   Queued  — a task with a place in the plan that is not being worked on yet.
+ *
+ * Work in progress gets no pill (its claim avatar already says someone is on it), and the
+ * states with no place in the plan say nothing: on a phone a mark on every row is noise.
+ */
+export type RowCuePill = "Next" | "Queued";
+
+export function rowCuePill(cue: RowPickupCue): RowCuePill | null {
+  if (cue.state === "pickable") return "Next";
+  if (cue.state === "in_flight") return null;
+  return cue.position !== null ? "Queued" : null;
+}
+
+/**
  * The sentence in `title` and in the screen-reader text — the word first, then what it
  * means, then the number, then the resolver's own reason when it sent one.
  *

@@ -31,7 +31,7 @@ import {
   type RowDrop,
 } from "./row-layout";
 import { mergedDependencySentence } from "./DependencyBadges";
-import { rowCueShort } from "./row-cues";
+import { rowCuePill, rowCueShort } from "./row-cues";
 
 const NOW = new Date("2026-09-01T01:00:00.000Z");
 
@@ -68,9 +68,22 @@ describe("the collapse ladder — precedence as data", () => {
 
   it("never lists the elements that must survive every width", () => {
     const all = new Set<string>(COLLAPSE_LADDER.flatMap((rung) => rung.drops));
-    for (const kept of ["chevron", "priority", "kind", "identifier", "status", "title", "claim", "assignee", "deps"]) {
+    for (const kept of ["chevron", "priority", "kind", "status", "title", "claim", "assignee", "deps"]) {
       expect(all.has(kept), kept).toBe(false);
     }
+  });
+
+  it("drops the identifier column only on a phone held upright, where the sheet header carries it", () => {
+    // The review's intent: the identifier costs a phone row 62px of title, and the detail
+    // sheet (below 768px) prints it in its header. It is the LAST rung's to drop, never earlier.
+    const last = COLLAPSE_LADDER.at(-1)!;
+    expect(last.below).toBe(480);
+    for (const drop of ["identifier", "plainKindGlyph", "cueMarks", "milestoneMark"] as const) {
+      expect(last.drops, drop).toContain(drop);
+      expect(COLLAPSE_LADDER.slice(0, -1).some((rung) => rung.drops.includes(drop)), drop).toBe(false);
+    }
+    expect(rowPlan(480).identifier).toBe(true);
+    expect(rowPlan(479).identifier).toBe(false);
   });
 
   it("drops the date and label names before anything a phone reader needs", () => {
@@ -99,22 +112,28 @@ describe("the collapse ladder — precedence as data", () => {
         deps: plan.deps,
         rollup: plan.rollup + (plan.rollupPlan ? "+est" : ""),
         indent: `${plan.geometry.indentStep}px x${plan.geometry.maxIndentDepth}`,
-        cue: plan.cueWords ? "words" : "glyph+n",
+        cue: plan.cues === "pill" ? "pill" : plan.cueWords ? "words" : "glyph+n",
         stale: plan.staleClaim,
+        id: plan.identifier,
+        taskGlyph: plan.plainKindGlyph,
+        milestone: plan.milestoneMark,
       };
     };
     expect(table(1440)).toEqual({
       layout: "line", labels: "pills", date: true, worklog: true, pr: "#n", claim: "pill+word",
       deps: "split", rollup: "bar+est", indent: "20px x6", cue: "words", stale: "sentence",
+      id: true, taskGlyph: true, milestone: true,
     });
     expect(table(768)).toEqual({
       layout: "line", labels: "dots", date: false, worklog: false, pr: "glyph", claim: "pill",
       deps: "split", rollup: "bar+est", indent: "20px x6", cue: "words", stale: "short",
+      id: true, taskGlyph: true, milestone: true,
     });
     for (const phone of [390, 360]) {
       expect(table(phone), `${phone}`).toEqual({
         layout: "compact", labels: "none", date: false, worklog: false, pr: "none", claim: "avatar",
-        deps: "merged", rollup: "ring", indent: "14px x5", cue: "glyph+n", stale: "short",
+        deps: "merged", rollup: "ring", indent: "14px x5", cue: "pill", stale: "short",
+        id: false, taskGlyph: false, milestone: false,
       });
     }
     expect(rowPlan(1440).labelMax).toBe(2);
@@ -291,7 +310,7 @@ describe("the compact row's cues — one line, the title first", () => {
     expect(render(line, 1440)).toContain('<span class="staple-pr-number">#42</span>');
   });
 
-  it("keeps the pickup cue's glyph and number on a phone and drops only its words", () => {
+  it("keeps the pickup cue's glyph and number on a narrow tablet, and one plain pill on a phone", () => {
     const queued = { state: "queued" as const, position: 2, scope: "plan" as const, reason: null };
     const next = { state: "pickable" as const, position: 1, scope: "effective" as const, reason: null };
     expect(rowCueShort(queued)).toBe("plan #2");
@@ -299,9 +318,14 @@ describe("the compact row's cues — one line, the title first", () => {
     expect(rowCueShort(next)).toBe("next");
     expect(rowCueShort(next, true)).toBe("");
     const line = flatRow({ ...row({ identifier: "STA-15" }), cues: { pickup: queued, milestone: null } });
+    const narrow = render(line, 600);
     const phone = render(line, 390);
     const desk = render(line, 1440);
-    expect(phone).toContain('<span aria-hidden="true">#</span><span aria-hidden="true">2</span>');
+    expect(narrow).toContain('<span aria-hidden="true">#</span><span aria-hidden="true">2</span>');
+    // The phone replaces the marks with one plain word (the review's "· ▸ ◇ ⋯" finding).
+    expect(phone).not.toContain('data-testid="row-pickup-cue"');
+    expect(phone).toContain('data-pickup-pill="queued"');
+    expect(phone).toContain('<span aria-hidden="true">Queued</span>');
     expect(desk).toContain('<span aria-hidden="true">plan #2</span>');
     // The sentence — what the cue MEANS — is identical at both widths.
     const sentence = (m: string) => /<span class="sr-only">(Queued[^<]*)<\/span>/.exec(m)?.[1];
@@ -363,5 +387,95 @@ describe("the row menu on touch — a visible `⋯` and a long-press", () => {
     const tap = pressStep(pressStep(IDLE, down()), { type: "up" });
     expect(tap).toEqual(IDLE);
     expect(swallowsClick(tap)).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+describe("the phone row — the title gets what the identifier, the task glyph and the marks held", () => {
+  const cue = (state: "pickable" | "queued" | "waiting" | "gated" | "in_flight" | "unqueued" | "unavailable", position: number | null) => ({
+    state,
+    position,
+    scope: "effective" as const,
+    reason: null,
+  });
+
+  it("draws no identifier column below 480px, and keeps the identifier as the row's screen-reader text", () => {
+    const line = flatRow(row({ identifier: "STA-21", title: "Short title" }));
+    const phone = render(line, 390);
+    expect(phone).not.toContain("staple-row-id");
+    expect(phone).toContain('data-id-column="off"');
+    expect(phone).toContain('<span class="sr-only">STA-21 </span>');
+    const narrowTablet = render(line, 480);
+    expect(narrowTablet).toContain('<span class="staple-row-id">');
+    expect(narrowTablet).not.toContain("data-id-column");
+  });
+
+  it("drops a plain task's kind glyph and keeps any other kind's, in front of the title", () => {
+    const task = render(flatRow(row({ identifier: "STA-22", kind: "task" })), 390);
+    const epic = render(flatRow(row({ identifier: "STA-23", kind: "epic" })), 390);
+    expect(task).not.toContain("staple-row-kind-lead");
+    expect(task).not.toContain('data-issue-kind="task"');
+    expect(epic).toMatch(/<span class="staple-row-kind-lead"><span class="staple-kind-glyph" data-issue-kind="epic"/);
+    // Wide rows are unchanged: every kind has its glyph in the identifier cluster.
+    expect(render(flatRow(row({ identifier: "STA-22", kind: "task" })), 1440)).toMatch(
+      /<span class="staple-row-id"><span class="staple-kind-glyph" data-issue-kind="task"/,
+    );
+  });
+
+  it("says Next for the task an agent picks up now and Queued for one waiting its turn in the plan — and nothing else", () => {
+    expect(rowCuePill(cue("pickable", 1))).toBe("Next");
+    expect(rowCuePill(cue("queued", 3))).toBe("Queued");
+    expect(rowCuePill(cue("waiting", 4))).toBe("Queued");
+    expect(rowCuePill(cue("gated", 5))).toBe("Queued");
+    // Someone is on it: the claim avatar says so; a pill would say it twice.
+    expect(rowCuePill(cue("in_flight", 2))).toBeNull();
+    // Not in the plan: silence, not a mark on every row.
+    expect(rowCuePill(cue("unqueued", null))).toBeNull();
+    expect(rowCuePill(cue("unavailable", null))).toBeNull();
+    expect(rowCuePill(cue("waiting", null))).toBeNull();
+  });
+
+  it("replaces the marks and the milestone ◇ with the one pill on a phone, and keeps both on wider rows", () => {
+    const line = flatRow({
+      ...row({ identifier: "STA-24" }),
+      cues: { pickup: cue("pickable", 1), milestone: { identifier: "STA-99", title: "Beta" } },
+    });
+    const phone = render(line, 390);
+    expect(phone).toContain('data-pickup-pill="next"');
+    expect(phone).toContain('<span aria-hidden="true">Next</span>');
+    expect(phone).not.toContain('data-testid="row-pickup-cue"');
+    expect(phone).not.toContain('data-testid="row-milestone-cue"');
+    const wide = render(line, 1440);
+    expect(wide).toContain('data-testid="row-pickup-cue"');
+    expect(wide).toContain('data-testid="row-milestone-cue"');
+    expect(wide).not.toContain("data-pickup-pill");
+  });
+});
+
+describe("touch rows — long-press does not select text, and the `⋯` never shares a target with a badge", () => {
+  const css = () =>
+    import("node:fs").then(({ readFileSync }) =>
+      readFileSync(new URL("./task-list.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, ""),
+    );
+  const px = (source: string, pattern: RegExp) => Number(pattern.exec(source)?.[1] ?? NaN);
+
+  it("turns off text selection and the iOS callout on every row under a finger", async () => {
+    const sheet = await css();
+    const blocks = [...sheet.matchAll(/@media \(pointer: coarse\)\s*{([\s\S]*?)\n}/g)].map((m) => m[1]!);
+    const rowBlock = blocks.find((block) => /\.staple-row\s*{[^}]*user-select:\s*none/.test(block)) ?? "";
+    expect(rowBlock).toMatch(/-webkit-user-select:\s*none/);
+    expect(rowBlock).toMatch(/-webkit-touch-callout:\s*none/);
+  });
+
+  it("keeps the `⋯` target clear of a badge's: gap + margin ≥ the badge's reach + the `⋯`'s reach", async () => {
+    const sheet = await css();
+    const gap = px(sheet, /\.staple-row\[data-layout="compact"\] \.staple-row-meta\s*{\s*gap:\s*(\d+)px/);
+    const margin = px(sheet, /\.staple-row\[data-layout="compact"\] \.staple-row-meta > :is\(\.staple-dep-badges, \.staple-pr-badge\) \+ \.staple-row-actions\s*{\s*margin-left:\s*(\d+)px/);
+    const badgeReach = px(sheet, /\.staple-row\[data-layout="compact"\] :is\(\.staple-dep-badge, \.staple-row-breadcrumb, \.staple-row-milestone\)::before\s*{[^}]*inset:\s*-\d+px -(\d+)px/);
+    const actionsReach = px(sheet, /\.staple-row\[data-layout="compact"\] \.staple-row-actions::before\s*{[^}]*inset:\s*-\d+px -\d+px -\d+px -(\d+)px/);
+    const width = px(sheet, /\.staple-row\[data-layout="compact"\] \.staple-row-actions\s*{\s*width:\s*(\d+)px/);
+    expect(gap + margin).toBeGreaterThanOrEqual(badgeReach + actionsReach);
+    // …and the `⋯` is still a 44px target across (its right reach is the row's 10px padding).
+    expect(width + actionsReach + 10).toBeGreaterThanOrEqual(44);
   });
 });
