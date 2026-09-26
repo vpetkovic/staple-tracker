@@ -547,6 +547,18 @@ describe("setup and unsetup", () => {
     expect(budgetConfig(home).bindings).toEqual([{ source: "codex_rollout", home: codexDir, provider: "openai", accountRef: "codex-pro" }]);
   });
 
+  it("refuses the whole unsetup when the settings file stopped being JSON, and changes nothing", () => {
+    writeFileSync(SETTINGS(), PRETTY);
+    applyBudgetSetup(SETUP, deps());
+    const wrapped = readFileSync(SETTINGS(), "utf8");
+    writeFileSync(SETTINGS(), `${wrapped},`);
+    const before = snapshot();
+    const error = refusal(() => applyBudgetUnsetup(deps()));
+    expect(error.detail).toMatchObject({ reason: "plan_refused" });
+    expect(snapshot()).toEqual(before);
+    expect(loaded).toBe(PLIST());
+  });
+
   it("without a setup record, unsetup removes the wrapper and the agent and leaves capture and bindings", () => {
     writeFileSync(SETTINGS(), PRETTY);
     applyBudgetSetup(SETUP, deps());
