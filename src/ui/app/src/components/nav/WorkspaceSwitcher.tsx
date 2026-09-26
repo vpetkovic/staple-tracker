@@ -163,7 +163,7 @@ export function WorkspaceSwitcher({ variant = "rail" }: { variant?: "rail" | "ba
       className={cn(
         "flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
         variant === "rail"
-          ? "min-h-7 flex-1 px-1.5 py-1 hover:bg-surface-hover data-[state=open]:bg-surface-selected max-md:min-h-11"
+          ? "min-h-7 flex-1 px-1.5 py-1 hover:bg-surface-hover data-[state=open]:bg-surface-selected max-md:min-h-11 pointer-coarse:min-h-11"
           : "min-h-11 max-w-full rounded-full border bg-card px-3 py-1.5 shadow-xs active:bg-surface-hover",
       )}
     >

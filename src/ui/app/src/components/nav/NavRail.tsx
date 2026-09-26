@@ -84,7 +84,7 @@ const ROW_ACTION_CLASS = cn(
   "text-text-tertiary opacity-0 transition-opacity outline-none",
   "group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-surface-active hover:text-foreground",
   // A touch screen has no hover: the action is simply always there, at thumb size.
-  "[@media(hover:none)]:opacity-100 max-md:right-0 max-md:size-11",
+  "[@media(hover:none)]:opacity-100 max-md:right-0 max-md:size-11 pointer-coarse:right-0 pointer-coarse:size-11",
   "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
 );
 
@@ -212,7 +212,7 @@ function NavItemRow({
           data-nav-item={entry.id}
           aria-current={active ? "page" : undefined}
           onClick={() => onSelect(entry.view)}
-          className={cn(RAIL_ROW_CLASS, entry.action && "pr-7 max-md:pr-12")}
+          className={cn(RAIL_ROW_CLASS, entry.action && "pr-7 max-md:pr-12 pointer-coarse:pr-12")}
         >
           <Icon aria-hidden />
           <span className="truncate">{entry.label}</span>
@@ -351,7 +351,8 @@ export function NavRail({
             size="icon-xs"
             aria-label="Hide navigation"
             onClick={onHide}
-            className="size-7 text-text-tertiary hover:text-foreground max-md:hidden"
+            // A tablet is a desk layout under a finger: its controls are 44px there too.
+            className="size-7 text-text-tertiary hover:text-foreground max-md:hidden pointer-coarse:size-11"
           >
             <PanelLeftClose className="size-4" />
           </Button>
@@ -372,7 +373,7 @@ export function NavRail({
         ── the two global verbs on one row: make a task, find anything ──
         Not in the phone's drawer: the phone's top bar already has both, one tap away.
       */}
-      <div className="flex h-7 shrink-0 items-center gap-1.5 px-2.5 max-md:hidden">
+      <div className="flex h-7 shrink-0 items-center gap-1.5 px-2.5 max-md:hidden pointer-coarse:h-11">
         <Hint label="New task" keys="C">
           <Button
             variant="outline"
@@ -398,7 +399,7 @@ export function NavRail({
               openCommandPalette();
               onNavigate?.();
             }}
-            className="size-7 shrink-0 text-text-tertiary hover:text-foreground max-md:size-11"
+            className="size-7 shrink-0 text-text-tertiary hover:text-foreground max-md:size-11 pointer-coarse:size-11"
           >
             <Search className="size-4" aria-hidden />
           </Button>

@@ -444,7 +444,14 @@ export function BudgetReportView({ view, heldSeconds, onRefresh }: { view: Budge
           {unsafe > 0 ? <StatusPill status="at_risk" label={`${unsafe} limit${unsafe === 1 ? "" : "s"} at risk`} /> : null}
           <span>Updated {clockText(view.asOf)}</span>
           {onRefresh ? (
-            <Button variant="outline" size="xs" className="ml-auto" onClick={onRefresh} data-testid="budget-refresh">
+            <Button
+              variant="outline"
+              size="xs"
+              // Drawn at 24px beside the timestamp; on touch a ::before carries a 46px target.
+              className="ml-auto relative pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[11px] pointer-coarse:before:content-['']"
+              onClick={onRefresh}
+              data-testid="budget-refresh"
+            >
               <RefreshCw aria-hidden />
               Refresh
             </Button>

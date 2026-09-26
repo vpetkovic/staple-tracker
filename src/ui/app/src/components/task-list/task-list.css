@@ -1306,7 +1306,19 @@
 .staple-row[data-layout="compact"] :is(.staple-dep-badge, .staple-row-breadcrumb, .staple-row-milestone)::before {
   content: "";
   position: absolute;
-  inset: -12px -3px;
+  inset: -13px -3px;
+}
+
+/* A one-digit badge is 34px wide. Its target is measured from inside its 1px border: at a
+   40px minimum that is 38 + 2 × 3 = 44px across (and 18 + 2 × 13 = 44px tall). The badges
+   beside each other stand 6px apart so their targets never overlap. */
+.staple-row[data-layout="compact"] .staple-dep-badge {
+  min-width: 40px;
+  justify-content: center;
+}
+
+.staple-row[data-layout="compact"] .staple-dep-badges {
+  gap: 6px;
 }
 
 /*
@@ -1328,7 +1340,7 @@
   position: absolute;
   /* Right edge stops at the row's own 10px padding: past it the target would widen the
      list's scroll area by the overhang. */
-  inset: -12px -10px -12px -11px;
+  inset: -13px -10px -13px -11px;
 }
 
 /*
@@ -1398,7 +1410,16 @@
   .staple-row :is(.staple-dep-badge, .staple-row-breadcrumb, .staple-row-milestone)::before {
     content: "";
     position: absolute;
-    inset: -12px -3px;
+    /* Measured from inside the chip's 1px border: 18 + 2 × 13 = 44px tall, and 40 - 2 + 2 × 3
+       = 44px wide at the chip's minimum width. */
+    inset: -13px -3px;
+  }
+  .staple-row .staple-dep-badge {
+    min-width: 40px;
+    justify-content: center;
+  }
+  .staple-row .staple-dep-badges {
+    gap: 6px;
   }
   /* The same separation as the compact row above: the `⋯` target meets the badge's, it
      never overlaps it. */
@@ -1413,7 +1434,39 @@
     position: absolute;
     /* Right edge stops at the row's own 10px padding: past it the target would widen the
        list's scroll area by the overhang. */
-    inset: -12px -10px -12px -11px;
+    inset: -13px -10px -13px -11px;
+  }
+  /*
+   * The disclosure on a touch row (a tablet's desk layout): the house floor made the 16px
+   * button 44px TALL, and the expanded state's rotation then turned that box sideways. As on
+   * the phone row: the button keeps its drawn size, a ::before carries a 44px target, and the
+   * glyph turns rather than the button. The priority glyph beside it has no hover to answer
+   * under a finger, so a tap there falls through to the chevron.
+   */
+  .staple-row .staple-row-chevron {
+    position: relative;
+    z-index: 1;
+    min-height: 0;
+  }
+  .staple-row .staple-row-chevron::before {
+    content: "";
+    position: absolute;
+    /* 8px left is the row's edge (the list clips past it); the rest of the width goes right,
+       over the priority glyph, which lets taps through on touch. 8 + 16 + 22 = 46px. */
+    inset: -14px -22px -14px -8px;
+  }
+  .staple-row .staple-row-chevron,
+  .staple-row .staple-row-chevron[data-expanded="true"] {
+    transform: none;
+  }
+  .staple-row .staple-row-chevron > svg {
+    transition: transform var(--motion-duration-instant) var(--motion-ease-standard);
+  }
+  .staple-row .staple-row-chevron[data-expanded="true"] > svg {
+    transform: rotate(90deg);
+  }
+  .staple-row .staple-row-priority {
+    pointer-events: none;
   }
 }
 

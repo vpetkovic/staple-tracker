@@ -221,6 +221,23 @@ body,
 }
 
 /*
+ * The zoom and fit buttons on touch: the house floor makes them 44px tall but leaves React
+ * Flow's 26px width, so each is squared up to 44px, with its icon kept at the drawn size. The
+ * attribution link is the one other control on the canvas; on touch it gets a 44px-tall line.
+ */
+@media (pointer: coarse) {
+  .react-flow__controls-button {
+    width: 44px;
+    height: 44px;
+  }
+  .react-flow__attribution a {
+    display: inline-block;
+    min-width: 44px;
+    line-height: 44px;
+  }
+}
+
+/*
  * Edge semantics. Exactly the two the legend names — solid for same-workspace, dashed and
  * in_progress-hued for cross-workspace — carried over verbatim from the SVG view so the
  * migration did not quietly change what an arrow means.

@@ -249,7 +249,8 @@ export function NextUpBand({
             {next.identifier}
           </span>
           <span className="min-w-0 flex-1 truncate text-[13px]">{next.title}</span>
-          <Button variant="outline" size="xs" onClick={() => onOpen(next.identifier)}>
+          {/* Drawn at 24px so the strip stays one line; on touch a ::before carries a 46px target. */}
+          <Button variant="outline" size="xs" data-queue-next-open className="relative pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[11px] pointer-coarse:before:content-['']" onClick={() => onOpen(next.identifier)}>
             Open
           </Button>
         </>

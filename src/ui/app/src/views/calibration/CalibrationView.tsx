@@ -380,7 +380,7 @@ export function CalibrationReportView({
           </>
         }
       >
-        <label className="inline-flex min-h-6 cursor-pointer items-center gap-2 text-[13px]">
+        <label className="inline-flex min-h-6 cursor-pointer items-center gap-2 text-[13px] pointer-coarse:min-h-11" data-include-reconstructed-label>
           <input
             type="checkbox"
             data-testid="include-reconstructed"

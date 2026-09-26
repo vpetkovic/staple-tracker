@@ -88,8 +88,10 @@ export const ClusterNode = memo(function ClusterNode({ data }: NodeProps<Cluster
           type="button"
           // nodrag: a press here must not become a node drag. See the file header.
           // Touch: the house 44px button rule (unlayered, hence the `!`) would push the title out of this fixed-size
-          // node, so the button keeps its drawn size and a ::before carries the target.
-          className="nodrag relative shrink-0 rounded-sm px-1 leading-none hover:bg-muted pointer-coarse:min-h-0! before:absolute before:-inset-3 before:content-['']"
+          // node, so the button keeps its drawn size and a ::before carries the target. On touch it
+          // reaches 16px each side, 10px up (the node clips above that) and 24px down: past 44px on
+          // screen at the phone's minimum zoom (graph/phone-fit.ts).
+          className="nodrag relative shrink-0 rounded-sm px-1 leading-none hover:bg-muted pointer-coarse:min-h-0! before:absolute before:-inset-3 before:content-[''] pointer-coarse:before:-inset-x-4 pointer-coarse:before:-top-2.5 pointer-coarse:before:-bottom-6"
           aria-label={`expand ${epic.id}`}
           onClick={(event) => {
             event.stopPropagation();
