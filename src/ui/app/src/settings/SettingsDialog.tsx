@@ -69,6 +69,7 @@ import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { CategoryContent, type ApplyTo } from "./CategoryContent";
 import { withCloudCategory } from "./cloud-settings";
+import { withTelemetryCategory } from "./telemetry-settings";
 import { UnsavedChangesDialog } from "./form/ConfirmDialog";
 import { leaveDecision } from "./form/form-model";
 import { SettingsShell } from "./SettingsShell";
@@ -180,9 +181,11 @@ export function SettingsDialog({
    * registry entry, is not a setting key, and never travels on `/api/settings`.
    * The category object is declared in `cloud-settings.ts`, in the browser, and
    * merged in here so the shell can render it in the same place as everything
-   * else while it is backed by an entirely different store.
+   * else while it is backed by an entirely different store. `withTelemetryCategory`
+   * ("Usage & budget") is the second, for the same reason: budget capture, bindings and
+   * automatic collection are this machine's (`telemetry-settings.ts`).
    */
-  const categories = withCloudCategory(settingCategories());
+  const categories = withTelemetryCategory(withCloudCategory(settingCategories()));
   const active = resolveCategory(categories, category);
 
   const stacked = useStacked();

@@ -27,10 +27,9 @@ import { readConfig } from "../../../config/file.js";
 import { userHome as osUserHome } from "../../../config/home.js";
 import { defaultBinDir, launcherPath } from "../../../install/launcher.js";
 import { StapleError } from "../../types.js";
-import { bindBudgetSource, budgetConfig, setBudgetCapture, unbindBudgetSource } from "../budget-config.js";
+import { accountOf, assertHomePath, bindBudgetSource, budgetConfig, setBudgetCapture, unbindBudgetSource } from "../budget-config.js";
 import { SOURCE_PROVIDER, claudeConfigDir, codexHome, expandHomePath } from "../bindings.js";
 import { isKnownBinding, type BindingSource, type KnownBinding, type TelemetryConfig } from "../config.js";
-import { assertAccountRef } from "../formats.js";
 import type { AttemptLinker } from "../ingest.js";
 import { lastReadingsBySource, type SourceLastReading } from "../read-budget.js";
 import { collectCodexRollouts, readCursor, type CollectResult, type CollectRunSummary } from "./codex-collect.js";
@@ -93,9 +92,22 @@ interface Resolved {
   readonly attemptLinker?: AttemptLinker;
 }
 
+/**
+ * The platform a test runs the UI server's collection routes as, which cannot be handed a
+ * `platform` dep. Honoured ONLY together with `STAPLE_TEST_LAUNCHCTL` (the suite's fake
+ * launchctl, `launchd.ts`), so outside the suite it can never make staple believe it is on
+ * macOS and reach for a launchd that is not there, or skip the one that is. Nothing outside
+ * the suite sets or documents it.
+ */
+function testPlatform(): NodeJS.Platform | undefined {
+  const forced = process.env.STAPLE_TEST_PLATFORM;
+  if (!forced || !process.env.STAPLE_TEST_LAUNCHCTL) return undefined;
+  return forced === "darwin" || forced === "linux" || forced === "win32" ? forced : undefined;
+}
+
 function resolveDeps(deps: CollectionDeps): Resolved {
   const env = deps.env ?? process.env;
-  const platform = deps.platform ?? process.platform;
+  const platform = deps.platform ?? testPlatform() ?? process.platform;
   const home = deps.userHome ?? osUserHome();
   let staple = deps.staple;
   if (staple === undefined) {
@@ -236,11 +248,11 @@ interface SetupTargets {
 }
 
 function setupTargets(options: SetupOptions, r: Resolved, telemetry: TelemetryConfig): SetupTargets {
-  const claudeDir = options.claudeConfigDir !== undefined ? expandHomePath(options.claudeConfigDir) : claudeConfigDir(r.env);
-  const codexDir = options.codexHome !== undefined ? expandHomePath(options.codexHome) : codexHome(r.env);
+  const claudeDir = options.claudeConfigDir !== undefined ? expandHomePath(assertHomePath(options.claudeConfigDir, "--claude-config-dir")) : claudeConfigDir(r.env);
+  const codexDir = options.codexHome !== undefined ? expandHomePath(assertHomePath(options.codexHome, "--codex-home")) : codexHome(r.env);
   const claudeAccount =
-    options.claudeAccount !== undefined ? assertAccountRef(options.claudeAccount, "--claude-account") : (bindingFor(telemetry, "claude_code_statusline", claudeDir)?.accountRef ?? null);
-  const codexAccount = options.codexAccount !== undefined ? assertAccountRef(options.codexAccount, "--codex-account") : (bindingFor(telemetry, "codex_rollout", codexDir)?.accountRef ?? null);
+    options.claudeAccount !== undefined ? accountOf(options.claudeAccount, "--claude-account") : (bindingFor(telemetry, "claude_code_statusline", claudeDir)?.accountRef ?? null);
+  const codexAccount = options.codexAccount !== undefined ? accountOf(options.codexAccount, "--codex-account") : (bindingFor(telemetry, "codex_rollout", codexDir)?.accountRef ?? null);
   if (claudeAccount === null && codexAccount === null) {
     throw new StapleError(
       "validation",

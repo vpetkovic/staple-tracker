@@ -5,7 +5,9 @@
  *   1. the token — captured from the URL `staple ui` printed, kept in sessionStorage,
  *      scrubbed from the address bar, and sent as X-Staple-Token on every request;
  *   2. the 401/403 contract — those become a typed AuthError, never an unhandled
- *      rejection, so the shell can render the token screen instead of a blank page;
+ *      rejection, so the shell can render the token screen instead of a blank page
+ *      (except a 403 from the Origin check, `detail.reason: "cross_origin"`, which is a
+ *      refusal of one write and not of the token: see `isCrossOriginRefusal`);
  *   3. the error envelope — the server answers { error, message, code, retryable } for
  *      every failure, and this turns that into an Error with those fields attached.
  *
@@ -59,6 +61,17 @@ import type {
   ForecastReport,
   BudgetView,
 } from "./types";
+import type {
+  BindInput,
+  BindingHomeInput,
+  BudgetConfigView,
+  CollectResult,
+  CollectionOutcome,
+  CollectionPlanResponse,
+  CollectionSetupOptions,
+  CollectionStatus,
+  PlanConsentTicket,
+} from "./telemetry-types";
 // Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
 import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
 
@@ -161,6 +174,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { ...(init?.headers ?? {}), "x-staple-token": token },
   });
+
+  if (res.status === 403) {
+    /**
+     * A write refused by the Origin check is not a credential failure: the token is fine,
+     * the page is being served through something other than this computer's loopback
+     * address (a phone on the tailnet, through a forwarder), which can read and not write.
+     * So it is an ordinary refusal the view that asked renders, not the token screen.
+     */
+    const envelope = (await res.clone().json().catch(() => ({}))) as Partial<ErrorEnvelope>;
+    if (envelope.detail?.["reason"] === "cross_origin") throw new ApiError(res.status, envelope);
+  }
 
   if (res.status === 401 || res.status === 403) {
     // 401 is almost always a restarted server: the old token died with the old
@@ -979,3 +1003,39 @@ export const deleteProject = (target: { ws?: string; ref: string }) =>
  */
 export const assignProject = (target: { ws?: string; ref: string; project: string | null }) =>
   projectWrite<IssueDetail>("assign", target);
+
+// ---------- budget collection, capture and bindings (machine-local) ----------
+
+/**
+ * True for the refusal of a write made from a page this server does not consider its own
+ * origin: on the tailnet, from a phone. Reading works there; writing is refused by design.
+ */
+export function isCrossOriginRefusal(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403 && error.detail?.["reason"] === "cross_origin";
+}
+
+const postJson = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+/** `staple budget status --json`: capture, bindings, each source's newest reading, wrapper and watcher, problems. */
+export const getBudgetCollection = () => request<CollectionStatus>("/api/budget/collection");
+
+/** What setup or unsetup would change, and a single-use consent ticket bound to that plan. Reads only. */
+export const planBudgetCollection = (action: "setup" | "unsetup", options: CollectionSetupOptions = {}) =>
+  postJson<CollectionPlanResponse>("/api/budget/collection/plan", { action, ...options });
+
+/** Apply the plan that ticket was minted with. The body carries nothing else: the options are the ticket's. */
+export const applyBudgetCollection = (action: "setup" | "unsetup", consent: PlanConsentTicket) =>
+  postJson<CollectionOutcome>(`/api/budget/collection/${action}`, { consent: consent.id, digest: consent.digest });
+
+/** One collect run now (`staple budget collect`). */
+export const collectBudgetNow = () => postJson<CollectResult>("/api/budget/collection/collect", {});
+
+/** `staple budget capture on|off`. */
+export const setBudgetCapture = (enabled: boolean) => postJson<BudgetConfigView>("/api/budget/capture", { enabled });
+
+/** `staple budget bind`; with `replacing`, an edit that swaps one binding for another in one write. */
+export const bindBudgetSource = (input: BindInput) => postJson<BudgetConfigView>("/api/budget/bindings/bind", input);
+
+/** `staple budget unbind`. */
+export const unbindBudgetSource = (input: BindingHomeInput) => postJson<BudgetConfigView>("/api/budget/bindings/unbind", input);

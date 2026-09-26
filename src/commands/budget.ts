@@ -29,13 +29,14 @@ import { parseArgs } from "node:util";
 import { stapleHome } from "../config/home.js";
 import { StapleError } from "../core/types.js";
 import {
+  accountRequired,
   bindBudgetSource,
+  parseBindingSource,
   budgetConfig,
   setBudgetCapture,
   unbindBudgetSource,
   type BudgetConfigView,
 } from "../core/telemetry/budget-config.js";
-import type { BindingSource } from "../core/telemetry/config.js";
 import { INGEST_SOURCES, ingestBudget, type IngestResult, type IngestSource } from "../core/telemetry/ingest.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
 import { listBudgetSamples, readBudget, type BudgetView, type HistorySample, type LimitReading } from "../core/telemetry/read-budget.js";
@@ -81,10 +82,13 @@ const HELP = `staple budget — provider budget telemetry on this machine (docs/
               screen shows as a duration (3h), converted at capture
   budget capture [on|off]               budget capture is opt-in and off by default
   budget bind --source claude-statusline|codex-rollout --account A [--provider P]
-              [--config-dir D | --codex-home D]
+              [--config-dir D | --codex-home D] [--replace-source S [--replace-dir D]]
               name the account a harness home spends from (CLAUDE_CONFIG_DIR or
-              ~/.claude; CODEX_HOME or ~/.codex). Without a binding or --account,
-              ingestion is refused and nothing is stored under a guessed account
+              ~/.claude; CODEX_HOME or ~/.codex; a path given must be absolute or
+              start with ~). Without a binding or --account, ingestion is refused
+              and nothing is stored under a guessed account. --replace-source edits
+              an existing binding (of home D, default as above) into this one in
+              one write; refused when another binding already holds the new home
   budget unbind --source S [--config-dir D | --codex-home D]
   budget bindings                       capture state and every binding
 
@@ -230,12 +234,6 @@ function preParseTee(argv: readonly string[]): boolean {
   return source === undefined || source === "claude-statusline";
 }
 
-function bindingSourceOf(raw: string | undefined): BindingSource {
-  if (raw === "claude-statusline") return "claude_code_statusline";
-  if (raw === "codex-rollout") return "codex_rollout";
-  throw new StapleError("validation", `--source must be claude-statusline or codex-rollout for a binding; got ${raw === undefined ? "nothing" : `"${raw}"`}.`);
-}
-
 function sayIngest(result: IngestResult): void {
   const skipped = Object.entries(result.skipped)
     .map(([reason, count]) => `${reason} ${count}`)
@@ -349,6 +347,8 @@ export function runBudgetCommand(argv: string[]): void {
       provider: { type: "string" },
       "config-dir": { type: "string" },
       "codex-home": { type: "string" },
+      "replace-source": { type: "string" },
+      "replace-dir": { type: "string" },
       "limit-key": { type: "string" },
       used: { type: "string" },
       "resets-at": { type: "string" },
@@ -433,20 +433,31 @@ export function runBudgetCommand(argv: string[]): void {
       return;
     }
     case "bind": {
-      if (values.account === undefined) throw new StapleError("validation", "budget bind needs --account: the label of the account this harness home spends from.");
+      if (values.account === undefined) accountRequired();
+      const source = parseBindingSource(values.source);
+      if (values["replace-dir"] !== undefined && values["replace-source"] === undefined) {
+        throw new StapleError("validation", "--replace-dir names the home of the binding being replaced; pass --replace-source with it.");
+      }
+      const replaceSource = values["replace-source"] === undefined ? undefined : parseBindingSource(values["replace-source"], "--replace-source");
       const view = bindBudgetSource(home, {
-        source: bindingSourceOf(values.source),
+        source,
         account: values.account,
         provider: values.provider,
         configDir: values["config-dir"],
         codexHome: values["codex-home"],
+        replacing:
+          replaceSource === undefined
+            ? undefined
+            : replaceSource === "claude_code_statusline"
+              ? { source: replaceSource, configDir: values["replace-dir"] }
+              : { source: replaceSource, codexHome: values["replace-dir"] },
       });
       print(view, () => sayConfig(view));
       return;
     }
     case "unbind": {
       const view = unbindBudgetSource(home, {
-        source: bindingSourceOf(values.source),
+        source: parseBindingSource(values.source),
         configDir: values["config-dir"],
         codexHome: values["codex-home"],
       });

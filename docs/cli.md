@@ -1236,6 +1236,27 @@ an expired or used ticket is 404; a wrong digest, a ticket for the other
 action, or a plan that no longer reads the same (`plan_changed`) is 409. The
 routes are machine-local and never trigger a sync.
 
+`capture`, `bind`, `unbind` and `bindings` have routes too, for the web
+Settings' *Usage & budget* section ([web-ui.md](web-ui.md#usage--budget)):
+`POST /api/budget/capture` (`{enabled}`), `POST /api/budget/bindings/bind`
+(`{source, account, provider?, configDir? | codexHome?, replacing?}`, `source`
+spelled as `--source`; `replacing` is `bind --replace-source/--replace-dir`,
+the binding an edit swaps out in the same write), `POST
+/api/budget/bindings/unbind` and `GET /api/budget/bindings`. Same store
+methods, same validation and refusal sentences as the CLI, same `config.json`.
+Every refusal of a capture or binding write carries `detail.reason`
+(`invalid_source`, `invalid_account`, `invalid_provider`, `invalid_path`,
+`account_required`, `binding_not_found`, `home_taken`) and `detail.field`, at
+the CLI (`--json`) and over HTTP, so the web page words it without reading the
+sentence. A body on these routes (and on the collection writes) that is not a
+JSON object is 400 `validation`, `detail.reason: "invalid_body"`.
+
+```bash
+# Edit: move the Claude link of ~/work/.claude onto a Codex home, in one write.
+staple budget bind --source codex-rollout --account work --codex-home ~/work/.codex \
+  --replace-source claude-statusline --replace-dir ~/work/.claude
+```
+
 ### Reading budget and attempts back
 
 ```bash
