@@ -100,6 +100,15 @@ export function remoteFromLocation(where: { hostname: string } | undefined): boo
   return where !== undefined && viewedFromAnotherDevice(where.hostname);
 }
 
+/**
+ * The precise answer, once the server has said which origins it takes writes from
+ * (`/api/bootstrap` `writeOrigins`): a page whose origin is not one of them is remote, which
+ * also catches `localhost` on another port (a port-forward), where the hostname looks local.
+ */
+export function remoteFromOrigins(pageOrigin: string, writeOrigins: readonly string[]): boolean {
+  return !writeOrigins.includes(pageOrigin);
+}
+
 // ---------------------------------------------------------------- words
 
 export const SOURCE_WORDS: Record<BindingSource, { name: string; what: string; flag: BindingSourceFlag; folderLabel: string; defaultFolder: string }> = {
@@ -263,7 +272,6 @@ const PROBLEM_WORDS: Record<string, string> = {
   invalid_binding: "One account link in the settings file is broken and is being ignored. Edit or remove it, or add it again.",
   statusline_removed: "The small step staple added to your Claude status line is gone (the settings file was changed). Turn automatic collection on again to put it back.",
   statusline_invalid_json: "Your Claude settings file can't be read (it isn't valid JSON).",
-  statusline_not_installed: "A Claude folder is linked, but its status line doesn't record usage yet. Turn on automatic collection to add the step.",
   watcher_not_loaded: "The background check of Codex sessions is installed but not running. Turn on automatic collection again to restart it.",
   watcher_foreign: "Another copy of staple on this computer already runs the background check, so this one can't install its own.",
   watcher_node_missing: "The background check can't start because it can't find Node. Turn on automatic collection again to repair it.",
@@ -282,31 +290,71 @@ export interface ProblemRow {
 }
 
 /**
- * "No reading yet" is one line PER ACCOUNT, naming it. The server raises `no_reading` once for
- * each bound source without a reading, in source order; the account and source are read from
- * `status.sources` (values), not out of the message, and paired with those problems in order
- * so each line keeps its own server sentence for "Show details".
+ * Problems that are about ONE account or folder are one line each, naming it: `no_reading`
+ * (per bound source without a reading) and `statusline_not_installed` (per bound Claude
+ * folder whose status line records nothing). The server raises them in a fixed order over
+ * values the page also has (`status.sources`, `status.statusline`), so the subjects are
+ * derived from those values, never read out of the message, and paired with the problems in
+ * order; each line keeps its own server sentence for "Show details". When the counts do not
+ * match (a server that raises them differently) the server's own sentences are shown.
  */
-function noReadingText(source: SourceStatus): string {
-  const words = SOURCE_WORDS[source.source];
-  const when = source.source === "claude_code_statusline" ? "Claude records one the next time its status line updates." : "Codex records one on the next check.";
-  return `No reading yet from ${source.accountRef} (${words.what}). ${when}`;
+const claudeEntry = (status: CollectionStatus, dir: string): StatuslineStatus | undefined => status.statusline.find((entry) => entry.configDir === dir);
+
+function noReadingText(status: CollectionStatus, source: SourceStatus): string {
+  const what = SOURCE_WORDS[source.source].what;
+  if (source.source === "codex_rollout") return `No reading yet from ${source.accountRef} (${what}). Codex records one on the next check.`;
+  if (claudeEntry(status, source.dir)?.state === "missing_file") {
+    return `No reading yet from ${source.accountRef} (${what}): the folder ${source.dir} has no Claude settings, so there is no status line to record from.`;
+  }
+  return `No reading yet from ${source.accountRef} (${what}). Claude records one the next time its status line updates.`;
+}
+
+interface Subject {
+  dir: string;
+  account: string;
+  state: StatuslineStatus["state"];
+}
+
+/** The bound Claude folders the server reports `statusline_not_installed` for, in its order. */
+function unwrappedFolders(status: CollectionStatus): Subject[] {
+  return status.statusline.flatMap((entry): Subject[] => {
+    const bound = status.sources.find((source) => source.source === "claude_code_statusline" && source.dir === entry.configDir);
+    if (bound === undefined) return [];
+    if (entry.recorded && entry.state !== "installed") return []; // statusline_removed
+    if (entry.state === "invalid_json" || entry.state === "installed" || entry.state === "hand_wrapped") return [];
+    return [{ dir: entry.configDir, account: bound.accountRef, state: entry.state }];
+  });
+}
+
+function unwrappedText(subject: Subject): string {
+  if (subject.state === "missing_file") {
+    return `The Claude folder ${subject.dir} (account ${subject.account}) has no Claude settings file, so it has no status line to record from. Check the folder is right, or start Claude there once.`;
+  }
+  return `The Claude folder ${subject.dir} (account ${subject.account}) is linked, but its status line doesn't record usage yet. Turn on automatic collection to add the step.`;
 }
 
 export function problemRows(status: CollectionStatus): ProblemRow[] {
-  const silent = status.budgetCapture ? status.sources.filter((source) => source.lastReading === null) : [];
-  const noReading = status.problems.filter((problem) => problem.code === "no_reading");
+  const perSubject: Record<string, { texts: string[]; problems: CollectionProblem[] }> = {
+    no_reading: {
+      texts: (status.budgetCapture ? status.sources.filter((source) => source.lastReading === null) : []).map((source) => noReadingText(status, source)),
+      problems: status.problems.filter((problem) => problem.code === "no_reading"),
+    },
+    statusline_not_installed: {
+      texts: unwrappedFolders(status).map(unwrappedText),
+      problems: status.problems.filter((problem) => problem.code === "statusline_not_installed"),
+    },
+  };
   const rows: ProblemRow[] = [];
-  let paired = false;
+  const done = new Set<string>();
   for (const problem of status.problems as CollectionProblem[]) {
-    if (problem.code !== "no_reading") {
+    const group = perSubject[problem.code];
+    if (group === undefined) {
       rows.push({ code: problem.code, text: PROBLEM_WORDS[problem.code] ?? problem.message, detail: problem.message });
-    } else if (!paired && silent.length === noReading.length) {
-      paired = true;
-      silent.forEach((source, index) => rows.push({ code: "no_reading", text: noReadingText(source), detail: noReading[index]!.message }));
-    } else if (silent.length !== noReading.length) {
-      // A server that raised them differently: its own sentence, never a guessed pairing.
+    } else if (group.texts.length !== group.problems.length) {
       rows.push({ code: problem.code, text: problem.message, detail: problem.message });
+    } else if (!done.has(problem.code)) {
+      done.add(problem.code);
+      group.texts.forEach((text, index) => rows.push({ code: problem.code, text, detail: group.problems[index]!.message }));
     }
   }
   return rows;
@@ -493,8 +541,12 @@ export function plainRefusal(refusal: { message: string; reason: string | null; 
 
 /**
  * The source of a draft changes: the provider goes back to empty (the new source's
- * default), so a link switched from Claude to Codex does not keep "anthropic".
+ * default), so a link switched from Claude to Codex does not keep "anthropic"; switching
+ * back to the edited link's own source restores the provider it has stored.
  */
-export function withSource(draft: BindingDraft, source: BindingSourceFlag): BindingDraft {
-  return source === draft.source ? draft : { ...draft, source, provider: "" };
+export function withSource(draft: BindingDraft, source: BindingSourceFlag, editing: KnownBinding | null = null): BindingDraft {
+  if (source === draft.source) return draft;
+  // Back to the source of the link being edited: its own stored provider, custom or not.
+  const provider = editing !== null && SOURCE_WORDS[editing.source].flag === source ? editing.provider : "";
+  return { ...draft, source, provider };
 }

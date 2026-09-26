@@ -47,6 +47,8 @@ export interface Refusal {
    * module words itself: a write refused by the Origin check (below).
    */
   serverMessage?: string;
+  /** Set for the Origin check's refusal: not a guard, so no surface frames it as one. */
+  crossOrigin?: true;
 }
 
 /**
@@ -114,6 +116,7 @@ export function describeRefusal(error: unknown): Refusal {
       blockers: [],
       retryable: false,
       fromServer: true,
+      crossOrigin: true,
       ...(message !== undefined ? { serverMessage: message } : {}),
     };
   }

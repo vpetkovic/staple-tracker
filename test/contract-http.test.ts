@@ -317,6 +317,7 @@ describe("read shapes", () => {
     expect(await (await get("/api/bootstrap")).json()).toEqual({
       mode: "workspace",
       workspaces: [{ slug: WS, prefix: "CON" }],
+      writeOrigins: [origin, origin.replace("127.0.0.1", "localhost")],
     });
   });
 

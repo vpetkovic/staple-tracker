@@ -16,7 +16,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SurfaceAutoSync } from "../src/core/cloud/auto-triggers.js";
-import { readConfig } from "../src/config/file.js";
+import { readConfig, updateConfig } from "../src/config/file.js";
 import { budgetConfig } from "../src/core/telemetry/budget-config.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
@@ -242,6 +242,69 @@ describe("parity with staple budget capture|bind|unbind", () => {
       expect(bindings.some((binding) => binding.source === "codex_rollout" && binding.home === join(root, "B") && binding.accountRef === "codex-plus")).toBe(true);
       expect(bindings.some((binding) => binding.source === "codex_rollout" && binding.home === join(root, "C") && binding.accountRef === "work-claude")).toBe(true);
     }
+  });
+
+  it("renaming the account of a link, same folder, is an edit both surfaces accept, in place", async () => {
+    for (const [argv, body] of [
+      [["bind", "--source", "claude-statusline", "--account", "rename-me", "--config-dir", join(root, "R")], { source: "claude-statusline", account: "rename-me", configDir: join(root, "R") }],
+      [["bind", "--source", "codex-rollout", "--account", "after-it", "--codex-home", join(root, "R2")], { source: "codex-rollout", account: "after-it", codexHome: join(root, "R2") }],
+    ] as const) {
+      expect((await cli([...argv])).status).toBe(0);
+      expect((await call("/api/budget/bindings/bind", { body })).status).toBe(200);
+    }
+    const viaCli = await cli(["bind", "--source", "claude-statusline", "--account", "renamed", "--config-dir", join(root, "R"), "--replace-source", "claude-statusline", "--replace-dir", join(root, "R")]);
+    const viaHttp = await call("/api/budget/bindings/bind", {
+      body: { source: "claude-statusline", account: "renamed", configDir: join(root, "R"), replacing: { source: "claude-statusline", configDir: join(root, "R") } },
+    });
+    expect(viaCli.status).toBe(0);
+    expect(viaHttp.status, JSON.stringify(viaHttp.body)).toBe(200);
+    expect(telemetryOf(httpHome)).toEqual(telemetryOf(cliHome));
+    const accounts = budgetConfig(httpHome).bindings.map((binding) => binding.accountRef);
+    expect(accounts.indexOf("renamed")).toBe(accounts.indexOf("after-it") - 1);
+    expect(accounts).not.toContain("rename-me");
+  });
+
+  it("an edit of a binding that is gone names --replace-dir, on both surfaces", async () => {
+    const viaCli = await cli(["bind", "--source", "codex-rollout", "--account", "late", "--codex-home", join(root, "Z"), "--replace-source", "codex-rollout", "--replace-dir", join(root, "gone")]);
+    const viaHttp = await call("/api/budget/bindings/bind", { body: { source: "codex-rollout", account: "late", codexHome: join(root, "Z"), replacing: { source: "codex-rollout", codexHome: join(root, "gone") } } });
+    expect(viaHttp.status).toBe(404);
+    for (const envelope of [viaHttp.body, viaCli.json]) {
+      expect(envelope.detail).toEqual({ reason: "binding_not_found", field: "--replace-dir" });
+      expect(envelope.message).not.toContain("---");
+    }
+  });
+
+  it("a binding an older staple stored with a relative folder can still be removed and edited", async () => {
+    for (const home of [httpHome, cliHome]) {
+      const telemetry = readConfig(home).config.telemetry;
+      updateConfig(home, {
+        telemetry: {
+          ...telemetry,
+          bindings: [...telemetry.bindings, { source: "codex_rollout", home: "legacy/codex", provider: "openai", accountRef: "legacy" }, { source: "codex_rollout", home: "legacy/other", provider: "openai", accountRef: "legacy-two" }],
+        },
+      });
+    }
+    // Edit the first onto an absolute folder; remove the second.
+    expect((await cli(["bind", "--source", "codex-rollout", "--account", "legacy", "--codex-home", join(root, "L"), "--replace-source", "codex-rollout", "--replace-dir", "legacy/codex"])).status).toBe(0);
+    expect((await call("/api/budget/bindings/bind", { body: { source: "codex-rollout", account: "legacy", codexHome: join(root, "L"), replacing: { source: "codex-rollout", codexHome: "legacy/codex" } } })).status).toBe(200);
+    expect((await cli(["unbind", "--source", "codex-rollout", "--codex-home", "legacy/other"])).status).toBe(0);
+    expect((await call("/api/budget/bindings/unbind", { body: { source: "codex-rollout", codexHome: "legacy/other" } })).status).toBe(200);
+    expect(telemetryOf(httpHome)).toEqual(telemetryOf(cliHome));
+    const homes = (telemetryOf(httpHome).bindings as Array<{ home?: string }>).map((binding) => binding.home);
+    expect(homes).toContain(join(root, "L"));
+    expect(homes).not.toContain("legacy/codex");
+    expect(homes).not.toContain("legacy/other");
+  });
+
+  it("the setup plan refuses a bad account label with the binding form's reason, on both surfaces", async () => {
+    const viaCli = await cli(["setup", "--claude-account", "Claude Max", "--no-watcher"]);
+    const viaHttp = await call("/api/budget/collection/plan", { body: { action: "setup", claudeAccount: "Claude Max", watcher: false } });
+    expect(viaHttp.status).toBe(409);
+    for (const envelope of [viaHttp.body, viaCli.json]) {
+      expect(envelope.code).toBe("validation");
+      expect(envelope.detail).toEqual({ reason: "invalid_account", field: "--claude-account" });
+    }
+    expect(viaHttp.body.message).toBe(viaCli.json.message);
   });
 
   it("a body that is not a JSON object is a 400 validation, never a 500", async () => {

@@ -106,7 +106,7 @@ export function assertHomePath(value: string, where: string): string {
 }
 
 /** The account label check, with the reason a surface can map. Same rule and sentence as `assertAccountRef`. */
-function accountOf(value: string, where: string): string {
+export function accountOf(value: string, where: string): string {
   try {
     return assertAccountRef(value, where);
   } catch (error) {
@@ -136,11 +136,16 @@ export interface BindingHome {
   readonly codexHome?: string;
 }
 
-function homeDir(request: BindingHome, env: NodeJS.ProcessEnv, prefix = ""): string {
-  if (request.source === "claude_code_statusline") {
-    return request.configDir !== undefined ? assertHomePath(request.configDir, `${prefix}--config-dir`) : claudeConfigDir(env);
-  }
-  return request.codexHome !== undefined ? assertHomePath(request.codexHome, `${prefix}--codex-home`) : codexHome(env);
+/**
+ * The directory of a binding home. A NEW value (the home a binding is written for) must be
+ * absolute or start with `~`. A LOOKUP of an existing binding (unbind, the binding an edit
+ * replaces) is not checked: a binding written by an older staple with a relative folder
+ * must still be removable and editable.
+ */
+function homeDir(request: BindingHome, env: NodeJS.ProcessEnv, mode: "new" | "lookup"): string {
+  const given = request.source === "claude_code_statusline" ? request.configDir : request.codexHome;
+  if (given === undefined) return request.source === "claude_code_statusline" ? claudeConfigDir(env) : codexHome(env);
+  return mode === "lookup" ? given : assertHomePath(given, request.source === "claude_code_statusline" ? "--config-dir" : "--codex-home");
 }
 
 export interface BindRequest extends BindingHome {
@@ -161,7 +166,7 @@ export interface BindRequest extends BindingHome {
 export function bindBudgetSource(home: string, request: BindRequest, env: NodeJS.ProcessEnv = process.env): BudgetConfigView {
   const accountRef = accountOf(request.account, "--account");
   const provider = providerOf(request.provider ?? SOURCE_PROVIDER[request.source], "--provider");
-  const dir = homeDir(request, env);
+  const dir = homeDir(request, env, "new");
   const binding: KnownBinding =
     request.source === "claude_code_statusline"
       ? { source: "claude_code_statusline", configDir: dir, provider, accountRef }
@@ -171,7 +176,7 @@ export function bindBudgetSource(home: string, request: BindRequest, env: NodeJS
   let kept = telemetry.bindings;
   if (request.replacing !== undefined) {
     const old = request.replacing;
-    const oldDir = homeDir(old, env, "--replace-");
+    const oldDir = homeDir(old, env, "lookup");
     at = kept.findIndex((existing) => sameHome(existing, old.source, oldDir));
     if (at === -1) {
       refuse(
@@ -199,7 +204,7 @@ export function bindBudgetSource(home: string, request: BindRequest, env: NodeJS
 
 /** Remove the binding for a harness home. Refused when there is none, so a typo is not silent. */
 export function unbindBudgetSource(home: string, request: BindingHome, env: NodeJS.ProcessEnv = process.env): BudgetConfigView {
-  const dir = homeDir(request, env);
+  const dir = homeDir(request, env, "lookup");
   const key = expandHomePath(dir);
   const telemetry = readConfig(home).config.telemetry;
   const bindings = telemetry.bindings.filter((existing) => !sameHome(existing, request.source, dir));

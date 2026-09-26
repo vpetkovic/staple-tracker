@@ -266,7 +266,9 @@ a list of bindings is not a shape the settings registry has.
   fields from the web Settings) must be an absolute path or start with `~`.
   A relative path would name a different folder depending on where staple
   runs next, so it is refused (`detail.reason: "invalid_path"`), at the CLI and
-  in the web Settings alike.
+  in the web Settings alike. Finding an existing binding (`unbind`, or the
+  binding an edit replaces) is not checked, so a binding an older staple
+  stored with a relative folder can still be removed or edited.
 - **Editing a binding** (`bind … --replace-source S [--replace-dir D]`, or
   *Edit* in the web Settings) swaps that binding for the new one in one write,
   in its place in the list. It is refused, with nothing written, when the

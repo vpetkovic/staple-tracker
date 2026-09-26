@@ -29,6 +29,7 @@ import { createTelemetryController, type TelemetryController } from "./telemetry
 import { STALE_PLAN_WHY, confirmPlan, showPlan } from "./telemetry-flow";
 import { PRIVACY_NOTE, TELEMETRY_CATEGORY_ID, bindingHomeInput, remoteFromLocation, viewedFromAnotherDevice, withTelemetryCategory } from "./telemetry-settings";
 import { CLOUD_CATEGORY } from "./cloud-settings";
+import { GuardRefusal } from "@/components/GuardRefusal";
 import { REPO_ROOT, runCliAtAsync } from "../../../../../test/fixtures/characterize-support.ts";
 import { STATUSLINE_FIXTURE } from "../../../../../test/fixtures/budget-support.ts";
 import { ingestBudget } from "../../../../core/telemetry/ingest.ts";
@@ -415,6 +416,83 @@ describe("needs attention", () => {
       "No reading yet from codex-work (Codex sessions). Codex records one on the next check.",
     ]);
     expect(new Set(lines).size).toBe(lines.length);
+  });
+});
+
+describe("second review", () => {
+  it("the setup form refuses a bad label in plain words; the CLI's flag only under Show details", async () => {
+    const page = await section();
+    await turnOn(page, { claudeAccount: "Claude Max", codexAccount: "", statusline: true, watcher: false });
+    const notice = page.get().notice!;
+    expect(notice.tone).toBe("error");
+    expect(notice.text).toContain("The account label can only use lowercase letters, digits and dashes");
+    expect(notice.details).toContain("--claude-account must be an account label");
+    expect(visible(html(page))).not.toContain("--claude-account");
+    expect(page.get().plan).toBeNull();
+  });
+
+  it("renaming a link's account, same folder, saves in place", async () => {
+    const page = await section();
+    for (const account of ["rename-me", "after-it"]) {
+      page.handlers.onEditorOpen(null);
+      page.handlers.onEditorDraft({ source: account === "rename-me" ? "claude-statusline" : "codex-rollout", folder: "", account, provider: "" });
+      await page.handlers.onEditorSave();
+    }
+    page.handlers.onEditorOpen(page.get().status!.bindings[0]!);
+    page.handlers.onEditorDraft({ ...page.get().editor!.draft, account: "renamed" });
+    await page.handlers.onEditorSave();
+    expect(page.get().editor).toBeNull();
+    expect(page.get().status!.bindings.map((binding) => binding.accountRef)).toEqual(["renamed", "after-it"]);
+  });
+
+  it("switching a link's source away and back restores its own stored provider", async () => {
+    const page = await section();
+    page.handlers.onEditorOpen(null);
+    page.handlers.onEditorDraft({ source: "claude-statusline", folder: "", account: "claude-eu", provider: "anthropic-eu" });
+    await page.handlers.onEditorSave();
+    page.handlers.onEditorOpen(page.get().status!.bindings[0]!);
+    page.handlers.onEditorSource("codex-rollout");
+    expect(page.get().editor!.draft.provider).toBe("");
+    page.handlers.onEditorSource("claude-statusline");
+    expect(page.get().editor!.draft.provider).toBe("anthropic-eu");
+  });
+
+  it("names the Claude folder a status line is missing from, and says when a folder has no Claude settings", async () => {
+    await setBudgetCapture(true);
+    const empty = join(root, "no-settings-claude");
+    mkdirSync(empty, { recursive: true });
+    await bindBudgetSource({ source: "claude-statusline", account: "claude-home" });
+    await bindBudgetSource({ source: "claude-statusline", account: "claude-empty", configDir: empty });
+    const markup = html(await section());
+    const lines = (code: string) => [...markup.matchAll(new RegExp(`<li[^>]*data-problem="${code}"[^>]*>([\\s\\S]*?)<\\/li>`, "g"))].map((match) => text(match[1]!).trim());
+    expect(lines("statusline_not_installed")).toEqual([
+      `The Claude folder ${claudeDir} (account claude-home) is linked, but its status line doesn't record usage yet. Turn on automatic collection to add the step.`,
+      `The Claude folder ${empty} (account claude-empty) has no Claude settings file, so it has no status line to record from. Check the folder is right, or start Claude there once.`,
+    ]);
+    expect(lines("no_reading")).toContain(`No reading yet from claude-empty (Claude status line): the folder ${empty} has no Claude settings, so there is no status line to record from.`);
+    expect(lines("no_reading").join(" ")).not.toContain("claude-empty (Claude status line). Claude records one");
+  });
+
+  it("a page on localhost through a port-forward is remote once the server names its write origins", async () => {
+    const forwarded = createTelemetryController(PAGE_TELEMETRY_API, { remote: remoteFromLocation({ hostname: "localhost" }), origin: "http://localhost:1" });
+    expect(forwarded.get().remote).toBe(false);
+    await forwarded.reload();
+    expect(forwarded.get().remote).toBe(true);
+    for (const own of [origin, origin.replace("127.0.0.1", "localhost")]) {
+      const local = createTelemetryController(PAGE_TELEMETRY_API, { remote: false, origin: own });
+      await local.reload();
+      expect(local.get().remote, own).toBe(false);
+    }
+  });
+
+  it("the task dialog's refusal strip frames a cross-origin refusal as 'only from this computer's browser', not as a guard", () => {
+    const refusal = describeRefusal(new ApiError(403, { code: "forbidden", message: "Cross-origin request rejected (Origin: x)", detail: { reason: "cross_origin" } }));
+    const strip = text(renderToStaticMarkup(<GuardRefusal refusal={refusal} />));
+    expect(strip).toContain("only from this computer's browser");
+    expect(strip).toContain(CROSS_ORIGIN_MESSAGE);
+    expect(strip).not.toMatch(/refused by the store|not retryable/i);
+    const guard = text(renderToStaticMarkup(<GuardRefusal refusal={describeRefusal(new ApiError(409, { code: "conflict", message: "in_progress requires an assignee" }))} />));
+    expect(guard).toMatch(/refused by the store/i);
   });
 });
 

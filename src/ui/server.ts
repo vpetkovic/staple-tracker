@@ -755,11 +755,16 @@ export function startUiServer(options: UiOptions): UiHandle {
    * alongside 127.0.0.1 because both name the loopback socket this server is
    * bound to — an attacker's page is on neither.
    */
+  /** The page origins this server accepts writes from: its own loopback socket, by either name. */
+  function writeOrigins(): string[] {
+    const port = boundPort();
+    return [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
+  }
+
   function originAllowed(req: IncomingMessage): boolean {
     const origin = req.headers.origin;
     if (!origin) return true;
-    const port = boundPort();
-    return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+    return writeOrigins().includes(origin);
   }
 
   /**
@@ -1641,6 +1646,13 @@ export function startUiServer(options: UiOptions): UiHandle {
         json(res, 200, {
           mode: options.hub ? "hub" : "workspace",
           workspaces: handles.map((h) => ({ slug: h.slug, prefix: h.prefix })),
+          /**
+           * The origins a write is accepted from (the Origin check below). A page compares
+           * its own origin against these to know, before pressing anything, that it is
+           * open somewhere writes are refused: through the tailnet, or a port-forward to
+           * a different localhost port.
+           */
+          writeOrigins: writeOrigins(),
         });
         return;
       }

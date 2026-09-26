@@ -737,6 +737,8 @@ export interface WorkspaceRef {
 export interface Bootstrap {
   mode: UiMode;
   workspaces: WorkspaceRef[];
+  /** The page origins the server accepts writes from (its Origin check). */
+  writeOrigins?: string[];
 }
 
 /** GET /api/poll — the whole auto-refresh contract, one string. */

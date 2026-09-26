@@ -576,8 +576,18 @@ everything and change nothing. That refusal carries `detail.reason:
 "cross_origin"`. `lib/api.ts` treats it as an ordinary refusal, not a dead
 token (no token screen), and `describeRefusal` words it once for every view:
 *"Changes can only be made from this computer's browser …"*, with the server's
-sentence kept as `serverMessage`. A page not on `127.0.0.1` or `localhost`
-says so up front in this section and turns its write buttons off.
+sentence kept as `serverMessage`; the refusal strip (`GuardRefusal`) frames it
+as *only from this computer's browser*, not as a store guard. A page not on
+`127.0.0.1` or `localhost` says so up front in this section and turns its
+write buttons off; `/api/bootstrap` also returns the server's `writeOrigins`,
+so a page on `localhost` through a port-forward (another port) is recognised
+as remote before anything is pressed.
+
+Problems about one account or folder are one line each, naming it ("No
+reading yet from claude-max (Claude status line)…", "The Claude folder … is
+linked, but its status line doesn't record usage yet"); a bound folder with no
+Claude settings file says exactly that. The subjects come from the status's
+own `sources` and `statusline` values, never from the message.
 
 Routes (each the same store or service method as the CLI verb):
 `GET /api/budget/collection` (`budget status`), `POST

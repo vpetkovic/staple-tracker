@@ -38,6 +38,7 @@ import {
   plainRefusal,
   setupDefaults,
   setupOptionsOf,
+  remoteFromOrigins,
   withSource,
   type BindingDraft,
   type PlainRefusal,
@@ -114,6 +115,8 @@ export interface TelemetryApi {
   capture(enabled: boolean): Promise<BudgetConfigView>;
   bind(input: BindInput): Promise<BudgetConfigView>;
   unbind(input: BindingHomeInput): Promise<BudgetConfigView>;
+  /** The origins the server accepts writes from (`/api/bootstrap` `writeOrigins`). */
+  writeOrigins(): Promise<readonly string[] | undefined>;
 }
 
 export interface TelemetryController {
@@ -138,7 +141,12 @@ function noticeOf(error: unknown): TelemetryNotice {
 
 const REMOTE_NOTICE: TelemetryNotice = { tone: "cross_origin", text: CROSS_ORIGIN_MESSAGE };
 
-export function createTelemetryController(api: TelemetryApi, options: { remote: boolean }): TelemetryController {
+/**
+ * `remote` is the first guess, from the page's hostname. With `origin` (the page's own), the
+ * first read also asks the server which origins it takes writes from and settles it: a page
+ * on `localhost` through a port-forward is remote too, and learns so before any press.
+ */
+export function createTelemetryController(api: TelemetryApi, options: { remote: boolean; origin?: string }): TelemetryController {
   let state: TelemetryState = {
     status: null,
     loadError: null,
@@ -161,7 +169,19 @@ export function createTelemetryController(api: TelemetryApi, options: { remote: 
     for (const listener of listeners) listener();
   };
 
+  let originsKnown = options.origin === undefined;
   const reload = async (): Promise<void> => {
+    if (!originsKnown) {
+      try {
+        const origins = await api.writeOrigins();
+        if (origins !== undefined) {
+          originsKnown = true;
+          set({ remote: remoteFromOrigins(options.origin!, origins) });
+        }
+      } catch {
+        // Keep the hostname's answer; the server still refuses what it must.
+      }
+    }
     try {
       set({ status: await api.status(), loadError: null });
     } catch (error) {
@@ -280,7 +300,7 @@ export function createTelemetryController(api: TelemetryApi, options: { remote: 
     onEditorOpen: (binding) =>
       set({ notice: null, removing: null, editor: { editing: binding, draft: binding === null ? EMPTY_BINDING_DRAFT : draftOf(binding), error: null } }),
     onEditorDraft: (draft) => set({ editor: state.editor === null ? null : { ...state.editor, draft, error: null } }),
-    onEditorSource: (source) => set({ editor: state.editor === null ? null : { ...state.editor, draft: withSource(state.editor.draft, source), error: null } }),
+    onEditorSource: (source) => set({ editor: state.editor === null ? null : { ...state.editor, draft: withSource(state.editor.draft, source, state.editor.editing), error: null } }),
     onEditorCancel: () => set({ editor: null }),
     onEditorSave: () =>
       write("bind", async () => {

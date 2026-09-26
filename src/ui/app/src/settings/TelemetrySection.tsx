@@ -28,6 +28,7 @@ import {
   applyBudgetCollection,
   bindBudgetSource,
   collectBudgetNow,
+  getBootstrap,
   getBudgetCollection,
   planBudgetCollection,
   setBudgetCapture,
@@ -587,11 +588,15 @@ export const PAGE_TELEMETRY_API: TelemetryApi = {
   capture: setBudgetCapture,
   bind: bindBudgetSource,
   unbind: unbindBudgetSource,
+  writeOrigins: async () => (await getBootstrap()).writeOrigins,
 };
 
 export function TelemetrySection() {
   const controller = useMemo(
-    () => createTelemetryController(PAGE_TELEMETRY_API, { remote: remoteFromLocation(typeof location === "undefined" ? undefined : location) }),
+    () => createTelemetryController(PAGE_TELEMETRY_API, {
+        remote: remoteFromLocation(typeof location === "undefined" ? undefined : location),
+        ...(typeof location === "undefined" ? {} : { origin: location.origin }),
+      }),
     [],
   );
   const state = useSyncExternalStore(controller.subscribe, controller.get, controller.get);
