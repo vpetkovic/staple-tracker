@@ -9,9 +9,8 @@
  * test merged while these files were being converted.
  *
  * This walks each such file's syntax tree, collects the functions declared `async`
- * in it plus the three helpers, and fails on a call to any of them that is used as
- * a value without `await`: a bare statement, a variable's initial value, or the
- * object of a property access.
+ * in it plus the three helpers, and fails on a call to any of them that is not
+ * directly awaited, returned, the body of an arrow function, or explicitly `void`ed.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -55,11 +54,12 @@ function unawaitedCalls(fileName: string, text: string): string[] {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && asyncNames.has(node.expression.text)) {
       let parent = node.parent;
       while (ts.isParenthesizedExpression(parent)) parent = parent.parent;
-      const usedAsValue =
-        ts.isExpressionStatement(parent) ||
-        (ts.isVariableDeclaration(parent) && parent.initializer === node) ||
-        ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node);
-      if (usedAsValue) {
+      const handled =
+        ts.isAwaitExpression(parent) ||
+        ts.isReturnStatement(parent) ||
+        ts.isVoidExpression(parent) ||
+        (ts.isArrowFunction(parent) && parent.body !== undefined);
+      if (!handled) {
         const line = source.getLineAndCharacterOfPosition(node.getStart()).line + 1;
         found.push(`${fileName}:${line} ${node.expression.text}(...) is not awaited`);
       }
@@ -89,12 +89,18 @@ describe("async CLI calls in the files that serve HTTP in-process", () => {
       "  const status = cli().status;",
       "  const fine = await cli();",
       "  const alsoFine = (await cli()).status;",
+      "  expect(cli()).toBeDefined();",
+      "  let late; late = cli();",
+      "  void cli();",
+      "  const wrapped = () => cli();",
       "}",
     ].join("\n");
     expect(unawaitedCalls("sample.ts", sample)).toEqual([
       "sample.ts:3 cli(...) is not awaited",
       "sample.ts:4 cli(...) is not awaited",
       "sample.ts:5 cli(...) is not awaited",
+      "sample.ts:8 cli(...) is not awaited",
+      "sample.ts:9 cli(...) is not awaited",
     ]);
   });
 });

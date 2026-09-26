@@ -27,7 +27,9 @@
  * sockets before the next request; the immediate runs in the check phase, which
  * the loop can only reach through the poll phase, so pending IPC replies are read
  * and their timers cleared. The longest stretch without a turn becomes one test
- * (bounded by `testTimeout`), not one file.
+ * (bounded by its own timeout), not one file. A test with a long timeout that runs
+ * synchronously for tens of seconds must yield itself, as the thousand-unit test
+ * in `test/plan-rollup.test.ts` does.
  *
  * The timer functions are captured when this file loads, before any test can
  * install fake timers, so a file using `vi.useFakeTimers()` still yields for real.

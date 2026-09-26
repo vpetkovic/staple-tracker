@@ -17,7 +17,12 @@
  * and resolves to the same shape: `status` is null when a signal ended the child,
  * `error` is set when it could not start or `timeout` killed it (code `ETIMEDOUT`,
  * as `spawnSync` reports it), and stdin is closed at once, or after `input` is
- * written, as `spawnSync` does.
+ * written, as `spawnSync` does. On timeout it resolves once the child exits, even
+ * when a grandchild still holds the pipes, as `spawnSync` does.
+ *
+ * Two differences, both more lenient: there is no `maxBuffer` (output of any size
+ * is returned whole, where `spawnSync` fails with ENOBUFS), and a child that exits
+ * without reading its input is not an error (`spawnSync` reports EPIPE).
  */
 import { spawn } from "node:child_process";
 
@@ -63,6 +68,12 @@ export function spawnAsync(
         const timedOut: NodeJS.ErrnoException = new Error(`spawnAsync ${command} ETIMEDOUT`);
         timedOut.code = "ETIMEDOUT";
         error = timedOut;
+        // A grandchild (tsx runs the CLI in one) can keep the pipes open after the
+        // child dies; close our ends on exit so "close" follows, as spawnSync returns.
+        child.once("exit", () => {
+          child.stdout.destroy();
+          child.stderr.destroy();
+        });
         child.kill(options.killSignal ?? "SIGTERM");
       }, options.timeout);
     }
