@@ -65,7 +65,14 @@ import {
   type ShellUrlState,
 } from "@/lib/session-url";
 import { rememberWorkspace } from "@/lib/session-workspace";
-import { afterHistorySettles, isOwnTraversal, leaveOverlays, replaceUrl } from "@/lib/back-to-close";
+import {
+  afterHistorySettles,
+  leaveOverlays,
+  pushPage,
+  replaceUrl,
+  traversalKind,
+  whenHistoryIsFree,
+} from "@/lib/back-to-close";
 import { useWorkspaceSettings } from "@/lib/settings";
 import type { SortPref } from "@/lib/sort-modes";
 import type { MilestoneListRow, MilestoneView, ProjectRow } from "@/lib/types";
@@ -499,7 +506,7 @@ export function App() {
     const write = () => {
       const href = withShellState(window.location.href, shellState);
       if (href === window.location.href) return;
-      if (navigating) window.history.pushState(null, "", href);
+      if (navigating) pushPage(href);
       else replaceUrl(href);
     };
     // Going somewhere closes whatever is open on top first, so Back from the new page
@@ -510,10 +517,25 @@ export function App() {
 
   useEffect(() => {
     const onPop = () => {
-      // An overlay closing (or being closed for a navigation) steps back through entries at
-      // the page's own address, or at the address the page is leaving: neither is a request
-      // to go anywhere.
-      if (isOwnTraversal()) return;
+      /*
+       * AN OVERLAY CLOSING IS NOT A NAVIGATION. Stepping back past overlays before a
+       * navigation lands on the page being left, and the new page follows: nothing to read.
+       * An overlay closed (by Back or from the UI) lands on the entry beneath it, which is
+       * this same page — but that entry can be STALE: a filter chosen inside an open menu
+       * was written onto the menu's entry. So the page keeps what it has and writes it back
+       * onto the address, rather than rewinding to what the entry beneath remembered.
+       */
+      const kind = traversalKind();
+      if (kind === "navigation") return;
+      if (kind === "close" || kind === "overlay-back") {
+        // Behind anything already queued — the overlay may have closed FOR a navigation
+        // whose new page is about to be pushed — and with the state as it is then.
+        whenHistoryIsFree(() => {
+          const keep = lastSynced.current;
+          if (keep) replaceUrl(withShellState(window.location.href, keep));
+        });
+        return;
+      }
       const next = readShellUrl(window.location.search);
       if (!next) return;
       lastSynced.current = next;

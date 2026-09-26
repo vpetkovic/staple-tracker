@@ -37,6 +37,7 @@ import {
   popOverlay,
   pushOverlayEntry,
   replaceUrl,
+  whenHistoryIsFree,
 } from "@/lib/back-to-close";
 import { onOpenSettings } from "@/lib/shell-events";
 import { rememberWorkspace } from "@/lib/session-workspace";
@@ -58,7 +59,7 @@ export function SettingsMount() {
         const workspace = request.workspace ?? "";
         // Queued behind whatever was closing when this was asked for — the drawer the gear
         // sits in, the palette — so the entry lands on top of the page, not under a Back.
-        afterHistorySettles(() => {
+        whenHistoryIsFree(() => {
           // Already open (the palette re-dispatching over an open shell): re-point it in place.
           if (readSettingsRoute(window.location.search)) {
             replaceUrl(withSettingsRoute(window.location.href, category, workspace || undefined));

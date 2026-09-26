@@ -8,7 +8,7 @@
  * in both forms when `hint` is given — the sort control uses it for the full reading of the
  * direction, which no longer fits on the trigger.
  */
-import { forwardRef, type ComponentProps, type ReactNode } from "react";
+import { forwardRef, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,27 @@ export const HEADER_BUTTON_CLASS = cn(
 
 /** The compact form: a 28px square. */
 const HEADER_ICON_CLASS = "size-7 px-0 max-md:size-11";
+
+/**
+ * Can this device hover? A tooltip is a hover affordance: on a touch screen it opens when
+ * focus lands on the button — after a menu closes and hands focus back — and then sits
+ * over the page with nothing to dismiss it. Touch devices get the accessible name instead.
+ * True where nothing can answer (a string render), which is the desktop behaviour.
+ */
+const HOVER_QUERY = "(hover: hover)";
+function subscribeHover(onChange: () => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia(HOVER_QUERY);
+  query.addEventListener?.("change", onChange);
+  return () => query.removeEventListener?.("change", onChange);
+}
+function readHover(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
+  return window.matchMedia(HOVER_QUERY).matches;
+}
+export function useCanHover(): boolean {
+  return useSyncExternalStore(subscribeHover, readHover, () => true);
+}
 
 export type HeaderButtonProps = Omit<ComponentProps<typeof Button>, "children"> & {
   icon: ReactNode;
@@ -40,6 +61,7 @@ export const HeaderButton = forwardRef<HTMLButtonElement, HeaderButtonProps>(fun
   { icon, label, compact = false, hint, active = false, badge, className, "aria-label": ariaLabel, ...props },
   ref,
 ) {
+  const canHover = useCanHover();
   const button = (
     <Button
       ref={ref}
@@ -63,7 +85,7 @@ export const HeaderButton = forwardRef<HTMLButtonElement, HeaderButtonProps>(fun
     </Button>
   );
   const tooltip = hint ?? (compact ? label : null);
-  if (tooltip === null) return button;
+  if (tooltip === null || !canHover) return button;
   return (
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
