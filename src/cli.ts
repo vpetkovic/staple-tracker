@@ -1070,6 +1070,10 @@ Provider budget
               provisional 20%); unknown is never shown as 0
   budget history --account A [--since T] [--limit N] [--cursor C]
               one account's readings, bounded, with capture gaps listed
+  budget forget <reading-id>... [--yes]
+              remove wrong readings; without --yes only the preview (each
+              reading, its window, and the limit's current window and reading
+              after); a window left empty goes and the one it displaced returns
   budget setup [--claude-account A] [--codex-account B] [--yes]
               one consent: capture on, bindings, the Claude status-line wrapper
               and the Codex watcher; without --yes only the plan. budget unsetup

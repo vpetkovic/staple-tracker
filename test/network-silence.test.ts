@@ -1196,6 +1196,14 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         ["/api/budget/bindings/unbind", { source: "codex-rollout" }, 200],
         ["/api/budget/capture", { enabled: false }, 200],
         /*
+         * Removing budget readings: hub.db only, excluded from the post-write sync
+         * trigger. A preview and a confirmed removal of an id this home does not hold,
+         * both refused from local state. The applying path is pinned as never arming the
+         * sync trigger in `test/budget-forget.test.ts`.
+         */
+        ["/api/budget/forget", { ids: ["0000dead"] }, 404],
+        ["/api/budget/forget", { ids: ["0000dead"], confirm: true }, 404],
+        /*
          * S18 (STA-279). A hub backup is offered unconditionally — the button is
          * never hidden and never gated on a connection — so it is reachable on a
          * machine that has never connected anything. That is exactly the shape of

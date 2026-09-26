@@ -701,11 +701,12 @@ describe("a pre-A4 hub (no meta table at all)", () => {
         // changed. Moved again by hub 005 (limit windows and budget samples):
         // latest 4 -> 5, pending gains 5. And by hub 006 (the attempt presence
         // index): latest 5 -> 6, pending gains 6. And by hub 007 (the presence
-        // index's lane column): latest 6 -> 7, pending gains 7.
+        // index's lane column): latest 6 -> 7, pending gains 7. And by hub 008 (the
+        // forgotten budget readings): latest 7 -> 8, pending gains 8.
         expect(describeSchema(db, HUB_TARGET)).toEqual({
           current: 1,
-          latest: 7,
-          pending: [2, 3, 4, 5, 6, 7],
+          latest: 8,
+          pending: [2, 3, 4, 5, 6, 7, 8],
           detection: "unstamped",
         });
         // Nothing to read: this is the quirk A4 exists to close.
@@ -731,8 +732,9 @@ describe("a pre-A4 hub (no meta table at all)", () => {
         // part that matters here — an old binary's `CAST(value AS INTEGER)`
         // guard has to be able to read it.
         // Moved again by hub 005 (budget samples): "4" -> "5", and by hub 006
-        // (attempt presence): "5" -> "6", and by hub 007 (presence role): "6" -> "7".
-        expect(row).toEqual({ t: "text", value: "7" });
+        // (attempt presence): "5" -> "6", and by hub 007 (presence role): "6" -> "7",
+        // and by hub 008 (forgotten budget readings): "7" -> "8".
+        expect(row).toEqual({ t: "text", value: "8" });
       } finally {
         db.close();
       }

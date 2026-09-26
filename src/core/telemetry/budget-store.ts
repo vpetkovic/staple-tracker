@@ -14,11 +14,14 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
+import { StapleError } from "../types.js";
 import { budgetDedupKey, type BudgetSourceKind, windowLabel } from "./formats.js";
 import { sampleQuality, type BudgetState, type Quality } from "./quality.js";
 
 /** Samples join a window when their resets are this close (Window identity). */
 export const WINDOW_TOLERANCE_SECONDS = 120;
+/** The shortest reading id prefix `forget` accepts: 8 characters, the first group of a UUID. */
+export const MIN_ID_PREFIX = 8;
 /** An unchanged reading is stored again, as a heartbeat, once the last one is this old. */
 export const HEARTBEAT_SECONDS = 300;
 
@@ -113,8 +116,11 @@ export interface LimitWindow {
   readonly missing: Missing;
 }
 
-/** Why a reading was not stored. `unchanged` is the cadence; the others come from the sources. */
-export type SkipReason = "unchanged" | "fork_copied" | "not_reported_by_source" | "parse_error";
+/**
+ * Why a reading was not stored. `unchanged` is the cadence; `forgotten` is a reading the
+ * operator removed (`forget`) coming back on a replay; the others come from the sources.
+ */
+export type SkipReason = "unchanged" | "forgotten" | "fork_copied" | "not_reported_by_source" | "parse_error";
 
 export type SampleOutcome =
   | { readonly stored: true; readonly sample: BudgetSample & { readonly quality: Quality<BudgetState> } }
@@ -183,6 +189,55 @@ interface WindowRow {
   created_at: string;
   first_sample_at: string | null;
   last_sample_at: string | null;
+}
+
+
+/** One limit of one account: what `forget` summarizes before and after a removal. */
+export interface LimitKey {
+  readonly provider: string;
+  readonly accountRef: string;
+  readonly limitKey: string;
+}
+
+/** What a removal does to one window instance a removed reading belonged to. */
+export interface ForgetWindowChange {
+  readonly windowId: string;
+  readonly provider: string;
+  readonly accountRef: string;
+  readonly limitKey: string;
+  readonly resetsAt: string | null;
+  /** `removed` when no reading is left in it; `kept` otherwise, with the readings left. */
+  readonly outcome: "kept" | "removed";
+  readonly samplesLeft: number;
+  /**
+   * For a kept window whose opening reading was removed: the reading whose fields it now
+   * carries (`resetsAt`, `windowSeconds`, `startsAt`), the earliest-recorded one left.
+   * Null when the opening reading is still there.
+   */
+  readonly rederivedFrom: string | null;
+  /**
+   * The windows a removed window had superseded. Each is released and its overlap with
+   * the windows still standing is settled again, so `supersededBy` is what it is now:
+   * null when it stands again.
+   */
+  readonly released: ReadonlyArray<{ readonly windowId: string; readonly resetsAt: string | null; readonly supersededBy: string | null }>;
+}
+
+export interface ForgetOutcome<V> {
+  /** True when the removal was committed; false for a preview, which is rolled back. */
+  readonly applied: boolean;
+  /** The removed readings, as they were stored. */
+  readonly samples: BudgetSample[];
+  readonly windows: ForgetWindowChange[];
+  /** Each affected limit as `summarize` reads it, before and after the removal. */
+  readonly limits: ReadonlyArray<LimitKey & { readonly before: V; readonly after: V }>;
+}
+
+/** Thrown inside the transaction to roll a preview back and carry its outcome out. */
+class PreviewRollback<V> extends Error {
+  constructor(readonly outcome: ForgetOutcome<V>) {
+    super("preview");
+  }
 }
 
 const ms = (instant: string): number => Date.parse(instant);
@@ -324,6 +379,11 @@ export class BudgetStore {
     // so a replay cannot mint one either.
     if (this.db.prepare("SELECT 1 FROM budget_samples WHERE dedup_key = ?").get(dedupKey) !== undefined) {
       return skipped("unchanged");
+    }
+    // A reading the operator removed stays removed when the same input is read again. A
+    // new observation of the same value has a new `observedAt`, so a new key.
+    if (this.db.prepare("SELECT 1 FROM budget_forgotten WHERE dedup_key = ?").get(dedupKey) !== undefined) {
+      return skipped("forgotten");
     }
 
     const windowId = needsWindow ? this.openWindow(input) : (joined?.id ?? null);
@@ -635,4 +695,209 @@ export class BudgetStore {
       missing,
     };
   }
+
+  // ------------------------------------------------------------------- removing readings
+
+  /**
+   * The stored readings `refs` name. Each ref is a full id, or a prefix of exactly one id.
+   * All or nothing: an unknown ref is `not_found` and an ambiguous prefix is refused, both
+   * before anything is removed.
+   */
+  resolveSamples(refs: readonly string[]): BudgetSample[] {
+    const wanted = [...new Set(refs.map((ref) => ref.trim().toLowerCase()))];
+    if (wanted.length === 0 || wanted.some((ref) => ref === "")) {
+      throw new StapleError("validation", "Name at least one reading id (staple budget history --json shows them).");
+    }
+    const short = wanted.filter((ref) => ref.length < MIN_ID_PREFIX);
+    if (short.length > 0) {
+      throw new StapleError(
+        "validation",
+        `A reading id prefix needs at least ${MIN_ID_PREFIX} characters; ${short.map((ref) => `"${ref}"`).join(", ")} is shorter. Give more of the id (staple budget history --json shows them). Nothing was removed.`,
+        { reason: "id_too_short", ids: short },
+      );
+    }
+    const unknown: string[] = [];
+    const ambiguous: Array<{ ref: string; matches: string[] }> = [];
+    const found = new Map<string, SampleRow>();
+    for (const ref of wanted) {
+      // Ids are UUIDs, so anything else cannot name one; it is simply not found. This also
+      // keeps LIKE's wildcards (`%`, `_`) out of the prefix match.
+      const rows = /^[0-9a-f-]+$/.test(ref)
+        ? (this.db.prepare("SELECT * FROM budget_samples WHERE id = ? OR id LIKE ? ORDER BY id LIMIT 6").all(ref, `${ref}%`) as unknown as SampleRow[])
+        : [];
+      const exact = rows.find((row) => row.id === ref);
+      if (exact !== undefined) found.set(exact.id, exact);
+      else if (rows.length === 1) found.set(rows[0]!.id, rows[0]!);
+      else if (rows.length === 0) unknown.push(ref);
+      else ambiguous.push({ ref, matches: rows.slice(0, 5).map((row) => row.id) });
+    }
+    if (unknown.length > 0) {
+      throw new StapleError("not_found", `No budget reading with id ${unknown.map((ref) => `"${ref}"`).join(", ")} on this machine. Nothing was removed.`, {
+        reason: "not_found",
+        ids: unknown,
+      });
+    }
+    if (ambiguous.length > 0) {
+      throw new StapleError(
+        "validation",
+        `${ambiguous.map((a) => `"${a.ref}" matches ${a.matches.length > 4 ? "more than 4" : a.matches.length} readings (${a.matches.slice(0, 4).join(", ")})`).join("; ")}. Give more of the id. Nothing was removed.`,
+        { reason: "ambiguous_id", ambiguous },
+      );
+    }
+    return [...found.values()].sort((a, b) => (a.observed_at === b.observed_at ? a.id.localeCompare(b.id) : a.observed_at < b.observed_at ? -1 : 1)).map(toSample);
+  }
+
+  /**
+   * Remove readings (`staple budget forget`, `forget_budget_samples`, `POST
+   * /api/budget/forget`: one method). In one transaction:
+   *
+   *   1. the readings are deleted, and their dedup keys kept in `budget_forgotten`, so the
+   *      same input read again stores nothing (`record` skips it as `forgotten`);
+   *   2. a window left with no reading is removed. A window instance exists because a
+   *      reading opened it, so one with none left was never observed. A window kept
+   *      whose opening reading was removed takes its fields from the earliest-recorded
+   *      reading left ({@link rederiveWindow});
+   *   3. the windows a removed window had superseded are released, and each one's overlap
+   *      with the windows still standing is settled again by the rule a new window meets
+   *      in `openWindow`. A window a false reading displaced stands again.
+   *
+   * Nothing derived is written: status, high-water and regressions are read-time, so
+   * they follow. With `apply: false` the same transaction runs and is rolled back, so the
+   * preview is exactly what applying would do. `summarize` reads each affected limit
+   * before and after, inside the transaction.
+   */
+  forget<V>(refs: readonly string[], options: { apply: boolean; at: string; summarize: (store: BudgetStore, limit: LimitKey) => V }): ForgetOutcome<V> {
+    try {
+      return tx(this.db, () => {
+        const outcome = this.forgetInTransaction(refs, options);
+        if (!options.apply) throw new PreviewRollback(outcome);
+        return outcome;
+      });
+    } catch (error) {
+      if (error instanceof PreviewRollback) return error.outcome as ForgetOutcome<V>;
+      throw error;
+    }
+  }
+
+  private forgetInTransaction<V>(refs: readonly string[], options: { apply: boolean; at: string; summarize: (store: BudgetStore, limit: LimitKey) => V }): ForgetOutcome<V> {
+    const samples = this.resolveSamples(refs);
+    const limitKeys = new Map<string, LimitKey>();
+    for (const sample of samples) {
+      limitKeys.set(`${sample.provider}\u0000${sample.accountRef}\u0000${sample.limitKey}`, { provider: sample.provider, accountRef: sample.accountRef, limitKey: sample.limitKey });
+    }
+    const limits = [...limitKeys.values()];
+    const before = limits.map((limit) => options.summarize(this, limit));
+
+    // The reading that opened each window: the first stored in it (insertion order).
+    const openerOf = (windowId: string): SampleRow | undefined =>
+      this.db.prepare("SELECT * FROM budget_samples WHERE window_id = ? ORDER BY rowid LIMIT 1").get(windowId) as unknown as SampleRow | undefined;
+    const openers = new Map<string, string>();
+    for (const windowId of new Set(samples.map((sample) => sample.windowId).filter((id): id is string => id !== null))) {
+      const opener = openerOf(windowId);
+      if (opener !== undefined) openers.set(windowId, opener.id);
+    }
+    const removedIds = new Set(samples.map((sample) => sample.id));
+
+    const remove = this.db.prepare("DELETE FROM budget_samples WHERE id = ?");
+    const tombstone = this.db.prepare("INSERT OR IGNORE INTO budget_forgotten (dedup_key, sample_id, forgotten_at) VALUES (?, ?, ?)");
+    for (const sample of samples) {
+      remove.run(sample.id);
+      tombstone.run(sample.dedupKey, sample.id, options.at);
+    }
+
+    const windowIds = [...new Set(samples.map((sample) => sample.windowId).filter((id): id is string => id !== null))];
+    const windows: ForgetWindowChange[] = [];
+    for (const windowId of windowIds) {
+      const row = this.db.prepare(`${WINDOW_SELECT} WHERE w.id = ?`).get(windowId) as unknown as WindowRow | undefined;
+      if (row === undefined) continue;
+      const left = (this.db.prepare("SELECT COUNT(*) AS n FROM budget_samples WHERE window_id = ?").get(windowId) as { n: number }).n;
+      const base = { windowId, provider: row.provider, accountRef: row.account_ref, limitKey: row.limit_key, resetsAt: row.resets_at };
+      if (left > 0) {
+        const opener = openers.get(windowId);
+        const rederivedFrom = opener !== undefined && removedIds.has(opener) ? this.rederiveWindow(windowId, openerOf(windowId)!) : null;
+        const resetsAt = rederivedFrom === null ? row.resets_at : (this.db.prepare("SELECT resets_at FROM limit_windows WHERE id = ?").get(windowId) as { resets_at: string | null }).resets_at;
+        windows.push({ ...base, resetsAt, outcome: "kept", samplesLeft: left, rederivedFrom, released: [] });
+        continue;
+      }
+      const freed = this.db.prepare("SELECT id FROM limit_windows WHERE superseded_by = ?").all(windowId) as Array<{ id: string }>;
+      this.db.prepare("UPDATE limit_windows SET superseded_by = NULL, superseded_reason = NULL WHERE superseded_by = ?").run(windowId);
+      this.db.prepare("DELETE FROM limit_windows WHERE id = ?").run(windowId);
+      windows.push({ ...base, outcome: "removed", samplesLeft: 0, rederivedFrom: null, released: freed.map((f) => ({ windowId: f.id, resetsAt: null, supersededBy: null })) });
+    }
+    // Settled after every removal, so a window is never settled against one about to go.
+    const released = windows.flatMap((change) => change.released.map((r) => r.windowId));
+    const firstSeen = (id: string): number => {
+      const row = this.db.prepare(`${WINDOW_SELECT} WHERE w.id = ?`).get(id) as unknown as WindowRow | undefined;
+      return row?.first_sample_at == null ? Number.POSITIVE_INFINITY : ms(row.first_sample_at);
+    };
+    for (const id of [...released].sort((a, b) => firstSeen(a) - firstSeen(b) || a.localeCompare(b))) this.settleOverlaps(id);
+    const settled = windows.map((change) => ({
+      ...change,
+      released: change.released.map((r) => {
+        const row = this.db.prepare("SELECT resets_at, superseded_by FROM limit_windows WHERE id = ?").get(r.windowId) as { resets_at: string | null; superseded_by: string | null };
+        return { windowId: r.windowId, resetsAt: row.resets_at, supersededBy: row.superseded_by };
+      }),
+    }));
+
+    const after = limits.map((limit) => options.summarize(this, limit));
+    return {
+      applied: options.apply,
+      samples,
+      windows: settled,
+      limits: limits.map((limit, i) => ({ ...limit, before: before[i]!, after: after[i]! })),
+    };
+  }
+
+  /**
+   * Give a kept window the fields its new opening reading would have given it, as
+   * {@link openWindow} sets them, when the reading that opened it was removed. A sample
+   * carries no plan tier, so the window's is cleared with reason `opening_reading_removed`
+   * rather than kept from a reading that is gone. Returns the new opener's id.
+   */
+  private rederiveWindow(windowId: string, opener: SampleRow): string {
+    const observed = opener.window_seconds_source === "observed" && opener.window_seconds !== null && opener.resets_at !== null;
+    const startsAt = observed ? new Date(ms(opener.resets_at!) - opener.window_seconds! * 1000).toISOString() : null;
+    const missing: Missing = { planTier: "opening_reading_removed" };
+    if (opener.window_seconds === null) missing.windowSeconds = parseMissing(opener.missing).windowSeconds ?? "not_reported_by_source";
+    if (startsAt === null) missing.startsAt = "not_reported_by_source";
+    this.db
+      .prepare(
+        `UPDATE limit_windows SET resets_at = ?, resets_at_source = ?, window_seconds = ?, window_seconds_source = ?,
+           starts_at = ?, plan_tier = NULL, missing = ? WHERE id = ?`,
+      )
+      .run(opener.resets_at, opener.resets_at_source, opener.window_seconds, opener.window_seconds_source, startsAt, JSON.stringify(missing), windowId);
+    return opener.id;
+  }
+
+  /**
+   * Settle a released window against the windows of its limit still standing, by the
+   * rule {@link openWindow} applies when a window is minted: of two instances that
+   * overlap, the one first observed earlier is superseded by the other (`reset_moved`).
+   * An instance that had elapsed when the other was first seen, or that ended before the
+   * other began, does not overlap it.
+   */
+  private settleOverlaps(windowId: string): void {
+    const self = this.db.prepare(`${WINDOW_SELECT} WHERE w.id = ?`).get(windowId) as unknown as WindowRow | undefined;
+    if (self === undefined || self.superseded_by !== null || self.resets_at === null || self.first_sample_at === null) return;
+    const tolerance = WINDOW_TOLERANCE_SECONDS * 1000;
+    const others = this.db
+      .prepare(
+        `${WINDOW_SELECT} WHERE w.provider = ? AND w.account_ref = ? AND w.limit_key = ? AND w.id <> ?
+           AND w.superseded_by IS NULL AND w.resets_at IS NOT NULL`,
+      )
+      .all(self.provider, self.account_ref, self.limit_key, self.id) as unknown as WindowRow[];
+    for (const other of others) {
+      if (other.first_sample_at === null) continue;
+      const selfFirst = ms(self.first_sample_at);
+      const otherFirst = ms(other.first_sample_at);
+      const [later, earlier] = selfFirst > otherFirst || (selfFirst === otherFirst && self.id > other.id) ? [self, other] : [other, self];
+      const laterSeen = ms(later.first_sample_at!);
+      if (laterSeen >= ms(earlier.resets_at!)) continue; // elapsed when the later one was first seen
+      const begin = earlier.starts_at ?? earlier.first_sample_at;
+      if (begin !== null && ms(later.resets_at!) <= ms(begin) + tolerance) continue; // ended before the earlier began
+      this.db.prepare("UPDATE limit_windows SET superseded_by = ?, superseded_reason = 'reset_moved' WHERE id = ?").run(later.id, earlier.id);
+      if (earlier.id === self.id) return;
+    }
+  }
+
 }

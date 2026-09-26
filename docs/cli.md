@@ -54,6 +54,7 @@ staple budget ingest --source manual --account A --limit-key K --used P [--reset
 staple budget capture on|off | bind --source S --account A | unbind | bindings
 staple budget setup [--claude-account A] [--codex-account B] [--yes]   one consent: capture, bindings, wrapper, watcher
 staple budget unsetup [--yes] | status | collect [--max-files N]
+staple budget forget <reading-id>... [--yes]       remove wrong readings; without --yes only the preview (exit 2)
 
 staple attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label] [--role R | --attempt ID]
                                                     report on the attempt you hold
@@ -1144,8 +1145,9 @@ staple budget ingest --source manual --account personal-max --provider anthropic
 `--json` prints `{source, provider, accountRef, accountSource, outcomes,
 storedCount, skipped}`, the same object the MCP tool `record_budget_sample`
 returns. Each outcome is `{stored: true, sample}` or `{stored: false, reason}`
-with `reason` one of `unchanged`, `fork_copied`, `not_reported_by_source`,
-`parse_error`. Refusals use the existing envelope: `validation` (exit 2) with
+with `reason` one of `unchanged`, `forgotten` (a reading removed with
+`budget forget`, read again from the same input), `fork_copied`,
+`not_reported_by_source`, `parse_error`. Refusals use the existing envelope: `validation` (exit 2) with
 `detail.reason` `capture_disabled` or `no_binding_configured`. A manual reading
 typed at the CLI is the operator's own and is accepted with capture off; the
 same reading sent by an agent through `record_budget_sample` is refused
@@ -1248,14 +1250,70 @@ Every refusal of a capture or binding write carries `detail.reason`
 (`invalid_source`, `invalid_account`, `invalid_provider`, `invalid_path`,
 `account_required`, `binding_not_found`, `home_taken`) and `detail.field`, at
 the CLI (`--json`) and over HTTP, so the web page words it without reading the
-sentence. A body on these routes (and on the collection writes) that is not a
-JSON object is 400 `validation`, `detail.reason: "invalid_body"`.
+sentence. A body on these routes (and on the collection writes and
+`/api/budget/forget`) that is not a JSON object is 400 `validation`, `detail.reason: "invalid_body"`.
 
 ```bash
 # Edit: move the Claude link of ~/work/.claude onto a Codex home, in one write.
 staple budget bind --source codex-rollout --account work --codex-home ~/work/.codex \
   --replace-source claude-statusline --replace-dir ~/work/.claude
 ```
+
+### Removing a wrong reading
+
+A reading that should never have been stored can be removed by id. A common
+case is a test status-line payload piped through the live ingest. Its fake reset
+can open a window of its own, and that window then supersedes the real one and
+reads as current
+([execution-telemetry.md](execution-telemetry.md#removing-a-reading)):
+
+```bash
+staple budget history --account personal-max --json      # find the ids
+staple budget forget 97379345 c549682b                    # the preview; nothing is removed (exit 2)
+staple budget forget 97379345 c549682b --yes              # remove them
+```
+
+- **Ids.** Use a full reading id, or a prefix of at least 8 characters that
+  names exactly one reading. An unknown id is refused with `not_found` (exit 3).
+  A shorter prefix is refused with `validation` (`id_too_short`), and so is an
+  ambiguous one (`ambiguous_id`). Either way nothing is removed: it is all or
+  nothing.
+- **Preview.** Without `--yes` nothing is removed. The command prints what the
+  removal would do and exits 2 (`detail.reason: "consent_required"`, the preview
+  in `detail.preview`). The preview lists each reading and its window, and what
+  the window becomes: `kept` with the readings left, or `removed`. It also
+  shows each affected limit's current window and latest reading before and after,
+  as `staple budget` would read them. The preview runs the removal and rolls it
+  back, so it shows exactly what `--yes` does.
+- **Windows.** A window left with no reading is removed. Any window it had
+  superseded is released and settled again by the rule a new window meets, so
+  a real window that a fake one displaced is current again. A window that keeps
+  readings, but loses the one that opened it, takes its reset, length and start
+  from the earliest-recorded reading left (`rederivedFrom`). Readings carry no
+  plan tier, so its plan tier becomes `null` with reason
+  `opening_reading_removed`. High-water marks and regression flags are derived
+  at read, so they follow.
+- **Cannot be undone.** The removed readings' dedup keys are kept, so reading
+  the same input again stores nothing, with skip reason `forgotten`. A
+  forgotten Codex reading is never read back from its rollout: re-reading the
+  file, or losing the collector's cursor, does not bring it back. There is no
+  command that restores one. A status line is captured when it arrives, so a
+  new render is a new observation and is stored. The preview says this too
+  (`note`).
+- **Audit.** One JSON line, `{at, action: "forget", via, readings, windows}`,
+  goes to `logs/budget-collect.log`. It is written after the removal commits.
+  If it cannot be written, the removal still stands: `auditLog` is `null`,
+  `warnings` says why (the CLI prints it to stderr), and the exit is 0.
+
+`--json` prints `{applied, asOf, readings, windows, limits, auditLog, warnings, note}`. The MCP
+tool `forget_budget_samples` (`{ids, confirm?}`) and `POST /api/budget/forget`
+(`{ids, confirm?}`) call the same method. `confirm` must be the boolean `true`;
+a string or a number is refused. Without `confirm: true` they answer
+the preview (`applied: false`) rather than refusing. The route is token-gated,
+Origin-checked and POST-only, and never triggers a sync. A body that is not a
+JSON object (`null`, an array, malformed JSON) is 400 `validation` with
+`detail.reason: "invalid_body"`, and nothing is removed. Budget readings live in
+this machine's `hub.db` and never replicate.
 
 ### Reading budget and attempts back
 

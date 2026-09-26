@@ -302,8 +302,9 @@ describe("tool inventory", () => {
   // get_attempt, get_budget and list_budget_samples: 48 -> 52. The explicit estimate
   // write added set_estimate: 52 -> 53. The certified plan read added compare_plans: 53 -> 54.
   // The timing quality read added timing_quality: 54 -> 55. The calibration read added
-  // calibration_cohorts: 55 -> 56. The forecast read added forecast: 56 -> 57.
-  it("exposes exactly these 57 tools with these annotations and output schemas", async () => {
+  // calibration_cohorts: 55 -> 56. The forecast read added forecast: 56 -> 57. Removing
+  // wrong budget readings added forget_budget_samples: 57 -> 58.
+  it("exposes exactly these 58 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -863,6 +864,22 @@ describe("tool inventory", () => {
           readOnlyHint: false,
           destructiveHint: false,
           idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      /**
+       * Removing readings from hub.db: destructive (rows go, and a window a reading
+       * opened goes with its last one) and not idempotent (the second call finds
+       * nothing and is refused with not_found). Without confirm it only previews.
+       */
+      {
+        name: "forget_budget_samples",
+        annotations: {
+          title: "Forget budget samples",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
           openWorldHint: false,
         },
         hasOutputSchema: true,
@@ -1734,6 +1751,9 @@ describe("tool response shapes (31/31)", () => {
       // Budget ingestion is pinned in test/budget-surfaces.test.ts, against the CLI's
       // `staple budget ingest --json` payload from the same `ingestBudget`.
       "record_budget_sample",
+      // Removing readings is pinned in test/budget-forget.test.ts: the MCP preview equals
+      // the CLI's and the HTTP route's, all from the same `forgetBudgetSamples`.
+      "forget_budget_samples",
       // Execution attempts: pinned in test/attempts-surfaces.test.ts, against the CLI's
       // `staple attempt ... --json` payload from the same `recordAttemptEvent`.
       "record_attempt_event",

@@ -72,7 +72,7 @@ export interface IngestResult {
   /** One per reading or skipped line, in input order. */
   readonly outcomes: SampleOutcome[];
   readonly storedCount: number;
-  /** Skipped readings by reason: `unchanged`, `fork_copied`, `not_reported_by_source`, `parse_error`. */
+  /** Skipped readings by reason: `unchanged`, `forgotten`, `fork_copied`, `not_reported_by_source`, `parse_error`. */
   readonly skipped: Record<string, number>;
 }
 

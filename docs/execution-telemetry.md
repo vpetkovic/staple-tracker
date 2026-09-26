@@ -1001,6 +1001,63 @@ never reach the key, because they are skipped, not deduplicated. Samples live
 in `hub.db`, not in the events table, so the key is a plain digest and not an
 event key.
 
+### Removing a reading
+
+A reading that should never have been stored can be removed:
+`staple budget forget <reading-id>... [--yes]`, the MCP tool
+`forget_budget_samples {ids, confirm?}` and `POST /api/budget/forget`
+(`{ids, confirm?}`), all through one store method, `BudgetStore.forget`. The
+case it exists for is a synthetic status-line payload piped through the live
+ingest. Its reset was about 1.5 hours before the real one, so it opened a
+window of its own. That window was first observed after the real window's
+first reading, so it superseded the real one under [Window
+identity](#window-identity). The fake window then read as current, and the real
+readings kept joining a window marked superseded.
+
+- **Consent.** Without `--yes` or `confirm: true` nothing is removed. The
+  answer is a preview, and the preview is the removal run and rolled back in
+  one transaction, so it is exactly what consent would do. It lists each
+  reading and its window, and what the window becomes. It also shows each
+  affected limit's current window and latest reading before and after, as
+  `get_budget` reads them. The CLI exits 2 with the preview in
+  `detail.preview`. MCP and HTTP answer it with `applied: false`.
+- **Ids.** A full id, or a prefix of at least 8 characters that names exactly
+  one reading. An unknown id is `not_found`. A shorter prefix is `validation`
+  (`id_too_short`), and an ambiguous one is `validation` (`ambiguous_id`). A
+  prefix is hex digits and dashes, so it never reaches `LIKE` as a wildcard.
+  Nothing is removed on a refusal: all or nothing.
+- **Windows.** A window instance exists because a reading opened it, so one left
+  with no reading is removed. A window left with readings is kept. If the
+  reading that opened it is among those removed, the window takes `resetsAt`,
+  `windowSeconds` and `startsAt` from the earliest-recorded reading left, as if
+  that reading had opened it (`rederivedFrom`). A sample carries no plan tier,
+  so `planTier` becomes `null` with reason `opening_reading_removed`.
+  The windows a removed window had superseded are released. Each one's overlap
+  with the windows still standing is then settled again by the rule a new
+  window meets: of two overlapping instances, the one first observed earlier is
+  superseded by the other. So a real window a false one displaced stands
+  again, unless a later real instance displaced it too. `status`, high-water
+  and `regression` are read-time derivations and follow without a write.
+- **It cannot be undone.** A forgotten reading is never stored again from the
+  same input. In particular, a forgotten Codex reading is never re-read from its
+  rollout. Nothing restores one. Every answer carries this as `note`, the
+  preview first.
+- **Replays.** The removed readings' `dedupKey`s are kept in `budget_forgotten`
+  (hub migration 008). A reading whose key is there is skipped with reason
+  `forgotten`, so re-reading the same rollout, or the same input in any form,
+  does not bring it back. A new observation has a new `observedAt`, so a new
+  key, and is stored. A status-line render is captured when it arrives, so
+  the same payload sent again later is a new observation.
+- **Audit.** One JSON line, `{at, action: "forget", via, readings, windows}`,
+  is appended to `logs/budget-collect.log` after the commit. A log that cannot
+  be written does not undo or hide the removal. The answer succeeds with
+  `auditLog: null` and a plain `warnings` entry, so a caller does not retry a
+  removal that already happened.
+- **Machine-local.** It writes `hub.db` and the staple home's log, never a
+  workspace, and nothing replicates. The HTTP route is token-gated,
+  Origin-checked and POST-only, and never arms the post-write sync trigger. Its
+  body must be a JSON object; anything else is 400 `invalid_body`.
+
 ### Automatic collection
 
 Capture stays opt-in and off by default. What automatic collection adds is that
@@ -1097,6 +1154,7 @@ shown verbatim):
 | `no_provider_binding` | The attempt names no account, so budget cannot be joined to it |
 | `no_binding_configured` | No [source binding](#source-bindings-produce-the-account) matches the harness, and no `--account` was passed |
 | `reset_not_reported` | The source gave usage without a reset instant (old Codex lines), so the sample joins no window |
+| `opening_reading_removed` | The reading that opened a window was removed ([Removing a reading](#removing-a-reading)) and the readings left do not carry the field (a window's `planTier`) |
 | `end_not_observed` | An attempt read as `orphaned`: no device recorded when it actually stopped |
 | `no_matching_attempt`, `ambiguous_attempt` | A sample could not be linked to exactly one attempt |
 | `not_connected` | The workspace is not synchronized, so there is no sync horizon |
@@ -1254,9 +1312,10 @@ tests catching drift. The names are proposals. The single-method rule is not.
 | `checkout`, `status`, `done` gain optional `--harness-session`, `--harness claude_code\|codex\|other`, `--model`, `--account`, `--attempt-key K` (the attempt's idempotency key), and the claim-clearing verbs (`release`, `status`, `done`) gain `--outcome failed --reason R` | the same fields on `checkout_task`, `release_task`, `update_task` (`harness_session`, `harness`, `model`, `account`, `attempt_idempotency_key`, `outcome`, `reason`) | Unchanged payloads, plus `attempt` |
 | `staple budget [--account A] [--reserve P]` (HTTP `GET /api/budget?account=&reserve=`) | `get_budget` | Per account, each current window with its latest sample, `status`, `missing`, and each limit's provisional [pressure](#pressure) |
 | `staple budget history --account A [--since T] [--limit N]` | `list_budget_samples` | `{items, truncated, nextCursor, coverage}` |
+| `staple budget forget <reading-id>... [--yes]` (HTTP `POST /api/budget/forget {ids, confirm?}`) | `forget_budget_samples {ids, confirm?}` | `{applied, asOf, readings, windows, limits, auditLog, warnings, note}`: without consent the [preview](#removing-a-reading), with it what was removed |
 | `staple timing quality [--kind K] [--parent REF] [--since T] [--include S] [--exclude S] [--exclude-reason R]` | `timing_quality` | Counts and coverage of the timing quality states over the eligible population, the ratio aggregates, and the eligible records, bounded ([timing semantics](timing-semantics.md#cohort-coverage)) |
 | `staple calibrate [--kind K] [--priority P] [--parent REF] [--since T] [--include reconstructed] [--samples] [--for REF [--model M]]` | `calibration_cohorts` | Calibration cohorts over exact samples (reconstructed as its own set on request), each with its fallback level, coverage, medians, quantiles, intervals and bounds, heavy-tail test, timing floors, warnings and a snapshot id; or the samples, bounded; `--for` adds per-issue duration forecasts ([timing semantics](timing-semantics.md#calibration-cohorts), [confidence ranges](timing-semantics.md#confidence-ranges)) |
-| `staple budget ingest --source claude-statusline [--tee] [--account A]` (stdin), `--source codex-rollout <file> [--account A]`, `--source manual --account A --limit-key K --used P --resets-at T` | `record_budget_sample` | The stored sample, or `{stored: false, reason: "unchanged" \| "fork_copied"}` |
+| `staple budget ingest --source claude-statusline [--tee] [--account A]` (stdin), `--source codex-rollout <file> [--account A]`, `--source manual --account A --limit-key K --used P --resets-at T` | `record_budget_sample` | The stored sample, or `{stored: false, reason: "unchanged" \| "forgotten" \| "fork_copied"}` |
 
 `--tee` passes the status-line input through to stdout unchanged, so staple can
 sit in front of a status-line command the operator already uses.

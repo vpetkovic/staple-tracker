@@ -35,6 +35,7 @@ import { settingDefinitionsFor, settingRegistryView, settingValueView } from "..
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
+import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
 import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
@@ -1455,7 +1456,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           /** Budget collection: named in one set; `/api/budget/collection` itself is the GET read. */
           BUDGET_COLLECTION_WRITES.has(url.pathname) ||
           /** Budget capture and bindings: machine-local config writes, named in one set. */
-          BUDGET_CONFIG_WRITES.has(url.pathname)
+          BUDGET_CONFIG_WRITES.has(url.pathname) ||
+          url.pathname === "/api/budget/forget"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1513,7 +1515,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           req.method === "POST" &&
           !CLOUD_LIFECYCLE_WRITES.has(url.pathname) &&
           !BUDGET_COLLECTION_WRITES.has(url.pathname) &&
-          !BUDGET_CONFIG_WRITES.has(url.pathname)
+          !BUDGET_CONFIG_WRITES.has(url.pathname) &&
+          url.pathname !== "/api/budget/forget"
         ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
@@ -1540,7 +1543,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
       let budgetBody: Record<string, unknown> | null = null;
-      if (BUDGET_CONFIG_WRITES.has(url.pathname) || BUDGET_COLLECTION_WRITES.has(url.pathname)) {
+      if (BUDGET_CONFIG_WRITES.has(url.pathname) || BUDGET_COLLECTION_WRITES.has(url.pathname) || url.pathname === "/api/budget/forget") {
         /**
          * These bodies are objects. Malformed JSON, `null`, an array or a scalar is the
          * caller's mistake and answers 400 `validation` with nothing changed, rather than the
@@ -1595,6 +1598,26 @@ export function startUiServer(options: UiOptions): UiHandle {
           );
           return;
         }
+      }
+      /**
+       * `staple budget forget` / MCP `forget_budget_samples`: remove readings from this
+       * machine's hub.db through the one method all three call. POST-only, so it is
+       * Origin-checked like every write. Like the collection writes, it journals nothing
+       * and never arms the post-write sync trigger. `{ ids }` alone answers the preview
+       * (`applied: false`); `{ ids, confirm: true }` is the consent and removes them.
+       */
+      if (url.pathname === "/api/budget/forget") {
+        const body = budgetBody!;
+        if (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== "string")) {
+          deny(res, 400, "validation", "ids must be an array of reading ids.");
+          return;
+        }
+        if (body.confirm !== undefined && typeof body.confirm !== "boolean") {
+          deny(res, 400, "validation", "confirm must be true or false.");
+          return;
+        }
+        json(res, 200, forgetBudgetSamples({ ids: body.ids as string[], confirm: body.confirm === true, via: "http" }, { home: stapleHome() }));
+        return;
       }
       if (BUDGET_COLLECTION_WRITES.has(url.pathname)) {
         const body = budgetBody!;

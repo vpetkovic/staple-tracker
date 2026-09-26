@@ -508,6 +508,17 @@ describe("help surface", () => {
     ]);
   });
 
+  it("names budget forget, and its consent, in the Provider budget section and in budget --help", () => {
+    const help = cli("help").stdout;
+    const section = help.slice(help.indexOf("Provider budget"), help.indexOf("Durations (<dur>)"));
+    expect(section).toContain("budget forget <reading-id>... [--yes]");
+    expect(section).toContain("without --yes only the preview");
+    const own = cli("budget", "--help");
+    expect(own.status).toBe(0);
+    expect(own.stdout).toContain("budget forget <reading-id>... [--yes]");
+    expect(own.stdout).toContain("Without --yes it\n              only previews, exit 2");
+  });
+
   it("pins the global-flag and status footer scripts read", () => {
     const help = cli("help").stdout;
     expect(help).toContain("Global flags: --db <path>, --ws <slug|prefix>  (default: walk up for .staple/staple.db,");

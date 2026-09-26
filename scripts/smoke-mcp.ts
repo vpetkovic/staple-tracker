@@ -161,6 +161,14 @@ try {
     `exactly the 24 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
+  // Removing budget readings takes rows out of hub.db: destructive, and not idempotent
+  // (a second call finds nothing and is refused with not_found).
+  assert(
+    byName.get("forget_budget_samples").annotations.destructiveHint === true &&
+      byName.get("forget_budget_samples").annotations.idempotentHint === false &&
+      byName.get("forget_budget_samples").annotations.readOnlyHint === false,
+    "forget_budget_samples is flagged destructive and not idempotent",
+  );
   assert(
     byName.get("update_task").annotations.destructiveHint === false,
     "update_task is not flagged destructive",
@@ -858,8 +866,9 @@ try {
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&
-      !coldByName.get("record_budget_sample").inputSchema.properties?.ws,
-    "machine-level budget tools (get_budget, list_budget_samples, record_budget_sample) take no ws",
+      !coldByName.get("record_budget_sample").inputSchema.properties?.ws &&
+      !coldByName.get("forget_budget_samples").inputSchema.properties?.ws,
+    "machine-level budget tools (get_budget, list_budget_samples, record_budget_sample, forget_budget_samples) take no ws",
   );
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
@@ -984,6 +993,12 @@ try {
   assert(
     !coldBudget.isError && Array.isArray(JSON.parse(toolText(coldBudget)).accounts),
     "get_budget answers with no workspace resolved: budget is machine state",
+  );
+  // An id this home does not hold is refused whole, with no workspace resolved either.
+  const coldForget = await cold.rpc("tools/call", { name: "forget_budget_samples", arguments: { ids: ["0000dead"], confirm: true } });
+  assert(
+    coldForget.isError && toolError(coldForget).code === "not_found",
+    "forget_budget_samples refuses an unknown reading id with not_found and no workspace resolved",
   );
 
   const reInit = await cold.rpc("tools/call", {

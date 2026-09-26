@@ -370,6 +370,8 @@ describe("the machine home", () => {
       "index:limit_windows_limit_idx",
       // Hub migration 004 (STA-287): this machine's own cross-link changes.
       "index:sqlite_autoindex_attempt_presence_1",
+      // Hub migration 008: the dedup keys of readings removed with budget forget.
+      "index:sqlite_autoindex_budget_forgotten_1",
       "index:sqlite_autoindex_budget_samples_1",
       "index:sqlite_autoindex_budget_samples_2",
       "index:sqlite_autoindex_cross_link_changes_1",
@@ -382,6 +384,7 @@ describe("the machine home", () => {
       "index:workspaces_repository_id_idx",
       // Hub migration 005: provider limit windows and budget samples, machine state.
       "table:attempt_presence",
+      "table:budget_forgotten",
       "table:budget_samples",
       "table:cross_link_changes",
       "table:cross_links",
@@ -404,13 +407,14 @@ describe("the machine home", () => {
     // Hub migration 005 adds `limit_windows` and `budget_samples`. Moved again:
     // 5 -> 6. Hub migration 006 adds `attempt_presence`. Moved again: 6 -> 7.
     // Hub migration 007 adds its `role` column (a column, not a schema object).
+    // Moved again: 7 -> 8. Hub migration 008 adds `budget_forgotten`.
     //
     // `schema_version` is still the only key a FRESHLY INITIALISED hub holds —
     // slug and prefix remain authoritative in each workspace file, not here. It
     // is no longer the only key the hub can ever hold: `hub_id` is minted, once,
     // the first time something asks the hub to identify itself (a hub backup).
     // Lazily on purpose, so that no existing hub grows one until it is used.
-    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "7" }]);
+    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "8" }]);
   }, 30_000);
 
   it("mints ~/.staple/ui-token at 0600 the first time the UI is asked for", () => {

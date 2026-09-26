@@ -8,6 +8,7 @@ import { migration as m004 } from "./004-cross-link-changes.js";
 import { migration as m005 } from "./005-budget-samples.js";
 import { migration as m006 } from "./006-attempt-presence.js";
 import { migration as m007 } from "./007-presence-role.js";
+import { migration as m008 } from "./008-budget-forgotten.js";
 
 /**
  * The hub database — machine-wide registry and cross-workspace links.
@@ -21,7 +22,7 @@ export const HUB_TARGET: MigrationTarget = {
   // `workspaces` has existed since version 1; a hub with it and no version row
   // is a pre-A4 hub, which is what every hub on disk today looks like.
   sentinelTable: "workspaces",
-  migrations: [m001, m002, m003, m004, m005, m006, m007],
+  migrations: [m001, m002, m003, m004, m005, m006, m007, m008],
   consolidated: CONSOLIDATED_DDL,
 };
 
