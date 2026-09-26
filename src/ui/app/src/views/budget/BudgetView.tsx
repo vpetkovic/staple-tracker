@@ -30,9 +30,9 @@
  * `BudgetReportView` takes the payload (and the seconds held) as props and reads no context, so the
  * e2e test renders it from the real server's answer; `BudgetView` is the fetch and the clock.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, CircleHelp, RefreshCw } from "lucide-react";
-import { getBudget, type AuthError } from "@/lib/api";
+import { AuthError, getBudget } from "@/lib/api";
 import {
   BUDGET_REFRESH_MS,
   PRESSURE_WARNING_TEXT,
@@ -55,9 +55,7 @@ import {
   type PressureTone,
 } from "@/lib/budget-text";
 import { formatDuration } from "@/lib/forecast-text";
-import { useSession } from "@/lib/session";
 import type { BudgetAccountView, BudgetLimitReading, BudgetView as BudgetPayload } from "@/lib/types";
-import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { ConfidenceBadge, WarningChips } from "@/detail/ForecastSection";
 import { Button } from "@/components/ui/button";
@@ -87,11 +85,12 @@ function Unknown({ children }: { children: React.ReactNode }) {
 const TONE_ICON: Record<PressureTone, typeof AlertTriangle> = { unsafe: AlertTriangle, within: CheckCircle2, unknown: CircleHelp };
 
 /** The pressure state: a word and an icon, in a frame that is hatched when unsafe and dashed when unknown. */
-function PressureBadge({ tone, word }: { tone: PressureTone; word: string }) {
+function PressureBadge({ tone, word, provisional }: { tone: PressureTone; word: string; provisional: boolean }) {
   const Icon = TONE_ICON[tone];
   return (
     <span
       data-pressure-badge={tone}
+      title={provisional ? `${word}, by the provisional pressure rule` : undefined}
       className={cn(
         "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
         tone === "unsafe" && "border-destructive text-destructive",
@@ -101,6 +100,7 @@ function PressureBadge({ tone, word }: { tone: PressureTone; word: string }) {
     >
       <Icon className="size-3.5" aria-hidden />
       {word}
+      {provisional ? <span className="sr-only"> (provisional)</span> : null}
     </span>
   );
 }
@@ -188,7 +188,7 @@ function ForecastBlock({ limit, asOf }: { limit: BudgetLimitReading; asOf: strin
           {pressure.sustainablePercentPerHour !== null ? (
             <>
               <span className="font-mono tabular-nums">{perHourText(pressure.sustainablePercentPerHour)}</span>
-              <span className="text-[11px] text-muted-foreground"> keeps {Math.round(pressure.reservePercent)}% at the reset</span>
+              <span className="text-[11px] text-muted-foreground"> keeps {percentText(pressure.reservePercent)} at the reset</span>
             </>
           ) : (
             <Unknown>Unknown: {whyUnknown(pressure, "sustainablePercentPerHour") ?? "no reason given"}</Unknown>
@@ -252,11 +252,11 @@ function LimitCard({ limit, asOf, unsafeAt, heldSeconds }: { limit: BudgetLimitR
         </h3>
         {limit.window?.label ? <span className="text-[11px] text-muted-foreground">{limit.window.label}</span> : null}
         <span className="ml-auto" />
-        <PressureBadge tone={state.tone} word={state.word} />
+        <PressureBadge tone={state.tone} word={state.word} provisional={state.tone !== "unknown"} />
       </header>
       {noWindow ? null : (
         <p className={cn("mb-2 text-[11px]", state.tone === "unsafe" ? "text-destructive" : "text-muted-foreground")} data-testid="budget-state-detail">
-          {state.word}: {state.detail}
+          {state.tone === "unknown" ? `${state.word}: ${state.detail}` : `${state.word} (provisional): ${state.detail}`}
         </p>
       )}
       {noWindow ? (
@@ -359,31 +359,71 @@ function useHeldSeconds(since: number): number {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [since]);
-  return Math.max(0, Math.floor((now - since) / 1000));
+  return Math.max(0, Math.floor((Math.max(now, since) - since) / 1000));
+}
+
+/** One read and the instant the page received it, set together so a countdown never ticks from the previous answer's clock. */
+interface Held {
+  readonly view: BudgetPayload;
+  readonly receivedAt: number;
+}
+
+/**
+ * The budget, re-read every {@link BUDGET_REFRESH_MS} while the page is visible and at once when
+ * it becomes visible again. Budget readings live in the hub, not in a workspace, so the page's
+ * workspace fingerprint says nothing about them and is not a reason to re-read.
+ */
+function useLiveBudget(onAuthError: (error: AuthError) => void): { held: Held | null; error: Error | null; reload: () => void } {
+  const [held, setHeld] = useState<Held | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const authRef = useRef(onAuthError);
+  authRef.current = onAuthError;
+  const alive = useRef(true);
+  const reload = useCallback(() => {
+    getBudget()
+      .then((view) => {
+        if (!alive.current) return;
+        setHeld({ view, receivedAt: Date.now() });
+        setError(null);
+      })
+      .catch((caught: unknown) => {
+        if (!alive.current) return;
+        if (caught instanceof AuthError) authRef.current(caught);
+        else setError(caught instanceof Error ? caught : new Error(String(caught)));
+      });
+  }, []);
+  useEffect(() => {
+    alive.current = true;
+    reload();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) reload();
+    }, BUDGET_REFRESH_MS);
+    const onVisible = () => {
+      if (!document.hidden) reload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      alive.current = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [reload]);
+  return { held, error, reload };
 }
 
 export function BudgetView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
-  const session = useSession();
-  const budget = useResource(() => getBudget(), [session.version], onAuthError);
-  const { reload } = budget;
-  useEffect(() => {
-    const timer = window.setInterval(reload, BUDGET_REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [reload]);
-  // The instant the page received this answer, by its own clock: the countdowns tick from it.
-  const [received, setReceived] = useState(() => Date.now());
-  useEffect(() => setReceived(Date.now()), [budget.data]);
-  const heldSeconds = useHeldSeconds(received);
+  const { held, error, reload } = useLiveBudget(onAuthError);
+  const heldSeconds = useHeldSeconds(held?.receivedAt ?? 0);
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-4 py-4">
-        {budget.error && !budget.data ? (
-          <ErrorState error={budget.error} />
-        ) : budget.data ? (
+        {error && !held ? (
+          <ErrorState error={error} />
+        ) : held ? (
           <>
-            {budget.error ? <p className={cn(UNKNOWN, "mb-2")}>The last refresh failed ({budget.error.message}); showing the previous read.</p> : null}
-            <BudgetReportView view={budget.data} heldSeconds={heldSeconds} onRefresh={reload} />
+            {error ? <p className={cn(UNKNOWN, "mb-2")}>The last refresh failed ({error.message}); showing the previous read.</p> : null}
+            <BudgetReportView view={held.view} heldSeconds={heldSeconds} onRefresh={reload} />
           </>
         ) : (
           <LoadingState rows={3} />

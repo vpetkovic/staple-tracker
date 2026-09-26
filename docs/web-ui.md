@@ -912,7 +912,8 @@ chips (few readings, a span under 30 minutes, regressions in the window).
 No figure appears in both blocks, and the page computes none of them.
 
 **States.** Each card carries its pressure state as a word and an icon:
-*Within*, *Unsafe* or *Unknown*. Unsafe also gets a red frame and a hatched
+*Within*, *Unsafe* or *Unknown*, and the line under it says *(provisional)*
+for the first two, since the rule behind them is. Unsafe also gets a red frame and a hatched
 left edge, so the state never rests on colour alone, and the header counts
 the unsafe limits. Unknown is always the word with the payload's reason
 (`stale`, `no_sample_yet`, `window_elapsed`, a missing second reading) in the
@@ -927,7 +928,10 @@ yet*: it belongs to the admission policy, which is not built.
 limit, a provisional default until an admission policy sets one) and the
 provisional pressure rule (unsafe at ×1.00 or over), both from the payload.
 
-**Live.** The view re-reads every 30 seconds (and on the Refresh button).
+**Live.** The view re-reads every 30 seconds while the page is visible, at
+once when it becomes visible again, and on the Refresh button. It does not
+follow the workspace fingerprint: budget readings live in the hub, not in a
+workspace.
 Between reads, the reset countdown and the last reading's age tick by the
 seconds the page has held the answer, by the page's own clock, so a device
 whose clock is off still counts right; the forecast figures stay as of the

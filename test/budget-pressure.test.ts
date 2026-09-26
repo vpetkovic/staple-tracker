@@ -129,6 +129,43 @@ describe("pressure from status-line readings", () => {
     expect(limit(31, "personal-max", "five_hour", "10").pressure.state).toBe("within");
   });
 
+  it("reads remaining exactly at the reserve as unsafe: the boundary is at or under", () => {
+    bindClaude();
+    const reset = at(240);
+    render(0, 79, reset);
+    render(30, 80, reset);
+    const { pressure, remainingPercent } = limit(31, "personal-max", "five_hour");
+    expect(remainingPercent).toBe(20);
+    expect(pressure).toMatchObject({ state: "unsafe", ratio: null, sustainablePercentPerHour: 0, reserveReach: { atPace: "already" } });
+    expect(pressure.missing.ratio).toBe("reserve_reached");
+  });
+
+  it("reads a pace exactly at the sustainable one as unsafe: pressure 1 is the line", () => {
+    bindClaude();
+    // 25% to 30% in 30 minutes: 10%/h. 70 left, reserve 50, two hours to the reset: 10%/h sustainable.
+    const reset = at(150);
+    render(0, 25, reset);
+    render(30, 30, reset);
+    const { pressure } = limit(30, "personal-max", "five_hour", "50");
+    expect(pressure.observed!.percentPerHour).toBe(10);
+    expect(pressure.sustainablePercentPerHour).toBe(10);
+    expect(pressure.ratio).toBe(1);
+    expect(pressure.state).toBe("unsafe");
+    expect(pressure.reserveReach).toMatchObject({ atPace: "after_reset", seconds: 7200 });
+  });
+
+  it("keeps a stale reading at or under the reserve unsafe: the high-water only rises until the reset", () => {
+    bindClaude();
+    const reset = at(240);
+    render(0, 85, reset);
+    render(10, 95, reset);
+    const { pressure, stale } = limit(40, "personal-max", "five_hour");
+    expect(stale).toBe(true);
+    expect(pressure).toMatchObject({ provisional: true, state: "unsafe", ratio: null, sustainablePercentPerHour: 0, reserveReach: { atPace: "already" }, exhaustion: null });
+    expect(pressure.missing).toMatchObject({ ratio: "reserve_reached", exhaustion: "stale" });
+    expect(pressure.missing.state).toBeUndefined();
+  });
+
   it("follows the reserve argument, and refuses one out of range", () => {
     bindClaude();
     const reset = at(180);

@@ -12,6 +12,7 @@ import {
 import type { BudgetAccountView, LimitPressure } from "./types";
 
 const pressure = (fields: Partial<LimitPressure>): LimitPressure => ({
+  provisional: true,
   observed: null,
   lastReadingAgeSeconds: null,
   secondsToReset: null,
@@ -64,7 +65,7 @@ describe("budget text", () => {
 
   it("explains an account or a machine with nothing, with the setup hint", () => {
     const account = (missing: Record<string, string>, bound: boolean): BudgetAccountView => ({ provider: null, accountRef: "a", bound, limits: [], missing });
-    expect(accountAbsentText(account({ limits: "source_unavailable" }, false), true)).toMatchObject({ reason: "Unknown: no source is bound to it.", hint: expect.stringContaining("staple budget setup") });
+    expect(accountAbsentText(account({ limits: "source_unavailable" }, false), true)).toMatchObject({ reason: "Unknown: no source is bound to it.", hint: expect.stringContaining("`staple budget setup --claude-account <label> --codex-account <label>`") });
     expect(accountAbsentText(account({ limits: "source_unavailable" }, true), false).reason).toBe("Unknown: budget capture is off.");
     expect(accountAbsentText(account({ limits: "no_sample_yet" }, true), true).reason).toMatch(/^No reading yet/);
     expect(machineAbsentText({ budgetCapture: false, accounts: [] })?.reason).toMatch(/capture is off/);

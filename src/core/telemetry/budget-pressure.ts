@@ -41,6 +41,24 @@ export const PRESSURE_NOTE =
 const HOUR = 3600;
 const ms = (instant: string): number => Date.parse(instant);
 
+// ------------------------------------------------------------------ the provisional policy
+// The three rules the admission policy will replace, and nothing else, in one place.
+
+/** Remaining at or under the reserve: unsafe whatever the pace. */
+export function reserveReached(remainingPercent: number, reservePercent: number): boolean {
+  return remainingPercent - reservePercent <= 0;
+}
+
+/** The pace, %/hour, that lands exactly on the reserve at the reset. */
+export function sustainablePace(remainingPercent: number, reservePercent: number, secondsToReset: number): number {
+  return (Math.max(0, remainingPercent - reservePercent) / secondsToReset) * HOUR;
+}
+
+/** The state a pressure ratio reads. */
+export function pressureState(ratio: number): "within" | "unsafe" {
+  return ratio >= UNSAFE_PRESSURE ? "unsafe" : "within";
+}
+
 /** How the reading's rule reads, once per report. */
 export interface PressureRule {
   readonly provisional: true;
@@ -69,8 +87,10 @@ export interface PressureConfidence {
   readonly warnings: string[];
 }
 
-/** One limit's pressure. MEASURED: `observed`, `lastReadingAgeSeconds`. FORECAST: the rest. */
+/** One limit's pressure. MEASURED: `observed`, `lastReadingAgeSeconds`, `secondsToReset`. FORECAST: the rest. */
 export interface LimitPressure {
+  /** Every forecast figure here, the state included, is provisional until the admission policy defines pressure. */
+  readonly provisional: true;
   /** MEASURED: the window's pace, %/hour of wall clock; null under two readings. */
   readonly observed: BudgetPace | null;
   /** MEASURED: how old the latest reading's value is at `asOf`. */
@@ -124,8 +144,13 @@ export function limitPressure(input: PressureInput): LimitPressure {
   if (!current) blocked = input.missing.remainingPercent ?? input.missing.window ?? "no_sample_yet";
   else if (window.resetsAt === null) blocked = "sliding_window";
   else if (input.remainingPercent === null) blocked = input.missing.remainingPercent ?? "no_sample_yet";
-  else if (input.stale === true) blocked = "stale";
   else if (secondsToReset! <= 0) blocked = "window_elapsed";
+  /**
+   * A stale reading blocks only what needs the pace NOW. The high-water of a current window can
+   * only rise until its reset, so a remaining figure already at or under the reserve still is,
+   * however old the reading: that state is known.
+   */
+  const stale = blocked === null && input.stale === true;
 
   // ---- measured
   const observed = current ? paceOf(input.readings) : null;
@@ -158,36 +183,43 @@ export function limitPressure(input: PressureInput): LimitPressure {
   let state: LimitPressure["state"] = null;
   let exhaustion: BudgetExhaustion | null = null;
   let reserveReach: ReserveReach | null = null;
+  const reached = blocked === null && reserveReached(input.remainingPercent!, reserve);
   if (blocked !== null) {
     for (const field of ["sustainablePercentPerHour", "ratio", "state", "exhaustion", "reserveReach"]) missing[field] = blocked;
+  } else if (reached) {
+    // Already at or under the reserve: unsafe whatever the pace, stale or not, and nothing to divide by.
+    sustainable = 0;
+    state = "unsafe";
+    missing.ratio = "reserve_reached";
+    reserveReach = { atPace: "already", seconds: 0, at: input.asOf };
+    if (stale) missing.exhaustion = "stale";
+    else if (observed === null) {
+      missing.exhaustion = "input_missing";
+      missingInputs.exhaustion = ["observed"];
+    } else exhaustion = exhaustionAtPace(input.remainingPercent!, observed.percentPerHour, secondsToReset!, input.asOf);
+  } else if (stale) {
+    for (const field of ["sustainablePercentPerHour", "ratio", "state", "exhaustion", "reserveReach"]) missing[field] = "stale";
   } else {
     const remaining = input.remainingPercent!;
     const above = remaining - reserve;
-    sustainable = (Math.max(0, above) / secondsToReset!) * HOUR;
-    if (above <= 0) {
-      // Already at or under the reserve: unsafe whatever the pace, and nothing to divide by.
-      state = "unsafe";
-      missing.ratio = "reserve_reached";
-      reserveReach = { atPace: "already", seconds: 0, at: input.asOf };
-    }
+    sustainable = sustainablePace(remaining, reserve, secondsToReset!);
     if (observed === null) {
-      for (const field of ["exhaustion", ...(above > 0 ? ["ratio", "reserveReach", "state"] : [])]) {
+      for (const field of ["exhaustion", "ratio", "reserveReach", "state"]) {
         missing[field] = "input_missing";
         missingInputs[field] = ["observed"];
       }
     } else {
       exhaustion = exhaustionAtPace(remaining, observed.percentPerHour, secondsToReset!, input.asOf);
-      if (above > 0) {
-        ratio = observed.percentPerHour / sustainable;
-        state = ratio >= UNSAFE_PRESSURE ? "unsafe" : "within";
-        reserveReach = exhaustionAtPace(above, observed.percentPerHour, secondsToReset!, input.asOf);
-      }
+      ratio = observed.percentPerHour / sustainable;
+      state = pressureState(ratio);
+      reserveReach = exhaustionAtPace(above, observed.percentPerHour, secondsToReset!, input.asOf);
     }
   }
   missing.safeConcurrency = "policy_not_defined";
   if (state !== null) delete missing.state;
 
   return {
+    provisional: true,
     observed,
     lastReadingAgeSeconds,
     secondsToReset: toReset,

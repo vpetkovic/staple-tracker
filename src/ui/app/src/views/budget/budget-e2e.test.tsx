@@ -54,7 +54,7 @@ beforeAll(async () => {
   await once(ui.server, "listening");
   origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
   view = await get("/api/budget");
-  reserved = await get("/api/budget?reserve=5");
+  reserved = await get("/api/budget?reserve=12.5");
   bare = await get("/api/budget", bareHome);
 }, 60_000);
 
@@ -146,8 +146,8 @@ describe("an unsafe limit", () => {
     const html = card(render(view), PRESSURE_ACCOUNTS.unsafe, "codex.primary");
     expect(html).toContain('data-pressure-state="unsafe"');
     expect(html).toContain("data-unsafe-hatch");
-    expect(html).toMatch(/data-pressure-badge="unsafe"[^>]*><svg[\s\S]*?<\/svg>Unsafe<\/span>/);
-    expect(text(html)).toContain(`Unsafe: pace is ${pressureRatioText(limit.pressure.ratio!)} the sustainable pace (unsafe at ×1.00)`);
+    expect(html).toMatch(/data-pressure-badge="unsafe"[^>]*><svg[\s\S]*?<\/svg>Unsafe<span class="sr-only"> \(provisional\)<\/span><\/span>/);
+    expect(text(html)).toContain(`Unsafe (provisional): pace is ${pressureRatioText(limit.pressure.ratio!)} the sustainable pace (unsafe at ×1.00)`);
     expect(text(section(html, 'data-block="forecast"'))).toContain("before the reset");
     // The header counts it.
     expect(text(render(view))).toContain("1 unsafe limit");
@@ -156,8 +156,10 @@ describe("an unsafe limit", () => {
   });
 
   it("follows the reserve the read was asked with", () => {
-    expect(reserved.reserve).toEqual({ percent: 5, source: "argument", note: null });
-    expect(text(render(reserved))).toContain("Protected reserve: 5% of each limit, as asked.");
+    expect(reserved.reserve).toEqual({ percent: 12.5, source: "argument", note: null });
+    expect(text(render(reserved))).toContain("Protected reserve: 12.5% of each limit, as asked.");
+    // A fractional reserve keeps its decimal on every card, never rounded to 13%.
+    expect(text(section(card(render(reserved), PRESSURE_ACCOUNTS.within, "five_hour"), 'data-block="forecast"'))).toContain("keeps 12.5% at the reset");
     expect(text(render(view))).toContain("Protected reserve: 20% of each limit, a provisional default until an admission policy sets one.");
   });
 });
@@ -193,6 +195,6 @@ describe("unknown telemetry is visibly unknown", () => {
     expect(bare).toMatchObject({ budgetCapture: false, accounts: [] });
     const html = text(section(render(bare), 'data-testid="budget-none"'));
     expect(html).toContain("Budget capture is off on this machine");
-    expect(html).toContain("staple budget setup");
+    expect(html).toContain("`staple budget setup --claude-account <label> --codex-account <label>`: it prints the plan, and the same command with `--yes` applies it.");
   });
 });

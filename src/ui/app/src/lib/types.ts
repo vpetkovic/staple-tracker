@@ -2743,6 +2743,7 @@ export interface PressureConfidence {
 }
 
 export interface LimitPressure {
+  readonly provisional: true;
   readonly observed: BudgetPace | null;
   readonly lastReadingAgeSeconds: number | null;
   readonly secondsToReset: number | null;

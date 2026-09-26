@@ -1277,7 +1277,10 @@ and in every workspace, and it never synchronizes.
 concurrency belong to the admission policy, which is not built. Until it is,
 the read states one provisional definition of the first two and says so on
 every report (`pressureRule: {provisional: true, unsafeAtRatio: 1, note}`),
-the way the budget forecast states its provisional reserve. The reserve is a
+the way the budget forecast states its provisional reserve, and every limit's
+block carries `provisional: true` of its own. The three rules the policy will
+replace (at or under the reserve, the sustainable pace, the unsafe threshold)
+live in one module, `src/core/telemetry/budget-pressure.ts`. The reserve is a
 parameter (`--reserve P`, MCP `reserve`, HTTP `reserve=`), and without one the
 same provisional 20% as the forecast applies, named on `reserve.source`.
 
@@ -1297,7 +1300,9 @@ Unknown is never 0 and never `within`. A reading that is not current (the
 window elapsed, the reading reported no reset) or a sliding window makes every
 figure null with the reading's reason. A stale reading keeps `observed` (it
 describes the window's past) and makes every forecast figure null with
-`stale`. One reading makes `observed` null (`input_missing`, `second_reading`)
+`stale`, with one exception: a remaining figure already at or under the reserve
+reads `unsafe` however old the reading, because a current window's high-water
+only rises until its reset (only `exhaustion` then reads `stale`). One reading makes `observed` null (`input_missing`, `second_reading`)
 and everything that needs it null (`input_missing`, `observed`), while
 `sustainablePercentPerHour` still reads.
 

@@ -14,7 +14,7 @@
  */
 // Relative, as forecast-text.ts explains: a pure module stays resolvable without the alias.
 import { formatDuration } from "../detail/analytics";
-import { MISSING_TEXT, formatPercent, missingText } from "./forecast-text";
+import { MISSING_TEXT, missingText } from "./forecast-text";
 import type { BudgetAccountView, BudgetLimitReading, BudgetView, LimitPressure, ReserveReach } from "./types";
 
 /** How often the page re-reads the budget. Readings arrive at a status line's pace, not faster. */
@@ -96,8 +96,8 @@ export function clockText(iso: string, now: Date = new Date()): string {
 /** `The provisional 20% reserve` / `the 30% reserve`, as forecast-text says it. */
 export function reserveText(reserve: BudgetView["reserve"]): string {
   return reserve.source === "provisional_default"
-    ? `${formatPercent(reserve.percent)} of each limit, a provisional default until an admission policy sets one`
-    : `${formatPercent(reserve.percent)} of each limit, as asked`;
+    ? `${percentText(reserve.percent)} of each limit, a provisional default until an admission policy sets one`
+    : `${percentText(reserve.percent)} of each limit, as asked`;
 }
 
 // ------------------------------------------------------------------ the pressure state
@@ -134,7 +134,8 @@ export function exhaustionText(exhaustion: NonNullable<LimitPressure["exhaustion
 // ------------------------------------------------------------------ what is unknown, and what to do
 
 /** The command that sets collection up (and its long form, for a build without it). */
-export const SETUP_HINT = "Set up collection with `staple budget setup`, or `staple budget capture on` and `staple budget bind`.";
+export const SETUP_HINT =
+  "Set up collection with `staple budget setup --claude-account <label> --codex-account <label>`: it prints the plan, and the same command with `--yes` applies it. `staple budget status` shows what is running.";
 
 /** Why the whole machine shows nothing, with what to do about it. */
 export function machineAbsentText(view: Pick<BudgetView, "budgetCapture" | "accounts">): { reason: string; hint: string } | null {
@@ -149,7 +150,7 @@ export function accountAbsentText(account: BudgetAccountView, budgetCapture: boo
   if (code === "no_sample_yet") {
     return {
       reason: "No reading yet: capture is on and a source is bound, and nothing has arrived.",
-      hint: "Readings arrive with the next status-line render, or `staple budget collect` for Codex.",
+      hint: "Readings arrive with the next Claude Code status-line render, or the next `staple budget collect` for Codex. `staple budget status` shows each source's newest reading.",
     };
   }
   if (code === "source_unavailable") {
@@ -175,7 +176,7 @@ export function noWindowText(limit: BudgetLimitReading): { reason: string; hint:
 
 /** A limit's remaining figure, or unknown with the reading's reason. */
 export function remainingText(limit: BudgetLimitReading): { value: string | null; absent: string | null } {
-  if (limit.remainingPercent !== null) return { value: `${formatPercent(limit.remainingPercent)} left`, absent: null };
+  if (limit.remainingPercent !== null) return { value: `${percentText(limit.remainingPercent)} left`, absent: null };
   const reason = whyUnknown(limit, "remainingPercent") ?? limit.quality.reasons.map(pressureMissingText).join("; ");
   return { value: null, absent: reason ? `Unknown: ${reason}` : "Unknown" };
 }
