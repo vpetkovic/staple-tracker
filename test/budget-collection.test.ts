@@ -971,6 +971,17 @@ describe("round 2: noclobber, regrown rollouts, lock edges", () => {
       expect(again.files[0]!.storedCount).toBe(20);
     });
 
+    it("reads a file whose head changed whole, even when the bytes the last read ended on did not", () => {
+      const file = rollout(A, start, Array.from({ length: 20 }, (_, i) => 10 + i));
+      collectBudget({}, deps());
+      // Same length, one changed byte in the session_meta line, then one more reading.
+      const text = readFileSync(file, "utf8");
+      expect(text).toContain('"cli_version":"0.156.1"');
+      writeFileSync(file, text.replace('"cli_version":"0.156.1"', '"cli_version":"0.156.2"'));
+      appendFileSync(file, `${tokenCountLine({ timestamp: after(start, 40 * 60_000), primary: five(50), secondary: null })}\n`);
+      expect(collectBudget({}, deps()).files[0]).toMatchObject({ mode: "full", storedCount: 1 });
+    });
+
     it("reads a file shrunk below the old offset whole (first 4 KiB kept)", () => {
       const file = rollout(A, start, Array.from({ length: 20 }, (_, i) => 10 + i));
       collectBudget({}, deps());
