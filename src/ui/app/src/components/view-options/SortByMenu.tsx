@@ -45,6 +45,7 @@ import {
   type SortPref,
 } from "@/lib/sort-modes";
 import { cn } from "@/lib/utils";
+import { useBackToClose } from "@/lib/back-to-close";
 
 /**
  * What the trigger SHOWS: the mode, short — "Sort: Activity". The direction is an arrow
@@ -79,6 +80,7 @@ export function SortByMenu({
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  useBackToClose(open, () => setOpen(false));
 
   /**
    * PICKING A MODE PICKS ITS OWN DIRECTION, and does not carry the last one over. Somebody

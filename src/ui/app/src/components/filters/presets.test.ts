@@ -46,7 +46,8 @@ describe("the quick filters", () => {
 
   it("follow the workspace's configured statuses by category — a custom active status is in progress too", () => {
     expect(preset("in-progress").dims).toEqual({ status: ["in_progress", "pairing"] });
-    expect(preset("blocked").dims).toEqual({ status: ["blocked"] });
+    // Blocked is not a status list: it is the `blocked` dimension (status OR a blocker).
+    expect(preset("blocked").dims).toEqual({ blocked: ["blocked"] });
     // A vocabulary not loaded yet falls back to the built-in id rather than to nothing.
     expect(preset("in-progress", { ...SEED, statuses: [] }).dims).toEqual({ status: ["in_progress"] });
   });
@@ -76,10 +77,17 @@ describe("one tap", () => {
     expect(togglePreset(on, preset("high-priority"))).toEqual(start);
   });
 
-  it("replaces the dimension it owns: Blocked after In progress means blocked, not both", () => {
+  it("replaces the dimension it owns: a second tap on a status preset replaces the first", () => {
+    const withBlockedStatus: FilterState = withDimension(emptyFilters(), "status", ["blocked"]);
+    const next = togglePreset(withBlockedStatus, preset("in-progress"));
+    expect(next.dims.status).toEqual(["in_progress", "pairing"]);
+  });
+
+  it("Blocked combines with In progress as 'in progress AND blocked' — they are different questions now", () => {
     const next = togglePreset(togglePreset(emptyFilters(), preset("in-progress")), preset("blocked"));
-    expect(next.dims.status).toEqual(["blocked"]);
-    expect(presetActive(next, preset("in-progress"))).toBe(false);
+    expect(next.dims).toEqual({ status: ["in_progress", "pairing"], blocked: ["blocked"] });
+    expect(presetActive(next, preset("in-progress"))).toBe(true);
+    expect(presetActive(next, preset("blocked"))).toBe(true);
   });
 
   it("combines presets on different dimensions", () => {

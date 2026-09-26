@@ -268,7 +268,12 @@ describe("nothing the user typed is lost without them choosing to lose it", () =
     // …and there is no fourth, unguarded, way out.
     expect(dialog.match(/onOpenChange\(false\)/g)).toHaveLength(1);
     expect(dialog.match(/onCategoryChange\(/g)).toHaveLength(1);
-    expect(dialog.match(/setPane\("nav"\)/g)).toHaveLength(1);
+    // The one other `setPane("nav")` is the phone's system Back from a section to the list.
+    // It LOSES NOTHING, which is why it needs no guard: the list and the section are two
+    // panes of one mounted form, the draft stays mounted (and dirty) behind the list, and
+    // choosing another section from there still goes through the guard above.
+    expect(dialog.match(/setPane\("nav"\)/g)).toHaveLength(2);
+    expect(dialog).toMatch(/useBackToClose\(stacked && pane === "content", \(\) => setPane\("nav"\)\)/);
 
     // The draft is only really discarded on the deliberate choice.
     expect(dialog).toMatch(/onDiscard=\{\(\) => \{[\s\S]*?setFormKey\(\(key\) => key \+ 1\);[\s\S]*?\}\}/);

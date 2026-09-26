@@ -37,10 +37,11 @@ import { CircleCheck, CircleHelp, CloudOff, OctagonAlert, RefreshCw, TriangleAle
 import { useState } from "react";
 import { ShowDetails } from "@/components/plain/PlainCard";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import type { PlainStatus } from "@/lib/plain-language";
+import { plainAge, type PlainStatus } from "@/lib/plain-language";
 import { openSettings } from "@/lib/shell-events";
 import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useBackToClose } from "@/lib/back-to-close";
 
 export interface SyncFact {
   label: string;
@@ -65,13 +66,27 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
  * The words for one workspace's sync state, or `null` when there is nothing to say —
  * disconnected, not loaded, or no sync identity. See the file header for why null.
  */
-export function syncSummary(report: CloudSurfaceReport | null): SyncSummary | null {
+/**
+ * "5 min ago", "3h ago", "2 days ago" — how a person reads a sync time. `null` for a value
+ * that is not a time; the exact timestamp stays under Show details.
+ */
+export function syncedAgo(at: string, now: number = Date.now()): string | null {
+  const then = Date.parse(at);
+  if (Number.isNaN(then)) return null;
+  const seconds = (now - then) / 1000;
+  if (seconds < 45) return "Just now";
+  return `${plainAge(seconds)} ago`;
+}
+
+export function syncSummary(report: CloudSurfaceReport | null, now: number = Date.now()): SyncSummary | null {
   if (report === null || report.state === "disconnected") return null;
   if (report.failure?.code === "no_identity") return null;
 
   const facts: SyncFact[] = [];
   const device = report.label ?? report.deviceId;
   if (device) facts.push({ label: "This device", value: device });
+  const ago = report.lastSyncAt ? syncedAgo(report.lastSyncAt, now) : null;
+  if (ago) facts.push({ label: "Last synced", value: ago });
   if (report.pending > 0) facts.push({ label: "Changes waiting to send", value: String(report.pending) });
   if (report.conflicts.open > 0) facts.push({ label: "Conflicts to resolve", value: String(report.conflicts.open) });
   if (report.leases.held > 0) facts.push({ label: "Tasks reserved by this device", value: String(report.leases.held) });
@@ -79,7 +94,8 @@ export function syncSummary(report: CloudSurfaceReport | null): SyncSummary | nu
   const details: SyncFact[] = [{ label: "Sync mode", value: report.mode }];
   if (report.cursor) details.push({ label: "Position in the shared history", value: report.cursor });
   if (report.epoch !== null) details.push({ label: "History generation", value: String(report.epoch) });
-  if (report.lastSyncAt) details.push({ label: "Last synced", value: report.lastSyncAt });
+  // The exact time, for whoever needs it; the card's facts say it as "5 min ago".
+  if (report.lastSyncAt) details.push({ label: "Last synced at", value: report.lastSyncAt });
 
   if (report.failure) {
     const tone: PlainStatus = report.failure.code === "offline" ? "tight" : "at_risk";
@@ -176,6 +192,7 @@ export function CloudStrip({
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  useBackToClose(open, () => setOpen(false));
   const summary = syncSummary(report) ?? (report === null ? hubSyncSummary(hub) : null);
   if (summary === null) return null;
   const tone = TONE[summary.tone];

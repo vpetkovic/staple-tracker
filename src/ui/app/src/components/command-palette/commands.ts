@@ -262,6 +262,12 @@ function issueCount(count: number): string {
  * Every non-issue command, in natural order. Ordering for display is a separate
  * concern — see `orderCommands`.
  */
+/** Words the pages were once called, so muscle memory still finds them in the palette. */
+const FORMER_VIEW_NAMES: Partial<Record<ViewName, string>> = {
+  calibration: "estimate accuracy calibration",
+  budget: "budget limits",
+};
+
 /**
  * Where a palette write on the open issue goes: the issue the selection was pinned to, not
  * the number it was opened by — a renumber in between would otherwise aim it at another
@@ -351,7 +357,8 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       id: `view:${view}`,
       group: "view",
       label: `Go to ${viewLabel(view)}`,
-      keywords: `view switch ${view} ${viewLabel(view)}`,
+      // The names these pages used to have still find them.
+      keywords: `view switch ${view} ${viewLabel(view)} ${FORMER_VIEW_NAMES[view] ?? ""}`,
       action: { type: "view", view },
     });
   }
@@ -381,8 +388,8 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
    * All workspaces included, since Settings is global.
    */
   for (const [section, label, keywords] of [
-    ["telemetry", "Settings: Usage & budget", "usage budget telemetry claude codex plan limits tracking"],
-    ["cloud", "Settings: Cloud", "cloud sync hub connect devices backup"],
+    ["telemetry", "Settings: Usage", "usage budget telemetry claude codex plan limits tracking"],
+    ["cloud", "Settings: Cloud account", "cloud sync hub connect devices backup"],
     ["statuses", "Settings: Statuses", "statuses status vocabulary workflow states"],
   ] as const) {
     commands.push({

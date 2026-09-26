@@ -67,7 +67,9 @@ export const CLOUD_CATEGORY_ID = "cloud";
  */
 export const CLOUD_CATEGORY: SettingCategoryView = {
   id: CLOUD_CATEGORY_ID,
-  label: "Cloud",
+  // "Cloud account": the computer's sign-in to the sync service. Each workspace's own
+  // syncing is "Cloud sync", under Per workspace (settings-shell.ts).
+  label: "Cloud account",
   description:
     "This machine's connection to a sync service, and the two later consents. Stored beside " +
     "staple's home on this computer — never in the workspace, which would replicate it to " +

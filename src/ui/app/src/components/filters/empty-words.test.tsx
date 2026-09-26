@@ -8,7 +8,7 @@ import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters, type FilterState } from "@/lib/filters";
 import type { Issue, IssueRow } from "@/lib/types";
 import { plainEmptyExplanation } from "./empty-words";
-import { FilterExplanation } from "./FilterEmptyState";
+import { FilterExplanation, emptyHeadline, narrowingLine } from "./FilterEmptyState";
 
 const row = (identifier: string, over: Partial<Issue>): IssueRow =>
   ({
@@ -90,5 +90,29 @@ describe("the fix is one tap", () => {
     const headline = /data-filter-explanation-headline[^>]*>([^<]*)</.exec(markup)?.[1] ?? "";
     expect(headline).not.toMatch(FIELD_NAMES);
     expect(markup.indexOf("Show details")).toBeLessThan(markup.indexOf("data-filter-explanation-detail"));
+  });
+});
+
+describe("a filter is named once, never in quotes inside quotes", () => {
+  it("names the search as the search, not “Matches “…””", () => {
+    const why = plainEmptyExplanation(ROWS, state({ dims: { kind: ["bug"] }, text: "zzqq" }), context)!;
+    expect(why.headline).toBe("No task matches all of these filters. Removing the search “zzqq” would show 1 task.");
+    expect(why.actions.map((a) => a.label)).toEqual(["Remove the search “zzqq” · 1 task"]);
+    for (const text of [why.headline, ...why.actions.map((a) => a.label)]) {
+      expect(text).not.toMatch(/“[^”]*“/);
+    }
+  });
+
+  it("leaves a tag's own quotes alone rather than wrapping them again", () => {
+    const why = plainEmptyExplanation(ROWS, state({ dims: { label: ["ui"], kind: ["bug"] } }), context)!;
+    for (const text of [why.headline, ...why.actions.map((a) => a.label)]) {
+      expect(text).not.toMatch(/“[^”]*“/);
+    }
+    expect(why.actions.map((a) => a.label)).toContain("Remove Tagged “ui” · 1 task");
+  });
+
+  it("heads the empty page in sentence case", () => {
+    expect(emptyHeadline("tasks")).toBe("No tasks match these filters");
+    expect(narrowingLine(2, false)).toBe("2 filters are narrowing this view, and done tasks are hidden.");
   });
 });

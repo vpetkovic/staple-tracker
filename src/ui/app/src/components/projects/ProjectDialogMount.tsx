@@ -7,10 +7,13 @@
 import { useEffect, useState } from "react";
 import { onOpenProjectDialog, type ProjectDialogRequest } from "@/lib/shell-events";
 import { ProjectDialog } from "./ProjectDialog";
+import { useBackToClose } from "@/lib/back-to-close";
 
 export function ProjectDialogMount() {
   const [request, setRequest] = useState<ProjectDialogRequest | null>(null);
   useEffect(() => onOpenProjectDialog(setRequest), []);
+  // Phone Back closes the dialog (lib/back-to-close.ts).
+  useBackToClose(request !== null, () => setRequest(null));
   if (!request) return null;
   return <ProjectDialog request={request} onOpenChange={(open) => (open ? undefined : setRequest(null))} />;
 }

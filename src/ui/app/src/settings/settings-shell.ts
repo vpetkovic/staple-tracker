@@ -170,7 +170,7 @@ export function appliesToText(scope: SettingScope, workspace: string): string {
  */
 export const HUB_REGISTRY_CATEGORY: SettingCategoryView = {
   id: "hub-registry",
-  label: "Hub registry",
+  label: "Workspaces on this computer",
   description:
     "Keep the list of workspaces on this computer on your sync service, so another computer can restore or adopt it. " +
     "Stored on this computer, never in a workspace.",
@@ -182,7 +182,9 @@ export const HUB_REGISTRY_CATEGORY: SettingCategoryView = {
 export const WORKSPACE_CLOUD_CATEGORY: SettingCategoryView = {
   id: "workspace-cloud",
   label: "Cloud sync",
-  description: "Whether this workspace syncs with your other devices, and the devices it syncs with.",
+  description:
+    "Whether this workspace syncs with your other devices, and the devices it syncs with. " +
+    "The computer's sign-in to the sync service is Cloud account.",
   scope: "workspace",
   editor: "fields",
   order: 40,

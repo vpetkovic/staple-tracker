@@ -17,6 +17,7 @@ import { UNASSIGNED } from "@/lib/filters";
 /** The menu heading for each dimension, as a plain question-shaped phrase. */
 const DIMENSION_WORDS: Record<string, string> = {
   status: "Status",
+  blocked: "Blocked",
   kind: "Kind of task",
   assignee: "Assigned to",
   priority: "Priority",
@@ -61,6 +62,8 @@ export function chipPhrase(chip: Pick<FilterChip, "dimension" | "value" | "label
   switch (chip.dimension) {
     case "status":
       return sentenceCase(chip.label);
+    case "blocked":
+      return "Blocked";
     case "kind":
       return pluralKind(chip.label);
     case "assignee":

@@ -426,6 +426,7 @@ describe("the registry, the count and the chips", () => {
   it("offers every dimension the ticket asks for, the three new ones last", () => {
     expect(ALL_FILTER_DIMENSIONS.map((d) => d.id)).toEqual([
       "status",
+      "blocked",
       "kind",
       "assignee",
       "priority",

@@ -2369,7 +2369,7 @@ export function CloudSection({ ws, part = "all" }: { ws?: string; part?: CloudPa
 
   if (loadError !== null) {
     return (
-      <Section title="Cloud">
+      <Section title="Cloud account">
         <InlineError>{loadError}</InlineError>
       </Section>
     );

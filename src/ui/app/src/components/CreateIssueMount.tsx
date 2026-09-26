@@ -23,9 +23,12 @@ import { useEffect, useState } from "react";
 import { dialogIsOpen, isTyping } from "@/lib/keyboard";
 import { onOpenCreateIssue } from "@/lib/shell-events";
 import { CreateIssueDialog } from "./CreateIssueDialog";
+import { useBackToClose } from "@/lib/back-to-close";
 
 export function CreateIssueMount() {
   const [open, setOpen] = useState(false);
+  // Phone Back closes the form (lib/back-to-close.ts).
+  useBackToClose(open, () => setOpen(false));
 
   useEffect(() => onOpenCreateIssue(() => setOpen(true)), []);
 

@@ -30,6 +30,14 @@
  * something that deserves it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  afterHistorySettles,
+  leaveOverlays,
+  overlayEntryIsOpen,
+  popOverlay,
+  pushOverlayEntry,
+  replaceUrl,
+} from "@/lib/back-to-close";
 import { onOpenSettings } from "@/lib/shell-events";
 import { rememberWorkspace } from "@/lib/session-workspace";
 import { SettingsDialog } from "./SettingsDialog";
@@ -37,40 +45,42 @@ import { closeAction, readSettingsRoute, withSettingsRoute, type SettingsRoute }
 
 export function SettingsMount() {
   const [route, setRoute] = useState<SettingsRoute | null>(() => readSettingsRoute(window.location.search));
-  /** Did WE push the history entry the shell is open on? Decides how closing leaves. */
-  const pushed = useRef(false);
+  /**
+   * The overlay entry WE pushed when the shell opened (lib/back-to-close.ts), or null after
+   * a deep-link arrival, which pushed nothing. Decides how closing leaves: `closeAction`.
+   */
+  const entry = useRef<string | null>(null);
 
   useEffect(
     () =>
       onOpenSettings((request) => {
         const category = request.section ?? "";
         const workspace = request.workspace ?? "";
-        // Already open (the palette re-dispatching over an open shell): re-point it in place.
-        if (readSettingsRoute(window.location.search)) {
-          window.history.replaceState(null, "", withSettingsRoute(window.location.href, category, workspace || undefined));
-          setRoute(readSettingsRoute(window.location.search));
-          return;
-        }
-        window.history.pushState(null, "", withSettingsRoute(window.location.href, category, workspace || null));
-        pushed.current = true;
-        setRoute({ category, workspace });
+        // Queued behind whatever was closing when this was asked for — the drawer the gear
+        // sits in, the palette — so the entry lands on top of the page, not under a Back.
+        afterHistorySettles(() => {
+          // Already open (the palette re-dispatching over an open shell): re-point it in place.
+          if (readSettingsRoute(window.location.search)) {
+            replaceUrl(withSettingsRoute(window.location.href, category, workspace || undefined));
+            setRoute(readSettingsRoute(window.location.search));
+            return;
+          }
+          entry.current = pushOverlayEntry(withSettingsRoute(window.location.href, category, workspace || null));
+          setRoute({ category, workspace });
+        });
       }),
     [],
   );
 
   useEffect(() => {
-    const onPop = () => {
-      // Whatever entry we are on now, the browser put us there; there is nothing of ours
-      // left to pop, whichever way the next close goes.
-      pushed.current = false;
-      setRoute(readSettingsRoute(window.location.search));
-    };
+    // Back, Forward, or an overlay above the shell closing: the address says what is open.
+    const onPop = () => setRoute(readSettingsRoute(window.location.search));
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   const focusCategory = useCallback((category: string) => {
-    window.history.replaceState(null, "", withSettingsRoute(window.location.href, category));
+    afterHistorySettles(() => replaceUrl(withSettingsRoute(window.location.href, category)));
     setRoute((current) => ({ category, workspace: current?.workspace ?? "" }));
   }, []);
 
@@ -80,20 +90,28 @@ export function SettingsMount() {
    */
   const focusWorkspace = useCallback((workspace: string) => {
     rememberWorkspace(workspace);
-    const current = readSettingsRoute(window.location.search);
-    window.history.replaceState(null, "", withSettingsRoute(window.location.href, current?.category ?? "", workspace));
+    afterHistorySettles(() => {
+      const current = readSettingsRoute(window.location.search);
+      replaceUrl(withSettingsRoute(window.location.href, current?.category ?? "", workspace));
+    });
     setRoute((held) => ({ category: held?.category ?? "", workspace }));
   }, []);
 
   const close = useCallback(() => {
-    if (closeAction(pushed.current) === "history-back") {
-      pushed.current = false;
-      // The popstate handler closes the dialog once the browser has moved.
-      window.history.back();
+    const ours = entry.current;
+    entry.current = null;
+    if (closeAction(ours !== null && overlayEntryIsOpen(ours)) === "history-back") {
+      // Back past our entry and anything above it (a section's own entry on a phone); the
+      // popstate handler closes the dialog once the browser has moved.
+      popOverlay(ours!);
       return;
     }
-    window.history.replaceState(null, "", withSettingsRoute(window.location.href, null));
-    setRoute(null);
+    // A deep-link arrival: step out of any overlay entries above the page, then strip the
+    // parameters in place.
+    leaveOverlays(() => {
+      replaceUrl(withSettingsRoute(window.location.href, null));
+      setRoute(null);
+    });
   }, []);
 
   const onOpenChange = useCallback(

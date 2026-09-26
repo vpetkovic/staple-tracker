@@ -84,9 +84,12 @@ describe("an address that says nothing about the page", () => {
 describe("the other features' parameters survive", () => {
   it("keeps settings, settings-ws, graph and token verbatim while rewriting its own", () => {
     const href = "http://127.0.0.1:4400/?token=t0k&graph=g1&settings=statuses&settings-ws=pinecone&view=graph&status=todo";
+    const onGraph = new URL(withShellState(href, state({ view: "graph" })));
+    expect(onGraph.searchParams.get("graph")).toBe("g1");
     const next = new URL(withShellState(href, state({ view: "queue" })));
     expect(next.searchParams.get("token")).toBe("t0k");
-    expect(next.searchParams.get("graph")).toBe("g1");
+    // The graph's layout is the Graph's: it does not follow the reader to another page.
+    expect(next.searchParams.get("graph")).toBeNull();
     expect(next.searchParams.get("settings")).toBe("statuses");
     expect(next.searchParams.get("settings-ws")).toBe("pinecone");
     expect(next.searchParams.get("view")).toBe("queue");

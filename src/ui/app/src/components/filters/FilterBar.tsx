@@ -30,7 +30,7 @@ import { SortByMenu } from "@/components/view-options/SortByMenu";
 import { Input } from "@/components/ui/input";
 import { countActiveFilters } from "@/lib/filter-dimensions";
 import { withShowDone, withText } from "@/lib/filters";
-import { useSession } from "@/lib/session";
+import { useSession, viewControls } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { FilterMenu } from "./FilterMenu";
 import { HeaderButton } from "./HeaderButton";
@@ -43,6 +43,11 @@ export function FilterBar() {
   /* R4b: counts BOTH registries, so the badge does not go quiet on a milestone filter. */
   const active = countActiveFilters(filters);
   const compact = useCompactHeader();
+  /** Only the controls this view honours (`viewControls` in lib/session.ts). */
+  const controls = viewControls(session.view);
+  /** What Done shows or hides here: finished milestones on Milestones, finished tasks elsewhere. */
+  const doneNoun = session.view === "milestones" ? "finished milestones" : "done and cancelled tasks";
+  const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
   /**
    * The folded search. Open while the reader asked for it or while the box holds text —
@@ -55,100 +60,134 @@ export function FilterBar() {
     if (compact && searchOpen) searchRef.current?.focus();
   }, [compact, searchOpen]);
 
+  const clearAndFold = () => {
+    setFilters(withText(filters, ""));
+    setSearchOpen(false);
+  };
+
+  const searchField = (
+    <div className={cn("relative", compact && "min-w-0 flex-1")}>
+      <Search
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-text-tertiary",
+          compact && "left-3 size-5",
+        )}
+      />
+      <Input
+        ref={searchRef}
+        value={filters.text}
+        onChange={(event) => setFilters(withText(filters, event.currentTarget.value))}
+        onBlur={() => {
+          // Folding back happens only when there is nothing to show.
+          if (compact && filters.text === "") setSearchOpen(false);
+        }}
+        onKeyDown={(event) => {
+          // Escape clears rather than blurs. A search box you cannot empty without
+          // selecting all and deleting is the smallest possible papercut, repeated.
+          if (event.key === "Escape" && filters.text !== "") {
+            event.stopPropagation();
+            setFilters(withText(filters, ""));
+          }
+        }}
+        placeholder={compact ? "Search tasks" : "Search"}
+        aria-label="Search tasks"
+        enterKeyHint="search"
+        data-filter-search
+        className={cn(
+          "h-7 pl-7 text-[13px]",
+          compact
+            ? "h-11 w-full rounded-full border-input bg-surface-hover pr-11 pl-10 text-[16px]"
+            : "w-[9rem] max-w-[36vw] border-transparent bg-transparent shadow-none hover:border-input",
+          "focus-visible:border-ring",
+        )}
+      />
+      {compact ? (
+        <button
+          type="button"
+          aria-label="Close search"
+          data-filter-search-close
+          onClick={clearAndFold}
+          className="absolute top-1/2 right-0 flex size-11 -translate-y-1/2 items-center justify-center rounded-full text-text-tertiary hover:text-foreground"
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+      ) : null}
+    </div>
+  );
+
+  /**
+   * A PHONE SEARCHES ON ITS OWN ROW. The header has room for the view's name and five 44px
+   * controls and nothing more, so an open search used to push the row past the screen and
+   * scroll the whole page sideways. While searching (or while a query is held) the field
+   * takes the header row over, full width, the way a phone's own apps search: the title and
+   * the Group/Sort/Filter/Done buttons step aside and come back when the search closes.
+   */
+  if (compact && searchShown && controls.filter) {
+    return (
+      <div data-search-mode className="absolute inset-0 z-10 flex items-center gap-1 bg-card px-2">
+        {searchField}
+      </div>
+    );
+  }
+
   return (
     <div className="ml-auto flex shrink-0 items-center gap-0.5">
-      <GroupByMenu compact={compact} />
-      <SortByMenu sort={session.sort} onChange={session.setSort} compact={compact} />
+      {controls.arrange ? (
+        <>
+          <GroupByMenu compact={compact} />
+          <SortByMenu sort={session.sort} onChange={session.setSort} compact={compact} />
+        </>
+      ) : null}
 
-      <FilterMenu rows={rows} state={filters} context={session.filterContext} onChange={setFilters}>
-        <HeaderButton
-          icon={<ListFilter aria-hidden />}
-          label="Filter"
-          aria-label="Add a filter"
-          compact={compact}
-          active={active > 0}
-          data-filter-add
-          badge={
-            active > 0 ? (
-              <span
-                data-filter-count
-                className="ml-0.5 min-w-4 rounded-full bg-primary px-1 text-center font-mono text-[10px] leading-4 text-primary-foreground tabular-nums"
-              >
-                {active}
-              </span>
-            ) : null
-          }
-        />
-      </FilterMenu>
+      {controls.filter ? (
+        <FilterMenu rows={rows} state={filters} context={session.filterContext} onChange={setFilters}>
+          <HeaderButton
+            icon={<ListFilter aria-hidden />}
+            label="Filter"
+            aria-label="Add a filter"
+            compact={compact}
+            active={active > 0}
+            data-filter-add
+            badge={
+              active > 0 ? (
+                <span
+                  data-filter-count
+                  className="ml-0.5 min-w-4 rounded-full bg-primary px-1 text-center font-mono text-[10px] leading-4 text-primary-foreground tabular-nums"
+                >
+                  {active}
+                </span>
+              ) : null
+            }
+          />
+        </FilterMenu>
+      ) : null}
 
       {/*
         Pressed means "done is on the page". The default is unpressed, and the icon says
         which way round it is without reading the label — an eye with a line through it is
         the only state that needs explaining, and it is the one that is true by default.
       */}
-      <HeaderButton
-        icon={filters.showDone ? <Eye aria-hidden /> : <EyeOff aria-hidden />}
-        label="Done"
-        aria-pressed={filters.showDone}
-        aria-label={filters.showDone ? "Hide done and cancelled tasks" : "Show done and cancelled tasks"}
-        hint={
-          filters.showDone
-            ? "Done and cancelled tasks are shown — click to hide them"
-            : "Done and cancelled tasks are hidden — click to show them"
-        }
-        compact={compact}
-        active={filters.showDone}
-        data-filter-done={filters.showDone ? "shown" : "hidden"}
-        onClick={() => setFilters(withShowDone(filters, !filters.showDone))}
-      />
+      {controls.done ? (
+        <HeaderButton
+          icon={filters.showDone ? <Eye aria-hidden /> : <EyeOff aria-hidden />}
+          label="Done"
+          aria-pressed={filters.showDone}
+          aria-label={`${filters.showDone ? "Hide" : "Show"} ${doneNoun}`}
+          hint={
+            filters.showDone
+              ? `${sentence(doneNoun)} are shown — click to hide them`
+              : `${sentence(doneNoun)} are hidden — click to show them`
+          }
+          compact={compact}
+          active={filters.showDone}
+          data-filter-done={filters.showDone ? "shown" : "hidden"}
+          onClick={() => setFilters(withShowDone(filters, !filters.showDone))}
+        />
+      ) : null}
 
-      {searchShown ? (
-        <div className="relative">
-          <Search
-            aria-hidden
-            className="pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-text-tertiary"
-          />
-          <Input
-            ref={searchRef}
-            value={filters.text}
-            onChange={(event) => setFilters(withText(filters, event.currentTarget.value))}
-            onBlur={() => {
-              // Folding back happens only when there is nothing to show.
-              if (compact && filters.text === "") setSearchOpen(false);
-            }}
-            onKeyDown={(event) => {
-              // Escape clears rather than blurs. A search box you cannot empty without
-              // selecting all and deleting is the smallest possible papercut, repeated.
-              if (event.key === "Escape" && filters.text !== "") {
-                event.stopPropagation();
-                setFilters(withText(filters, ""));
-              }
-            }}
-            placeholder="Search"
-            aria-label="Search tasks"
-            data-filter-search
-            className={cn(
-              "h-7 pl-7 text-[13px]",
-              compact ? "h-11 w-[min(12rem,50vw)] pr-11 text-[16px]" : "w-[9rem] max-w-[36vw]",
-              "border-transparent bg-transparent shadow-none",
-              "hover:border-input focus-visible:border-ring",
-            )}
-          />
-          {compact ? (
-            <button
-              type="button"
-              aria-label="Close search"
-              data-filter-search-close
-              onClick={() => {
-                setFilters(withText(filters, ""));
-                setSearchOpen(false);
-              }}
-              className="absolute top-1/2 right-0 flex size-11 -translate-y-1/2 items-center justify-center rounded text-text-tertiary hover:text-foreground"
-            >
-              <X className="size-3.5" aria-hidden />
-            </button>
-          ) : null}
-        </div>
+      {!controls.filter ? null : searchShown ? (
+        searchField
       ) : (
         <HeaderButton
           icon={<Search aria-hidden />}

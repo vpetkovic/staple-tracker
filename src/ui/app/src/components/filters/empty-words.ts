@@ -42,6 +42,17 @@ function phraseOf(state: FilterState, context: FilterContext, id: string): strin
   return phrases.join(" or ");
 }
 
+/**
+ * A filter, named inside a sentence. Quoted when its words could run into the sentence
+ * ("Remove “In progress”"); NOT quoted again when the words already carry quotes — the
+ * search reads "the search “login”" and a tag "Tagged “ui”", never "“Matches “login””".
+ */
+function named(state: FilterState, context: FilterContext, id: string): string {
+  if (id === "text") return `the search “${state.text.trim()}”`;
+  const phrase = phraseOf(state, context, id);
+  return /[“”"]/.test(phrase) ? phrase : `“${phrase}”`;
+}
+
 const removal = (id: string) => (state: FilterState) => (id === "text" ? withText(state, "") : withDimension(state, id, []));
 
 /** `null` when nothing is filtering, which is not a filtered-empty page. */
@@ -52,7 +63,7 @@ export function plainEmptyExplanation(
 ): PlainEmptyExplanation | null {
   const why = explainNoMatches(rows, state, context);
   if (!why.sentence) return null;
-  const quoted = (id: string) => `“${phraseOf(state, context, id)}”`;
+  const quoted = (id: string) => named(state, context, id);
 
   if (why.impossible) {
     const [a, b] = why.dimensions;

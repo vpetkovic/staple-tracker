@@ -44,6 +44,7 @@ import {
   Settings,
   SquarePen,
   Sun,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
@@ -340,21 +341,38 @@ export function NavRail({
       {/* ── the switcher, and the way to put the rail away. 40px, level with the content header. ── */}
       <div className="flex min-h-10 shrink-0 items-center gap-1 py-1 pr-2 pl-2.5">
         <WorkspaceSwitcher />
+        {/*
+          A desk collapses the rail; a phone's drawer has nothing to collapse, so it offers a
+          plain close instead (the scrim and the system Back close it too).
+        */}
         <Hint label="Hide navigation" keys="[">
           <Button
             variant="ghost"
             size="icon-xs"
             aria-label="Hide navigation"
             onClick={onHide}
-            className="size-7 text-text-tertiary hover:text-foreground max-md:size-11"
+            className="size-7 text-text-tertiary hover:text-foreground max-md:hidden"
           >
             <PanelLeftClose className="size-4" />
           </Button>
         </Hint>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Close menu"
+          data-nav-close
+          onClick={onHide}
+          className="size-11 text-text-tertiary hover:text-foreground md:hidden"
+        >
+          <X className="size-5" />
+        </Button>
       </div>
 
-      {/* ── the two global verbs on one row: make a task, find anything ── */}
-      <div className="flex h-7 shrink-0 items-center gap-1.5 px-2.5 max-md:h-11">
+      {/*
+        ── the two global verbs on one row: make a task, find anything ──
+        Not in the phone's drawer: the phone's top bar already has both, one tap away.
+      */}
+      <div className="flex h-7 shrink-0 items-center gap-1.5 px-2.5 max-md:hidden">
         <Hint label="New task" keys="C">
           <Button
             variant="outline"

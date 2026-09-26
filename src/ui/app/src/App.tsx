@@ -47,6 +47,7 @@ import {
   withDimension,
   type FilterState,
 } from "@/lib/filters";
+import { readMilestoneList } from "@/lib/milestone-list";
 import { projectsForWorkspace } from "@/lib/projects";
 import {
   DEFAULT_VIEW,
@@ -64,6 +65,7 @@ import {
   type ShellUrlState,
 } from "@/lib/session-url";
 import { rememberWorkspace } from "@/lib/session-workspace";
+import { afterHistorySettles, isOwnTraversal, leaveOverlays, replaceUrl } from "@/lib/back-to-close";
 import { useWorkspaceSettings } from "@/lib/settings";
 import type { SortPref } from "@/lib/sort-modes";
 import type { MilestoneListRow, MilestoneView, ProjectRow } from "@/lib/types";
@@ -282,7 +284,15 @@ export function App() {
       bootstrap.data?.mode === "hub" && ws === "" ? bootstrap.data.workspaces.map((entry) => entry.slug) : undefined,
     [bootstrap.data, ws],
   );
-  const settings = useWorkspaceSettings({ ws: ws || undefined, all: vocabularyOfAll, version, onAuthError });
+  // Nothing is asked before the workspace list is known (see `wait`): never a per-workspace
+  // read for a workspace nobody chose.
+  const settings = useWorkspaceSettings({
+    ws: ws || undefined,
+    all: vocabularyOfAll,
+    version,
+    onAuthError,
+    wait: bootstrap.data === undefined,
+  });
 
   /**
    * THE MILESTONES, FOR THE FILTER — R4b (STA-187).
@@ -302,34 +312,18 @@ export function App() {
    * finished work is on the page — the same default, asked once.
    */
   const showDone = filters.showDone;
-  /**
-   * ALL WORKSPACES ASKS EVERY WORKSPACE. `/api/milestones` with no `ws` answers for the
-   * server's FIRST registered workspace, so on All workspaces the menu used to offer only
-   * that workspace's milestones — the first-workspace fallback, one level down. Each
-   * workspace is read on its own and the answers joined, every row keeping the workspace
-   * it came from so its members are fetched from the right place. A workspace that cannot
-   * answer (no milestone kind configured) contributes nothing rather than failing the menu.
-   */
+  /** All workspaces asks every workspace: `readMilestoneList` in lib/milestone-list.ts. */
   const booted = bootstrap.data !== undefined;
   const allWorkspaces = bootstrap.data?.mode === "hub" && ws === "";
   const workspaceSlugs = (bootstrap.data?.workspaces ?? []).map((entry) => entry.slug).join(",");
-  const loadMilestoneList = useCallback(async (): Promise<{ row: MilestoneListRow; ws: string }[]> => {
-    // Before bootstrap nobody knows whether "" means All workspaces; ask nothing yet.
-    if (!booted) return [];
-    if (!allWorkspaces) return (await getMilestones({ ws, all: showDone })).map((row) => ({ row, ws }));
-    const lists = await Promise.all(
-      (workspaceSlugs ? workspaceSlugs.split(",") : []).map((slug) =>
-        getMilestones({ ws: slug, all: showDone }).then(
-          (rows) => rows.map((row) => ({ row, ws: slug })),
-          (error: unknown) => {
-            if (error instanceof AuthError) throw error;
-            return [];
-          },
-        ),
+  const loadMilestoneList = useCallback(
+    () =>
+      readMilestoneList(
+        { booted, allWorkspaces, ws, workspaces: workspaceSlugs ? workspaceSlugs.split(",") : [], showDone },
+        getMilestones,
       ),
-    );
-    return lists.flat();
-  }, [ws, showDone, booted, allWorkspaces, workspaceSlugs]);
+    [ws, showDone, booted, allWorkspaces, workspaceSlugs],
+  );
   const milestoneList = useResource<{ row: MilestoneListRow; ws: string }[]>(
     loadMilestoneList,
     [ws, showDone, booted, allWorkspaces, workspaceSlugs, version],
@@ -498,16 +492,28 @@ export function App() {
     [ws, view, filters, milestoneFocus],
   );
   useEffect(() => {
-    const href = withShellState(window.location.href, shellState);
     const navigating = isNavigation(lastSynced.current, shellState);
     lastSynced.current = shellState;
-    if (href === window.location.href) return;
-    if (navigating) window.history.pushState(null, "", href);
-    else window.history.replaceState(null, "", href);
+    // The address is built when the write RUNS, not now: a write queued behind an overlay
+    // closing (lib/back-to-close.ts) must see the address the traversal landed on.
+    const write = () => {
+      const href = withShellState(window.location.href, shellState);
+      if (href === window.location.href) return;
+      if (navigating) window.history.pushState(null, "", href);
+      else replaceUrl(href);
+    };
+    // Going somewhere closes whatever is open on top first, so Back from the new page
+    // returns to the old page and not to a stale overlay entry of it.
+    if (navigating) leaveOverlays(write);
+    else afterHistorySettles(write);
   }, [shellState]);
 
   useEffect(() => {
     const onPop = () => {
+      // An overlay closing (or being closed for a navigation) steps back through entries at
+      // the page's own address, or at the address the page is leaving: neither is a request
+      // to go anywhere.
+      if (isOwnTraversal()) return;
       const next = readShellUrl(window.location.search);
       if (!next) return;
       lastSynced.current = next;

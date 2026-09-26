@@ -24,7 +24,7 @@
  * somewhere predictable, and the only predictable place is where a new tab starts.
  */
 import { Check, X } from "lucide-react";
-import { forwardRef, useMemo, useState, type ComponentProps } from "react";
+import { forwardRef, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Command, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -52,6 +52,7 @@ import {
   type FilterPreset,
   type PresetContext,
 } from "./presets";
+import { useBackToClose } from "@/lib/back-to-close";
 
 const FOCUS = "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
 
@@ -184,6 +185,7 @@ export function FilterChipStrip({
 }: FilterChipStripProps) {
   const presets = useMemo(() => filterPresets(presetContext), [presetContext]);
   const [asking, setAsking] = useState(false);
+  useBackToClose(asking, () => setAsking(false));
   const covered = coveredByPresets(filters, presets);
   const chips = activeFilterChips(filters, context).filter(
     (chip) => !covered.has(`${chip.dimension}:${chip.value}`),
@@ -197,6 +199,17 @@ export function FilterChipStrip({
    */
   const litPresets = presets.filter((preset) => presetActive(filters, preset));
   const unlitPresets = presets.filter((preset) => !presetActive(filters, preset));
+
+  /**
+   * AFTER A TAP, THE STRIP GOES BACK TO ITS START. The chip you tapped moves to the front
+   * (it is on now), but a strip left scrolled to where your thumb was would leave it — and
+   * Clear all — off the left edge. Whenever what is on changes, the strip returns to 0.
+   */
+  const strip = useRef<HTMLDivElement>(null);
+  const onSignature = [...litPresets.map((preset) => preset.id), ...chips.map((chip) => `${chip.dimension}:${chip.value}`)].join("|");
+  useLayoutEffect(() => {
+    if (strip.current) strip.current.scrollLeft = 0;
+  }, [onSignature]);
 
   /** One quick filter. "My tasks" with nobody known as "me" asks first, once, then filters. */
   const renderPreset = (preset: FilterPreset) => {
@@ -226,6 +239,7 @@ export function FilterChipStrip({
 
   return (
     <div
+      ref={strip}
       data-filter-chips
       role="toolbar"
       aria-label="Quick filters"
@@ -307,6 +321,9 @@ export function FilterChipStrip({
           className={cn(
             HIT,
             "rounded-md px-2 text-[12px] font-medium whitespace-nowrap text-text-secondary hover:text-foreground max-md:text-[14px]",
+            // On a phone it never scrolls out of reach: when the chips before it are wider
+            // than the screen it waits at the right edge, over a fade, until you get there.
+            "max-md:sticky max-md:right-0 max-md:z-[1] max-md:bg-card max-md:pl-3 max-md:shadow-[-12px_0_12px_-4px_var(--color-card)]",
             FOCUS,
           )}
         >
@@ -316,31 +333,7 @@ export function FilterChipStrip({
 
       {filtering && unlitPresets.length > 0 ? <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" /> : null}
 
-      {unlitPresets.map((preset) => {
-        const on = presetActive(filters, preset);
-        if (preset.id === MY_TASKS_ID && !me) {
-          // Nobody is "me" yet: the first tap asks, once, and then filters.
-          return (
-            <Popover key={preset.id} open={asking} onOpenChange={setAsking}>
-              <PopoverTrigger asChild>
-                <PresetChip preset={preset} on={false} />
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-[min(18rem,calc(100vw-1.5rem))] p-0">
-                <WhoAmI
-                  rows={rows}
-                  onChoose={(name) => {
-                    setAsking(false);
-                    onChooseMe?.(name);
-                    setFilters(withDimension(filters, "assignee", [name]));
-                  }}
-                />
-              </PopoverContent>
-            </Popover>
-          );
-        }
-        return <PresetChip key={preset.id} preset={preset} on={on} onToggle={() => setFilters(togglePreset(filters, preset))} />;
-      })}
-
+      {unlitPresets.map(renderPreset)}
     </div>
   );
 }

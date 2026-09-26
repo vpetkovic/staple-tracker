@@ -22,7 +22,7 @@
  * lib/session-url.ts) and is remembered as the default answer to "which workspace?".
  */
 import { Check, ChevronsUpDown } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCompactHeader } from "@/components/filters/useCompactHeader";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -37,6 +37,7 @@ import {
   switcherSearches,
   switcherTriggerLabel,
 } from "./switcher-model";
+import { useBackToClose } from "@/lib/back-to-close";
 
 /** The brand mark the trigger wears as its avatar — the app's own name did not leave the page. */
 function BrandMark({ large = false }: { large?: boolean }) {
@@ -70,8 +71,33 @@ function SwitcherList({ onChosen, phone }: { onChosen: () => void; phone: boolea
   const shown = filterSwitcherRows(rows, query, prefixes);
   const searches = switcherSearches(session);
 
+  /**
+   * THE KEYBOARD WORKS AT EVERY SIZE. With a search box, cmdk hears the arrows through it.
+   * Without one (six workspaces or fewer) nothing inside the list had focus, so the arrows
+   * went nowhere; the list itself now takes focus on a desk, starting on the workspace you
+   * are on, and Up/Down (wrapping), Home/End, Enter and Escape work exactly as in the
+   * command palette. A phone opens it as a sheet and focuses nothing.
+   */
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (phone) return;
+    // The search box when there is one, otherwise the list.
+    const target = listRef.current?.querySelector<HTMLElement>("[cmdk-input]") ?? listRef.current;
+    target?.focus({ preventScroll: true });
+  }, [phone, searches]);
+  const current = rows.find((row) => row.current);
+
   return (
-    <Command shouldFilter={false} loop data-workspace-list className="bg-transparent">
+    <Command
+      ref={listRef}
+      shouldFilter={false}
+      loop
+      defaultValue={current ? current.value || "__all__" : undefined}
+      tabIndex={!phone && !searches ? -1 : undefined}
+      aria-label="Workspaces"
+      data-workspace-list
+      className="bg-transparent outline-none"
+    >
       {searches ? (
         <CommandInput
           value={query}
@@ -120,6 +146,8 @@ export function WorkspaceSwitcher({ variant = "rail" }: { variant?: "rail" | "ba
   const session = useSession();
   const phone = useCompactHeader();
   const [open, setOpen] = useState(false);
+  // Phone Back closes the sheet (and the desktop list) rather than leaving the page.
+  useBackToClose(open, () => setOpen(false));
   const label = switcherTriggerLabel(session);
   const hub = session.mode === "hub";
 
@@ -173,7 +201,13 @@ export function WorkspaceSwitcher({ variant = "rail" }: { variant?: "rail" | "ba
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align="start" className="w-[288px] p-1" data-workspace-popover>
+      <PopoverContent
+        align="start"
+        className="w-[288px] p-1"
+        data-workspace-popover
+        // The list focuses itself (above); Radix focusing the first tabbable would pre-empt it.
+        onOpenAutoFocus={(event) => event.preventDefault()}
+      >
         <div className="px-2.5 pt-1.5 pb-1 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">
           {hub ? "Switch workspace" : "Workspace"}
         </div>

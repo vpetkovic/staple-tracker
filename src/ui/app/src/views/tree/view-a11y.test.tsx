@@ -215,7 +215,7 @@ describe("the active filter state is announced, not only drawn", () => {
       { filters: state },
     );
 
-    expect(markup).toContain("no tasks match these filters");
+    expect(markup).toContain("No tasks match these filters");
     expect(markup).toContain("2 filters are narrowing this view");
     expect(markup).toContain("done tasks are hidden");
     // And the sentence that names WHICH chip to take off, with the number it would restore.

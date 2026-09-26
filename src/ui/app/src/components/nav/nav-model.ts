@@ -88,7 +88,8 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   },
   {
     id: "machine",
-    label: "Machine",
+    // Settings' own name for the computer-wide section ("This machine").
+    label: "This machine",
     items: MACHINE_VIEWS.map(item),
   },
 ];

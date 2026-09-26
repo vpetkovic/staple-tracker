@@ -28,10 +28,12 @@ import { useSession } from "@/lib/session";
 // `Button` left with the trigger: the recipe is HeaderButton's now, shared with the row.
 import { GROUP_BY_OPTIONS, type GroupBy } from "@/lib/view-prefs";
 import { cn } from "@/lib/utils";
+import { useBackToClose } from "@/lib/back-to-close";
 
 export function GroupByMenu({ compact = false }: { compact?: boolean } = {}) {
   const session = useSession();
   const [open, setOpen] = useState(false);
+  useBackToClose(open, () => setOpen(false));
   const grouped = session.groupBy !== "none";
   // "Group" when off, "Group: Status" when on — the label carries the state, so nothing
   // has to be inferred from a highlight.

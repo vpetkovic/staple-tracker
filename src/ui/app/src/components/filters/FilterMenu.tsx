@@ -55,6 +55,7 @@ import type { FilterState } from "@/lib/filters";
 import type { IssueRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { dimensionWords } from "./chip-words";
+import { useBackToClose } from "@/lib/back-to-close";
 
 export interface FilterMenuProps {
   /** The rows the options are derived from — the unfiltered page, not the visible one. */
@@ -78,6 +79,7 @@ export function FilterMenu({
   children,
 }: FilterMenuProps) {
   const [open, setOpen] = useState(false);
+  useBackToClose(open, () => setOpen(false));
   const [page, setPage] = useState<string | null>(openAt ?? null);
 
   // Reset on every open rather than on close: closing mid-drill and reopening should

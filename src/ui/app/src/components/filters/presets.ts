@@ -22,7 +22,7 @@
  * kind. "My tasks" needs to know who "me" is — the page has no login — so it asks once
  * which assignee is you and remembers the answer in this browser.
  */
-import { UNASSIGNED, withDimension, type FilterState } from "@/lib/filters";
+import { BLOCKED_VALUE, UNASSIGNED, withDimension, type FilterState } from "@/lib/filters";
 import type { StatusCategory } from "@/lib/types";
 
 export interface FilterPreset {
@@ -68,8 +68,10 @@ export function filterPresets(context: PresetContext): FilterPreset[] {
     {
       id: "blocked",
       label: "Blocked",
-      description: "Tasks that cannot move until something else happens",
-      dims: { status: statusesIn(context, "blocked", "blocked") },
+      description: "Tasks that cannot move until something else happens: parked as blocked, or waiting on another task",
+      // Not the blocked statuses alone: a task waiting on another task is blocked whatever
+      // its status says (`isBlockedRow` in lib/filters.ts, the rule the "Blocked by" badge uses).
+      dims: { blocked: [BLOCKED_VALUE] },
     },
     {
       id: "high-priority",

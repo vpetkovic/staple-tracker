@@ -37,13 +37,21 @@
  * summary counts both, one Cancel that drops both, one guard, and one conflict banner
  * for either half moving underneath.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, Ellipsis, Plus, Trash2 } from "lucide-react";
 import { StatusIcon } from "@/components/task-list/StatusIcon";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { KindAppearance } from "@/lib/kind-appearance";
+import { cn } from "@/lib/utils";
 import type { Refusal } from "@/lib/refusal";
 import { titleCaseId, type SettingOp } from "@/lib/settings";
 import type { StatusCategory, VocabularyOp } from "@/lib/types";
@@ -118,6 +126,39 @@ export interface VocabularyListProps {
   glyphs?: GlyphEditing;
   /** The shell's unsaved-changes guard listens here. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Rows (a table, on a wide pane) or cards (a narrow one). Absent: decided by the width
+   * the list actually has (`useListLayout`), so a phone and a tablet's settings pane get
+   * cards and a desk gets the table. Tests pass it to render either.
+   */
+  layout?: VocabularyLayout;
+}
+
+export type VocabularyLayout = "table" | "cards";
+
+/**
+ * Below this many pixels the table's fixed columns (handle, id, label, category, usage,
+ * three buttons ≈ 640px) no longer fit, and each entry becomes a card.
+ */
+export const VOCABULARY_CARDS_BELOW = 640;
+
+/** Which layout the list's own width allows — measured, and re-measured as it changes. */
+function useListLayout(forced: VocabularyLayout | undefined): [React.RefObject<HTMLDivElement | null>, VocabularyLayout] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState<VocabularyLayout>(() =>
+    // Before the first measurement: a narrow window cannot hold the table anywhere.
+    typeof window !== "undefined" && window.innerWidth < 1000 ? "cards" : "table",
+  );
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (forced || !node || typeof ResizeObserver === "undefined") return;
+    const measure = () => setMeasured(node.clientWidth < VOCABULARY_CARDS_BELOW ? "cards" : "table");
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [forced]);
+  return [ref, forced ?? measured];
 }
 
 const NO_MIGRATE = "__none__";
@@ -132,7 +173,9 @@ function RowFields({
   glyph,
   onRename,
   onRecategorize,
+  cards = false,
 }: {
+  cards?: boolean;
   row: VocabularyRow;
   target: "statuses" | "kinds";
   categories?: readonly StatusCategory[];
@@ -150,6 +193,91 @@ function RowFields({
     if (labelChanged(row, label)) onRename(row.id, label);
     else setLabel(row.label);
   }, [label, onRename, row]);
+
+  const labelInput = (
+    <Input
+      value={label}
+      aria-label={`Label for ${row.id}`}
+      disabled={disabled}
+      onChange={(event) => setLabel(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          setLabel(row.label);
+        }
+      }}
+      className={cards ? "h-11 min-w-0 flex-1 text-[16px]" : "h-7 min-w-0 flex-1 text-[13px]"}
+    />
+  );
+
+  /**
+   * THE CARD: what a person reads first on top — the name, editable in place, full width —
+   * then the group it belongs to and how many tasks use it, then the id in small print for
+   * whoever needs it. Every control is a 44px target.
+   */
+  if (cards) {
+    return (
+      <div data-vocabulary-card={row.id} className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="flex items-center gap-2">
+          {target === "statuses" && row.category ? (
+            <StatusIcon status={row.id} category={row.category} className="shrink-0" />
+          ) : null}
+          {glyph ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              data-glyph-change={row.id}
+              aria-label={`Change glyph for ${row.label}`}
+              aria-expanded={glyph.open}
+              aria-controls={glyph.panelId}
+              disabled={disabled}
+              onClick={glyph.onToggle}
+              className="size-11 shrink-0"
+            >
+              <GlyphPreview kind={row.id} appearance={glyph.appearance} size={PREVIEW_SIZES.row} />
+            </Button>
+          ) : null}
+          {labelInput}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          {target === "statuses" && categories ? (
+            <Select
+              value={row.category}
+              disabled={disabled}
+              onValueChange={(value) => onRecategorize(row.id, value as StatusCategory)}
+            >
+              <SelectTrigger
+                aria-label={`Category for ${row.id}`}
+                className="h-11 min-w-[9rem] flex-1 text-[15px] data-[size=default]:h-11"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {categories.map((category) => (
+                  <SelectItem key={category} value={category} className="min-h-11">
+                    {category}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          {usageCount === null ? null : (
+            <span data-vocabulary-usage className="text-[13px] whitespace-nowrap text-muted-foreground">
+              {usageCount === 1 ? "Used by 1 task" : `Used by ${usageCount} tasks`}
+            </span>
+          )}
+        </div>
+        <span className="truncate font-mono text-[11px] text-text-tertiary" title={row.id}>
+          ID {row.id}
+        </span>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -184,23 +312,7 @@ function RowFields({
         {row.id}
       </span>
 
-      <Input
-        value={label}
-        aria-label={`Label for ${row.id}`}
-        disabled={disabled}
-        onChange={(event) => setLabel(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            commit();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            setLabel(row.label);
-          }
-        }}
-        className="h-7 min-w-0 flex-1 text-[13px]"
-      />
+      {labelInput}
 
       {target === "statuses" && categories ? (
         <Select
@@ -290,7 +402,10 @@ export function VocabularyList({
   write,
   glyphs,
   onDirtyChange,
+  layout: forcedLayout,
 }: VocabularyListProps) {
+  const [measureRef, layout] = useListLayout(forcedLayout);
+  const cards = layout === "cards";
   const served = useMemo(() => emptyDraft(rows, usage), [rows, usage]);
   const draft = useDraft<VocabularyDraft>({
     served,
@@ -383,16 +498,19 @@ export function VocabularyList({
         <ConflictBanner what={`${noun} list`} onReload={cancelAll} onKeep={keepAll} />
       ) : null}
 
-      <div className="flex items-center gap-2 px-2 text-[11px] tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">
-        <span className="w-[1.6rem] shrink-0" />
-        {target === "statuses" ? <span className="w-4 shrink-0" /> : null}
-        {glyphs ? <span className="w-8 shrink-0">glyph</span> : null}
-        <span className="w-36 shrink-0">id</span>
-        <span className="flex-1">label</span>
-        {target === "statuses" ? <span className="w-[8.5rem] shrink-0">category</span> : null}
-        <span className="w-16 shrink-0 text-right">in use</span>
-        <span className="w-[6.5rem] shrink-0" />
-      </div>
+      <div ref={measureRef} data-vocabulary-layout={layout} />
+      {cards ? null : (
+        <div className="flex items-center gap-2 px-2 text-[11px] tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">
+          <span className="w-[1.6rem] shrink-0" />
+          {target === "statuses" ? <span className="w-4 shrink-0" /> : null}
+          {glyphs ? <span className="w-8 shrink-0">glyph</span> : null}
+          <span className="w-36 shrink-0">id</span>
+          <span className="flex-1">label</span>
+          {target === "statuses" ? <span className="w-[8.5rem] shrink-0">category</span> : null}
+          <span className="w-16 shrink-0 text-right">in use</span>
+          <span className="w-[6.5rem] shrink-0" />
+        </div>
+      )}
 
       <ReorderList
         items={painted}
@@ -401,6 +519,7 @@ export function VocabularyList({
         disabled={disabled}
         onMove={onMove}
         rowState={(row) => ({ invalid: row.id in rowErrors })}
+        cards={cards}
         renderItem={(row) => (
           <RowFields
             // The label, not just the id: a committed rename, Cancel and Reload each
@@ -423,19 +542,68 @@ export function VocabularyList({
             }
             onRename={(id, label) => edit(renameOp(id, label))}
             onRecategorize={(id, category) => edit(recategorizeOp(id, category))}
+            cards={cards}
           />
         )}
-        renderActions={(row) => (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Remove ${row.label}`}
-            disabled={disabled}
-            onClick={() => setConfirming((open) => (open === row.id ? null : row.id))}
-          >
-            <Trash2 className="size-3.5" aria-hidden />
-          </Button>
-        )}
+        renderActions={(row, index) =>
+          cards ? (
+            /*
+              One ⋯ menu instead of four small buttons: moving and removing are the rare
+              things done to an entry, and on a narrow card they would crowd out its name.
+            */
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`More for ${row.label}`}
+                  data-vocabulary-more={row.id}
+                  disabled={disabled}
+                  className="size-11 shrink-0"
+                >
+                  <Ellipsis className="size-5" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-48">
+                <DropdownMenuItem
+                  className="min-h-11 text-[15px]"
+                  disabled={index === 0}
+                  onSelect={() => onMove(index, index - 1)}
+                >
+                  <ArrowUp aria-hidden />
+                  Move up
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="min-h-11 text-[15px]"
+                  disabled={index === painted.length - 1}
+                  onSelect={() => onMove(index, index + 1)}
+                >
+                  <ArrowDown aria-hidden />
+                  Move down
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  className="min-h-11 text-[15px]"
+                  onSelect={() => setConfirming(row.id)}
+                >
+                  <Trash2 aria-hidden />
+                  Remove…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Remove ${row.label}`}
+              disabled={disabled}
+              onClick={() => setConfirming((open) => (open === row.id ? null : row.id))}
+            >
+              <Trash2 className="size-3.5" aria-hidden />
+            </Button>
+          )
+        }
         renderBelow={(row) => (
           <>
             {rowErrors[row.id] ? <InlineError>{rowErrors[row.id]}</InlineError> : null}
@@ -480,7 +648,7 @@ export function VocabularyList({
         looking rather than at a position they then have to go and find.
       */}
       <form
-        className="flex flex-wrap items-end gap-2 border-t pt-3"
+        className={cn("flex flex-wrap items-end gap-2 border-t pt-3", cards && "flex-col items-stretch gap-3 [&>*]:w-full")}
         onSubmit={(event) => {
           event.preventDefault();
           if (idError || newId.trim() === "") return;
@@ -504,7 +672,7 @@ export function VocabularyList({
               onChange={(event) => setNewId(event.target.value)}
               placeholder={target === "statuses" ? "awaiting_qa" : "research"}
               disabled={disabled}
-              className="h-7 w-44 font-mono text-[12px]"
+              className={cards ? "h-11 w-full font-mono text-[16px]" : "h-7 w-44 font-mono text-[12px]"}
             />
           )}
         </Field>
@@ -516,7 +684,7 @@ export function VocabularyList({
               onChange={(event) => setNewLabel(event.target.value)}
               placeholder={newId.trim() ? titleCaseId(newId.trim()) : "derived from the id"}
               disabled={disabled}
-              className="h-7 w-44 text-[13px]"
+              className={cards ? "h-11 w-full text-[16px]" : "h-7 w-44 text-[13px]"}
             />
           )}
         </Field>
@@ -525,9 +693,9 @@ export function VocabularyList({
             <Select value={newCategory} onValueChange={(v) => setNewCategory(v as StatusCategory)} disabled={disabled}>
               <SelectTrigger
                 id={`new-${target}-category`}
-                size="sm"
+                size={cards ? "default" : "sm"}
                 aria-label="Category for the new status"
-                className="w-[8.5rem] text-[12px]"
+                className={cards ? "h-11 w-full text-[15px] data-[size=default]:h-11" : "w-[8.5rem] text-[12px]"}
               >
                 <SelectValue />
               </SelectTrigger>
@@ -541,7 +709,13 @@ export function VocabularyList({
             </Select>
           </Field>
         ) : null}
-        <Button type="submit" size="sm" variant="outline" disabled={disabled || newId.trim() === "" || idError !== null}>
+        <Button
+          type="submit"
+          size="sm"
+          variant="outline"
+          className={cards ? "h-11 w-full text-[15px]" : undefined}
+          disabled={disabled || newId.trim() === "" || idError !== null}
+        >
           <Plus className="size-3.5" aria-hidden />
           Add {noun}
         </Button>

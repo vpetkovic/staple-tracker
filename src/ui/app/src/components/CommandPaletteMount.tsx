@@ -17,9 +17,12 @@
 import { useEffect, useState } from "react";
 import { onOpenCommandPalette } from "@/lib/shell-events";
 import { CommandPalette } from "./command-palette/CommandPalette";
+import { useBackToClose } from "@/lib/back-to-close";
 
 export function CommandPaletteMount() {
   const [open, setOpen] = useState(false);
+  // Phone Back closes the palette (lib/back-to-close.ts).
+  useBackToClose(open, () => setOpen(false));
 
   useEffect(() => onOpenCommandPalette(() => setOpen(true)), []);
 

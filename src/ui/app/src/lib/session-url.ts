@@ -20,7 +20,8 @@
  *
  * `withShellState` rewrites only its own parameters and keeps every other one verbatim:
  * `settings`/`settings-ws` (the settings sheet, see settings/settings-shell.ts), `graph`
- * (the graph's shareable layout) and `token` (which lib/api.ts strips on arrival anyway).
+ * (the graph's shareable layout — kept on the Graph only, dropped on every other page) and
+ * `token` (which lib/api.ts strips on arrival anyway).
  */
 import { ALL_FILTER_DIMENSIONS } from "./filter-dimensions";
 import { emptyFilters, type FilterState } from "./filters";
@@ -47,6 +48,9 @@ export function viewFromSlug(slug: string | null): ViewName | null {
 }
 
 export const URL_PARAMS = { ws: "ws", view: "view", text: "q", done: "done", focus: "focus" } as const;
+
+/** The Graph's own shareable layout parameter (views/graph/graph-share.ts). Kept only on the Graph. */
+export const GRAPH_PARAM = "graph";
 
 /** Every filter dimension id the address can carry. */
 function dimensionIds(): string[] {
@@ -100,6 +104,9 @@ export function withShellState(href: string, state: ShellUrlState): string {
   const url = new URL(href);
   const params = url.searchParams;
   for (const key of [...Object.values(URL_PARAMS), ...dimensionIds()]) params.delete(key);
+  // The graph's layout belongs to the Graph: on any other page it would ride along, unread,
+  // into every link and bookmark — and re-appear on the Graph from a stale address.
+  if (state.view !== "graph") params.delete(GRAPH_PARAM);
   const extra = [...params.entries()];
   const next = new URLSearchParams();
   if (state.ws) next.set(URL_PARAMS.ws, state.ws);

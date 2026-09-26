@@ -12,18 +12,16 @@
  * the view just applied (see empty-words.ts), so it can never describe a page that is not
  * on screen.
  *
- * `NoMatchesState` (views/ViewChrome) still supplies the headline and the count; its own
- * "Clear filters" button is hidden here because this block's "Clear all" sits beside the
- * other fixes, and two clear buttons on one screen would ask the reader to choose between
- * identical things.
+ * The headline and the count are this file's own (sentence case, one "Clear all" beside the
+ * other fixes rather than a second clear button above them).
  */
 import { ShowDetails } from "@/components/plain/PlainCard";
 import { Button } from "@/components/ui/button";
-import type { FilterContext } from "@/lib/filter-dimensions";
+import { countActiveFilters, type FilterContext } from "@/lib/filter-dimensions";
+import { FilterX } from "lucide-react";
 import { clearFilters, type FilterState } from "@/lib/filters";
 import { useOptionalSession } from "@/lib/session";
 import type { IssueRow } from "@/lib/types";
-import { NoMatchesState } from "@/views/ViewChrome";
 import { plainEmptyExplanation } from "./empty-words";
 
 export interface FilterEmptyStateProps {
@@ -35,14 +33,36 @@ export interface FilterEmptyStateProps {
   noun?: string;
 }
 
-export function FilterEmptyState({ rows, state, context, noun }: FilterEmptyStateProps) {
+export function FilterEmptyState({ rows, state, context, noun = "tasks" }: FilterEmptyStateProps) {
   const session = useOptionalSession();
+  const active = countActiveFilters(state);
   return (
-    <div data-filter-empty-explained className="[&_[data-filter-empty]>button]:hidden">
-      <NoMatchesState noun={noun} />
+    <div data-filter-empty-explained>
+      {/*
+        The headline, in sentence case and in this file's own words: what is true ("No tasks
+        match these filters") and how much is narrowing it. The fixes follow below.
+      */}
+      <div data-filter-empty className="flex flex-col items-center gap-3 pt-16 pb-6 text-center">
+        <FilterX className="size-6 text-text-tertiary" aria-hidden />
+        <div className="space-y-1 px-4">
+          <p className="text-[15px] font-medium">{emptyHeadline(noun)}</p>
+          <p className="text-[13px] text-muted-foreground">{narrowingLine(active, state.showDone)}</p>
+        </div>
+      </div>
       <FilterExplanation rows={rows} state={state} context={context} onChange={session?.setFilters} />
     </div>
   );
+}
+
+/** "No tasks match these filters" — sentence case, whatever the noun. */
+export function emptyHeadline(noun: string): string {
+  return `No ${noun} match these filters`;
+}
+
+/** How much is narrowing the page, in one sentence. */
+export function narrowingLine(active: number, showDone: boolean): string {
+  const count = active === 1 ? "1 filter is" : `${active} filters are`;
+  return `${count} narrowing this view${showDone ? "" : ", and done tasks are hidden"}.`;
 }
 
 /**

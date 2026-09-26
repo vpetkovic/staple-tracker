@@ -547,8 +547,14 @@ export function useWorkspaceSettings(options: {
   all?: readonly string[];
   version?: number;
   onAuthError?: (error: AuthError) => void;
+  /**
+   * Ask nothing yet. The page sets it until the workspace list is known: before bootstrap
+   * `ws: ""` cannot be told apart from All workspaces, and a request without a workspace
+   * would be answered for the server's first workspace — a per-workspace read nobody asked for.
+   */
+  wait?: boolean;
 } = {}): SettingsResource {
-  const { ws, version, onAuthError } = options;
+  const { ws, version, onAuthError, wait = false } = options;
   const allKey = (options.all ?? []).join(",");
   const [snapshot, setSnapshot] = useState<WorkspaceSettingsEnvelope>(current);
   const [loading, setLoading] = useState(true);
@@ -558,6 +564,7 @@ export function useWorkspaceSettings(options: {
   useEffect(() => subscribeWorkspaceSettings(() => setSnapshot(current)), []);
 
   useEffect(() => {
+    if (wait) return;
     let alive = true;
     const slugs = allKey ? allKey.split(",") : [];
     const read =
@@ -589,7 +596,7 @@ export function useWorkspaceSettings(options: {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ws, allKey, version, nonce]);
+  }, [ws, allKey, version, nonce, wait]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   return { settings: snapshot, loading, error, reload };

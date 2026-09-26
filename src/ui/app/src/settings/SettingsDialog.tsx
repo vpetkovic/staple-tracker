@@ -62,6 +62,7 @@ import { isAllWorkspaces, useSession } from "@/lib/session";
 import { asksForWorkspace, loadRememberedWorkspace } from "@/lib/session-workspace";
 import type { VocabularyOp } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useBackToClose } from "@/lib/back-to-close";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { CategoryContent, type ApplyTo } from "./CategoryContent";
 import { withCloudCategory } from "./cloud-settings";
@@ -238,6 +239,13 @@ export function SettingsDialog({
     [active, guard, onCategoryChange],
   );
   const back = useCallback(() => guard(() => setPane("nav")), [guard]);
+  /**
+   * On a phone a section is a screen of its own, so the system Back returns to the list of
+   * sections — the way every phone settings app behaves — and only Back from the list
+   * closes Settings (its own entry, SettingsMount). The section's entry is an overlay entry
+   * (lib/back-to-close.ts); the in-sheet Back arrow consumes it.
+   */
+  useBackToClose(stacked && pane === "content", () => setPane("nav"));
   const toggleMode = useCallback(() => setMode((current) => otherShellMode(current)), []);
   const close = useCallback(() => guard(() => onOpenChange(false)), [guard, onOpenChange]);
 

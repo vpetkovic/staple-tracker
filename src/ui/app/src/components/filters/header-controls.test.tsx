@@ -145,3 +145,42 @@ describe("the header row", () => {
     expect(atWidth(420)).not.toContain("tabindex");
   });
 });
+
+describe("each view shows only the controls it honours", () => {
+  it("Graph: filter, Done and search — no Group or Sort, which a graph cannot do", () => {
+    const graph = atWidth(1440, { view: "graph" });
+    expect(graph).not.toContain('aria-label="Group tasks"');
+    expect(graph).not.toContain("Sort:");
+    expect(graph).toContain('aria-label="Add a filter"');
+    expect(graph).toContain('aria-label="Show done and cancelled tasks"');
+    expect(graph).toContain('aria-label="Search tasks"');
+  });
+
+  it("Milestones: Done alone, named for what it shows there", () => {
+    const milestones = atWidth(1440, { view: "milestones" });
+    expect(milestones).toContain('aria-label="Show finished milestones"');
+    for (const absent of ['aria-label="Group tasks"', "Sort:", 'aria-label="Add a filter"', 'aria-label="Search tasks"']) {
+      expect(milestones).not.toContain(absent);
+    }
+  });
+
+  it("Queue: nothing — a filter there would change nothing", () => {
+    const queue = atWidth(1440, { view: "queue" });
+    expect(queue).not.toContain("<button");
+    expect(queue).not.toContain("<input");
+  });
+});
+
+describe("a phone searches on its own row", () => {
+  it("while a query is held, the field takes the whole header row and the other controls step aside", () => {
+    const typing = atWidth(390, { filters: withText(emptyFilters(), "login") as FilterState });
+    expect(typing).toContain("data-search-mode");
+    expect(typing).toMatch(/data-search-mode[^>]*class="[^"]*\babsolute\b[^"]*\binset-0\b/);
+    const field = typing.slice(typing.lastIndexOf("<", typing.indexOf('data-filter-search="true"')), typing.indexOf(">", typing.indexOf('data-filter-search="true"')));
+    expect(field).toMatch(/class="[^"]*\bw-full\b/);
+    expect(typing).not.toContain('aria-label="Group tasks"');
+    expect(typing).not.toContain('aria-label="Add a filter"');
+    // A desk keeps its one row: the field sits at the end of it.
+    expect(atWidth(1440, { filters: withText(emptyFilters(), "login") as FilterState })).not.toContain("data-search-mode");
+  });
+});

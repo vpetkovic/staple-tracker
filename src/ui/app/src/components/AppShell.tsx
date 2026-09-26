@@ -75,7 +75,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
 import { openCommandPalette, openCreateIssue } from "@/lib/shell-events";
-import { isAllWorkspaces, scopeName, useSession, viewLabel, viewUsesIssueFilters } from "@/lib/session";
+import { isAllWorkspaces, scopeName, useSession, viewControls, viewLabel } from "@/lib/session";
+import { useBackToClose } from "@/lib/back-to-close";
 
 /** Above this the rail is a column; below it, a sheet. */
 const WIDE_QUERY = "(min-width: 768px)";
@@ -163,6 +164,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     else setOverlayOpen((current) => !current);
   }, [wide]);
   const closeOverlay = useCallback(() => setOverlayOpen(false), []);
+  // The phone's menu drawer: Back closes it (lib/back-to-close.ts).
+  useBackToClose(!wide && overlayOpen, closeOverlay);
 
   // A sheet left open while the window grows would become a second rail beside the first.
   useEffect(() => {
@@ -216,7 +219,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.title = `${title} · ${scope} · staple`;
   }, [title, scope]);
-  const filterable = viewUsesIssueFilters(session.view);
+  const controls = viewControls(session.view);
+  const filterable = controls.filter;
+  const hasHeaderControls = controls.arrange || controls.filter || controls.done;
 
   return (
     /*
@@ -271,7 +276,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         {/* ── the content header: what the view is, where, and how much of it ── */}
         <header className="shrink-0 border-b">
-          <div className="flex min-h-10 items-center gap-2 px-4 max-md:min-h-13 max-md:gap-1 max-md:pr-2">
+          <div className="relative flex min-h-10 items-center gap-2 px-4 max-md:min-h-13 max-md:gap-1 max-md:pr-2">
             {!wide || railVisible ? null : (
               <Button
                 variant="ghost"
@@ -297,7 +302,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
             {wide ? <CloudStrip report={cloud} hub={hubCloud} /> : null}
             {/* `FilterBar` owns its own `ml-auto`, so this row says nothing about its right. */}
-            {filterable ? <FilterBar /> : null}
+            {hasHeaderControls ? <FilterBar /> : null}
           </div>
         </header>
 

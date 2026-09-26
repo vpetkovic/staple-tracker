@@ -36,9 +36,11 @@ export const VIEW_LABELS: Record<ViewName, string> = {
   queue: "Queue",
   graph: "Graph",
   milestones: "Milestones",
-  // The id stays `calibration` (routes, saved preferences, commands key off it); readers see the plain name.
-  calibration: "Estimate accuracy",
-  budget: "Budget",
+  // The ids stay `calibration` and `budget` (routes, saved preferences, commands key off them);
+  // readers see one plain name for each, the same in the rail, the tab bar, the header and
+  // the palette, and the same word Settings uses for the matching section ("Usage").
+  calibration: "Estimates",
+  budget: "Usage",
 };
 
 /**
@@ -54,12 +56,43 @@ export function isMachineView(view: ViewName): boolean {
 }
 
 /**
- * Whether the header's group, sort and filter controls act on a view. They narrow the issue list,
- * and the Estimate accuracy report is not an issue list: it reads the whole workspace's history, so the
- * controls would promise a filter that does nothing there. Neither is the machine's Budget view.
+ * WHICH HEADER CONTROLS A VIEW HONOURS — and so which it shows. A control on a page where it
+ * does nothing is a promise the page breaks: a quick filter on the Queue that leaves the
+ * queue unchanged teaches the reader that filters do not work.
+ *
+ *   Tasks       — everything: how the rows are arranged (Group, Sort), which rows (the
+ *                 filters, the quick filters, search), and whether finished work shows.
+ *   Graph       — the filters, search and Done decide which nodes it draws; it has no
+ *                 rows to group or sort.
+ *   Milestones  — Done alone: it lists finished milestones when finished work is shown.
+ *   Queue, Estimates, Usage — none. The queue is the pickup order itself, and the two
+ *                 reports read a workspace's (or the machine's) whole history.
  */
+export interface ViewControls {
+  /** Group and Sort. */
+  arrange: boolean;
+  /** The Filter menu, the quick filters under the header, and search. */
+  filter: boolean;
+  /** The Done toggle. */
+  done: boolean;
+}
+
+const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
+  tree: { arrange: true, filter: true, done: true },
+  graph: { arrange: false, filter: true, done: true },
+  milestones: { arrange: false, filter: false, done: true },
+  queue: { arrange: false, filter: false, done: false },
+  calibration: { arrange: false, filter: false, done: false },
+  budget: { arrange: false, filter: false, done: false },
+};
+
+export function viewControls(view: ViewName): ViewControls {
+  return VIEW_CONTROLS[view];
+}
+
+/** Does the view narrow its issues by the filters (the menu, the quick filters, search)? */
 export function viewUsesIssueFilters(view: ViewName): boolean {
-  return view !== "calibration" && !isMachineView(view);
+  return VIEW_CONTROLS[view].filter;
 }
 
 export function viewLabel(view: ViewName): string {
@@ -67,17 +100,11 @@ export function viewLabel(view: ViewName): string {
 }
 
 /**
- * The name a view wears where there is room for one short word only — the phone's bottom
- * tab bar, six tabs across 360px. The full name stays the accessible name and the header.
+ * The name a view wears on the phone's bottom tab bar (six tabs across 360px). The SAME as
+ * `VIEW_LABELS`: every name was chosen short enough to fit, so a view is never called one
+ * thing on the tab bar and another in the rail. Kept as its own export for the tab bar.
  */
-export const VIEW_SHORT_LABELS: Record<ViewName, string> = {
-  tree: "Tasks",
-  queue: "Queue",
-  graph: "Graph",
-  milestones: "Milestones",
-  calibration: "Accuracy",
-  budget: "Budget",
-};
+export const VIEW_SHORT_LABELS: Record<ViewName, string> = VIEW_LABELS;
 
 // ---------------------------------------------------------------- the workspace in scope
 

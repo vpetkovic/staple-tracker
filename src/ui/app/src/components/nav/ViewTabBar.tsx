@@ -7,8 +7,8 @@
  * header, and is the pattern both iOS (UITabBar) and Android (Material navigation bar) teach
  * people for exactly this job. A segmented control would have to scroll sideways at six
  * items on a 360px screen (a hidden view is not one tap away); a menu makes every switch two
- * taps. Six tabs at 360px are 60px each — past the 44px minimum — with a short label under
- * each icon ("Accuracy" for Estimate accuracy; the full name is the accessible name).
+ * taps. Six tabs at 360px are 60px each — past the 44px minimum — with the view's own name
+ * under each icon; the names were chosen to fit, so the tab bar and the rail agree.
  *
  * The bar sits on the home-indicator safe area and never covers content: it is a flex item
  * below `<main>`, not an overlay, so every view's own scroll container ends above it.

@@ -183,9 +183,11 @@ describe("buildCommands", () => {
 
   it("names the calibration view in plain words, and still finds it by its old name", () => {
     const command = buildCommands(context({ view: "tree" })).find((c) => c.id === "view:calibration")!;
-    expect(command.label).toBe("Go to Estimate accuracy");
-    // The view id stays `calibration`, so typing the old name still reaches it.
+    // One name everywhere: the rail, the tab bar, the header and the palette say "Estimates".
+    expect(command.label).toBe("Go to Estimates");
+    // The view id stays `calibration`, and the page's former name still reaches it.
     expect(command.keywords).toContain("calibration");
+    expect(command.keywords).toContain("estimate accuracy");
   });
 
   it("offers no issue filter commands on the Estimate accuracy report, which is not an issue list", () => {

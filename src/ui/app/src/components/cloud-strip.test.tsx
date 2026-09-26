@@ -22,7 +22,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CloudStrip, hubSyncSummary, syncSummary } from "./CloudStrip";
+import { CloudStrip, hubSyncSummary, syncSummary, syncedAgo } from "./CloudStrip";
 import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
 
 function report(over: Partial<CloudSurfaceReport> = {}): CloudSurfaceReport {
@@ -246,5 +246,24 @@ describe("All workspaces counts the workspaces that sync, and says nothing when 
     expect(summary.headline).toContain("Pick a workspace");
     // A per-workspace report always wins over the hub summary.
     expect(renderToStaticMarkup(<CloudStrip report={connected()} hub={hub(3, 8)} />)).toContain("Manual sync");
+  });
+});
+
+describe("the last sync is said the way a person says it", () => {
+  const NOW = Date.parse("2026-09-26T12:00:00Z");
+
+  it("reads '5 min ago' in the card, and keeps the exact time under Show details", () => {
+    const summary = syncSummary(connected({ lastSyncAt: "2026-09-26T11:55:00Z" }), NOW)!;
+    expect(summary.facts).toContainEqual({ label: "Last synced", value: "5 min ago" });
+    expect(summary.details).toContainEqual({ label: "Last synced at", value: "2026-09-26T11:55:00Z" });
+    // Never the raw timestamp among the facts a person acts on.
+    expect(summary.facts.some((fact) => fact.value.includes("2026-"))).toBe(false);
+  });
+
+  it("says hours and days, and 'Just now' for a sync seconds ago", () => {
+    expect(syncedAgo("2026-09-26T09:00:00Z", NOW)).toBe("3h ago");
+    expect(syncedAgo("2026-09-24T12:00:00Z", NOW)).toBe("2 days ago");
+    expect(syncedAgo("2026-09-26T11:59:40Z", NOW)).toBe("Just now");
+    expect(syncedAgo("not a time", NOW)).toBeNull();
   });
 });

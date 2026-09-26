@@ -463,7 +463,7 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
   );
 
   return (
-    <Section title="Hub registry" error={state.error}>
+    <Section title="Workspaces on this computer" error={state.error}>
       <div data-hub-registry data-stage={stage} className="space-y-3">
         <RegistryTiles report={report} />
 
