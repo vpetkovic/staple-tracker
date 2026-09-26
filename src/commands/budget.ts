@@ -3,7 +3,7 @@
  * readings, the operator's opt-in and source bindings, and reading them back.
  * Machine-level: it reads and writes the staple home, never a workspace.
  *
- *   budget [--account A]                   each account's current windows (get_budget)
+ *   budget [--account A] [--reserve P]     each account's current windows and pressure (get_budget)
  *   budget history --account A [--since T] [--limit N] [--cursor C]   (list_budget_samples)
  *   budget ingest --source claude-statusline [--tee] [--account A] [--config-dir D]
  *   budget ingest --source codex-rollout <file> [--account A]
@@ -31,7 +31,7 @@ import {
 import type { BindingSource } from "../core/telemetry/config.js";
 import { INGEST_SOURCES, ingestBudget, type IngestResult, type IngestSource } from "../core/telemetry/ingest.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
-import { listBudgetSamples, readBudget, type BudgetView, type HistorySample } from "../core/telemetry/read-budget.js";
+import { listBudgetSamples, readBudget, type BudgetView, type HistorySample, type LimitReading } from "../core/telemetry/read-budget.js";
 import type { TelemetryPage } from "../core/telemetry/read-page.js";
 import { limitFlag } from "./attempts.js";
 
@@ -39,9 +39,12 @@ const USAGE = "Use: history, ingest, capture, bind, unbind, bindings (staple bud
 
 const HELP = `staple budget — provider budget telemetry on this machine (docs/execution-telemetry.md)
 
-  budget [--account A]                  each account's limits: the current window, its
-              latest reading, the high-water remaining percent and status. Unknown is
-              shown as unknown with its reason, never as 0
+  budget [--account A] [--reserve P]    each account's limits: the current window, its
+              latest reading, the high-water remaining percent and status, and the
+              window's pressure: its observed pace against the sustainable pace that
+              keeps P% (default: a provisional 20%) at the reset. Pressure is
+              provisional until the admission policy defines it. Unknown is shown as
+              unknown with its reason, never as 0
   budget history --account A [--since T] [--limit N] [--cursor C]
               one account's readings, oldest first; T is an instant or a duration
               (2h = two hours ago); --limit defaults to 50, at most 500; gaps where
@@ -150,7 +153,26 @@ function sayIngest(result: IngestResult): void {
 
 const percent = (value: number | null, reason: string | undefined): string => (value === null ? `unknown (${reason ?? "no reading"})` : `${value}%`);
 
+const perHour = (value: number): string => `${Math.round(value * 10) / 10}%/h`;
+
+/** The pressure line of one limit: measured pace, then the provisional forecast figures. */
+function pressureLine(pressure: LimitReading["pressure"]): string {
+  const why = (field: string): string => {
+    const code = pressure.missing[field] ?? "no reason";
+    const inputs = pressure.missingInputs[field];
+    return code === "input_missing" && inputs ? inputs.join(", ") : code;
+  };
+  const observed = pressure.observed === null ? `pace unknown (${why("observed")})` : `pace ${perHour(pressure.observed.percentPerHour)}`;
+  const sustainable = pressure.sustainablePercentPerHour === null ? `sustainable unknown (${why("sustainablePercentPerHour")})` : `sustainable ${perHour(pressure.sustainablePercentPerHour)}`;
+  const state =
+    pressure.state === null
+      ? `pressure unknown (${why("state")})`
+      : `pressure ${pressure.ratio === null ? why("ratio") : `x${pressure.ratio.toFixed(2)}`} ${pressure.state.toUpperCase()}`;
+  return `    ${observed}  ${sustainable}  ${state}`;
+}
+
 function sayBudget(view: BudgetView): void {
+  console.log(`reserve ${view.reserve.percent}%${view.reserve.source === "provisional_default" ? " (provisional default)" : ""}; pressure is provisional`);
   if (view.accounts.length === 0) console.log(`no accounts (capture ${view.budgetCapture ? "on" : "off"}; staple budget bind names one)`);
   for (const account of view.accounts) {
     console.log(`${account.accountRef}${account.provider ? ` (${account.provider})` : ""}${account.limits.length === 0 ? `  ${account.missing.limits ?? "no readings"}` : ""}`);
@@ -158,6 +180,7 @@ function sayBudget(view: BudgetView): void {
       const reset = limit.window?.resetsAt ? ` resets ${limit.window.resetsAt}` : "";
       const stale = limit.stale ? "  (stale)" : "";
       console.log(`  ${limit.limitKey.padEnd(22)} ${(limit.status ?? "-").padEnd(8)} remaining ${percent(limit.remainingPercent, limit.missing.remainingPercent)}${reset}${stale}`);
+      console.log(pressureLine(limit.pressure));
     }
   }
 }
@@ -207,6 +230,7 @@ export function runBudgetCommand(argv: string[]): void {
       since: { type: "string" },
       limit: { type: "string" },
       cursor: { type: "string" },
+      reserve: { type: "string" },
     },
   });
   const [sub, ...args] = positionals;
@@ -224,7 +248,7 @@ export function runBudgetCommand(argv: string[]): void {
 
   switch (sub) {
     case undefined: {
-      const view = readBudget(home, { account: values.account });
+      const view = readBudget(home, { account: values.account, reserve: values.reserve });
       print(view, () => sayBudget(view));
       return;
     }

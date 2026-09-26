@@ -34,6 +34,7 @@ import type { QueueVerb } from "../core/queue-store.js";
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
+import { readBudget } from "../core/telemetry/read-budget.js";
 import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
@@ -3631,6 +3632,23 @@ export function startUiServer(options: UiOptions): UiHandle {
             reserve: url.searchParams.get("reserve") ?? undefined,
             account: url.searchParams.get("account") ?? undefined,
             model: url.searchParams.get("model") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      /**
+       * `staple budget` / MCP `get_budget`: this machine's provider limits and each one's
+       * provisional pressure, from the one read both call. Machine-level: it takes no `ws`
+       * and reads no workspace. `account` narrows to one account, `reserve` is a percent.
+       */
+      if (url.pathname === "/api/budget") {
+        json(
+          res,
+          200,
+          readBudget(stapleHome(), {
+            account: url.searchParams.get("account") ?? undefined,
+            reserve: url.searchParams.get("reserve") ?? undefined,
           }),
         );
         return;

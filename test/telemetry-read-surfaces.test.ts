@@ -44,6 +44,9 @@ function cli(args: string[], ws: string | null = WS, agent?: string): Record<str
   return JSON.parse(result.stdout.trim()) as Record<string, unknown>;
 }
 
+/** Pressure figures measured from `asOf` (the time to the reset, the reading's age): known or not must agree, the value moves with the clock. */
+const FROM_AS_OF = new Set(["lastReadingAgeSeconds", "sustainablePercentPerHour", "ratio", "exhaustion", "reserveReach"]);
+
 /** Drop the fields that read the clock, everywhere in a payload. */
 function steady(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(steady);
@@ -51,11 +54,30 @@ function steady(value: unknown): unknown {
     const out: Record<string, unknown> = {};
     for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
       if (key === "idleSeconds" || key === "asOf" || key === "stale" || key === "heldSeconds" || key === "silentSeconds") continue;
+      if (FROM_AS_OF.has(key) && inner !== null) {
+        out[key] = "<from asOf>";
+        continue;
+      }
       out[key] = steady(inner);
     }
     return out;
   }
   return value;
+}
+
+/**
+ * A machine-level route (`/api/budget`) reads the staple home of the process at request time,
+ * as every hub route does: point it at this suite's home for the one request.
+ */
+async function inHome<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.STAPLE_HOME;
+  process.env.STAPLE_HOME = home;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.STAPLE_HOME;
+    else process.env.STAPLE_HOME = previous;
+  }
 }
 
 async function http(path: string): Promise<Record<string, unknown>> {
@@ -159,6 +181,24 @@ describe("CLI --json and MCP answer one shape", () => {
     const view = cli(["budget"], null);
     expect(steady(toolPayload(await mcp.call("get_budget", {})))).toEqual(steady(view));
     expect(view).toMatchObject({ budgetCapture: true, accounts: [{ accountRef: "personal-max", limits: [{ limitKey: "five_hour", highWaterPercent: 26, remainingPercent: 74 }] }] });
+    // The same read over HTTP, which the page's budget view polls.
+    expect(steady(await inHome(() => http("/api/budget")))).toEqual(steady(view));
+
+    // The pressure block and its reserve argument, one value on the three surfaces.
+    const reserved = cli(["budget", "--reserve", "30%"], null);
+    expect(steady(toolPayload(await mcp.call("get_budget", { reserve: "30%" })))).toEqual(steady(reserved));
+    expect(steady(await inHome(() => http("/api/budget?reserve=30%25")))).toEqual(steady(reserved));
+    expect(reserved).toMatchObject({
+      reserve: { percent: 30, source: "argument", note: null },
+      pressureRule: { provisional: true, unsafeAtRatio: 1 },
+      accounts: [{ limits: [{ pressure: { reservePercent: 30, observed: { fromPercent: 20, toPercent: 26, readings: 2 }, safeConcurrency: null, missing: { safeConcurrency: "policy_not_defined" } } }] }],
+    });
+    expect(view).toMatchObject({ reserve: { percent: 20, source: "provisional_default", note: expect.stringContaining("provisional") } });
+    // A reserve out of range is the same refusal everywhere.
+    const refused = run(["budget", "--reserve", "150", "--json"]);
+    expect(refused.status).toBe(2);
+    expect(mcpEnvelope(await mcp.call("get_budget", { reserve: "150" }))).toEqual(JSON.parse(refused.stderr.trim()));
+    expect((await inHome(() => fetch(`${origin}/api/budget?reserve=150`, { headers: { "x-staple-token": ui.token } }))).status).toBe(409);
 
     const history = cli(["budget", "history", "--account", "personal-max", "--limit", "1"], null);
     const viaMcp = toolPayload(await mcp.call("list_budget_samples", { account: "personal-max", limit: 1 }));

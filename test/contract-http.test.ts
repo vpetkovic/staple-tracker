@@ -389,6 +389,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
+      // `staple budget` / MCP `get_budget`: GET-only, a read of this machine's hub, no `ws`.
+      "/api/budget",
       // `staple calibrate` / MCP `calibration_cohorts`: GET-only, a read.
       "/api/calibration",
       /**
