@@ -530,8 +530,12 @@ describe("setup and unsetup", () => {
     writeFileSync(SETTINGS(), PRETTY);
     applyBudgetSetup({ claudeAccount: "claude-max" }, deps());
     expect(budgetConfig(home).bindings[0]).toMatchObject({ accountRef: "claude-max" });
-    // A second setup must not forget what was there before the first.
-    applyBudgetSetup({ claudeAccount: "claude-max", codexAccount: "codex-plus" }, deps());
+    // A second setup that re-binds the same home must not forget what was there before the first.
+    applyBudgetSetup({ claudeAccount: "claude-pro", codexAccount: "codex-plus" }, deps());
+    expect(readSetupRecord(home)!.bindings.find((change) => change.source === "claude_code_statusline")).toMatchObject({
+      before: { accountRef: "old-max" },
+      after: { accountRef: "claude-pro" },
+    });
     applyBudgetUnsetup(deps());
     const config = budgetConfig(home);
     expect(config.budgetCapture).toBe(true);
