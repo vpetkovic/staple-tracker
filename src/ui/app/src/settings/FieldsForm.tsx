@@ -68,7 +68,8 @@ function Control({
   switch (schema.type) {
     case "boolean":
       return (
-        <label className="flex h-7 items-center gap-2 text-[13px]">
+        // A finger gets the whole 44px line; a mouse keeps the compact 28px one.
+        <label className="flex h-7 items-center gap-2 text-[13px] pointer-coarse:h-11">
           <input
             {...aria}
             type="checkbox"

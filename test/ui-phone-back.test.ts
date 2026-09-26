@@ -628,6 +628,12 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     expect((await atLeast44(usage.page, '[data-testid="budget-refresh"]')).drawnH).toBeLessThan(30);
     await usage.context.close();
 
+    // A switch in Settings (This machine): the line it sits on is the target.
+    const machine = await page("/?view=tasks&settings=machine");
+    await settle(machine.page, 600);
+    await atLeast44(machine.page, '[data-settings-content] input[role="switch"]');
+    await machine.context.close();
+
     // A desk with a mouse keeps every one of them at its drawn size.
     const heights = async (path: string, selectors: string[]) => {
       const { page: d, context } = await page(path, DESK);
