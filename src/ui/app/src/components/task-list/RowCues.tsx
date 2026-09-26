@@ -41,10 +41,10 @@ import {
  * one (docs/queue.md, "Presentation sort is not the queue"). Making it clickable would
  * advertise an affordance that does not and must not exist here.
  */
-export function PickupCue({ cue }: { cue: RowPickupCue }) {
+export function PickupCue({ cue, compact = false }: { cue: RowPickupCue; compact?: boolean }) {
   const { glyph } = ROW_CUE_PRESENTATION[cue.state];
   const sentence = rowCueSentence(cue);
-  const short = rowCueShort(cue);
+  const short = rowCueShort(cue, compact);
 
   return (
     <span

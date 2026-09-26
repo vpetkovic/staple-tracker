@@ -33,6 +33,7 @@ import {
 } from "@/components/task-list";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { QueueRowMenu, queueRowMenuState } from "@/components/QueueRowMenu";
+import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
 import { buildGateCaptions } from "@/lib/derived-queued";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
@@ -153,12 +154,14 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   );
 
   const rowActionsMenu = useCallback(
-    (row: TaskRow, trigger: ReactNode) => {
+    (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => {
       const ref = row.issue.identifier;
       const ws = session.ws || undefined;
       return (
         <QueueRowMenu
           trigger={trigger}
+          open={control?.open}
+          onOpenChange={control?.onOpenChange}
           identifier={ref}
           state={queueRowMenuState(row, queuedIds)}
           disabled={queueBusy || queueRevision === undefined}

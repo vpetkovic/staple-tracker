@@ -38,7 +38,7 @@
  * — which is ClickUp's own move at width, and, more practically, the only difference
  * worth having. A second layout would be a second thing to keep correct.
  */
-import { ChevronDown, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { StaleClaimBadge } from "@/components/StaleClaimBadge";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -53,7 +53,7 @@ import type { IssueDetail, UiMode } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import type { DetailMode } from "./drawer";
+import type { DetailMode, DetailPresentation } from "./drawer";
 import type { NavState, NavTarget } from "./navigation";
 import { IssueActions } from "./IssueActions";
 import { InlineKind, InlineLabels, InlinePriority, InlineProject, InlineTitle } from "./InlineProperties";
@@ -64,6 +64,7 @@ import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
 export function IssueDetailPanel({
   selection,
   mode,
+  presentation = mode,
   onToggleMode,
   nav,
   onNavigate,
@@ -72,6 +73,11 @@ export function IssueDetailPanel({
 }: {
   selection: Selection;
   mode: DetailMode;
+  /**
+   * `sheet` on a phone (drawer.ts): a Back control leads the bar and the expand toggle
+   * goes, because a full-screen sheet has nothing to expand to. Defaults to `mode`.
+   */
+  presentation?: DetailPresentation;
   onToggleMode: () => void;
   nav: NavState;
   onNavigate: (target: NavTarget | null) => void;
@@ -80,7 +86,8 @@ export function IssueDetailPanel({
 }) {
   const session = useSession();
   const [tab, setTab] = useState("overview");
-  const expanded = mode === "full";
+  const sheet = presentation === "sheet";
+  const expanded = !sheet && mode === "full";
 
   /**
    * A tab asking to hand the reader to another tab — W3 (STA-115). Overview's worklog
@@ -119,7 +126,24 @@ export function IssueDetailPanel({
           A fixed 44px bar rather than padding-derived height: this and the app
           header are the persistent chrome on the page, and when their heights are
           computed from different padding they never quite line up across a resize. */}
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3 pr-2">
+      <div
+        className={cn("flex shrink-0 items-center gap-2 border-b px-3 pr-2", sheet ? "staple-detail-sheet-bar h-12 pl-1" : "h-11")}
+        data-detail-bar={sheet ? "sheet" : undefined}
+      >
+        {sheet ? (
+          /* Where the thumb and the iOS habit both expect the way out. It is the same
+             `session.close()` the X calls; the X goes, so there is one exit, not two. */
+          <Button
+            variant="ghost"
+            onClick={onClose}
+            aria-label="Back to the list"
+            data-detail-back=""
+            className="h-11 min-w-11 gap-0.5 px-2 text-[15px] font-normal text-foreground"
+          >
+            <ChevronLeft className="size-5" aria-hidden />
+            Back
+          </Button>
+        ) : null}
         <span className="font-mono text-[11px] text-text-tertiary">{issue?.identifier ?? selection.ref}</span>
         {issue ? <StatusBadge status={issue.status} /> : null}
 
@@ -173,20 +197,24 @@ export function IssueDetailPanel({
             onNavigate={onNavigate}
             icon={<ChevronDown className="size-4" />}
           />
-          <span aria-hidden className="bg-border mx-1 h-4 w-px" />
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={expanded ? "Collapse to drawer" : "Expand to full screen"}
-            aria-pressed={expanded}
-            title={expanded ? "Collapse to drawer" : "Expand to full screen"}
-            onClick={onToggleMode}
-          >
-            {expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-          </Button>
-          <Button variant="ghost" size="icon" aria-label="Close detail" onClick={onClose}>
-            <X className="size-4" />
-          </Button>
+          {sheet ? null : (
+            <>
+              <span aria-hidden className="bg-border mx-1 h-4 w-px" />
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={expanded ? "Collapse to drawer" : "Expand to full screen"}
+                aria-pressed={expanded}
+                title={expanded ? "Collapse to drawer" : "Expand to full screen"}
+                onClick={onToggleMode}
+              >
+                {expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+              </Button>
+              <Button variant="ghost" size="icon" aria-label="Close detail" onClick={onClose}>
+                <X className="size-4" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -196,7 +224,7 @@ export function IssueDetailPanel({
           detail people complain about — you scroll the wrong one, twice, before
           you learn which is which. A sticky rail inside one scroll gets the same
           layout with one place for the scrollbar to be. */}
-      <div className="scrollbar-auto-hide min-h-0 flex-1 overflow-y-auto">
+      <div className="staple-detail-scroll scrollbar-auto-hide min-h-0 flex-1 overflow-y-auto">
         {resource.error ? (
           <div className="px-5 py-4">
             <ErrorState error={resource.error} />

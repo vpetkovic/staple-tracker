@@ -68,6 +68,8 @@ import { WarningChips } from "@/detail/ForecastSection";
 import { PlainCard, ShowDetails } from "@/components/plain/PlainCard";
 import { RangeBar } from "@/components/plain/RangeBar";
 import { ConfidencePill, StatusPill } from "@/components/plain/StatusPill";
+import { ChooseWorkspace } from "@/views/ChooseWorkspace";
+import { workspaceScope } from "@/views/workspace-scope";
 
 const UNKNOWN = "text-muted-foreground italic";
 
@@ -106,7 +108,7 @@ function CohortFacts({ cohort }: { cohort: CalibrationCohort }) {
       <dl className="space-y-1">
         <Fact label="Class">
           <span data-testid="cohort-fallback">{fallbackText(cohort)}</span>
-          <div className="text-[10px] text-muted-foreground" data-testid="cohort-path">
+          <div className="text-[10px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="cohort-path">
             path:{" "}
             {cohort.path.map((step, index) => (
               <span key={step.level}>
@@ -417,8 +419,23 @@ export function calibrationRequest(workspace: string, includeReconstructed: bool
 
 export function CalibrationView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  const scope = workspaceScope(session.mode, session.ws, session.workspaces);
+  if (scope.kind === "choose") {
+    return (
+      <ChooseWorkspace
+        page="Estimate accuracy"
+        sentence="Estimate accuracy is worked out for each workspace on its own. Choose a workspace to see how its estimates compare with the time the work really took."
+        workspaces={scope.workspaces}
+        onChoose={session.setWs}
+      />
+    );
+  }
+  return <WorkspaceCalibration key={scope.slug} workspace={scope.slug} onAuthError={onAuthError} />;
+}
+
+function WorkspaceCalibration({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
+  const session = useSession();
   const [includeReconstructed, setIncludeReconstructed] = useState(INCLUDE_RECONSTRUCTED_BY_DEFAULT);
-  const workspace = session.ws || session.workspaces[0]?.slug || "";
   const load = useCallback(
     () => getCalibration(calibrationRequest(workspace, includeReconstructed)),
     [workspace, includeReconstructed],
@@ -430,9 +447,6 @@ export function CalibrationView({ onAuthError }: { onAuthError: (error: AuthErro
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl px-4 py-5">
-        {session.mode === "hub" && !session.ws && session.workspaces.length > 1 ? (
-          <p className="mb-3 text-[12px] text-muted-foreground">Estimate accuracy is per workspace: showing {workspace}. Pick another in the switcher.</p>
-        ) : null}
         {report.error ? (
           <ErrorState error={report.error} />
         ) : data ? (

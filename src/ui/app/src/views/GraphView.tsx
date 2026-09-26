@@ -987,7 +987,9 @@ function GraphCanvas({
               ];
             }}
             nodeStrokeWidth={0}
-            className="!bg-card"
+            // On a phone the minimap is a third of the canvas and says less than the
+            // canvas beside it; pinch and drag do its job there.
+            className="!bg-card max-[719px]:!hidden"
           />
         </ReactFlow>
       </div>

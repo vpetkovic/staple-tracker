@@ -8,21 +8,18 @@
  * "visual check" below is exactly two things, and it is worth being explicit about the
  * limit rather than implying a picture was compared:
  *
- *   1. THE MARKUP AT TWO WIDTHS. §14's one width-dependent decision that cannot be made in
- *      CSS is the label cap — the `+N` changes with the cap and no media query can recount —
- *      so `TreeGrid` measures the viewport with `matchMedia` and passes a number down. That
- *      measurement is stubbed here, which makes the narrow and the wide page two genuinely
- *      different strings, and both are asserted.
- *   2. THE STYLESHEET THAT DOES THE REST. Everything else §14 drops is a media query, so
- *      the DOM is identical at both widths BY DESIGN and the assertion has to be about the
- *      rule. `task-list.css` is read with its comments stripped — the technique
- *      `group-header.test.tsx` uses for the R4d separator — so the sheet's own prose about
- *      a rule cannot satisfy a test looking for the rule.
+ *   1. THE MARKUP AT SEVERAL WIDTHS. Since the mobile list lane, EVERYTHING §14 drops is
+ *      decided by one ladder (components/task-list/row-layout.ts) that `TreeGrid` reads
+ *      through `matchMedia`, and a dropped element is absent from the DOM. That measurement
+ *      is stubbed here, so each width is a genuinely different string and the precedence
+ *      can be read straight off the markup.
+ *   2. THE STYLESHEET, for the one thing the markup cannot say: the compact row's geometry
+ *      (one 48px line, no second grid row). `task-list.css` is read with its comments
+ *      stripped — the technique `group-header.test.tsx` uses for the R4d separator — so the
+ *      sheet's own prose about a rule cannot satisfy a test looking for the rule.
  *
- * What a screenshot would have shown at 400px — the meta cluster on line two, the date
- * back, the rolled-up plan gone, the labels as dots — is the `@media (max-width: 719px)`
- * block plus the `max-[719px]:hidden` utility plus the label cap, and all three are read
- * directly below.
+ * The measured half — row height, same-line badges, overflow at 360/390 in a real browser —
+ * is the lane's Playwright evidence, not this file.
  *
  * ── AND THE CLAIM THAT MATTERS MOST IS AN INVARIANCE ──────────────────────────────────
  *
@@ -50,9 +47,9 @@ const CSS = readFileSync(
   "utf8",
 ).replace(/\/\*[\s\S]*?\*\//g, "");
 
-/** The §14 breakpoint below which the row becomes two lines. */
-const TWO_LINE_BREAKPOINT = 719;
 const NARROW = 400;
+/** Between the compact line (below 720px) and the phone rung (below 480px). */
+const SMALL_TABLET = 600;
 const WIDE = 1440;
 
 /**
@@ -142,8 +139,9 @@ describe("every grouping renders at both widths and says the same thing", () => 
         expect(epic).toContain(">STA-1<");
         expect(epic).toContain("staple-row-status");
         const live = rows(narrow).get("STA-2");
-        // The live claim's pill survives wherever the row is drawn on this axis.
-        if (live) expect(live).toContain("staple-working-pill");
+        // The live claim survives wherever the row is drawn on this axis — as an avatar
+        // with a breathing mark on a phone, a pill on a wide row; the same test id.
+        if (live) expect(live).toContain('data-testid="working-pill"');
       });
     });
   }
@@ -169,95 +167,94 @@ describe("the cues survive every width, because they live in the title cell", ()
     expect(narrow.get("STA-8")).toContain('data-pickup-cue="pickable"');
   });
 
-  it("is never touched by a media query — no rule hides either cue at any width", () => {
+  it("is never touched by a media query — no rule hides either cue, or any row element", () => {
     /*
-     * The DOM proof above cannot say this on its own: both cues are in the markup at both
-     * widths BECAUSE nothing drops them, and "nothing drops them" is a fact about the sheet.
-     * The contrast is `.staple-worklog-cue` and `.staple-row-date`, which ARE dropped, in
-     * §14's documented order — so the absence below is a decision rather than an oversight.
+     * The ladder is the only thing that drops a row element now, so the sheet must not
+     * hide one behind its back: a media query that hid the date would make the markup say
+     * "shown" while the screen says "gone", and the precedence table would lie.
      */
-    for (const selector of [".staple-row-cue", ".staple-row-milestone"]) {
+    const rowElements = [
+      ".staple-row-cue",
+      ".staple-row-milestone",
+      ".staple-worklog-cue",
+      ".staple-row-date",
+      ".staple-pr-number",
+      ".staple-working-label",
+      ".staple-held-label",
+    ];
+    for (const selector of rowElements) {
       for (const block of mediaBlocks()) {
-        expect(block.body.includes(selector), `${selector} in ${block.query}`).toBe(false);
+        const hides = new RegExp(`${selector.replace(".", "\\.")}[^{]*{[^}]*display:\\s*none`).test(block.body);
+        expect(hides, `${selector} hidden in ${block.query}`).toBe(false);
       }
     }
-    // ...and the two that DO drop, so this test fails if the sheet stops dropping anything.
-    expect(mediaBlocks().some((b) => b.body.includes(".staple-worklog-cue"))).toBe(true);
-    expect(mediaBlocks().some((b) => b.body.includes(".staple-row-date"))).toBe(true);
+    // ...and the ladder DOES drop the two that used to be media queries, so this test fails
+    // if nothing drops them any more.
+    expect(rows(atWidth(WIDE, "none")).get("STA-2")).toContain("staple-row-date");
+    expect(rows(atWidth(NARROW, "none")).get("STA-2")).not.toContain("staple-row-date");
   });
 });
 
 describe("what narrow actually changes", () => {
-  it("degrades the label pills to bare dots — the one decision CSS cannot make", () => {
+  it("names two labels wide, dots on a small tablet, and none on a phone", () => {
     /*
-     * The `+N` changes with the cap, and no media query can recount. So this is the single
-     * width-dependent branch in the component, and it is the only reason the two renders in
-     * this file are different strings at all.
+     * The `+N` changes with the cap, and no media query can recount — the reason the label
+     * cap was JS before the ladder, and the reason every rung is JS now.
      */
     const wide = rows(atWidth(WIDE, "none")).get("STA-2")!;
+    const small = rows(atWidth(SMALL_TABLET, "none")).get("STA-2")!;
     const narrow = rows(atWidth(NARROW, "none")).get("STA-2")!;
 
     // Wide: two named pills and an overflow that says what it hid.
     expect((wide.match(/data-testid="label-pill"/g) ?? []).length).toBe(2);
     expect(wide).toContain('data-testid="label-overflow"');
     expect(wide).toContain(">ui<");
-    // Narrow: colour survives, names do not, and the title still carries all three.
-    expect(narrow).toContain('data-testid="label-dots"');
-    expect(narrow).not.toContain('data-testid="label-pill"');
-    expect(narrow).toContain('title="ui, queue, tests"');
+    // Small tablet: colour survives, names do not, and the title carries all three.
+    expect(small).toContain('data-testid="label-dots"');
+    expect(small).not.toContain('data-testid="label-pill"');
+    expect(small).toContain('title="ui, queue, tests"');
+    // Phone: the title gets the width; labels are on the detail.
+    expect(narrow).not.toContain("staple-label-cluster");
   });
 
-  it("hides the rolled-up plan with a utility class rather than a rule in the sheet", () => {
-    /*
-     * Below the breakpoint the title track is the whole row width and there is no room for
-     * an aside, so R7c's `est 3h` yields there. It is the same markup at both widths — a
-     * `max-[719px]:hidden` utility — which is exactly why a markup-only test cannot see the
-     * difference and the class itself is the assertion.
-     */
+  it("drops the rolled-up plan below 720px — absent, not hidden — and keeps x/y", () => {
     const epic = rows(atWidth(NARROW, "none")).get("STA-5")!;
-
-    expect(epic).toContain('data-testid="parent-rollup-plan"');
-    expect(epic).toContain('class="staple-rollup-count max-[719px]:hidden"');
-    expect(epic).toContain("est 3h");
-    // The count and the bar are NOT hidden: a folded epic must still say 0/2 at any width.
-    expect(epic).toContain('data-testid="parent-rollup-bar"');
+    expect(epic).not.toContain('data-testid="parent-rollup-plan"');
     expect(epic).toContain('aria-label="0 of 2 done"');
-    expect(epic).toMatch(/<span class="staple-rollup-count" aria-label="0 of 2 done"/);
+    // A folded epic keeps its progress as a ring on a phone, where the 36px bar would come
+    // straight out of the title.
+    expect(epic).toContain('data-testid="parent-rollup-ring"');
+    expect(epic).not.toContain('data-testid="parent-rollup-bar"');
+
+    const wideEpic = rows(atWidth(WIDE, "none")).get("STA-5")!;
+    expect(wideEpic).toContain('data-testid="parent-rollup-plan"');
+    expect(wideEpic).toContain('data-testid="parent-rollup-bar"');
   });
 
-  it("reflows the row to two lines at 719px, with the meta cluster on the second", () => {
-    const block = mediaBlocks().find((b) => b.query.includes(`max-width: ${TWO_LINE_BREAKPOINT}px`));
-    expect(block, "no two-line breakpoint in the sheet").toBeDefined();
-
-    expect(block!.body).toMatch(/\.staple-row\s*{[^}]*height:\s*56px/);
-    expect(block!.body).toMatch(/grid-template-rows:\s*28px 28px/);
-    // The cluster takes a whole line of its own, which is why the date and the worklog cue
-    // come BACK here after being dropped at the wider breakpoints.
-    expect(block!.body).toMatch(/\.staple-row-meta\s*{[^}]*grid-column:\s*1 \/ -1/);
-    expect(block!.body).toMatch(/\.staple-row-date\s*{[^}]*display:\s*inline/);
-    expect(block!.body).toMatch(/\.staple-worklog-cue\s*{[^}]*display:\s*inline-flex/);
+  it("stays ONE line below 720px: the compact layout, 48px, no second grid row", () => {
+    for (const [id, markup] of rows(atWidth(NARROW, "none"))) {
+      expect(markup, id).toContain('data-layout="compact"');
+    }
+    for (const [id, markup] of rows(atWidth(WIDE, "none"))) {
+      expect(markup, id).toContain('data-layout="line"');
+    }
+    const compact = /\.staple-row\[data-layout="compact"\]\s*{([^}]*)}/.exec(CSS)?.[1] ?? "";
+    expect(compact).toMatch(/height:\s*48px/);
+    // The two-line reflow is gone from the sheet entirely.
+    expect(CSS).not.toMatch(/grid-template-rows:\s*28px 28px/);
+    expect(CSS).not.toMatch(/\.staple-row-meta\s*{[^}]*grid-row:\s*2/);
   });
 
-  it("hides the date for good below 640px, keeping its title for the hover", () => {
-    /*
-     * The two-line row at 719px brought the date back on line two; at phone widths that
-     * line has no room for it either. The `<time>` keeps `title`, so the stamp is a hover
-     * away — pinned in row-render, not here; this pins that the sheet drops it.
-     */
-    const block = mediaBlocks().find((b) => b.query.includes("max-width: 639px"));
-    expect(block, "no 639px breakpoint in the sheet").toBeDefined();
-    expect(block!.body).toMatch(/\.staple-row-date\s*{[^}]*display:\s*none/);
-  });
-
-  it("drops the wider elements in §14's order — date before the working label", () => {
-    const queries = mediaBlocks().map((b) => b.query);
-    // 959 drops the worklog cue, 879 the date and the pill's word, 719 reflows. Least
-    // diagnostic first, which is the order the spec fixes and the sheet has to follow.
-    expect(queries.some((q) => q.includes("max-width: 959px"))).toBe(true);
-    expect(queries.some((q) => q.includes("max-width: 879px"))).toBe(true);
-    const at879 = mediaBlocks().find((b) => b.query.includes("879px"))!.body;
-    expect(at879).toContain(".staple-row-date");
-    expect(at879).toContain(".staple-working-label");
+  it("drops the date and the worklog below 880px and 960px — in the ladder's order", () => {
+    const at = (w: number) => rows(atWidth(w, "none")).get("STA-2")!;
+    // 1440: everything. 900: the worklog cue has gone (below 960), the date has not.
+    expect(at(WIDE)).toContain("staple-row-date");
+    expect(at(900)).toContain("staple-row-date");
+    expect(at(900)).not.toContain("staple-worklog-cue");
+    // 800: the date and the "Working…" word follow (below 880).
+    expect(at(800)).not.toContain("staple-row-date");
+    expect(at(800)).not.toContain("staple-working-label");
+    expect(at(WIDE)).toContain("staple-working-label");
   });
 });
 

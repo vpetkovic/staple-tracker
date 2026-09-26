@@ -32,6 +32,8 @@
  * asserted in the tests so it stays one.
  */
 
+import type { RowPlan } from "./row-layout";
+
 export type TaskListDensity = "comfortable" | "compact";
 
 /**
@@ -257,7 +259,13 @@ export const TASK_LIST_PRESETS: Record<TaskListPreset, PresetShape> = {
   },
 };
 
-export interface TaskListConfig extends PresetShape {}
+export interface TaskListConfig extends PresetShape {
+  /**
+   * What the row keeps at the current width — row-layout.ts. Absent means the full row,
+   * which is what every surface that does not measure (the palette, a fixture) wants.
+   */
+  plan?: RowPlan;
+}
 
 /**
  * A preset plus per-call overrides.
@@ -268,12 +276,16 @@ export interface TaskListConfig extends PresetShape {}
  */
 export function resolveTaskListConfig(
   preset: TaskListPreset,
-  over?: { density?: TaskListDensity; columns?: Partial<TaskListColumns>; labelMax?: number },
+  over?: { density?: TaskListDensity; columns?: Partial<TaskListColumns>; labelMax?: number; plan?: RowPlan },
 ): TaskListConfig {
   const base = TASK_LIST_PRESETS[preset];
+  const labelMax = over?.labelMax ?? base.labelMax;
   return {
     density: over?.density ?? base.density,
     columns: over?.columns ? { ...base.columns, ...over.columns } : base.columns,
-    labelMax: over?.labelMax ?? base.labelMax,
+    // The narrower of the preset's cap and the width's: a panel that never names labels
+    // does not start naming them on a wide screen.
+    labelMax: over?.plan ? Math.min(labelMax, over.plan.labelMax) : labelMax,
+    ...(over?.plan ? { plan: over.plan } : {}),
   };
 }

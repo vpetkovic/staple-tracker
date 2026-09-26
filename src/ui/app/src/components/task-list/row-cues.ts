@@ -116,7 +116,10 @@ export const MILESTONE_CUE_GLYPH = "◇";
  * because a container's number and a leaf's number are different numbers, and a reader who
  * cannot tell which one they are looking at cannot use either.
  */
-export function rowCueShort(cue: RowPickupCue): string {
+export function rowCueShort(cue: RowPickupCue, compact = false): string {
+  // A phone keeps the glyph and the bare number (`#2`, `▸`): the words "plan" and "next"
+  // are in the sentence the cue carries, and on a 360px row they are title.
+  if (compact) return cue.position === null || cue.state === "pickable" ? "" : String(cue.position);
   if (cue.state === "pickable") return "next";
   if (cue.position === null) return "";
   return cue.scope === "plan" ? `plan #${cue.position}` : `#${cue.position}`;

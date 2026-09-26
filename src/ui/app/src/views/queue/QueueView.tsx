@@ -84,6 +84,8 @@ import { ChevronRight, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { QueueRowMenu, queueRowMenuState } from "@/components/QueueRowMenu";
+import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
+import { useRowPlan } from "@/components/task-list/useRowPlan";
 import {
   clampIndex,
   resolveTaskListConfig,
@@ -110,6 +112,9 @@ import type { EffectiveQueueRow, IssueRow, QueueEligibility, QueueView as QueueV
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState } from "@/views/ViewChrome";
+import { ChooseWorkspace } from "@/views/ChooseWorkspace";
+import "./queue.css";
+import { workspaceScope } from "@/views/workspace-scope";
 import {
   effectivePreview,
   ELIGIBILITY_PRESENTATION,
@@ -135,9 +140,13 @@ import { idsOf, pinnedRef } from "@/lib/write-ref";
  * two overrides are both subtractions — there is no multi-select here, and the `⋯` would be
  * a second way to reach actions the rail already owns for the selected row.
  */
-const QUEUE_ROW_CONFIG = resolveTaskListConfig("tree", {
-  columns: { select: false, disclosure: true, actions: true },
-});
+const QUEUE_ROW_COLUMNS = { select: false, disclosure: true, actions: true } as const;
+
+/** The queue row at this width — the tree's own ladder (row-layout.ts), so the two agree. */
+function useQueueRowConfig() {
+  const plan = useRowPlan();
+  return useMemo(() => resolveTaskListConfig("tree", { columns: QUEUE_ROW_COLUMNS, plan }), [plan]);
+}
 
 /** What the view shows when a write went wrong, and how it went wrong. */
 export interface QueueWriteFailure {
@@ -148,7 +157,7 @@ export interface QueueWriteFailure {
 }
 
 /** Everything the `⋯` on a queue row can do. Built by the view, one closure per row. */
-export type QueueRowActions = (row: TaskRow, trigger: ReactNode) => ReactNode;
+export type QueueRowActions = (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => ReactNode;
 
 /** Is somebody holding this row right now — the resolver's answer, or the page's claim. */
 function inFlight(effective: EffectiveQueueRow | null, row: TaskRow): boolean {
@@ -200,7 +209,7 @@ function Gutter({ children, dim = false }: { children?: ReactNode; dim?: boolean
     <span
       aria-hidden={children ? undefined : true}
       className={cn(
-        "w-12 shrink-0 pr-2 text-right font-mono text-[11px] tabular-nums text-text-tertiary",
+        "staple-queue-gutter w-12 shrink-0 pr-2 text-right font-mono text-[11px] tabular-nums text-text-tertiary",
         // IN FLIGHT: somebody is holding this row, so its number is not a turn that is
         // coming. The number stays — it is still where the row sits — it just stops
         // advertising. See the header.
@@ -287,6 +296,7 @@ export function QueueTreeLine({
 }) {
   const identifier = entry.row.issue.identifier;
   const live = inFlight(entry.effective, entry.row);
+  const config = useQueueRowConfig();
   return (
     <div
       data-queue-tree-row={identifier}
@@ -306,7 +316,7 @@ export function QueueTreeLine({
         */}
         <TaskRowLine
           row={entry.row}
-          config={QUEUE_ROW_CONFIG}
+          config={config}
           semantics="list"
           now={now}
           isExpanded={entry.row.isExpanded}
@@ -323,7 +333,7 @@ export function QueueTreeLine({
           onFocus={onFocus}
           onKeyDown={onKeyDown}
           onToggleExpand={onToggle}
-          actionsMenu={actions ? (trigger) => actions(entry.row, trigger) : undefined}
+          actionsMenu={actions ? (trigger, control) => actions(entry.row, trigger, control) : undefined}
           registerRef={registerRef}
         />
       </div>
@@ -571,6 +581,7 @@ function PlanRowContent({
     ? { ...plan.row, hasChildren: true, isExpanded: expanded, childCount: plan.expansion.length }
     : plan.row;
   const live = inFlight(plan.effective, plan.row);
+  const config = useQueueRowConfig();
   return (
     <div
       data-queue-entry={entry.identifier}
@@ -605,14 +616,14 @@ function PlanRowContent({
         <div className="min-w-0 flex-1">
           <TaskRowLine
             row={row}
-            config={QUEUE_ROW_CONFIG}
+            config={config}
             semantics="bare"
             now={now}
             isExpanded={expanded}
             caption={plan.effective ? reasonLabel(plan.effective) ?? undefined : undefined}
             onOpen={() => onOpen(plan.row.workspace, entry.identifier)}
             onToggleExpand={foldable ? onToggleExpand : undefined}
-            actionsMenu={actions ? (trigger) => actions(row, trigger) : undefined}
+            actionsMenu={actions ? (trigger, control) => actions(row, trigger, control) : undefined}
           />
         </div>
       </div>
@@ -830,6 +841,23 @@ export function QueueBoard({
 
 export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  const scope = workspaceScope(session.mode, session.ws, session.workspaces);
+  if (scope.kind === "choose") {
+    return (
+      <ChooseWorkspace
+        page="Queue"
+        sentence="Each workspace keeps its own pickup order, so there is no single queue for all of them. Choose a workspace to see and change its order."
+        workspaces={scope.workspaces}
+        onChoose={session.setWs}
+      />
+    );
+  }
+  // Keyed, so switching workspace starts the page clean (collapsed rows, a failed write).
+  return <WorkspaceQueue key={scope.slug} workspace={scope.slug} onAuthError={onAuthError} />;
+}
+
+function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
+  const session = useSession();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<QueueWriteFailure | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
@@ -837,8 +865,8 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
   /** The last write's answer, shown until the next read lands — a writer redraws from its result. */
   const [written, setWritten] = useState<QueueViewData | null>(null);
 
-  const ws = session.ws || undefined;
-  const workspace = session.ws || session.workspaces[0]?.slug || "";
+  // Always the workspace the page names — never the server's own first (workspace-scope.ts).
+  const ws = workspace || undefined;
 
   /*
    * `all: true`, ALWAYS — see the file header. The plan's positions are the plan's, and a view
@@ -997,12 +1025,22 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
    * THE `⋯`, on every row of this view — the same menu the tree hangs, plus the two moves,
    * which are offered here because here there IS an order on screen to move within.
    */
+  /**
+   * On a phone the row's own up/down arrows are not drawn (queue.css) — they cost the title
+   * its width — so the one-step moves join the `⋯`, which long-press also opens.
+   */
+  const compact = useRowPlan().layout === "compact";
+
   const actions = useCallback<QueueRowActions>(
-    (row, trigger) => {
+    (row, trigger, control) => {
       const ref = row.issue.identifier;
+      const at = compact ? indexOf(ref) : -1;
+      const count = view?.entries.length ?? 0;
       return (
         <QueueRowMenu
           trigger={trigger}
+          open={control?.open}
+          onOpenChange={control?.onOpenChange}
           identifier={ref}
           state={queueRowMenuState(row, queuedIds)}
           disabled={busy || view === null}
@@ -1012,10 +1050,12 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
           onDequeue={() => onRemove(ref)}
           onMoveToTop={() => onMoveToEdge(ref, "first")}
           onMoveToBottom={() => onMoveToEdge(ref, "last")}
+          onMoveUp={at > 0 ? () => onMove(at, at - 1) : undefined}
+          onMoveDown={at >= 0 && at < count - 1 ? () => onMove(at, at + 1) : undefined}
         />
       );
     },
-    [busy, onAdd, onMoveToEdge, onOpen, onRemove, queuedIds, view],
+    [busy, compact, indexOf, onAdd, onMove, onMoveToEdge, onOpen, onRemove, queuedIds, view],
   );
 
   if (queue.error) return <ErrorState error={queue.error} />;
