@@ -230,7 +230,10 @@ export function limitMissingText(limit: Pick<BudgetLimitForecast, "missing" | "m
  * words, and its bands are lower bounds too.
  */
 export interface RemainingText {
+  /** The whole statement, `at least 1h39m` for a lower bound. */
   value: string | null;
+  /** The duration alone, for the figure's typeface; the words around it are set apart. */
+  figure: string | null;
   absent: string | null;
   lowerBound: boolean;
   /** `p10–p90 1h25m–2h10m`, or null without draws. */
@@ -244,10 +247,10 @@ export function remainingText(figure: RemainingFigure): RemainingText {
   const band = figure.simulated ? bandText(figure.simulated) : null;
   if (figure.expectedSeconds === null) {
     const reasons = figure.missing.length > 0 ? figure.missing.map(missingText).join("; ") : "no reason given";
-    return { value: null, absent: `Unknown: ${reasons}`, lowerBound: figure.partial, spread, band };
+    return { value: null, figure: null, absent: `Unknown: ${reasons}`, lowerBound: figure.partial, spread, band };
   }
   const value = formatDuration(figure.expectedSeconds);
-  return { value: figure.partial ? `at least ${value}` : value, absent: null, lowerBound: figure.partial, spread, band };
+  return { value: figure.partial ? `at least ${value}` : value, figure: value, absent: null, lowerBound: figure.partial, spread, band };
 }
 
 /** `p10–p90 1h25m–2h10m`: the lower quantiles of the draws. */

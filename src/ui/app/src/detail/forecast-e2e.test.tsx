@@ -21,7 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { formatDuration, formatProbability, spreadText, bandText, warningText } from "@/lib/forecast-text";
 import type { CalibrationCohort, CalibrationReport, ForecastReport } from "@/lib/types";
-import { CalibrationReportView } from "@/views/calibration/CalibrationView";
+import { CalibrationReportView, INCLUDE_RECONSTRUCTED_BY_DEFAULT } from "@/views/calibration/CalibrationView";
 import { ForecastReportView } from "./ForecastSection";
 import { EMPTY_WS, FORECAST_WS, seedForecastScenario, type ForecastScenario } from "../../../../../test/fixtures/forecast-scenario.ts";
 import { setClock } from "../../../../core/types.ts";
@@ -298,6 +298,7 @@ const renderCalibration = (report: CalibrationReport, includeReconstructed: bool
 
 describe("the workspace calibration report", () => {
   it("is exact by default: the switch is off and no reconstructed section is drawn", () => {
+    expect(INCLUDE_RECONSTRUCTED_BY_DEFAULT).toBe(false);
     expect(exact.filter.include).toEqual(["exact"]);
     const html = renderCalibration(exact, false);
     expect(html).toMatch(/<input type="checkbox" data-testid="include-reconstructed"(?![^>]*checked)[^>]*>/);

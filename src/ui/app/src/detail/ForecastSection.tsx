@@ -110,13 +110,14 @@ function RemainingRow({ label, text, testId, children }: { label: string; text: 
             {text.absent}
           </div>
         ) : (
-          <div className="font-mono text-[13px] tabular-nums" data-figure>
-            {text.value}
+          <div data-figure>
+            {text.lowerBound ? <span className="text-[11px] text-muted-foreground">at least </span> : null}
+            <span className="font-mono text-[13px] tabular-nums">{text.figure}</span>
           </div>
         )}
         {text.spread ? (
           <div className="font-mono text-[10px] text-muted-foreground tabular-nums">
-            {text.spread} · {text.band}
+            <span className="whitespace-nowrap">{text.spread}</span> · <span className="whitespace-nowrap">{text.band}</span>
             {text.lowerBound ? <span className="font-sans"> (lower bounds)</span> : null}
           </div>
         ) : null}
@@ -195,12 +196,12 @@ function CompletionBlock({ completion, mode, onOpen }: { completion: CompletionF
           <div className="text-[10px] text-muted-foreground">Unknown: not counted, so the sums above are lower bounds</div>
           <ul className="text-[11px]">
             {unknown.map((unit) => (
-              <li key={unit.ref} className="flex min-w-0 gap-2">
+              <li key={unit.ref} className="flex min-w-0 flex-wrap gap-x-2">
                 <RefLink refId={unit.ref} onOpen={onOpen} />
                 <span className="min-w-0 truncate text-muted-foreground" title={unit.title}>
                   {unit.title}
                 </span>
-                <span className={cn(UNKNOWN, "ml-auto shrink-0")}>{unknownUnitReason(unit)}</span>
+                <span className={cn(UNKNOWN, "ml-auto shrink-0 pr-0.5")}>{unknownUnitReason(unit)}</span>
               </li>
             ))}
           </ul>

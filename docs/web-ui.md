@@ -783,6 +783,91 @@ at the count's own size, so the row does not grow; it is absent rather than
 `est —` when nothing beneath is estimated, and hidden below the two-line
 breakpoint where the title has the whole row.
 
+**Forecast.** Between the breakdown and the per-child list, an open parent
+shows its forecast, and an open leaf with its own estimate a compact one: both
+read `GET /api/forecast?ref=` (`staple forecast --json`, MCP `forecast`; see
+[timing-semantics.md](timing-semantics.md), "Forecasts") and render it as
+returned. The page computes nothing: every figure is a field of the payload,
+formatted. A resolved issue, or a leaf with no estimate, shows no forecast.
+
+- **Completion**, under a *Forecast* heading with a confidence badge. *Remaining
+  labor* and *Critical path* each give the expected figure, then the draws'
+  `p10–p90` and the `90% band` (p5 to p95). A figure over an unknown unit is a
+  lower bound and says *at least*, with its bands marked *(lower bounds)*; a
+  figure that is null reads *Unknown:* and the reason (`no unit's remaining work
+  is known`), never 0. The path lists its chain, first to last, as issue links
+  with each unit's expected remaining work. One line gives the confidence, what
+  the classes' bounds reach against the 90% target, and why it is not high.
+  Low confidence is a dashed amber badge with the word, never a hue alone.
+  Warnings are small chips in the payload's order, each with a plain-language
+  tooltip (also read to a screen reader). Units in review are listed as *Not
+  forecast*; units whose remaining work is unknown are listed with their reason.
+  A compact (leaf) forecast shows the remaining work only: no path, no unit
+  lists. A settled forecast says every unit is done.
+- **Budget**, in its own dashed frame under its own heading, marked *this machine
+  only*: budget data never synchronizes and never blends with the completion
+  figures. It names the reserve it is measured against, and says when that is
+  the *provisional* 20% default. Per account and limit: what is left, the reset
+  countdown as the server measured it, the work rate in %/work-hour with its
+  confidence and warnings, what the work alone uses and leaves at the reset, and
+  the chance of going under the reserve, alone and with other use of the account.
+  Every unknown figure (no measured work rate, stale reading, unknown labor)
+  reads *unknown* with the reason from `missing` and `missingInputs`, never 0%.
+  With no readings on the machine the block says so.
+- **Data**, a closed disclosure: the forecast, calibration and budget snapshot
+  ids, the instant, and whether the scope is the subtree or the issue itself.
+
+The forecast re-reads on the page's refresh fingerprint.
+
+## Calibration
+
+The fifth destination in the rail (also "Go to Calibration" in the command
+palette) is the workspace's calibration report: `GET /api/calibration`, the
+payload of `staple calibrate --json` and MCP `calibration_cohorts`
+([timing-semantics.md](timing-semantics.md), "Calibration cohorts" and
+"Confidence ranges"). Calibration is per workspace; in hub mode with no
+workspace chosen it reads the first and says which. The header's group, sort
+and filter controls are hidden here: they narrow the issue list, and this report
+is not one.
+
+**Header.** The population (issues, and how many are in the ratio population),
+the *Include reconstructed history* switch, and the snapshot id with its member
+count and instant, so a reader can name the data.
+
+**Exact by default.** The page opens on the `exact` set, captured history: one
+line for the set (samples, coverage over the population with its denominator,
+cohorts, and what is not a sample, by state and reason), then one entry per
+cohort: its key (`task · high · type unknown · area unknown · model unknown`),
+`n`, the class it read and how (`read at full, its own key`, or `fell back to
+all: its key has 1 sample`) with the whole fallback path and each level's
+sample count, coverage (`7 of 10 eligible (70%)`), the median and pooled ratio,
+the ratio a forecast scales by and how it was formed, `p10–p90`, where the next
+piece of work lands (the prediction bounds) with the confidence reached, the
+median interval, the work median and `p10–p90`, timing floors and heavy tails
+when present, and the cohort's warnings as chips. A confidence under the 90%
+target is marked in words. With no samples the set says *No cohorts* and why.
+
+**Reconstructed history is opt-in, and apart.** The switch re-reads with
+`include=reconstructed`; the reconstructed cohorts then appear in their own
+section, *Reconstructed history: backfilled, never pooled with exact*, after the
+exact one, with their own set line. The exact section reads the same either way.
+The switch is page state and every visit opens on exact. The snapshot id changes
+with it, because the selection is part of what the id names.
+
+**How the two are verified.** `detail/forecast-e2e.test.tsx` starts the real
+HTTP server over `test/fixtures/forecast-scenario.ts`, a scenario written through
+the real store (checkouts and comments for the samples, a unit in progress, one
+in review, one unestimated, a dependency, reconstructed history rebuilt by the
+real `reconstruct`) and the real budget ingestion (a status-line limit read
+during a real attempt, a Codex account with no attempt), plus an empty
+workspace. It renders `ForecastReportView` and `CalibrationReportView` from the
+responses and pins the separate blocks, the lower bounds, the chain, the
+confidence and warnings, the unknowns with their reasons, the provisional
+reserve, and the reconstructed toggle leaving the exact section byte-identical.
+`lib/forecast-text.test.ts` pins the formats and the rule for which issues get a
+forecast. The type mirror is pinned against the store's types in
+`test/contract-ui-types.test.ts`.
+
 ## Milestones
 
 The third tab beside Graph — also "Go to milestones" in the command palette —

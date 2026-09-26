@@ -232,12 +232,15 @@ export function CalibrationReportView({
   );
 }
 
+/** The switch's state on every visit: exact only. Reconstructed history is an explicit opt-in. */
+export const INCLUDE_RECONSTRUCTED_BY_DEFAULT = false;
+
 /** The page cap: the store's maximum, so a workspace's cohorts fit one read. */
 const COHORT_LIMIT = 500;
 
 export function CalibrationView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
-  const [includeReconstructed, setIncludeReconstructed] = useState(false);
+  const [includeReconstructed, setIncludeReconstructed] = useState(INCLUDE_RECONSTRUCTED_BY_DEFAULT);
   const ws = session.ws || undefined;
   const workspace = session.ws || session.workspaces[0]?.slug || "";
   const load = useCallback(
