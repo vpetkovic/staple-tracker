@@ -205,6 +205,15 @@ export function keychainCredentialStore(exec: ExecFn = defaultExec): CredentialS
     },
     write(repositoryId, token) {
       try {
+        /**
+         * `add-generic-password` opens a modal "Keychain Not Found" dialog when
+         * this process has no default user keychain. That commonly happens in
+         * test and build processes which isolate HOME. Asking for the default is
+         * read-only and fails on stderr instead, so the caller can use the file
+         * fallback without interrupting the desktop or resetting valid keychain
+         * settings.
+         */
+        exec("security", ["default-keychain", "-d", "user"]);
         // `-U` updates an existing item instead of failing, so re-connecting
         // replaces the credential rather than leaving the old one in place.
         exec("security", [
@@ -330,8 +339,10 @@ export function selectCredentialStore(home: string, options: SelectOptions = {})
   }
 
   const probeId = `${CREDENTIAL_SERVICE}-probe`;
+  let wroteProbe = false;
   try {
     os.write(probeId, "probe");
+    wroteProbe = true;
     const readBack = os.read(probeId);
     os.delete(probeId);
     if (readBack !== "probe") {
@@ -339,10 +350,12 @@ export function selectCredentialStore(home: string, options: SelectOptions = {})
     }
     return { store: os, fallbackReason: null };
   } catch (error) {
-    try {
-      os.delete(probeId);
-    } catch {
-      // The probe is best effort in both directions.
+    if (wroteProbe) {
+      try {
+        os.delete(probeId);
+      } catch {
+        // The probe is best effort in both directions.
+      }
     }
     const reason =
       error instanceof CredentialStoreUnavailable ? error.message : `${os.mechanism} is not usable here`;
