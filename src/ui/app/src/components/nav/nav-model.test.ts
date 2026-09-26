@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VIEWS, VIEW_LABELS } from "@/lib/session";
+import { VIEWS, VIEW_LABELS, viewUsesIssueFilters } from "@/lib/session";
 import {
   NAV_GROUPS,
   RAIL_STORAGE_KEY,
@@ -21,11 +21,15 @@ describe("the rail's groups", () => {
     expect(new Set(views).size).toBe(views.length);
   });
 
-  it("opens with the Workspace group, in the order Tasks, Queue, Graph, Milestones", () => {
+  it("opens with the Workspace group, in the order Tasks, Queue, Graph, Milestones, Calibration", () => {
     const first = NAV_GROUPS[0]!;
     expect(first.label).toBe("Workspace");
-    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones"]);
-    expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones"]);
+    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Calibration"]);
+    expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "calibration"]);
+  });
+
+  it("shows the issue filters on every issue view and not on the Calibration report", () => {
+    expect(VIEWS.filter((view) => !viewUsesIssueFilters(view))).toEqual(["calibration"]);
   });
 
   it("calls the tree view Tasks and keeps its internal value", () => {

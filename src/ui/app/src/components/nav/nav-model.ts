@@ -17,7 +17,7 @@
  * `lib/view-prefs.ts` treats the sort envelope.
  */
 import type { LucideIcon } from "lucide-react";
-import { GitFork, Layers, ListOrdered, Milestone } from "lucide-react";
+import { Gauge, GitFork, Layers, ListOrdered, Milestone } from "lucide-react";
 import { VIEWS, VIEW_LABELS, type ViewName } from "@/lib/session";
 
 export interface NavItem {
@@ -52,6 +52,7 @@ const ICONS: Record<ViewName, LucideIcon> = {
   queue: ListOrdered,
   graph: GitFork,
   milestones: Milestone,
+  calibration: Gauge,
 };
 
 function item(view: ViewName): NavItem {

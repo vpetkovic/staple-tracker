@@ -12,7 +12,7 @@
  * exist at test time.
  */
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
-import { VIEWS, selectionTarget, viewLabel, type Selection, type ViewName } from "../../lib/session";
+import { VIEWS, selectionTarget, viewLabel, viewUsesIssueFilters, type Selection, type ViewName } from "../../lib/session";
 import { SEED_SETTINGS } from "../../lib/settings";
 import {
   type IssueRow,
@@ -356,40 +356,11 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
     });
   }
 
-  commands.push({
-    id: "filter:assignee",
-    group: "filter",
-    label: "Filter by assignee…",
-    hint: context.assignee || undefined,
-    keywords: "filter assignee who owner mine",
-    action: { type: "page", page: "assignee" },
-  });
-  if (context.assignee !== "") {
-    commands.push({
-      id: "filter:assignee:clear",
-      group: "filter",
-      label: "Clear the assignee filter",
-      hint: context.assignee,
-      keywords: "clear reset assignee filter all",
-      action: { type: "assignee", assignee: "" },
-    });
-  }
-
-  // Handoff risk — the whole of W5's palette surface. Always offered, including when the
-  // count is zero: "nothing is at risk" is the answer the orchestrator came for, and a
-  // command that disappears when the board is healthy is a command nobody ever learns.
-  for (const risk of HANDOFF_RISKS) {
-    const copy = HANDOFF_COPY[risk];
-    const rows = context.rows;
-    commands.push({
-      id: `filter:handoff:${risk}`,
-      group: "filter",
-      label: copy.label,
-      hint: rows ? issueCount(rows.filter((row) => handoffRiskOf(row) === risk).length) : undefined,
-      keywords: copy.keywords,
-      action: { type: "dimension", dimension: "handoff", values: [risk] },
-    });
-  }
+  /*
+   * The issue filters, only where they filter something: the Calibration report is not an issue
+   * list, and the header hides the same controls there (`viewUsesIssueFilters`).
+   */
+  if (viewUsesIssueFilters(context.view)) pushIssueFilters(commands, context);
 
   /*
    * The workspace vocabulary editor — O7b (STA-141). In the `view` group rather than in
@@ -485,4 +456,42 @@ export function filterCommands(commands: readonly PaletteCommand[], query: strin
   });
   scored.sort((a, b) => b.score - a.score || a.index - b.index);
   return scored.map(({ command }) => command);
+}
+
+/** The assignee and handoff-risk filter commands. */
+function pushIssueFilters(commands: PaletteCommand[], context: PaletteContext): void {
+  commands.push({
+    id: "filter:assignee",
+    group: "filter",
+    label: "Filter by assignee…",
+    hint: context.assignee || undefined,
+    keywords: "filter assignee who owner mine",
+    action: { type: "page", page: "assignee" },
+  });
+  if (context.assignee !== "") {
+    commands.push({
+      id: "filter:assignee:clear",
+      group: "filter",
+      label: "Clear the assignee filter",
+      hint: context.assignee,
+      keywords: "clear reset assignee filter all",
+      action: { type: "assignee", assignee: "" },
+    });
+  }
+
+  // Handoff risk — the whole of W5's palette surface. Always offered, including when the
+  // count is zero: "nothing is at risk" is the answer the orchestrator came for, and a
+  // command that disappears when the board is healthy is a command nobody ever learns.
+  for (const risk of HANDOFF_RISKS) {
+    const copy = HANDOFF_COPY[risk];
+    const rows = context.rows;
+    commands.push({
+      id: `filter:handoff:${risk}`,
+      group: "filter",
+      label: copy.label,
+      hint: rows ? issueCount(rows.filter((row) => handoffRiskOf(row) === risk).length) : undefined,
+      keywords: copy.keywords,
+      action: { type: "dimension", dimension: "handoff", values: [risk] },
+    });
+  }
 }
