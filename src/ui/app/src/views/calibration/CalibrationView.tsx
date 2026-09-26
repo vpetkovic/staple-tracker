@@ -240,14 +240,21 @@ export const INCLUDE_RECONSTRUCTED_BY_DEFAULT = false;
 /** The page cap: the store's maximum, so a workspace's cohorts fit one read. */
 const COHORT_LIMIT = 500;
 
+/**
+ * What the page asks for: always the workspace it is labelled with (in hub mode with none chosen
+ * the server would otherwise pick its own first, which need not be the one named), exact unless
+ * the switch is on, and the store's page cap.
+ */
+export function calibrationRequest(workspace: string, includeReconstructed: boolean): { ws: string; include?: "reconstructed"; limit: number } {
+  return { ws: workspace, ...(includeReconstructed ? { include: "reconstructed" as const } : {}), limit: COHORT_LIMIT };
+}
+
 export function CalibrationView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
   const [includeReconstructed, setIncludeReconstructed] = useState(INCLUDE_RECONSTRUCTED_BY_DEFAULT);
   const workspace = session.ws || session.workspaces[0]?.slug || "";
   const load = useCallback(
-    // `ws` is the workspace the page is labelled with, always: in hub mode with none chosen the
-    // server would pick its own first, which need not be the one named here.
-    () => getCalibration({ ws: workspace, include: includeReconstructed ? "reconstructed" : undefined, limit: COHORT_LIMIT }),
+    () => getCalibration(calibrationRequest(workspace, includeReconstructed)),
     [workspace, includeReconstructed],
   );
   const report = useResource(load, [workspace, includeReconstructed, session.version], onAuthError);

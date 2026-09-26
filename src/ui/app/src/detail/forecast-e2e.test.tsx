@@ -21,7 +21,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { asOfText, forecastMode, formatDuration, formatEffort, formatProbability, spreadText, bandText, warningText } from "@/lib/forecast-text";
 import type { CalibrationCohort, CalibrationReport, ForecastReport } from "@/lib/types";
-import { CalibrationReportView, INCLUDE_RECONSTRUCTED_BY_DEFAULT } from "@/views/calibration/CalibrationView";
+import { CalibrationReportView, INCLUDE_RECONSTRUCTED_BY_DEFAULT, calibrationRequest } from "@/views/calibration/CalibrationView";
 import { AwaitingForecast, ForecastReportView } from "./ForecastSection";
 import { EMPTY_WS, FORECAST_WS, seedForecastScenario, type ForecastScenario } from "../../../../../test/fixtures/forecast-scenario.ts";
 import { setClock } from "../../../../core/types.ts";
@@ -159,6 +159,11 @@ describe("an epic's forecast, as the server computed it", () => {
     const html = section(render(epic), 'aria-label="Critical path chain"');
     const buttons = [...html.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map((match) => match[1]);
     expect(buttons).toEqual(chain.map((step) => step.ref));
+    // An identifier never breaks across lines, and keeps its size under a touch screen's 44px floor.
+    for (const button of html.match(/<button[^>]*>/g)!) {
+      expect(button).toContain('data-size="xs"');
+      expect(button).toMatch(/class="[^"]*\bshrink-0\b[^"]*\bwhitespace-nowrap\b/);
+    }
     for (const step of chain) expect(text(html)).toContain(formatEffort(step.seconds!));
   });
 
@@ -190,7 +195,7 @@ describe("an epic's forecast, as the server computed it", () => {
       const { label, tip } = warningText(code);
       // A focusable button, whose accessible name carries the sentence; the tooltip and the
       // inline disclosure (both client-side) show the same sentence.
-      expect(html).toMatch(new RegExp(`<button type="button" data-warning="${code}" aria-expanded="false"`));
+      expect(html).toMatch(new RegExp(`<button type="button" data-size="xs" data-warning="${code}" aria-expanded="false"`));
       expect(text(html)).toContain(`${label}: ${tip}`);
     }
   });
@@ -404,6 +409,11 @@ describe("the workspace calibration report", () => {
     // The snapshot names the selection it read.
     expect(withReconstructed.snapshot.id).not.toBe(exact.snapshot.id);
     expect(text(section(on, 'data-testid="calibration-snapshot"'))).toContain(withReconstructed.snapshot.id);
+  });
+
+  it("asks for the workspace it is labelled with, exact unless the switch is on", () => {
+    expect(calibrationRequest(FORECAST_WS, false)).toEqual({ ws: FORECAST_WS, limit: 500 });
+    expect(calibrationRequest(FORECAST_WS, true)).toEqual({ ws: FORECAST_WS, include: "reconstructed", limit: 500 });
   });
 
   it("with no samples, says there are no cohorts and why, with no figure", () => {

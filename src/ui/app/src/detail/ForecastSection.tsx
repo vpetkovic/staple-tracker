@@ -73,6 +73,7 @@ export function WarningChips({ codes, table, label }: { codes: readonly string[]
                 <TooltipTrigger asChild>
                   <button
                     type="button"
+                    data-size="xs"
                     data-warning={code}
                     aria-expanded={open === code}
                     aria-controls={tipId}
@@ -122,7 +123,9 @@ function RefLink({ refId, onOpen }: { refId: string; onOpen?: (ref: string) => v
   // Never broken across lines: `STA-` on one line and `303` on the next is not an identifier.
   if (!onOpen) return <span className="shrink-0 font-mono whitespace-nowrap">{refId}</span>;
   return (
-    <button type="button" className="shrink-0 font-mono whitespace-nowrap underline-offset-2 hover:underline" onClick={() => onOpen(refId)}>
+    // `data-size="xs"`: an inline identifier keeps its text size on a touch screen, where the
+    // app's 44px floor would stand it on its own line (theme-tokens.css, coarse pointers).
+    <button type="button" data-size="xs" className="shrink-0 font-mono whitespace-nowrap underline-offset-2 hover:underline" onClick={() => onOpen(refId)}>
       {refId}
     </button>
   );
