@@ -1,70 +1,89 @@
 /**
- * The active-filter strip — V4 (STA-89).
+ * The filter strip — quick filters, the filters that are on, and one tap to clear them.
  *
- * ── Why this is a sibling of the header and not a third tier inside it ────────────────
+ * ── ONE ROW UNDER THE HEADER ──────────────────────────────────────────────────────────
  *
- * The obvious place for chips is another row in `<header>`. It is the wrong place, and
- * for a specific structural reason rather than taste: V2's view tabs draw their active
- * underline on the header's own bottom border (`-bottom-px`, see ViewChrome's note in
- * AppShell). Adding a tier below tier 2 leaves that underline floating in the middle of
- * the header with a row of chips beneath it, and the alignment that whole row was built
- * around is gone. So the strip sits between `</header>` and `<main>`, carries its own
- * bottom hairline, and the header is untouched.
+ * Left to right: the QUICK FILTERS (presets.ts) as toggle chips — "My tasks", "In progress",
+ * "Blocked", "High priority", "Bugs", "Unassigned" — lit when on; then every other active
+ * filter as a removable chip that says what it does ("Assigned to vp", "Tagged “ui”"); then
+ * "Clear all" whenever anything is on. On a phone the row scrolls sideways with momentum
+ * instead of wrapping, every chip is a 44px target, and nothing depends on hover.
  *
- * It also earns its place by not existing. With no filters on there is no strip, no
- * border and no vertical space spent — which is the state the app is in most of the time,
- * and it is why a permanent bar would have been furniture.
+ * It sits between `</header>` and `<main>`, carries its own bottom hairline, and replaced the
+ * row the sync strip used to take, so the desktop layout gained quick filters without
+ * getting taller.
  *
- * ── The chips are editable, not just removable ────────────────────────────────────────
+ * ── THE CHIPS ARE EDITABLE, NOT JUST REMOVABLE ────────────────────────────────────────
  *
- * Clicking a chip reopens ITS dimension's menu, so "In Progress" → also In Review is one
- * click on the thing you are looking at rather than a trip back to the Filter button.
- * That is the behaviour ClickUp and Linear both have and it is the difference between
- * chips as a readout and chips as a control. The `×` is a separate button inside the
- * chip so the two intentions never fight over one hit area.
+ * Tapping a chip's words reopens ITS dimension's menu, so "In progress" → also In review is
+ * one tap on the thing you are looking at. The `×` is a separate button so the two
+ * intentions never fight over one hit area. A lit preset is its own chip; the values it
+ * covers are not repeated beside it.
  *
- * Each chip prints its dimension — "Status: Done", not "Done" — because the dimensions
- * overlap in the worst possible way: a label can be called `done`, an assignee can be
- * called `blocked`. Without the prefix the strip would be ambiguous exactly when it
- * matters.
+ * Clear-all resets to the SHIPPED default, which re-hides done: "clear filters" has to land
+ * somewhere predictable, and the only predictable place is where a new tab starts.
  */
-import { X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Check, X } from "lucide-react";
+import { forwardRef, useMemo, useState, type ComponentProps } from "react";
+import { Command, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   activeFilterChips,
   EMPTY_FILTER_CONTEXT,
+  filterDimensionOptions,
   isFilteringNow,
   type FilterContext,
 } from "@/lib/filter-dimensions";
-import { clearFilters, type FilterState } from "@/lib/filters";
+import { clearFilters, UNASSIGNED, withDimension, type FilterState } from "@/lib/filters";
 import { useSession } from "@/lib/session";
+import { configuredKindOrder, configuredStatusOrder, statusCategory } from "@/lib/settings";
 import type { IssueRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { chipPhrase } from "./chip-words";
 import { FilterMenu } from "./FilterMenu";
+import {
+  MY_TASKS_ID,
+  coveredByPresets,
+  filterPresets,
+  loadMe,
+  presetActive,
+  saveMe,
+  togglePreset,
+  type FilterPreset,
+  type PresetContext,
+} from "./presets";
 
-/** The pill itself. Shared by both kinds of chip so they cannot drift apart visually. */
-function ChipBody({ dimensionLabel, label }: { dimensionLabel: string; label: string }) {
-  return (
-    <>
-      <span className="text-text-tertiary">{dimensionLabel}</span>
-      <span className="max-w-[12rem] truncate font-medium">{label}</span>
-    </>
-  );
+const FOCUS = "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
+
+/** A chip's hit area: 28px on a desk, 44px under a thumb. The pill inside carries the look. */
+const HIT = "flex shrink-0 items-center max-md:h-11 md:h-7";
+
+const PILL =
+  "flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] whitespace-nowrap transition-colors max-md:h-9 max-md:px-3.5 max-md:text-[14px]";
+
+/** The page's vocabulary as the presets need it. Read at render, like every other status surface. */
+export function presetContextNow(me: string | null): PresetContext {
+  return {
+    statuses: configuredStatusOrder().map((id) => ({ id, category: statusCategory(id) })),
+    kinds: configuredKindOrder(),
+    me,
+  };
 }
-
-const CHIP_CLASS = cn(
-  "flex h-6 items-center gap-1.5 rounded-md border bg-card pl-2 text-[12px]",
-  "transition-colors",
-);
 
 export function FilterChips() {
   const session = useSession();
+  const [me, setMe] = useState<string | null>(() => loadMe());
   return (
     <FilterChipStrip
       rows={session.issues.data ?? []}
       state={session.filters}
       context={session.filterContext}
       onChange={session.setFilters}
+      presetContext={presetContextNow(me)}
+      onChooseMe={(name) => {
+        saveMe(name);
+        setMe(name);
+      }}
     />
   );
 }
@@ -75,107 +94,217 @@ export interface FilterChipStripProps {
   state: FilterState;
   context?: FilterContext;
   onChange: (next: FilterState) => void;
+  /** What the quick filters are built from. Absent: the built-in vocabulary, nobody is "me". */
+  presetContext?: PresetContext;
+  /** "My tasks" learned who "me" is (or forgot it, with null). */
+  onChooseMe?: (name: string | null) => void;
 }
 
+/** "Which of these is you?" — asked once, the first time "My tasks" is tapped. */
+function WhoAmI({
+  rows,
+  onChoose,
+}: {
+  rows: readonly IssueRow[];
+  onChoose: (name: string) => void;
+}) {
+  const people = filterDimensionOptions("assignee", rows).filter((option) => option.value !== UNASSIGNED);
+  return (
+    <div data-who-am-i>
+      <p className="px-3 pt-3 pb-1 text-[13px] leading-snug">
+        Which of these names is yours? This browser will remember it for “My tasks”.
+      </p>
+      <Command>
+        <CommandList className="max-h-[50dvh]">
+          <CommandGroup>
+            {people.length === 0 ? (
+              <p className="px-2 py-3 text-[13px] text-muted-foreground">No task is assigned to anyone yet.</p>
+            ) : null}
+            {people.map((person) => (
+              <CommandItem
+                key={person.value}
+                value={person.value}
+                data-who-am-i-option={person.value}
+                onSelect={() => onChoose(person.value)}
+                className="max-md:min-h-11"
+              >
+                <span className="flex-1 truncate">{person.label}</span>
+                <span className="font-mono text-[11px] text-text-tertiary tabular-nums">{person.count}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        </CommandList>
+      </Command>
+    </div>
+  );
+}
+
+const PresetChip = forwardRef<
+  HTMLButtonElement,
+  { preset: FilterPreset; on: boolean; onToggle?: () => void } & Omit<ComponentProps<"button">, "children">
+>(function PresetChip({ preset, on, onToggle, className, ...props }, ref) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      data-filter-preset={preset.id}
+      aria-pressed={on}
+      title={preset.description}
+      onClick={onToggle}
+      {...props}
+      className={cn(HIT, "group rounded-full", FOCUS, className)}
+    >
+      <span
+        className={cn(
+          PILL,
+          on
+            ? "border-foreground bg-foreground font-medium text-background"
+            : "bg-card text-foreground hover:bg-surface-hover group-active:bg-surface-hover",
+        )}
+      >
+        {on ? <Check aria-hidden className="size-3.5" strokeWidth={2.5} /> : null}
+        {preset.label}
+      </span>
+    </button>
+  );
+});
+
 /**
- * The strip itself, taking everything as props and reading no context — the split
- * `views/milestones/MilestonesView.tsx` makes for the same reason: a component that reads
- * the session cannot be rendered to a string without standing up a whole session, and every
- * claim worth pinning here is about which chips exist and what they say.
+ * The strip itself, taking everything as props and reading no context, so every claim
+ * worth pinning — which chips exist, what they say, what a tap does — is testable from a
+ * string render.
  */
 export function FilterChipStrip({
   rows,
   state: filters,
   context = EMPTY_FILTER_CONTEXT,
   onChange: setFilters,
+  presetContext = { statuses: [], kinds: ["bug"], me: null },
+  onChooseMe,
 }: FilterChipStripProps) {
-  /*
-   * R4b (STA-187). Both of these come from lib/filter-dimensions.ts rather than from
-   * lib/filters.ts, and it is not a preference: `isFiltering` and `activeChips` there iterate
-   * their own eight dimensions only, so a page filtered by milestone alone would render NO
-   * strip and offer no way to remove the constraint that emptied it.
-   */
-  if (!isFilteringNow(filters)) return null;
-
-  const chips = activeFilterChips(filters, context);
+  const presets = useMemo(() => filterPresets(presetContext), [presetContext]);
+  const [asking, setAsking] = useState(false);
+  const covered = coveredByPresets(filters, presets);
+  const chips = activeFilterChips(filters, context).filter(
+    (chip) => !covered.has(`${chip.dimension}:${chip.value}`),
+  );
+  const filtering = isFilteringNow(filters);
+  const me = presetContext.me;
 
   return (
     <div
       data-filter-chips
-      className="flex shrink-0 flex-wrap items-center gap-1.5 border-b px-4 py-1.5"
+      role="toolbar"
+      aria-label="Quick filters"
+      className={cn(
+        "staple-momentum staple-no-scrollbar flex shrink-0 items-center gap-1.5 border-b px-4",
+        "max-md:gap-2 max-md:overflow-x-auto max-md:px-3 md:flex-wrap md:py-1.5",
+      )}
     >
+      {presets.map((preset) => {
+        const on = presetActive(filters, preset);
+        if (preset.id === MY_TASKS_ID && !me) {
+          // Nobody is "me" yet: the first tap asks, once, and then filters.
+          return (
+            <Popover key={preset.id} open={asking} onOpenChange={setAsking}>
+              <PopoverTrigger asChild>
+                <PresetChip preset={preset} on={false} />
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-[min(18rem,calc(100vw-1.5rem))] p-0">
+                <WhoAmI
+                  rows={rows}
+                  onChoose={(name) => {
+                    setAsking(false);
+                    onChooseMe?.(name);
+                    setFilters(withDimension(filters, "assignee", [name]));
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
+          );
+        }
+        return <PresetChip key={preset.id} preset={preset} on={on} onToggle={() => setFilters(togglePreset(filters, preset))} />;
+      })}
+
+      {me && presets.some((preset) => preset.id === MY_TASKS_ID && presetActive(filters, preset)) ? (
+        <button
+          type="button"
+          data-filter-not-me
+          onClick={() => {
+            onChooseMe?.(null);
+            setFilters(withDimension(filters, "assignee", []));
+          }}
+          className={cn(HIT, "rounded-md px-1 text-[12px] whitespace-nowrap text-text-tertiary hover:text-foreground max-md:text-[13px]", FOCUS)}
+        >
+          Not {me}?
+        </button>
+      ) : null}
+
+      {chips.length > 0 ? <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" /> : null}
+
       {chips.map((chip) => {
+        const phrase = chipPhrase(chip);
         const remove = (
           <button
             type="button"
+            // The accessible names keep the dimension on purpose (view-a11y.test.tsx pins them):
+            // read aloud without the chip beside it, "Remove filter Milestone Release 1.0" is
+            // unambiguous where the visible phrase leans on what surrounds it.
             aria-label={`Remove filter ${chip.dimensionLabel} ${chip.label}`}
+            title={`Remove: ${phrase}`}
             onClick={() => setFilters(chip.remove(filters))}
             className={cn(
-              "flex h-full items-center rounded-r-md px-1.5 text-text-tertiary",
-              "transition-colors hover:bg-surface-hover hover:text-foreground",
-              "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+              HIT,
+              "justify-center rounded-r-full pr-2 pl-1 text-text-tertiary hover:text-foreground max-md:w-11",
+              FOCUS,
             )}
           >
-            <X className="size-3" aria-hidden />
+            <X className="size-3.5" aria-hidden />
           </button>
         );
-
-        // The search chip has no menu to reopen — there is one text box and it is already
-        // on screen — so it renders as a static pill with only the remove affordance.
-        if (chip.dimension === "text") {
-          return (
-            <span key="text" data-filter-chip="text" className={CHIP_CLASS}>
-              <ChipBody dimensionLabel={chip.dimensionLabel} label={chip.label} />
-              {remove}
-            </span>
-          );
-        }
-
+        const body = (
+          <span className="max-w-[16rem] truncate font-medium">{phrase}</span>
+        );
         return (
           <span
             key={`${chip.dimension}:${chip.value}`}
             data-filter-chip={chip.dimension}
-            className={CHIP_CLASS}
+            className="flex shrink-0 items-center rounded-full border bg-surface-selected max-md:h-9"
           >
-            <FilterMenu
-              rows={rows}
-              state={filters}
-              context={context}
-              onChange={setFilters}
-              openAt={chip.dimension}
-            >
-              <button
-                type="button"
-                aria-label={`Edit ${chip.dimensionLabel} filter`}
-                className={cn(
-                  "-ml-2 flex h-full items-center gap-1.5 rounded-l-md pl-2",
-                  "transition-colors hover:bg-surface-hover",
-                  "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
-                )}
-              >
-                <ChipBody dimensionLabel={chip.dimensionLabel} label={chip.label} />
-              </button>
-            </FilterMenu>
+            {chip.dimension === "text" ? (
+              // The search chip has no menu to reopen: the search box is already on screen.
+              <span className="flex h-7 items-center pl-3 text-[12px] max-md:h-11 max-md:text-[14px]">{body}</span>
+            ) : (
+              <FilterMenu rows={rows} state={filters} context={context} onChange={setFilters} openAt={chip.dimension}>
+                <button
+                  type="button"
+                  aria-label={`Edit ${chip.dimensionLabel} filter`}
+                  title={`Change: ${phrase}`}
+                  className={cn(HIT, "rounded-l-full pl-3 text-[12px] max-md:text-[14px]", FOCUS)}
+                >
+                  {body}
+                </button>
+              </FilterMenu>
+            )}
             {remove}
           </span>
         );
       })}
 
-      {/*
-        Clear-all resets to the SHIPPED default, which re-hides done. That is deliberate:
-        "clear filters" has to land somewhere predictable, and the only predictable place
-        is where a new tab starts. Leaving done showing after a clear would mean the app
-        has two different resting states depending on what you did before.
-      */}
-      <Button
-        variant="ghost"
-        size="xs"
-        onClick={() => setFilters(clearFilters())}
-        data-filter-clear
-        className="ml-1 text-text-tertiary hover:text-foreground"
-      >
-        Clear all
-      </Button>
+      {filtering ? (
+        <button
+          type="button"
+          onClick={() => setFilters(clearFilters())}
+          data-filter-clear
+          className={cn(
+            HIT,
+            "ml-auto rounded-md px-2 text-[12px] font-medium whitespace-nowrap text-text-secondary hover:text-foreground max-md:ml-1 max-md:text-[14px]",
+            FOCUS,
+          )}
+        >
+          Clear all
+        </button>
+      ) : null}
     </div>
   );
 }

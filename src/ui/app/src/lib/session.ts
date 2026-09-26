@@ -67,6 +67,56 @@ export function viewLabel(view: ViewName): string {
 }
 
 /**
+ * The name a view wears where there is room for one short word only — the phone's bottom
+ * tab bar, six tabs across 360px. The full name stays the accessible name and the header.
+ */
+export const VIEW_SHORT_LABELS: Record<ViewName, string> = {
+  tree: "Tasks",
+  queue: "Queue",
+  graph: "Graph",
+  milestones: "Milestones",
+  calibration: "Accuracy",
+  budget: "Budget",
+};
+
+// ---------------------------------------------------------------- the workspace in scope
+
+/** What the page calls the "every workspace" selection, everywhere a human reads it. */
+export const ALL_WORKSPACES_LABEL = "All workspaces";
+
+/** The two session fields every scope question is answered from. */
+export type WorkspaceScope = Pick<StapleSession, "mode" | "ws" | "workspaces">;
+
+/**
+ * Is the page showing every workspace at once? Its own state, not "the first workspace":
+ * only a hub has it, and there it is `ws === ""`. Anything that must act on ONE workspace
+ * asks this first and, when it is true, asks the person which one (see
+ * `lib/session-workspace.ts`) instead of reaching for `workspaces[0]`.
+ */
+export function isAllWorkspaces(scope: Pick<WorkspaceScope, "mode" | "ws">): boolean {
+  return scope.mode === "hub" && scope.ws === "";
+}
+
+/**
+ * The one workspace the page is on, or `null` when it is on all of them.
+ *
+ * Single-workspace mode has exactly one workspace and it IS current — that is the only
+ * case in which the first entry of the list is the answer. In a hub, the answer is the
+ * selected slug or nothing; never the first registered workspace.
+ */
+export function currentWorkspace(scope: WorkspaceScope): WorkspaceRef | null {
+  if (scope.mode !== "hub") return scope.workspaces[0] ?? null;
+  if (scope.ws === "") return null;
+  return scope.workspaces.find((workspace) => workspace.slug === scope.ws) ?? null;
+}
+
+/** What a header says the page is scoped to: the workspace's name, or "All workspaces". */
+export function scopeName(scope: WorkspaceScope): string {
+  if (isAllWorkspaces(scope)) return ALL_WORKSPACES_LABEL;
+  return currentWorkspace(scope)?.slug ?? scope.ws;
+}
+
+/**
  * Where the app lands. Tasks is the product — the list is what you look at, and the
  * graph is where you go to answer a question about shape. Declared rather than written
  * as a literal in App.tsx so "what is the default view" has one answer.
@@ -135,7 +185,11 @@ export interface StapleSession {
    */
   focusProject: (projectId: string) => void;
 
-  /** "" means every workspace, and is only reachable in hub mode. */
+  /**
+   * "" means every workspace, and is only reachable in hub mode. It is its OWN state:
+   * read it through `isAllWorkspaces` / `currentWorkspace` / `scopeName` above, never by
+   * falling back to `workspaces[0]`.
+   */
   ws: string;
   setWs: (ws: string) => void;
 

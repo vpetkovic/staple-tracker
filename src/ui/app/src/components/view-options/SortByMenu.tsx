@@ -244,7 +244,7 @@ function OptionRow({
       data-sort-group={group}
       data-sort-option={option}
       onClick={onSelect}
-      className="flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent"
+      className="flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent max-md:min-h-11 max-md:py-2.5"
     >
       <span
         className={cn(

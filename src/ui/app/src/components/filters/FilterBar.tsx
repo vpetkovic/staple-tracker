@@ -124,12 +124,12 @@ export function FilterBar() {
                 setFilters(withText(filters, ""));
               }
             }}
-            placeholder="search"
+            placeholder="Search"
             aria-label="Search tasks"
             data-filter-search
             className={cn(
               "h-7 pl-7 text-[13px]",
-              compact ? "w-[10rem] pr-7" : "w-[9rem] max-w-[36vw]",
+              compact ? "h-11 w-[min(12rem,50vw)] pr-11 text-[16px]" : "w-[9rem] max-w-[36vw]",
               "border-transparent bg-transparent shadow-none",
               "hover:border-input focus-visible:border-ring",
             )}
@@ -143,7 +143,7 @@ export function FilterBar() {
                 setFilters(withText(filters, ""));
                 setSearchOpen(false);
               }}
-              className="absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded text-text-tertiary hover:text-foreground"
+              className="absolute top-1/2 right-0 flex size-11 -translate-y-1/2 items-center justify-center rounded text-text-tertiary hover:text-foreground"
             >
               <X className="size-3.5" aria-hidden />
             </button>

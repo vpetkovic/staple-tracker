@@ -1,52 +1,45 @@
 /**
- * WORK WORKSPACE SETTINGS — the dialog that hosts the shell. O7b (STA-141) built the
- * first panel; R6b (STA-177) replaced its two tabs with a registry-driven shell.
+ * SETTINGS — the dialog that hosts the sheet. O7b (STA-141) built the first panel; R6b
+ * (STA-177) replaced its two tabs with a registry-driven shell; it is now global.
  *
  * ── WHY A DIALOG AND NOT A VIEW ───────────────────────────────────────────────────────
  *
- * `lib/session.ts` VIEWS is `["tree", "graph"]` and the tuple is load-bearing: the header
- * tabs, the palette's "Go to …" commands and App's switch are all derived from it, so a
- * third member would put "settings" in the tab row beside the two things the app is FOR.
- * Settings is not a place you look at work from; it is a thing you do to the workspace and
- * then leave. That is a dialog, mounted above the shell beside the palette and the create
- * form, reached the same two ways every other shell verb is — a visible control and the
- * command palette — and, since R6b, by URL (`?settings=<category>`, see SettingsMount).
+ * Settings is not a place you look at work from; it is a thing you do and then leave. That
+ * is a dialog, mounted above the shell beside the palette and the create form, reached from
+ * a visible control, the command palette, the sync pill, and by URL
+ * (`?settings=<section>&settings-ws=<workspace>`, see SettingsMount). On a phone it is a
+ * full-screen sheet: the list of sections, then a section, with Back.
  *
- * ── WHAT THIS FILE OWNS, AND WHAT IT HANDS DOWN ───────────────────────────────────────
+ * ── GLOBAL, WITH A WORKSPACE PICKER INSIDE ────────────────────────────────────────────
  *
- * Three things: the fetch (`useWorkspaceSettings`), the write path (`applyTo`), and the
- * dialog's FRAME — which of the shell's arrangements applies, from the viewport width and
- * the full-screen toggle. The shell (`SettingsShell`) draws the nav and the panes from
- * `settingCategories()` and asks `CategoryContent` what goes in the selected one. The URL
- * belongs to the mount, which passes the requested category in and takes selections out.
+ * It opens from anywhere — All workspaces included — on the same sheet. The sections that
+ * are about the computer (Cloud, Hub registry, Usage & budget, This machine) read the
+ * page's own settings snapshot. The sections that are about ONE workspace edit `target`
+ * (`settingsTarget` in settings-shell.ts), fetched on its own by `useTargetSettings` so the
+ * page's vocabulary is never overwritten by another workspace's; the picker above them
+ * changes `target` in place, through the URL, without closing anything. With no target
+ * (All workspaces, nothing remembered) a per-workspace section asks which workspace.
  *
  * ── ONE WRITE PATH ────────────────────────────────────────────────────────────────────
  *
  * `applyTo` is the only function in this file that talks to the server, and every editor
- * shares it. It POSTs one ordered batch, publishes the WHOLE returned envelope to
- * lib/settings.ts, and bumps the session's data version so the tree and the graph refetch —
- * because a removal with a migrate-to has just rewritten the status of every issue that
- * carried it, and a list still showing the old one is a list that is wrong rather than
- * merely stale.
+ * shares it. It POSTs one ordered batch to the section's workspace, hands the returned
+ * envelope to the target's local state (and to lib/settings.ts only when it IS the page's
+ * workspace), and bumps the session's data version so the tree and the graph refetch.
  *
  * ── REFUSALS ARE THE STORE'S SENTENCE ─────────────────────────────────────────────────
  *
- * Nothing in this dialog decides whether an edit is ALLOWED. The store refuses a duplicate
- * id, a removal that still has rows and no target, and the removal of the last status in a
- * category it writes into — and each refusal arrives as its own sentence through
- * `describeRefusal`. `applyTo` RETURNS it (null on success) rather than holding it, so the
- * form that posted the batch can put the sentence on the row or field it names (R6c).
+ * Nothing in this dialog decides whether an edit is ALLOWED. The store refuses, and each
+ * refusal arrives as its own sentence through `describeRefusal`. `applyTo` RETURNS it
+ * (null on success) so the form that posted the batch can put it where it belongs (R6c).
  *
  * ── LEAVING IS A CHOICE WHILE SOMETHING IS UNSAVED ────────────────────────────────────
  *
- * Since R6c the editors hold a draft, and every way out of the shell — the X, Esc, a
- * click on the overlay, the stacked layout's Back, selecting another category — goes
- * through one guard: clean, it proceeds; dirty, it asks (`UnsavedChangesDialog`) and
- * proceeds only on "Discard changes". The forms report their dirty state through
- * `onDirtyChange`; the dialog does not know what is dirty, only that something is.
- * `beforeunload` covers the tab itself.
+ * Every way out of a section — the X, Esc, the overlay, Back, another section, another
+ * workspace in the picker — goes through one guard: clean, it proceeds; dirty, it asks
+ * (`UnsavedChangesDialog`) and proceeds only on "Discard changes".
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   Dialog,
@@ -55,15 +48,18 @@ import {
   DialogPortal,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ApiError, putSettings } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import {
   publishWorkspaceSettings,
-  settingCategories,
-  useWorkspaceSettings,
+  subscribeWorkspaceSettings,
+  workspaceSettings,
   type SettingOp,
+  type WorkspaceSettingsEnvelope,
 } from "@/lib/settings";
 import { useSession } from "@/lib/session";
+import { asksForWorkspace, loadRememberedWorkspace } from "@/lib/session-workspace";
 import type { VocabularyOp } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
@@ -75,13 +71,18 @@ import { leaveDecision } from "./form/form-model";
 import { SettingsShell } from "./SettingsShell";
 import {
   STACKED_QUERY,
+  needsWorkspaceChoice,
   otherShellMode,
   resolveCategory,
   scopeSummaryOf,
   settingsFrameClass,
+  settingsTarget,
+  withShellCategories,
   type ShellMode,
   type ShellPane,
 } from "./settings-shell";
+import { useTargetSettings } from "./useTargetSettings";
+import { WorkspaceChooser } from "./WorkspaceChooser";
 
 /**
  * Is the viewport too narrow for two panes? Read once at mount and then subscribed, so
@@ -102,34 +103,54 @@ function useStacked(): boolean {
   return stacked;
 }
 
+/** The page's own settings snapshot (lib/settings.ts), without fetching it a second time. */
+function usePageSettings(): WorkspaceSettingsEnvelope {
+  return useSyncExternalStore(subscribeWorkspaceSettings, workspaceSettings, workspaceSettings);
+}
+
 export function SettingsDialog({
   open,
   category,
+  workspace = "",
   onCategoryChange,
+  onWorkspaceChange = () => {},
   onOpenChange,
 }: {
   open: boolean;
   /** The category the URL asked for; `""` for "whichever is first". */
   category: string;
+  /** The workspace the URL asked the per-workspace sections to edit; `""` for the default. */
+  workspace?: string;
   onCategoryChange: (category: string) => void;
+  /** The in-Settings picker chose another workspace. The dialog stays open. */
+  onWorkspaceChange?: (workspace: string) => void;
   onOpenChange: (open: boolean) => void;
 }) {
   const session = useSession();
-  // `ws || undefined` — "" means "all workspaces" on the session and there is no such
-  // thing as an all-workspaces vocabulary; the server then resolves its default handle,
-  // which in single-workspace mode is the only one there is.
-  const resource = useWorkspaceSettings({ ws: session.ws || undefined, version: session.version });
-  const applyTo = useCallback<ApplyTo>(
-    async (target: "statuses" | "kinds" | "settings", ops: VocabularyOp[] | SettingOp[]): Promise<Refusal | null> => {
+  const page = usePageSettings();
+  const [remembered] = useState(() => loadRememberedWorkspace());
+  /** Which workspace the per-workspace sections edit; "" = not chosen, so they ask. */
+  const target = settingsTarget(session, workspace, remembered);
+  const targetSettings = useTargetSettings(target, session.version);
+
+  const write = useCallback(
+    async (
+      kind: "statuses" | "kinds" | "settings",
+      ops: VocabularyOp[] | SettingOp[],
+      forWorkspace?: string,
+    ): Promise<Refusal | null> => {
+      // A global section writes through the page's workspace route (the server keeps global
+      // keys in config.json whichever workspace carries them); a per-workspace one, the target's.
+      const ws = forWorkspace ?? (session.ws || undefined);
       try {
         const next =
-          target === "settings"
-            ? await putSettings(target, ops as SettingOp[], { ws: session.ws || undefined })
-            : await putSettings(target, ops as VocabularyOp[], { ws: session.ws || undefined });
-        publishWorkspaceSettings(next);
-        // A migrate-to removal rewrote issue rows. Everything on screen has to refetch,
-        // and the fingerprint poll would get there within 1.5s anyway — this only makes
-        // the list agree with the dialog in the same frame the dialog updates.
+          kind === "settings"
+            ? await putSettings(kind, ops as SettingOp[], { ws })
+            : await putSettings(kind, ops as VocabularyOp[], { ws });
+        if (forWorkspace !== undefined) targetSettings.replace(next as WorkspaceSettingsEnvelope);
+        // The page's snapshot takes the answer only when it is the page's own workspace.
+        if (ws === (session.ws || undefined)) publishWorkspaceSettings(next);
+        // A migrate-to removal rewrote issue rows. Everything on screen refetches.
         session.refresh();
         return null;
       } catch (error) {
@@ -139,7 +160,17 @@ export function SettingsDialog({
         return describeRefusal({ message: error instanceof Error ? error.message : String(error) });
       }
     },
-    [session],
+    [session, targetSettings],
+  );
+  /** The write path as each kind of section sees it: global through the page, per-workspace through the target. */
+  const applyGlobal = useMemo(
+    () => ((kind: "statuses" | "kinds" | "settings", ops: VocabularyOp[] | SettingOp[]) => write(kind, ops)) as ApplyTo,
+    [write],
+  );
+  const applyTarget = useMemo(
+    () =>
+      ((kind: "statuses" | "kinds" | "settings", ops: VocabularyOp[] | SettingOp[]) => write(kind, ops, target)) as ApplyTo,
+    [write, target],
   );
 
   /**
@@ -170,22 +201,14 @@ export function SettingsDialog({
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
-  const settings = resource.settings;
   /**
-   * Re-read on every render: `settings` above is the same snapshot the accessor reads,
-   * so this is the served registry, in shell order, with no list of its own.
-   *
-   * `withCloudCategory` is the ONE addition to that list, and it is not a
-   * back door into the registry — it is the opposite (S13, STA-258). Cloud state
-   * is machine-local because the workspace database synchronizes, so it has no
-   * registry entry, is not a setting key, and never travels on `/api/settings`.
-   * The category object is declared in `cloud-settings.ts`, in the browser, and
-   * merged in here so the shell can render it in the same place as everything
-   * else while it is backed by an entirely different store. `withTelemetryCategory`
-   * ("Usage & budget") is the second, for the same reason: budget capture, bindings and
-   * automatic collection are this machine's (`telemetry-settings.ts`).
+   * The served registry in shell order, plus the sections the browser declares itself:
+   * Cloud and Usage & budget (machine-local stores, `cloud-settings.ts` and
+   * `telemetry-settings.ts`), and the two this sheet split out of Cloud — Hub registry
+   * (global) and Cloud sync (per workspace). None of those is a back door into the
+   * registry: nothing they hold ever travels on `/api/settings`.
    */
-  const categories = withTelemetryCategory(withCloudCategory(settingCategories()));
+  const categories = withShellCategories(withTelemetryCategory(withCloudCategory(page.registry.categories)));
   const active = resolveCategory(categories, category);
 
   const stacked = useStacked();
@@ -216,7 +239,35 @@ export function SettingsDialog({
   const toggleMode = useCallback(() => setMode((current) => otherShellMode(current)), []);
   const close = useCallback(() => guard(() => onOpenChange(false)), [guard, onOpenChange]);
 
-  const fallback = resource.error ? <ErrorState error={resource.error} /> : <LoadingState rows={5} />;
+  const fallback = <LoadingState rows={5} />;
+  const chooseWorkspace = useCallback(
+    (slug: string) => {
+      if (slug === target) return;
+      guard(() => onWorkspaceChange(slug));
+    },
+    [guard, onWorkspaceChange, target],
+  );
+  const workspacePicker = asksForWorkspace(session) ? (
+    <label className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <span className="text-[13px] text-muted-foreground">Workspace</span>
+      <Select value={target || undefined} onValueChange={chooseWorkspace}>
+        <SelectTrigger
+          data-settings-target
+          aria-label="Workspace these settings change"
+          className="h-11 min-w-[12rem] flex-1 text-[15px] sm:h-9 sm:max-w-xs sm:flex-none sm:text-sm"
+        >
+          <SelectValue placeholder="Choose a workspace" />
+        </SelectTrigger>
+        <SelectContent position="popper" align="start">
+          {session.workspaces.map((entry) => (
+            <SelectItem key={entry.slug} value={entry.slug} className="min-h-11 sm:min-h-8">
+              {entry.slug}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </label>
+  ) : null;
 
   return (
     <Dialog
@@ -255,7 +306,8 @@ export function SettingsDialog({
             layout={layout}
             pane={pane}
             mode={mode}
-            scope={scopeSummaryOf(settings)}
+            scope={scopeSummaryOf(page, target)}
+            workspacePicker={workspacePicker}
             onSelect={select}
             onBack={back}
             onToggleMode={toggleMode}
@@ -263,20 +315,25 @@ export function SettingsDialog({
             TitleTag={DialogTitle}
             DescriptionTag={DialogDescription}
             fallback={fallback}
-            renderCategory={(current) =>
-              resource.error ? (
-                <ErrorState error={resource.error} />
-              ) : (
+            renderCategory={(shown) => {
+              const perWorkspace = shown.scope === "workspace";
+              if (needsWorkspaceChoice(shown, target)) {
+                return <WorkspaceChooser section={shown.label} workspaces={session.workspaces} onChoose={chooseWorkspace} />;
+              }
+              if (perWorkspace && targetSettings.error) return <ErrorState error={targetSettings.error} />;
+              const envelope = perWorkspace ? targetSettings.settings : page;
+              if (!envelope) return <LoadingState rows={4} />;
+              return (
                 <CategoryContent
-                  key={`${current.id}:${formKey}`}
-                  category={current}
-                  settings={settings}
-                  applyTo={applyTo}
+                  key={`${shown.id}:${perWorkspace ? target : ""}:${formKey}`}
+                  category={shown}
+                  settings={envelope}
+                  applyTo={perWorkspace ? applyTarget : applyGlobal}
                   onDirtyChange={setDirty}
-                  ws={session.ws || undefined}
+                  ws={perWorkspace ? target : session.ws || undefined}
                 />
-              )
-            }
+              );
+            }}
           />
           <UnsavedChangesDialog
             open={pendingLeave !== null}

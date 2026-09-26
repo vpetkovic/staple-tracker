@@ -253,7 +253,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           // Closing first: Radix marks the page inert while a dialog is open, and
           // leaving the palette up would trap focus between the two.
           close();
-          openSettings();
+          openSettings(next.section ? { section: next.section } : {});
           return;
         case "page":
           setPage(next.page);

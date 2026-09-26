@@ -313,7 +313,9 @@ describe("a disconnected workspace renders quietly and asks nobody anything", ()
     expect(effects.length).toBeGreaterThan(0);
 
     const joined = effects.join("\n");
-    expect(joined).toContain("getCloudStatus()");
+    // `{ ws }` since Settings went global: a per-workspace Cloud sync section reads ITS
+    // workspace's status. Still the same single loopback read, still no egress.
+    expect(joined).toContain("getCloudStatus({ ws })");
     for (const egress of ["listCloudDevices", "revokeCloudDevice", "cloudConnect", "previewCloudConnect"]) {
       expect(joined, `${egress} is called from an effect — that is a ping on open`).not.toContain(egress);
     }
@@ -394,8 +396,15 @@ describe("nothing here is a workspace setting", () => {
     const file = source("CategoryContent.tsx");
     // Matched by id, BEFORE the editor switch, and without `applyTo` — which is
     // the function that writes `/api/settings`, i.e. the workspace database.
-    expect(file).toMatch(/isCloudCategory\(category\.id\)\) return <CloudSection ws=\{ws\} \/>/);
-    expect(file.indexOf("isCloudCategory")).toBeLessThan(file.indexOf("switch (category.editor)"));
+    // Since Settings went global the one section is three parts (hub, registry, one
+    // workspace's connection), each matched by id and none handed `applyTo`.
+    expect(file).toMatch(/isCloudCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="machine" \/>/);
+    expect(file).toMatch(/isHubRegistryCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="registry" \/>/);
+    expect(file).toMatch(/isWorkspaceCloudCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="workspace" \/>/);
+    for (const matcher of ["isCloudCategory", "isHubRegistryCategory", "isWorkspaceCloudCategory"]) {
+      expect(file.lastIndexOf(`${matcher}(category.id)`)).toBeLessThan(file.indexOf("switch (category.editor)"));
+    }
+    expect(file).not.toMatch(/<CloudSection[^>]*applyTo/);
   });
 
   it("names no setting key anywhere in the section", () => {

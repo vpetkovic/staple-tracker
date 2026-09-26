@@ -22,7 +22,7 @@
  * graph need — sticky group headers and a canvas that fills its parent — are both
  * properties of the scroll container, and a shell that owns it owns those decisions too.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { CommandPaletteMount } from "@/components/CommandPaletteMount";
 import { CreateIssueMount } from "@/components/CreateIssueMount";
@@ -56,6 +56,14 @@ import {
   type StapleSession,
   type ViewName,
 } from "@/lib/session";
+import {
+  afterWorkspaceSwitch,
+  isNavigation,
+  readShellUrl,
+  withShellState,
+  type ShellUrlState,
+} from "@/lib/session-url";
+import { rememberWorkspace } from "@/lib/session-workspace";
 import { useWorkspaceSettings } from "@/lib/settings";
 import type { SortPref } from "@/lib/sort-modes";
 import type { MilestoneListRow, MilestoneView, ProjectRow } from "@/lib/types";
@@ -120,13 +128,21 @@ export function App() {
     return () => window.removeEventListener("staple:auth-error", onBroadcast);
   }, [onAuthError]);
 
-  const [view, setView] = useState<ViewName>(DEFAULT_VIEW);
+  /**
+   * THE ADDRESS, read once before the first render — lib/session-url.ts. When it describes a
+   * page (it carries `view`), the workspace, the view, the milestone focus and that scope's
+   * filters all start from it; a bare address starts from what this browser remembered.
+   */
+  const [initialUrl] = useState<ShellUrlState | null>(() =>
+    typeof window === "undefined" ? null : readShellUrl(window.location.search),
+  );
+  const [view, setView] = useState<ViewName>(initialUrl?.view ?? DEFAULT_VIEW);
   /**
    * R4c (STA-188). Which milestone the page was pointed at, and by what. Beside `view`
    * because it is the second half of one navigation act; see lib/session.ts.
    */
-  const [milestoneFocus, setMilestoneFocus] = useState<string | null>(null);
-  const [ws, setWs] = useState("");
+  const [milestoneFocus, setMilestoneFocus] = useState<string | null>(initialUrl?.focus ?? null);
+  const [ws, setWsState] = useState(initialUrl?.ws ?? "");
   const [selection, setSelection] = useState<Selection | null>(null);
 
   /**
@@ -142,9 +158,12 @@ export function App() {
    * `filtersForScope` in lib/view-prefs.ts.
    */
   const [legacyFilters, setLegacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
-  const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(
-    () => loadViewPrefs(window.localStorage).filters,
-  );
+  const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(() => {
+    const stored = loadViewPrefs(window.localStorage).filters;
+    // An address that describes a page decides that page's filters, whatever was stored.
+    if (!initialUrl) return stored;
+    return withFiltersForScope(stored, sortScopeKey(initialUrl.ws, initialUrl.view), initialUrl.filters);
+  });
 
   /**
    * How the list is arranged — R1 (STA-100). Seeded during the FIRST render for the same
@@ -403,6 +422,71 @@ export function App() {
     },
     [ws, legacyFilters],
   );
+
+  /**
+   * SWITCHING WORKSPACE KEEPS THE PAGE — `afterWorkspaceSwitch` in lib/session-url.ts. The
+   * view stays; the milestone focus (a milestone of the workspace being left) does not; the
+   * filters are the target scope's own, which `filtersForScope` resolves on the next render.
+   * A chosen workspace is also remembered as the default for "which workspace?" questions
+   * asked later from All workspaces (lib/session-workspace.ts).
+   */
+  const setWs = useCallback(
+    (next: string) => {
+      const landing = afterWorkspaceSwitch({ view }, next, () => filters);
+      setWsState(landing.ws);
+      setMilestoneFocus(landing.focus);
+      if (next) rememberWorkspace(next);
+    },
+    [view, filters],
+  );
+
+  /**
+   * THE URL MIRRORS THE PAGE, and the page follows the URL on Back and Forward.
+   *
+   * Every change to the workspace, the view, the focus or the filters on screen is written
+   * into the address. Going somewhere (another workspace or view) pushes a history entry, so
+   * Back — the phone's back gesture included — returns from it; narrowing the list replaces
+   * the entry, so Back does not replay every keystroke typed into search. `lastSynced` is
+   * the state the address last held, which is what makes a popstate write nothing back.
+   */
+  const lastSynced = useRef<ShellUrlState | null>(initialUrl);
+  const shellState = useMemo<ShellUrlState>(
+    () => ({ ws, view, filters, focus: milestoneFocus }),
+    [ws, view, filters, milestoneFocus],
+  );
+  useEffect(() => {
+    const href = withShellState(window.location.href, shellState);
+    const navigating = isNavigation(lastSynced.current, shellState);
+    lastSynced.current = shellState;
+    if (href === window.location.href) return;
+    if (navigating) window.history.pushState(null, "", href);
+    else window.history.replaceState(null, "", href);
+  }, [shellState]);
+
+  useEffect(() => {
+    const onPop = () => {
+      const next = readShellUrl(window.location.search);
+      if (!next) return;
+      lastSynced.current = next;
+      setWsState(next.ws);
+      setView(next.view);
+      setMilestoneFocus(next.focus);
+      setFilterPrefs((current) => withFiltersForScope(current, sortScopeKey(next.ws, next.view), next.filters));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  /**
+   * An address naming a workspace this hub does not have (a link from another machine, a
+   * workspace unregistered since) lands on All workspaces rather than on an error.
+   */
+  const knownWorkspaces = bootstrap.data?.workspaces;
+  const hubMode = bootstrap.data?.mode === "hub";
+  useEffect(() => {
+    if (!knownWorkspaces || ws === "") return;
+    if (!hubMode || !knownWorkspaces.some((workspace) => workspace.slug === ws)) setWsState("");
+  }, [knownWorkspaces, hubMode, ws]);
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const pin = useCallback(

@@ -54,6 +54,7 @@ import { toggleValue } from "@/lib/filters";
 import type { FilterState } from "@/lib/filters";
 import type { IssueRow } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { dimensionWords } from "./chip-words";
 
 export interface FilterMenuProps {
   /** The rows the options are derived from — the unfiltered page, not the visible one. */
@@ -143,7 +144,7 @@ export function FilterMenuBody({
       <div data-filter-menu={dimension ? dimension.id : "root"}>
         {dimension === null ? (
           <Command>
-            <CommandInput placeholder="Filter by…" />
+            <CommandInput placeholder="Filter by…" aria-label="Find a filter" />
             <CommandList>
               <CommandEmpty>no such filter</CommandEmpty>
               <CommandGroup>
@@ -152,11 +153,12 @@ export function FilterMenuBody({
                   return (
                     <CommandItem
                       key={entry.id}
-                      value={entry.label}
+                      value={dimensionWords(entry.id, entry.label)}
                       onSelect={() => onPage(entry.id)}
                       data-filter-dimension={entry.id}
+                      className="max-md:min-h-11"
                     >
-                      <span className="flex-1">{entry.label}</span>
+                      <span className="flex-1">{dimensionWords(entry.id, entry.label)}</span>
                       {/* The count of what is ALREADY on, so re-opening the menu tells
                           you where you have been. Silent when nothing is selected. */}
                       {selected > 0 ? (
@@ -177,22 +179,22 @@ export function FilterMenuBody({
                 nothing behind it to go back to, and an arrow that navigates somewhere the
                 user never was is a trapdoor. */}
             {pinned ? (
-              <div className="border-b px-2.5 py-2 text-[13px] font-medium">{dimension.label}</div>
+              <div className="border-b px-2.5 py-2 text-[13px] font-medium">{dimensionWords(dimension.id, dimension.label)}</div>
             ) : (
               <button
                 type="button"
                 onClick={() => onPage(null)}
                 className={cn(
-                  "flex w-full items-center gap-1.5 border-b px-2.5 py-2 text-left text-[13px]",
+                  "flex w-full items-center gap-1.5 border-b px-2.5 py-2 text-left text-[13px] max-md:min-h-11",
                   "text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground",
                   "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
                 )}
               >
                 <ChevronLeft className="size-3.5" aria-hidden />
-                {dimension.label}
+                {dimensionWords(dimension.id, dimension.label)}
               </button>
             )}
-            <CommandInput placeholder={`Search ${dimension.label.toLowerCase()}…`} />
+            <CommandInput placeholder="Search…" />
             <CommandList>
               <CommandEmpty>nothing to filter by</CommandEmpty>
               <CommandGroup>
@@ -205,6 +207,7 @@ export function FilterMenuBody({
                       onSelect={() => onChange(toggleValue(state, dimension.id, option.value))}
                       data-filter-option={option.value}
                       data-checked={checked ? "" : undefined}
+                      className="max-md:min-h-11"
                       /* R4b: the five pickup states carry one. Read generically off the
                          option, so this still names no dimension. */
                       title={option.hint}

@@ -233,7 +233,8 @@ export const getPoll = () => request<Poll>("/api/poll");
  * poll — connection state changes when a human runs a command, not while they
  * read a page.
  */
-export const getCloudStatus = () => request<CloudSurfaceReport>("/api/cloud/status");
+export const getCloudStatus = (params: { ws?: string } = {}) =>
+  request<CloudSurfaceReport>(`/api/cloud/status${qs({ ws: params.ws })}`);
 
 /**
  * `GET /api/cloud/workspaces` — every registered workspace with its own
