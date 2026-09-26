@@ -17,8 +17,8 @@
  * `lib/view-prefs.ts` treats the sort envelope.
  */
 import type { LucideIcon } from "lucide-react";
-import { Gauge, GitFork, Layers, ListOrdered, Milestone } from "lucide-react";
-import { VIEWS, VIEW_LABELS, type ViewName } from "@/lib/session";
+import { BatteryMedium, Gauge, GitFork, Layers, ListOrdered, Milestone } from "lucide-react";
+import { MACHINE_VIEWS, VIEWS, VIEW_LABELS, isMachineView, type ViewName } from "@/lib/session";
 
 export interface NavItem {
   /** Stable id; the DOM key and the test hook. */
@@ -53,6 +53,7 @@ const ICONS: Record<ViewName, LucideIcon> = {
   graph: GitFork,
   milestones: Milestone,
   calibration: Gauge,
+  budget: BatteryMedium,
 };
 
 function item(view: ViewName): NavItem {
@@ -66,18 +67,24 @@ function item(view: ViewName): NavItem {
 }
 
 /**
- * The rail's sections, top to bottom. One group today; the shape is a list so the next
- * one is an entry, not a layout.
+ * The rail's sections, top to bottom.
  *
  * The Workspace group lists every view in `VIEWS` order — the tuple is the registry and
- * the rail must not keep a second copy of it. A view moved to another group would be
- * listed there explicitly and dropped from this derivation.
+ * the rail must not keep a second copy of it — except the machine's views, which are
+ * listed in the Machine group below (`MACHINE_VIEWS`): the provider budget is this
+ * machine's and reads the same whichever workspace the switcher names, so filing it
+ * under the workspace would say otherwise.
  */
 export const NAV_GROUPS: readonly NavGroup[] = [
   {
     id: "workspace",
     label: "Workspace",
-    items: VIEWS.map(item),
+    items: VIEWS.filter((view) => !isMachineView(view)).map(item),
+  },
+  {
+    id: "machine",
+    label: "Machine",
+    items: MACHINE_VIEWS.map(item),
   },
 ];
 

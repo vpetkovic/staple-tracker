@@ -27,7 +27,7 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "graph", "milestones", "calibration"] as const;
+export const VIEWS = ["tree", "queue", "graph", "milestones", "calibration", "budget"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /** The human name of each view — the rail row, the content header, the palette command. */
@@ -37,15 +37,28 @@ export const VIEW_LABELS: Record<ViewName, string> = {
   graph: "Graph",
   milestones: "Milestones",
   calibration: "Calibration",
+  budget: "Budget",
 };
+
+/**
+ * The views that are about THIS MACHINE, not a workspace: the provider budget is read from the
+ * machine's hub, never synchronizes, and is the same whichever workspace is picked. The rail
+ * lists them in their own "Machine" group (`components/nav/nav-model.ts`), apart from the
+ * workspace's views.
+ */
+export const MACHINE_VIEWS: readonly ViewName[] = ["budget"];
+
+export function isMachineView(view: ViewName): boolean {
+  return MACHINE_VIEWS.includes(view);
+}
 
 /**
  * Whether the header's group, sort and filter controls act on a view. They narrow the issue list,
  * and the Calibration report is not an issue list: it reads the whole workspace's history, so the
- * controls would promise a filter that does nothing there.
+ * controls would promise a filter that does nothing there. Neither is the machine's Budget view.
  */
 export function viewUsesIssueFilters(view: ViewName): boolean {
-  return view !== "calibration";
+  return view !== "calibration" && !isMachineView(view);
 }
 
 export function viewLabel(view: ViewName): string {

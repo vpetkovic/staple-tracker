@@ -69,6 +69,8 @@ export function bareEnv(extra: Record<string, string> = {}): Record<string, stri
     base[key] = value;
   }
   base.NODE_NO_WARNINGS = "1"; // node:sqlite's ExperimentalWarning is runtime noise
+  // The one STAPLE_ variable a child keeps: the suite's fake launchctl (test/setup/isolated-home.ts).
+  if (process.env.STAPLE_TEST_LAUNCHCTL) base.STAPLE_TEST_LAUNCHCTL = process.env.STAPLE_TEST_LAUNCHCTL;
   return { ...base, ...extra };
 }
 

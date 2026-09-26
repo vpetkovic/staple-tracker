@@ -84,16 +84,21 @@ export function registerTelemetryReadTools(
     "get_budget",
     {
       description:
-        "Provider budget on THIS machine (docs/execution-telemetry.md): per account (those with readings and those a source binding names), each limit's current window with its latest sample, `status`, the high-water `remainingPercent` (the conservative figure) and `missing`. An unknown value is null with a reason (no_sample_yet, source_unavailable, window_elapsed, reset_not_reported, sliding_window), never 0. `stale` is true when the latest reading's value is over 10 minutes old (judged on observedAt, as history's gaps are). Budget data is machine-local and never synchronizes. Same payload as `staple budget --json`.",
-      inputSchema: { account: z.string().optional().describe("Only this account label.") },
+        "Provider budget on THIS machine (docs/execution-telemetry.md): per account (those with readings and those a source binding names), each limit's current window with its latest sample, `status`, the high-water `remainingPercent` (the conservative figure) and `missing`. An unknown value is null with a reason (no_sample_yet, source_unavailable, window_elapsed, reset_not_reported, sliding_window), never 0. `stale` is true when the latest reading's value is over 10 minutes old (judged on observedAt, as history's gaps are). Each limit's `pressure` (PROVISIONAL until the admission policy defines it): MEASURED `observed` pace (%/hour of wall clock) and `lastReadingAgeSeconds`; FORECAST `sustainablePercentPerHour` = (remaining − reserve) / hours to reset, `ratio` = observed / sustainable, `state` unsafe at 1 or over (or at the reserve already) else within, `exhaustion` and `reserveReach` at the pace, and `safeConcurrency` always null (policy_not_defined). Budget data is machine-local and never synchronizes. Same payload as `staple budget --json`.",
+      inputSchema: {
+        account: z.string().optional().describe("Only this account label."),
+        reserve: z.union([z.string(), z.number()]).optional().describe("The reserve pressure protects, a percent of each limit (20 or \"20%\"); a provisional default otherwise, said on `reserve.source`."),
+      },
       outputSchema: {
         asOf: z.string(),
         budgetCapture: z.boolean(),
+        reserve: z.record(z.string(), z.unknown()),
+        pressureRule: z.record(z.string(), z.unknown()),
         accounts: z.array(z.record(z.string(), z.unknown())),
       },
       annotations: { title: "Get budget", ...READ },
     },
-    ({ account }: { account?: string }) => run(() => readBudget(stapleHome(), { account })),
+    ({ account, reserve }: { account?: string; reserve?: string | number }) => run(() => readBudget(stapleHome(), { account, reserve })),
   );
 
   server.registerTool(

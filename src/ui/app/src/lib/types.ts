@@ -2701,3 +2701,91 @@ export interface ForecastReport {
   readonly completion: CompletionForecast;
   readonly budget: BudgetForecast;
 }
+
+// ------------------------------------------------------------------ this machine's budget
+
+/**
+ * `GET /api/budget` (`staple budget --json`, MCP `get_budget`), mirroring `BudgetView` in
+ * src/core/telemetry/read-budget.ts and `LimitPressure` in src/core/telemetry/budget-pressure.ts.
+ * docs/execution-telemetry.md, "Pressure", says what every field means. Machine-level: it reads
+ * this machine's hub, never a workspace, and never synchronizes.
+ */
+/** The fields of a stored sample the page reads; the payload carries the whole record. */
+export interface BudgetSampleView {
+  readonly id: string;
+  readonly observedAt: string;
+  readonly recordedAt: string;
+  readonly usedPercent: number | null;
+  readonly source: { readonly kind: string; readonly harnessVersion: string | null; readonly field: string };
+  readonly heartbeat: boolean;
+}
+
+/** The fields of a limit window the page reads. */
+export interface BudgetWindowView {
+  readonly id: string;
+  readonly label: string | null;
+  readonly resetsAt: string | null;
+  readonly windowSeconds: number | null;
+  readonly status: "current" | "elapsed" | "superseded";
+}
+
+export interface ReserveReach {
+  readonly atPace: "already" | "before_reset" | "after_reset" | "never";
+  readonly seconds: number | null;
+  readonly at: string | null;
+}
+
+export interface PressureConfidence {
+  readonly label: "low" | "medium";
+  readonly readings: number;
+  readonly spanSeconds: number;
+  readonly warnings: string[];
+}
+
+export interface LimitPressure {
+  readonly provisional: true;
+  readonly observed: BudgetPace | null;
+  readonly lastReadingAgeSeconds: number | null;
+  readonly secondsToReset: number | null;
+  readonly reservePercent: number;
+  readonly sustainablePercentPerHour: number | null;
+  readonly ratio: number | null;
+  readonly state: "within" | "unsafe" | null;
+  readonly exhaustion: BudgetExhaustion | null;
+  readonly reserveReach: ReserveReach | null;
+  readonly safeConcurrency: null;
+  readonly confidence: PressureConfidence | null;
+  readonly missing: Record<string, string>;
+  readonly missingInputs: Record<string, string[]>;
+}
+
+export interface BudgetLimitReading {
+  readonly limitKey: string;
+  readonly status: string | null;
+  readonly window: BudgetWindowView | null;
+  readonly latestSample: BudgetSampleView | null;
+  readonly highWaterPercent: number | null;
+  readonly remainingPercent: number | null;
+  readonly regressionCount: number | null;
+  readonly sampleCount: number | null;
+  readonly stale: boolean | null;
+  readonly missing: Record<string, string>;
+  readonly quality: { readonly state: BudgetState; readonly reasons: string[] };
+  readonly pressure: LimitPressure;
+}
+
+export interface BudgetAccountView {
+  readonly provider: string | null;
+  readonly accountRef: string;
+  readonly bound: boolean;
+  readonly limits: BudgetLimitReading[];
+  readonly missing: Record<string, string>;
+}
+
+export interface BudgetView {
+  readonly asOf: string;
+  readonly budgetCapture: boolean;
+  readonly reserve: { readonly percent: number; readonly source: ReserveSource; readonly note: string | null };
+  readonly pressureRule: { readonly provisional: true; readonly unsafeAtRatio: number; readonly note: string };
+  readonly accounts: BudgetAccountView[];
+}
