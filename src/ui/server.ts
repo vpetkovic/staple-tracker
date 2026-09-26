@@ -146,6 +146,14 @@ import {
   type SetupOptions,
 } from "../core/telemetry/collection/service.js";
 import { PlanConsentStore } from "../core/telemetry/collection/plan-consent.js";
+import {
+  bindBudgetSource,
+  budgetConfig,
+  parseBindingSource,
+  setBudgetCapture,
+  unbindBudgetSource,
+  type BindingHome,
+} from "../core/telemetry/budget-config.js";
 
 interface UiOptions {
   port: number;
@@ -399,6 +407,33 @@ const BUDGET_COLLECTION_WRITES = new Set([
   "/api/budget/collection/unsetup",
   "/api/budget/collection/collect",
 ]);
+
+/**
+ * Budget capture and source bindings, the web Settings' "Usage & budget" section:
+ * `staple budget capture on|off`, `bind` and `unbind`, each the same store method
+ * (`core/telemetry/budget-config.ts`) with the same validation. They write
+ * `<staple home>/config.json`, machine-local and never synced, so like the collection
+ * writes they journal nothing and must not arm the post-write sync trigger.
+ * `GET /api/budget/bindings` is the read (`staple budget bindings --json`).
+ *
+ * No consent ticket: the CLI's `bind` and `capture on` take no `--yes`, and a binding
+ * only names which account a harness home spends from. What the page shows before
+ * turning capture on is its own confirmation; the token and the Origin check are what
+ * keep a foreign page from doing it.
+ */
+const BUDGET_CONFIG_WRITES = new Set(["/api/budget/capture", "/api/budget/bindings/bind", "/api/budget/bindings/unbind"]);
+
+/** A binding home out of a request body: `source` spelled as at the CLI, and its directory. */
+function bindingHomeOf(body: Record<string, unknown>, what: string): BindingHome {
+  const text = (key: string): string | undefined => {
+    const value = body[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "string") throw new StapleError("validation", `${what}${key} must be a string`);
+    return value;
+  };
+  // As at the CLI, the directory that is not the source's own is ignored rather than refused.
+  return { source: parseBindingSource(body.source), configDir: text("configDir"), codexHome: text("codexHome") };
+}
 
 /**
  * What the page shows before a hub restore — the CLI's own disclosure (`runRestore` in
@@ -1406,7 +1441,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/hub/registry/restore" ||
           url.pathname === "/api/hub/registry/adopt" ||
           /** Budget collection: named in one set; `/api/budget/collection` itself is the GET read. */
-          BUDGET_COLLECTION_WRITES.has(url.pathname)
+          BUDGET_COLLECTION_WRITES.has(url.pathname) ||
+          /** Budget capture and bindings: machine-local config writes, named in one set. */
+          BUDGET_CONFIG_WRITES.has(url.pathname)
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1423,7 +1460,15 @@ export function startUiServer(options: UiOptions): UiHandle {
          * same sentence, now stated about the request instead of about the route.
          */
         if (req.method === "POST" && !originAllowed(req)) {
-          deny(res, 403, "forbidden", `Cross-origin request rejected (Origin: ${req.headers.origin})`);
+          /**
+           * `detail.reason` names WHY, so the page can tell this refusal from a dead token:
+           * a phone reaching this server through a forwarder (the tailnet) sends its own
+           * Origin, so it can read everything and write nothing, by design. The page says
+           * so ("changes can only be made from this computer's browser") instead of
+           * treating the refusal as a credential failure.
+           */
+          const message = `Cross-origin request rejected (Origin: ${req.headers.origin})`;
+          json(res, 403, { error: message, message, code: "forbidden", detail: { reason: "cross_origin" }, retryable: false });
           return;
         }
 
@@ -1452,7 +1497,12 @@ export function startUiServer(options: UiOptions): UiHandle {
          * on its session tick. Fixing it properly means threading the resolved
          * handle out of the route, which is not a thin registration.
          */
-        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname) && !BUDGET_COLLECTION_WRITES.has(url.pathname)) {
+        if (
+          req.method === "POST" &&
+          !CLOUD_LIFECYCLE_WRITES.has(url.pathname) &&
+          !BUDGET_COLLECTION_WRITES.has(url.pathname) &&
+          !BUDGET_CONFIG_WRITES.has(url.pathname)
+        ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
             if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
@@ -1468,6 +1518,49 @@ export function startUiServer(options: UiOptions): UiHandle {
       if (url.pathname === "/api/budget/collection") {
         json(res, 200, budgetCollectionStatus({ home: stapleHome() }));
         return;
+      }
+      /**
+       * Budget capture and source bindings (`staple budget capture|bind|unbind|bindings`),
+       * one store method each. Machine-local: `<staple home>/config.json`, never a workspace.
+       */
+      if (url.pathname === "/api/budget/bindings") {
+        json(res, 200, budgetConfig(stapleHome()));
+        return;
+      }
+      if (BUDGET_CONFIG_WRITES.has(url.pathname)) {
+        const body = await readBody(req);
+        const home = stapleHome();
+        if (url.pathname === "/api/budget/capture") {
+          if (typeof body.enabled !== "boolean") throw new StapleError("validation", "enabled must be true or false (budget capture on|off).");
+          json(res, 200, setBudgetCapture(home, body.enabled));
+          return;
+        }
+        if (url.pathname === "/api/budget/bindings/unbind") {
+          json(res, 200, unbindBudgetSource(home, bindingHomeOf(body, "")));
+          return;
+        }
+        if (url.pathname === "/api/budget/bindings/bind") {
+          const target = bindingHomeOf(body, "");
+          if (typeof body.account !== "string") {
+            throw new StapleError("validation", "budget bind needs --account: the label of the account this harness home spends from.");
+          }
+          if (body.provider !== undefined && body.provider !== null && typeof body.provider !== "string") throw new StapleError("validation", "provider must be a string");
+          const replacing = body.replacing;
+          if (replacing !== undefined && replacing !== null && (typeof replacing !== "object" || Array.isArray(replacing))) {
+            throw new StapleError("validation", "replacing must be the binding being edited: { source, configDir | codexHome }.");
+          }
+          json(
+            res,
+            200,
+            bindBudgetSource(home, {
+              ...target,
+              account: body.account,
+              provider: typeof body.provider === "string" ? body.provider : undefined,
+              replacing: replacing ? bindingHomeOf(replacing as Record<string, unknown>, "replacing.") : undefined,
+            }),
+          );
+          return;
+        }
       }
       if (BUDGET_COLLECTION_WRITES.has(url.pathname)) {
         const body = await readBody(req);

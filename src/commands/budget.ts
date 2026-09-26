@@ -30,12 +30,12 @@ import { stapleHome } from "../config/home.js";
 import { StapleError } from "../core/types.js";
 import {
   bindBudgetSource,
+  parseBindingSource,
   budgetConfig,
   setBudgetCapture,
   unbindBudgetSource,
   type BudgetConfigView,
 } from "../core/telemetry/budget-config.js";
-import type { BindingSource } from "../core/telemetry/config.js";
 import { INGEST_SOURCES, ingestBudget, type IngestResult, type IngestSource } from "../core/telemetry/ingest.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
 import { listBudgetSamples, readBudget, type BudgetView, type HistorySample, type LimitReading } from "../core/telemetry/read-budget.js";
@@ -228,12 +228,6 @@ function preParseTee(argv: readonly string[]): boolean {
     else if (arg.startsWith("--source=")) source = arg.slice("--source=".length);
   });
   return source === undefined || source === "claude-statusline";
-}
-
-function bindingSourceOf(raw: string | undefined): BindingSource {
-  if (raw === "claude-statusline") return "claude_code_statusline";
-  if (raw === "codex-rollout") return "codex_rollout";
-  throw new StapleError("validation", `--source must be claude-statusline or codex-rollout for a binding; got ${raw === undefined ? "nothing" : `"${raw}"`}.`);
 }
 
 function sayIngest(result: IngestResult): void {
@@ -435,7 +429,7 @@ export function runBudgetCommand(argv: string[]): void {
     case "bind": {
       if (values.account === undefined) throw new StapleError("validation", "budget bind needs --account: the label of the account this harness home spends from.");
       const view = bindBudgetSource(home, {
-        source: bindingSourceOf(values.source),
+        source: parseBindingSource(values.source),
         account: values.account,
         provider: values.provider,
         configDir: values["config-dir"],
@@ -446,7 +440,7 @@ export function runBudgetCommand(argv: string[]): void {
     }
     case "unbind": {
       const view = unbindBudgetSource(home, {
-        source: bindingSourceOf(values.source),
+        source: parseBindingSource(values.source),
         configDir: values["config-dir"],
         codexHome: values["codex-home"],
       });

@@ -403,6 +403,17 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/budget/collection/plan",
       "/api/budget/collection/setup",
       "/api/budget/collection/unsetup",
+      /**
+       * Budget capture and source bindings, the web Settings' "Usage & budget":
+       * `staple budget bindings|bind|unbind|capture`, one store method each. The GET is
+       * the read; the three POSTs are named in `BUDGET_CONFIG_WRITES`, POST-only and
+       * skipped by the post-write sync trigger (config.json is machine-local).
+       * `test/budget-bindings-http.test.ts` pins their parity with the CLI.
+       */
+      "/api/budget/bindings",
+      "/api/budget/bindings/bind",
+      "/api/budget/bindings/unbind",
+      "/api/budget/capture",
       // `staple calibrate` / MCP `calibration_cohorts`: GET-only, a read.
       "/api/calibration",
       /**
