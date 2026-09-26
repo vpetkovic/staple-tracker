@@ -21,6 +21,8 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SettingCategoryView } from "@/lib/settings";
 import { SETTINGS_TITLE, SettingsShell, type SettingsShellProps } from "./SettingsShell";
+import { CLOUD_CATEGORY } from "./cloud-settings";
+import { TELEMETRY_CATEGORY } from "./telemetry-settings";
 import {
   HUB_REGISTRY_CATEGORY,
   SETTINGS_PARAM,
@@ -320,6 +322,16 @@ describe("which workspace the per-workspace sections edit", () => {
 });
 
 describe("the sections split out of Cloud", () => {
+  it("names the computer's sections in plain words: Workspaces on this computer, Cloud account, Usage", () => {
+    expect(HUB_REGISTRY_CATEGORY.label).toBe("Workspaces on this computer");
+    expect(WORKSPACE_CLOUD_CATEGORY.label).toBe("Cloud sync");
+    expect(CLOUD_CATEGORY.label).toBe("Cloud account");
+    expect(TELEMETRY_CATEGORY.label).toBe("Usage");
+    for (const label of [HUB_REGISTRY_CATEGORY.label, CLOUD_CATEGORY.label, TELEMETRY_CATEGORY.label]) {
+      expect(label).not.toMatch(/registry|hub|&/i);
+    }
+  });
+
   it("adds Hub registry to the global group and Cloud sync to the per-workspace group", () => {
     const merged = withShellCategories(CATEGORIES);
     expect(merged.find((c) => c.id === HUB_REGISTRY_CATEGORY.id)?.scope).toBe("global");

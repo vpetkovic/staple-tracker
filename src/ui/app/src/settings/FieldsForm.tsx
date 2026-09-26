@@ -193,6 +193,7 @@ export function FieldsForm({ definitions, settings, write, onDirtyChange }: Fiel
                     type="button"
                     variant="ghost"
                     size="xs"
+                    className="[@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-3"
                     aria-label={`Reset ${definition.ui.label} to default`}
                     disabled={disabled || !isResettable(value, definition, current)}
                     onClick={() => draft.set(resetField(value, definition, current))}

@@ -396,7 +396,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                         onSelect={() => void run(command)}
                         // The row is full-bleed inside the item and owns its own geometry;
                         // the item keeps only its rounded corner and its selected background.
-                        className="p-0 gap-0"
+                        // A phone gets the 44px floor every other palette row has.
+                        className="p-0 gap-0 max-md:min-h-11 max-md:items-center"
                       >
                         <TaskRowLine
                           row={flatRow(row)}

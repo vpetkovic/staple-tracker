@@ -1,3 +1,5 @@
+/// <reference lib="dom" />
+/// <reference lib="dom.iterable" />
 /**
  * PHONE BACK CLOSES WHAT IS OPEN — in a real browser, against the real server and the
  * built app.
@@ -139,6 +141,12 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await tap(p, 'button[aria-label="Menu"]');
     await settle(p);
     expect(await count(p, "[data-nav-overlay]")).toBe(1);
+    // The drawer does not repeat the top bar's New task and Search, and offers a plain close
+    // rather than the desktop's collapse-the-rail icon.
+    expect(await p.locator("[data-nav-rail] [data-nav-new-task]").isVisible()).toBe(false);
+    expect(await p.locator("[data-nav-rail] [data-nav-search]").isVisible()).toBe(false);
+    expect(await p.locator('[data-nav-rail] [aria-label="Hide navigation"]').isVisible()).toBe(false);
+    expect(await p.locator("[data-nav-close]").isVisible()).toBe(true);
     await back(p);
     expect(await count(p, "[data-nav-overlay]")).toBe(0);
     expect(viewOf(p)).toBe("tasks");
@@ -286,6 +294,22 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await context.close();
   }, 30_000);
 
+  it.skipIf(!detailSheetWired)("[task-list overlay] a desk: a view chosen with the task drawer open closes the drawer first; Back returns to Tasks", async () => {
+    const { page: p, context } = await page("/?view=tasks", DESK);
+    await p.locator('[data-testid="task-row"]').first().click();
+    await settle(p, 800);
+    expect(await count(p, "[data-detail-overlay]")).toBe(1);
+    await p.locator('[data-nav-item="view:graph"]').click({ force: true });
+    await settle(p, 900);
+    expect(viewOf(p)).toBe("graph");
+    expect(await count(p, "[data-detail-overlay]")).toBe(0);
+    expect(await overlayIds(p)).toBe(0);
+    await back(p);
+    expect(viewOf(p)).toBe("tasks");
+    expect(await count(p, "[data-detail-overlay]")).toBe(0);
+    await context.close();
+  }, 30_000);
+
   it.skipIf(!rowMenuWired)("[task-list overlay] a row's menu", async () => {
     const { page: p, context } = await page("/?ws=alpha&view=tasks");
     await tap(p, 'button[aria-label^="Actions for"]');
@@ -310,7 +334,7 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
       return {
         scrollWidth: document.documentElement.scrollWidth,
         innerWidth,
-        sideways: [...document.querySelectorAll("body *")].filter((e) => e.scrollLeft !== 0).length,
+        sideways: Array.from(document.querySelectorAll("body *")).filter((e) => e.scrollLeft !== 0).length,
         field: [Math.round(field.left), Math.round(field.right), Math.round(field.height)],
       };
     });
@@ -365,14 +389,32 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     await p.keyboard.press("Enter");
     await settle(p, 500);
     expect(new URL(p.url()).searchParams.get("ws")).toBe("alpha");
+    // Reopened on a workspace, the list starts on that workspace.
     await p.locator('[data-workspace-switcher="rail"]').focus();
     await p.keyboard.press("Enter");
     await settle(p, 300);
+    expect(await selected()).toBe("alpha");
     await p.keyboard.press("Escape");
     await settle(p, 300);
     expect(await count(p, "[data-workspace-popover]")).toBe(0);
     await context.close();
   }, 30_000);
+
+  it("the quick filters and the Filter button appear only where they narrow something", async () => {
+    for (const [view, expected] of [
+      ["tasks", true],
+      ["graph", true],
+      ["queue", false],
+      ["milestones", false],
+      ["estimate-accuracy", false],
+      ["budget", false],
+    ] as const) {
+      const { page: p, context } = await page(`/?ws=alpha&view=${view}`);
+      expect(await count(p, "[data-filter-chips]"), view).toBe(expected ? 1 : 0);
+      expect(await count(p, "[data-filter-add]"), view).toBe(expected ? 1 : 0);
+      await context.close();
+    }
+  }, 60_000);
 
   it("a phone edits statuses as cards: a wide label, 44px controls, nothing off the side", async () => {
     const { page: p, context } = await page("/?view=tasks&settings=statuses&settings-ws=alpha");

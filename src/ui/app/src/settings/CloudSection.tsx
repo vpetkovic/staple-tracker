@@ -386,7 +386,7 @@ function ConnectDisclosure({ hasDraft, children }: { hasDraft: boolean; children
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="cursor-pointer py-1.5 text-[13px] font-medium">Enter connection details</summary>
+      <summary className="cursor-pointer py-1.5 text-[13px] font-medium [@media(pointer:coarse)]:py-0 [@media(pointer:coarse)]:leading-[44px]">Enter connection details</summary>
       {children}
     </details>
   );
@@ -781,7 +781,7 @@ function HubSelfPanel({
           {report.self.backupHeadline}
         </p>
         <details data-cloud-hub-backup-details className="mt-1">
-          <summary className="cursor-pointer text-[11px] text-muted-foreground">
+          <summary className="cursor-pointer text-[11px] text-muted-foreground [@media(pointer:coarse)]:text-[13px] [@media(pointer:coarse)]:leading-[44px]">
             What a hub backup contains
           </summary>
           <ul className="m-0 mt-1 list-disc space-y-1 pl-4 text-[11px] text-muted-foreground">
@@ -1660,7 +1660,7 @@ function HubRow({
       */}
       {view.rationale !== null ? (
         <details data-cloud-workspace-details className="mt-1">
-          <summary className="cursor-pointer text-[11px] text-muted-foreground">Details</summary>
+          <summary className="cursor-pointer text-[11px] text-muted-foreground [@media(pointer:coarse)]:text-[13px] [@media(pointer:coarse)]:leading-[44px]">Details</summary>
           <p className="mt-1 text-[11px] leading-relaxed wrap-anywhere text-muted-foreground">
             {view.rationale}
           </p>

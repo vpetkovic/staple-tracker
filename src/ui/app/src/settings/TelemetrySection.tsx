@@ -547,7 +547,7 @@ function BindingForm({ editor, busy, disabled, on }: { editor: BindingEditor; bu
         />
       </div>
       <details className="group">
-        <summary className="cursor-pointer text-[12px] text-muted-foreground select-none">Advanced: provider</summary>
+        <summary className="cursor-pointer text-[12px] text-muted-foreground select-none [@media(pointer:coarse)]:leading-[44px]">Advanced: provider</summary>
         <div className="mt-2 max-w-72">
           <TextField
             id={`${prefix}-provider`}

@@ -280,7 +280,7 @@ function Disclosure({
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="cursor-pointer py-1.5 text-[13px] font-medium">{summary}</summary>
+      <summary className="cursor-pointer py-1.5 text-[13px] font-medium [@media(pointer:coarse)]:py-0 [@media(pointer:coarse)]:leading-[44px]">{summary}</summary>
       {children}
     </details>
   );
@@ -406,7 +406,7 @@ function RegistryConsent({
     <div data-cloud-hub-registry>
       <Field id="cloud-hub-registry" label={control.label} description={control.description}>
         {(aria) => (
-          <label className="flex min-h-8 items-center gap-2 text-[13px]">
+          <label className="flex min-h-8 items-center gap-2 text-[13px] [@media(pointer:coarse)]:min-h-11">
             <input
               {...aria}
               type="checkbox"
@@ -686,7 +686,7 @@ export function HubRegistryPanel(props: HubRegistryPanelProps) {
             description="Point-in-time copies of the registry, so a lost machine can be restored to a moment. Its own decision, separate from publishing."
           >
             {(aria) => (
-              <label className="flex min-h-8 items-center gap-2 text-[13px]">
+              <label className="flex min-h-8 items-center gap-2 text-[13px] [@media(pointer:coarse)]:min-h-11">
                 <input
                   {...aria}
                   type="checkbox"
