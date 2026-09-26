@@ -102,6 +102,18 @@ beforeAll(async () => {
       ws.store.milestones().create({ title: "October cut" }, null);
       ws.store.milestones().addMember("ALP-5", "ALP-4", {}, null);
     }
+    if (slug === "beta") {
+      // One task waiting on another (the Tasks rows carry dependency badges), and an epic
+      // holding two more, one waiting on the other: the Graph has a canvas, a toolbar and
+      // an epic box to test on.
+      ws.store.setBlockedBy("BET-2", ["BET-1"], null);
+      ws.store.createIssue({ title: "Release plan (beta)", kind: "epic" });
+      ws.store.createChild("BET-5", { title: "Cut the release branch (beta)" });
+      ws.store.createChild("BET-5", { title: "Publish the release notes (beta)" });
+      ws.store.setBlockedBy("BET-7", ["BET-6"], null);
+      // BET-6 both waits and blocks: two badges side by side on a wide row.
+      ws.store.setBlockedBy("BET-6", ["BET-2"], null);
+    }
     ws.store.db.close();
   }
   ui = startUiServer({ port: 0, hub: true });
@@ -119,8 +131,10 @@ afterAll(async () => {
 
 const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 const DESK = { viewport: { width: 1440, height: 900 } };
+/** A tablet held upright: the desk layout, under a finger. */
+const TABLET = { viewport: { width: 768, height: 1024 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 
-async function page(path: string, device: typeof PHONE | typeof DESK = PHONE): Promise<{ page: Page; context: BrowserContext }> {
+async function page(path: string, device: typeof PHONE | typeof DESK | typeof TABLET = PHONE): Promise<{ page: Page; context: BrowserContext }> {
   const context = await browser.newContext(device);
   const p = await context.newPage();
   const errors: string[] = [];
@@ -363,6 +377,150 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await context.close();
   }, 30_000);
 
+  it.skipIf(!milestoneMenuWired || !detailSheetWired)("[task-list overlay] a milestone member's menu hands over to the sheet: one Back closes the sheet, the next leaves the page", async () => {
+    const { page: p, context } = await page("/?ws=alpha&view=tasks");
+    await tap(p, '[data-view-tab="milestones"]');
+    await settle(p, 600);
+    if ((await count(p, '[data-member-actions="ALP-4"]')) === 0) {
+      await p.getByRole("button", { name: /October cut/ }).first().tap();
+      await settle(p, 600);
+    }
+    const before = p.url();
+    await tap(p, '[data-member-actions="ALP-4"]');
+    await settle(p);
+    await tap(p, '[role=menu] [data-menu-item="open"]');
+    await settle(p, 800);
+    expect(await count(p, "[role=menu]")).toBe(0);
+    expect(await count(p, "[data-detail-overlay]")).toBe(1);
+    expect(await overlayIds(p)).toBe(1);
+    await back(p);
+    expect(await count(p, "[data-detail-overlay]")).toBe(0);
+    expect(p.url()).toBe(before);
+    expect(await overlayIds(p)).toBe(0);
+    // No dead entry left by the menu: the next Back leaves this page.
+    await back(p);
+    expect(p.url()).not.toBe(before);
+    await context.close();
+  }, 30_000);
+
+  it("Graph's View menu: a choice made in it rewrites the address without orphaning the menu's entry", async () => {
+    const { page: p, context } = await page("/?ws=beta&view=tasks");
+    await tap(p, '[data-view-tab="graph"]');
+    await settle(p, 800);
+    await tap(p, "[data-graph-view]");
+    await settle(p);
+    expect(await count(p, "[data-graph-view-options]")).toBe(1);
+    expect(await overlayIds(p)).toBe(1);
+    await tap(p, '[data-view-option="frontier"]');
+    await settle(p, 500);
+    // The graph wrote its state onto the address, and the menu's entry is still the entry.
+    expect(new URL(p.url()).searchParams.get("graph")).toBeTruthy();
+    expect(await overlayIds(p)).toBe(1);
+    // Closed from the UI: its entry comes out, so one Back is one page.
+    await p.keyboard.press("Escape");
+    await settle(p, 600);
+    expect(await count(p, "[data-graph-view-options]")).toBe(0);
+    expect(await overlayIds(p)).toBe(0);
+    await back(p);
+    expect(viewOf(p)).toBe("tasks");
+    // …and phone Back closes the menu itself.
+    await tap(p, '[data-view-tab="graph"]');
+    await settle(p, 800);
+    await tap(p, "[data-graph-view]");
+    await settle(p);
+    await back(p);
+    expect(await count(p, "[data-graph-view-options]")).toBe(0);
+    expect(viewOf(p)).toBe("graph");
+    await context.close();
+  }, 30_000);
+
+  it("a task's dependencies dialog, Graph's Epics picker, and a status card's ⋯ menu in Settings", async () => {
+    const tasks = await page("/?ws=beta&view=tasks");
+    await tap(tasks.page, ".staple-dep-badge");
+    await settle(tasks.page, 600);
+    expect(await count(tasks.page, '[data-testid="dependencies-dialog"]')).toBe(1);
+    await back(tasks.page);
+    expect(await count(tasks.page, '[data-testid="dependencies-dialog"]')).toBe(0);
+    expect(viewOf(tasks.page)).toBe("tasks");
+    await tasks.context.close();
+
+    const graph = await page("/?ws=beta&view=graph");
+    await settle(graph.page, 500);
+    await tap(graph.page, "[data-epic-picker]");
+    await settle(graph.page);
+    expect(await count(graph.page, 'input[aria-label="Search epics"]')).toBe(1);
+    await back(graph.page);
+    expect(await count(graph.page, 'input[aria-label="Search epics"]')).toBe(0);
+    expect(viewOf(graph.page)).toBe("graph");
+    await graph.context.close();
+
+    const settings = await page("/?ws=alpha&view=tasks&settings=statuses&settings-ws=alpha");
+    await settle(settings.page, 800);
+    await tap(settings.page, '[data-vocabulary-more="todo"]');
+    await settle(settings.page);
+    expect(await count(settings.page, "[role=menu]")).toBe(1);
+    await back(settings.page);
+    expect(await count(settings.page, "[role=menu]")).toBe(0);
+    expect(await count(settings.page, "[data-settings-dialog]")).toBe(1);
+    expect(await settings.page.locator("[data-settings-shell]").getAttribute("data-pane")).toBe("content");
+    await settings.context.close();
+  }, 45_000);
+
+  it("Settings: Back over unsaved edits asks, as the X does; Keep stays, Discard closes and leaves no dead step", async () => {
+    const { page: p, context } = await page("/?ws=alpha&view=tasks");
+    await tap(p, '[data-view-tab="graph"]');
+    await settle(p, 600);
+    await tap(p, 'button[aria-label="Menu"]');
+    await settle(p);
+    await tap(p, '[data-nav-rail] button[aria-label="Settings"]');
+    await settle(p, 700);
+    await tap(p, '[data-settings-category="statuses"]');
+    await settle(p, 800);
+    await p.getByRole("textbox", { name: "Label for todo" }).fill("Ready to start");
+    await settle(p, 300);
+    // Back from the section keeps the draft (the section only hides) and shows the list.
+    await back(p);
+    expect(await p.locator("[data-settings-shell]").getAttribute("data-pane")).toBe("nav");
+    expect(await count(p, "[data-confirm-dialog]")).toBe(0);
+    // Back from the list would close Settings and throw the edit away: it asks instead.
+    await back(p);
+    expect(await count(p, "[data-settings-dialog]")).toBe(1);
+    expect(await p.locator("[data-confirm-dialog]").textContent()).toContain("Discard unsaved changes?");
+    expect(new URL(p.url()).searchParams.has("settings")).toBe(true);
+    // Keep editing: Settings stays, holding its entry.
+    await p.getByRole("button", { name: "Keep editing" }).tap();
+    await settle(p, 500);
+    expect(await count(p, "[data-confirm-dialog]")).toBe(0);
+    expect(await count(p, "[data-settings-dialog]")).toBe(1);
+    expect(await overlayIds(p)).toBe(1);
+    // Back while the question is up is the safe answer, too.
+    await back(p);
+    expect(await count(p, "[data-confirm-dialog]")).toBe(1);
+    await back(p);
+    expect(await count(p, "[data-confirm-dialog]")).toBe(0);
+    expect(await count(p, "[data-settings-dialog]")).toBe(1);
+    // Discard: Settings closes, the address drops it, and no dead Back step is left.
+    await back(p);
+    await p.getByRole("button", { name: "Discard changes" }).tap();
+    await settle(p, 700);
+    expect(await count(p, "[data-settings-dialog]")).toBe(0);
+    expect(new URL(p.url()).searchParams.has("settings")).toBe(false);
+    expect(viewOf(p)).toBe("graph");
+    expect(await overlayIds(p)).toBe(0);
+    await back(p);
+    expect(viewOf(p)).toBe("tasks");
+    // Clean, Back closes Settings at once, as before.
+    await tap(p, 'button[aria-label="Menu"]');
+    await settle(p);
+    await tap(p, '[data-nav-rail] button[aria-label="Settings"]');
+    await settle(p, 700);
+    await back(p);
+    expect(await count(p, "[data-settings-dialog]")).toBe(0);
+    expect(await count(p, "[data-confirm-dialog]")).toBe(0);
+    expect((p as Page & { errors: string[] }).errors).toEqual([]);
+    await context.close();
+  }, 45_000);
+
   it.skipIf(!milestoneMenuWired)("[task-list overlay] a milestone member's menu", async () => {
     const { page: p, context } = await page("/?ws=alpha&view=milestones");
     await settle(p, 500);
@@ -393,6 +551,123 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
 });
 
 describe.skipIf(Boolean(reason))("the shell, measured", () => {
+  /**
+   * A control's TOUCH target as a finger meets it: the span around its centre where the
+   * browser's hit test lands on it, a pseudo-element's area included and whatever covers or
+   * clips it excluded. Quarter-pixel steps, so the span is within 0.25px of each true edge.
+   */
+  const target = (p: Page, selector: string, index = 0) =>
+    p.evaluate(([selector, index]) => {
+      const el = document.querySelectorAll(selector)[index];
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const on = (x: number, y: number) => {
+        const hit = document.elementFromPoint(x, y);
+        return !!hit && (el === hit || el.contains(hit) || (el instanceof HTMLInputElement && [...(el.labels ?? [])].some((label) => label.contains(hit))));
+      };
+      const reach = (dx: number, dy: number) => {
+        let d = 0;
+        while (d < 60 && on(cx + dx * (d + 0.25), cy + dy * (d + 0.25))) d += 0.25;
+        return d;
+      };
+      return { w: reach(-1, 0) + reach(1, 0) + 0.25, h: reach(0, -1) + reach(0, 1) + 0.25, drawnH: r.height };
+    }, [selector, index] as const);
+  const atLeast44 = async (p: Page, selector: string, index = 0) => {
+    const t = await target(p, selector, index);
+    expect(t, selector).not.toBeNull();
+    expect(Math.min(t!.w, t!.h), `${selector} ${JSON.stringify(t)}`).toBeGreaterThanOrEqual(43.75);
+    return t!;
+  };
+
+  it("the views' small controls are 44px targets on a phone, and keep their drawn size", async () => {
+    const queue = await page("/?ws=alpha&view=queue");
+    expect((await atLeast44(queue.page, "[data-queue-next-open]")).drawnH).toBeLessThan(30);
+    await queue.context.close();
+
+    const tasks = await page("/?ws=beta&view=tasks");
+    await settle(tasks.page, 400);
+    const phoneBadges = await count(tasks.page, ".staple-dep-badge");
+    expect(phoneBadges).toBeGreaterThanOrEqual(2);
+    for (let index = 0; index < phoneBadges; index++) expect((await atLeast44(tasks.page, ".staple-dep-badge", index)).drawnH).toBe(20);
+    await tasks.context.close();
+
+    const graph = await page("/?ws=beta&view=graph");
+    await settle(graph.page, 600);
+    for (const control of ["Zoom In", "Zoom Out", "Fit View"]) await atLeast44(graph.page, `.react-flow__controls-button[aria-label="${control}"]`);
+    // The epic's box is wider than a phone and its chevron sits at the right end: drag the
+    // canvas left until the chevron is on screen.
+    const chevron = graph.page.locator('[aria-label="collapse BET-5"]');
+    const at = (await chevron.boundingBox())!;
+    const pane = (await graph.page.locator(".react-flow__pane").boundingBox())!;
+    const y = pane.y + 50;
+    const from = pane.x + pane.width - 20;
+    const shift = at.x + at.width - 300;
+    const cdp = await graph.context.newCDPSession(graph.page);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y }] });
+    for (let step = 1; step <= 10; step++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: from - (shift * step) / 10, y }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await settle(graph.page, 300);
+    expect((await atLeast44(graph.page, '[aria-label="collapse BET-5"]')).drawnH).toBeLessThan(20);
+    await graph.page.locator('[aria-label="collapse BET-5"]').tap();
+    await settle(graph.page, 600);
+    expect((await atLeast44(graph.page, '[aria-label="expand BET-5"]')).drawnH).toBeLessThan(20);
+    await graph.context.close();
+
+    const estimates = await page("/?ws=alpha&view=estimate-accuracy");
+    await atLeast44(estimates.page, '[data-testid="include-reconstructed"]');
+    await estimates.context.close();
+
+    const usage = await page("/?view=budget");
+    expect((await atLeast44(usage.page, '[data-testid="budget-refresh"]')).drawnH).toBeLessThan(30);
+    await usage.context.close();
+
+    // A desk with a mouse keeps every one of them at its drawn size.
+    const heights = async (path: string, selectors: string[]) => {
+      const { page: d, context } = await page(path, DESK);
+      await settle(d, 400);
+      const out = await d.evaluate((list) => list.map((sel) => Math.round(document.querySelector(sel)!.getBoundingClientRect().height)), selectors);
+      await context.close();
+      return out;
+    };
+    expect(await heights("/?ws=alpha&view=queue", ["[data-queue-next-open]", 'button[aria-label="Hide navigation"]', '[data-workspace-switcher="rail"]'])).toEqual([24, 28, 28]);
+    expect(await heights("/?view=budget", ['[data-testid="budget-refresh"]'])).toEqual([24]);
+    expect((await heights("/?ws=alpha&view=estimate-accuracy", ["[data-include-reconstructed-label]"]))[0]).toBeLessThanOrEqual(24);
+  }, 60_000);
+
+  it("a tablet's desk layout under a finger: the rail's controls and the rows' small controls are 44px targets", async () => {
+    const { page: p, context } = await page("/?ws=beta&view=tasks", TABLET);
+    await settle(p, 400);
+    for (const control of [
+      'button[aria-label="Hide navigation"]',
+      'button[aria-label="Open the command palette"]',
+      '[data-workspace-switcher="rail"]',
+      '[data-nav-action="new-project"]',
+    ]) {
+      await atLeast44(p, control);
+    }
+    await atLeast44(p, 'button[aria-label="Actions for BET-2"]');
+    // The disclosure keeps its drawn 16px and a 44px target — expanded as well as collapsed
+    // (the button used to rotate, turning a 16×44 box into a 44×16 one).
+    const chevron = '.staple-row-chevron[aria-label$="BET-5"]';
+    expect((await atLeast44(p, chevron)).drawnH).toBe(16);
+    await p.locator(chevron).tap();
+    await settle(p, 400);
+    expect((await atLeast44(p, chevron)).drawnH).toBe(16);
+    if ((await p.locator(chevron).getAttribute("data-expanded")) !== "true") {
+      await p.locator(chevron).tap();
+      await settle(p, 400);
+    }
+    // Every badge, the two side by side on BET-6's row included.
+    expect(await count(p, '.staple-row:has([aria-label="Actions for BET-6"]) .staple-dep-badge')).toBe(2);
+    const badges = await count(p, ".staple-dep-badge");
+    for (let index = 0; index < badges; index++) expect((await atLeast44(p, ".staple-dep-badge", index)).drawnH).toBe(20);
+    await context.close();
+  }, 30_000);
+
   it("phone search takes the header row: nothing wider than the screen, nothing scrolled sideways", async () => {
     const { page: p, context } = await page("/?view=tasks");
     await tap(p, 'button[aria-label="Search tasks"]');
@@ -467,6 +742,17 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     await p.keyboard.press("Escape");
     await settle(p, 300);
     expect(await count(p, "[data-workspace-popover]")).toBe(0);
+    await context.close();
+  }, 30_000);
+
+  it("a Graph the filters emptied says so in the words the task list uses, with the fixes beside it", async () => {
+    const { page: p, context } = await page("/?ws=beta&view=graph");
+    await settle(p, 500);
+    await tap(p, '[data-filter-preset="high-priority"]');
+    await settle(p, 600);
+    expect(await count(p, "[data-filter-empty-explained]")).toBe(1);
+    expect(await p.locator("[data-filter-empty]").innerText()).toContain("No dependencies match these filters");
+    expect(await count(p, "[data-filter-explanation-clear]")).toBe(1);
     await context.close();
   }, 30_000);
 
