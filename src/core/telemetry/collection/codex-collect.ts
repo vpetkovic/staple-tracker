@@ -185,7 +185,7 @@ function processAlive(pid: number): boolean {
  * A live pid keeps its lock even when its `at` cannot be read; only a dead or missing
  * pid, or a readable `at` older than {@link LOCK_STALE_MS}, makes it stale.
  */
-function acquireLock(home: string, nowMs: number): boolean {
+export function acquireLock(home: string, nowMs: number, hooks: { readonly beforeMoveAside?: () => void } = {}): boolean {
   const path = lockPath(home);
   mkdirSync(join(home, "telemetry"), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -214,6 +214,7 @@ function acquireLock(home: string, nowMs: number): boolean {
     const live = typeof holder.pid === "number" && processAlive(holder.pid) && !tooOld;
     if (live) return false;
     const aside = `${path}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
+    hooks.beforeMoveAside?.();
     try {
       renameSync(path, aside);
     } catch {

@@ -32,7 +32,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bindBudgetSource, budgetConfig, setBudgetCapture } from "../src/core/telemetry/budget-config.js";
 import { readCursor, LOG_MAX_BYTES } from "../src/core/telemetry/collection/codex-collect.js";
 import { agentPlist, COLLECT_AGENT_LABEL, type LaunchctlRunner } from "../src/core/telemetry/collection/launchd.js";
-import { lockPath } from "../src/core/telemetry/collection/codex-collect.js";
+import { acquireLock, lockPath } from "../src/core/telemetry/collection/codex-collect.js";
 import {
   applyBudgetSetup,
   applyBudgetUnsetup,
@@ -1000,6 +1000,18 @@ describe("round 2: noclobber, regrown rollouts, lock edges", () => {
       writeFileSync(lockPath(home), JSON.stringify({ pid: process.pid, at: "2020-01-01T00:00:00.000Z" }));
       expect(collectBudget({}, deps())).toMatchObject({ skippedReason: null });
       expect(readdirSync(join(home, "telemetry")).filter((name) => name.startsWith("collect.lock"))).toEqual([]);
+    });
+
+    it("never takes over a lock another run created between judging the old one stale and moving it aside", () => {
+      mkdirSync(join(home, "telemetry"), { recursive: true });
+      const dead = JSON.stringify({ pid: 2 ** 22 + 12345, at: new Date().toISOString() });
+      const fresh = JSON.stringify({ pid: process.pid, at: new Date().toISOString() });
+      writeFileSync(lockPath(home), dead);
+      // The race: another run replaces the stale lock with its own, right before this one moves it.
+      const took = acquireLock(home, Date.now(), { beforeMoveAside: () => writeFileSync(lockPath(home), fresh) });
+      expect(took).toBe(false);
+      expect(readFileSync(lockPath(home), "utf8")).toBe(fresh);
+      expect(readdirSync(join(home, "telemetry")).filter((name) => name.startsWith("collect.lock"))).toEqual(["collect.lock"]);
     });
 
     it("takes over an unreadable lock (a crash mid-write)", () => {
