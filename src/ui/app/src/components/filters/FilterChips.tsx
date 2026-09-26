@@ -323,7 +323,7 @@ export function FilterChipStrip({
             "rounded-md px-2 text-[12px] font-medium whitespace-nowrap text-text-secondary hover:text-foreground max-md:text-[14px]",
             // On a phone it never scrolls out of reach: when the chips before it are wider
             // than the screen it waits at the right edge, over a fade, until you get there.
-            "max-md:sticky max-md:right-0 max-md:z-[1] max-md:bg-card max-md:pl-3 max-md:shadow-[-12px_0_12px_-4px_var(--color-card)]",
+            "max-md:sticky max-md:right-0 max-md:z-[1] max-md:bg-card max-md:pl-3 max-md:shadow-[-12px_0_12px_-4px_var(--color-card),16px_0_0_0_var(--color-card)]",
             FOCUS,
           )}
         >

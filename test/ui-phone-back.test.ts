@@ -195,6 +195,9 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
       await back(p);
       expect(await count(p, surface), `${trigger} closes on Back`).toBe(0);
       expect(viewOf(p)).toBe("tasks");
+      // Focus returns to the trigger; on a touch screen that must not raise a tooltip that
+      // nothing can dismiss.
+      expect(await count(p, "[role=tooltip]"), `${trigger} leaves no tooltip behind`).toBe(0);
     }
     expect((p as Page & { errors: string[] }).errors).toEqual([]);
     await context.close();
@@ -368,6 +371,47 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     await p.keyboard.press("Escape");
     await settle(p, 300);
     expect(await count(p, "[data-workspace-popover]")).toBe(0);
+    await context.close();
+  }, 30_000);
+
+  it("a phone edits statuses as cards: a wide label, 44px controls, nothing off the side", async () => {
+    const { page: p, context } = await page("/?view=tasks&settings=statuses&settings-ws=alpha");
+    await settle(p, 600);
+    const m = await p.evaluate(() => {
+      const pane = document.querySelector("[data-settings-content]")!;
+      const box = (s: string) => {
+        const r = document.querySelector(s)!.getBoundingClientRect();
+        return { w: Math.round(r.width), h: Math.round(r.height), right: Math.round(r.right) };
+      };
+      return {
+        layout: document.querySelector("[data-vocabulary-layout]")?.getAttribute("data-vocabulary-layout"),
+        label: box('input[aria-label="Label for todo"]'),
+        category: box('[aria-label="Category for todo"]'),
+        more: box('[aria-label="More for To do"], [aria-label^="More for"]'),
+        overflow: pane.scrollWidth - pane.clientWidth,
+      };
+    });
+    expect(m.layout).toBe("cards");
+    expect(m.label.w).toBeGreaterThanOrEqual(200);
+    expect(m.label.h).toBeGreaterThanOrEqual(44);
+    expect(m.category.h).toBeGreaterThanOrEqual(44);
+    expect(Math.min(m.more.w, m.more.h)).toBeGreaterThanOrEqual(44);
+    expect(m.more.right).toBeLessThanOrEqual(390);
+    expect(m.overflow).toBeLessThanOrEqual(1);
+    await context.close();
+  }, 30_000);
+
+  it("All workspaces never asks for one workspace's settings without naming it", async () => {
+    const context = await browser.newContext(DESK);
+    const p = await context.newPage();
+    const reads: string[] = [];
+    p.on("request", (request) => {
+      if (request.url().includes("/api/settings")) reads.push(request.url());
+    });
+    await p.goto(`${origin}/?view=tasks&token=${token}`, { waitUntil: "networkidle" });
+    await settle(p, 500);
+    expect(reads.length).toBeGreaterThan(0);
+    for (const url of reads) expect(new URL(url).searchParams.get("ws"), url).toBeTruthy();
     await context.close();
   }, 30_000);
 
