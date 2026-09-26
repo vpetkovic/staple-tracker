@@ -300,9 +300,12 @@ export function App() {
    * it came from so its members are fetched from the right place. A workspace that cannot
    * answer (no milestone kind configured) contributes nothing rather than failing the menu.
    */
+  const booted = bootstrap.data !== undefined;
   const allWorkspaces = bootstrap.data?.mode === "hub" && ws === "";
   const workspaceSlugs = (bootstrap.data?.workspaces ?? []).map((entry) => entry.slug).join(",");
   const loadMilestoneList = useCallback(async (): Promise<{ row: MilestoneListRow; ws: string }[]> => {
+    // Before bootstrap nobody knows whether "" means All workspaces; ask nothing yet.
+    if (!booted) return [];
     if (!allWorkspaces) return (await getMilestones({ ws, all: showDone })).map((row) => ({ row, ws }));
     const lists = await Promise.all(
       (workspaceSlugs ? workspaceSlugs.split(",") : []).map((slug) =>
@@ -316,10 +319,10 @@ export function App() {
       ),
     );
     return lists.flat();
-  }, [ws, showDone, allWorkspaces, workspaceSlugs]);
+  }, [ws, showDone, booted, allWorkspaces, workspaceSlugs]);
   const milestoneList = useResource<{ row: MilestoneListRow; ws: string }[]>(
     loadMilestoneList,
-    [ws, showDone, allWorkspaces, workspaceSlugs, version],
+    [ws, showDone, booted, allWorkspaces, workspaceSlugs, version],
     onAuthError,
   );
 
