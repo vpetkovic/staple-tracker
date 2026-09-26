@@ -14,7 +14,6 @@
  * `BudgetStore.record`. Every removal goes through `forgetBudgetSamples`. No row is
  * written by hand.
  */
-import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -34,6 +33,7 @@ import { StapleError, setClock } from "../src/core/types.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv } from "./fixtures/characterize-support.js";
+import { spawnAsync } from "./fixtures/spawn-async.js";
 import { mcpEnvelope, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import { STATUSLINE_SESSION_ID, epoch, sessionMetaLine, statusline, tokenCountLine, writeRollout } from "./fixtures/budget-support.js";
 
@@ -301,13 +301,14 @@ describe("forgetting the fake status-line readings", () => {
 
 // ------------------------------------------------------------------ the three surfaces
 
-function cli(args: string[]): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, "budget", ...args], {
+/** The CLI, without blocking: this file serves HTTP in-process (test/fixtures/spawn-async.ts). */
+async function cli(args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
+  const result = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "budget", ...args], {
     cwd: REPO_ROOT,
     env: bareEnv({ STAPLE_HOME: home, HOME: home, CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexDir }),
     timeout: 30_000,
   });
-  return { status: result.status ?? -1, stdout: result.stdout.toString("utf8"), stderr: result.stderr.toString("utf8") };
+  return { status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
 }
 
 /** A result without the instant it was judged at, which differs between two calls. */
@@ -367,11 +368,11 @@ describe("CLI, MCP and HTTP call the one method", () => {
     const before = counts();
 
     // CLI without --yes: the preview, and the refusal every consent command gives (exit 2).
-    const cliPreview = cli(["forget", ...fakeIds, "--json"]);
+    const cliPreview = await cli(["forget", ...fakeIds, "--json"]);
     expect(cliPreview.status).toBe(2);
     const envelope = JSON.parse(cliPreview.stderr.trim().split("\n").pop()!) as { code: string; detail: { reason: string; preview: Record<string, unknown> } };
     expect(envelope).toMatchObject({ code: "validation", detail: { reason: "consent_required" } });
-    const human = cli(["forget", fakeIds[0]!]);
+    const human = await cli(["forget", fakeIds[0]!]);
     expect(human.status).toBe(2);
     expect(human.stderr).toContain("would remove 1 reading(s)");
     expect(human.stderr).toContain("Re-run with --yes");
@@ -395,13 +396,13 @@ describe("CLI, MCP and HTTP call the one method", () => {
     expect(gone.isError).toBe(true);
     expect(mcpEnvelope(gone)).toMatchObject({ code: "not_found" });
     expect((await http("/api/budget/forget", { body: { ids: [fakeIds[0]], confirm: true } })).status).toBe(404);
-    expect(cli(["forget", fakeIds[0]!, "--yes"]).status).toBe(3);
+    expect((await cli(["forget", fakeIds[0]!, "--yes"])).status).toBe(3);
   }, 90_000);
 
-  it("the CLI applies with --yes and prints what it did", () => {
+  it("the CLI applies with --yes and prints what it did", async () => {
     render("2026-09-26T11:50:00.000Z", FAKE_SESSION, [31, FAKE_SEVEN_DAY_RESET], [56, FIVE_HOUR_RESET]);
     const id = listBudgetSamples(home, { account: "claude-max", now: NOW }).items.find((s) => s.usedPercent === 31)!.id;
-    const done = cli(["forget", id, "--yes", "--json"]);
+    const done = await cli(["forget", id, "--yes", "--json"]);
     expect(done.status, done.stderr).toBe(0);
     expect(JSON.parse(done.stdout)).toMatchObject({ applied: true, readings: [{ id, usedPercent: 31 }], auditLog: collectLogPath(home) });
   }, 60_000);
