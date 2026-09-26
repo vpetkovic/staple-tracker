@@ -84,6 +84,7 @@ describe("pressure from status-line readings", () => {
     // MEASURED: 4 points over one hour, the last reading a minute old.
     expect(pressure.observed).toMatchObject({ percentPerHour: 4, fromPercent: 10, toPercent: 14, readings: 5, spanSeconds: HOUR });
     expect(pressure.lastReadingAgeSeconds).toBe(60);
+    expect(pressure.secondsToReset).toBe(239 * 60);
     // FORECAST: (86 − 20) over the 239 minutes to the reset.
     const sustainable = (66 / (239 * 60)) * HOUR;
     expect(pressure.sustainablePercentPerHour).toBeCloseTo(sustainable, 9);
@@ -146,7 +147,7 @@ describe("pressure from status-line readings", () => {
     render(0, 10, reset);
     render(5, 12, reset);
     // An older cache from another session: a regression inside the window.
-    render(6, 11, reset, "aaaaaaaa-0000-7000-8000-000000000009");
+    render(6, 11, reset, "session-b");
     const { pressure } = limit(7, "personal-max", "five_hour");
     expect(pressure.confidence).toMatchObject({ label: "low", readings: 3, warnings: ["small_sample", "short_span", "regressions"] });
   });
@@ -200,8 +201,8 @@ describe("unknown pressure is unknown, with its reason, and never within", () =>
     render(30, 50, reset);
     const { pressure, status } = limit(90, "personal-max", "five_hour");
     expect(status).toBe("elapsed");
-    expect(pressure).toMatchObject({ observed: null, lastReadingAgeSeconds: null, state: null, sustainablePercentPerHour: null });
-    expect(pressure.missing).toMatchObject({ observed: "window_elapsed", state: "window_elapsed", lastReadingAgeSeconds: "window_elapsed" });
+    expect(pressure).toMatchObject({ observed: null, lastReadingAgeSeconds: null, secondsToReset: null, state: null, sustainablePercentPerHour: null });
+    expect(pressure.missing).toMatchObject({ observed: "window_elapsed", state: "window_elapsed", lastReadingAgeSeconds: "window_elapsed", secondsToReset: "window_elapsed" });
   });
 
   it("reads a reading with no reset as reset_not_reported", () => {

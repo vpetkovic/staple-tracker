@@ -45,7 +45,7 @@ function cli(args: string[], ws: string | null = WS, agent?: string): Record<str
 }
 
 /** Pressure figures measured from `asOf` (the time to the reset, the reading's age): known or not must agree, the value moves with the clock. */
-const FROM_AS_OF = new Set(["lastReadingAgeSeconds", "sustainablePercentPerHour", "ratio", "exhaustion", "reserveReach"]);
+const FROM_AS_OF = new Set(["lastReadingAgeSeconds", "secondsToReset", "sustainablePercentPerHour", "ratio", "exhaustion", "reserveReach"]);
 
 /** Drop the fields that read the clock, everywhere in a payload. */
 function steady(value: unknown): unknown {

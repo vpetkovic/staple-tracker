@@ -75,6 +75,8 @@ export interface LimitPressure {
   readonly observed: BudgetPace | null;
   /** MEASURED: how old the latest reading's value is at `asOf`. */
   readonly lastReadingAgeSeconds: number | null;
+  /** MEASURED: from `asOf` to the reset the provider reported for the current window. */
+  readonly secondsToReset: number | null;
   /** The reserve the figures protect, in percent of the limit. */
   readonly reservePercent: number;
   /** FORECAST: `max(0, remaining − reserve) / hours to reset`, %/hour. */
@@ -137,6 +139,8 @@ export function limitPressure(input: PressureInput): LimitPressure {
   }
   const lastReadingAgeSeconds = current && input.latestObservedAt !== null ? Math.max(0, (ms(input.asOf) - ms(input.latestObservedAt)) / 1000) : null;
   if (lastReadingAgeSeconds === null) missing.lastReadingAgeSeconds = current ? "no_sample_yet" : blocked!;
+  const toReset = secondsToReset === null ? null : Math.max(0, secondsToReset);
+  if (toReset === null) missing.secondsToReset = current ? "sliding_window" : blocked!;
 
   let confidence: PressureConfidence | null = null;
   if (observed !== null) {
@@ -186,6 +190,7 @@ export function limitPressure(input: PressureInput): LimitPressure {
   return {
     observed,
     lastReadingAgeSeconds,
+    secondsToReset: toReset,
     reservePercent: reserve,
     sustainablePercentPerHour: sustainable,
     ratio,
