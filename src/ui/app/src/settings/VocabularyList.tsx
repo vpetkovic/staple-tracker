@@ -37,7 +37,7 @@
  * summary counts both, one Cancel that drops both, one guard, and one conflict banner
  * for either half moving underneath.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Ellipsis, Plus, Trash2 } from "lucide-react";
 import { StatusIcon } from "@/components/task-list/StatusIcon";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useBackToClose } from "@/lib/back-to-close";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { KindAppearance } from "@/lib/kind-appearance";
@@ -551,7 +552,7 @@ export function VocabularyList({
               One ⋯ menu instead of four small buttons: moving and removing are the rare
               things done to an entry, and on a narrow card they would crowd out its name.
             */
-            <DropdownMenu>
+            <CardMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
@@ -591,7 +592,7 @@ export function VocabularyList({
                   Remove…
                 </DropdownMenuItem>
               </DropdownMenuContent>
-            </DropdownMenu>
+            </CardMenu>
           ) : (
             <Button
               variant="ghost"
@@ -740,5 +741,16 @@ export function VocabularyList({
         </p>
       ) : null}
     </Section>
+  );
+}
+
+/** A card's ⋯ menu. Controlled so phone Back closes it (lib/back-to-close.ts) instead of the section. */
+function CardMenu({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  useBackToClose(open, () => setOpen(false));
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      {children}
+    </DropdownMenu>
   );
 }

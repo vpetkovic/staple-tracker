@@ -37,9 +37,11 @@ import {
   type NodeChange,
   type NodeMouseHandler,
 } from "@xyflow/react";
+import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
 import { Button } from "@/components/ui/button";
 import { getGraph } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
+import { afterHistorySettles, replaceUrl } from "@/lib/back-to-close";
 import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { buildLineageIndex, lineageFrom, type Lineage } from "@/lib/graph-lineage";
 import { useSession } from "@/lib/session";
@@ -114,7 +116,7 @@ import { GraphToolbar } from "./graph/GraphToolbar";
 import { EpicPicker } from "./graph/EpicPicker";
 import { initialFit } from "./graph/phone-fit";
 import { nodeTypes, type GraphFlowNode } from "./graph/node-types";
-import { EmptyState, NoMatchesState, ViewState } from "./ViewChrome";
+import { EmptyState, ViewState } from "./ViewChrome";
 
 /** Height is explicit because React Flow measures its container and the shell scrolls. */
 /*
@@ -686,14 +688,21 @@ function GraphCanvas({
   /**
    * Keep the address bar in step, so "copy the URL" works as well as the button does.
    *
-   * `replaceState`, never `pushState`: every toggle would otherwise become a history
-   * entry and Back would stop meaning "the page I was on before". `withGraphView` rebuilds
-   * the URL from the CURRENT href and sets exactly one parameter, which is what keeps
-   * `token` untouched — it is never read here, never re-encoded, never reordered.
+   * Replace, never push: every toggle would otherwise become a history entry and Back would
+   * stop meaning "the page I was on before". `withGraphView` rebuilds the URL from the
+   * CURRENT href and sets exactly one parameter, which is what keeps `token` untouched — it
+   * is never read here, never re-encoded, never reordered.
+   *
+   * Through lib/back-to-close.ts like every other history write: `replaceUrl` keeps the
+   * entry's state (the overlay ids an open menu or sheet holds on it), and
+   * `afterHistorySettles` waits for a traversal in flight, so the parameter lands on the
+   * entry the browser is really on.
    */
   useEffect(() => {
-    const next = withGraphView(window.location.href, viewState);
-    if (next !== window.location.href) window.history.replaceState(null, "", next);
+    afterHistorySettles(() => {
+      const next = withGraphView(window.location.href, viewState);
+      if (next !== window.location.href) replaceUrl(next);
+    });
   }, [viewState]);
 
   const [copied, setCopied] = useState<string | null>(null);
@@ -925,7 +934,7 @@ function GraphCanvas({
     // Same distinction the tree makes: a graph with nothing in it and a graph the filter
     // emptied are different facts, and only one of them is fixed by clearing filters.
     return hidden.size > 0 ? (
-      <NoMatchesState noun="dependencies" />
+      <FilterEmptyState rows={session.issues.data ?? []} state={session.filters} context={session.filterContext} noun="dependencies" />
     ) : (
       <EmptyState>No dependencies yet. When one task has to wait for another, the two show up here, joined by a line.</EmptyState>
     );

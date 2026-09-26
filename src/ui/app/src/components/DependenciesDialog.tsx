@@ -26,6 +26,7 @@
  * its own tests. That is a ticket. This one replaces a caption.
  */
 import { useCallback } from "react";
+import { useBackToClose } from "@/lib/back-to-close";
 import { OctagonX, TriangleAlert } from "lucide-react";
 import {
   Dialog,
@@ -138,6 +139,8 @@ export function DependenciesDialog({
   onClose,
 }: DependenciesDialogProps) {
   const session = useSession();
+  // Mounted only while open: phone Back closes it, not the page (lib/back-to-close.ts).
+  useBackToClose(true, onClose);
 
   const load = useCallback(
     () => getIssue({ ws: workspace, ref: identifier }),

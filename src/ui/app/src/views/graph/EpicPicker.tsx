@@ -50,6 +50,7 @@
  */
 import { ChevronDown, ChevronRight, Layers, Search, X } from "lucide-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
+import { useBackToClose } from "@/lib/back-to-close";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 // Through the barrel, never from a file inside it — the same rule searchable-select.tsx
@@ -105,6 +106,8 @@ export function EpicPicker({
 }: EpicPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Phone Back closes the picker, not the page (lib/back-to-close.ts).
+  useBackToClose(open, () => setOpen(false));
 
   // Clear on every OPEN rather than on close: a list that reopens still holding the last
   // query looks broken, and clearing on close happens under the animation. R7's rule.

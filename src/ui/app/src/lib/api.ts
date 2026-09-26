@@ -13,6 +13,7 @@
  *
  * WAVE 2: import from here. Adding an endpoint means adding a function here.
  */
+import { replaceUrl } from "./back-to-close";
 import type {
   ActionPayload,
   AgentContext,
@@ -155,7 +156,7 @@ let token: string = (() => {
   writeSession(fromUrl);
   params.delete("token");
   const qs = params.toString();
-  history.replaceState({}, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
+  replaceUrl(location.pathname + (qs ? `?${qs}` : "") + location.hash);
   return fromUrl;
 })();
 

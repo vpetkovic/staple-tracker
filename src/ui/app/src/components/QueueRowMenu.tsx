@@ -50,7 +50,6 @@ import {
 import { useBackToClose } from "@/lib/back-to-close";
 import { statusCategory } from "@/lib/settings";
 import type { TaskRow } from "@/components/task-list";
-import { afterOverlayCloses } from "@/components/task-list/overlay-handoff";
 
 /** What the menu may offer for one row, and what it must refuse. */
 export interface QueueRowMenuState {
@@ -173,8 +172,10 @@ export function QueueRowMenu({
       >
         <DropdownMenuItem
           data-menu-item="open"
-          // The detail opens once the menu's Back entry is gone — see overlay-handoff.ts.
-          onSelect={() => afterOverlayCloses(onOpen)}
+          // One tap closes the menu and opens the detail. No hand-off is needed here: the
+          // detail's entry is pushed through `whenHistoryIsFree` (lib/back-to-close.ts), so it
+          // lands after the menu's own entry has been taken out.
+          onSelect={onOpen}
         >
           <ArrowUpRight aria-hidden />
           Open details

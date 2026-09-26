@@ -52,7 +52,6 @@ import {
 } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useBackToClose } from "@/lib/back-to-close";
-import { afterOverlayCloses } from "@/components/task-list/overlay-handoff";
 import { useSession } from "@/lib/session";
 import type {
   EffectiveQueueRow,
@@ -301,7 +300,7 @@ function MemberRow({
             aria-label={`Actions for ${identifier}`}
             className="pointer-coarse:[&_[role=menuitem]]:min-h-11 pointer-coarse:[&_[role=menuitem]]:text-[15px]"
           >
-            <DropdownMenuItem onSelect={() => afterOverlayCloses(() => onOpen(row.workspace, identifier))}>
+            <DropdownMenuItem data-menu-item="open" onSelect={() => onOpen(row.workspace, identifier)}>
               <ArrowUpRight aria-hidden />
               Open details
             </DropdownMenuItem>
