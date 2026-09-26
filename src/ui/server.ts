@@ -352,7 +352,7 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
 ]);
 
 /**
- * STA-303: automatic budget collection, machine-local. The four writes change this
+ * Automatic budget collection, machine-local. The four writes change this
  * machine's staple home, its Claude settings file and its launch agents, never the
  * tracker, so they journal nothing and must not arm the post-write sync trigger: the
  * contract is that budget collection makes no network call, and a sync fired on the
@@ -1399,7 +1399,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/hub/registry/backup/create" ||
           url.pathname === "/api/hub/registry/restore" ||
           url.pathname === "/api/hub/registry/adopt" ||
-          /** STA-303: named in one set; `/api/budget/collection` itself is the GET read. */
+          /** Budget collection: named in one set; `/api/budget/collection` itself is the GET read. */
           BUDGET_COLLECTION_WRITES.has(url.pathname)
             ? ["POST"]
             : url.pathname === "/api/settings"
@@ -1455,7 +1455,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
-       * STA-303: automatic budget collection. One service method per route, the same
+       * Automatic budget collection. One service method per route, the same
        * ones `staple budget setup|unsetup|status|collect` call. Machine-local: nothing
        * here reads or writes a workspace, and nothing replicates.
        */

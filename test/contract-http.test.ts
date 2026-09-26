@@ -390,7 +390,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/agent-context",
       "/api/bootstrap",
       /**
-       * STA-303: automatic budget collection, machine-local. The GET is the status
+       * Automatic budget collection, machine-local. The GET is the status
        * read; the four POSTs are named in `BUDGET_COLLECTION_WRITES`, which the method
        * gate pins as POST-only and the post-write sync trigger skips (collection makes
        * no network call). setup and unsetup need `consent: true` in the body.

@@ -1084,7 +1084,7 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         "/api/queue",
         "/api/settings",
         "/api/poll",
-        // STA-303: the collection status the web Settings reads (local files and hub.db).
+        // Budget collection: the status the web Settings reads (local files and hub.db).
         "/api/budget/collection",
       ];
 
@@ -1173,7 +1173,7 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         ["/api/hub/unregister", { slug: "netsilenceui" }],
         ["/api/hub/unregister", { slug: "no-such-workspace", confirm: true }],
         /*
-         * STA-303: automatic budget collection. The contract is that it makes no
+         * Automatic budget collection. The contract is that it makes no
          * network call, and these routes are excluded from the post-write sync
          * trigger for that reason. Setup is sent without consent (refused), with it,
          * then a collect and an unsetup, so each round ends where it began. Codex only
