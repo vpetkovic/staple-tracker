@@ -11,7 +11,8 @@ import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SurfaceAutoSync } from "../src/core/cloud/auto-triggers.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { budgetConfig } from "../src/core/telemetry/budget-config.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
@@ -125,6 +126,28 @@ describe("/api/budget/collection", () => {
     const cross = await call("/api/budget/collection/setup", { body: { ...SETUP, consent: true }, origin: "https://evil.example" });
     expect(cross.status).toBe(403);
     expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
+  });
+
+  it("never arms the post-write sync trigger, which every ordinary write does", async () => {
+    const spy = vi.spyOn(SurfaceAutoSync.prototype, "postWrite");
+    try {
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+      // The control: an ordinary 2xx POST arms it, so the spy is watching the right thing.
+      const svg = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4" fill="#f00"/></svg>';
+      const control = await call("/api/glyph/sanitize", { body: { svg, label: "Dot" } });
+      expect(control.status, JSON.stringify(control.body)).toBe(200);
+      await settle();
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockClear();
+      expect((await call("/api/budget/collection/plan", { body: { action: "setup", ...SETUP } })).status).toBe(200);
+      expect((await call("/api/budget/collection/setup", { body: { ...SETUP, consent: true } })).status).toBe(200);
+      expect((await call("/api/budget/collection/collect", { body: {} })).status).toBe(200);
+      expect((await call("/api/budget/collection/unsetup", { body: { consent: true } })).status).toBe(200);
+      await settle();
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("needs the token", async () => {

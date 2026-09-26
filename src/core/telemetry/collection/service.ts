@@ -28,7 +28,7 @@ import { userHome as osUserHome } from "../../../config/home.js";
 import { defaultBinDir, launcherPath } from "../../../install/launcher.js";
 import { StapleError } from "../../types.js";
 import { bindBudgetSource, budgetConfig, setBudgetCapture, unbindBudgetSource } from "../budget-config.js";
-import { SOURCE_PROVIDER, claudeBindingFor, claudeConfigDir, codexHome, expandHomePath } from "../bindings.js";
+import { SOURCE_PROVIDER, claudeConfigDir, codexHome, expandHomePath } from "../bindings.js";
 import { isKnownBinding, type BindingSource, type KnownBinding, type TelemetryConfig } from "../config.js";
 import { assertAccountRef } from "../formats.js";
 import type { AttemptLinker } from "../ingest.js";

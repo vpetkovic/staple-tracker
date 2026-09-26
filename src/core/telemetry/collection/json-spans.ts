@@ -138,7 +138,7 @@ export function splice(text: string, start: number, end: number, replacement: st
  * the member itself plus the comma that separated it from a neighbour (the preceding one
  * when there is one, else the following one), and the whitespace between them.
  */
-export function memberRemovalSpan(text: string, object: JsonNode, target: JsonMember): { start: number; end: number } {
+export function memberRemovalSpan(object: JsonNode, target: JsonMember): { start: number; end: number } {
   const members = object.members ?? [];
   const index = members.indexOf(target);
   if (index > 0) {

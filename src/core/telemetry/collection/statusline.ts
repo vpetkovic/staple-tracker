@@ -365,7 +365,7 @@ export function uninstallStatusline(input: { configDir: string; record: Statusli
       return true;
     }
   }
-  const span = memberRemovalSpan(text, parsed.root, line);
+  const span = memberRemovalSpan(parsed.root, line);
   writeSettings(settingsPath, splice(text, span.start, span.end, ""));
   return true;
 }
