@@ -6,10 +6,12 @@
  * Built from the plain-language card the Budget and Estimate accuracy pages use: a plain
  * sentence saying what this is and what to do, the answer one tap away, and the why behind
  * "What does this mean?". Picking a workspace here is `session.setWs`, the same call the
- * switcher makes, so the rest of the app follows.
+ * switcher makes, so the rest of the app follows. The choice is also remembered as the
+ * default "which workspace?" answer that Create task and Settings offer.
  */
 import { ChevronRight } from "lucide-react";
 import { PlainCard } from "@/components/plain/PlainCard";
+import { rememberWorkspace } from "@/lib/session-workspace";
 import type { WorkspaceRef } from "@/lib/types";
 
 export function ChooseWorkspace({
@@ -45,7 +47,10 @@ export function ChooseWorkspace({
                 <button
                   type="button"
                   data-choose-workspace-option={workspace.slug}
-                  onClick={() => onChoose(workspace.slug)}
+                  onClick={() => {
+                    rememberWorkspace(workspace.slug);
+                    onChoose(workspace.slug);
+                  }}
                   className="flex min-h-11 w-full min-w-0 items-center gap-3 rounded-lg border bg-card px-3 py-2 text-left outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{workspace.slug}</span>

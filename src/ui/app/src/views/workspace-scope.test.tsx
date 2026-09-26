@@ -7,6 +7,7 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { SessionContext, type StapleSession } from "@/lib/session";
+import { loadRememberedWorkspace } from "@/lib/session-workspace";
 import type { WorkspaceRef } from "@/lib/types";
 import { CalibrationView } from "./calibration/CalibrationView";
 import { ChooseWorkspace } from "./ChooseWorkspace";
@@ -105,5 +106,31 @@ describe("per-workspace pages in All workspaces", () => {
     buttons[2]!.click();
     buttons[1]!.click();
     expect(chosen).toEqual(["workshop", "staple"]);
+  });
+
+  it("remembers the chosen workspace as the default that Create task and Settings offer", () => {
+    const store = new Map<string, string>();
+    const previous = globalThis.localStorage;
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) },
+    });
+    try {
+      const root = ChooseWorkspace({ page: "Queue", sentence: "S.", workspaces: THREE, onChoose: () => {} });
+      let click: (() => void) | undefined;
+      const walk = (node: unknown): void => {
+        if (!node || typeof node !== "object") return;
+        if (Array.isArray(node)) return node.forEach(walk);
+        const props = (node as { props?: Record<string, unknown> }).props;
+        if (!props) return;
+        if (props["data-choose-workspace-option"] === "staple") click = props.onClick as () => void;
+        walk(props.children);
+      };
+      walk(root);
+      click!();
+      expect(loadRememberedWorkspace()).toBe("staple");
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", { configurable: true, value: previous });
+    }
   });
 });
