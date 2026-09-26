@@ -180,7 +180,7 @@ describe("parity with staple budget capture|bind|unbind", () => {
       else expect(viaHttp.body, step.name).toEqual(viaCli.json);
     }
     // The walk really wrote something, so the equality above is not two empty files.
-    expect(telemetryOf(httpHome).bindings.map((binding) => binding.accountRef)).toEqual(["claude-team", "codex-pro"]);
+    expect(budgetConfig(httpHome).bindings.map((binding) => binding.accountRef)).toEqual(["claude-team", "codex-pro"]);
     const listed = await call("/api/budget/bindings");
     expect(listed.status).toBe(200);
     expect(listed.body).toEqual((await cli(["bindings"])).json);
