@@ -80,6 +80,12 @@ describe("the sheet's Previous and Next", () => {
     for (const direction of ["prev", "next"]) expect(navClass(html, direction).split(" ")).toContain("size-11");
   });
 
+  it("print the identifier on one line — the phone row no longer draws it, so this is where it is read", () => {
+    const tag = /<span[^>]*data-detail-identifier=""[^>]*>/.exec(panel("sheet"))?.[0] ?? "";
+    expect(tag).toContain("whitespace-nowrap");
+    expect(tag).toContain("shrink-0");
+  });
+
   it("keep the desktop drawer's compact buttons, widened only under a finger", () => {
     const html = panel("drawer");
     for (const direction of ["prev", "next"]) {
