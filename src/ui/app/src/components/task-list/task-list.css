@@ -1245,12 +1245,15 @@
 }
 
 /*
- * The chevron keeps its 12px glyph and grows a 44px target. The target reaches left into
- * the indent gutter (empty by construction) and a little right into the column gap, never
- * over the priority glyph's centre.
+ * The chevron keeps its 12px glyph and grows a 44px target: 16px left into the indent
+ * gutter (empty by construction) and 24px right over the gap and the priority glyph, which
+ * is not interactive, so a thumb that lands a little right still folds. A top-level row's
+ * chevron sits 8px from the screen edge, and the edge itself is the rest of its target.
  */
 .staple-row[data-layout="compact"] .staple-row-chevron {
   position: relative;
+  /* Above the priority glyph, so the part of the target that overlaps it is the chevron's. */
+  z-index: 1;
   width: 12px;
   height: 12px;
 }
@@ -1258,7 +1261,28 @@
 .staple-row[data-layout="compact"] .staple-row-chevron::before {
   content: "";
   position: absolute;
-  inset: -16px -10px -16px -22px;
+  inset: -16px -24px -16px -16px;
+}
+
+/* The glyph turns, not the button: a rotated button would rotate its target with it, and
+   the asymmetric target above would point up the row instead of across it. */
+.staple-row[data-layout="compact"] .staple-row-chevron,
+.staple-row[data-layout="compact"] .staple-row-chevron[data-expanded="true"] {
+  transform: none;
+}
+
+.staple-row[data-layout="compact"] .staple-row-chevron > svg {
+  transition: transform var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+.staple-row[data-layout="compact"] .staple-row-chevron[data-expanded="true"] > svg {
+  transform: rotate(90deg);
+}
+
+/* The priority glyph is decoration on a phone (it has no hover to show a tooltip on), so
+   a tap on it falls through to the chevron's target above it rather than stopping there. */
+.staple-row[data-layout="compact"] .staple-row-priority {
+  pointer-events: none;
 }
 
 .staple-row[data-layout="compact"] .staple-row-chevron-spacer {

@@ -150,21 +150,24 @@ function HeldPill({ agent, showLabel = true }: { agent: string; showLabel?: bool
  * The full sentence is the accessible name and the tooltip, exactly as on the pill. The
  * stale case keeps its duration visible because that number IS the diagnosis.
  */
+/** A stale claim as initials and silence — the compact half of the stale badge. */
+function StaleShort({ claim }: { claim: ClaimActivity }) {
+  return (
+    <span
+      className="status-chip staple-claim-stale"
+      data-stale-claim=""
+      data-held-by={claim.heldBy}
+      data-testid="stale-claim-cue"
+      aria-label={`stale claim — ${staleClaimDetail(claim)}`}
+      title={staleClaimDetail(claim)}
+    >
+      {initials(claim.heldBy)} · {formatAgo(claim.idleSeconds)}
+    </span>
+  );
+}
+
 function ClaimAvatar({ claim, checkoutAgent }: { claim: ClaimActivity | null; checkoutAgent: string | null }) {
-  if (claim && isStaleClaim(claim)) {
-    return (
-      <span
-        className="status-chip staple-claim-stale"
-        data-stale-claim=""
-        data-held-by={claim.heldBy}
-        data-testid="stale-claim-cue"
-        aria-label={`stale claim — ${staleClaimDetail(claim)}`}
-        title={staleClaimDetail(claim)}
-      >
-        {initials(claim.heldBy)} · {formatAgo(claim.idleSeconds)}
-      </span>
-    );
-  }
+  if (claim && isStaleClaim(claim)) return <StaleShort claim={claim} />;
   const holder = claim?.heldBy ?? checkoutAgent;
   if (!holder) return null;
   const live = claim !== null;
@@ -194,15 +197,19 @@ export function RowClaimSlot({
   checkoutAgent,
   variant = "pill",
   showLabel = true,
+  staleShort = false,
 }: {
   claim: ClaimActivity | null;
   checkoutAgent: string | null;
   variant?: "pill" | "avatar";
   /** "Working…" and the held agent's name beside the pill — dropped below 880px. */
   showLabel?: boolean;
+  /** A stale claim as initials and silence rather than the whole sentence — below 1024px. */
+  staleShort?: boolean;
 }) {
   if (variant === "avatar") return <ClaimAvatar claim={claim} checkoutAgent={checkoutAgent} />;
   if (claim) {
+    if (isStaleClaim(claim) && staleShort) return <StaleShort claim={claim} />;
     return isStaleClaim(claim) ? (
       <StaleClaimBadge claim={claim} variant="compact" className="staple-row-stale" />
     ) : (

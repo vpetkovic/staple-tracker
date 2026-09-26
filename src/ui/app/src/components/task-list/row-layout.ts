@@ -42,10 +42,18 @@ export type RowDrop =
   | "rollupPlan"
   /** The ring-and-elbow glyph before a child's identifier; the indent already says it. */
   | "subtaskGlyph"
+  /** The pickup cue's words ("plan #2", "next"): the glyph and the number stay. */
+  | "cueWords"
   /** Separate blocked-by and blocks badges: they merge into one cue. */
   | "splitDeps"
   /** The PR badge itself. */
   | "prBadge"
+  /**
+   * A stale claim's full sentence (`held by opus-x · 2h · silent 46m`): it becomes the
+   * holder's initials and the silence (`OX · 46m`), the part that IS the diagnosis. The
+   * sentence stays the accessible name and the tooltip.
+   */
+  | "staleSentence"
   /** The label colour dots. */
   | "labelDots"
   /** The parent's 36px progress bar: it becomes a 12px ring beside the count. */
@@ -67,10 +75,10 @@ export interface RowRung {
  */
 export const COLLAPSE_LADDER: readonly RowRung[] = [
   { below: 1280, drops: ["secondLabel"] },
-  { below: 1024, drops: ["prNumber", "labelNames"] },
+  { below: 1024, drops: ["prNumber", "labelNames", "staleSentence"] },
   { below: 960, drops: ["worklog"] },
   { below: 880, drops: ["date", "workingLabel"] },
-  { below: 720, drops: ["rollupPlan", "subtaskGlyph", "splitDeps"] },
+  { below: 720, drops: ["rollupPlan", "subtaskGlyph", "cueWords", "splitDeps"] },
   { below: 480, drops: ["prBadge", "labelDots", "rollupBar"] },
 ];
 
@@ -127,6 +135,10 @@ export interface RowPlan {
    * ~150px, which on a phone is the whole title.
    */
   claim: "pill" | "avatar";
+  /** The pickup cue with its words, or glyph and number only. */
+  cueWords: boolean;
+  /** A stale claim as its whole sentence, or as initials and silence. */
+  staleClaim: "sentence" | "short";
 }
 
 /** Every drop that applies at `width`. */
@@ -158,6 +170,8 @@ export function rowPlan(width: number): RowPlan {
     deps: has("splitDeps") ? "split" : "merged",
     rollup: has("rollupBar") ? "bar" : "ring",
     claim: compact ? "avatar" : "pill",
+    cueWords: has("cueWords"),
+    staleClaim: has("staleSentence") ? "sentence" : "short",
   };
 }
 

@@ -31,6 +31,7 @@ import {
   type RowDrop,
 } from "./row-layout";
 import { mergedDependencySentence } from "./DependencyBadges";
+import { rowCueShort } from "./row-cues";
 
 const NOW = new Date("2026-09-01T01:00:00.000Z");
 
@@ -98,20 +99,22 @@ describe("the collapse ladder — precedence as data", () => {
         deps: plan.deps,
         rollup: plan.rollup + (plan.rollupPlan ? "+est" : ""),
         indent: `${plan.geometry.indentStep}px x${plan.geometry.maxIndentDepth}`,
+        cue: plan.cueWords ? "words" : "glyph+n",
+        stale: plan.staleClaim,
       };
     };
     expect(table(1440)).toEqual({
       layout: "line", labels: "pills", date: true, worklog: true, pr: "#n", claim: "pill+word",
-      deps: "split", rollup: "bar+est", indent: "20px x6",
+      deps: "split", rollup: "bar+est", indent: "20px x6", cue: "words", stale: "sentence",
     });
     expect(table(768)).toEqual({
       layout: "line", labels: "dots", date: false, worklog: false, pr: "glyph", claim: "pill",
-      deps: "split", rollup: "bar+est", indent: "20px x6",
+      deps: "split", rollup: "bar+est", indent: "20px x6", cue: "words", stale: "short",
     });
     for (const phone of [390, 360]) {
       expect(table(phone), `${phone}`).toEqual({
         layout: "compact", labels: "none", date: false, worklog: false, pr: "none", claim: "avatar",
-        deps: "merged", rollup: "ring", indent: "14px x5",
+        deps: "merged", rollup: "ring", indent: "14px x5", cue: "glyph+n", stale: "short",
       });
     }
     expect(rowPlan(1440).labelMax).toBe(2);
@@ -254,6 +257,14 @@ describe("the compact row's cues — one line, the title first", () => {
     expect(phone).toContain('data-testid="stale-claim-cue"');
     expect(phone).toMatch(/aria-label="stale claim — held by opus-gone · 2h · silent 40m/);
     expect(phone).toMatch(/>OG · 40m</);
+    // Beside a tablet's navigation rail the sentence would take the whole title, so below
+    // 1024px it is the short form in the pill slot too; wide rows keep the sentence.
+    const tablet = render(flatRow({ ...row({ identifier: "STA-9" }), claim: stale }), 768);
+    expect(tablet).toContain('data-testid="stale-claim-cue"');
+    expect(tablet).not.toContain(">held by opus-gone");
+    const wide = render(flatRow({ ...row({ identifier: "STA-9" }), claim: stale }), 1440);
+    expect(wide).toContain(">held by opus-gone · 2h · silent 40m<");
+    expect(wide).not.toContain('data-testid="stale-claim-cue"');
   });
 
   it("draws one avatar, not two, when the holder is also the assignee", () => {
@@ -278,6 +289,24 @@ describe("the compact row's cues — one line, the title first", () => {
     expect(tablet).toContain('data-testid="pr-badge"');
     expect(tablet).not.toContain("staple-pr-number");
     expect(render(line, 1440)).toContain('<span class="staple-pr-number">#42</span>');
+  });
+
+  it("keeps the pickup cue's glyph and number on a phone and drops only its words", () => {
+    const queued = { state: "queued" as const, position: 2, scope: "plan" as const, reason: null };
+    const next = { state: "pickable" as const, position: 1, scope: "effective" as const, reason: null };
+    expect(rowCueShort(queued)).toBe("plan #2");
+    expect(rowCueShort(queued, true)).toBe("2");
+    expect(rowCueShort(next)).toBe("next");
+    expect(rowCueShort(next, true)).toBe("");
+    const line = flatRow({ ...row({ identifier: "STA-15" }), cues: { pickup: queued, milestone: null } });
+    const phone = render(line, 390);
+    const desk = render(line, 1440);
+    expect(phone).toContain('<span aria-hidden="true">#</span><span aria-hidden="true">2</span>');
+    expect(desk).toContain('<span aria-hidden="true">plan #2</span>');
+    // The sentence — what the cue MEANS — is identical at both widths.
+    const sentence = (m: string) => /<span class="sr-only">(Queued[^<]*)<\/span>/.exec(m)?.[1];
+    expect(sentence(phone)).toBe(sentence(desk));
+    expect(sentence(phone)).toContain("Plan position 2.");
   });
 
   it("marks the row compact below 720px and the full row everywhere without a plan", () => {

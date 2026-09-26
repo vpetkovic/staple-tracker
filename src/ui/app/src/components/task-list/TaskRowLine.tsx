@@ -288,7 +288,9 @@ export function TaskRowLine({
   const menuControl: RowMenuControl = { open: menuOpen, onOpenChange: setMenuOpen };
   // Long-press opens the row's menu on touch. Only where there IS a menu: a row whose `⋯`
   // would only open the drawer already does that on a plain tap.
-  const longPress = useLongPress(actionsMenu && semantics !== "bare" ? () => setMenuOpen(true) : null);
+  // `bare` rows get it too: the Queue's plan rows are bare (the reorder list owns their
+  // role) and they are the rows whose menu carries the moves.
+  const longPress = useLongPress(actionsMenu ? () => setMenuOpen(true) : null);
   const collapsedParent = columns.disclosure && hasChildren && !isExpanded;
   const bare = semantics === "bare";
   /**
@@ -457,7 +459,7 @@ export function TaskRowLine({
           them and the only place they can go without a new grid track. They cost no
           height: see RowCues.tsx.
         */}
-        {cues?.pickup ? <PickupCue cue={cues.pickup} /> : null}
+        {cues?.pickup ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
         {cues?.milestone ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
@@ -557,6 +559,7 @@ export function TaskRowLine({
             checkoutAgent={issue.checkoutAgent}
             variant={plan.claim}
             showLabel={plan.workingLabel}
+            staleShort={plan.staleClaim === "short"}
           />
         ) : null}
         {columns.assignee && issue.assignee && !(plan.claim === "avatar" && claimHolder === issue.assignee) ? (
@@ -650,12 +653,12 @@ export function TaskRowLine({
       // arrow keys do the moving — the standard treegrid/listbox contract.
       tabIndex={bare ? undefined : isFocused ? 0 : -1}
       onClick={bare ? undefined : onOpen}
-      onClickCapture={bare ? undefined : longPress.onClickCapture}
-      onPointerDown={bare ? undefined : longPress.onPointerDown}
-      onPointerMove={bare ? undefined : longPress.onPointerMove}
-      onPointerUp={bare ? undefined : longPress.onPointerEnd}
-      onPointerCancel={bare ? undefined : longPress.onPointerEnd}
-      onContextMenu={bare ? undefined : longPress.onContextMenu}
+      onClickCapture={longPress.onClickCapture}
+      onPointerDown={longPress.onPointerDown}
+      onPointerMove={longPress.onPointerMove}
+      onPointerUp={longPress.onPointerEnd}
+      onPointerCancel={longPress.onPointerEnd}
+      onContextMenu={longPress.onContextMenu}
       onFocus={bare ? undefined : onFocus}
       onKeyDown={bare ? undefined : onKeyDown}
       className={cn(
