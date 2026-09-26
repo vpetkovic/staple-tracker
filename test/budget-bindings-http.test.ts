@@ -10,7 +10,6 @@
  * answers are compared, success and refusal alike. The CLI runs asynchronously so the
  * server in this process keeps answering while it does.
  */
-import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -21,7 +20,7 @@ import { readConfig } from "../src/config/file.js";
 import { budgetConfig } from "../src/core/telemetry/budget-config.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { REPO_ROOT, removeDir, runCliAtAsync, tempDir } from "./fixtures/characterize-support.js";
 
 let root: string;
 let httpHome: string;
@@ -48,19 +47,10 @@ async function call(path: string, init: { method?: string; body?: unknown; origi
 
 /** `staple budget …--json` on the CLI's own home, without blocking this process's server. */
 async function cli(args: string[]): Promise<{ status: number | null; json: Record<string, any> }> {
-  const child = spawn(process.execPath, [TSX_CLI, CLI_ENTRY, "budget", ...args, "--json"], {
-    cwd: REPO_ROOT,
-    env: bareEnv({ STAPLE_HOME: cliHome, HOME: root, CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexDir }),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const out: Buffer[] = [];
-  const err: Buffer[] = [];
-  child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
-  child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
-  const [status] = (await once(child, "close")) as [number | null];
+  const result = await runCliAtAsync(REPO_ROOT, ["budget", ...args, "--json"], { STAPLE_HOME: cliHome, HOME: root, CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexDir });
   // A --json refusal is the error envelope, on stderr; a success is the view, on stdout.
-  const text = Buffer.concat(status === 0 ? out : err).toString("utf8");
-  return { status, json: JSON.parse(text.slice(text.indexOf("{"))) as Record<string, any> };
+  const text = result.status === 0 ? result.stdout : result.stderr;
+  return { status: result.status, json: JSON.parse(text.slice(text.indexOf("{"))) as Record<string, any> };
 }
 
 const telemetryOf = (home: string) => readConfig(home).config.telemetry;
@@ -161,6 +151,24 @@ const REFUSALS = (): Step[] => [
     body: { source: "codex-rollout" },
   },
   {
+    name: "a relative Codex home",
+    argv: ["bind", "--source", "codex-rollout", "--account", "codex-plus", "--codex-home", "relative/codex"],
+    path: "/api/budget/bindings/bind",
+    body: { source: "codex-rollout", account: "codex-plus", codexHome: "relative/codex" },
+  },
+  {
+    name: "an empty Claude folder",
+    argv: ["bind", "--source", "claude-statusline", "--account", "claude-max", "--config-dir", ""],
+    path: "/api/budget/bindings/bind",
+    body: { source: "claude-statusline", account: "claude-max", configDir: "" },
+  },
+  {
+    name: "unbinding a relative home",
+    argv: ["unbind", "--source", "codex-rollout", "--codex-home", "codex"],
+    path: "/api/budget/bindings/unbind",
+    body: { source: "codex-rollout", codexHome: "codex" },
+  },
+  {
     name: "unbinding a home that has no binding",
     argv: ["unbind", "--source", "codex-rollout", "--codex-home", join(root, "nowhere")],
     path: "/api/budget/bindings/unbind",
@@ -193,9 +201,64 @@ describe("parity with staple budget capture|bind|unbind", () => {
       const viaHttp = await call(step.path, { body: step.body });
       expect(viaCli.status, step.name).not.toBe(0);
       expect(viaHttp.status, step.name).toBe(viaCli.json.code === "not_found" ? 404 : 409);
-      expect({ code: viaHttp.body.code, message: viaHttp.body.message }, step.name).toEqual({ code: viaCli.json.code, message: viaCli.json.message });
+      expect({ code: viaHttp.body.code, message: viaHttp.body.message, detail: viaHttp.body.detail }, step.name).toEqual({
+        code: viaCli.json.code,
+        message: viaCli.json.message,
+        detail: viaCli.json.detail,
+      });
+      // Every refusal names its reason, so a surface other than the CLI can word it.
+      expect(viaHttp.body.detail?.reason, step.name).toEqual(expect.any(String));
     }
     expect(readFileSync(join(httpHome, "config.json"), "utf8")).toBe(before);
+  });
+
+  it("an edit onto a home another binding holds is refused (conflict) by both, and removes nothing", async () => {
+    const setup = [
+      { argv: ["bind", "--source", "claude-statusline", "--account", "work-claude", "--config-dir", join(root, "A")], body: { source: "claude-statusline", account: "work-claude", configDir: join(root, "A") } },
+      { argv: ["bind", "--source", "codex-rollout", "--account", "codex-plus", "--codex-home", join(root, "B")], body: { source: "codex-rollout", account: "codex-plus", codexHome: join(root, "B") } },
+    ];
+    for (const step of setup) {
+      expect((await cli(step.argv)).status).toBe(0);
+      expect((await call("/api/budget/bindings/bind", { body: step.body })).status).toBe(200);
+    }
+    const before = { http: readFileSync(join(httpHome, "config.json"), "utf8"), cli: readFileSync(join(cliHome, "config.json"), "utf8") };
+    // Edit A (a Claude link) into a Codex link on B's home.
+    const viaCli = await cli(["bind", "--source", "codex-rollout", "--account", "work-claude", "--codex-home", join(root, "B"), "--replace-source", "claude-statusline", "--replace-dir", join(root, "A")]);
+    const viaHttp = await call("/api/budget/bindings/bind", {
+      body: { source: "codex-rollout", account: "work-claude", codexHome: join(root, "B"), replacing: { source: "claude-statusline", configDir: join(root, "A") } },
+    });
+    expect(viaCli.status).not.toBe(0);
+    expect(viaHttp.status).toBe(409);
+    expect(viaHttp.body).toMatchObject({ code: "conflict", detail: { reason: "home_taken" } });
+    expect({ code: viaHttp.body.code, message: viaHttp.body.message }).toEqual({ code: viaCli.json.code, message: viaCli.json.message });
+    expect(readFileSync(join(httpHome, "config.json"), "utf8")).toBe(before.http);
+    expect(readFileSync(join(cliHome, "config.json"), "utf8")).toBe(before.cli);
+    // The same edit onto a free home works on both, in place.
+    await cli(["bind", "--source", "codex-rollout", "--account", "work-claude", "--codex-home", join(root, "C"), "--replace-source", "claude-statusline", "--replace-dir", join(root, "A")]);
+    await call("/api/budget/bindings/bind", { body: { source: "codex-rollout", account: "work-claude", codexHome: join(root, "C"), replacing: { source: "claude-statusline", configDir: join(root, "A") } } });
+    expect(telemetryOf(httpHome)).toEqual(telemetryOf(cliHome));
+    for (const home of [httpHome, cliHome]) {
+      const bindings = budgetConfig(home).bindings;
+      expect(bindings.some((binding) => binding.source === "codex_rollout" && binding.home === join(root, "B") && binding.accountRef === "codex-plus")).toBe(true);
+      expect(bindings.some((binding) => binding.source === "codex_rollout" && binding.home === join(root, "C") && binding.accountRef === "work-claude")).toBe(true);
+    }
+  });
+
+  it("a body that is not a JSON object is a 400 validation, never a 500", async () => {
+    for (const path of ["/api/budget/capture", "/api/budget/bindings/bind", "/api/budget/bindings/unbind", "/api/budget/collection/plan"]) {
+      for (const raw of ["null", "{not json", "[1]", "7"]) {
+        const res = await fetch(`${origin}${path}`, { method: "POST", headers: { "x-staple-token": ui.token, "content-type": "application/json" }, body: raw });
+        const body = (await res.json()) as Record<string, any>;
+        expect(res.status, `${path} ${raw}`).toBe(400);
+        expect(body).toMatchObject({ code: "validation", detail: { reason: "invalid_body" } });
+      }
+    }
+  });
+
+  it("an empty replacing names replacing", async () => {
+    const empty = await call("/api/budget/bindings/bind", { body: { source: "codex-rollout", account: "codex-plus", replacing: {} } });
+    expect(empty.status).toBe(409);
+    expect(empty.body.message).toMatch(/^replacing\.source must be claude-statusline or codex-rollout/);
   });
 
   it("refuses a body field of the wrong type", async () => {

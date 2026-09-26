@@ -553,17 +553,31 @@ The server's own sentences stay behind *Show details*.
   already done. The flow is `settings/telemetry-flow.ts`.
 - **Account links.** List, add, edit and remove bindings (what it reads, the
   folder, the account label, and under *Advanced* the provider). Nothing is
-  validated in the browser: the server runs the CLI's own checks and its
-  sentence appears on the form. Editing a link to another folder is one write
-  that replaces the old binding in place.
+  validated in the browser: the server runs the CLI's own checks, and its
+  refusal's `detail.reason` picks the plain sentence on the form ("The account
+  label can only use lowercase letters, digits and dashes …"); the CLI's own
+  sentence, which names flags, stays under *Show details*. Editing a link is
+  one write that replaces the old binding in place, and it is refused when the
+  new folder already has a link of its own, so an edit never removes another
+  link. Switching what a link reads resets its provider to that source's
+  default.
+
+The section is built from the plain-language cards (`components/plain/*`:
+`PlainCard`, `StatusPill`, *What does this mean?*, *Show details*) and the
+`--plain-*` colour tokens. Its state and handlers live in
+`settings/telemetry-controller.ts`, which `TelemetrySection` subscribes to, so
+`settings/telemetry-e2e.test.tsx` drives the real handlers against the real
+server (with a stub launcher and a stateful fake launchctl in a private HOME,
+so setup really plans, installs, fails and removes the watcher).
 
 **From another device.** The server accepts writes only from its own loopback
 origin, so a page opened through a forwarder (a phone on the tailnet) can read
 everything and change nothing. That refusal carries `detail.reason:
-"cross_origin"`, and the page shows it as *"Changes can only be made from this
-computer's browser"* instead of the token screen (app-wide: `lib/api.ts` treats
-it as an ordinary refusal, not a dead token). A page not on `127.0.0.1` or
-`localhost` also says so up front.
+"cross_origin"`. `lib/api.ts` treats it as an ordinary refusal, not a dead
+token (no token screen), and `describeRefusal` words it once for every view:
+*"Changes can only be made from this computer's browser …"*, with the server's
+sentence kept as `serverMessage`. A page not on `127.0.0.1` or `localhost`
+says so up front in this section and turns its write buttons off.
 
 Routes (each the same store or service method as the CLI verb):
 `GET /api/budget/collection` (`budget status`), `POST

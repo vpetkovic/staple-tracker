@@ -147,6 +147,7 @@ import {
 } from "../core/telemetry/collection/service.js";
 import { PlanConsentStore } from "../core/telemetry/collection/plan-consent.js";
 import {
+  accountRequired,
   bindBudgetSource,
   budgetConfig,
   parseBindingSource,
@@ -432,7 +433,7 @@ function bindingHomeOf(body: Record<string, unknown>, what: string): BindingHome
     return value;
   };
   // As at the CLI, the directory that is not the source's own is ignored rather than refused.
-  return { source: parseBindingSource(body.source), configDir: text("configDir"), codexHome: text("codexHome") };
+  return { source: parseBindingSource(body.source, what === "" ? "--source" : `${what}source`), configDir: text("configDir"), codexHome: text("codexHome") };
 }
 
 /**
@@ -874,6 +875,12 @@ export function startUiServer(options: UiOptions): UiHandle {
       orchestration: handle.store.orchestrationSummary(context.issue.id),
       planSummary: handle.store.planSummary(context.issue.id),
     };
+  }
+
+  async function readRawBody(req: IncomingMessage): Promise<string> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks).toString("utf8");
   }
 
   async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -1527,8 +1534,32 @@ export function startUiServer(options: UiOptions): UiHandle {
         json(res, 200, budgetConfig(stapleHome()));
         return;
       }
+      let budgetBody: Record<string, unknown> | null = null;
+      if (BUDGET_CONFIG_WRITES.has(url.pathname) || BUDGET_COLLECTION_WRITES.has(url.pathname)) {
+        /**
+         * These bodies are objects. Malformed JSON, `null`, an array or a scalar is the
+         * caller's mistake and answers 400 `validation` with nothing changed, rather than the
+         * 500 a property read of `null` would otherwise become.
+         */
+        const raw = await readRawBody(req);
+        let parsed: unknown = {};
+        let bad: string | null = null;
+        if (raw.trim() !== "") {
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            bad = "The request body is not valid JSON.";
+          }
+        }
+        if (bad === null && (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))) bad = "The request body must be a JSON object.";
+        if (bad !== null) {
+          json(res, 400, { error: bad, message: bad, code: "validation", detail: { reason: "invalid_body" }, retryable: false });
+          return;
+        }
+        budgetBody = parsed as Record<string, unknown>;
+      }
       if (BUDGET_CONFIG_WRITES.has(url.pathname)) {
-        const body = await readBody(req);
+        const body = budgetBody!;
         const home = stapleHome();
         if (url.pathname === "/api/budget/capture") {
           if (typeof body.enabled !== "boolean") throw new StapleError("validation", "enabled must be true or false (budget capture on|off).");
@@ -1541,13 +1572,11 @@ export function startUiServer(options: UiOptions): UiHandle {
         }
         if (url.pathname === "/api/budget/bindings/bind") {
           const target = bindingHomeOf(body, "");
-          if (typeof body.account !== "string") {
-            throw new StapleError("validation", "budget bind needs --account: the label of the account this harness home spends from.");
-          }
+          if (typeof body.account !== "string") accountRequired();
           if (body.provider !== undefined && body.provider !== null && typeof body.provider !== "string") throw new StapleError("validation", "provider must be a string");
           const replacing = body.replacing;
           if (replacing !== undefined && replacing !== null && (typeof replacing !== "object" || Array.isArray(replacing))) {
-            throw new StapleError("validation", "replacing must be the binding being edited: { source, configDir | codexHome }.");
+            throw new StapleError("validation", "replacing must be the binding being edited: { source, configDir | codexHome }.", { reason: "invalid_body", field: "replacing" });
           }
           json(
             res,
@@ -1563,7 +1592,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         }
       }
       if (BUDGET_COLLECTION_WRITES.has(url.pathname)) {
-        const body = await readBody(req);
+        const body = budgetBody!;
         const home = stapleHome();
         if (url.pathname === "/api/budget/collection/collect") {
           const maxFiles = body.maxFiles === undefined ? undefined : Number(body.maxFiles);

@@ -22,6 +22,9 @@
  * details", so nothing a power user or an agent reads is lost. An unknown code from a
  * newer server falls back to its own message.
  */
+import { plainAge } from "@/lib/plain-language";
+import type { PlainStatus } from "@/lib/plain-language";
+import { CROSS_ORIGIN_MESSAGE } from "@/lib/refusal";
 import type { SettingCategoryView } from "@/lib/settings";
 import type {
   BindingSource,
@@ -84,13 +87,17 @@ export const AUTOMATIC_COLLECTION_HELP =
   "links your accounts, adds a small step to your Claude status line (a backup of your Claude settings is kept first) and " +
   "checks your Codex sessions every few minutes. Turning it off puts back exactly what it changed.";
 
-export const CROSS_ORIGIN_MESSAGE =
-  "Changes can only be made from this computer's browser. This page is open from another device (for example your phone), " +
-  "which can look at these settings but not change them. Open staple on this computer to make the change.";
+/** The one wording of a write refused by the Origin check, shared with every view (`lib/refusal.ts`). */
+export { CROSS_ORIGIN_MESSAGE };
 
 /** True when the page is not on this computer's loopback address, so writes will be refused. */
 export function viewedFromAnotherDevice(hostname: string): boolean {
   return hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "";
+}
+
+/** What the section decides from the page's location (none outside a browser: not remote). */
+export function remoteFromLocation(where: { hostname: string } | undefined): boolean {
+  return where !== undefined && viewedFromAnotherDevice(where.hostname);
 }
 
 // ---------------------------------------------------------------- words
@@ -120,16 +127,9 @@ export function bindingDir(binding: KnownBinding): string {
   return binding.source === "claude_code_statusline" ? binding.configDir : binding.home;
 }
 
-/** How long ago, the way a person says it: "just now", "4 minutes ago", "3 hours ago", "2 days ago". */
+/** How long ago: "4 min ago", "3h ago", "2 days ago" (`plainAge`, shared with the Budget page). */
 export function agoText(seconds: number): string {
-  const s = Math.max(0, Math.round(seconds));
-  if (s < 60) return "just now";
-  const minutes = Math.round(s / 60);
-  if (minutes < 60) return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
-  const hours = Math.round(s / 3600);
-  if (hours < 48) return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
-  const days = Math.round(s / 86_400);
-  return `${days} days ago`;
+  return `${plainAge(seconds)} ago`;
 }
 
 // ---------------------------------------------------------------- at a glance
@@ -141,6 +141,9 @@ export interface Glance {
   word: string;
   headline: string;
 }
+
+/** The shared pill's status for each state: its colour tokens are the contrast-checked `--plain-*`. */
+export const GLANCE_PILL: Record<GlanceState, PlainStatus> = { on: "on_track", off: "unknown", attention: "tight" };
 
 /** Problems that are only a restatement of "capture is off" are not "attention" items. */
 const OFF_PROBLEMS = new Set(["capture_off"]);
@@ -217,11 +220,24 @@ export function watcherWords(watcher: WatcherStatus): { text: string; ok: boolea
 export function sourceRows(status: CollectionStatus): SourceRow[] {
   return status.sources.map((source: SourceStatus, index): SourceRow => {
     const words = SOURCE_WORDS[source.source];
-    const feed =
-      source.source === "claude_code_statusline"
+    const feed = !status.budgetCapture
+      ? { text: "Not recording: usage tracking is off.", ok: false }
+      : source.source === "claude_code_statusline"
         ? statuslineWords(status.statusline.find((entry) => entry.configDir === source.dir))
         : watcherWords(status.watcher);
     const reading = source.lastReading;
+    /**
+     * A reading next to "Not recording" would read as a contradiction, so the reading says it
+     * is older than the stop: the newest reading there is, from before recording stopped
+     * (or, for Codex without a background check, from the last check that ran).
+     */
+    const since = !status.budgetCapture
+      ? ", before tracking was turned off"
+      : feed.ok
+        ? ""
+        : source.source === "claude_code_statusline"
+          ? ", before recording stopped"
+          : ", from the last check that ran";
     return {
       key: `${source.source}:${source.dir}:${index}`,
       source: source.source,
@@ -230,7 +246,7 @@ export function sourceRows(status: CollectionStatus): SourceRow[] {
       account: source.accountRef,
       provider: source.provider,
       folder: source.dir,
-      reading: reading === null ? "No reading yet" : `Last reading ${agoText(reading.ageSeconds)}`,
+      reading: reading === null ? "No reading yet" : `Last reading ${agoText(reading.ageSeconds)}${since}`,
       fresh: reading !== null && reading.ageSeconds <= FRESH_SECONDS,
       feed: feed.text,
       feedOk: feed.ok,
@@ -421,4 +437,42 @@ export function bindInputOf(draft: BindingDraft, editing: KnownBinding | null) {
     ...(provider === "" ? {} : { provider }),
     ...(editing === null ? {} : { replacing: bindingHomeInput(SOURCE_WORDS[editing.source].flag, bindingDir(editing)) }),
   };
+}
+
+// ---------------------------------------------------------------- refusals in plain words
+
+/**
+ * A binding or capture refusal in everyday words, by the `detail.reason` the store sends
+ * (`BindingRefusalReason` in core/telemetry/budget-config.ts). The server's sentence names
+ * CLI flags, so it goes behind "Show details"; an unknown reason is shown as the server said it.
+ */
+const REFUSAL_WORDS: Record<string, string> = {
+  invalid_account: "The account label can only use lowercase letters, digits and dashes (for example claude-max), up to 64 characters. It's a name you choose, never an email.",
+  invalid_provider: "The provider must be a short lowercase name, such as anthropic or openai.",
+  invalid_source: "Choose what it reads: the Claude status line or Codex sessions.",
+  invalid_path: "The folder must be a full path (starting with /) or start with ~ for your home folder.",
+  account_required: "Enter an account label.",
+  binding_not_found: "That account link isn't there any more; it may have been changed elsewhere. The list below is up to date.",
+  home_taken: "That folder already has its own account link. Edit or remove that link instead; nothing was changed.",
+  invalid_body: "The page sent something the server couldn't read. Reload the page and try again.",
+};
+
+export interface PlainRefusal {
+  text: string;
+  /** The server's sentence, verbatim, for "Show details". Null when `text` already is it. */
+  detail: string | null;
+}
+
+export function plainRefusal(refusal: { message: string; reason: string | null; serverMessage?: string }): PlainRefusal {
+  if (refusal.serverMessage !== undefined) return { text: refusal.message, detail: refusal.serverMessage };
+  const words = refusal.reason === null ? undefined : REFUSAL_WORDS[refusal.reason];
+  return words === undefined ? { text: refusal.message, detail: null } : { text: words, detail: refusal.message };
+}
+
+/**
+ * The source of a draft changes: the provider goes back to empty (the new source's
+ * default), so a link switched from Claude to Codex does not keep "anthropic".
+ */
+export function withSource(draft: BindingDraft, source: BindingSourceFlag): BindingDraft {
+  return source === draft.source ? draft : { ...draft, source, provider: "" };
 }

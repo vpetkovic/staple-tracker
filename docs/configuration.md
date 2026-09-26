@@ -262,6 +262,17 @@ a list of bindings is not a shape the settings registry has.
   by the home that contains the rollout (`CODEX_HOME`, or `~/.codex`). With no
   binding and no `--account`, ingestion is refused (`validation`,
   `detail.reason: "no_binding_configured"`).
+- **A folder given to `bind`** (`--config-dir`, `--codex-home`, or the same
+  fields from the web Settings) must be an absolute path or start with `~`.
+  A relative path would name a different folder depending on where staple
+  runs next, so it is refused (`detail.reason: "invalid_path"`), at the CLI and
+  in the web Settings alike.
+- **Editing a binding** (`bind … --replace-source S [--replace-dir D]`, or
+  *Edit* in the web Settings) swaps that binding for the new one in one write,
+  in its place in the list. It is refused, with nothing written, when the
+  binding is gone (`not_found`) or when the new folder already has a binding
+  of its own (`conflict`, `home_taken`): an edit never removes a binding it
+  was not asked to.
 - A binding for a source this build does not know is kept as written and never
   used for matching, like any other key from a newer staple.
 - **One bad binding does not break the file.** An entry with an invalid field

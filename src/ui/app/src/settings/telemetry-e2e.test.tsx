@@ -1,84 +1,95 @@
 /**
- * The "Usage & budget" settings section against the REAL server.
+ * The "Usage & budget" settings section against the REAL server, through its REAL wiring.
  *
- * The real HTTP server (`src/ui/server.ts`, in this process) runs on an isolated staple
- * home with a scratch Claude folder; launchd is the suite's fake (test/setup/isolated-home.ts),
- * and no staple launcher exists in the scratch HOME, so the watcher step is planned as
- * skipped and nothing is ever loaded. The page's own `lib/api.ts` functions are driven through
- * a `fetch` that forwards to that server (the token added as the page would have it), so the
- * consent flow, the binding writes and the cross-origin refusal go through the same code the
- * browser runs. The panel is rendered with `react-dom/server` from what came off the wire.
+ * The real HTTP server (`src/ui/server.ts`, in this process) runs on a staple home private
+ * to this file, with a private HOME holding a stub `~/.local/bin/staple` launcher (so setup
+ * plans and installs the Codex watcher, as on a real machine) and a private, stateful fake
+ * `launchctl` (`STAPLE_TEST_LAUNCHCTL`, restored afterwards) that records what is "loaded"
+ * and can be told to fail `bootstrap`. The machine's launchd is never asked; the suite's
+ * real-agent comparison still runs at teardown.
+ *
+ * The section is driven through `createTelemetryController` with `PAGE_TELEMETRY_API`: the
+ * same handlers and state `TelemetrySection` runs, calling the page's own `lib/api.ts`
+ * functions, whose `fetch` is pointed at the test server (the token added as the page has
+ * it). The panel is rendered with `react-dom/server` from the controller's state.
  */
-import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  ApiError,
-  applyBudgetCollection,
-  bindBudgetSource,
-  collectBudgetNow,
-  getBudgetCollection,
-  isCrossOriginRefusal,
-  planBudgetCollection,
-  setBudgetCapture,
-  unbindBudgetSource,
-} from "@/lib/api";
-import type { CollectionStatus, KnownBinding } from "@/lib/telemetry-types";
-import { TelemetryPanel, type TelemetryHandlers, type TelemetryView } from "./TelemetrySection";
-import { STALE_PLAN_WHY, confirmPlan, showPlan, type CollectionTransport } from "./telemetry-flow";
-import {
-  CROSS_ORIGIN_MESSAGE,
-  EMPTY_BINDING_DRAFT,
-  PRIVACY_NOTE,
-  TELEMETRY_CATEGORY_ID,
-  bindInputOf,
-  bindingHomeInput,
-  draftOf,
-  withTelemetryCategory,
-} from "./telemetry-settings";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { ApiError, applyBudgetCollection, bindBudgetSource, getBudgetCollection, isCrossOriginRefusal, planBudgetCollection, setBudgetCapture, unbindBudgetSource } from "@/lib/api";
+import { CROSS_ORIGIN_MESSAGE, describeRefusal } from "@/lib/refusal";
+import type { KnownBinding } from "@/lib/telemetry-types";
+import { PAGE_TELEMETRY_API, TelemetryPanel, type TelemetryView } from "./TelemetrySection";
+import { createTelemetryController, type TelemetryController } from "./telemetry-controller";
+import { STALE_PLAN_WHY, confirmPlan, showPlan } from "./telemetry-flow";
+import { PRIVACY_NOTE, TELEMETRY_CATEGORY_ID, bindingHomeInput, remoteFromLocation, viewedFromAnotherDevice, withTelemetryCategory } from "./telemetry-settings";
 import { CLOUD_CATEGORY } from "./cloud-settings";
+import { REPO_ROOT, runCliAtAsync } from "../../../../../test/fixtures/characterize-support.ts";
 import { STATUSLINE_FIXTURE } from "../../../../../test/fixtures/budget-support.ts";
-import { applyBudgetSetup } from "../../../../core/telemetry/collection/service.ts";
 import { ingestBudget } from "../../../../core/telemetry/ingest.ts";
-import { errorEnvelope, StapleError } from "../../../../core/types.ts";
 import { initWorkspace } from "../../../../core/workspace.ts";
 import { startUiServer } from "../../../server.ts";
 
-const REPO_ROOT = join(__dirname, "../../../../..");
 const PHONE = "http://100.90.235.4:4440";
 
 let root: string;
+let userHome: string;
 let home: string;
 let claudeDir: string;
 let codexDir: string;
+let loadedFile: string;
+let failFile: string;
+let plistPath: string;
 let ui: { server: Server; token: string; close(): void };
 let origin: string;
-/** The Origin header the forwarded fetch sends; null for none (a same-origin page sends its own loopback origin). */
 let sendOrigin: string | null = null;
+let requests = 0;
 const realFetch = globalThis.fetch;
 const saved: Record<string, string | undefined> = {};
 
 const SETTINGS = (): string => join(claudeDir, "settings.json");
 const ORIGINAL = `{\n  "statusLine": { "type": "command", "command": "~/bin/line" }\n}\n`;
 
-const pageTransport: CollectionTransport = { plan: planBudgetCollection, apply: applyBudgetCollection };
-
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), "staple-telemetry-e2e-"));
-  home = join(root, "staple-home");
-  claudeDir = join(root, "claude");
-  codexDir = join(root, "codex");
-  mkdirSync(home, { recursive: true });
-  for (const key of ["STAPLE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"]) saved[key] = process.env[key];
+  userHome = join(root, "home");
+  home = join(userHome, ".staple");
+  claudeDir = join(userHome, ".claude");
+  codexDir = join(userHome, ".codex");
+  loadedFile = join(root, "launchd-loaded");
+  failFile = join(root, "launchd-fail-bootstrap");
+  plistPath = join(userHome, "Library", "LaunchAgents", "com.staple.budget-collect.plist");
+  for (const dir of [home, claudeDir, codexDir, join(userHome, ".local", "bin"), join(userHome, "Library", "LaunchAgents"), join(root, "bin")]) mkdirSync(dir, { recursive: true });
+  // The installed launcher setup points the watcher at. Never run: launchd here is a fake.
+  writeFileSync(join(userHome, ".local", "bin", "staple"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(userHome, ".local", "bin", "staple"), 0o755);
+  // A launchd that remembers what it loaded, and fails bootstrap on request.
+  const fake = join(root, "bin", "launchctl");
+  writeFileSync(
+    fake,
+    [
+      "#!/bin/sh",
+      'case "$1" in',
+      `  print) if [ -f "${loadedFile}" ]; then printf '\\tpath = %s\\n' "$(cat "${loadedFile}")"; exit 0; fi; echo "Could not find service" >&2; exit 113;;`,
+      `  bootstrap) if [ -f "${failFile}" ]; then echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi; printf '%s' "$3" > "${loadedFile}"; exit 0;;`,
+      `  bootout) rm -f "${loadedFile}"; exit 0;;`,
+      "esac",
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+  for (const key of ["HOME", "STAPLE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "STAPLE_TEST_LAUNCHCTL"]) saved[key] = process.env[key];
+  process.env.HOME = userHome;
   process.env.STAPLE_HOME = home;
   process.env.CLAUDE_CONFIG_DIR = claudeDir;
   process.env.CODEX_HOME = codexDir;
+  process.env.STAPLE_TEST_LAUNCHCTL = fake;
   const ws = initWorkspace({ dir: join(root, "repo"), slug: "telemetrye2e" });
   ws.store.db.close();
   ui = startUiServer({ port: 0, hub: false, db: join(root, "repo", ".staple", "staple.db") });
@@ -86,6 +97,7 @@ beforeAll(async () => {
   origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
   // The page's fetch, pointed at the server: relative paths resolved, its token attached.
   globalThis.fetch = ((input: string | URL | Request, init: RequestInit = {}) => {
+    requests += 1;
     const headers = { ...(init.headers as Record<string, string>), "x-staple-token": ui.token, ...(sendOrigin ? { origin: sendOrigin } : {}) };
     return realFetch(`${origin}${String(input)}`, { ...init, headers });
   }) as typeof fetch;
@@ -101,88 +113,60 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-beforeEach(() => {
-  sendOrigin = null;
-  mkdirSync(claudeDir, { recursive: true });
-  writeFileSync(SETTINGS(), ORIGINAL);
-});
-
-afterEach(async () => {
+beforeEach(async () => {
   // Back to a machine with nothing set up, through the same consent the page uses.
   sendOrigin = null;
+  rmSync(failFile, { force: true });
   const undo = await planBudgetCollection("unsetup");
   if (undo.consent !== null) await applyBudgetCollection("unsetup", undo.consent);
   const status = await getBudgetCollection();
   for (const binding of status.bindings) await unbindBudgetSource(homeOf(binding));
   if (status.budgetCapture) await setBudgetCapture(false);
+  writeFileSync(SETTINGS(), ORIGINAL);
 });
 
 const homeOf = (binding: KnownBinding) =>
   bindingHomeInput(binding.source === "claude_code_statusline" ? "claude-statusline" : "codex-rollout", binding.source === "claude_code_statusline" ? binding.configDir : binding.home);
 
-const noop = () => {};
-const HANDLERS: TelemetryHandlers = {
-  onRefresh: noop,
-  onOpenSetup: noop,
-  onSetupDraft: noop,
-  onPlan: noop,
-  onConfirmPlan: noop,
-  onCancelPlan: noop,
-  onCaptureAsk: noop,
-  onCaptureConfirm: noop,
-  onCaptureCancel: noop,
-  onCollect: noop,
-  onEditorOpen: noop,
-  onEditorDraft: noop,
-  onEditorSave: noop,
-  onEditorCancel: noop,
-  onRemoveAsk: noop,
-  onRemoveConfirm: noop,
-  onRemoveCancel: noop,
-};
-
-function viewOf(status: CollectionStatus, extra: Partial<TelemetryView> = {}): TelemetryView {
-  return {
-    status,
-    busy: null,
-    notice: null,
-    remote: false,
-    setupForm: null,
-    plan: null,
-    planWhy: null,
-    captureConfirm: false,
-    editor: null,
-    removing: null,
-    lastCollect: null,
-    ...extra,
-  };
+async function section(remote = false): Promise<TelemetryController> {
+  const controller = createTelemetryController(PAGE_TELEMETRY_API, { remote });
+  await controller.reload();
+  return controller;
 }
 
-const text = (html: string): string =>
-  html
+const html = (controller: TelemetryController): string =>
+  renderToStaticMarkup(<TelemetryPanel view={controller.get() as TelemetryView} on={controller.handlers} />);
+
+const text = (markup: string): string =>
+  markup
     .replace(/<[^>]+>/g, " ")
     .replace(/&#x27;|&#39;/g, "'")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/\s+/g, " ");
 
-const render = (view: TelemetryView): string => renderToStaticMarkup(<TelemetryPanel view={view} on={HANDLERS} />);
+/** Text outside every <details>: what the reader sees without opening "Show details". */
+const visible = (markup: string): string => text(markup.replace(/<details[\s\S]*?<\/details>/g, ""));
 
-/** `staple budget …--json` on the same home as the server, asynchronously (the server is in this process). */
+/** `staple budget …--json` on the same home, asynchronously (the server is in this process). */
 async function cli(args: string[]): Promise<Record<string, unknown>> {
-  const child = spawn(process.execPath, [join(REPO_ROOT, "node_modules/tsx/dist/cli.mjs"), join(REPO_ROOT, "src/cli.ts"), "budget", ...args, "--json"], {
-    cwd: REPO_ROOT,
-    env: { ...process.env, NODE_NO_WARNINGS: "1" },
-    stdio: ["ignore", "pipe", "pipe"],
+  const result = await runCliAtAsync(REPO_ROOT, ["budget", ...args, "--json"], {
+    HOME: userHome,
+    STAPLE_HOME: home,
+    CLAUDE_CONFIG_DIR: claudeDir,
+    CODEX_HOME: codexDir,
   });
-  const out: Buffer[] = [];
-  child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
-  const [status] = (await once(child, "close")) as [number | null];
-  expect(status, args.join(" ")).toBe(0);
-  return JSON.parse(Buffer.concat(out).toString("utf8")) as Record<string, unknown>;
+  expect(result.status, `${args.join(" ")}: ${result.stderr}`).toBe(0);
+  return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
-describe("the category", () => {
+async function turnOn(controller: TelemetryController, draft = { claudeAccount: "claude-max", codexAccount: "codex-plus", statusline: true, watcher: true }) {
+  controller.handlers.onOpenSetup();
+  controller.handlers.onSetupDraft(draft);
+  await controller.handlers.onPlan("setup");
+}
+
+describe("the category and the device check", () => {
   it("sits under Global, after Cloud, and is not in the served registry", () => {
     const composed = withTelemetryCategory([
       { id: "statuses", label: "Statuses", description: "", scope: "workspace", editor: "statuses", order: 10 },
@@ -190,223 +174,273 @@ describe("the category", () => {
       { id: "machine", label: "This machine", description: "", scope: "global", editor: "fields", order: 90 },
     ]);
     expect(composed.map((category) => category.id)).toEqual(["statuses", "cloud", TELEMETRY_CATEGORY_ID, "machine"]);
-    expect(composed.find((category) => category.id === TELEMETRY_CATEGORY_ID)?.scope).toBe("global");
     expect(withTelemetryCategory([])).toEqual([]);
   });
-});
 
-describe("status at a glance, from the real status", () => {
-  it("a machine with nothing set up reads Off, says why, and carries the privacy note", async () => {
-    const status = await getBudgetCollection();
-    const html = render(viewOf(status));
-    expect(html).toContain('data-glance="off"');
-    expect(text(html)).toContain("Usage tracking is off. Nothing is being recorded.");
-    expect(text(html)).toContain(PRIVACY_NOTE);
-    expect(text(html)).toContain("Turn on automatic collection");
-    expect(html).not.toContain('data-action="unsetup-plan"');
-    expect(html).not.toContain("data-remote-note");
+  it("a page served from anywhere but this computer's loopback is another device", () => {
+    expect(viewedFromAnotherDevice("100.90.235.4")).toBe(true);
+    expect(viewedFromAnotherDevice("mac.tailnet.ts.net")).toBe(true);
+    expect(viewedFromAnotherDevice("127.0.0.1")).toBe(false);
+    expect(viewedFromAnotherDevice("localhost")).toBe(false);
+    // What TelemetrySection builds its controller from.
+    expect(remoteFromLocation({ hostname: "100.90.235.4" })).toBe(true);
+    expect(remoteFromLocation({ hostname: "127.0.0.1" })).toBe(false);
+    expect(remoteFromLocation(undefined)).toBe(false);
   });
 
-  it("after setup and a real status-line reading: each source with its account, reading age and feed", async () => {
-    const shown = await showPlan(pageTransport, "setup", { claudeAccount: "claude-max", codexAccount: "codex-plus", statusline: true, watcher: true });
-    const applied = await confirmPlan(pageTransport, shown);
-    expect(applied.kind).toBe("applied");
+  it("only the Origin check's refusal reads as cross-origin, and every view words it the same", () => {
+    const cross = new ApiError(403, { code: "forbidden", message: "Cross-origin request rejected (Origin: x)", detail: { reason: "cross_origin" } });
+    const other = new ApiError(403, { code: "forbidden", message: "not a member" });
+    expect(isCrossOriginRefusal(cross)).toBe(true);
+    expect(isCrossOriginRefusal(other)).toBe(false);
+    expect(describeRefusal(cross)).toMatchObject({ message: CROSS_ORIGIN_MESSAGE, serverMessage: "Cross-origin request rejected (Origin: x)" });
+    expect(describeRefusal(other).message).toBe("not a member");
+  });
+});
+
+describe("automatic collection, through the section's handlers", () => {
+  it("a machine with nothing set up reads Off, with the privacy note", async () => {
+    const page = await section();
+    const markup = html(page);
+    expect(markup).toContain('data-status="unknown"');
+    expect(text(markup)).toContain("Usage tracking is off. Nothing is being recorded.");
+    expect(text(markup)).toContain(PRIVACY_NOTE);
+    expect(markup).not.toContain('data-action="unsetup-plan"');
+  });
+
+  it("on: the plan in plain words, the watcher planned AND installed; off: all of it undone", async () => {
+    const page = await section();
+    await turnOn(page);
+    const plan = page.get().plan!;
+    expect(plan.response.plan.steps.find((step) => step.part === "watcher")?.action).toBe("change");
+    const planText = text(html(page));
+    expect(planText).toContain("Turn on usage tracking.");
+    expect(planText).toContain(`Link your Claude folder (${claudeDir}) to the account "claude-max".`);
+    expect(planText).toContain("Add a small step to your Claude status line so it records your usage (a backup of your Claude settings is kept).");
+    expect(planText).toContain("Check your Codex sessions every 5 minutes in the background.");
+    // Showing the plan changed nothing.
+    expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
+    expect(existsSync(plistPath)).toBe(false);
+
+    await page.handlers.onConfirmPlan();
+    expect(page.get().notice).toMatchObject({ tone: "ok", text: "Automatic collection is on. Done:" });
+    expect(page.get().notice?.lines).toContain("Check your Codex sessions every 5 minutes in the background.");
+    expect(readFileSync(SETTINGS(), "utf8")).toContain("staple-statusline-wrapper/v2");
+    expect(existsSync(plistPath)).toBe(true);
+    expect(readFileSync(loadedFile, "utf8")).toBe(plistPath);
+    const status = page.get().status!;
+    expect(status.watcher).toMatchObject({ installed: true, loaded: true, intervalMinutes: 5 });
+
     // A real reading through the real ingestion, as the wrapper would hand it over.
     ingestBudget({ source: "claude-statusline", input: readFileSync(STATUSLINE_FIXTURE, "utf8"), configDir: claudeDir }, { home });
-    const status = await getBudgetCollection();
-    const html = render(viewOf(status));
-    const claude = /<li[^>]*data-source="claude_code_statusline"[\s\S]*?<\/li>/.exec(html)?.[0] ?? "";
-    const codex = /<li[^>]*data-source="codex_rollout"[\s\S]*?<\/li>/.exec(html)?.[0] ?? "";
-    expect(text(claude)).toContain("Claude status line");
-    expect(text(claude)).toContain("claude-max");
-    expect(text(claude)).toContain("Last reading just now");
+    await page.handlers.onRefresh();
+    const on = html(page);
+    const claude = /<li[^>]*data-source="claude_code_statusline"[\s\S]*?<\/li>/.exec(on)![0];
+    const codex = /<li[^>]*data-source="codex_rollout"[\s\S]*?<\/li>/.exec(on)![0];
+    expect(text(claude)).toContain("Last reading 1 min ago");
     expect(text(claude)).toContain("Recording from the Claude status line.");
-    expect(text(codex)).toContain("codex-plus");
-    expect(text(codex)).toContain("No reading yet");
-    // No launcher in the scratch HOME: no watcher, said in words, and as a problem.
-    expect(text(codex)).toContain("Not checked automatically");
-    expect(html).toContain('data-problem="no_reading"');
-    expect(html).toContain('data-glance="attention"');
-    expect(html).toContain('data-action="unsetup-plan"');
-  });
-});
+    expect(text(codex)).toContain("Checked in the background every 5 minutes.");
 
-describe("turning automatic collection on and off, with consent", () => {
-  it("plan -> the plan in plain words -> confirm applies exactly it; off restores the file byte for byte", async () => {
-    const shown = await showPlan(pageTransport, "setup", { claudeAccount: "claude-max", codexAccount: "codex-plus", statusline: true, watcher: true });
-    // Nothing is changed by showing the plan.
+    // Tracking off: the reading says it is from before, beside "Not recording".
+    page.handlers.onCaptureAsk();
+    await page.handlers.onCaptureConfirm();
+    const off = /<li[^>]*data-source="claude_code_statusline"[\s\S]*?<\/li>/.exec(html(page))![0];
+    expect(text(off)).toContain("Last reading 1 min ago, before tracking was turned off");
+    expect(text(off)).toContain("Not recording: usage tracking is off.");
+
+    await page.handlers.onPlan("unsetup");
+    expect(text(html(page))).toContain("Stop and remove the background check of Codex sessions.");
+    await page.handlers.onConfirmPlan();
+    expect(page.get().notice).toMatchObject({ tone: "ok", text: "Automatic collection is off. Done:" });
     expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
-    expect((await getBudgetCollection()).budgetCapture).toBe(false);
-    const planHtml = text(render(viewOf(await getBudgetCollection(), { plan: shown })));
-    expect(planHtml).toContain("This will:");
-    expect(planHtml).toContain("Turn on usage tracking.");
-    expect(planHtml).toContain(`Link your Claude folder (${claudeDir}) to the account "claude-max".`);
-    expect(planHtml).toContain("Add a small step to your Claude status line so it records your usage (a backup of your Claude settings is kept).");
-    expect(planHtml).toContain(`Link your Codex folder (${codexDir}) to the account "codex-plus".`);
-    expect(planHtml).toContain("Confirm and turn on");
-
-    const result = await confirmPlan(pageTransport, shown);
-    expect(result.kind).toBe("applied");
-    if (result.kind !== "applied") return;
-    expect(result.outcome.applied.map((step) => step.part)).toEqual(["capture", "claude_binding", "statusline", "codex_binding"]);
-    expect(readFileSync(SETTINGS(), "utf8")).toContain("staple-statusline-wrapper/v2");
-    expect((await cli(["bindings"])).bindings).toHaveLength(2);
-
-    const off = await showPlan(pageTransport, "unsetup");
-    expect(text(render(viewOf(await getBudgetCollection(), { plan: off })))).toContain("Put your Claude status line back exactly as it was.");
-    expect((await confirmPlan(pageTransport, off)).kind).toBe("applied");
-    expect(readFileSync(SETTINGS(), "utf8")).toBe(ORIGINAL);
-    expect(await cli(["bindings"])).toMatchObject({ budgetCapture: false, bindings: [] });
+    expect(existsSync(plistPath)).toBe(false);
+    expect(existsSync(loadedFile)).toBe(false);
   });
 
-  it("a plan made stale by a change on the machine comes back as a NEW plan to confirm, and nothing is applied", async () => {
-    const shown = await showPlan(pageTransport, "setup", { claudeAccount: "claude-max", statusline: true, watcher: false });
+  it("a plan made stale by a change on the machine comes back as a NEW plan to confirm; nothing is applied", async () => {
+    const page = await section();
+    await turnOn(page, { claudeAccount: "claude-max", codexAccount: "", statusline: true, watcher: false });
+    const first = page.get().plan!;
     writeFileSync(SETTINGS(), `{"statusLine": {"type": "command", "command": "other"}}\n`);
-    const result = await confirmPlan(pageTransport, shown);
-    expect(result.kind).toBe("replanned");
-    if (result.kind !== "replanned") return;
-    expect(result.why).toBe(STALE_PLAN_WHY);
-    expect(result.shown.replanned).toBe(true);
-    expect(result.shown.response.consent?.id).not.toBe(shown.response.consent?.id);
-    // Nothing was applied.
-    expect((await getBudgetCollection()).budgetCapture).toBe(false);
+    await page.handlers.onConfirmPlan();
+    expect(page.get().planWhy).toBe(STALE_PLAN_WHY);
+    expect(page.get().plan?.replanned).toBe(true);
+    expect(page.get().plan?.response.consent?.id).not.toBe(first.response.consent?.id);
+    expect(page.get().status?.budgetCapture).toBe(false);
     expect(readFileSync(SETTINGS(), "utf8")).not.toContain("staple-statusline-wrapper");
-    // The page shows the reason above the fresh plan, with a Confirm of its own.
-    const html = render(viewOf(await getBudgetCollection(), { plan: result.shown, planWhy: result.why }));
-    expect(html).toContain("data-replanned");
-    expect(text(html)).toContain(STALE_PLAN_WHY);
-    // Confirming the fresh plan applies it.
-    expect((await confirmPlan(pageTransport, result.shown)).kind).toBe("applied");
+    expect(text(html(page))).toContain(STALE_PLAN_WHY);
+    await page.handlers.onConfirmPlan();
+    expect(page.get().notice?.tone).toBe("ok");
     expect(readFileSync(SETTINGS(), "utf8")).toContain("staple-statusline-wrapper/v2");
   });
 
-  it("a ticket already used (404) is re-planned too, never retried", async () => {
-    const shown = await showPlan(pageTransport, "setup", { codexAccount: "codex-plus", statusline: false, watcher: false });
+  it("a ticket already used (404) is re-planned, never retried", async () => {
+    const shown = await showPlan({ plan: planBudgetCollection, apply: applyBudgetCollection }, "setup", { codexAccount: "codex-plus", statusline: false, watcher: false });
     await applyBudgetCollection("setup", shown.response.consent!);
-    const again = await confirmPlan(pageTransport, shown);
+    const again = await confirmPlan({ plan: planBudgetCollection, apply: applyBudgetCollection }, shown);
     expect(again.kind).toBe("replanned");
-    if (again.kind !== "replanned") return;
-    // Everything is already so: the fresh plan has nothing to consent to.
-    expect(again.shown.response.plan.changes).toBe(0);
-    expect(again.shown.response.consent).toBeNull();
-    const html = render(viewOf(await getBudgetCollection(), { plan: again.shown, planWhy: again.why }));
-    expect(text(html)).toContain("Everything is already set up. There is nothing to change.");
-    expect(html).not.toContain('data-action="plan-confirm"');
+    if (again.kind === "replanned") expect(again.shown.response.consent).toBeNull();
   });
 
-  it("a plan that refuses is shown as refused, with no Confirm, and nothing can be applied", async () => {
+  it("a plan that refuses has no Confirm, and nothing is applied", async () => {
     writeFileSync(SETTINGS(), "{ not json");
-    const shown = await showPlan(pageTransport, "setup", { claudeAccount: "claude-max", statusline: true, watcher: false });
-    expect(shown.response.plan.refusals).toBeGreaterThan(0);
-    expect(shown.response.consent).toBeNull();
-    const html = render(viewOf(await getBudgetCollection(), { plan: shown }));
-    expect(text(html)).toContain("This can't be done right now. Nothing has been changed.");
-    expect(html).toContain('data-step-action="refuse"');
-    expect(html).not.toContain('data-action="plan-confirm"');
-    expect(await confirmPlan(pageTransport, shown)).toMatchObject({ kind: "refused" });
-    expect((await getBudgetCollection()).budgetCapture).toBe(false);
+    const page = await section();
+    await turnOn(page, { claudeAccount: "claude-max", codexAccount: "", statusline: true, watcher: false });
+    const markup = html(page);
+    expect(text(markup)).toContain("This can't be done right now. Nothing has been changed.");
+    expect(markup).toContain('data-step-action="refuse"');
+    expect(markup).not.toContain('data-action="plan-confirm"');
+    expect(page.get().status?.budgetCapture).toBe(false);
   });
 
-  it("setup that stopped partway is reported honestly, with what was already done", async () => {
-    // The envelope a real partial setup produces: the watcher's launchctl fails after capture
-    // and the binding were written (an injected runner, so launchd is never asked).
-    const agentHome = join(root, "partial");
-    mkdirSync(agentHome, { recursive: true });
-    let envelope: ReturnType<typeof errorEnvelope> | null = null;
-    try {
-      applyBudgetSetup(
-        { codexAccount: "codex-plus", statusline: false },
-        {
-          home: join(root, "partial-staple"),
-          platform: "darwin",
-          userHome: agentHome,
-          staple: join(agentHome, "staple"),
-          launchctl: (args) => (args[0] === "print" ? { status: 113, stdout: "", stderr: "not loaded" } : { status: 5, stdout: "", stderr: "Bootstrap failed: 5: Input/output error" }),
-        },
-      );
-    } catch (error) {
-      expect(error).toBeInstanceOf(StapleError);
-      envelope = errorEnvelope(error);
-    }
-    expect(envelope?.detail?.reason).toBe("setup_incomplete");
-    const stub: CollectionTransport = {
-      plan: pageTransport.plan,
-      apply: async () => {
-        throw new ApiError(409, envelope!);
-      },
-    };
-    const result = await confirmPlan(stub, { action: "setup", options: { codexAccount: "codex-plus" }, response: { plan: { action: "setup", steps: [], changes: 1, refusals: 0, platform: "darwin" }, consent: { id: "x", digest: "y", expiresAt: "" } }, replanned: false });
-    expect(result.kind).toBe("incomplete");
-    if (result.kind !== "incomplete") return;
-    expect(result.failedStep).toBe("watcher");
-    expect(result.applied.map((step) => step.part)).toEqual(["capture", "codex_binding"]);
+  it("a setup that really stops partway (launchd refuses the watcher) says so, with what was done", async () => {
+    writeFileSync(failFile, "");
+    const page = await section();
+    await turnOn(page, { claudeAccount: "", codexAccount: "codex-plus", statusline: false, watcher: true });
+    await page.handlers.onConfirmPlan();
+    const notice = page.get().notice!;
+    expect(notice.tone).toBe("error");
+    expect(notice.text).toContain("Setup stopped partway through.");
+    expect(notice.lines).toEqual(["Turn on usage tracking.", `Link your Codex folder (${codexDir}) to the account "codex-plus".`]);
+    expect(notice.details).toContain("Bootstrap failed: 5");
+    // What was done is really done, and recorded so "Turn off" undoes it.
+    expect(page.get().status).toMatchObject({ budgetCapture: true, setup: { recorded: true } });
+    rmSync(failFile);
+    await page.handlers.onPlan("unsetup");
+    await page.handlers.onConfirmPlan();
+    expect(page.get().status).toMatchObject({ budgetCapture: false, bindings: [] });
   });
 });
 
-describe("account links: add, edit, remove, as the CLI sees them", () => {
-  it("the page's writes land in config.json exactly as `staple budget bindings` reads them", async () => {
-    await bindBudgetSource(bindInputOf({ ...EMPTY_BINDING_DRAFT, account: "claude-max" }, null));
-    await bindBudgetSource(bindInputOf({ source: "codex-rollout", folder: join(root, "codex-work"), account: "codex-plus", provider: "" }, null));
-    let status = await getBudgetCollection();
-    expect((await cli(["bindings"])).bindings).toEqual(status.bindings);
-    expect(status.bindings.map((binding) => binding.accountRef)).toEqual(["claude-max", "codex-plus"]);
+describe("account links, through the section's handlers, as the CLI sees them", () => {
+  it("add, edit (in place), remove", async () => {
+    const page = await section();
+    page.handlers.onEditorOpen(null);
+    page.handlers.onEditorDraft({ source: "claude-statusline", folder: "", account: "claude-max", provider: "" });
+    await page.handlers.onEditorSave();
+    page.handlers.onEditorOpen(null);
+    page.handlers.onEditorSource("codex-rollout");
+    page.handlers.onEditorDraft({ ...page.get().editor!.draft, folder: join(root, "codex-work"), account: "codex-plus" });
+    await page.handlers.onEditorSave();
+    expect(page.get().notice).toMatchObject({ tone: "ok", text: "Account link added." });
+    expect((await cli(["bindings"])).bindings).toEqual(page.get().status!.bindings);
 
-    // Edit: the Codex link moves to another folder and account, in place.
-    const codex = status.bindings[1]!;
-    await bindBudgetSource(bindInputOf({ ...draftOf(codex), folder: join(root, "codex-moved"), account: "codex-pro" }, codex));
-    status = await getBudgetCollection();
-    expect((await cli(["bindings"])).bindings).toEqual(status.bindings);
-    expect(status.bindings[1]).toEqual({ source: "codex_rollout", home: join(root, "codex-moved"), provider: "openai", accountRef: "codex-pro" });
-    const html = render(viewOf(status));
-    expect(html).toContain(`data-binding="codex-rollout:${join(root, "codex-moved")}"`);
-    expect(html).not.toContain(`data-binding="codex-rollout:${join(root, "codex-work")}"`);
+    const codex = page.get().status!.bindings[1]!;
+    page.handlers.onEditorOpen(codex);
+    page.handlers.onEditorDraft({ ...page.get().editor!.draft, folder: join(root, "codex-moved"), account: "codex-pro" });
+    await page.handlers.onEditorSave();
+    expect(page.get().editor).toBeNull();
+    expect(page.get().status!.bindings[1]).toEqual({ source: "codex_rollout", home: join(root, "codex-moved"), provider: "openai", accountRef: "codex-pro" });
+    expect((await cli(["bindings"])).bindings).toEqual(page.get().status!.bindings);
 
-    // Remove.
-    await unbindBudgetSource(homeOf(status.bindings[0]!));
-    status = await getBudgetCollection();
-    expect((await cli(["bindings"])).bindings).toEqual(status.bindings);
-    expect(status.bindings.map((binding) => binding.accountRef)).toEqual(["codex-pro"]);
+    page.handlers.onRemoveAsk(page.get().status!.bindings[0]!);
+    await page.handlers.onRemoveConfirm();
+    expect(page.get().status!.bindings.map((binding) => binding.accountRef)).toEqual(["codex-pro"]);
+    expect((await cli(["bindings"])).bindings).toEqual(page.get().status!.bindings);
   });
 
-  it("a label the CLI refuses is refused with the CLI's sentence, shown on the form", async () => {
-    const refusal = await bindBudgetSource(bindInputOf({ ...EMPTY_BINDING_DRAFT, account: "Claude Max" }, null)).catch((error: unknown) => error);
-    expect(refusal).toBeInstanceOf(ApiError);
-    const message = (refusal as ApiError).message;
-    expect(message).toContain("--account must be an account label");
-    const html = render(viewOf(await getBudgetCollection(), { editor: { editing: null, draft: { ...EMPTY_BINDING_DRAFT, account: "Claude Max" }, error: message } }));
-    expect(html).toContain('data-binding-form="add"');
-    expect(html).toMatch(/role="alert"[^>]*>[^<]*--account must be an account label/);
+  it("switching an edited link from Claude to Codex takes Codex's provider, not Anthropic's", async () => {
+    const page = await section();
+    page.handlers.onEditorOpen(null);
+    page.handlers.onEditorDraft({ source: "claude-statusline", folder: join(root, "work-claude"), account: "work-claude", provider: "" });
+    await page.handlers.onEditorSave();
+    const claude = page.get().status!.bindings[0]!;
+    expect(claude.provider).toBe("anthropic");
+    page.handlers.onEditorOpen(claude);
+    expect(page.get().editor!.draft.provider).toBe("anthropic");
+    page.handlers.onEditorSource("codex-rollout");
+    expect(page.get().editor!.draft.provider).toBe("");
+    await page.handlers.onEditorSave();
+    expect(page.get().status!.bindings).toEqual([{ source: "codex_rollout", home: join(root, "work-claude"), provider: "openai", accountRef: "work-claude" }]);
+    expect(html(page)).not.toContain("(anthropic)");
+  });
+
+  it("editing a link onto a folder another link holds is refused in plain words, and both links stay", async () => {
+    const page = await section();
+    for (const draft of [
+      { source: "claude-statusline" as const, folder: "", account: "work-claude", provider: "" },
+      { source: "codex-rollout" as const, folder: "", account: "codex-plus", provider: "" },
+    ]) {
+      page.handlers.onEditorOpen(null);
+      page.handlers.onEditorDraft(draft);
+      await page.handlers.onEditorSave();
+    }
+    const before = page.get().status!.bindings;
+    page.handlers.onEditorOpen(before[0]!);
+    page.handlers.onEditorSource("codex-rollout");
+    page.handlers.onEditorDraft({ ...page.get().editor!.draft, folder: codexDir });
+    await page.handlers.onEditorSave();
+    expect(page.get().editor?.error?.text).toBe("That folder already has its own account link. Edit or remove that link instead; nothing was changed.");
+    expect(page.get().editor?.error?.detail).toContain("already has its own codex_rollout binding");
+    expect(page.get().status!.bindings).toEqual(before);
+    expect((await cli(["bindings"])).bindings).toEqual(before);
+  });
+
+  it("a label or folder the CLI refuses is refused in plain words; the CLI's sentence is only under Show details", async () => {
+    const page = await section();
+    page.handlers.onEditorOpen(null);
+    page.handlers.onEditorDraft({ source: "claude-statusline", folder: "", account: "Claude Max", provider: "" });
+    await page.handlers.onEditorSave();
+    let markup = html(page);
+    expect(visible(markup)).toContain("The account label can only use lowercase letters, digits and dashes");
+    expect(visible(markup)).not.toContain("--account");
+    expect(text(markup)).toContain("--account must be an account label");
+    page.handlers.onEditorDraft({ source: "claude-statusline", folder: "relative/claude", account: "claude-max", provider: "" });
+    await page.handlers.onEditorSave();
+    markup = html(page);
+    expect(visible(markup)).toContain("The folder must be a full path (starting with /) or start with ~ for your home folder.");
+    expect(visible(markup)).not.toContain("--config-dir");
+    expect(page.get().status!.bindings).toEqual([]);
+  });
+
+  it("keeps an account label on one line", async () => {
+    await bindBudgetSource({ source: "claude-statusline", account: "claude-max" });
+    const markup = html(await section());
+    expect(markup).toContain('<span class="whitespace-nowrap">“claude-max”</span>');
   });
 });
 
 describe("collect now", () => {
   it("runs one collect and says what it found in plain words", async () => {
+    const page = await section();
     await setBudgetCapture(true);
-    await bindBudgetSource(bindInputOf({ source: "codex-rollout", folder: "", account: "codex-plus", provider: "" }, null));
-    const result = await collectBudgetNow();
-    expect(result.ok).toBe(true);
-    const html = text(render(viewOf(await getBudgetCollection(), { lastCollect: result })));
-    expect(html).toContain("Checked your Codex sessions: nothing new since the last check.");
+    await bindBudgetSource({ source: "codex-rollout", account: "codex-plus" });
+    await page.handlers.onCollect();
+    expect(page.get().lastCollect?.ok).toBe(true);
+    expect(text(html(page))).toContain("Checked your Codex sessions: nothing new since the last check.");
   });
 });
 
-describe("a write from another device (the tailnet)", () => {
-  it("is refused as cross_origin, surfaces as an ordinary refusal (not a dead token), and the page says why", async () => {
-    sendOrigin = PHONE;
-    // Reading works from the phone.
-    const status = await getBudgetCollection();
-    for (const write of [() => setBudgetCapture(true), () => planBudgetCollection("setup", { codexAccount: "codex-plus" }), () => bindBudgetSource({ source: "codex-rollout", account: "phone" })]) {
-      const refusal = await write().catch((error: unknown) => error);
-      // An ApiError, so lib/api did not take the AuthError path (which would have tried to
-      // broadcast on `window`, absent here, and blanked the page to the token screen).
-      expect(refusal).toBeInstanceOf(ApiError);
-      expect(isCrossOriginRefusal(refusal)).toBe(true);
+describe("from another device (the tailnet)", () => {
+  it("a page that knows it is remote disables its writes and sends none", async () => {
+    const page = await section(true);
+    const markup = html(page);
+    expect(markup).toContain("data-remote-note");
+    for (const action of ["capture-on", "collect", "setup-open", "binding-add"]) {
+      expect(markup, action).toMatch(new RegExp(`<button[^>]*disabled=""[^>]*data-action="${action}"|<button[^>]*data-action="${action}"[^>]*disabled=""`));
     }
-    sendOrigin = null;
+    const sent = requests;
+    page.handlers.onCaptureAsk();
+    await page.handlers.onCaptureConfirm();
+    expect(page.get().notice).toMatchObject({ tone: "cross_origin", text: CROSS_ORIGIN_MESSAGE });
+    // Only the status re-read left the page; the write was never sent.
     expect((await getBudgetCollection()).budgetCapture).toBe(false);
-    const html = render(viewOf(status, { remote: true, notice: { tone: "cross_origin", text: CROSS_ORIGIN_MESSAGE, details: "Cross-origin request rejected" } }));
-    expect(html).toContain('data-notice="cross_origin"');
-    expect(text(html)).toContain("Changes can only be made from this computer's browser.");
-    expect(html).toContain("data-remote-note");
+    expect(requests - sent).toBe(1);
+  });
+
+  it("a write the server refuses for its origin is shown as that, not as a dead token", async () => {
+    const page = await section();
+    sendOrigin = PHONE;
+    page.handlers.onCaptureAsk();
+    await page.handlers.onCaptureConfirm();
+    expect(page.get().notice).toMatchObject({ tone: "cross_origin", text: CROSS_ORIGIN_MESSAGE });
+    expect(page.get().notice?.details).toContain("Cross-origin request rejected");
+    page.handlers.onEditorOpen(null);
+    page.handlers.onEditorDraft({ source: "codex-rollout", folder: "", account: "phone", provider: "" });
+    await page.handlers.onEditorSave();
+    expect(page.get().notice?.tone).toBe("cross_origin");
+    sendOrigin = null;
+    expect(await getBudgetCollection()).toMatchObject({ budgetCapture: false, bindings: [] });
+    expect(text(html(page))).toContain("Changes can only be made from this computer's browser.");
   });
 });

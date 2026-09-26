@@ -6,18 +6,22 @@
  * are the same store and service methods `staple budget capture|bind|unbind|setup|unsetup|
  * collect` call.
  *
- * Two components, as in `CloudSection`: `TelemetryPanel` is a pure function of a view and
- * some handlers (the suite renders it to a string from real server payloads), and
- * `TelemetrySection` fetches, holds the state and calls it.
+ * Three parts. `TelemetryPanel` is a pure function of the state and the handlers (the suite
+ * renders it to a string from real server payloads). `telemetry-controller.ts` holds the
+ * state and the handlers, so a test drives the real ones against the real server.
+ * `TelemetrySection` subscribes to a controller built on `lib/api.ts` and renders the panel.
+ *
+ * Built from the plain-language cards (`components/plain/*`): a status pill that is a word
+ * and an icon, "What does this mean?" help, and "Show details" holding the server's own
+ * sentences for power users and agents.
  *
  * Nothing here fires without a press except the one status read on mount. Automatic
- * collection is turned on and off only through the server's consent ticket: the plan is
- * shown first, in plain words, and Confirm sends back the ticket minted with it
- * (`telemetry-flow.ts`). A stale ticket brings back a fresh plan to confirm, never a
- * silent retry.
+ * collection is turned on and off only through the server's consent ticket (`telemetry-flow.ts`).
  */
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ChevronDown, CircleCheck, CircleHelp, CircleOff, Loader2, Lock, MonitorSmartphone, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
+import { AlertTriangle, CircleCheck, Loader2, Lock, MonitorSmartphone, RefreshCw } from "lucide-react";
+import { PlainCard, ShowDetails } from "@/components/plain/PlainCard";
+import { StatusPill } from "@/components/plain/StatusPill";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -25,192 +29,60 @@ import {
   bindBudgetSource,
   collectBudgetNow,
   getBudgetCollection,
-  isCrossOriginRefusal,
   planBudgetCollection,
   setBudgetCapture,
   unbindBudgetSource,
 } from "@/lib/api";
-import { describeRefusal } from "@/lib/refusal";
-import type { BindingSourceFlag, CollectResult, CollectionStatus, KnownBinding, PlanStep } from "@/lib/telemetry-types";
+import type { BindingSourceFlag, KnownBinding, PlanStep } from "@/lib/telemetry-types";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/views/ViewChrome";
 import { DestructiveConfirm, InlineError } from "./form/primitives";
-import { confirmPlan, showPlan, type CollectionTransport, type ShownPlan } from "./telemetry-flow";
+import {
+  createTelemetryController,
+  type BindingEditor,
+  type SetupDraft,
+  type TelemetryApi,
+  type TelemetryBusy,
+  type TelemetryHandlers,
+  type TelemetryNotice,
+  type TelemetryState,
+} from "./telemetry-controller";
+import type { ShownPlan } from "./telemetry-flow";
 import {
   AUTOMATIC_COLLECTION_HELP,
-  CROSS_ORIGIN_MESSAGE,
-  EMPTY_BINDING_DRAFT,
+  GLANCE_PILL,
   PRIVACY_NOTE,
   SOURCE_WORDS,
   WHAT_THIS_MEANS,
-  appliedText,
-  bindInputOf,
   bindingDir,
-  bindingHomeInput,
   collectResultText,
   collectionInstalled,
-  draftOf,
   glanceOf,
   planHeadline,
   plainPlan,
   problemRows,
-  setupDefaults,
-  setupOptionsOf,
+  remoteFromLocation,
   sourceRows,
-  viewedFromAnotherDevice,
-  type BindingDraft,
-  type GlanceState,
 } from "./telemetry-settings";
 
-// ---------------------------------------------------------------- view state
+export type { TelemetryHandlers, TelemetryState } from "./telemetry-controller";
 
-export type TelemetryBusy = null | "refresh" | "plan" | "confirm" | "capture" | "bind" | "unbind" | "collect";
-
-/** The outcome line under the section's actions. `cross_origin` is its own tone: it is not an error of the change. */
-export interface TelemetryNotice {
-  tone: "ok" | "error" | "cross_origin";
-  text: string;
-  lines?: string[];
-  details?: string;
-}
-
-export interface SetupDraft {
-  claudeAccount: string;
-  codexAccount: string;
-  statusline: boolean;
-  watcher: boolean;
-}
-
-export interface BindingEditor {
-  /** Null: adding a new link. Otherwise the binding being edited. */
-  editing: KnownBinding | null;
-  draft: BindingDraft;
-  error: string | null;
-}
-
-export interface TelemetryView {
-  status: CollectionStatus;
-  busy: TelemetryBusy;
-  notice: TelemetryNotice | null;
-  /** The page is open from another device, so writes will be refused by the Origin check. */
-  remote: boolean;
-  setupForm: SetupDraft | null;
-  plan: ShownPlan | null;
-  planWhy: string | null;
-  captureConfirm: boolean;
-  editor: BindingEditor | null;
-  removing: KnownBinding | null;
-  lastCollect: CollectResult | null;
-}
-
-export interface TelemetryHandlers {
-  onRefresh(): void;
-  onOpenSetup(): void;
-  onSetupDraft(draft: SetupDraft): void;
-  onPlan(action: "setup" | "unsetup"): void;
-  onConfirmPlan(): void;
-  onCancelPlan(): void;
-  onCaptureAsk(): void;
-  onCaptureConfirm(): void;
-  onCaptureCancel(): void;
-  onCollect(): void;
-  onEditorOpen(binding: KnownBinding | null): void;
-  onEditorDraft(draft: BindingDraft): void;
-  onEditorSave(): void;
-  onEditorCancel(): void;
-  onRemoveAsk(binding: KnownBinding): void;
-  onRemoveConfirm(): void;
-  onRemoveCancel(): void;
-}
+/** The state the panel renders: the controller's, once the status has been read. */
+export type TelemetryView = TelemetryState & { status: NonNullable<TelemetryState["status"]> };
 
 // ---------------------------------------------------------------- small pieces
 
-const FOCUS = "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-card";
-
-const PILL: Record<GlanceState, { icon: typeof CircleCheck; color: string }> = {
-  on: { icon: CircleCheck, color: "var(--status-task-icon-done)" },
-  off: { icon: CircleOff, color: "var(--status-task-icon-backlog)" },
-  attention: { icon: AlertTriangle, color: "var(--status-task-icon-blocked)" },
-};
-
-/** A word and an icon of its own shape, never colour alone. */
-function Pill({ state, word }: { state: GlanceState; word: string }) {
-  const { icon: Icon, color } = PILL[state];
-  return (
-    <span
-      data-glance={state}
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] leading-none font-medium"
-      style={{ borderColor: color }}
-    >
-      <Icon aria-hidden className="size-3.5" style={{ color }} strokeWidth={2.25} />
-      {word}
-    </span>
-  );
-}
-
-/** "What does this mean?": inline, so it works on a touch screen; the text is in the markup either way. */
-function HelpToggle({ children, label = "What does this mean?" }: { children: ReactNode; label?: string }) {
-  const [open, setOpen] = useState(false);
-  const id = useId();
-  return (
-    <div className="space-y-2">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={() => setOpen((value) => !value)}
-        className={cn("inline-flex min-h-6 items-center gap-1.5 rounded-md text-[12px] text-muted-foreground hover:text-foreground", FOCUS)}
-      >
-        <CircleHelp aria-hidden className="size-3.5" />
-        {label}
-      </button>
-      <p id={id} data-testid="telemetry-help" hidden={!open} className="rounded-lg bg-muted/60 px-3 py-2 text-[13px] leading-relaxed">
-        {children}
-      </p>
-    </div>
-  );
-}
-
-/** "Show details": the server's own sentences, unchanged, for power users and agents. */
-function Details({ children, label = "Show details" }: { children: ReactNode; label?: string }) {
-  return (
-    <details className="group" data-details>
-      <summary
-        className={cn(
-          "inline-flex min-h-6 cursor-pointer list-none items-center gap-1 rounded-md text-[12px] text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden",
-          FOCUS,
-        )}
-      >
-        <ChevronDown aria-hidden className="size-3.5 group-open:rotate-180 motion-safe:transition-transform" />
-        <span className="group-open:hidden">{label}</span>
-        <span className="hidden group-open:inline">Hide details</span>
-      </summary>
-      <div className="mt-2 space-y-1 border-t pt-2 font-mono text-[11px] leading-relaxed wrap-anywhere text-muted-foreground">{children}</div>
-    </details>
-  );
-}
-
-function Card({ title, children, testId, className }: { title: string; children: ReactNode; testId?: string; className?: string }) {
-  return (
-    <section aria-label={title} data-testid={testId} className={cn("flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4 text-card-foreground", className)}>
-      <h4 className="text-[13px] font-semibold">{title}</h4>
-      {children}
-    </section>
-  );
-}
-
 function Notice({ notice }: { notice: TelemetryNotice }) {
   const Icon = notice.tone === "ok" ? CircleCheck : notice.tone === "cross_origin" ? MonitorSmartphone : AlertTriangle;
+  const tone = notice.tone === "ok" ? "ok" : notice.tone === "cross_origin" ? "unknown" : "risk";
   return (
     <div
       role={notice.tone === "ok" ? "status" : "alert"}
       data-notice={notice.tone}
-      className={cn(
-        "flex items-start gap-2 rounded-lg border px-3 py-2 text-[13px] leading-relaxed",
-        notice.tone === "ok" ? "border-[var(--status-task-icon-done)]" : "border-[var(--status-task-icon-blocked)]",
-      )}
+      className="flex items-start gap-2 rounded-lg border px-3 py-2 text-[13px] leading-relaxed"
+      style={{ borderColor: `var(--plain-${tone}-border)` }}
     >
-      <Icon aria-hidden className="mt-0.5 size-4 shrink-0" />
+      <Icon aria-hidden className="mt-0.5 size-4 shrink-0" style={{ color: `var(--plain-${tone}-fg)` }} />
       <div className="min-w-0 flex-1 space-y-1">
         <p>{notice.text}</p>
         {notice.lines && notice.lines.length > 0 ? (
@@ -220,14 +92,28 @@ function Notice({ notice }: { notice: TelemetryNotice }) {
             ))}
           </ul>
         ) : null}
-        {notice.details ? <Details>{notice.details}</Details> : null}
+        {notice.details ? <Raw>{notice.details}</Raw> : null}
       </div>
     </div>
   );
 }
 
+/** The server's sentences, unchanged, behind "Show details". */
+function Raw({ children }: { children: ReactNode }) {
+  return (
+    <ShowDetails>
+      <div className="space-y-1 font-mono text-[11px] leading-relaxed wrap-anywhere text-muted-foreground">{children}</div>
+    </ShowDetails>
+  );
+}
+
 function Spinner({ on }: { on: boolean }) {
   return on ? <Loader2 aria-hidden className="size-3.5 animate-spin" /> : null;
+}
+
+/** An account label, kept on one line: "claude-max" never breaks at its dash. */
+function Account({ label }: { label: string }) {
+  return <span className="whitespace-nowrap">“{label}”</span>;
 }
 
 // ---------------------------------------------------------------- the panel
@@ -239,42 +125,40 @@ export function TelemetryPanel({ view, on }: { view: TelemetryView; on: Telemetr
   const problems = problemRows(status).filter((problem) => problem.code !== "capture_off");
   const installed = collectionInstalled(status);
   const locked = busy !== null;
+  /** From another device nothing can be written; the buttons say so by being off, and the note says why. */
+  const writeLocked = locked || view.remote;
+  const why = view.remote ? "Changes can only be made from this computer's browser" : undefined;
 
   return (
-    <div data-telemetry-section className="space-y-4">
+    <div data-telemetry-section data-remote={view.remote ? "" : undefined} className="space-y-4">
       {view.remote ? (
         <p data-remote-note className="flex items-start gap-2 rounded-lg border border-dashed px-3 py-2 text-[12px] leading-relaxed text-muted-foreground">
           <Lock aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-          You're looking at this from another device. You can see everything here, but changes can only be made from this computer's browser.
+          You're looking at this from another device. You can see everything here, but changes can only be made from this computer's browser, so
+          the buttons that change something are turned off.
         </p>
       ) : null}
 
-      {/* 1. At a glance */}
-      <Card title="At a glance" testId="telemetry-glance">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <Pill state={glance.state} word={glance.word} />
-          <p className="min-w-0 flex-1 text-[14px] leading-relaxed" data-testid="telemetry-headline">
-            {glance.headline}
-          </p>
-        </div>
+      <PlainCard
+        title="At a glance"
+        data-testid="telemetry-glance"
+        pill={<StatusPill status={GLANCE_PILL[glance.state]} label={glance.word} />}
+        headline={glance.headline}
+        headlineTestId="telemetry-headline"
+        help={WHAT_THIS_MEANS}
+      >
         <p className="text-[12px] leading-relaxed text-muted-foreground" data-testid="telemetry-privacy">
           {PRIVACY_NOTE}
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          {status.budgetCapture ? (
-            <Button type="button" size="sm" variant="outline" disabled={locked} onClick={on.onCaptureAsk} data-action="capture-off">
-              Turn usage tracking off
-            </Button>
-          ) : (
-            <Button type="button" size="sm" variant="outline" disabled={locked} onClick={on.onCaptureAsk} data-action="capture-on">
-              Turn usage tracking on
-            </Button>
-          )}
-          <Button type="button" size="sm" variant="ghost" disabled={locked} onClick={on.onCollect} data-action="collect">
+          <Button type="button" size="sm" variant="outline" disabled={writeLocked} title={why} onClick={on.onCaptureAsk} data-action={status.budgetCapture ? "capture-off" : "capture-on"}>
+            {status.budgetCapture ? "Turn usage tracking off" : "Turn usage tracking on"}
+          </Button>
+          <Button type="button" size="sm" variant="ghost" disabled={writeLocked} title={why} onClick={() => void on.onCollect()} data-action="collect">
             <Spinner on={busy === "collect"} />
             Collect now
           </Button>
-          <Button type="button" size="sm" variant="ghost" disabled={locked} onClick={on.onRefresh} data-action="refresh" aria-label="Check again">
+          <Button type="button" size="sm" variant="ghost" disabled={locked} onClick={() => void on.onRefresh()} data-action="refresh">
             <RefreshCw aria-hidden className={cn("size-3.5", busy === "refresh" && "animate-spin")} />
             Check again
           </Button>
@@ -284,12 +168,10 @@ export function TelemetryPanel({ view, on }: { view: TelemetryView; on: Telemetr
             {status.budgetCapture ? (
               <p>Turn usage tracking off? Nothing new will be recorded. Readings already saved are kept, and your account links stay.</p>
             ) : (
-              <p>
-                Turn usage tracking on? staple will record how much of your Claude and Codex plan limits is left, from the accounts linked below. {PRIVACY_NOTE}
-              </p>
+              <p>Turn usage tracking on? staple will record how much of your Claude and Codex plan limits is left, from the accounts linked below. {PRIVACY_NOTE}</p>
             )}
             <div className="flex flex-wrap gap-2">
-              <Button type="button" size="sm" disabled={locked} onClick={on.onCaptureConfirm} data-action="capture-confirm">
+              <Button type="button" size="sm" disabled={writeLocked} onClick={() => void on.onCaptureConfirm()} data-action="capture-confirm">
                 <Spinner on={busy === "capture"} />
                 {status.budgetCapture ? "Yes, turn it off" : "Yes, turn it on"}
               </Button>
@@ -304,37 +186,52 @@ export function TelemetryPanel({ view, on }: { view: TelemetryView; on: Telemetr
           <div data-testid="telemetry-collect-result" className="space-y-1 text-[13px] leading-relaxed">
             <p>{collectResultText(view.lastCollect)}</p>
             {view.lastCollect.errors.length > 0 ? (
-              <Details>
+              <Raw>
                 {view.lastCollect.errors.map((error) => (
                   <p key={error.file}>
                     {error.file}: {error.message}
                   </p>
                 ))}
-              </Details>
+              </Raw>
             ) : null}
           </div>
         ) : null}
-        <HelpToggle>{WHAT_THIS_MEANS}</HelpToggle>
-      </Card>
+      </PlainCard>
 
-      {/* Sources */}
-      <Card title="Where readings come from" testId="telemetry-sources">
-        {sources.length === 0 ? (
-          <p className="text-[13px] text-muted-foreground">No account is linked yet. Add one under Account links, or turn on automatic collection.</p>
-        ) : (
+      <PlainCard
+        title="Where readings come from"
+        data-testid="telemetry-sources"
+        headline={
+          sources.length === 0
+            ? "No account is linked yet. Add one under Account links, or turn on automatic collection."
+            : sources.length === 1
+              ? "One linked account:"
+              : `${sources.length} linked accounts:`
+        }
+        details={
+          problems.length > 0
+            ? problems.map((problem, index) => (
+                <p key={index} className="font-mono text-[11px] wrap-anywhere text-muted-foreground">
+                  {problem.code}: {problem.detail}
+                </p>
+              ))
+            : undefined
+        }
+      >
+        {sources.length > 0 ? (
           <ul className="divide-y">
             {sources.map((row) => (
               <li key={row.key} data-source={row.source} data-account={row.account} className="space-y-1 py-2 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                   <span className="text-[13px] font-medium">{row.what}</span>
                   <span className="text-[12px] text-muted-foreground">
-                    account “{row.account}”
+                    account <Account label={row.account} />
                   </span>
-                  <span data-fresh={row.fresh ? "" : undefined} className="ml-auto text-[12px] text-muted-foreground">
+                  <span data-reading data-fresh={row.fresh ? "" : undefined} className="ml-auto text-[12px] text-muted-foreground">
                     {row.reading}
                   </span>
                 </div>
-                <p className={cn("flex items-start gap-1.5 text-[12px] leading-relaxed", !row.feedOk && "text-[var(--status-task-icon-blocked)]")}>
+                <p data-feed={row.feedOk ? "ok" : "off"} className="flex items-start gap-1.5 text-[12px] leading-relaxed" style={row.feedOk ? undefined : { color: "var(--plain-tight-fg)" }}>
                   {row.feedOk ? <CircleCheck aria-hidden className="mt-0.5 size-3.5 shrink-0" /> : <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0" />}
                   {row.feed}
                 </p>
@@ -342,86 +239,83 @@ export function TelemetryPanel({ view, on }: { view: TelemetryView; on: Telemetr
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
         {problems.length > 0 ? (
           <div data-testid="telemetry-problems" className="space-y-2 border-t pt-3">
             <p className="text-[12px] font-medium">Needs attention</p>
             <ul className="space-y-1.5">
               {problems.map((problem, index) => (
                 <li key={`${problem.code}-${index}`} data-problem={problem.code} className="flex items-start gap-1.5 text-[13px] leading-relaxed">
-                  <AlertTriangle aria-hidden className="mt-1 size-3.5 shrink-0 text-[var(--status-task-icon-blocked)]" />
+                  <AlertTriangle aria-hidden className="mt-1 size-3.5 shrink-0" style={{ color: "var(--plain-tight-fg)" }} />
                   <span>{problem.text}</span>
                 </li>
               ))}
             </ul>
-            <Details>
-              {problems.map((problem, index) => (
-                <p key={index}>
-                  {problem.code}: {problem.detail}
-                </p>
-              ))}
-            </Details>
           </div>
         ) : null}
-      </Card>
+      </PlainCard>
 
-      {/* Automatic collection */}
-      <Card title="Automatic collection" testId="telemetry-automatic">
-        <p className="text-[13px] leading-relaxed">
-          {installed
-            ? "Automatic collection is set up on this computer."
-            : "Automatic collection isn't set up. Readings are only recorded if you set them up by hand."}
-          {status.setup.setupAt && installed ? <span className="text-muted-foreground"> (since {new Date(status.setup.setupAt).toLocaleString()})</span> : null}
-        </p>
+      <PlainCard
+        title="Automatic collection"
+        data-testid="telemetry-automatic"
+        headline={
+          <>
+            {installed ? "Automatic collection is set up on this computer." : "Automatic collection isn't set up. Readings are only recorded if you set them up by hand."}
+            {status.setup.setupAt && installed ? <span className="text-muted-foreground"> (since {new Date(status.setup.setupAt).toLocaleString()})</span> : null}
+          </>
+        }
+        help={AUTOMATIC_COLLECTION_HELP}
+      >
         {view.plan === null && view.setupForm === null ? (
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" disabled={locked} onClick={on.onOpenSetup} data-action="setup-open">
+            <Button type="button" size="sm" disabled={writeLocked} title={why} onClick={on.onOpenSetup} data-action="setup-open">
               {installed ? "Check or repair automatic collection" : "Turn on automatic collection"}
             </Button>
             {installed ? (
-              <Button type="button" size="sm" variant="outline" disabled={locked} onClick={() => on.onPlan("unsetup")} data-action="unsetup-plan">
+              <Button type="button" size="sm" variant="outline" disabled={writeLocked} title={why} onClick={() => void on.onPlan("unsetup")} data-action="unsetup-plan">
                 <Spinner on={busy === "plan"} />
                 Turn off automatic collection
               </Button>
             ) : null}
           </div>
         ) : null}
-
         {view.setupForm !== null && view.plan === null ? (
-          <SetupForm draft={view.setupForm} busy={busy} onDraft={on.onSetupDraft} onPlan={() => on.onPlan("setup")} onCancel={on.onCancelPlan} />
+          <SetupForm draft={view.setupForm} busy={busy} disabled={writeLocked} onDraft={on.onSetupDraft} onPlan={() => void on.onPlan("setup")} onCancel={on.onCancelPlan} />
         ) : null}
+        {view.plan !== null ? (
+          <PlanView shown={view.plan} why={view.planWhy} busy={busy} disabled={writeLocked} onConfirm={() => void on.onConfirmPlan()} onCancel={on.onCancelPlan} />
+        ) : null}
+      </PlainCard>
 
-        {view.plan !== null ? <PlanView shown={view.plan} why={view.planWhy} busy={busy} onConfirm={on.onConfirmPlan} onCancel={on.onCancelPlan} /> : null}
-
-        <HelpToggle>{AUTOMATIC_COLLECTION_HELP}</HelpToggle>
-      </Card>
-
-      {/* Bindings */}
-      <Card title="Account links" testId="telemetry-bindings">
-        <p className="text-[12px] leading-relaxed text-muted-foreground">
-          Which of your accounts each Claude or Codex folder on this computer uses. The label is a short name you choose (like “claude-max”), never an email.
-        </p>
+      <PlainCard
+        title="Account links"
+        data-testid="telemetry-bindings"
+        headline="Which of your accounts each Claude or Codex folder on this computer uses. The label is a short name you choose (like claude-max), never an email."
+      >
         {status.bindings.length === 0 ? <p className="text-[13px] text-muted-foreground">No account links yet.</p> : null}
         <ul className="divide-y">
           {status.bindings.map((binding) => {
             const dir = bindingDir(binding);
-            const editingThis = view.editor?.editing !== null && view.editor?.editing !== undefined && sameBinding(view.editor.editing, binding);
+            const editingThis = view.editor !== null && view.editor.editing !== null && sameBinding(view.editor.editing, binding);
             const removingThis = view.removing !== null && sameBinding(view.removing, binding);
             return (
               <li key={`${binding.source}:${dir}`} data-binding={`${SOURCE_WORDS[binding.source].flag}:${dir}`} className="space-y-2 py-2 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px]">
-                      <span className="font-medium">{SOURCE_WORDS[binding.source].what}</span> → “{binding.accountRef}”
-                      <span className="text-muted-foreground"> ({binding.provider})</span>
+                      <span className="font-medium">{SOURCE_WORDS[binding.source].what}</span> → <Account label={binding.accountRef} />
+                      <span className="text-muted-foreground" data-provider>
+                        {" "}
+                        ({binding.provider})
+                      </span>
                     </p>
                     <p className="font-mono text-[11px] wrap-anywhere text-text-tertiary">{dir}</p>
                   </div>
                   <div className="flex gap-1">
-                    <Button type="button" size="sm" variant="ghost" disabled={locked} onClick={() => on.onEditorOpen(binding)} aria-label={`Edit the link of ${dir}`}>
+                    <Button type="button" size="sm" variant="ghost" disabled={writeLocked} title={why} onClick={() => on.onEditorOpen(binding)} aria-label={`Edit the link of ${dir}`}>
                       Edit
                     </Button>
-                    <Button type="button" size="sm" variant="ghost" disabled={locked} onClick={() => on.onRemoveAsk(binding)} aria-label={`Remove the link of ${dir}`}>
+                    <Button type="button" size="sm" variant="ghost" disabled={writeLocked} title={why} onClick={() => on.onRemoveAsk(binding)} aria-label={`Remove the link of ${dir}`}>
                       Remove
                     </Button>
                   </div>
@@ -430,26 +324,26 @@ export function TelemetryPanel({ view, on }: { view: TelemetryView; on: Telemetr
                   <DestructiveConfirm
                     message={`Remove this link? Readings for “${binding.accountRef}” already saved are kept; new ones from this folder stop.`}
                     confirmLabel="Remove link"
-                    disabled={locked}
-                    onConfirm={on.onRemoveConfirm}
+                    disabled={writeLocked}
+                    onConfirm={() => void on.onRemoveConfirm()}
                     onCancel={on.onRemoveCancel}
                   />
                 ) : null}
-                {editingThis && view.editor ? <BindingForm editor={view.editor} busy={busy} onDraft={on.onEditorDraft} onSave={on.onEditorSave} onCancel={on.onEditorCancel} /> : null}
+                {editingThis && view.editor ? <BindingForm editor={view.editor} busy={busy} disabled={writeLocked} on={on} /> : null}
               </li>
             );
           })}
         </ul>
         {view.editor !== null && view.editor.editing === null ? (
-          <BindingForm editor={view.editor} busy={busy} onDraft={on.onEditorDraft} onSave={on.onEditorSave} onCancel={on.onEditorCancel} />
+          <BindingForm editor={view.editor} busy={busy} disabled={writeLocked} on={on} />
         ) : (
           <div>
-            <Button type="button" size="sm" variant="outline" disabled={locked || view.editor !== null} onClick={() => on.onEditorOpen(null)} data-action="binding-add">
+            <Button type="button" size="sm" variant="outline" disabled={writeLocked || view.editor !== null} title={why} onClick={() => on.onEditorOpen(null)} data-action="binding-add">
               Add an account link
             </Button>
           </div>
         )}
-      </Card>
+      </PlainCard>
     </div>
   );
 }
@@ -469,21 +363,7 @@ function Check({ id, checked, onChange, children }: { id: string; checked: boole
   );
 }
 
-function TextField({
-  id,
-  label,
-  hint,
-  value,
-  placeholder,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-  value: string;
-  placeholder?: string;
-  onChange: (value: string) => void;
-}) {
+function TextField({ id, label, hint, value, placeholder, onChange }: { id: string; label: string; hint?: string; value: string; placeholder?: string; onChange: (value: string) => void }) {
   return (
     <div className="grid gap-1">
       <label htmlFor={id} className="text-[12px] font-medium">
@@ -511,12 +391,14 @@ function TextField({
 function SetupForm({
   draft,
   busy,
+  disabled,
   onDraft,
   onPlan,
   onCancel,
 }: {
   draft: SetupDraft;
   busy: TelemetryBusy;
+  disabled: boolean;
   onDraft: (draft: SetupDraft) => void;
   onPlan: () => void;
   onCancel: () => void;
@@ -544,7 +426,7 @@ function SetupForm({
         </Check>
       </div>
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" size="sm" disabled={busy !== null} data-action="setup-plan">
+        <Button type="submit" size="sm" disabled={disabled} data-action="setup-plan">
           <Spinner on={busy === "plan"} />
           Show me what will change
         </Button>
@@ -559,7 +441,7 @@ function SetupForm({
 
 const STEP_MARK: Record<PlanStep["action"], string> = { change: "Will do", unchanged: "Already so", skip: "Skipped", refuse: "Blocked" };
 
-function PlanView({ shown, why, busy, onConfirm, onCancel }: { shown: ShownPlan; why: string | null; busy: TelemetryBusy; onConfirm: () => void; onCancel: () => void }) {
+function PlanView({ shown, why, busy, disabled, onConfirm, onCancel }: { shown: ShownPlan; why: string | null; busy: TelemetryBusy; disabled: boolean; onConfirm: () => void; onCancel: () => void }) {
   const { plan, consent } = shown.response;
   const steps = plainPlan(plan, shown.options);
   const doing = steps.filter((step) => step.action === "change" || step.action === "refuse");
@@ -579,7 +461,7 @@ function PlanView({ shown, why, busy, onConfirm, onCancel }: { shown: ShownPlan;
           {doing.map((step, index) => (
             <li key={index} data-step={step.part} data-step-action={step.action} className="flex items-start gap-2 text-[13px] leading-relaxed">
               {step.action === "refuse" ? (
-                <AlertTriangle aria-hidden className="mt-1 size-3.5 shrink-0 text-[var(--status-task-icon-blocked)]" />
+                <AlertTriangle aria-hidden className="mt-1 size-3.5 shrink-0" style={{ color: "var(--plain-risk-fg)" }} />
               ) : (
                 <CircleCheck aria-hidden className="mt-1 size-3.5 shrink-0" />
               )}
@@ -597,17 +479,17 @@ function PlanView({ shown, why, busy, onConfirm, onCancel }: { shown: ShownPlan;
           ))}
         </ul>
       ) : null}
-      <Details>
+      <Raw>
         {plan.steps.map((step, index) => (
           <p key={index}>
             [{STEP_MARK[step.action]}] {step.part}: {step.summary}
             {step.path ? ` (${step.path})` : ""}
           </p>
         ))}
-      </Details>
+      </Raw>
       <div className="flex flex-wrap gap-2">
         {consent !== null ? (
-          <Button type="button" size="sm" variant={plan.action === "unsetup" ? "destructive" : "default"} disabled={busy !== null} onClick={onConfirm} data-action="plan-confirm">
+          <Button type="button" size="sm" variant={plan.action === "unsetup" ? "destructive" : "default"} disabled={disabled} onClick={onConfirm} data-action="plan-confirm">
             <Spinner on={busy === "confirm"} />
             {plan.action === "setup" ? "Confirm and turn on" : "Confirm and turn off"}
           </Button>
@@ -622,19 +504,7 @@ function PlanView({ shown, why, busy, onConfirm, onCancel }: { shown: ShownPlan;
 
 // ---------------------------------------------------------------- binding form
 
-function BindingForm({
-  editor,
-  busy,
-  onDraft,
-  onSave,
-  onCancel,
-}: {
-  editor: BindingEditor;
-  busy: TelemetryBusy;
-  onDraft: (draft: BindingDraft) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
+function BindingForm({ editor, busy, disabled, on }: { editor: BindingEditor; busy: TelemetryBusy; disabled: boolean; on: TelemetryHandlers }) {
   const { draft } = editor;
   const words = SOURCE_WORDS[draft.source === "claude-statusline" ? "claude_code_statusline" : "codex_rollout"];
   const prefix = editor.editing === null ? "telemetry-bind-new" : "telemetry-bind-edit";
@@ -644,7 +514,7 @@ function BindingForm({
       className="space-y-3 rounded-lg border px-3 py-3"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave();
+        void on.onEditorSave();
       }}
     >
       <fieldset className="space-y-1">
@@ -652,14 +522,7 @@ function BindingForm({
         <div className="flex flex-wrap gap-x-4 gap-y-1">
           {(["claude-statusline", "codex-rollout"] as BindingSourceFlag[]).map((flag) => (
             <label key={flag} className="flex items-center gap-1.5 text-[13px]">
-              <input
-                type="radio"
-                name={`${prefix}-source`}
-                value={flag}
-                checked={draft.source === flag}
-                onChange={() => onDraft({ ...draft, source: flag })}
-                className="size-4"
-              />
+              <input type="radio" name={`${prefix}-source`} value={flag} checked={draft.source === flag} onChange={() => on.onEditorSource(flag)} className="size-4" />
               {flag === "claude-statusline" ? "Claude status line" : "Codex sessions"}
             </label>
           ))}
@@ -671,15 +534,15 @@ function BindingForm({
           label="Account label"
           hint="Lowercase letters, digits and dashes, e.g. claude-max"
           value={draft.account}
-          onChange={(value) => onDraft({ ...draft, account: value })}
+          onChange={(value) => on.onEditorDraft({ ...draft, account: value })}
         />
         <TextField
           id={`${prefix}-folder`}
           label={words.folderLabel}
-          hint={`Leave empty for the usual one (${words.defaultFolder})`}
+          hint={`Leave empty for the usual one (${words.defaultFolder}); otherwise a full path, or one starting with ~`}
           placeholder={words.defaultFolder}
           value={draft.folder}
-          onChange={(value) => onDraft({ ...draft, folder: value })}
+          onChange={(value) => on.onEditorDraft({ ...draft, folder: value })}
         />
       </div>
       <details className="group">
@@ -690,17 +553,22 @@ function BindingForm({
             label="Provider"
             hint={`Leave empty for ${draft.source === "claude-statusline" ? "anthropic" : "openai"}`}
             value={draft.provider}
-            onChange={(value) => onDraft({ ...draft, provider: value })}
+            onChange={(value) => on.onEditorDraft({ ...draft, provider: value })}
           />
         </div>
       </details>
-      {editor.error ? <InlineError>{editor.error}</InlineError> : null}
+      {editor.error ? (
+        <div data-binding-error className="space-y-1">
+          <InlineError>{editor.error.text}</InlineError>
+          {editor.error.detail ? <Raw>{editor.error.detail}</Raw> : null}
+        </div>
+      ) : null}
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" size="sm" disabled={busy !== null} data-action="binding-save">
+        <Button type="submit" size="sm" disabled={disabled} data-action="binding-save">
           <Spinner on={busy === "bind"} />
           {editor.editing === null ? "Add link" : "Save link"}
         </Button>
-        <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onCancel}>
+        <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={on.onEditorCancel}>
           Cancel
         </Button>
       </div>
@@ -710,75 +578,36 @@ function BindingForm({
 
 // ---------------------------------------------------------------- the wiring
 
-const pageTransport: CollectionTransport = {
+/** The page's API: `lib/api.ts`, nothing else. */
+export const PAGE_TELEMETRY_API: TelemetryApi = {
+  status: getBudgetCollection,
   plan: planBudgetCollection,
   apply: applyBudgetCollection,
+  collect: collectBudgetNow,
+  capture: setBudgetCapture,
+  bind: bindBudgetSource,
+  unbind: unbindBudgetSource,
 };
 
-/** A write's failure as a notice: the Origin refusal in its own words, anything else the server's sentence. */
-function failureNotice(error: unknown): TelemetryNotice {
-  if (isCrossOriginRefusal(error)) return { tone: "cross_origin", text: CROSS_ORIGIN_MESSAGE, details: describeRefusal(error).message };
-  return { tone: "error", text: describeRefusal(error).message };
-}
-
 export function TelemetrySection() {
-  const [status, setStatus] = useState<CollectionStatus | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<TelemetryBusy>(null);
-  const [notice, setNotice] = useState<TelemetryNotice | null>(null);
-  const [setupForm, setSetupForm] = useState<SetupDraft | null>(null);
-  const [plan, setPlan] = useState<ShownPlan | null>(null);
-  const [planWhy, setPlanWhy] = useState<string | null>(null);
-  const [captureConfirm, setCaptureConfirm] = useState(false);
-  const [editor, setEditor] = useState<BindingEditor | null>(null);
-  const [removing, setRemoving] = useState<KnownBinding | null>(null);
-  const [lastCollect, setLastCollect] = useState<CollectResult | null>(null);
-  const alive = useRef(true);
-  const remote = typeof location !== "undefined" && viewedFromAnotherDevice(location.hostname);
-
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
-
-  const reload = useCallback(async () => {
-    try {
-      const next = await getBudgetCollection();
-      if (alive.current) {
-        setStatus(next);
-        setLoadError(null);
-      }
-    } catch (error) {
-      if (alive.current) setLoadError(describeRefusal(error).message);
-    }
-  }, []);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  /** One action at a time; the status is re-read after every write, refused or not. */
-  const run = useCallback(
-    async (kind: Exclude<TelemetryBusy, null>, work: () => Promise<void>) => {
-      setBusy(kind);
-      try {
-        await work();
-      } finally {
-        await reload();
-        if (alive.current) setBusy(null);
-      }
-    },
-    [reload],
+  const controller = useMemo(
+    () => createTelemetryController(PAGE_TELEMETRY_API, { remote: remoteFromLocation(typeof location === "undefined" ? undefined : location) }),
+    [],
   );
+  const state = useSyncExternalStore(controller.subscribe, controller.get, controller.get);
 
-  if (status === null) {
-    if (loadError !== null) {
+  useEffect(() => {
+    // No dispose on cleanup: under StrictMode the effect runs twice on one controller, and a
+    // late answer after unmount only notifies listeners that are already gone.
+    void controller.reload();
+  }, [controller]);
+
+  if (state.status === null) {
+    if (state.loadError !== null) {
       return (
         <div className="space-y-2">
-          <InlineError>{loadError}</InlineError>
-          <Button type="button" size="sm" variant="outline" onClick={() => void reload()}>
+          <InlineError>{state.loadError}</InlineError>
+          <Button type="button" size="sm" variant="outline" onClick={() => void controller.reload()}>
             Try again
           </Button>
         </div>
@@ -786,144 +615,5 @@ export function TelemetrySection() {
     }
     return <LoadingState rows={3} />;
   }
-
-  const handlers: TelemetryHandlers = {
-    onRefresh: () => void run("refresh", async () => {}),
-    onOpenSetup: () => {
-      setNotice(null);
-      setSetupForm({ ...setupDefaults(status), statusline: true, watcher: true });
-    },
-    onSetupDraft: setSetupForm,
-    onPlan: (action) =>
-      void run("plan", async () => {
-        setNotice(null);
-        setPlanWhy(null);
-        try {
-          const options = action === "setup" && setupForm !== null ? setupOptionsOf(setupForm) : {};
-          const shown = await showPlan(pageTransport, action, options);
-          if (alive.current) setPlan(shown);
-        } catch (error) {
-          if (alive.current) setNotice(failureNotice(error));
-        }
-      }),
-    onConfirmPlan: () =>
-      void run("confirm", async () => {
-        if (plan === null) return;
-        const result = await confirmPlan(pageTransport, plan).catch((error: unknown) => ({ kind: "failed" as const, error }));
-        if (!alive.current) return;
-        switch (result.kind) {
-          case "applied": {
-            const lines = appliedText(plan.action, result.outcome.applied, result.options);
-            setNotice({
-              tone: "ok",
-              text: plan.action === "setup" ? "Automatic collection is on. Done:" : "Automatic collection is off. Done:",
-              lines: lines.length > 0 ? lines : ["Nothing needed changing."],
-            });
-            setPlan(null);
-            setPlanWhy(null);
-            setSetupForm(null);
-            break;
-          }
-          case "replanned":
-            setPlan(result.shown);
-            setPlanWhy(result.why);
-            break;
-          case "incomplete":
-            setNotice({
-              tone: "error",
-              text: "Setup stopped partway through. What was already done is listed below; “Turn off automatic collection” undoes it.",
-              lines: appliedText("setup", result.applied, plan.options),
-              details: result.message,
-            });
-            setPlan(null);
-            setPlanWhy(null);
-            break;
-          case "refused":
-            setNotice(result.crossOrigin ? { tone: "cross_origin", text: CROSS_ORIGIN_MESSAGE, details: result.message } : { tone: "error", text: result.message });
-            break;
-          case "failed":
-            setNotice(failureNotice(result.error));
-            break;
-        }
-      }),
-    onCancelPlan: () => {
-      setPlan(null);
-      setPlanWhy(null);
-      setSetupForm(null);
-    },
-    onCaptureAsk: () => {
-      setNotice(null);
-      setCaptureConfirm(true);
-    },
-    onCaptureCancel: () => setCaptureConfirm(false),
-    onCaptureConfirm: () =>
-      void run("capture", async () => {
-        const enable = !status.budgetCapture;
-        try {
-          await setBudgetCapture(enable);
-          if (alive.current) setNotice({ tone: "ok", text: enable ? "Usage tracking is on." : "Usage tracking is off. Readings already saved are kept." });
-        } catch (error) {
-          if (alive.current) setNotice(failureNotice(error));
-        } finally {
-          if (alive.current) setCaptureConfirm(false);
-        }
-      }),
-    onCollect: () =>
-      void run("collect", async () => {
-        setNotice(null);
-        try {
-          const result = await collectBudgetNow();
-          if (alive.current) setLastCollect(result);
-        } catch (error) {
-          if (alive.current) setNotice(failureNotice(error));
-        }
-      }),
-    onEditorOpen: (binding) => {
-      setNotice(null);
-      setRemoving(null);
-      setEditor({ editing: binding, draft: binding === null ? EMPTY_BINDING_DRAFT : draftOf(binding), error: null });
-    },
-    onEditorDraft: (draft) => setEditor((current) => (current === null ? current : { ...current, draft, error: null })),
-    onEditorCancel: () => setEditor(null),
-    onEditorSave: () =>
-      void run("bind", async () => {
-        if (editor === null) return;
-        try {
-          await bindBudgetSource(bindInputOf(editor.draft, editor.editing));
-          if (alive.current) {
-            setEditor(null);
-            setNotice({ tone: "ok", text: editor.editing === null ? "Account link added." : "Account link saved." });
-          }
-        } catch (error) {
-          if (!alive.current) return;
-          if (isCrossOriginRefusal(error)) setNotice(failureNotice(error));
-          else setEditor((current) => (current === null ? current : { ...current, error: describeRefusal(error).message }));
-        }
-      }),
-    onRemoveAsk: (binding) => {
-      setNotice(null);
-      setEditor(null);
-      setRemoving(binding);
-    },
-    onRemoveCancel: () => setRemoving(null),
-    onRemoveConfirm: () =>
-      void run("unbind", async () => {
-        if (removing === null) return;
-        try {
-          await unbindBudgetSource(bindingHomeInput(SOURCE_WORDS[removing.source].flag, bindingDir(removing)));
-          if (alive.current) setNotice({ tone: "ok", text: "Account link removed." });
-        } catch (error) {
-          if (alive.current) setNotice(failureNotice(error));
-        } finally {
-          if (alive.current) setRemoving(null);
-        }
-      }),
-  };
-
-  return (
-    <TelemetryPanel
-      view={{ status, busy, notice, remote, setupForm, plan, planWhy, captureConfirm, editor, removing, lastCollect }}
-      on={handlers}
-    />
-  );
+  return <TelemetryPanel view={state as TelemetryView} on={controller.handlers} />;
 }

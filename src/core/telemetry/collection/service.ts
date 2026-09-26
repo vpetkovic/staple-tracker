@@ -27,7 +27,7 @@ import { readConfig } from "../../../config/file.js";
 import { userHome as osUserHome } from "../../../config/home.js";
 import { defaultBinDir, launcherPath } from "../../../install/launcher.js";
 import { StapleError } from "../../types.js";
-import { bindBudgetSource, budgetConfig, setBudgetCapture, unbindBudgetSource } from "../budget-config.js";
+import { assertHomePath, bindBudgetSource, budgetConfig, setBudgetCapture, unbindBudgetSource } from "../budget-config.js";
 import { SOURCE_PROVIDER, claudeConfigDir, codexHome, expandHomePath } from "../bindings.js";
 import { isKnownBinding, type BindingSource, type KnownBinding, type TelemetryConfig } from "../config.js";
 import { assertAccountRef } from "../formats.js";
@@ -236,8 +236,8 @@ interface SetupTargets {
 }
 
 function setupTargets(options: SetupOptions, r: Resolved, telemetry: TelemetryConfig): SetupTargets {
-  const claudeDir = options.claudeConfigDir !== undefined ? expandHomePath(options.claudeConfigDir) : claudeConfigDir(r.env);
-  const codexDir = options.codexHome !== undefined ? expandHomePath(options.codexHome) : codexHome(r.env);
+  const claudeDir = options.claudeConfigDir !== undefined ? expandHomePath(assertHomePath(options.claudeConfigDir, "--claude-config-dir")) : claudeConfigDir(r.env);
+  const codexDir = options.codexHome !== undefined ? expandHomePath(assertHomePath(options.codexHome, "--codex-home")) : codexHome(r.env);
   const claudeAccount =
     options.claudeAccount !== undefined ? assertAccountRef(options.claudeAccount, "--claude-account") : (bindingFor(telemetry, "claude_code_statusline", claudeDir)?.accountRef ?? null);
   const codexAccount = options.codexAccount !== undefined ? assertAccountRef(options.codexAccount, "--codex-account") : (bindingFor(telemetry, "codex_rollout", codexDir)?.accountRef ?? null);

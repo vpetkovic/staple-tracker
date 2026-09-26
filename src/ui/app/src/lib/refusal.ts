@@ -42,6 +42,30 @@ export interface Refusal {
   retryable: boolean;
   /** False when nothing carried a message and we had to say so ourselves. */
   fromServer: boolean;
+  /**
+   * The server's own sentence, when `message` is not it. Set only for the one refusal this
+   * module words itself: a write refused by the Origin check (below).
+   */
+  serverMessage?: string;
+}
+
+/**
+ * THE ONE EXCEPTION TO "VERBATIM". A write refused by the server's Origin check
+ * (`detail.reason: "cross_origin"`) is not a store guard: nothing about the change was
+ * wrong, the page is open from another device (a phone on the tailnet, through a
+ * forwarder), which can read and not write. The server's sentence ("Cross-origin request
+ * rejected (Origin: …)") explains the mechanism and not what to do, so every view says
+ * this instead, and keeps the server's sentence as `serverMessage`.
+ */
+export const CROSS_ORIGIN_MESSAGE =
+  "Changes can only be made from this computer's browser. This page is open from another device (for example your phone), " +
+  "which can look at everything but not change it. Open staple on this computer to make the change.";
+
+function readReason(source: Record<string, unknown>): string | undefined {
+  const detail = source["detail"];
+  if (typeof detail !== "object" || detail === null) return undefined;
+  const reason = (detail as Record<string, unknown>)["reason"];
+  return typeof reason === "string" ? reason : undefined;
 }
 
 function readString(source: Record<string, unknown>, key: string): string | undefined {
@@ -82,6 +106,17 @@ export function describeRefusal(error: unknown): Refusal {
   // alone is enough — but read `error` too, in case a raw envelope object is handed in.
   const message = readString(source, "message") ?? readString(source, "error");
   const retryable = source["retryable"];
+
+  if (readReason(source) === "cross_origin") {
+    return {
+      message: CROSS_ORIGIN_MESSAGE,
+      code: readString(source, "code") ?? "forbidden",
+      blockers: [],
+      retryable: false,
+      fromServer: true,
+      ...(message !== undefined ? { serverMessage: message } : {}),
+    };
+  }
 
   return {
     message: message ?? "the change was refused, and the server did not say why",
