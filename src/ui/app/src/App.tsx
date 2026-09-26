@@ -292,26 +292,56 @@ export function App() {
    * finished work is on the page — the same default, asked once.
    */
   const showDone = filters.showDone;
-  const loadMilestoneList = useCallback(() => getMilestones({ ws, all: showDone }), [ws, showDone]);
-  const milestoneList = useResource<MilestoneListRow[]>(
+  /**
+   * ALL WORKSPACES ASKS EVERY WORKSPACE. `/api/milestones` with no `ws` answers for the
+   * server's FIRST registered workspace, so on All workspaces the menu used to offer only
+   * that workspace's milestones — the first-workspace fallback, one level down. Each
+   * workspace is read on its own and the answers joined, every row keeping the workspace
+   * it came from so its members are fetched from the right place. A workspace that cannot
+   * answer (no milestone kind configured) contributes nothing rather than failing the menu.
+   */
+  const allWorkspaces = bootstrap.data?.mode === "hub" && ws === "";
+  const workspaceSlugs = (bootstrap.data?.workspaces ?? []).map((entry) => entry.slug).join(",");
+  const loadMilestoneList = useCallback(async (): Promise<{ row: MilestoneListRow; ws: string }[]> => {
+    if (!allWorkspaces) return (await getMilestones({ ws, all: showDone })).map((row) => ({ row, ws }));
+    const lists = await Promise.all(
+      (workspaceSlugs ? workspaceSlugs.split(",") : []).map((slug) =>
+        getMilestones({ ws: slug, all: showDone }).then(
+          (rows) => rows.map((row) => ({ row, ws: slug })),
+          (error: unknown) => {
+            if (error instanceof AuthError) throw error;
+            return [];
+          },
+        ),
+      ),
+    );
+    return lists.flat();
+  }, [ws, showDone, allWorkspaces, workspaceSlugs]);
+  const milestoneList = useResource<{ row: MilestoneListRow; ws: string }[]>(
     loadMilestoneList,
-    [ws, showDone, version],
+    [ws, showDone, allWorkspaces, workspaceSlugs, version],
     onAuthError,
   );
 
   const selectedMilestones = (filters.dims.milestone ?? []).join(",");
-  const loadMilestoneMembers = useCallback(
-    () =>
-      Promise.all(
-        (selectedMilestones ? selectedMilestones.split(",") : []).map((ref) =>
-          getMilestone({ ws, ref }),
-        ),
-      ),
-    [ws, selectedMilestones],
+  /** Which workspace each listed milestone lives in, so a selected one is read from there. */
+  const milestoneHomes = useMemo(
+    () => (milestoneList.data ?? []).map((entry) => `${entry.row.milestone.identifier}=${entry.ws}`).join(","),
+    [milestoneList.data],
   );
+  const loadMilestoneMembers = useCallback(() => {
+    const homes = new Map(
+      (milestoneHomes ? milestoneHomes.split(",") : []).map((pair) => pair.split("=") as [string, string]),
+    );
+    return Promise.all(
+      (selectedMilestones ? selectedMilestones.split(",") : []).map((ref) =>
+        getMilestone({ ws: homes.get(ref) ?? ws, ref }),
+      ),
+    );
+  }, [ws, selectedMilestones, milestoneHomes]);
   const milestoneMembers = useResource<MilestoneView[]>(
     loadMilestoneMembers,
-    [ws, selectedMilestones, version],
+    [ws, selectedMilestones, milestoneHomes, version],
     onAuthError,
   );
 
@@ -327,7 +357,7 @@ export function App() {
         view.members.map((member) => member.identifier),
       ]),
     );
-    return (milestoneList.data ?? []).map((row) => ({
+    return (milestoneList.data ?? []).map(({ row }) => ({
       identifier: row.milestone.identifier,
       title: row.milestone.title,
       memberCount: row.memberCount,

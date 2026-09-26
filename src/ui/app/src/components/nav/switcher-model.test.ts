@@ -70,6 +70,9 @@ describe("search", () => {
     const prefixes = new Map([...FEW, ...MANY].map((w) => [w.slug, w.prefix]));
     expect(filterSwitcherRows(rows, "AI Inbox", prefixes).map((r) => r.value)).toEqual(["ai-inbox-supabase"]);
     expect(filterSwitcherRows(rows, "sta", prefixes).map((r) => r.value)).toEqual(["staple"]);
+    // A prefix that appears nowhere in the name: "MKT" finds marketing-site.
+    const withMarketing = switcherRows(hub("", [...FEW, ws("marketing-site", "MKT")]));
+    expect(filterSwitcherRows(withMarketing, "mkt", new Map([["marketing-site", "MKT"]])).map((r) => r.value)).toEqual(["marketing-site"]);
     expect(filterSwitcherRows(rows, "all", prefixes).map((r) => r.value)).toEqual([""]);
     expect(filterSwitcherRows(rows, "", prefixes)).toHaveLength(rows.length);
     expect(filterSwitcherRows(rows, "zzz", prefixes)).toEqual([]);
