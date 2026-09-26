@@ -86,6 +86,11 @@ export function plainDuration(seconds: number): PlainDuration {
   return { number: hours, unit, text: `${hours} ${unit}` };
 }
 
+/** "about 15 hours", but a phrase with no number stands alone: "a few minutes", never "about a few minutes". */
+export function aboutText(duration: PlainDuration): string {
+  return duration.unit === null ? duration.text : `about ${duration.text}`;
+}
+
 /**
  * "between 14 and 21 hours", "between 40 minutes and 2 hours", "up to about 1 hour" when the
  * lower end is under a minute, or, when both ends round to the same words, "about 15 hours". The two ends are the payload's own; nothing is widened or moved.
@@ -102,24 +107,28 @@ export function plainRange(lower: number, upper: number): string {
 
 /** A calendar countdown, as a clock would read it: "3h 56m", "4 days 1h", "25 minutes". */
 export function plainCountdown(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  if (s < 3600) {
-    const minutes = Math.max(1, Math.round(s / 60));
-    return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  // Round once, to the minute, and carry: 3599 s is "1 hour", never "60 minutes".
+  const total = Math.max(1, Math.round(Math.max(0, seconds) / 60));
+  if (total < 60) return total === 1 ? "1 minute" : `${total} minutes`;
+  const days = Math.floor(total / 1440);
+  const hours = Math.floor((total % 1440) / 60);
+  const minutes = total % 60;
+  if (days === 0) {
+    if (minutes === 0) return hours === 1 ? "1 hour" : `${hours} hours`;
+    return `${hours}h ${minutes}m`;
   }
-  const days = Math.floor(s / 86_400);
-  const hours = Math.floor((s % 86_400) / 3600);
-  const minutes = Math.floor((s % 3600) / 60);
-  if (days === 0) return minutes ? `${hours}h ${minutes}m` : `${hours}h`;
   const dayText = days === 1 ? "1 day" : `${days} days`;
   return hours ? `${dayText} ${hours}h` : dayText;
 }
 
 /** How old a reading is, short: "12 min", "3h", "2 days". */
 export function plainAge(seconds: number): string {
+  // Each unit carries into the next when it rounds up to it: 3598 s is "1h", 84 683 s is "1 day".
   const s = Math.max(0, seconds);
-  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min`;
-  if (s < 86_400) return `${Math.round(s / 3600)}h`;
+  const minutes = Math.max(1, Math.round(s / 60));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.round(s / 3600);
+  if (hours < 24) return `${hours}h`;
   const days = Math.round(s / 86_400);
   return days === 1 ? "1 day" : `${days} days`;
 }
@@ -189,8 +198,13 @@ export function plainRatio(ratio: number): PlainRatio {
 /** "Bug fixes (high priority) usually take about a fifth of the estimate", or the concrete clause below a fifth. */
 export function ratioClause(name: string, ratio: number): string {
   const plain = plainRatio(ratio);
-  if (plain.kind === "small") return `${name}: a 10-hour estimate usually takes about ${plain.words}`;
+  if (plain.kind === "small") return `${name}: a 10-hour estimate usually takes ${smallWords(plain.words)}`;
   return `${name} usually take ${plain.sentence}`;
+}
+
+/** The duration a small ratio says, with "about" only before a number. */
+function smallWords(words: string): string {
+  return /^\d/.test(words) ? `about ${words}` : words;
 }
 
 /** A card's headline figure: "About ¾ of the estimate", "About 50 minutes per 10 estimated hours", "About 1¼ times the estimate". */
@@ -198,7 +212,7 @@ export function ratioFigure(ratio: number): string {
   const plain = plainRatio(ratio);
   if (plain.kind === "same") return "About as estimated";
   if (plain.kind === "near") return upperFirst(plain.words);
-  if (plain.kind === "small") return `About ${plain.words} per 10 estimated hours`;
+  if (plain.kind === "small") return `${upperFirst(smallWords(plain.words))} per 10 estimated hours`;
   if (plain.kind === "times") return `About ${plain.words} the estimate`;
   const glyph = FRACTIONS.find((fraction) => fraction.words === plain.words)?.glyph ?? plain.words;
   return `About ${glyph} of the estimate`;
@@ -355,14 +369,15 @@ export function forecastHeadline(completion: CompletionForecast, mode: "full" | 
   if (labor.expectedSeconds === null) {
     return { sentence: `We can't tell yet how long ${mode === "full" ? "this" : "this task"} will take: ${plainReasons(labor.missing)}.`, figure: null };
   }
-  const figure = plainDuration(labor.expectedSeconds).text;
+  const duration = plainDuration(labor.expectedSeconds);
+  const figure = duration.text;
   if (labor.partial) {
     const unknown = completion.units.unknownRefs.length;
     const why = unknown > 0 ? `${count(unknown, "task")} can't be estimated yet` : "part of it can't be estimated yet";
     return { sentence: `At least ${figure} of work is left, probably more: ${why}.`, figure: `at least ${figure}` };
   }
-  if (mode === "compact") return { sentence: `About ${figure} of work is left on this task.`, figure };
-  return { sentence: `This should take about ${figure} of work.`, figure };
+  if (mode === "compact") return { sentence: `${upperFirst(aboutText(duration))} of work is left on this task.`, figure };
+  return { sentence: `This should take ${aboutText(duration)} of work.`, figure };
 }
 
 /** The critical path's sentence: how much of the work has to happen one step after another. */
@@ -370,9 +385,10 @@ export function pathHeadline(path: RemainingFigure): Headline {
   if (path.expectedSeconds === null) {
     return { sentence: `We can't tell how much of it has to happen in order: ${plainReasons(path.missing)}.`, figure: null };
   }
-  const figure = plainDuration(path.expectedSeconds).text;
+  const duration = plainDuration(path.expectedSeconds);
+  const figure = duration.text;
   if (path.partial) return { sentence: `At least ${figure} of it has to happen one step after another.`, figure: `at least ${figure}` };
-  return { sentence: `About ${figure} of it has to happen one step after another, however many people work on it.`, figure };
+  return { sentence: `${upperFirst(aboutText(duration))} of it has to happen one step after another, however many people work on it.`, figure };
 }
 
 /**
@@ -413,7 +429,7 @@ export function rangeWords(figure: RemainingFigure): RangeWords | null {
   const likely = `Most likely ${plainRange(spread.p10, spread.p90)}${more} (8 in 10 chances)`;
   const upper = plainDuration(spread.band.upper).text;
   const beyond = !figure.partial && upper !== plainDuration(spread.p90).text ? `rarely beyond ${upper}` : null;
-  const expected = `Expected: ${figure.partial ? "at least" : "about"} ${plainDuration(figure.expectedSeconds).text}`;
+  const expected = `Expected: ${figure.partial ? `at least ${plainDuration(figure.expectedSeconds).text}` : aboutText(plainDuration(figure.expectedSeconds))}`;
   const description = `${likely}${beyond ? `; ${beyond}` : ""}. ${expected}${figure.partial ? "; the real figure can only be higher" : ""}.`;
   return { likely, beyond, expected, description };
 }
@@ -683,11 +699,16 @@ export function cohortName(key: CalibrationCohort["key"]): string {
   return rest.length > 0 ? `${kind} (${rest.join(", ")})` : kind;
 }
 
-/** A class a cohort fell back to, named as the group it is: "All finished work", "All bug fixes". */
+/**
+ * A class a cohort fell back to, named as the group it is, with what it spans so it never reads
+ * like a kind of its own: "All finished work (every kind)", "All tasks (every priority)", "All
+ * tasks (high priority)" for a narrower class.
+ */
 export function className(key: CalibrationCohort["class"]): string {
-  if (key.kind === "*") return "All finished work";
+  if (key.kind === "*") return "All finished work (every kind)";
   const name = cohortName(key);
-  return `All ${name.charAt(0).toLowerCase()}${name.slice(1)}`;
+  const all = `All ${name.charAt(0).toLowerCase()}${name.slice(1)}`;
+  return key.priority === "*" && !name.includes("(") ? `${all} (every priority)` : all;
 }
 
 /**
@@ -791,14 +812,28 @@ export function groupSentence(group: AccuracyGroup): { answer: string; basis: st
 export function accuracyHeadline(cohorts: readonly CalibrationCohort[]): string {
   const groups = accuracyGroups(cohorts);
   if (groups.length === 0) return "We can't tell yet: there are no finished tasks with measured time to compare with their estimates.";
-  const shown = groups.slice(0, 3).map((group, index) => {
-    const name = group.kind === "own" ? cohortName(group.cohort.key) : group.name;
-    const ratio = group.kind === "own" ? group.cohort.ratio.expected.value : group.figure.ratio.expected.value;
-    const clause = ratioClause(index === 0 ? name : `${name.charAt(0).toLowerCase()}${name.slice(1)}`, ratio);
-    return group.kind === "class" && group.figure.class.kind === "*" ? clause.replace(/ usually take /, " usually takes ") : clause;
+  // Up to three cards, and cards that say the same thing are said once, together:
+  // "Tasks (high priority) and all finished work (every kind) usually take about a fifth of the estimate."
+  const shown = groups.slice(0, 3).map((group) => ({
+    name: group.kind === "own" ? cohortName(group.cohort.key) : group.name,
+    ratio: plainRatio(group.kind === "own" ? group.cohort.ratio.expected.value : group.figure.ratio.expected.value),
+    mass: group.kind === "class" && group.figure.class.kind === "*",
+  }));
+  const merged: Array<{ names: string[]; ratio: PlainRatio; mass: boolean }> = [];
+  for (const item of shown) {
+    const same = merged.find((entry) => entry.ratio.kind === item.ratio.kind && entry.ratio.words === item.ratio.words);
+    if (same) same.names.push(item.name);
+    else merged.push({ names: [item.name], ratio: item.ratio, mass: item.mass });
+  }
+  const list = (names: string[]): string => (names.length === 1 ? names[0]! : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`);
+  const clauses = merged.map((entry, index) => {
+    const names = entry.names.map((name, position) => (index === 0 && position === 0 ? name : `${name.charAt(0).toLowerCase()}${name.slice(1)}`));
+    if (entry.ratio.kind === "small") return `${list(names)}: a 10-hour estimate usually takes ${smallWords(entry.ratio.words)}`;
+    const verb = names.length === 1 && entry.mass ? "takes" : "take";
+    return `${list(names)} usually ${verb} ${entry.ratio.sentence}`;
   });
   const more = groups.length > 3 ? `; and ${count(groups.length - 3, "more group")} below` : "";
-  return `${shown.join("; ")}${more}.`;
+  return `${clauses.join("; ")}${more}.`;
 }
 
 /**
@@ -876,7 +911,7 @@ export function cohortRangeWords(cohort: Pick<CalibrationCohort, "ratio">): { pa
   const nextKnown = bounds.confidence >= NEXT_ONE_MIN_CONFIDENCE;
   const next = nextKnown ? `Next one, about ${inTen(bounds.confidence)}: ${plainRatioRange(bounds.lower, bounds.upper)}` : "Too little data to say where the next one lands";
   const typical = plainRatio(expected.value);
-  const typicalText = typical.kind === "small" ? `a 10-hour estimate usually takes about ${typical.words}` : typical.sentence;
+  const typicalText = typical.kind === "small" ? `a 10-hour estimate usually takes ${smallWords(typical.words)}` : typical.sentence;
   return { past, next, nextKnown, description: `${past}. ${next}. Typical: ${typicalText}. The dashed line is the estimate itself.` };
 }
 
@@ -921,21 +956,38 @@ function plainPressureReason(pressure: BudgetLimitReading["pressure"], field: st
   return PLAIN_PRESSURE_MISSING[code] ?? plainMissing(code);
 }
 
-/** A pace in everyday words: "about 12% an hour", "under 1% an hour". */
-export function plainPace(percentPerHour: number): string {
-  if (percentPerHour < 1) return percentPerHour <= 0 ? "none" : "under 1% an hour";
-  return `about ${Math.round(percentPerHour)}% an hour`;
+/**
+ * A pace in everyday words, one unit per limit so the Measured and Forecast frames compare: per
+ * hour for a short window, per DAY for a window of two days or more (a weekly limit's "about 8% a
+ * day" reads better than "0.35% an hour"). One decimal under 10, whole from 10 ("about 0.4% an
+ * hour", "about 12% an hour"); "less than 0.1%" under that. The unit change is a presentation of
+ * the payload's %/hour, not a new figure.
+ */
+export type PaceUnit = "hour" | "day";
+
+export function paceUnit(windowSeconds: number | null | undefined): PaceUnit {
+  return windowSeconds !== null && windowSeconds !== undefined && windowSeconds >= 2 * 86_400 ? "day" : "hour";
+}
+
+export function plainPace(percentPerHour: number, unit: PaceUnit = "hour"): string {
+  const value = unit === "day" ? percentPerHour * 24 : percentPerHour;
+  const per = unit === "day" ? "a day" : "an hour";
+  if (value < 0.05) return `less than 0.1% ${per}`;
+  const rounded = value < 10 ? Math.round(value * 10) / 10 : Math.round(value);
+  return `about ${rounded}% ${per}`;
 }
 
 /**
  * The Budget card's sentence after its figure ("78% left"): the reset (ticked by the page's own
- * clock, as the technical block does) and the verdict, from the pressure's own fields:
+ * clock, as the technical block does) and the verdict, from the pressure's own fields. It is the
+ * ONE place the reserve reach is said (the Forecast frame gives the safe pace, not the reach):
  *
  * - On track: "At your current pace you'll stay above the reserve."
  * - At risk, already at the reserve: "It's already at or below the 20% reserve."
  * - At risk, the reserve reached before the reset: "At your current pace you'll reach the 20%
  *   reserve in 1h 10m, before it resets."
- * - At risk otherwise: "Your current pace is faster than this limit can keep up until it resets."
+ * - At risk otherwise (a pace at or over the safe pace, the reserve reached at the reset): "At
+ *   your current pace you'll use up everything above the 20% reserve by the reset."
  * - Unknown: "We can't tell where your pace is heading: …" with the reason.
  */
 export function pressureSentence(limit: BudgetLimitReading, resetSeconds: number | null): string {
@@ -946,34 +998,44 @@ export function pressureSentence(limit: BudgetLimitReading, resetSeconds: number
   if (reason === "within") return `${reset}At your current pace you'll stay above the reserve.`;
   if (reason === "unsafe") {
     const reach = pressure.reserveReach;
-    if (reach?.atPace === "already") return `${reset}It's already at or below ${reserve}.`;
+    if (reach?.atPace === "already" || pressure.missing.ratio === "reserve_reached") return `${reset}It's already at or below ${reserve}.`;
     if (reach?.atPace === "before_reset" && reach.seconds !== null) {
       return `${reset}At your current pace you'll reach ${reserve} in ${plainCountdown(reach.seconds)}, before it resets.`;
     }
-    return `${reset}Your current pace is faster than this limit can keep up until it resets.`;
+    return `${reset}At your current pace you'll use up everything above ${reserve} by the reset.`;
   }
   return `${reset}We can't tell where your pace is heading: ${plainPressureReason(pressure, "state")}.`;
 }
 
-/** The measured line: "Using about 12% an hour lately" and how old the last reading is. */
+/**
+ * The measured line: the observed pace, in the limit's pace unit, and how old the last reading
+ * is. An idle limit says "No use lately"; a stale reading says "as of 3h ago" instead of "lately".
+ */
 export function measuredLine(limit: BudgetLimitReading, ageSeconds: number | null): string {
-  const pace = limit.pressure.observed ? `Using ${plainPace(limit.pressure.observed.percentPerHour)} lately` : `No pace measured yet: ${plainPressureReason(limit.pressure, "observed")}`;
-  const age = ageSeconds !== null ? `; last read ${plainAge(ageSeconds)} ago` : "";
-  return `${pace}${age}.`;
+  const observed = limit.pressure.observed;
+  const stale = limit.stale === true && ageSeconds !== null;
+  const when = stale ? ` as of ${plainAge(ageSeconds!)} ago` : " lately";
+  const age = !stale && ageSeconds !== null ? `; last read ${plainAge(ageSeconds)} ago` : "";
+  if (!observed) return `No pace measured yet: ${plainPressureReason(limit.pressure, "observed")}${stale ? `; last read ${plainAge(ageSeconds!)} ago` : age}.`;
+  if (observed.percentPerHour <= 0) return `No use${when}${age}.`;
+  return `Using ${plainPace(observed.percentPerHour, paceUnit(limit.window?.windowSeconds))}${when}${age}.`;
 }
 
-/** The forecast line (provisional): the sustainable pace in words, and when the pace reaches the reserve. */
+/**
+ * The forecast line (provisional): the safe pace, in the same unit as the measured line. Already at
+ * or below the reserve: "Already at or below the 20% reserve; any more use eats into it." A safe
+ * pace greater than everything left (a reset minutes away): "Almost any pace is safe until the
+ * reset." The reach itself is the headline's to say, once.
+ */
 export function forecastLine(limit: BudgetLimitReading): string {
   const { pressure } = limit;
   const reserve = `the ${Math.round(pressure.reservePercent * 10) / 10}% reserve`;
+  if (pressure.reserveReach?.atPace === "already" || pressure.missing.ratio === "reserve_reached") return `Already at or below ${reserve}; any more use eats into it.`;
   if (pressure.sustainablePercentPerHour === null) return `We can't work out a safe pace yet: ${plainPressureReason(pressure, "sustainablePercentPerHour")}.`;
-  const keep = `To keep ${reserve} until it resets, stay under ${plainPace(pressure.sustainablePercentPerHour)}.`;
-  const reach = pressure.reserveReach;
-  if (!reach) return keep;
-  if (reach.atPace === "before_reset" && reach.seconds !== null) return `${keep} At the current pace you'd reach the reserve in ${plainCountdown(reach.seconds)}, before it resets.`;
-  if (reach.atPace === "after_reset") return `${keep} At the current pace you'd only reach it after the reset.`;
-  if (reach.atPace === "never") return `${keep} At the current pace you won't reach it.`;
-  return keep;
+  if (limit.remainingPercent !== null && pressure.sustainablePercentPerHour > limit.remainingPercent) return "Almost any pace is safe until the reset.";
+  const pace = plainPace(pressure.sustainablePercentPerHour, paceUnit(limit.window?.windowSeconds));
+  if (pace.startsWith("less than")) return `To keep ${reserve} until it resets, use next to nothing (${pace}).`;
+  return `To keep ${reserve} until it resets, use no more than ${pace}.`;
 }
 
 /** The gauge's text alternative for a reading: what is left now and the reserve. */

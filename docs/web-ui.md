@@ -824,8 +824,10 @@ hour*); under 10 hours, the nearest half hour (`8½ hours`); under 100 hours, th
 never written in days. A range shares its unit (`between 14 and 21 hours`),
 reads *up to about 1 hour* when it starts under a minute, and collapses to `about
 15 hours` when both ends round alike. A reset countdown reads
-like a clock (`3h 56m`, `4 days 1h`); a stale reading's age is short (`12 min
-ago`). An estimate ratio (work / estimate) reads *about as long as estimated*
+like a clock (`3h 56m`, `3 hours`, `4 days 1h`), rounded once to the minute and
+carried (3 599 s is *1 hour*, never *60 minutes*); a stale reading's age is short
+(`12 min ago`, 3 598 s is *1h*, 23½ hours is *1 day*). *About* goes only before a
+number: *a few minutes*, never *about a few minutes*. An estimate ratio (work / estimate) reads *about as long as estimated*
 from 0.9 to 1.1; *a little less than estimated* from 0.85, *a little longer than
 estimated* up to 1.125 (a 10% overrun is never hidden as "1 times"); from a fifth
 up to 0.85, the nearest of *half*, *a third*, *a quarter*, *a fifth*, *two
@@ -978,9 +980,9 @@ one. The page asks for the workspace it names, so the label and the data cannot
 diverge.
 
 **The answer first.** A card opens the page with one sentence, the first three
-cards of the measured history in display order: *Tasks (high priority) usually
-take about a fifth of the estimate; all finished work usually takes about a fifth
-of the estimate.* (and how many more groups follow). It reads only the measured
+cards of the measured history in display order, cards that say the same thing
+said once, together: *Tasks (high priority) and all finished work (every kind)
+usually take about a fifth of the estimate.* (and how many more groups follow). It reads only the measured
 history, so it is the same with the older-history switch on or off. It holds the switch, **Include older history (rebuilt from logs, less
 precise)**; its *Show details* keeps the population line and the snapshot id with
 its member count and instant.
@@ -995,14 +997,14 @@ own fields: no samples or no bounds is *Unknown*; bounds under the 90% target or
 `small_sample` is *Rough guess*; a quantile under the target is *Fairly sure*;
 otherwise *Quite sure*. **Cohorts that fell back** to a broader class never get a
 card of their own, because the figure is the class's, not theirs: the cohorts
-that share a class are ONE card named for it (*All finished work*, *All bug
-fixes*), with the class's figure and count (*Based on 9 finished tasks.*) and
+that share a class are ONE card named for it and for what it spans (*All finished
+work (every kind)*, *All bug fixes (every priority)*), with the class's figure and count (*Based on 9 finished tasks.*) and
 *Also used for: Bug fixes (high priority): too few of their own (1)*, the own
 count being the fallback path's first level. Its pill is always *Rough guess*
 (the kinds it stands in for have too few of their own), never *Quite sure*, and
 it says so for them: *Rough guess for spikes (critical priority): only 3 of their
-own, so all finished work stands in.* The verb agrees with the class: *All
-finished work usually takes*, *All bug fixes usually take*. The
+own, so all finished work (every kind) stands in.* The verb agrees with the class: *All
+finished work (every kind) usually takes*, *All bug fixes (every priority) usually take*. The
 bar shows where 8 in 10 past tasks landed (the ratio's p10–p90) inside where the
 next one will likely land (the prediction bounds, at the confidence they reach,
 in tens; under 50% it says *Too little data to say where the next one lands* and
@@ -1074,9 +1076,18 @@ reading is a plain card (the same components as the forecast's, see
 the figure (*78% left*, with its age when stale, *· 12 min ago*), a sentence
 with the reset and the verdict (*Resets in 3h 56m. At your current pace you'll
 stay above the reserve.*), a solid **Measured** frame (the gauge with the reserve
-line; *Using about 4% an hour lately; last read 1 min ago.*) and a dashed
-**Forecast** frame labelled *an early rule of thumb until a budget policy is
-set* (*To keep the 20% reserve until it resets, stay under about 15% an hour.*).
+line; *Using about 4.2% an hour lately; last read 1 min ago.*, *No use lately.*
+for an idle limit, *… as of 3h ago* for a stale one) and a dashed **Forecast**
+frame labelled *an early rule of thumb until a budget policy is set* (*To keep
+the 20% reserve until it resets, use no more than about 15% an hour.*; *Already
+at or below the 20% reserve; any more use eats into it.*; *Almost any pace is
+safe until the reset.* when the safe pace exceeds everything left). Both frames
+say a pace in the same unit, so they compare: one decimal under 10%, per hour for
+a short window and per day for a window of two days or more (*about 8.4% a
+day*). When the pace reaches the reserve is said once, in the sentence, never
+again in the Forecast frame; at a pressure of exactly ×1.00 the sentence says
+*you'll use up everything above the 20% reserve by the reset*, which the frame's
+safe pace agrees with.
 The status is `pressureStatus`, the store's own provisional state and no
 threshold of the page's: *unsafe* is **At risk** (with the hatched edge; the
 sentence says when the pace reaches the reserve, or that it already has),

@@ -48,6 +48,8 @@ import {
   measuredLine,
   forecastLine,
   plainPace,
+  paceUnit,
+  aboutText,
   budgetAbsentPlain,
   boundText,
   readingGaugeDescription,
@@ -203,6 +205,19 @@ describe("durations, rounded as a person says them", () => {
     expect(plainDuration(139 * H).text).not.toMatch(/day/);
   });
 
+  it("puts 'about' only before a number", () => {
+    expect(aboutText(plainDuration(15 * H))).toBe("about 15 hours");
+    expect(aboutText(plainDuration(120))).toBe("a few minutes");
+    expect(aboutText(plainDuration(20))).toBe("less than a minute");
+    expect(forecastHeadline(completion({ labor: figure({ expectedSeconds: 120, simulated: null }) }), "full").sentence).toBe("This should take a few minutes of work.");
+    expect(pathHeadline(figure({ expectedSeconds: 30 })).sentence).toBe("Less than a minute of it has to happen one step after another, however many people work on it.");
+    expect(plainRatio(0.004).words).toBe("a few minutes");
+    expect(ratioFigure(0.004)).toBe("A few minutes per 10 estimated hours");
+    expect(groupSentence(accuracyGroups([cohort({}, { expected: { value: 0.004, method: "pooled" } })])[0]!).answer).toBe(
+      "Bug fixes (high priority): a 10-hour estimate usually takes a few minutes.",
+    );
+  });
+
   it("shares the unit across a range, collapses equal ends, and names mixed units in full", () => {
     expect(plainRange(14 * H, 21 * H)).toBe("between 14 and 21 hours");
     expect(plainRange(40 * 60, 2 * H)).toBe("between 40 minutes and 2 hours");
@@ -218,7 +233,12 @@ describe("durations, rounded as a person says them", () => {
 
   it("writes a reset countdown the way a clock does, and a reading's age short", () => {
     expect(plainCountdown(3 * H + 56 * 60)).toBe("3h 56m");
-    expect(plainCountdown(3 * H)).toBe("3h");
+    expect(plainCountdown(3 * H)).toBe("3 hours");
+    expect(plainCountdown(H)).toBe("1 hour");
+    // Rounded once and carried: never "60 minutes" or "0h 60m".
+    expect(plainCountdown(3599)).toBe("1 hour");
+    expect(plainCountdown(3 * H + 59 * 60 + 50)).toBe("4 hours");
+    expect(plainCountdown(84_683)).toBe("23h 31m");
     expect(plainCountdown(25 * 60)).toBe("25 minutes");
     expect(plainCountdown(30)).toBe("1 minute");
     expect(plainCountdown(4 * 86_400 + H)).toBe("4 days 1h");
@@ -226,6 +246,8 @@ describe("durations, rounded as a person says them", () => {
     expect(plainAge(12 * 60)).toBe("12 min");
     expect(plainAge(10)).toBe("1 min");
     expect(plainAge(3 * H)).toBe("3h");
+    expect(plainAge(3598)).toBe("1h");
+    expect(plainAge(84_683)).toBe("1 day");
     expect(plainAge(2 * 86_400)).toBe("2 days");
   });
 });
@@ -602,16 +624,16 @@ describe("estimate accuracy in words", () => {
     const groups = accuracyGroups([bug, task, spike]);
     expect(groups.map((group) => group.kind)).toEqual(["own", "class"]);
     const klass = groups[1]!;
-    expect(klass.kind === "class" && klass.name).toBe("All finished work");
+    expect(klass.kind === "class" && klass.name).toBe("All finished work (every kind)");
     expect(klass.kind === "class" && klass.members).toEqual([bug, spike]);
     const words = groupSentence(klass);
-    expect(words.answer).toBe("All finished work usually takes about a fifth of the estimate.");
+    expect(words.answer).toBe("All finished work (every kind) usually takes about a fifth of the estimate.");
     expect(words.basis).toBe("Based on 9 finished tasks.");
     expect(words.alsoFor).toEqual(["Bug fixes (high priority): too few of their own (1)", "Spikes (critical priority): too few of their own (3)"]);
     // Never "Quite sure", however many the broader class holds; said for the kinds it stands in for.
-    expect(words.confidence).toBe("Rough guess for bug fixes (high priority), spikes (critical priority): too few of their own (below), so all finished work stands in.");
+    expect(words.confidence).toBe("Rough guess for bug fixes (high priority), spikes (critical priority): too few of their own (below), so all finished work (every kind) stands in.");
     expect(groupSentence(accuracyGroups([fellBack("spike", "critical", 3, "all", ALL, 108)])[0]!).confidence).toBe(
-      "Rough guess for spikes (critical priority): only 3 of their own, so all finished work stands in.",
+      "Rough guess for spikes (critical priority): only 3 of their own, so all finished work (every kind) stands in.",
     );
     expect(FALLBACK_CONFIDENCE.level).toBe("low");
   });
@@ -628,8 +650,8 @@ describe("estimate accuracy in words", () => {
     const kindClass = { ...ALL, kind: "chore" };
     const groups = accuracyGroups([fellBack("chore", "critical", 1, "kind", kindClass, 6), fellBack("chore", "high", 1, "kind", kindClass, 6), fellBack("bug", "high", 1)]);
     expect(groups.map((group) => (group.kind === "class" ? [group.name, group.members.length] : null))).toEqual([
-      ["All chores", 2],
-      ["All finished work", 1],
+      ["All chores (every priority)", 2],
+      ["All finished work (every kind)", 1],
     ]);
     expect(className({ kind: "task", priority: "high", workType: "*", area: "*", model: "*" })).toBe("All tasks (high priority)");
   });
@@ -638,12 +660,12 @@ describe("estimate accuracy in words", () => {
     const bugClass = { ...ALL, kind: "bug" };
     const half = (member: CalibrationCohort): CalibrationCohort => ({ ...member, ratio: { ...member.ratio, expected: { value: 0.5, method: "pooled" } } });
     const kindGroup = accuracyGroups([half(fellBack("bug", "medium", 2, "kind", bugClass, 15))])[0]!;
-    expect(groupSentence(kindGroup).answer).toBe("All bug fixes usually take about half of the estimate.");
-    expect(groupSentence(kindGroup).confidence).toBe("Rough guess for bug fixes (medium priority): only 2 of their own, so all bug fixes stand in.");
-    expect(accuracyHeadline([half(fellBack("bug", "medium", 2, "kind", bugClass, 15))])).toBe("All bug fixes usually take about half of the estimate.");
+    expect(groupSentence(kindGroup).answer).toBe("All bug fixes (every priority) usually take about half of the estimate.");
+    expect(groupSentence(kindGroup).confidence).toBe("Rough guess for bug fixes (medium priority): only 2 of their own, so all bug fixes (every priority) stand in.");
+    expect(accuracyHeadline([half(fellBack("bug", "medium", 2, "kind", bugClass, 15))])).toBe("All bug fixes (every priority) usually take about half of the estimate.");
     const allGroup = accuracyGroups([half(fellBack("bug", "high", 1))])[0]!;
-    expect(groupSentence(allGroup).answer).toBe("All finished work usually takes about half of the estimate.");
-    expect(accuracyHeadline([half(fellBack("bug", "high", 1))])).toBe("All finished work usually takes about half of the estimate.");
+    expect(groupSentence(allGroup).answer).toBe("All finished work (every kind) usually takes about half of the estimate.");
+    expect(accuracyHeadline([half(fellBack("bug", "high", 1))])).toBe("All finished work (every kind) usually takes about half of the estimate.");
   });
 
   it("grades an own cohort's confidence from its own fields", () => {
@@ -665,8 +687,14 @@ describe("estimate accuracy in words", () => {
 
   it("opens the page with up to three cards in display order, a fallback named for its class", () => {
     const task = cohort({ key: { kind: "task", priority: "high", workType: "unknown", area: "unknown", model: "unknown" } }, { expected: { value: 0.2, method: "pooled" } });
-    expect(accuracyHeadline([fellBack("bug", "high", 1), task])).toBe(
-      "Tasks (high priority) usually take about a fifth of the estimate; all finished work usually takes about a fifth of the estimate.",
+    // Cards that say the same thing are said once, together.
+    expect(accuracyHeadline([fellBack("bug", "high", 1), task])).toBe("Tasks (high priority) and all finished work (every kind) usually take about a fifth of the estimate.");
+    const third = cohort({ key: { kind: "chore", priority: "low", workType: "unknown", area: "unknown", model: "unknown" } }, { expected: { value: 0.5, method: "pooled" } });
+    expect(accuracyHeadline([task, third, fellBack("bug", "high", 1)])).toBe(
+      "Tasks (high priority) and all finished work (every kind) usually take about a fifth of the estimate; chores (low priority) usually take about half of the estimate.",
+    );
+    expect(accuracyHeadline([task, cohort({ key: { kind: "chore", priority: "low", workType: "unknown", area: "unknown", model: "unknown" } })])).toBe(
+      "Tasks (high priority) usually take about a fifth of the estimate; chores (low priority): a 10-hour estimate usually takes about 50 minutes.",
     );
     expect(accuracyHeadline([fellBack("bug", "high", 1)])).not.toContain("Bug fixes");
     const other = (kind: string) => cohort({ key: { kind, priority: "high", workType: "unknown", area: "unknown", model: "unknown" } }, { expected: { value: 1, method: "pooled" } });
@@ -782,32 +810,81 @@ describe("the Budget view's status: the store's provisional state, said honestly
     expect(pressureSentence(reading(), 3 * H + 56 * 60)).toBe("Resets in 3h 56m. At your current pace you'll stay above the reserve.");
     expect(pressureSentence(reading({}, { state: "unsafe", ratio: null, reserveReach: { atPace: "already", seconds: null, at: null } }), null)).toBe("It's already at or below the 20% reserve.");
     expect(pressureSentence(reading({}, { state: "unsafe", ratio: 1.4, reserveReach: { atPace: "before_reset", seconds: 70 * 60, at: null } }), H)).toBe(
-      "Resets in 1h. At your current pace you'll reach the 20% reserve in 1h 10m, before it resets.",
+      "Resets in 1 hour. At your current pace you'll reach the 20% reserve in 1h 10m, before it resets.",
     );
-    expect(pressureSentence(reading({}, { state: "unsafe", ratio: 1.4, reserveReach: null }), null)).toBe("Your current pace is faster than this limit can keep up until it resets.");
+    expect(pressureSentence(reading({}, { state: "unsafe", ratio: 1.4, reserveReach: null }), null)).toBe("At your current pace you'll use up everything above the 20% reserve by the reset.");
+    // At a ratio of exactly 1 the reserve is reached at the reset: the headline says so, and the
+    // Forecast frame's safe pace is the pace being used, so the two agree.
+    const atOne = reading({}, { state: "unsafe", ratio: 1, sustainablePercentPerHour: 4.2, reserveReach: { atPace: "after_reset", seconds: 4 * H, at: null } });
+    expect(pressureSentence(atOne, null)).toBe("At your current pace you'll use up everything above the 20% reserve by the reset.");
+    expect(forecastLine(atOne)).toBe("To keep the 20% reserve until it resets, use no more than about 4.2% an hour.");
+    expect(measuredLine(atOne, 60)).toBe("Using about 4.2% an hour lately; last read 1 min ago.");
     expect(pressureSentence(reading({}, { state: null, missing: { state: "stale" } }), null)).toBe("We can't tell where your pace is heading: the last reading is more than 10 minutes old.");
     expect(pressureSentence(reading({}, { state: null, missing: { state: "input_missing" }, missingInputs: { state: ["second_reading"] } }), null)).toBe(
       "We can't tell where your pace is heading: there is only one reading so far.",
     );
   });
 
-  it("keeps the measured line to what was measured, and the forecast line to the rule of thumb", () => {
-    expect(measuredLine(reading(), 60)).toBe("Using about 4% an hour lately; last read 1 min ago.");
+  it("keeps the measured line to what was measured, and the forecast line to the safe pace", () => {
+    expect(measuredLine(reading(), 60)).toBe("Using about 4.2% an hour lately; last read 1 min ago.");
     expect(measuredLine(reading({}, { observed: null, missing: { observed: "input_missing" }, missingInputs: { observed: ["second_reading"] } }), null)).toBe(
       "No pace measured yet: there is only one reading so far.",
     );
-    expect(forecastLine(reading())).toBe("To keep the 20% reserve until it resets, stay under about 15% an hour. At the current pace you'd only reach it after the reset.");
-    expect(forecastLine(reading({}, { reserveReach: { atPace: "before_reset", seconds: 2 * H, at: null } }))).toContain("you'd reach the reserve in 2h, before it resets.");
-    expect(forecastLine(reading({}, { reserveReach: { atPace: "never", seconds: null, at: null } }))).toContain("you won't reach it.");
+    // An idle limit: no use, never "Using none".
+    const idle = reading({}, { observed: { percentPerHour: 0, fromPercent: 10, toPercent: 10, from: "a", to: "b", spanSeconds: 3600, readings: 4 } });
+    expect(measuredLine(idle, 60)).toBe("No use lately; last read 1 min ago.");
+    // A stale reading: "as of", never "lately".
+    expect(measuredLine(reading({ stale: true }), 3 * H)).toBe("Using about 4.2% an hour as of 3h ago.");
+    expect(measuredLine({ ...idle, stale: true }, 3 * H)).toBe("No use as of 3h ago.");
+    expect(forecastLine(reading())).toBe("To keep the 20% reserve until it resets, use no more than about 15% an hour.");
+    // The reach is the headline's to say, once.
+    expect(forecastLine(reading({}, { reserveReach: { atPace: "before_reset", seconds: 2 * H, at: null } }))).not.toMatch(/reach/);
     expect(forecastLine(reading({}, { sustainablePercentPerHour: null, missing: { sustainablePercentPerHour: "stale" } }))).toBe(
       "We can't work out a safe pace yet: the last reading is more than 10 minutes old.",
     );
   });
 
+  it("never says 'stay under under 1%': a small safe pace has one decimal", () => {
+    // The ordinary weekly case: 78% left, a 20% reserve, a week to go.
+    const weekly = reading({ window: { id: "w", label: null, resetsAt: null, windowSeconds: 604_800, status: "current" } }, { sustainablePercentPerHour: 0.35 });
+    expect(forecastLine(weekly)).toBe("To keep the 20% reserve until it resets, use no more than about 8.4% a day.");
+    expect(forecastLine(reading({}, { sustainablePercentPerHour: 0.35 }))).toBe("To keep the 20% reserve until it resets, use no more than about 0.4% an hour.");
+    expect(forecastLine(reading({}, { sustainablePercentPerHour: 0.01 }))).toBe("To keep the 20% reserve until it resets, use next to nothing (less than 0.1% an hour).");
+    for (const pace of [0.01, 0.35, 0.99, 1.49]) expect(forecastLine(reading({}, { sustainablePercentPerHour: pace }))).not.toMatch(/under under|stay under none|no more than less than/);
+  });
+
+  it("keeps an at-risk pace distinguishable from its safe pace, in the same unit", () => {
+    // 0.4 against 0.118, 1.49 against 1.0: both read "under 1%" or "about 1%" with whole numbers.
+    const a = reading({}, { state: "unsafe", observed: { percentPerHour: 0.4, fromPercent: 1, toPercent: 2, from: "a", to: "b", spanSeconds: 3600, readings: 5 }, sustainablePercentPerHour: 0.118 });
+    expect(measuredLine(a, 60)).toContain("about 0.4% an hour");
+    expect(forecastLine(a)).toContain("about 0.1% an hour");
+    const b = reading({}, { state: "unsafe", observed: { percentPerHour: 1.49, fromPercent: 1, toPercent: 2, from: "a", to: "b", spanSeconds: 3600, readings: 5 }, sustainablePercentPerHour: 1.0 });
+    expect(measuredLine(b, 60)).toContain("about 1.5% an hour");
+    expect(forecastLine(b)).toContain("about 1% an hour");
+    // A weekly limit says both frames per day.
+    const weekly = { id: "w", label: null, resetsAt: null, windowSeconds: 604_800, status: "current" as const };
+    expect(measuredLine(reading({ window: weekly }), 60)).toBe("Using about 101% a day lately; last read 1 min ago.");
+    expect(forecastLine(reading({ window: weekly }))).toBe("To keep the 20% reserve until it resets, use no more than about 370% a day.");
+  });
+
+  it("says 'already at the reserve', and 'almost any pace' when the reset is too close to matter", () => {
+    expect(forecastLine(reading({}, { state: "unsafe", ratio: null, sustainablePercentPerHour: null, reserveReach: { atPace: "already", seconds: null, at: null }, missing: { ratio: "reserve_reached" } }))).toBe(
+      "Already at or below the 20% reserve; any more use eats into it.",
+    );
+    expect(forecastLine(reading({}, { sustainablePercentPerHour: 0, reserveReach: { atPace: "already", seconds: null, at: null } }))).not.toMatch(/none|under/);
+    expect(forecastLine(reading({}, { sustainablePercentPerHour: 250 }))).toBe("Almost any pace is safe until the reset.");
+    expect(forecastLine(reading({}, { sustainablePercentPerHour: 77 }))).toBe("To keep the 20% reserve until it resets, use no more than about 77% an hour.");
+  });
+
   it("says paces, the gauge, the binding and an empty account in plain words", () => {
     expect(plainPace(12.4)).toBe("about 12% an hour");
-    expect(plainPace(0.4)).toBe("under 1% an hour");
-    expect(plainPace(0)).toBe("none");
+    expect(plainPace(9.94)).toBe("about 9.9% an hour");
+    expect(plainPace(0.4)).toBe("about 0.4% an hour");
+    expect(plainPace(0.04)).toBe("less than 0.1% an hour");
+    expect(plainPace(0.35, "day")).toBe("about 8.4% a day");
+    expect(paceUnit(604_800)).toBe("day");
+    expect(paceUnit(18_000)).toBe("hour");
+    expect(paceUnit(null)).toBe("hour");
     expect(readingGaugeDescription(78, 12.5)).toBe("78% left now. Safety reserve: 12.5%.");
     expect(boundText(true)).toBe("measured on this computer");
     expect(boundText(false)).toBe("not set up on this computer");

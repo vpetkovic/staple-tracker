@@ -46,7 +46,7 @@ export function BudgetGauge({ remaining, after, reserve, lowerBound, description
           ) : null}
         </div>
         {reserve !== null ? (
-          <div data-mark="reserve" className="absolute top-0 h-7 w-0 border-l-2 border-dashed border-[var(--viz-marker)]" style={{ left: `${barPercent(reserve, 100)}%` }} />
+          <div data-mark="reserve" className="absolute top-0 h-7 w-0 border-l-2 border-dashed border-[var(--viz-marker)] shadow-[0_0_0_2px_var(--card)]" style={{ left: `${barPercent(reserve, 100)}%` }} />
         ) : null}
       </div>
       <ul aria-hidden className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">

@@ -52,7 +52,7 @@ export function RangeBar({ max, wide, likely, marker, reference, description, le
         ) : null}
         <div data-mark="likely" className="absolute top-1.5 h-3 rounded-full bg-[var(--viz-likely)]" style={{ left: at(likely.lower), width: span(likely.lower, likely.upper) }} />
         {reference !== undefined ? (
-          <div data-mark="reference" className="absolute top-0 h-6 w-0 border-l-2 border-dashed border-[var(--viz-marker)]" style={{ left: at(reference) }} />
+          <div data-mark="reference" className="absolute top-0 h-6 w-0 border-l-2 border-dashed border-[var(--viz-marker)] shadow-[0_0_0_2px_var(--card)]" style={{ left: at(reference) }} />
         ) : null}
         {marker !== null ? (
           <div

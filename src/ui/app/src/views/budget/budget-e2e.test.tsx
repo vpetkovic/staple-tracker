@@ -252,10 +252,11 @@ describe("the plain-language layer of the Budget view", () => {
     // "Provisional", in plain words, on the forecast frame and in the page's opening sentence.
     expect(text(forecast)).toContain("Forecast · an early rule of thumb until a budget policy is set");
     expect(text(section(render(view), 'data-testid="budget-intro"'))).toContain("The pace check is an early rule of thumb until a budget policy is set.");
-    expect(text(forecast)).toMatch(/To keep the 20% reserve until it resets, stay under about \d+% an hour\./);
+    expect(text(forecast)).toMatch(/To keep the 20% reserve until it resets, use no more than about \d+(\.\d)?% (an hour|a day)\./);
+    expect(text(forecast)).not.toMatch(/under under|reach the reserve/);
     // No figure crosses: the measured pace is not in the forecast frame, the sustainable one not in the measured.
     expect(text(forecast)).not.toContain("lately");
-    expect(text(measured)).not.toContain("stay under");
+    expect(text(measured)).not.toContain("no more than");
   });
 
   it("keeps every technical figure of the panel, unchanged, behind a closed Show details", () => {

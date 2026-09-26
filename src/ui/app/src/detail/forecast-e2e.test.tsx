@@ -577,6 +577,8 @@ describe("the plain-language layer, over the same payloads", () => {
     expect(imgLabel(gauge)).toBe(gaugeDescription(limit));
     expect(imgLabel(gauge)).toContain(`This work would use at least ${Math.round(limit.work!.consumedPercent.expected)}%, leaving at most ${Math.round(limit.work!.remainingAtResetPercent.expected)}% when it resets.`);
     for (const mark of ["left-after", "this-work", "reserve"]) expect(gauge).toContain(`data-mark="${mark}"`);
+    // The dashed reserve line wears a card-coloured ring, so it reads over the blue fill in both modes.
+    expect(gauge).toMatch(/data-mark="reserve" class="[^"]*shadow-\[0_0_0_2px_var\(--card\)\]/);
   });
 
   it("names each account for people, with the operator's label beside it and the raw reference behind details", () => {
@@ -716,7 +718,7 @@ describe("estimate accuracy, in everyday words", () => {
     const groups = accuracyGroups(cohorts);
     expect(groups.map((group) => group.kind)).toEqual(["own", "class"]);
     const klass = section(html, 'data-group="class"');
-    expect(text(klass)).toMatch(/^All finished work/);
+    expect(text(klass)).toMatch(/^All finished work \(every kind\)/);
     expect(text(section(klass, 'data-testid="cohort-sentence"'))).toBe(Object.values(groupSentence(groups[1]!)).slice(0, 3).join(" "));
     expect(text(section(klass, 'data-testid="cohort-sentence"'))).toContain(`Based on ${bug.samples} finished tasks.`);
     expect(text(section(klass, 'data-testid="cohort-also-for"'))).toBe(`Also used for: Bug fixes (high priority): too few of their own (${bug.path[0]!.samples})`);
@@ -731,7 +733,9 @@ describe("estimate accuracy, in everyday words", () => {
     const html = renderCalibration(exact, false);
     const cohorts = exact.items as CalibrationCohort[];
     expect(text(section(html, 'data-testid="accuracy-headline"'))).toBe(accuracyHeadline(cohorts));
-    expect(text(section(html, 'data-testid="accuracy-headline"'))).toContain("all finished work usually takes");
+    // Identical clauses are said once, together, and the class says what it spans.
+    expect(text(section(html, 'data-testid="accuracy-headline"'))).toMatch(/^Tasks \(high priority\) and all finished work \(every kind\) usually take /);
+    expect(text(section(html, 'data-testid="accuracy-headline"')).match(/of the estimate/g)!.length).toBe(1);
     const own = accuracyGroups(cohorts).find((group) => group.kind === "own")!;
     const words = groupSentence(own);
     expect(text(section(html, 'data-group="own"'))).toContain(`${words.answer} ${words.basis} ${words.confidence}`);
@@ -739,6 +743,7 @@ describe("estimate accuracy, in everyday words", () => {
       expect(insideClosedDetails(html, attribute), attribute).toBe(true);
     }
     expect(html).toContain('data-mark="reference"');
+    expect(html).toMatch(/data-mark="reference" class="[^"]*shadow-\[0_0_0_2px_var\(--card\)\]/);
     expect(imgLabel(section(html, 'data-testid="cohort-range"'))).toMatch(/^8 in 10 past tasks: .*The dashed line is the estimate itself\.$/);
   });
 
