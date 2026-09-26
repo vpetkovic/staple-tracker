@@ -23,7 +23,7 @@ import {
   cliEnvelope,
   mcpEnvelope,
   normalize,
-  runCli,
+  runCliAsync,
   startMcpClient,
   toolPayload,
   type CliResult,
@@ -42,12 +42,12 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]): CliResult {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]): Promise<CliResult> {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
-function cliJson(...args: string[]): unknown {
-  const result = cli(...args, "--json");
+async function cliJson(...args: string[]): Promise<unknown> {
+  const result = await cli(...args, "--json");
   expect(result.stderr, result.stderr).toBe("");
   expect(result.status).toBe(0);
   return JSON.parse(result.stdout);
@@ -80,17 +80,17 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
-  expect(cli("init", "--global", BARE).status).toBe(0);
-  expect(cli("kinds", "add", "milestone", "--label", "Milestone", "--ws", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("init", "--global", BARE)).status).toBe(0);
+  expect((await cli("kinds", "add", "milestone", "--label", "Milestone", "--ws", WS)).status).toBe(0);
   // CON-1 programme > CON-2 epic > CON-3 task; CON-4 a standalone task.
-  expect(cli("new", "R programme", "--kind", "epic", "--ws", WS).status).toBe(0);
-  expect(cli("new", "S: opt-in cloud continuity", "--kind", "epic", "--parent", "CON-1", "--ws", WS).status).toBe(0);
-  expect(cli("new", "S2", "--parent", "CON-2", "--ws", WS).status).toBe(0);
-  expect(cli("new", "Flake", "--ws", WS).status).toBe(0);
+  expect((await cli("new", "R programme", "--kind", "epic", "--ws", WS)).status).toBe(0);
+  expect((await cli("new", "S: opt-in cloud continuity", "--kind", "epic", "--parent", "CON-1", "--ws", WS)).status).toBe(0);
+  expect((await cli("new", "S2", "--parent", "CON-2", "--ws", WS)).status).toBe(0);
+  expect((await cli("new", "Flake", "--ws", WS)).status).toBe(0);
   // CON-5 is the milestone the shape tests read; it has one member (CON-4).
-  expect(cli("milestone", "new", "October cut", "--target", "2026-10-31", "--ws", WS).status).toBe(0);
-  expect(cli("milestone", "add", "CON-5", "CON-4", "--ws", WS).status).toBe(0);
+  expect((await cli("milestone", "new", "October cut", "--target", "2026-10-31", "--ws", WS)).status).toBe(0);
+  expect((await cli("milestone", "add", "CON-5", "CON-4", "--ws", WS)).status).toBe(0);
 
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: true });
@@ -108,7 +108,7 @@ afterAll(async () => {
 
 describe("every operation has the same shape and refusal on every surface", () => {
   it("show is one shape on CLI, MCP and HTTP", async () => {
-    const fromCli = normalize(cliJson("milestone", "show", "CON-5", "--ws", WS), [home]);
+    const fromCli = normalize(await cliJson("milestone", "show", "CON-5", "--ws", WS), [home]);
     const fromMcp = normalize(await mcpJson("get_milestone", { ref: "CON-5" }), [home]);
     const fromHttp = normalize(await httpJson(`/api/milestone?ref=CON-5&ws=${WS}`), [home]);
     expect(fromCli).toEqual({
@@ -159,7 +159,7 @@ describe("every operation has the same shape and refusal on every surface", () =
   });
 
   it("list is one shape on CLI, MCP and HTTP", async () => {
-    const fromCli = normalize(cliJson("milestone", "ls", "--ws", WS), [home]);
+    const fromCli = normalize(await cliJson("milestone", "ls", "--ws", WS), [home]);
     const fromMcp = normalize(await mcpJson("list_milestones", {}), [home]);
     const fromHttp = normalize(await httpJson(`/api/milestones?ws=${WS}`), [home]);
     expect(fromCli).toEqual([
@@ -179,7 +179,7 @@ describe("every operation has the same shape and refusal on every surface", () =
     label: string;
     expected: ErrorTriple;
     mcp: () => Promise<Record<string, unknown>>;
-    cli: () => CliResult;
+    cli: () => Promise<CliResult>;
     cliExit: number;
     http: () => Promise<{ status: number; body: Record<string, unknown> }>;
   }
@@ -189,7 +189,7 @@ describe("every operation has the same shape and refusal on every surface", () =
       label: "a non-milestone is refused naming its kind",
       expected: { code: "validation", retryable: false, detail: { identifier: "CON-2", kind: "epic" } },
       mcp: async () => mcpEnvelope(await mcp.call("get_milestone", { ref: "CON-2", ws: WS })),
-      cli: () => cli("milestone", "show", "CON-2", "--ws", WS, "--json"),
+      cli: async () => await cli("milestone", "show", "CON-2", "--ws", WS, "--json"),
       cliExit: CLI_EXIT_CODES.validation!,
       http: () => http(`/api/milestone?ref=CON-2&ws=${WS}`),
     },
@@ -197,7 +197,7 @@ describe("every operation has the same shape and refusal on every surface", () =
       label: "an unknown reference is not_found",
       expected: ERROR_CONTRACT.notFound(),
       mcp: async () => mcpEnvelope(await mcp.call("get_milestone", { ref: "CON-999", ws: WS })),
-      cli: () => cli("milestone", "show", "CON-999", "--ws", WS, "--json"),
+      cli: async () => await cli("milestone", "show", "CON-999", "--ws", WS, "--json"),
       cliExit: CLI_EXIT_CODES.not_found!,
       http: () => http(`/api/milestone?ref=CON-999&ws=${WS}`),
     },
@@ -205,7 +205,7 @@ describe("every operation has the same shape and refusal on every surface", () =
       label: "removing a non-member is not_found",
       expected: { code: "not_found", retryable: false, detail: { identifier: "CON-3", milestone: "CON-5" } },
       mcp: async () => mcpEnvelope(await mcp.call("remove_milestone_member", { milestone: "CON-5", ref: "CON-3", ws: WS })),
-      cli: () => cli("milestone", "rm", "CON-5", "CON-3", "--ws", WS, "--json"),
+      cli: async () => await cli("milestone", "rm", "CON-5", "CON-3", "--ws", WS, "--json"),
       cliExit: CLI_EXIT_CODES.not_found!,
       http: () => http("/api/milestone/remove", { milestone: "CON-5", ref: "CON-3" }),
     },
@@ -214,7 +214,7 @@ describe("every operation has the same shape and refusal on every surface", () =
       expected: ERROR_CONTRACT.revisionConflict(1),
       mcp: async () =>
         mcpEnvelope(await mcp.call("add_milestone_member", { milestone: "CON-5", ref: "CON-3", base_revision: 99, ws: WS })),
-      cli: () => cli("milestone", "add", "CON-5", "CON-3", "--base", "99", "--ws", WS, "--json"),
+      cli: async () => await cli("milestone", "add", "CON-5", "CON-3", "--base", "99", "--ws", WS, "--json"),
       cliExit: CLI_EXIT_CODES.revision_conflict!,
       http: () => http("/api/milestone/add", { milestone: "CON-5", ref: "CON-3", baseRevision: 99 }),
     },
@@ -222,7 +222,7 @@ describe("every operation has the same shape and refusal on every surface", () =
 
   it.each(cases)("$label", async (testCase) => {
     const mcpTriple = tripleOf(await testCase.mcp());
-    const cliResult = testCase.cli();
+    const cliResult = await testCase.cli();
     const cliTriple = tripleOf(cliEnvelope(cliResult));
     const { status, body } = await testCase.http();
 
@@ -244,8 +244,8 @@ describe("every operation has the same shape and refusal on every surface", () =
  */
 describe("the queue fills planPosition and next on every surface", () => {
   it("a queued milestone reports its plan position and its next eligible row everywhere", async () => {
-    expect(cli("queue", "add", "CON-5", "--ws", WS).status).toBe(0);
-    const fromCli = normalize(cliJson("milestone", "show", "CON-5", "--ws", WS), [home]) as {
+    expect((await cli("queue", "add", "CON-5", "--ws", WS)).status).toBe(0);
+    const fromCli = normalize(await cliJson("milestone", "show", "CON-5", "--ws", WS), [home]) as {
       milestone: { planPosition: number | null };
       next: { identifier: string; position: number } | null;
     };
@@ -269,7 +269,7 @@ describe("the queue fills planPosition and next on every surface", () => {
       effective: Array<{ identifier: string; milestonePath: string[]; epicPath: string[] }>;
     };
     expect(queue.effective[0]).toMatchObject({ identifier: "CON-4", milestonePath: ["CON-5"], epicPath: [] });
-    expect(cli("queue", "rm", "CON-5", "--ws", WS).status).toBe(0);
+    expect((await cli("queue", "rm", "CON-5", "--ws", WS)).status).toBe(0);
     expect(
       ((await mcpJson("get_milestone", { ref: "CON-5" })) as { milestone: { planPosition: number | null } }).milestone
         .planPosition,
@@ -280,7 +280,7 @@ describe("the queue fills planPosition and next on every surface", () => {
 describe("every surface refuses with the same validation envelope when the kind is absent", () => {
   it("names the kinds add that enables the feature, on every surface", async () => {
     const fromMcp = mcpEnvelope(await mcp.call("list_milestones", { ws: BARE }));
-    const cliResult = cli("milestone", "ls", "--ws", BARE, "--json");
+    const cliResult = await cli("milestone", "ls", "--ws", BARE, "--json");
     const fromCli = cliEnvelope(cliResult);
     const { status, body } = await http(`/api/milestones?ws=${BARE}`);
 
@@ -294,7 +294,7 @@ describe("every surface refuses with the same validation envelope when the kind 
     // The writes too — a workspace without the vocabulary gets nothing created on its behalf.
     expect(mcpEnvelope(await mcp.call("create_milestone", { title: "x", ws: BARE })).message).toBe(MILESTONE_KIND_MISSING_MESSAGE);
     expect((await http("/api/milestone/create", { title: "x", ws: BARE })).body.message).toBe(MILESTONE_KIND_MISSING_MESSAGE);
-    expect(cliEnvelope(cli("milestone", "new", "x", "--ws", BARE, "--json")).message).toBe(MILESTONE_KIND_MISSING_MESSAGE);
+    expect(cliEnvelope(await cli("milestone", "new", "x", "--ws", BARE, "--json")).message).toBe(MILESTONE_KIND_MISSING_MESSAGE);
   });
 });
 
@@ -307,7 +307,7 @@ describe("the preview and the commit name the same changes on every surface", ()
       hierarchyChanges: [],
     };
     const before = (await mcpJson("list_milestones", { all: true }) as unknown[]).length;
-    expect(cliJson("milestone", "new", "--from-epic", "CON-2", "--target", "2026-12-31", "--preview", "--ws", WS)).toEqual(expected);
+    expect(await cliJson("milestone", "new", "--from-epic", "CON-2", "--target", "2026-12-31", "--preview", "--ws", WS)).toEqual(expected);
     expect(await mcpJson("create_milestone", { from_epic: "CON-2", target_date: "2026-12-31", preview: true })).toEqual(expected);
     expect(await httpJson("/api/milestone/create", { fromEpic: "CON-2", targetDate: "2026-12-31", preview: true })).toEqual(expected);
     // Three previews wrote nothing.
@@ -332,7 +332,7 @@ describe("the preview and the commit name the same changes on every surface", ()
     const epic = (await mcpJson("get_task", { ref: "CON-2" }) as { issue: { parentId: string }; children: unknown[] });
     expect(epic.children).toHaveLength(1);
     // And the commit is what every surface now reads.
-    expect(normalize(cliJson("milestone", "show", "CON-6", "--ws", WS), [home])).toEqual(
+    expect(normalize(await cliJson("milestone", "show", "CON-6", "--ws", WS), [home])).toEqual(
       normalize(await mcpJson("get_milestone", { ref: "CON-6" }), [home]),
     );
   });
@@ -345,7 +345,7 @@ describe("round-trips dates, order and removal", () => {
       startDate: "2026-10-01",
       targetDate: "2026-11-30",
     });
-    const cleared = cliJson("milestone", "set", "CON-5", "--start", "none", "--ws", WS) as { milestone: Record<string, unknown> };
+    const cleared = await cliJson("milestone", "set", "CON-5", "--start", "none", "--ws", WS) as { milestone: Record<string, unknown> };
     expect(cleared.milestone).toMatchObject({ startDate: null, targetDate: "2026-11-30" });
     expect(((await httpJson(`/api/milestone?ref=CON-5&ws=${WS}`)) as { milestone: Record<string, unknown> }).milestone).toMatchObject({
       startDate: null,
@@ -365,7 +365,7 @@ describe("round-trips dates, order and removal", () => {
     };
     expect(added.replayed).toBe(false);
     expect(added.members.map((m) => m.identifier)).toEqual(["CON-3", "CON-4"]);
-    const moved = cliJson("milestone", "mv", "CON-3", "--after", "CON-4", "--base", String(added.revision), "--ws", WS) as {
+    const moved = await cliJson("milestone", "mv", "CON-3", "--after", "CON-4", "--base", String(added.revision), "--ws", WS) as {
       revision: number;
       members: Array<{ identifier: string }>;
     };
@@ -380,7 +380,7 @@ describe("round-trips dates, order and removal", () => {
       ["CON-3", 1024],
       ["CON-4", 2048],
     ]);
-    const fromCli = normalize(cliJson("milestone", "show", "CON-5", "--ws", WS), [home]);
+    const fromCli = normalize(await cliJson("milestone", "show", "CON-5", "--ws", WS), [home]);
     expect(fromCli).toEqual(normalize(await mcpJson("get_milestone", { ref: "CON-5" }), [home]));
     expect(fromCli).toEqual(normalize(await httpJson(`/api/milestone?ref=CON-5&ws=${WS}`), [home]));
     // A replayed add is the same shape plus the flag, and bumps nothing.
@@ -390,7 +390,7 @@ describe("round-trips dates, order and removal", () => {
 
   it("a member removed on one surface is gone on the others, and the member itself is untouched", async () => {
     const before = (await mcpJson("get_task", { ref: "CON-3" }) as { issue: Record<string, unknown> }).issue;
-    const removed = cliJson("milestone", "rm", "CON-5", "CON-3", "--ws", WS) as { members: Array<{ identifier: string }> };
+    const removed = await cliJson("milestone", "rm", "CON-5", "CON-3", "--ws", WS) as { members: Array<{ identifier: string }> };
     expect(removed.members.map((m) => m.identifier)).toEqual(["CON-4"]);
     expect(((await httpJson(`/api/milestone?ref=CON-5&ws=${WS}`)) as { members: unknown[] }).members).toHaveLength(1);
     expect((await mcpJson("get_milestone", { ref: "CON-5" }) as { members: unknown[] }).members).toHaveLength(1);

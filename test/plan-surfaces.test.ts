@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { CONTRACT_AGENT, runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "plans";
 let home: string;
@@ -26,11 +26,11 @@ let inner: string;
 let leaf: string;
 const refs: Record<string, string> = {};
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
-function cliJson(...args: string[]): any {
-  const result = cli(...args, "--ws", WS, "--json");
+async function cliJson(...args: string[]): Promise<any> {
+  const result = await cli(...args, "--ws", WS, "--json");
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
 }
@@ -43,27 +43,27 @@ async function tool(name: string, args: Record<string, unknown>): Promise<any> {
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   return toolPayload(result);
 }
-const mint = (title: string, ...args: string[]): string => String(cliJson("new", title, ...args).identifier);
+const mint = async (title: string, ...args: string[]): Promise<string> => String((await cliJson("new", title, ...args)).identifier);
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "staple-plans-home-"));
   emptyDir = mkdtempSync(join(tmpdir(), "staple-plans-cwd-"));
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect(cli("init", "--global", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
 
   // Epic: container A (a1 1h, a2 2h) -> B 3h -> C 4h, a gap, a cancelled 5h, and an
   // outside blocker on B.
-  epic = mint("Epic");
-  inner = mint("A", "--parent", epic);
-  refs.a1 = mint("a1", "--parent", inner, "--estimate", "1h");
-  refs.a2 = mint("a2", "--parent", inner, "--estimate", "2h");
-  other = mint("Other epic", "--estimate", "6h");
-  refs.b = mint("B", "--parent", epic, "--estimate", "3h", "--blocked-by", `${refs.a2},${other}`);
-  refs.c = mint("C", "--parent", epic, "--estimate", "4h", "--blocked-by", refs.b);
-  refs.gap = mint("Gap", "--parent", epic);
-  refs.dropped = mint("Dropped", "--parent", epic, "--estimate", "5h");
-  expect(cli("cancel", refs.dropped, "--ws", WS).status).toBe(0);
+  epic = await mint("Epic");
+  inner = await mint("A", "--parent", epic);
+  refs.a1 = await mint("a1", "--parent", inner, "--estimate", "1h");
+  refs.a2 = await mint("a2", "--parent", inner, "--estimate", "2h");
+  other = await mint("Other epic", "--estimate", "6h");
+  refs.b = await mint("B", "--parent", epic, "--estimate", "3h", "--blocked-by", `${refs.a2},${other}`);
+  refs.c = await mint("C", "--parent", epic, "--estimate", "4h", "--blocked-by", refs.b);
+  refs.gap = await mint("Gap", "--parent", epic);
+  refs.dropped = await mint("Dropped", "--parent", epic, "--estimate", "5h");
+  expect((await cli("cancel", refs.dropped, "--ws", WS)).status).toBe(0);
   leaf = refs.c;
 
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
@@ -82,7 +82,7 @@ afterAll(async () => {
 
 describe("compare: one payload through the CLI, MCP and HTTP", () => {
   it("reports labor, coverage and the path of each ref, and the overlap", async () => {
-    const viaCli = cliJson("compare", epic, other, inner);
+    const viaCli = await cliJson("compare", epic, other, inner);
     const viaMcp = await tool("compare_plans", { refs: [epic, other, inner] });
     const viaHttp = await http(`/api/compare?ws=${WS}&ref=${epic}&ref=${other}&ref=${inner}`);
     expect(viaHttp.status).toBe(200);
@@ -107,8 +107,8 @@ describe("compare: one payload through the CLI, MCP and HTTP", () => {
     expect(viaCli.overlaps).toEqual([{ ref: inner, within: epic }]);
   });
 
-  it("prints no tree: two lines per ref and the overlap note", () => {
-    const result = cli("compare", epic, other, "--ws", WS);
+  it("prints no tree: two lines per ref and the overlap note", async () => {
+    const result = await cli("compare", epic, other, "--ws", WS);
     expect(result.status, result.stderr).toBe(0);
     const lines = result.stdout.trimEnd().split("\n");
     expect(lines).toHaveLength(8);
@@ -121,7 +121,7 @@ describe("compare: one payload through the CLI, MCP and HTTP", () => {
   });
 
   it("is refused without a ref, on every surface", async () => {
-    const bare = cli("compare", "--ws", WS);
+    const bare = await cli("compare", "--ws", WS);
     expect(bare.status).toBe(2);
     expect(bare.stderr).toMatch(/at least one issue/);
     const refused = await mcp.call("compare_plans", { refs: [], ws: WS });
@@ -135,23 +135,23 @@ describe("compare: one payload through the CLI, MCP and HTTP", () => {
 
 describe("planSummary rides the detail surfaces", () => {
   it("is the same object on show --json, get_task, /api/issue and /api/agent-context", async () => {
-    const viaCli = cliJson("show", epic).planSummary;
+    const viaCli = (await cliJson("show", epic)).planSummary;
     expect(viaCli.labor.seconds).toBe(10 * 3600);
     expect((await tool("get_task", { ref: epic })).planSummary).toEqual(viaCli);
     expect((await http(`/api/issue?ws=${WS}&ref=${epic}`)).body.planSummary).toEqual(viaCli);
     expect((await http(`/api/agent-context?ws=${WS}&ref=${epic}`)).body.planSummary).toEqual(viaCli);
     // And it is compare's entry for the same ref, field for field.
-    const { ref: _ref, title: _title, kind: _kind, status: _status, ...entry } = cliJson("compare", epic).plans[0];
+    const { ref: _ref, title: _title, kind: _kind, status: _status, ...entry } = (await cliJson("compare", epic)).plans[0];
     expect(entry).toEqual(viaCli);
   });
 
   it("is null for a leaf, whose plan is its own estimate on timing", async () => {
-    expect(cliJson("show", leaf).planSummary).toBeNull();
+    expect((await cliJson("show", leaf)).planSummary).toBeNull();
     expect((await tool("get_task", { ref: leaf })).planSummary).toBeNull();
   });
 
-  it("show prints the plan lines for a parent", () => {
-    const out = cli("show", epic, "--ws", WS).stdout;
+  it("show prints the plan lines for a parent", async () => {
+    const out = (await cli("show", epic, "--ws", WS)).stdout;
     expect(out).toContain(`\nlabor ≥10h (descendants) · 4 of 5 units planned`);
     expect(out).toContain(`\nplanned path ≥9h · ${refs.a2} > ${refs.b} > ${refs.c}`);
   });

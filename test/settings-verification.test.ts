@@ -48,7 +48,7 @@ import {
 import { openWorkspace } from "../src/core/open.js";
 import type { WorkspaceStore } from "../src/core/store.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { runCli, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import {
   FIXTURE_CATEGORY,
   FIXTURE_DEFINITION,
@@ -96,8 +96,8 @@ let alpha: WorkspaceStore;
 let beta: WorkspaceStore;
 let mcp: McpHarness;
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: "r6e-verify" });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: "r6e-verify" });
 }
 
 /**
@@ -105,8 +105,8 @@ function cli(...args: string[]) {
  * fixture — the child's equivalent of the `SETTING_DEFINITIONS` entry a shipped
  * setting would have. Opt-in, so every other call above still runs a stock CLI.
  */
-function cliWithFixture(...args: string[]) {
-  return runCli(args, {
+async function cliWithFixture(...args: string[]) {
+  return await runCliAsync(args, {
     STAPLE_HOME: home,
     STAPLE_AGENT: "r6e-verify",
     NODE_OPTIONS: REGISTER_FIXTURE_NODE_OPTIONS,
@@ -135,8 +135,8 @@ function configFile(): string | null {
 }
 
 /** The `{value, source}` pair as the CLI answers it, so the CLI is asserted and not assumed. */
-function cliValue(key: string, ws: string): SettingView {
-  const result = cli("settings", "get", key, "--ws", ws, "--json");
+async function cliValue(key: string, ws: string): Promise<SettingView> {
+  const result = await cli("settings", "get", key, "--ws", ws, "--json");
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout) as SettingView;
 }
@@ -152,8 +152,8 @@ beforeAll(async () => {
   process.env.NODE_NO_WARNINGS = "1";
 
   // Two GLOBAL workspaces so both are in the hub and one server can serve both.
-  expect(cli("init", "--global", ALPHA).status).toBe(0);
-  expect(cli("init", "--global", BETA).status).toBe(0);
+  expect((await cli("init", "--global", ALPHA)).status).toBe(0);
+  expect((await cli("init", "--global", BETA)).status).toBe(0);
 
   alpha = openWorkspace(join(home, "workspaces", `${ALPHA}.db`)).store;
   beta = openWorkspace(join(home, "workspaces", `${BETA}.db`)).store;
@@ -200,27 +200,27 @@ describe("two workspaces and one machine config never share a value", () => {
     expect(written.status).toBe(200);
     expect(written.body.workspace).toBe(ALPHA);
 
-    const setBeta = cli("settings", "set", KIND_DEFAULT, "bug", "--ws", BETA, "--json");
+    const setBeta = await cli("settings", "set", KIND_DEFAULT, "bug", "--ws", BETA, "--json");
     expect(setBeta.status, setBeta.stderr).toBe(0);
 
     // ALPHA carries the policy and nothing else; BETA carries the kind and nothing else.
     for (const [label, view] of Object.entries({
       http: (await envelopeOf(ALPHA)).values[POLICY]!,
-      cli: cliValue(POLICY, ALPHA),
+      cli: await cliValue(POLICY, ALPHA),
       store: storeValue(alpha, POLICY),
     })) {
       expect(view, `${label} alpha ${POLICY}`).toEqual({ key: POLICY, scope: "workspace", value: "strict", source: "workspace", version: 1 });
     }
     for (const [label, view] of Object.entries({
       http: (await envelopeOf(BETA)).values[POLICY]!,
-      cli: cliValue(POLICY, BETA),
+      cli: await cliValue(POLICY, BETA),
       store: storeValue(beta, POLICY),
     })) {
       expect(view, `${label} beta ${POLICY}`).toEqual({ key: POLICY, scope: "workspace", value: "advisory", source: "default", version: 1 });
     }
     expect(storeValue(beta, KIND_DEFAULT).value).toBe("bug");
     expect(storeValue(alpha, KIND_DEFAULT)).toEqual({ key: KIND_DEFAULT, scope: "workspace", value: "task", source: "default", version: 1 });
-    expect(cliValue(KIND_DEFAULT, ALPHA).source).toBe("default");
+    expect((await cliValue(KIND_DEFAULT, ALPHA)).source).toBe("default");
 
     // Neither workspace has grown a row for the other's key, or for a global one.
     expect(alpha.unknownSettingKeys()).toEqual([]);
@@ -239,7 +239,7 @@ describe("two workspaces and one machine config never share a value", () => {
   it("a global write reaches config.json and neither workspace's values", async () => {
     const before = { alpha: (await envelopeOf(ALPHA)).values, beta: (await envelopeOf(BETA)).values };
 
-    const set = cli("config", "set", "port", "4411");
+    const set = await cli("config", "set", "port", "4411");
     expect(set.status, set.stderr).toBe(0);
 
     const after = { alpha: await envelopeOf(ALPHA), beta: await envelopeOf(BETA) };
@@ -269,8 +269,8 @@ describe("two workspaces and one machine config never share a value", () => {
    * uses. The store-level refusal is pinned in test/store-settings.test.ts; what is
    * new here is that `staple settings set` on a workspace names the OTHER command.
    */
-  it("the workspace surface refuses a global key by pointing at the command that owns it", () => {
-    const refused = cli("settings", "set", "machine.port", "4500", "--ws", ALPHA, "--json");
+  it("the workspace surface refuses a global key by pointing at the command that owns it", async () => {
+    const refused = await cli("settings", "set", "machine.port", "4500", "--ws", ALPHA, "--json");
     expect(refused.status).toBe(2);
     expect(refused.stderr).toContain("staple config set");
     expect(JSON.parse(configFile() ?? "{}")).toMatchObject({ port: 4411 });
@@ -454,10 +454,10 @@ describe("a category nothing was written for reaches the page by being registere
     });
 
     // 2. The CLI — a separate process, which registers the same fixture at import.
-    expect(JSON.parse(cliWithFixture("settings", "get", FIXTURE_KEY, "--ws", ALPHA, "--json").stdout)).toEqual(
+    expect(JSON.parse((await cliWithFixture("settings", "get", FIXTURE_KEY, "--ws", ALPHA, "--json")).stdout)).toEqual(
       stored(true),
     );
-    const cliSet = cliWithFixture("settings", "set", FIXTURE_KEY, "false", "--ws", ALPHA, "--json");
+    const cliSet = await cliWithFixture("settings", "set", FIXTURE_KEY, "false", "--ws", ALPHA, "--json");
     expect(cliSet.status, cliSet.stderr).toBe(0);
     expect(storeValue(alpha, FIXTURE_KEY)).toEqual(stored(false));
 

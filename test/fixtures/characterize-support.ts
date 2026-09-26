@@ -32,6 +32,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnAsync } from "./spawn-async.js";
 
 export const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const TSX_CLI = join(REPO_ROOT, "node_modules/tsx/dist/cli.mjs");
@@ -104,6 +105,33 @@ export function runCliAt(
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
     timedOut: result.error !== undefined && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT",
+  };
+}
+
+/**
+ * `runCliAt`, without blocking this process's event loop while the child runs. Use
+ * it in a file that serves HTTP from this process (`startUiServer`): a blocked loop
+ * freezes that server between two requests, which production never does (see
+ * `spawn-async.ts`).
+ */
+export async function runCliAtAsync(
+  cwd: string,
+  args: string[],
+  env: Record<string, string> = {},
+  timeoutMs = 30_000,
+): Promise<CliResult> {
+  const result = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
+    cwd,
+    env: bareEnv(env),
+    encoding: "utf8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
+  return {
+    status: result.status ?? 0,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    timedOut: result.error !== undefined && result.error.code === "ETIMEDOUT",
   };
 }
 

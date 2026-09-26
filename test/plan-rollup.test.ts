@@ -458,13 +458,16 @@ describe("coverage against subtreePlan", () => {
 });
 
 describe("performance", () => {
-  it("an edge between two containers of a thousand units stays one edge", () => {
+  it("an edge between two containers of a thousand units stays one edge", async () => {
     const epic = store.createIssue({ title: "Epic" });
     const left = child(epic, "Left");
     const right = child(epic, "Right");
     for (let i = 0; i < 1000; i++) {
       child(left, `l${i}`, 1);
       child(right, `r${i}`, 1);
+      // Building 2000 issues can take tens of seconds on a loaded machine; yield so
+      // vitest's RPC to the main process is not starved (test/setup/turn-event-loop.ts).
+      if (i % 50 === 49) await new Promise<void>((resolve) => setImmediate(resolve));
     }
     block(right, left);
     const plan = store.planSummary(epic.id)!;
