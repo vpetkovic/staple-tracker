@@ -39,7 +39,7 @@
  * workspace in the picker — goes through one guard: clean, it proceeds; dirty, it asks
  * (`UnsavedChangesDialog`) and proceeds only on "Discard changes".
  */
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   Dialog,
@@ -116,6 +116,8 @@ export function SettingsDialog({
   onCategoryChange,
   onWorkspaceChange = () => {},
   onOpenChange,
+  onDirtyChange,
+  leaveRequest = 0,
 }: {
   open: boolean;
   /** The category the URL asked for; `""` for "whichever is first". */
@@ -126,6 +128,13 @@ export function SettingsDialog({
   /** The in-Settings picker chose another workspace. The dialog stays open. */
   onWorkspaceChange?: (workspace: string) => void;
   onOpenChange: (open: boolean) => void;
+  /** Whether the open form holds unsaved edits, reported up so the mount can guard phone Back. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Bumped by the mount when phone Back tried to close Settings over unsaved edits (it has put
+   * its entry back): each new value asks to close, through the same guard as the X.
+   */
+  leaveRequest?: number;
 }) {
   const session = useSession();
   const page = usePageSettings();
@@ -195,6 +204,11 @@ export function SettingsDialog({
     },
     [dirty],
   );
+  const dirtyChange = useRef(onDirtyChange);
+  dirtyChange.current = onDirtyChange;
+  useEffect(() => {
+    dirtyChange.current?.(dirty);
+  }, [dirty]);
   useEffect(() => {
     if (!dirty || typeof window === "undefined") return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -248,6 +262,13 @@ export function SettingsDialog({
   useBackToClose(stacked && pane === "content", () => setPane("nav"));
   const toggleMode = useCallback(() => setMode((current) => otherShellMode(current)), []);
   const close = useCallback(() => guard(() => onOpenChange(false)), [guard, onOpenChange]);
+  /** A Back the mount held for a decision: ask exactly as the X does. Only a NEW request asks. */
+  const answeredLeave = useRef(leaveRequest);
+  useEffect(() => {
+    if (leaveRequest === answeredLeave.current) return;
+    answeredLeave.current = leaveRequest;
+    close();
+  }, [leaveRequest, close]);
 
   const fallback = <LoadingState rows={5} />;
   const chooseWorkspace = useCallback(
