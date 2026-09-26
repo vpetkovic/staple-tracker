@@ -31,8 +31,10 @@ jobs:
       # No `build:package` first: the suite builds its own payload before any
       # file loads (test/setup/package-payload.ts), so the install and tarball
       # suites always run, against this commit's source.
+      # Two workers: on the hosted runner a full pool starves vitest's worker RPC
+      # ("Timeout calling onTaskUpdate") and fails the step with every test passing.
       - name: Unit tests
-        run: npm test
+        run: npm test -- --maxWorkers=2
 
       - name: Typecheck
         run: npm run typecheck
