@@ -18,9 +18,9 @@
  *                             so Back still means "the page I was on");
  *   the workspace picker    — replaces it with `settings-ws=<slug>`, same reason;
  *   Back / forward          — `popstate` re-reads the URL, which is what closes the
- *                             shell on Back and reopens it on Forward. Over unsaved
- *                             edits Back is held: the entry goes back on and the dialog
- *                             asks, as the X does.
+ *                             shell on Back and reopens it on Forward. Back is held
+ *                             for the dialog's guard: the entry goes back on and the
+ *                             dialog leaves as the X does, asking over unsaved edits.
  *
  * Closing with the X or Esc pops the entry this mount pushed, so the URL and the dialog
  * cannot disagree; a deep-link arrival pushed nothing, so the parameter is stripped in
@@ -54,11 +54,10 @@ export function SettingsMount() {
    * a deep-link arrival, which pushed nothing. Decides how closing leaves: `closeAction`.
    */
   const entry = useRef<string | null>(null);
-  /** What is open, and whether its form holds unsaved edits — read by the Back guard below. */
+  /** What is open — read by the Back guard below. */
   const held = useRef(route);
   held.current = route;
-  const dirty = useRef(false);
-  /** Bumped when Back was held over unsaved edits; the dialog asks (`leaveRequest`). */
+  /** Bumped when Back was held; the dialog decides through its own guard (`leaveRequest`). */
   const [leaveRequest, setLeaveRequest] = useState(0);
 
   useEffect(
@@ -88,14 +87,20 @@ export function SettingsMount() {
       const next = readSettingsRoute(window.location.search);
       const open = held.current;
       /*
-       * BACK DOES NOT DISCARD. The person's Back took Settings' own entry while a form holds
-       * unsaved edits: the X would have asked, so Back asks too. The entry goes back on (the
-       * page's Back is not spent) and the dialog puts the same "Discard unsaved changes?"
-       * question; Discard closes through `close` below, Keep leaves Settings open. Only the
-       * person's Back is held — a close or a navigation this app started has already decided.
+       * BACK DOES NOT DISCARD. The person's Back took Settings' own entry: it closes the way
+       * the X does, through the dialog's unsaved-changes guard. The entry goes back on (so a
+       * Keep leaves the page's Back unspent) and the dialog is asked to leave: clean, it
+       * closes through `close` below at once; with unsaved edits it asks "Discard unsaved
+       * changes?" first. Only the person's Back is held — a close or a navigation this app
+       * started has already decided, and holding it would ask forever.
        */
-      if (next === null && open !== null && dirty.current && entry.current !== null && traversalKind() === "overlay-back") {
+      if (next === null && open !== null && entry.current !== null && traversalKind() === "overlay-back") {
         entry.current = null;
+        // A label still being typed in commits when it loses focus, and the X gets that for
+        // free (pressing it moves focus); Back does not, so the field is blurred here, before
+        // the dialog is asked.
+        const typing = document.activeElement;
+        if (typing instanceof HTMLElement && typing.closest("[data-settings-dialog]")) typing.blur();
         whenHistoryIsFree(() => {
           entry.current = pushOverlayEntry(withSettingsRoute(window.location.href, open.category, open.workspace || null));
           setLeaveRequest((count) => count + 1);
@@ -159,9 +164,6 @@ export function SettingsMount() {
       onCategoryChange={focusCategory}
       onWorkspaceChange={focusWorkspace}
       onOpenChange={onOpenChange}
-      onDirtyChange={(value) => {
-        dirty.current = value;
-      }}
       leaveRequest={leaveRequest}
     />
   );

@@ -116,7 +116,6 @@ export function SettingsDialog({
   onCategoryChange,
   onWorkspaceChange = () => {},
   onOpenChange,
-  onDirtyChange,
   leaveRequest = 0,
 }: {
   open: boolean;
@@ -128,11 +127,9 @@ export function SettingsDialog({
   /** The in-Settings picker chose another workspace. The dialog stays open. */
   onWorkspaceChange?: (workspace: string) => void;
   onOpenChange: (open: boolean) => void;
-  /** Whether the open form holds unsaved edits, reported up so the mount can guard phone Back. */
-  onDirtyChange?: (dirty: boolean) => void;
   /**
-   * Bumped by the mount when phone Back tried to close Settings over unsaved edits (it has put
-   * its entry back): each new value asks to close, through the same guard as the X.
+   * Bumped by the mount when phone Back tried to close Settings (it has put its entry back):
+   * each new value asks to close, through the same guard as the X.
    */
   leaveRequest?: number;
 }) {
@@ -204,11 +201,6 @@ export function SettingsDialog({
     },
     [dirty],
   );
-  const dirtyChange = useRef(onDirtyChange);
-  dirtyChange.current = onDirtyChange;
-  useEffect(() => {
-    dirtyChange.current?.(dirty);
-  }, [dirty]);
   useEffect(() => {
     if (!dirty || typeof window === "undefined") return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {

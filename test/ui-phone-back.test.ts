@@ -434,6 +434,36 @@ describe.skipIf(Boolean(reason))("phone Back closes the overlay on top, and the 
     await context.close();
   }, 30_000);
 
+  it("Settings on a desk: Back while a label is still being typed commits it and asks, rather than dropping it", async () => {
+    const { page: p, context } = await page("/?ws=alpha&view=tasks", DESK);
+    await p.locator('[data-nav-item="view:graph"]').click();
+    await settle(p, 600);
+    await p.keyboard.press("ControlOrMeta+k");
+    await settle(p, 300);
+    await p.keyboard.type("Settings: Statuses");
+    await p.keyboard.press("Enter");
+    await settle(p, 900);
+    expect(await count(p, "[data-settings-dialog]")).toBe(1);
+    // Typed, never committed: focus is still in the field when Back is pressed.
+    await p.getByRole("textbox", { name: "Label for todo" }).fill("Ready to start");
+    await back(p);
+    expect(await count(p, "[data-settings-dialog]")).toBe(1);
+    expect(await count(p, "[data-confirm-dialog]")).toBe(1);
+    await p.getByRole("button", { name: "Keep editing" }).click();
+    await settle(p, 400);
+    expect(await p.getByRole("textbox", { name: "Label for todo" }).inputValue()).toBe("Ready to start");
+    // Back again asks again; Discard closes Settings and leaves no dead Back step.
+    await back(p);
+    expect(await count(p, "[data-confirm-dialog]")).toBe(1);
+    await p.getByRole("button", { name: "Discard changes" }).click();
+    await settle(p, 700);
+    expect(await count(p, "[data-settings-dialog]")).toBe(0);
+    expect(viewOf(p)).toBe("graph");
+    await back(p);
+    expect(viewOf(p)).toBe("tasks");
+    await context.close();
+  }, 45_000);
+
   it("a task's dependencies dialog, Graph's Epics picker, and a status card's ⋯ menu in Settings", async () => {
     const tasks = await page("/?ws=beta&view=tasks");
     await tap(tasks.page, ".staple-dep-badge");
