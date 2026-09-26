@@ -86,13 +86,39 @@ export function otherMode(mode: DetailMode): DetailMode {
  * and leaves the chrome edge to edge, which is what every page-mode detail worth
  * copying does. Below 1376px — every laptop this is used on — the cap is inert.
  */
-const PANEL_CLASS: Record<DetailMode, string> = {
+const PANEL_CLASS: Record<DetailPresentation, string> = {
   drawer: "inset-y-0 right-0 w-[min(46rem,94vw)] border-l",
   full: "inset-0",
+  // The sheet's height, safe-area insets and momentum scroll are in detail.css, keyed on
+  // `data-mode="sheet"`; the class only pins it to the viewport.
+  sheet: "inset-x-0 top-0",
 };
 
-export function panelClass(mode: DetailMode): string {
-  return PANEL_CLASS[mode];
+export function panelClass(presentation: DetailPresentation): string {
+  return PANEL_CLASS[presentation];
+}
+
+/**
+ * ── THE PHONE SHEET ───────────────────────────────────────────────────────────────────
+ *
+ * Below 768px the detail is a FULL-SCREEN SHEET, whatever the stored mode says. A 94vw
+ * drawer on a 390px phone leaves a 23px strip of dimmed list that cannot be used, which is
+ * the 98%-modal R3 already rejected for the desktop — and the expand toggle has nothing to
+ * expand to. So the phone gets the iOS shape: edge to edge, the dynamic viewport height
+ * (so the browser's own toolbars never cover the bottom of it), the notch and home-bar
+ * insets respected, a Back control where the thumb expects it, momentum scroll.
+ *
+ * It is a PRESENTATION, not a third stored mode: rotating a tablet or widening a window
+ * past 768px goes straight back to the drawer or page the reader chose, and the choice is
+ * never overwritten by having once looked at a ticket on a phone.
+ */
+export type DetailPresentation = DetailMode | "sheet";
+
+/** Viewports narrower than this present the detail as a sheet. */
+export const SHEET_BELOW = 768;
+
+export function presentationFor(viewportWidth: number, mode: DetailMode): DetailPresentation {
+  return viewportWidth < SHEET_BELOW ? "sheet" : mode;
 }
 
 /**

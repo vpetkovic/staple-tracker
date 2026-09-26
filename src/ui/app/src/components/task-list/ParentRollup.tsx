@@ -79,6 +79,7 @@ export function ParentRollupBar({
   rollup,
   collapsed,
   showPlan = false,
+  progress = "bar",
   className,
 }: {
   rollup: Rollup;
@@ -89,6 +90,11 @@ export function ParentRollupBar({
    * decides (comfortable density only); this component never reads the config.
    */
   showPlan?: boolean;
+  /**
+   * `ring` on a phone (row-layout.ts, `rollupBar`): the same done fraction as a 12px circle
+   * beside the count, where the 36px bar would come straight out of the title.
+   */
+  progress?: "bar" | "ring";
   className?: string;
 }) {
   // Nothing beneath this row that the rollup counts — which is not the same as no children
@@ -107,7 +113,7 @@ export function ParentRollupBar({
       >
         {rollup.resolved}/{rollup.total}
       </span>
-      {collapsed ? <Segments rollup={rollup} /> : null}
+      {collapsed ? progress === "ring" ? <Ring rollup={rollup} /> : <Segments rollup={rollup} /> : null}
       {collapsed && showPlan ? <Plan plan={rollup.plan} /> : null}
       {collapsed && rollup.live ? <ChildLive rollup={rollup} /> : null}
     </span>
@@ -133,7 +139,7 @@ function Plan({ plan }: { plan: Rollup["plan"] }) {
   const sentence = `planned ${figure}, ${PLAN_SOURCE[plan.source]}`;
   return (
     <span
-      className="staple-rollup-count max-[719px]:hidden"
+      className="staple-rollup-count"
       data-testid="parent-rollup-plan"
       data-plan-source={plan.source}
       aria-label={sentence}
@@ -160,6 +166,40 @@ const PLAN_SOURCE: Record<Rollup["plan"]["source"], string> = {
  * `aria-hidden`, deliberately. The same fact is one element to the left in a real sentence,
  * and a screen reader reading four nested spans of nothing is worse than silence.
  */
+/** The done fraction as a ring. Decorative: the count beside it carries the sentence. */
+export function ringDash(rollup: Pick<Rollup, "resolved" | "total">, circumference: number): string {
+  const fraction = rollup.total > 0 ? Math.min(1, Math.max(0, rollup.resolved / rollup.total)) : 0;
+  const done = fraction * circumference;
+  return `${done.toFixed(2)} ${(circumference - done).toFixed(2)}`;
+}
+
+const RING_R = 4.5;
+const RING_C = 2 * Math.PI * RING_R;
+
+function Ring({ rollup }: { rollup: Rollup }) {
+  return (
+    <svg
+      className="staple-rollup-ring"
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      aria-hidden="true"
+      focusable="false"
+      data-testid="parent-rollup-ring"
+    >
+      <circle cx="6" cy="6" r={RING_R} className="staple-rollup-ring-track" />
+      <circle
+        cx="6"
+        cy="6"
+        r={RING_R}
+        className="staple-rollup-ring-done"
+        strokeDasharray={ringDash(rollup, RING_C)}
+        transform="rotate(-90 6 6)"
+      />
+    </svg>
+  );
+}
+
 function Segments({ rollup }: { rollup: Rollup }) {
   return (
     <span className="staple-rollup-bar" aria-hidden="true" data-testid="parent-rollup-bar">

@@ -246,7 +246,7 @@
    * for exactly the containers that need them most.
    */
   --col-select: [select] 24px;
-  --col-disclosure: [disclosure] 16px;
+  --col-disclosure: [disclosure] var(--col-disclosure-w, 16px);
   grid-template-columns:
     var(--col-select)
     var(--col-disclosure)
@@ -359,7 +359,8 @@
   position: absolute;
   top: 0;
   height: 50%;
-  width: 12px;
+  /* From the parent's rail to the child's disclosure column — `elbowWidth` in model.ts. */
+  width: var(--guide-elbow-w, 12px);
   border-left: 1px solid var(--border-strong);
   border-bottom: 1px solid var(--border-strong);
   border-bottom-left-radius: 6px;
@@ -1171,104 +1172,236 @@
 }
 
 /*
- * ── Responsive degradation (§14) ───────────────────────────────────────────────────
+ * ── Responsive degradation (§14) — now row-layout.ts ────────────────────────────────
  *
- * Right-side elements drop LEAST DIAGNOSTIC FIRST. Left of the title nothing ever drops.
- * The date goes before the assignee because attribution was an explicit requirement and a
- * timestamp is recoverable from the drawer. Label names go before label colours because a
- * colour still carries a category at a glance while a truncated word carries nothing.
- *
- * Never dropped at any width: priority glyph, identifier, status icon, title, assignee
- * avatar, and the working pill's dot. Those are the brief.
- *
- * The label-pill count is NOT here — it lives in TreeGrid's `useLabelCapacity`, because
- * the `+N` changes with the cap and CSS cannot recount.
+ * WHAT DROPS, AND IN WHICH ORDER, IS NOT IN THIS SHEET ANY MORE. The five viewport rungs
+ * that used to live here (1023, 959, 879, 719, 639) are `COLLAPSE_LADDER` in row-layout.ts,
+ * and the row renders from the plan it produces: an element that has dropped is absent
+ * from the DOM, so a test can read the precedence off the markup and the PR can print it
+ * as a table. What is left here is geometry — how the row that remains is laid out.
  */
-@media (max-width: 1023px) {
-  .staple-pr-number {
-    display: none;
-  }
+
+/* A claim pill whose word has dropped closes up around its dot. */
+.staple-working-pill[data-bare],
+.staple-held-pill[data-bare] {
+  padding-right: 4px;
 }
 
 /*
- * The worklog cue's §14 rung — W4 (STA-116).
+ * ── The compact row — one line below 720px ──────────────────────────────────────────
  *
- * Its drop position is BETWEEN the PR number and the working-pill text: more diagnostic
- * than a link to a branch, less diagnostic than whether anyone is there right now. The
- * ladder already had rungs at 1023 and 879 for exactly those two, so this is a new one
- * strictly between them rather than a shared rung — sharing would have quietly said the
- * two elements are worth the same, which is the ordering §14 exists to fix.
+ * It used to become two 28px lines here, with the meta cluster wrapped under the
+ * identifier: a 56px row whose badges broke the guide lines and whose title lost to a
+ * second line nobody read first. Now it stays one line and pays for it through the ladder
+ * (merged cue, avatar claim, ring rollup, no date, no labels below 480px), so the title
+ * keeps the width.
  *
- * `display: none` here, and ABSENCE FROM THE DOM in config.ts, are two different rules
- * about two different things and both are correct. A container that never wants the
- * element must not pay a pixel for it, so the preset omits it entirely. A container that
- * wants it and is merely too narrow today will be wide enough after a drag, and
- * re-rendering the row on every resize to recover four characters would be worse than a
- * media query. Every other §14 element drops the same way.
+ * 48px: above the 44px touch minimum with a hairline to spare, under the 56px ceiling, and
+ * the height of a comfortable phone list row. The tracks shrink by a few px each and the
+ * gap by 2px; the identifier keeps a fixed track so status icons and titles still form
+ * columns down the list, which is what makes a dense list read as calm.
  */
-@media (max-width: 959px) {
-  .staple-worklog-cue {
-    display: none;
-  }
+.staple-row[data-layout="compact"] {
+  --row-id-width: 62px;
+  height: 48px;
+  grid-template-columns:
+    var(--col-select)
+    var(--col-disclosure)
+    [priority] 16px
+    [identifier] var(--row-id-width)
+    [status] 16px
+    [title] minmax(0, 1fr)
+    [meta] auto;
+  column-gap: 6px;
+  padding-right: 10px;
+  /* A long-press opens the row's menu; iOS must not also raise its link callout. */
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-@media (max-width: 879px) {
-  .staple-row-date {
-    display: none;
-  }
-  .staple-working-label,
-  .staple-held-label {
-    display: none;
-  }
-  .staple-working-pill,
-  .staple-held-pill {
-    padding-right: 4px;
-  }
+.staple-row[data-layout="compact"] .staple-row-check {
+  display: none;
+}
+
+.staple-row[data-layout="compact"] .staple-row-title {
+  font-size: 14px;
 }
 
 /*
- * Below 640px the date goes for good: the two-line row brought it back at 719px because
- * line two had room, and at phone widths it no longer does. The `<time>` keeps its `title`,
- * so the exact stamp is one hover away.
+ * The caption ("waiting on STA-61") gives way before the title on a phone: it shrinks four
+ * times as hard, so a long title keeps its words and the aside keeps whatever is left. The
+ * full sentence is still in its `title` and on the detail.
  */
-@media (max-width: 639px) {
-  .staple-row-date {
-    display: none !important;
+.staple-row[data-layout="compact"] .staple-row-caption {
+  flex-shrink: 4;
+}
+
+.staple-row[data-layout="compact"] .staple-row-id {
+  gap: 3px;
+}
+
+.staple-row[data-layout="compact"] .staple-row-meta {
+  gap: 6px;
+}
+
+/*
+ * The chevron keeps its 12px glyph and grows a 44px target. The target reaches left into
+ * the indent gutter (empty by construction) and a little right into the column gap, never
+ * over the priority glyph's centre.
+ */
+.staple-row[data-layout="compact"] .staple-row-chevron {
+  position: relative;
+  width: 12px;
+  height: 12px;
+}
+
+.staple-row[data-layout="compact"] .staple-row-chevron::before {
+  content: "";
+  position: absolute;
+  inset: -16px -10px -16px -22px;
+}
+
+.staple-row[data-layout="compact"] .staple-row-chevron-spacer {
+  width: 12px;
+}
+
+/*
+ * Every tappable chip on a compact or touch row keeps its DRAWN size and grows an invisible
+ * 44px-tall target. The house coarse-pointer rule (theme-tokens.css) stretches every button
+ * to 44px, which on this row turned a 20px outlined badge into a 44px box that broke the
+ * line; the target belongs to a pseudo-element, not to the border.
+ */
+.staple-row[data-layout="compact"] :is(.staple-dep-badge, .staple-row-actions, .staple-row-breadcrumb, .staple-row-milestone, .staple-row-chevron) {
+  min-height: 0;
+}
+
+.staple-row[data-layout="compact"] :is(.staple-dep-badge, .staple-row-actions, .staple-row-breadcrumb, .staple-row-milestone) {
+  position: relative;
+}
+
+.staple-row[data-layout="compact"] :is(.staple-dep-badge, .staple-row-breadcrumb, .staple-row-milestone)::before {
+  content: "";
+  position: absolute;
+  inset: -12px -3px;
+}
+
+.staple-row[data-layout="compact"] .staple-row-actions::before {
+  content: "";
+  position: absolute;
+  /* Right edge stops at the row's own 10px padding: past it the target would widen the
+     list's scroll area by the overhang. */
+  inset: -12px -10px -12px -14px;
+}
+
+@media (pointer: coarse) {
+  .staple-row :is(.staple-dep-badge, .staple-row-actions, .staple-row-breadcrumb, .staple-row-milestone) {
+    position: relative;
+    min-height: 0;
+  }
+  .staple-row :is(.staple-dep-badge, .staple-row-breadcrumb, .staple-row-milestone)::before {
+    content: "";
+    position: absolute;
+    inset: -12px -3px;
+  }
+  .staple-row .staple-row-actions::before {
+    content: "";
+    position: absolute;
+    /* Right edge stops at the row's own 10px padding: past it the target would widen the
+     list's scroll area by the overhang. */
+  inset: -12px -10px -12px -14px;
   }
 }
 
-@media (max-width: 719px) {
-  .staple-row {
-    height: 56px;
-    grid-template-columns:
-      var(--col-disclosure)
-      [priority] 16px
-      [identifier] var(--row-id-width)
-      [status] 20px
-      [title] minmax(0, 1fr);
-    grid-template-rows: 28px 28px;
+/* ── The merged dependency cue ──────────────────────────────────────────────────────── */
+
+.staple-dep-merged {
+  gap: 6px;
+}
+
+.staple-dep-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.staple-dep-part[data-kind="blocked-by"] svg {
+  color: var(--dep-blocked-by);
+}
+
+.staple-dep-part[data-kind="blocks"] svg {
+  color: var(--dep-blocks);
+}
+
+/* ── The rollup ring (compact parents) ──────────────────────────────────────────────── */
+
+.staple-rollup-ring {
+  flex-shrink: 0;
+}
+
+.staple-rollup-ring circle {
+  fill: none;
+  stroke-width: 2;
+}
+
+.staple-rollup-ring-track {
+  stroke: var(--priority-track);
+}
+
+.staple-rollup-ring-done {
+  stroke: var(--status-task-done);
+  stroke-linecap: round;
+}
+
+/* ── The claim as one avatar (compact rows) ─────────────────────────────────────────── */
+
+.staple-claim-avatar {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.staple-claim-mark {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  /* The card colour as a ring, so the mark reads as ON the avatar and not beside it. */
+  box-shadow: 0 0 0 2px var(--card);
+  background: var(--card);
+  border: 1.5px solid var(--text-tertiary);
+}
+
+.staple-claim-mark.staple-working-dot {
+  border: none;
+  background: var(--status-task-in_progress);
+}
+
+.staple-claim-stale {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/*
+ * ── Touch: nothing is hover-only ────────────────────────────────────────────────────
+ *
+ * On a device that cannot hover, the `⋯` is always drawn — it is the visible half of the
+ * row menu, and long-press is the other half. The chevron takes the hover colour it would
+ * otherwise only earn under a pointer.
+ */
+@media (hover: none) {
+  .staple-row-actions {
+    opacity: 1;
   }
-  .staple-row-check {
-    display: none;
-  }
-  .staple-row-meta {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-content: flex-start;
-    /* Indented to the title column, so line 2 reads as belonging to line 1. */
-    padding-left: 24px;
-  }
-  .staple-row-date {
-    display: inline;
-    width: auto;
-  }
-  /*
-   * The cue comes back, for the same reason the date does: below this breakpoint the row
-   * is two lines and `.staple-row-meta` has a whole 28px line to itself, so the width
-   * that was scarce at 959px is not scarce here. §3C called this riding along for free.
-   */
-  .staple-worklog-cue {
-    display: inline-flex;
+  .staple-row-chevron {
+    color: var(--muted-foreground);
   }
 }
 

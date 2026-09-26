@@ -34,7 +34,7 @@
  * as progress. See tree-row.css for why it is the dot and only the dot that moves.
  */
 import { StaleClaimBadge } from "@/components/StaleClaimBadge";
-import { formatAgo, isStaleClaim, staleClaimSummary } from "@/lib/claim";
+import { formatAgo, isStaleClaim, staleClaimDetail, staleClaimSummary } from "@/lib/claim";
 import type { ClaimActivity } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { initials } from "./avatar";
@@ -105,11 +105,12 @@ export function AvatarStack({ holders }: { holders: string[] }) {
   );
 }
 
-function WorkingPill({ claim }: { claim: ClaimActivity }) {
+function WorkingPill({ claim, showLabel = true }: { claim: ClaimActivity; showLabel?: boolean }) {
   return (
     <span
       className="staple-working-pill"
       data-testid="working-pill"
+      data-bare={showLabel ? undefined : ""}
       aria-label={`${claim.heldBy} is working — held ${formatAgo(claim.heldSeconds)}, active ${formatAgo(claim.idleSeconds)} ago`}
       // The same sentence the card and the detail panel show, so three surfaces cannot
       // end up disagreeing about one claim.
@@ -117,21 +118,22 @@ function WorkingPill({ claim }: { claim: ClaimActivity }) {
     >
       <AvatarStack holders={[claim.heldBy]} />
       <span className="staple-working-dot" aria-hidden="true" />
-      <span className="staple-working-label">Working…</span>
+      {showLabel ? <span className="staple-working-label">Working…</span> : null}
     </span>
   );
 }
 
-function HeldPill({ agent }: { agent: string }) {
+function HeldPill({ agent, showLabel = true }: { agent: string; showLabel?: boolean }) {
   return (
     <span
       className="staple-held-pill"
       data-testid="held-pill"
+      data-bare={showLabel ? undefined : ""}
       aria-label={`held by ${agent}; no liveness reading`}
       title={`held by ${agent} — no liveness reading available`}
     >
       <Avatar name={agent} kind="agent" size={18} />
-      <span className="staple-held-label">{agent}</span>
+      {showLabel ? <span className="staple-held-label">{agent}</span> : null}
     </span>
   );
 }
@@ -140,19 +142,72 @@ function HeldPill({ agent }: { agent: string }) {
  * The single decision point. Every caller passes the row's two fields and gets whichever of
  * the four states is true — so there is exactly one place the liveness rule is written down.
  */
+/**
+ * THE CLAIM AS ONE AVATAR — the compact row (row-layout.ts, `claim: "avatar"`).
+ *
+ * Same three facts as the pills, in 20px: who (the initials), and which state (a breathing
+ * dot for live, a hollow ring for held without a reading, an amber `silent 3h` for stale).
+ * The full sentence is the accessible name and the tooltip, exactly as on the pill. The
+ * stale case keeps its duration visible because that number IS the diagnosis.
+ */
+function ClaimAvatar({ claim, checkoutAgent }: { claim: ClaimActivity | null; checkoutAgent: string | null }) {
+  if (claim && isStaleClaim(claim)) {
+    return (
+      <span
+        className="status-chip staple-claim-stale"
+        data-stale-claim=""
+        data-held-by={claim.heldBy}
+        data-testid="stale-claim-cue"
+        aria-label={`stale claim — ${staleClaimDetail(claim)}`}
+        title={staleClaimDetail(claim)}
+      >
+        {initials(claim.heldBy)} · {formatAgo(claim.idleSeconds)}
+      </span>
+    );
+  }
+  const holder = claim?.heldBy ?? checkoutAgent;
+  if (!holder) return null;
+  const live = claim !== null;
+  return (
+    <span
+      className="staple-claim-avatar"
+      data-state={live ? "working" : "held"}
+      data-testid={live ? "working-pill" : "held-pill"}
+      role="img"
+      aria-label={
+        claim
+          ? `${claim.heldBy} is working — held ${formatAgo(claim.heldSeconds)}, active ${formatAgo(claim.idleSeconds)} ago`
+          : `held by ${holder}; no liveness reading`
+      }
+      title={claim ? staleClaimSummary(claim) : `held by ${holder} — no liveness reading available`}
+    >
+      <span className="staple-avatar" data-kind="agent" aria-hidden="true" style={{ width: 20, height: 20 }}>
+        {initials(holder)}
+      </span>
+      <span className={live ? "staple-claim-mark staple-working-dot" : "staple-claim-mark"} aria-hidden="true" />
+    </span>
+  );
+}
+
 export function RowClaimSlot({
   claim,
   checkoutAgent,
+  variant = "pill",
+  showLabel = true,
 }: {
   claim: ClaimActivity | null;
   checkoutAgent: string | null;
+  variant?: "pill" | "avatar";
+  /** "Working…" and the held agent's name beside the pill — dropped below 880px. */
+  showLabel?: boolean;
 }) {
+  if (variant === "avatar") return <ClaimAvatar claim={claim} checkoutAgent={checkoutAgent} />;
   if (claim) {
     return isStaleClaim(claim) ? (
       <StaleClaimBadge claim={claim} variant="compact" className="staple-row-stale" />
     ) : (
-      <WorkingPill claim={claim} />
+      <WorkingPill claim={claim} showLabel={showLabel} />
     );
   }
-  return checkoutAgent ? <HeldPill agent={checkoutAgent} /> : null;
+  return checkoutAgent ? <HeldPill agent={checkoutAgent} showLabel={showLabel} /> : null;
 }
