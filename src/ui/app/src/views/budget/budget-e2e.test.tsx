@@ -183,7 +183,7 @@ describe("unknown telemetry is visibly unknown", () => {
     expect(unbound).toContain('data-pressure-state="unknown"');
     // One line says why, rather than every figure repeating it.
     expect(text(section(unbound, 'data-testid="budget-no-window"'))).toBe(
-      "Unknown: the provider reports no reset time.A reading without a reset instant joins no window; a typed reading takes --resets-at.",
+      "Unknown: the provider reports no reset time.The source gave usage without a reset instant (older Codex lines, or a reading typed without --resets-at), so it joins no window.",
     );
     // Nothing unknown is drawn as a 0.
     expect(text(unbound)).not.toMatch(/\b0%/);

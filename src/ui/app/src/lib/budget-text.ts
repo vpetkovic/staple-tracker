@@ -169,7 +169,7 @@ export function noWindowText(limit: BudgetLimitReading): { reason: string; hint:
   const code = limit.missing.remainingPercent ?? limit.missing.window;
   const reason = `Unknown: ${code === undefined ? "no current window" : pressureMissingText(code)}.`;
   if (code === "window_elapsed") return { reason, hint: "Nothing carries across a reset: the next reading starts the new window." };
-  if (code === "reset_not_reported") return { reason, hint: "A reading without a reset instant joins no window; a typed reading takes --resets-at." };
+  if (code === "reset_not_reported") return { reason, hint: "The source gave usage without a reset instant (older Codex lines, or a reading typed without --resets-at), so it joins no window." };
   return { reason, hint: null };
 }
 

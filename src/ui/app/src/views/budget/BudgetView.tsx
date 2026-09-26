@@ -120,7 +120,10 @@ function MeasuredBlock({ limit, heldSeconds }: { limit: BudgetLimitReading; held
       <dl>
         <Figure label="Remaining" testId="budget-remaining">
           {remaining.value !== null ? (
-            <span className="font-mono text-[15px] font-medium tabular-nums">{remaining.value}</span>
+            <>
+              <span className="font-mono text-[15px] font-medium tabular-nums">{percentText(limit.remainingPercent!)}</span>
+              <span className="text-[12px]"> left</span>
+            </>
           ) : (
             <Unknown>{remaining.absent}</Unknown>
           )}
