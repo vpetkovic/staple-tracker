@@ -30,7 +30,7 @@
  *
  * ── On a phone it is an app, not a squeezed desktop ───────────────────────────────────
  *
- * Below 768px the shell takes the shape every phone app has (STA-310's lane):
+ * Below 768px the shell takes the shape every phone app has:
  *
  *   A TOP BAR — the menu button (the rail as a drawer: projects, Settings, theme), the
  *     workspace switcher as a pill with the FULL name (one tap opens it as a bottom sheet),
