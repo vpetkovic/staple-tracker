@@ -1513,6 +1513,10 @@ and every limit of it:
   probability is also the probability of falling under the reserve at or before that
   reset. A remaining figure already under the reserve reads 1 with `alreadyBelow: true`.
 
+The machine-level counterpart, with no work projected, is `get_budget`'s
+provisional [pressure](execution-telemetry.md#pressure): the same pace, against
+the pace that would land on the reserve at the reset.
+
 **The reserve is a parameter.** `--reserve P` (MCP `reserve`, HTTP `reserve=`) takes a
 percent of each limit, `20` or `20%`. Deciding the protected reserve, and what pressure
 against it means for admitting work, belongs to the admission policy, which does not

@@ -135,6 +135,25 @@ export function WarningChips({ codes, table, label }: { codes: readonly string[]
   );
 }
 
+/**
+ * The technical confidence badge (the budget pressure panel's). Low is marked with a dashed border
+ * and the word; colour never carries it alone.
+ */
+export function ConfidenceBadge({ label, text }: { label: "high" | "medium" | "low"; text: string }) {
+  return (
+    <span
+      data-confidence={label}
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+        label === "low" && "border-dashed border-[var(--status-task-todo)] text-[var(--status-task-todo)]",
+        label === "medium" && "text-muted-foreground",
+      )}
+    >
+      {text}
+    </span>
+  );
+}
+
 /** A clickable identifier that opens the issue, or plain text where nothing can open it. */
 function RefLink({ refId, onOpen }: { refId: string; onOpen?: (ref: string) => void }) {
   // Never broken across lines: `STA-` on one line and `303` on the next is not an identifier.

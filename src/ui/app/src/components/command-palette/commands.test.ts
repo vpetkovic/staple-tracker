@@ -178,7 +178,7 @@ describe("buildCommands", () => {
      * meaning "every view switch". The action type is what this test was always about.
      */
     const views = buildCommands(context({ view: "tree" })).filter((c) => c.action.type === "view");
-    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones", "view:calibration"]);
+    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones", "view:calibration", "view:budget"]);
   });
 
   it("names the calibration view in plain words, and still finds it by its old name", () => {

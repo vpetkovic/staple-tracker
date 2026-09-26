@@ -1043,6 +1043,58 @@ samples;
 issues get a forecast. The type mirror is pinned against the store's types in
 `test/contract-ui-types.test.ts`.
 
+## Budget
+
+The rail's **Machine** group holds one destination, **Budget** (also "Go to
+Budget" in the command palette): this machine's provider limits and each
+one's session pressure, `GET /api/budget`, the payload of `staple budget
+--json` and MCP `get_budget` ([execution-telemetry.md](execution-telemetry.md#pressure)).
+It sits apart from the Workspace group because budget readings live in this
+machine's hub and never synchronize: the view takes no workspace and shows
+the same figures whichever one the switcher names. The header's group, sort
+and filter controls are hidden, as on Calibration.
+
+**One card per limit, two blocks per card.** Accounts are listed as the read
+returns them, each limit a card. **Measured**, in a solid frame, is what the
+provider reported: the high-water remaining figure, the reset countdown and
+its local time, the observed pace (`%/h`, from the window's first reading to
+its latest) and the last reading's age and source, with a `stale` mark past
+10 minutes. **Forecast**, in a dashed frame labelled *provisional, as of*
+the read, is what the pace implies: the sustainable pace (what is left above
+the reserve over the time to the reset), the pressure (observed over
+sustainable), when the pace uses the limit up and when it reaches the
+reserve, safe concurrency, and the confidence of the pace with its warning
+chips (few readings, a span under 30 minutes, regressions in the window).
+No figure appears in both blocks, and the page computes none of them.
+
+**States.** Each card carries its pressure state as a word and an icon:
+*Within*, *Unsafe* or *Unknown*, and the line under it says *(provisional)*
+for the first two, since the rule behind them is. Unsafe also gets a red frame and a hatched
+left edge, so the state never rests on colour alone, and the header counts
+the unsafe limits. Unknown is always the word with the payload's reason
+(`stale`, `no_sample_yet`, `window_elapsed`, a missing second reading) in the
+italic placeholder style, never a 0. A limit with no current window (it
+reset, or its readings carried no reset instant) collapses to one line that
+says so. An account with no limits says why (no reading yet, capture off, no
+source bound) and names `staple budget setup`; a machine with no budget data
+at all says the same at the top. Safe concurrency always reads *Not defined
+yet*: it belongs to the admission policy, which is not built.
+
+**The reserve and the rule.** The header states the reserve (20% of each
+limit, a provisional default until an admission policy sets one) and the
+provisional pressure rule (unsafe at ×1.00 or over), both from the payload.
+
+**Live.** The view re-reads every 30 seconds while the page is visible, at
+once when it becomes visible again, and on the Refresh button. It does not
+follow the workspace fingerprint: budget readings live in the hub, not in a
+workspace.
+Between reads, the reset countdown and the last reading's age tick by the
+seconds the page has held the answer, by the page's own clock, so a device
+whose clock is off still counts right; the forecast figures stay as of the
+read. At 390 px the two blocks stack, labels keep a fixed column and long
+values wrap; nothing scrolls sideways, and the controls keep the app's touch
+rules (the chips at 24 px).
+
 ## Milestones
 
 The third tab beside Graph — also "Go to milestones" in the command palette —

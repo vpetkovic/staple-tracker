@@ -389,6 +389,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
+      // `staple budget` / MCP `get_budget`: GET-only, a read of this machine's hub, no `ws`.
+      "/api/budget",
       /**
        * Automatic budget collection, machine-local. The GET is the status
        * read; the four POSTs are named in `BUDGET_COLLECTION_WRITES`, which the method

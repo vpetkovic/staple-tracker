@@ -28,8 +28,16 @@ describe("the rail's groups", () => {
     expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "calibration"]);
   });
 
-  it("shows the issue filters on every issue view and not on the Estimate accuracy report", () => {
-    expect(VIEWS.filter((view) => !viewUsesIssueFilters(view))).toEqual(["calibration"]);
+  it("lists the machine's Budget in its own Machine group, after the workspace's views", () => {
+    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["Workspace", "Machine"]);
+    const machine = NAV_GROUPS[1]!;
+    expect(machine.items.map((entry) => entry.label)).toEqual(["Budget"]);
+    expect(machine.items.map((entry) => entry.view)).toEqual(["budget"]);
+    expect(navItemForView("budget")).toMatchObject({ id: "view:budget", label: "Budget" });
+  });
+
+  it("shows the issue filters on every issue view and not on the Estimate accuracy report or the Budget", () => {
+    expect(VIEWS.filter((view) => !viewUsesIssueFilters(view))).toEqual(["calibration", "budget"]);
   });
 
   it("calls the tree view Tasks and keeps its internal value", () => {

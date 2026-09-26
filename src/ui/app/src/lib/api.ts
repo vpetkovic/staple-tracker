@@ -57,6 +57,7 @@ import type {
   TimingQualityReport,
   CalibrationReport,
   ForecastReport,
+  BudgetView,
 } from "./types";
 // Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
 import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
@@ -689,6 +690,13 @@ export const getAgentContext = (params: { ws?: string; ref: string; documents?: 
  */
 export const getTimingQuality = (params: { ws?: string; parent?: string; limit?: number }) =>
   request<TimingQualityReport>(`/api/timing/quality${qs(params)}`);
+
+/**
+ * `GET /api/budget` — this machine's provider limits, each with its provisional pressure
+ * (`staple budget --json`, MCP `get_budget`). Machine-level: no `ws`. Rendered as returned.
+ */
+export const getBudget = (params: { account?: string; reserve?: string } = {}) =>
+  request<BudgetView>(`/api/budget${qs(params)}`);
 
 /**
  * `GET /api/forecast` — the completion forecast of `ref` and, apart from it, the budget forecast
