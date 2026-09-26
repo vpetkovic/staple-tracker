@@ -32,7 +32,7 @@ import {
 } from "./bindings.js";
 import { assertAccountRef, assertProvider, type BudgetSourceKind } from "./formats.js";
 import { parseClaudeStatusline } from "./sources/claude-statusline.js";
-import { parseCodexRollout } from "./sources/codex-rollout.js";
+import { scanCodexRollout, type RolloutScan, type SessionMeta } from "./sources/codex-rollout.js";
 import { parseManualReading } from "./sources/manual.js";
 import type { ParsedItem } from "./sources/types.js";
 
@@ -48,6 +48,12 @@ export interface IngestRequest {
   readonly configDir?: string;
   /** codex-rollout: one rollout-*.jsonl file. */
   readonly file?: string;
+  /**
+   * codex-rollout, the collector only: read the lines after `offset` with a previous
+   * scan's metadata (`budget collect`, for a grown file whose copy run already ended).
+   * Not exposed on the CLI or MCP.
+   */
+  readonly rolloutFrom?: { readonly offset: number; readonly meta: SessionMeta | null };
   readonly account?: string;
   readonly provider?: string;
   /** manual: the provider's name for the limit. */
@@ -89,6 +95,8 @@ export interface IngestDeps {
    * MCP tool is not the operator, and is held to the opt-in like any harness source.
    */
   readonly operator?: boolean;
+  /** Told what a codex-rollout scan found beyond its readings, so the collector can resume after it. */
+  readonly onRolloutScan?: (scan: Omit<RolloutScan, "items">) => void;
 }
 
 const SOURCE_KIND: Readonly<Record<IngestSource, BudgetSourceKind>> = {
@@ -154,7 +162,9 @@ export function ingestBudget(request: IngestRequest, deps: IngestDeps): IngestRe
       });
       // Ancestors are read only from the bound Codex home's sessions tree.
       const sessionsRoot = binding !== null && binding.source === "codex_rollout" ? join(expandHomePath(binding.home), "sessions") : undefined;
-      items = parseCodexRollout(file, { sessionsRoot });
+      const scan = scanCodexRollout(file, { sessionsRoot, from: request.rolloutFrom ?? null });
+      items = scan.items;
+      deps.onRolloutScan?.({ meta: scan.meta, completeBytes: scan.completeBytes, leadingRunEnded: scan.leadingRunEnded });
       break;
     }
     case "manual": {

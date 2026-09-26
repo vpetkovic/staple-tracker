@@ -284,6 +284,28 @@ staple budget bind --source codex-rollout --account codex-plus         # binds $
 staple budget bindings
 ```
 
+Or all of it, plus the status-line wrapper and the Codex watcher, as one
+explicit consent
+([execution-telemetry.md](execution-telemetry.md#automatic-collection)):
+
+```bash
+staple budget setup --claude-account personal-max --codex-account codex-plus        # the plan; changes nothing
+staple budget setup --claude-account personal-max --codex-account codex-plus --yes  # apply it
+staple budget status
+staple budget unsetup --yes                                                         # reverse exactly what setup did
+```
+
+Automatic collection keeps its own machine-local state in the staple home, none
+of it in `config.json` and none of it replicated:
+
+| Path | What |
+|---|---|
+| `telemetry/collection.json` | what setup changed, so `unsetup` can reverse exactly that |
+| `telemetry/codex-cursor.json` | each rollout's size, mtime and where its last read stopped, and the last run's summary and error |
+| `telemetry/collect.lock` | held while a collect runs, so the agent and a hand-run collect never overlap |
+| `logs/budget-collect.log`, `logs/budget-collect.agent.log` | one line per collect run, and the launch agent's own output; each rotated at 256 KiB |
+| `backups/claude-settings/` | a copy of `settings.json` before each edit; the newest 10 are kept |
+
 ## Commands
 
 ```bash
