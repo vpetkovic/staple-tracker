@@ -178,7 +178,13 @@ describe("durations, rounded as a person says them", () => {
     expect(plainDuration(300).text).toBe("5 minutes");
     expect(plainDuration(40 * 60 + 100).text).toBe("40 minutes");
     expect(plainDuration(2999).text).toBe("50 minutes");
-    expect(plainDuration(3000).text).toBe("1 hour");
+    // The nearest 5 minutes up to 90 minutes: no jump from "50 minutes" to "1 hour".
+    expect(plainDuration(3000).text).toBe("50 minutes");
+    expect(plainDuration(3300).text).toBe("55 minutes");
+    expect(plainDuration(3600).text).toBe("60 minutes");
+    expect(plainDuration(5100).text).toBe("85 minutes");
+    expect(plainDuration(5399).text).toBe("90 minutes");
+    expect(plainDuration(5400).text).toBe("1½ hours");
     expect(plainDuration(1.5 * H).text).toBe("1½ hours");
     expect(plainDuration(8.4 * H).text).toBe("8½ hours");
     expect(plainDuration(9.9 * H).text).toBe("10 hours");
@@ -194,6 +200,11 @@ describe("durations, rounded as a person says them", () => {
     expect(plainRange(15 * H, 15.2 * H)).toBe("about 15 hours");
     expect(plainRange(10, 30)).toBe("less than a minute");
     expect(plainRange(90, 2 * H)).toBe("between a few minutes and 2 hours");
+    // A range that starts under a minute is said by its upper end.
+    expect(plainRange(30, 1 * H)).toBe("up to about 60 minutes");
+    expect(plainRange(30, 3 * H)).toBe("up to about 3 hours");
+    expect(plainRange(30, 200)).toBe("up to a few minutes");
+    expect(plainRange(60, 3 * H)).toBe("between a few minutes and 3 hours");
   });
 
   it("writes a reset countdown the way a clock does, and a reading's age short", () => {
@@ -261,7 +272,8 @@ describe("estimate ratios in words", () => {
     expect(plainRatioRange(0.5, 1.5)).toBe("between half of the estimate and 1½ times the estimate");
     expect(plainRatioRange(0.5, 1)).toBe("between half of the estimate and the full estimate");
     expect(plainRatioRange(0.2, 0.21)).toBe("about a fifth of the estimate");
-    expect(plainRatioRange(0.14, 0.25)).toBe("for a 10-hour estimate, between 1½ and 2½ hours");
+    expect(plainRatioRange(0.14, 0.25)).toBe("for a 10-hour estimate, between 85 minutes and 2½ hours");
+    expect(plainRatioRange(0.001, 0.1)).toBe("for a 10-hour estimate, up to about 60 minutes");
     expect(ratioFigure(0.79)).toBe("About ¾ of the estimate");
     expect(ratioFigure(1)).toBe("About as estimated");
     expect(ratioFigure(1.2)).toBe("About 1¼ times the estimate");
@@ -371,6 +383,15 @@ describe("limitStatus: the one status mapping", () => {
     expect(limitStatus(limit({ work: null }))).toEqual({ status: "unknown", reason: "no_projection" });
     expect(limitStatus(limit({ reserve: null }))).toEqual({ status: "unknown", reason: "no_projection" });
     expect(limitStatus(limit({ reserve: reserve({ breachProbability: null }) }))).toEqual({ status: "unknown", reason: "no_projection" });
+  });
+
+  it("is Tight, not Unknown, when this work's use is unknown but the account's pace runs out before the reset", () => {
+    const paced = (atPace: "before_reset" | "after_reset") => limit({ work: null, exhaustion: { atPace, seconds: 3600, at: null } });
+    expect(limitStatus(paced("before_reset"))).toEqual({ status: "tight", reason: "pace_unknown_work" });
+    expect(limitSentence(paced("before_reset")).verdict).toBe("At the account's current pace this limit runs out before it resets; what this work adds is unknown.");
+    expect(limitStatus(paced("after_reset"))).toEqual({ status: "unknown", reason: "no_projection" });
+    // Already under the reserve still says At risk first.
+    expect(limitStatus(limit({ work: null, exhaustion: { atPace: "before_reset", seconds: 3600, at: null }, reserve: reserve({ alreadyBelow: true }) })).status).toBe("at_risk");
   });
 
   it("is At risk when already under the reserve, even with nothing projected", () => {
@@ -516,11 +537,12 @@ describe("budget sentences", () => {
     expect(providerName("mistral", "m")).toEqual({ name: "Mistral", short: "Mistral" });
     expect(providerName(null, "my-account").name).toBe("my-account");
     const unreported = limit({ remainingPercent: null, missing: { remainingPercent: "reset_not_reported" } });
-    expect(unreadableLine([unreported, unreported], "Codex", true)).toBe("2 other Codex limits can't be read yet: the provider doesn't report them.");
-    expect(unreadableLine([unreported], "Codex", false)).toBe("1 Codex limit can't be read yet: the provider doesn't report it.");
+    // reset_not_reported: the limit has samples; the provider doesn't say when it RESETS.
+    expect(unreadableLine([unreported, unreported], "Codex", true)).toBe("2 other Codex limits can't be read yet: the provider doesn't say when they reset.");
+    expect(unreadableLine([unreported], "Codex", false)).toBe("1 Codex limit can't be read yet: the provider doesn't say when it resets.");
     const elapsed = limit({ remainingPercent: null, missing: { remainingPercent: "window_elapsed" } });
     expect(unreadableLine([elapsed, unreported], "Codex", false)).toBe(
-      "2 Codex limits can't be read yet: they have reset since the last reading; the provider doesn't report them.",
+      "2 Codex limits can't be read yet: they have reset since the last reading; the provider doesn't say when they reset.",
     );
     expect(unreadableLine([], "Codex", true)).toBeNull();
   });
@@ -577,9 +599,11 @@ describe("estimate accuracy in words", () => {
     expect(words.answer).toBe("All finished work usually takes about a fifth of the estimate.");
     expect(words.basis).toBe("Based on 9 finished tasks.");
     expect(words.alsoFor).toEqual(["Bug fixes (high priority): too few of their own (1)", "Spikes (critical priority): too few of their own (3)"]);
-    // Never "Quite sure", however many the broader class holds.
-    expect(words.confidence).toBe("Rough guess: these kinds have too few finished tasks of their own.");
-    expect(groupSentence(accuracyGroups([fellBack("spike", "critical", 3, "all", ALL, 108)])[0]!).confidence).toBe(words.confidence);
+    // Never "Quite sure", however many the broader class holds; said for the kinds it stands in for.
+    expect(words.confidence).toBe("Rough guess for bug fixes (high priority), spikes (critical priority): too few of their own (below), so all finished work stands in.");
+    expect(groupSentence(accuracyGroups([fellBack("spike", "critical", 3, "all", ALL, 108)])[0]!).confidence).toBe(
+      "Rough guess for spikes (critical priority): only 3 of their own, so all finished work stands in.",
+    );
     expect(FALLBACK_CONFIDENCE.level).toBe("low");
   });
 
@@ -599,6 +623,18 @@ describe("estimate accuracy in words", () => {
       ["All finished work", 1],
     ]);
     expect(className({ kind: "task", priority: "high", workType: "*", area: "*", model: "*" })).toBe("All tasks (high priority)");
+  });
+
+  it("agrees the verb with the class: 'All finished work usually takes', 'All bug fixes usually take'", () => {
+    const bugClass = { ...ALL, kind: "bug" };
+    const half = (member: CalibrationCohort): CalibrationCohort => ({ ...member, ratio: { ...member.ratio, expected: { value: 0.5, method: "pooled" } } });
+    const kindGroup = accuracyGroups([half(fellBack("bug", "medium", 2, "kind", bugClass, 15))])[0]!;
+    expect(groupSentence(kindGroup).answer).toBe("All bug fixes usually take about half of the estimate.");
+    expect(groupSentence(kindGroup).confidence).toBe("Rough guess for bug fixes (medium priority): only 2 of their own, so all bug fixes stand in.");
+    expect(accuracyHeadline([half(fellBack("bug", "medium", 2, "kind", bugClass, 15))])).toBe("All bug fixes usually take about half of the estimate.");
+    const allGroup = accuracyGroups([half(fellBack("bug", "high", 1))])[0]!;
+    expect(groupSentence(allGroup).answer).toBe("All finished work usually takes about half of the estimate.");
+    expect(accuracyHeadline([half(fellBack("bug", "high", 1))])).toBe("All finished work usually takes about half of the estimate.");
   });
 
   it("grades an own cohort's confidence from its own fields", () => {
@@ -640,11 +676,16 @@ describe("estimate accuracy in words", () => {
     });
     expect(setSummaryText(summary("exact", { approximate: 2, reconstructed: 127 }, 9))).toEqual({
       basis: "Based on 9 finished tasks with measured time, out of 138 finished with an estimate.",
-      notUsed: "Not used here: 2 have only approximate timing and 127 have timing rebuilt from logs (see older history).",
+      notUsed: "Not used here: 2 have only approximate timing and 127 have timing rebuilt from logs (they're in the older history).",
     });
-    const older = setSummaryText(summary("reconstructed", { exact: 10, approximate: 2, reconstructed: 19 }, 108));
+    // The measured history says the same whether the older history is shown or not.
+    expect(setSummaryText(summary("exact", { reconstructed: 127 }, 9), { measuredAbove: true })).toEqual(setSummaryText(summary("exact", { reconstructed: 127 }, 9)));
+    const olderSummary = summary("reconstructed", { exact: 10, approximate: 2, reconstructed: 19 }, 108);
+    const older = setSummaryText(olderSummary, { measuredAbove: true });
     expect(older.basis).toBe("Based on 108 finished tasks with timing rebuilt from logs, out of 138 finished with an estimate.");
     expect(older.notUsed).toBe("Not used here: 10 are in the measured history above, 2 have only approximate timing and 19 couldn't be rebuilt reliably.");
+    // "Above" only when the page draws the measured history above it.
+    expect(setSummaryText(olderSummary).notUsed).toBe("Not used here: 10 are in the measured history, 2 have only approximate timing and 19 couldn't be rebuilt reliably.");
     // Never the blanket "their timing isn't exact": the exact ones are exact.
     expect(older.notUsed).not.toMatch(/isn't exact/);
     expect(setSummaryText(summary("exact", { approximate: 1 }, 3)).notUsed).toBe("Not used here: 1 has only approximate timing.");

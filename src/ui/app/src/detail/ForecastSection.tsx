@@ -256,7 +256,22 @@ function CompletionBlock({
   const headline = forecastHeadline(completion, mode);
   const order = pathHeadline(completion.path);
 
-  const notCounted = notCountedText(awaiting.length, unknown.length);
+  // The headline already says how many can't be estimated (a lower bound or an unknown figure):
+  // "Not counted" does not say it again.
+  const headlineSaysUnknown = completion.labor.expectedSeconds === null || (completion.labor.partial && completion.units.unknownRefs.length > 0);
+  const notCounted = notCountedText(awaiting.length, headlineSaysUnknown ? 0 : unknown.length);
+  // With no figure there is nothing to be sure about: the confidence card is left out, and its
+  // technical line and warnings move under the work-left card's details, so none is lost.
+  const hasFigure = completion.settled || completion.labor.expectedSeconds !== null;
+  const confidenceDetails = (
+    <>
+      <p className="text-[11px] text-muted-foreground" data-testid="forecast-confidence">
+        {confidence.label}: {confidence.achieved}.
+        {confidence.reasons.length > 0 ? ` Not high because: ${confidence.reasons.join(", ").toLowerCase()}.` : null}
+      </p>
+      <WarningChips codes={completion.warnings} label="Forecast warnings" />
+    </>
+  );
 
   return (
     <section aria-label="Completion forecast" data-block="completion" className="grid gap-3 @xl:grid-cols-2">
@@ -326,6 +341,7 @@ function CompletionBlock({
               <p className="text-[10px] text-muted-foreground">
                 Effort along the work, not calendar time: waits for an agent, a review or an outside blocker are not in it.
               </p>
+              {hasFigure ? null : confidenceDetails}
             </>
           )
         }
@@ -388,30 +404,24 @@ function CompletionBlock({
         </PlainCard>
       ) : null}
 
-      <PlainCard
-        data-confidence={completion.confidence.label}
-        title="How sure we are"
-        className={full && !completion.settled ? undefined : "@xl:col-span-2"}
-        figure={CONFIDENCE_WORDS[completion.confidence.label]}
-        headline={confidenceHeadline(completion.confidence, calibrationSamples)}
-        headlineTestId="forecast-confidence-headline"
-        help={
-          <>
-            The forecast learns from how long finished tasks really took compared with their estimates. The more finished tasks
-            like these there are, the surer it gets. &ldquo;Quite sure&rdquo;, &ldquo;Fairly sure&rdquo; and &ldquo;Rough
-            guess&rdquo; say how much to lean on it.
-          </>
-        }
-        details={
-          <>
-            <p className="text-[11px] text-muted-foreground" data-testid="forecast-confidence">
-              {confidence.label}: {confidence.achieved}.
-              {confidence.reasons.length > 0 ? ` Not high because: ${confidence.reasons.join(", ").toLowerCase()}.` : null}
-            </p>
-            <WarningChips codes={completion.warnings} label="Forecast warnings" />
-          </>
-        }
-      />
+      {hasFigure ? (
+        <PlainCard
+          data-confidence={completion.confidence.label}
+          title="How sure we are"
+          className={full && !completion.settled ? undefined : "@xl:col-span-2"}
+          figure={CONFIDENCE_WORDS[completion.confidence.label]}
+          headline={confidenceHeadline(completion.confidence, calibrationSamples)}
+          headlineTestId="forecast-confidence-headline"
+          help={
+            <>
+              The forecast learns from how long finished tasks really took compared with their estimates. The more finished tasks
+              like these there are, the surer it gets. &ldquo;Quite sure&rdquo;, &ldquo;Fairly sure&rdquo; and &ldquo;Rough
+              guess&rdquo; say how much to lean on it.
+            </>
+          }
+          details={confidenceDetails}
+        />
+      ) : null}
     </section>
   );
 }

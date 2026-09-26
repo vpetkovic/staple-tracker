@@ -31,6 +31,7 @@ import {
   limitSentence,
   limitStatus,
   notCountedText,
+  plainCountdown,
   pathHeadline,
   rangeWords,
   setSummaryText,
@@ -487,10 +488,9 @@ describe("the plain-language layer, over the same payloads", () => {
     expect(headline).toMatch(/^At least .* of work is left, probably more: 1 task can't be estimated yet\.$/);
     expect(epic.completion.units.unknownRefs.length).toBe(1);
     // The review wait is said here, as not counted, not as a doubt about the figure.
-    expect(text(section(html, 'data-testid="forecast-not-counted"'))).toBe(notCountedText(1, 1));
-    expect(text(section(html, 'data-testid="forecast-not-counted"'))).toBe(
-      "Not counted: 1 task waiting for review (time waiting for review isn't work) and 1 task that can't be estimated yet.",
-    );
+    // The headline already says 1 task can't be estimated: "Not counted" does not say it again.
+    expect(text(section(html, 'data-testid="forecast-not-counted"'))).toBe(notCountedText(1, 0));
+    expect(text(section(html, 'data-testid="forecast-not-counted"'))).toBe("Not counted: 1 task waiting for review (time waiting for review isn't work).");
     // The pill says the confidence in a word with an icon, dashed when a rough guess.
     expect(html).toMatch(/<span data-confidence="low"[^>]*border-dashed[^>]*><svg[\s\S]*?<\/svg>Rough guess<\/span>/);
   });
@@ -602,16 +602,28 @@ describe("the plain-language layer, over the same payloads", () => {
     }
   });
 
-  it("says Unknown, with the reason in everyday words, where the work's use was never measured", () => {
-    const codex = epic.budget.accounts.find((a) => a.accountRef === "codex-plus")!;
-    for (const limit of codex.limits) {
-      const card = section(render(epic), `data-limit="${limit.limitKey}"`);
-      expect(pill(card)).toEqual({ status: "unknown", word: "Unknown", icon: true });
-      expect(text(section(card, 'data-testid="budget-headline"'))).toContain(
-        "We can't tell yet what this work does to it: no usage has been measured for this project on this account yet.",
-      );
-      expect(text(section(card, 'data-testid="budget-headline"'))).not.toMatch(/\b0%/);
-    }
+  it("says Unknown, with the reason in everyday words, where nothing projects this work", () => {
+    // A quarter of an hour later the readings are stale: nothing is projected off them.
+    const secondary = stale.budget.accounts.find((a) => a.accountRef === "codex-plus")!.limits.find((limit) => limit.limitKey === "codex.secondary")!;
+    expect(secondary.work).toBeNull();
+    expect(secondary.exhaustion).toBeNull();
+    const card = section(render(stale), 'data-limit="codex.secondary"');
+    expect(pill(card)).toEqual({ status: "unknown", word: "Unknown", icon: true });
+    expect(text(section(card, 'data-testid="budget-headline"'))).toContain("We can't tell yet what this work does to it: the last reading is more than 10 minutes old.");
+    expect(text(section(card, 'data-testid="budget-headline"'))).not.toMatch(/\b0%/);
+  });
+
+  it("says Tight, not Unknown, when the account's own pace runs the limit out and this work's use is unknown", () => {
+    const primary = epic.budget.accounts.find((a) => a.accountRef === "codex-plus")!.limits.find((limit) => limit.limitKey === "codex.primary")!;
+    // The payload's own pace: 20%/hour on 60% left, before a reset about 4 hours away.
+    expect(primary.work).toBeNull();
+    expect(primary.exhaustion?.atPace).toBe("before_reset");
+    expect(limitStatus(primary)).toEqual({ status: "tight", reason: "pace_unknown_work" });
+    const card = section(render(epic), 'data-limit="codex.primary"');
+    expect(pill(card)).toEqual({ status: "tight", word: "Tight", icon: true });
+    expect(text(section(card, 'data-testid="budget-headline"'))).toBe(
+      `Resets in ${plainCountdown(primary.secondsToReset!)}. At the account's current pace this limit runs out before it resets; what this work adds is unknown.`,
+    );
   });
 
   it("says At risk when the limit is already under the reserve asked for", () => {
@@ -628,7 +640,12 @@ describe("the plain-language layer, over the same payloads", () => {
     expect(headline).toBe("We can't tell yet how long this will take: none of the remaining tasks can be estimated yet.");
     expect(pill(section(html, 'data-block="completion"'))).toEqual({ status: "unknown", word: "Unknown", icon: true });
     expect(html).not.toContain('data-testid="forecast-range"');
-    expect(text(section(html, 'data-testid="forecast-confidence-headline"'))).toMatch(/^There are no finished tasks|^Based on /);
+    // No figure, nothing to be sure about: no confidence card, and no "Not counted" line repeating the headline.
+    expect(html).not.toContain('data-testid="forecast-confidence-headline"');
+    expect(html).not.toContain("How sure we are");
+    expect(html).not.toContain('data-testid="forecast-not-counted"');
+    // The technical confidence line is still there, behind the work-left card's details.
+    expect(insideClosedDetails(html, 'data-testid="forecast-confidence"')).toBe(true);
   });
 
   it("gives the compact leaf a plain answer", () => {
@@ -734,8 +751,9 @@ describe("estimate accuracy, in everyday words", () => {
     // The older history's non-samples include the exact ones: they are named as such, never "not exact".
     expect(older.excluded.counts.exact).toBeGreaterThan(0);
     const line = text(section(on, 'data-testid="set-plain-reconstructed"'));
-    expect(line).toContain(setSummaryText(older).notUsed!);
+    expect(setSummaryText(older).notUsed).not.toContain("above");
     expect(line).toContain(`${older.excluded.counts.exact} ${older.excluded.counts.exact === 1 ? "is" : "are"} in the measured history above`);
+    expect(line).toContain(setSummaryText(older, { measuredAbove: true }).notUsed!);
     expect(line).toContain("timing rebuilt from logs");
     expect(line).not.toMatch(/isn't exact/);
   });

@@ -48,8 +48,9 @@ export function count(n: number, noun: string, plural = `${noun}s`): string {
  *
  * - under a minute: "less than a minute";
  * - under 5 minutes: "a few minutes";
- * - under 50 minutes: the nearest 5 minutes ("40 minutes");
- * - under 10 hours: the nearest half hour ("1 hour", "8½ hours");
+ * - under 90 minutes: the nearest 5 minutes ("40 minutes", "55 minutes", "70 minutes"), so a
+ *   typical figure never jumps from "50 minutes" to "1 hour";
+ * - under 10 hours: the nearest half hour ("1½ hours", "8½ hours");
  * - under 100 hours: the nearest hour ("15 hours");
  * - from 100 hours: the nearest 5 hours ("140 hours").
  *
@@ -66,7 +67,7 @@ export interface PlainDuration {
 export function plainDuration(seconds: number): PlainDuration {
   if (!Number.isFinite(seconds) || seconds < 60) return { number: "", unit: null, text: "less than a minute" };
   if (seconds < 300) return { number: "", unit: null, text: "a few minutes" };
-  if (seconds < 3000) {
+  if (seconds < 5400) {
     const minutes = Math.round(seconds / 300) * 5;
     return { number: String(minutes), unit: "minutes", text: `${minutes} minutes` };
   }
@@ -85,13 +86,15 @@ export function plainDuration(seconds: number): PlainDuration {
 }
 
 /**
- * "between 14 and 21 hours", "between 40 minutes and 2 hours", or, when both ends round to the
- * same words, "about 15 hours". The two ends are the payload's own; nothing is widened or moved.
+ * "between 14 and 21 hours", "between 40 minutes and 2 hours", "up to about 1 hour" when the
+ * lower end is under a minute, or, when both ends round to the same words, "about 15 hours". The two ends are the payload's own; nothing is widened or moved.
  */
 export function plainRange(lower: number, upper: number): string {
   const low = plainDuration(lower);
   const high = plainDuration(upper);
   if (low.text === high.text) return high.unit === null ? high.text : `about ${high.text}`;
+  // A range that starts under a minute is said by its upper end: "up to about 1 hour".
+  if (lower < 60) return high.unit === null ? `up to ${high.text}` : `up to about ${high.text}`;
   const sameUnit = low.unit !== null && high.unit !== null && low.unit.startsWith("hour") === high.unit.startsWith("hour");
   return sameUnit ? `between ${low.number} and ${high.text}` : `between ${low.text} and ${high.text}`;
 }
@@ -437,7 +440,7 @@ export const STATUS_THRESHOLDS = {
   atRisk: 0.5,
 } as const;
 
-export type StatusReason = "no_reading" | "already_below" | "no_projection" | "runs_out" | "breach" | "other_use" | "lower_bound" | "pace";
+export type StatusReason = "no_reading" | "already_below" | "no_projection" | "pace_unknown_work" | "runs_out" | "breach" | "other_use" | "lower_bound" | "pace";
 
 const RANK: Record<PlainStatus, number> = { unknown: -1, on_track: 0, tight: 1, at_risk: 2 };
 const byRank = (rank: number): PlainStatus => (rank >= 2 ? "at_risk" : rank === 1 ? "tight" : "on_track");
@@ -450,7 +453,9 @@ const fromProbability = (probability: number): PlainStatus =>
  * 1. `remainingPercent` null → Unknown (`no_reading`).
  * 2. `reserve.alreadyBelow` → At risk (`already_below`).
  * 3. no `work`, no `reserve`, or a null `reserve.breachProbability` → Unknown (`no_projection`):
- *    what is left is known, what this work does to it is not.
+ *    what is left is known, what this work does to it is not — unless the account's own pace runs
+ *    the limit out before the reset (`exhaustion.atPace === "before_reset"`), which is Tight
+ *    whatever the work adds (`pace_unknown_work`).
  * 4. `work.remainingAtResetPercent.expected` under 0 (the work alone runs the limit out before
  *    the reset) → At risk (`runs_out`).
  * 5. The breach probability — the WORSE of the work alone and, when the payload has it, the work
@@ -470,7 +475,11 @@ export function limitStatus(limit: BudgetLimitForecast): { status: PlainStatus; 
   if (limit.reserve?.alreadyBelow) return { status: "at_risk", reason: "already_below" };
   const work = limit.work;
   const alone = limit.reserve?.breachProbability ?? null;
-  if (work === null || limit.reserve === null || alone === null) return { status: "unknown", reason: "no_projection" };
+  if (work === null || limit.reserve === null || alone === null) {
+    // What this work adds is unknown, but the account's own pace already runs the limit out.
+    if (limit.exhaustion?.atPace === "before_reset") return { status: "tight", reason: "pace_unknown_work" };
+    return { status: "unknown", reason: "no_projection" };
+  }
   if (work.remainingAtResetPercent.expected < 0) return { status: "at_risk", reason: "runs_out" };
   const other = limit.reserve.withOtherUse?.breachProbability ?? null;
   let status = fromProbability(alone);
@@ -564,6 +573,8 @@ export function limitSentence(limit: BudgetLimitForecast): { opening: string | n
         return `It's already below ${plainReserve(reserve!)}.`;
       case "no_projection":
         return `We can't tell yet what this work does to it: ${plainLimitReason(limit, limit.work === null ? "work" : "reserve")}.`;
+      case "pace_unknown_work":
+        return "At the account's current pace this limit runs out before it resets; what this work adds is unknown.";
       case "runs_out":
         return "This work alone would use it up before it resets.";
       case "breach": {
@@ -634,7 +645,7 @@ export function limitHelp(limit: BudgetLimitForecast): string {
  * the payload's `missing.remainingPercent`, said once each.
  */
 const UNREADABLE_REASON: Record<string, [one: string, many: string]> = {
-  reset_not_reported: ["the provider doesn't report it", "the provider doesn't report them"],
+  reset_not_reported: ["the provider doesn't say when it resets", "the provider doesn't say when they reset"],
   window_elapsed: ["it has reset since the last reading", "they have reset since the last reading"],
   no_sample_yet: ["nothing has been read yet", "nothing has been read yet"],
   sliding_window: ["it has no fixed reset time", "they have no fixed reset time"],
@@ -722,7 +733,16 @@ export function accuracyGroups(cohorts: readonly CalibrationCohort[]): AccuracyG
  * A fallback group's confidence comes from the members' own counts, which are under the minimum
  * by definition: always "Rough guess", never "Quite sure", however many the broader class holds.
  */
-export const FALLBACK_CONFIDENCE = { word: "Rough guess", note: "these kinds have too few finished tasks of their own", level: "low" as const };
+export const FALLBACK_CONFIDENCE = { word: "Rough guess", level: "low" as const };
+
+/**
+ * A class's clause: "All finished work usually takes …" (a mass noun, `*` kind) but "All bug fixes
+ * usually take …" (a plural).
+ */
+function classClause(name: string, figure: CalibrationCohort): string {
+  const clause = ratioClause(name, figure.ratio.expected.value);
+  return figure.class.kind === "*" ? clause.replace(/ usually take /, " usually takes ") : clause;
+}
 
 /**
  * The card's sentences. An own cohort: "Bug fixes (high priority) usually take about a fifth of
@@ -742,11 +762,18 @@ export function groupSentence(group: AccuracyGroup): { answer: string; basis: st
       alsoFor: [],
     };
   }
-  const answer = ratioClause(group.name, group.figure.ratio.expected.value).replace(/ usually take /, " usually takes ");
+  const answer = classClause(group.name, group.figure);
+  const lower = (text: string): string => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  const own = (member: CalibrationCohort): number => member.path[0]?.samples ?? member.keySamples;
+  const standsIn = `${lower(group.name)} ${group.figure.class.kind === "*" ? "stands" : "stand"} in`;
+  const confidence =
+    group.members.length === 1
+      ? `${FALLBACK_CONFIDENCE.word} for ${lower(cohortName(group.members[0]!.key))}: only ${own(group.members[0]!)} of their own, so ${standsIn}.`
+      : `${FALLBACK_CONFIDENCE.word} for ${group.members.map((member) => lower(cohortName(member.key))).join(", ")}: too few of their own (below), so ${standsIn}.`;
   return {
     answer: `${answer}.`,
     basis: `Based on ${count(group.figure.samples, "finished task")}.`,
-    confidence: `${FALLBACK_CONFIDENCE.word}: ${FALLBACK_CONFIDENCE.note}.`,
+    confidence,
     alsoFor: group.members.map((member) => `${cohortName(member.key)}: too few of their own (${member.path[0]?.samples ?? member.keySamples})`),
   };
 }
@@ -763,7 +790,7 @@ export function accuracyHeadline(cohorts: readonly CalibrationCohort[]): string 
     const name = group.kind === "own" ? cohortName(group.cohort.key) : group.name;
     const ratio = group.kind === "own" ? group.cohort.ratio.expected.value : group.figure.ratio.expected.value;
     const clause = ratioClause(index === 0 ? name : `${name.charAt(0).toLowerCase()}${name.slice(1)}`, ratio);
-    return group.kind === "class" ? clause.replace(/ usually take /, " usually takes ") : clause;
+    return group.kind === "class" && group.figure.class.kind === "*" ? clause.replace(/ usually take /, " usually takes ") : clause;
   });
   const more = groups.length > 3 ? `; and ${count(groups.length - 3, "more group")} below` : "";
   return `${shown.join("; ")}${more}.`;
@@ -771,12 +798,15 @@ export function accuracyHeadline(cohorts: readonly CalibrationCohort[]): string 
 
 /**
  * A set's summary in words: what it rests on, and what is not used here, by the state the
- * payload counts (`excluded.counts`), said for the set it belongs to. For the older history,
- * `exact` members are "in the measured history above"; for the measured history, `reconstructed`
- * members were "rebuilt from logs"; the older history's own `reconstructed` members that are not
+ * payload counts (`excluded.counts`), said for the set it belongs to and for what the page shows.
+ * For the older history, `exact` members are "in the measured history", "above" only when the
+ * page draws the measured history above it (`shown.measuredAbove`); for the measured history,
+ * `reconstructed` members "have timing rebuilt from logs (they're in the older history)", which
+ * holds whether or not the older history is shown, so the measured section never changes with the
+ * switch; the older history's own `reconstructed` members that are not
  * samples "couldn't be rebuilt reliably".
  */
-export function setSummaryText(summary: CalibrationSetSummary): { basis: string; notUsed: string | null } {
+export function setSummaryText(summary: CalibrationSetSummary, shown: { measuredAbove: boolean } = { measuredAbove: false }): { basis: string; notUsed: string | null } {
   const how = summary.set === "exact" ? "with measured time" : "with timing rebuilt from logs";
   const basis = `Based on ${count(summary.samples, "finished task")} ${how}, out of ${summary.coverage.eligible} finished with an estimate.`;
   const verb = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
@@ -786,12 +816,14 @@ export function setSummaryText(summary: CalibrationSetSummary): { basis: string;
       const k = n!;
       switch (state) {
         case "exact":
-          return verb(k, "is in the measured history above", "are in the measured history above");
+          return shown.measuredAbove
+            ? verb(k, "is in the measured history above", "are in the measured history above")
+            : verb(k, "is in the measured history", "are in the measured history");
         case "approximate":
           return verb(k, "has only approximate timing", "have only approximate timing");
         case "reconstructed":
           return summary.set === "exact"
-            ? verb(k, "has timing rebuilt from logs (see older history)", "have timing rebuilt from logs (see older history)")
+            ? verb(k, "has timing rebuilt from logs (it's in the older history)", "have timing rebuilt from logs (they're in the older history)")
             : `${k} couldn't be rebuilt reliably`;
         case "timing-floor":
           return `${k} took under a minute`;

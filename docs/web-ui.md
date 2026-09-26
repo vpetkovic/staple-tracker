@@ -818,11 +818,12 @@ validated steps (below).
 
 **Rounding and phrasing, never meaning** (`lib/plain-language.ts`, pure and
 tested in `lib/plain-language.test.ts`). Effort durations round by band: under a
-minute says *less than a minute*; under 5 minutes, *a few minutes*; under 50
-minutes, the nearest 5 minutes; under 10 hours, the nearest half hour (`8½
-hours`); under 100 hours, the nearest hour; beyond, the nearest 5 hours. Effort is
-never written in days. A range shares its unit (`between 14 and 21 hours`) and
-collapses to `about 15 hours` when both ends round alike. A reset countdown reads
+minute says *less than a minute*; under 5 minutes, *a few minutes*; under 90
+minutes, the nearest 5 minutes (so a typical *55 minutes* never jumps to *1
+hour*); under 10 hours, the nearest half hour (`8½ hours`); under 100 hours, the nearest hour; beyond, the nearest 5 hours. Effort is
+never written in days. A range shares its unit (`between 14 and 21 hours`),
+reads *up to about 1 hour* when it starts under a minute, and collapses to `about
+15 hours` when both ends round alike. A reset countdown reads
 like a clock (`3h 56m`, `4 days 1h`); a stale reading's age is short (`12 min
 ago`). An estimate ratio (work / estimate) reads *about as long as estimated*
 from 0.9 to 1.1; *a little less than estimated* from 0.85, *a little longer than
@@ -845,6 +846,7 @@ threshold). A provider limit is:
 |---|---|---|
 | **Unknown** | question mark | nothing is known to be left (`remainingPercent` null) |
 | **At risk** | octagon | already under the reserve (`reserve.alreadyBelow`) |
+| **Tight** | triangle | no projection of this work, but the account's pace runs out before the reset (`exhaustion.atPace` = `before_reset`): *At the account's current pace this limit runs out before it resets; what this work adds is unknown.* |
 | **Unknown** | question mark | no projection of this work (`work`, `reserve` or `reserve.breachProbability` null) |
 | **At risk** | octagon | the work alone runs the limit out (`work.remainingAtResetPercent.expected` < 0) |
 | **At risk** | octagon | the worse breach probability (alone, or with other use) ≥ 50% |
@@ -903,7 +905,9 @@ motion and is off under reduced motion.
 - **Work left** (full width): the headline figure, the answer sentence, the
   likely-range bar of the remaining labor, and a *Not counted* line naming how
   many units are in review (*time waiting for review isn't work*) or cannot be
-  estimated. A lower bound reads *At least
+  estimated (the latter only when the headline has not already said it). With no
+  figure at all, the *How sure we are* card is left out (there is nothing to be sure
+  about) and its technical line and warnings move under *Work left*'s details. A lower bound reads *At least
   1½ hours of work is left, probably more: 1 task can't be estimated yet.* Under
   *Show details*: *Remaining labor* (or *Remaining work* for a leaf) with the
   expected figure, the draws' `p10–p90` and the `90% band`, *(lower bounds)*
@@ -937,7 +941,8 @@ motion and is off under reduced motion.
   (*Resets in 3h 56m. This work fits comfortably.*), the gauge, and a *What does
   this mean?* that describes only the marks that card draws. Cards keep their own
   height. The limits that can't be read at all collapse into one line per account
-  (*2 other Codex limits can't be read yet: the provider doesn't report them.*),
+  (*2 other Codex limits can't be read yet: the provider doesn't say when they
+  reset.*),
   their technical rows behind the account's *Show account details*.
   Under each card's *Show details*, unchanged: the limit key, what is left, the
   reset countdown with the read's clock time (`resets in 3h58m (as of 11:02)`),
@@ -994,7 +999,10 @@ that share a class are ONE card named for it (*All finished work*, *All bug
 fixes*), with the class's figure and count (*Based on 9 finished tasks.*) and
 *Also used for: Bug fixes (high priority): too few of their own (1)*, the own
 count being the fallback path's first level. Its pill is always *Rough guess*
-(the kinds it stands in for have too few of their own), never *Quite sure*. The
+(the kinds it stands in for have too few of their own), never *Quite sure*, and
+it says so for them: *Rough guess for spikes (critical priority): only 3 of their
+own, so all finished work stands in.* The verb agrees with the class: *All
+finished work usually takes*, *All bug fixes usually take*. The
 bar shows where 8 in 10 past tasks landed (the ratio's p10–p90) inside where the
 next one will likely land (the prediction bounds, at the confidence they reach,
 in tens; under 50% it says *Too little data to say where the next one lands* and
@@ -1013,9 +1021,9 @@ on the `exact` set, *Finished tasks with measured time*, with a plain line
 (*Based on 9 finished tasks with measured time, out of 138 finished with an
 estimate.*) and what is not used, by the state the payload counts, said for that
 set (*Not used here: 2 have only approximate timing and 127 have timing rebuilt
-from logs (see older history).*); the older history says *10 are in the measured
-history above, 2 have only approximate timing and 19 couldn't be rebuilt
-reliably*. The technical set line is behind *Show details*. The
+from logs (they're in the older history).*, the same with the switch on or off);
+the older history, drawn under it, says *10 are in the measured history above, 2
+have only approximate timing and 19 couldn't be rebuilt reliably*. The technical set line is behind *Show details*. The
 switch re-reads with `include=reconstructed`; the reconstructed groups then
 appear in their own section, *Older history (rebuilt from logs, less precise)*,
 *kept separate: never mixed with the history above*, after the exact one. The

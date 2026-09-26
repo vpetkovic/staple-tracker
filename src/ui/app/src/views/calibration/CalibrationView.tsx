@@ -303,7 +303,8 @@ function SetSection({ set, report }: { set: EvidenceSet; report: CalibrationRepo
   const summary = report.sets.find((entry) => entry.set === set);
   // `list` is always `cohorts` here: the page never asks for samples.
   const cohorts = (report.items as CalibrationCohort[]).filter((cohort) => cohort.set === set);
-  const plain = summary ? setSummaryText(summary) : null;
+  // The older history is only ever drawn under the measured history, so "above" is true there.
+  const plain = summary ? setSummaryText(summary, { measuredAbove: set === "reconstructed" }) : null;
   return (
     <section aria-label={SET_HEADING[set]} data-set={set} className="space-y-3">
       <div className="space-y-1">
