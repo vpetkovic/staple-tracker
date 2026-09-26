@@ -707,6 +707,8 @@ describe("the wrapper runs in the caller's own shell", () => {
     `head -c 20; echo " it's done"`,
     `cat | wc -c; exit 3`,
     `echo 'naïve ✓' && echo "$(echo nested)"`,
+    // The wrapper's own variable does not leak into the command it wraps.
+    `echo "[\${__stf-unset}]"`,
   ];
   for (const shell of SHELLS) {
     for (const original of originals) {
@@ -914,5 +916,96 @@ describe("budget collect: one run at a time, and tail reads", () => {
     expect(third.files.find((file) => file.file === child)).toMatchObject({ mode: "full", storedCount: 1 });
     appendFileSync(child, `${tokenCountLine({ timestamp: after(fork, 120_000), primary: five(27), secondary: null })}\n`);
     expect(collectBudget({}, deps()).files.find((file) => file.file === child)).toMatchObject({ mode: "tail", storedCount: 1 });
+  });
+});
+
+// ------------------------------------------------------------------ round 2 review
+
+describe("round 2: noclobber, regrown rollouts, lock edges", () => {
+  const noclobber = (shell: string) => (shell.endsWith("zsh") ? "setopt noclobber" : "set -C");
+
+  for (const shell of SHELLS) {
+    it(`${shell} with noclobber: the wrapper still prints what the original prints and hands staple the input`, () => {
+      const out = join(root, "ingested");
+      const fake = join(root, "fake staple");
+      writeFileSync(fake, `#!/bin/sh\ncat > "${out}.tmp"; mv "${out}.tmp" "${out}"\n`);
+      chmodSync(fake, 0o755);
+      const original = `head -c 30; echo " ok"`;
+      const input = statusline();
+      const direct = spawnSync(shell, ["-c", `${noclobber(shell)}; ${original}`], { input });
+      const wrapped = spawnSync(shell, ["-c", `${noclobber(shell)}; ${wrapperCommand({ staple: fake, configDir: claudeDir, original })}`], { input });
+      expect(wrapped.stdout.toString()).not.toBe("");
+      expect(Buffer.compare(wrapped.stdout, direct.stdout)).toBe(0);
+      expect(wrapped.stderr.toString()).toBe("");
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(out) && Date.now() < deadline) spawnSync("sleep", ["0.05"]);
+      expect(readFileSync(out, "utf8")).toBe(input);
+    });
+  }
+
+  it("setup rewrites a wrapper that is not exactly what this build writes (an earlier v2)", () => {
+    const current = wrapperCommand({ staple: STAPLE, configDir: claudeDir, original: ORIGINAL });
+    const earlier = current.replace('cat >| "$__stf"', 'cat > "$__stf"').replace(" unset __stf;", "");
+    writeFileSync(SETTINGS(), JSON.stringify({ statusLine: { type: "command", command: earlier } }, null, 2));
+    expect(planBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps()).steps.find((step) => step.part === "statusline")).toMatchObject({ action: "change" });
+    applyBudgetSetup({ claudeAccount: "claude-max", watcher: false }, deps());
+    expect((JSON.parse(readFileSync(SETTINGS(), "utf8")) as { statusLine: { command: string } }).statusLine.command).toBe(current);
+  });
+
+  describe("regrown and shrunk rollouts", () => {
+    beforeEach(optIn);
+    const start = "2026-09-26T06:00:00.000Z";
+    const lines = (values: number[], offsetMinutes = 0) =>
+      values.map((u, i) => tokenCountLine({ timestamp: after(start, (offsetMinutes + i + 1) * 60_000), primary: five(u), secondary: null }));
+    const write = (path: string, body: string[]) => writeFileSync(path, `${[sessionMetaLine({ id: A, timestamp: start }), ...body].join("\n")}\n`);
+
+    it("reads a file truncated and regrown past the old offset whole, even with the same first 4 KiB", () => {
+      const file = rollout(A, start, Array.from({ length: 20 }, (_, i) => 10 + i));
+      collectBudget({}, deps());
+      expect(statSync(file).size).toBeGreaterThan(3 * 4096);
+      // Same head (the first 6 readings), a different middle, and longer than before.
+      write(file, [...lines([10, 11, 12, 13, 14, 15]), ...lines(Array.from({ length: 20 }, (_, i) => 60 + i), 6)]);
+      const again = collectBudget({}, deps());
+      expect(again.files[0]!.mode).toBe("full");
+      // Every changed middle reading is stored: 20 new values, none skipped by a tail read.
+      expect(again.files[0]!.storedCount).toBe(20);
+    });
+
+    it("reads a file shrunk below the old offset whole (first 4 KiB kept)", () => {
+      const file = rollout(A, start, Array.from({ length: 20 }, (_, i) => 10 + i));
+      collectBudget({}, deps());
+      const before = statSync(file).size;
+      // Keep the head, drop the rest, then add two new readings: still shorter than before.
+      write(file, [...lines([10, 11, 12, 13, 14, 15]), ...lines([90, 91], 30)]);
+      expect(statSync(file).size).toBeLessThan(before);
+      expect(statSync(file).size).toBeGreaterThan(4096);
+      const again = collectBudget({}, deps());
+      expect(again.files[0]).toMatchObject({ mode: "full", error: null, storedCount: 2 });
+    });
+  });
+
+  describe("lock edges", () => {
+    beforeEach(optIn);
+
+    it("keeps a live holder's lock even when its time cannot be read", () => {
+      mkdirSync(join(home, "telemetry"), { recursive: true });
+      writeFileSync(lockPath(home), JSON.stringify({ pid: process.pid, at: "not a time" }));
+      expect(collectBudget({}, deps())).toMatchObject({ skippedReason: "locked" });
+      writeFileSync(lockPath(home), JSON.stringify({ pid: process.pid }));
+      expect(collectBudget({}, deps())).toMatchObject({ skippedReason: "locked" });
+    });
+
+    it("takes over a live pid's lock once it is older than the stale limit, and leaves nothing aside", () => {
+      mkdirSync(join(home, "telemetry"), { recursive: true });
+      writeFileSync(lockPath(home), JSON.stringify({ pid: process.pid, at: "2020-01-01T00:00:00.000Z" }));
+      expect(collectBudget({}, deps())).toMatchObject({ skippedReason: null });
+      expect(readdirSync(join(home, "telemetry")).filter((name) => name.startsWith("collect.lock"))).toEqual([]);
+    });
+
+    it("takes over an unreadable lock (a crash mid-write)", () => {
+      mkdirSync(join(home, "telemetry"), { recursive: true });
+      writeFileSync(lockPath(home), "{");
+      expect(collectBudget({}, deps())).toMatchObject({ skippedReason: null });
+    });
   });
 });

@@ -8,7 +8,7 @@
  * The recipe docs/cli.md documents, as a plain POSIX command list that the shell Claude
  * Code already uses runs directly (no nested `bash -c`):
  *
- *     : staple-statusline-wrapper/v2; __stf=$(mktemp); cat > "$__stf"; exec 3<"$__stf" 4<"$__stf"; rm -f "$__stf";
+ *     : staple-statusline-wrapper/v2; __stf=$(mktemp); cat >| "$__stf"; exec 3<"$__stf" 4<"$__stf"; rm -f "$__stf"; unset __stf;
  *     '<staple>' budget ingest --source claude-statusline --config-dir '<dir>' <&3 >/dev/null 2>&1 &
  *     exec 0<&4 3<&- 4<&-; <original command>
  *
@@ -78,7 +78,8 @@ function shellUnquote(value: string): string | null {
 /** The status-line command staple installs, around `original` (null: there was none). */
 export function wrapperCommand(input: { staple: string; configDir: string; original: string | null }): string {
   const ingest = `${shellQuote(input.staple)} budget ingest --source claude-statusline --config-dir ${shellQuote(input.configDir)} <&3 >/dev/null 2>&1 &`;
-  return `${PREFIX}__stf=$(mktemp); cat > "$__stf"; exec 3<"$__stf" 4<"$__stf"; rm -f "$__stf"; ${ingest} ${SEPARATOR}${input.original === null ? "" : ` ${input.original}`}`;
+  // `>|`: mktemp has already created the file, and `set -C` (noclobber) would refuse `>`.
+  return `${PREFIX}__stf=$(mktemp); cat >| "$__stf"; exec 3<"$__stf" 4<"$__stf"; rm -f "$__stf"; unset __stf; ${ingest} ${SEPARATOR}${input.original === null ? "" : ` ${input.original}`}`;
 }
 
 export type WrapperKind = "staple" | "hand_wrapped" | "plain";
@@ -336,14 +337,20 @@ export function planStatuslineInstall(input: { configDir: string; staple: string
         return { ...base, action: "hand_wrapped", currentCommand: state.command, reason: "The status line already runs `staple budget ingest` (a hand-installed wrapper); it is left as it is and not wrapped twice." };
       }
       if (state.kind === "staple") {
-        if (isCurrentWrapper(state.command)) return { ...base, action: "already_installed", currentCommand: state.command, reason: "staple's wrapper is already installed." };
         try {
           original = unwrapCommand(state.command);
         } catch (error) {
           return refuse((error as Error).message);
         }
+        // Current only when it is exactly what this build would write around the same
+        // original: an older form (v1's `bash -c`, v2 before noclobber-safety) is rewritten.
+        if (state.command === wrapperCommand({ staple: input.staple, configDir: input.configDir, original })) {
+          return { ...base, action: "already_installed", currentCommand: state.command, reason: "staple's wrapper is already installed." };
+        }
         action = "upgrade";
-        reason = "An older staple wrapper (a nested `bash -c`) is replaced by the current one; the command it wraps is unchanged.";
+        reason = isCurrentWrapper(state.command)
+          ? "An older staple wrapper is replaced by the current one (noclobber-safe, or a new staple path or config directory); the command it wraps is unchanged."
+          : "An older staple wrapper (a nested `bash -c`) is replaced by the current one; the command it wraps is unchanged.";
         break;
       }
       action = "install";

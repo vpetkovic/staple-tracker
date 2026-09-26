@@ -1113,12 +1113,14 @@ staple budget ingest --source manual --account personal-max --provider anthropic
 
   ```bash
   # statusLine command; my-statusline is the status line you already had
-  f=$(mktemp); cat > "$f"; exec 3<"$f" 4<"$f"; rm -f "$f"; staple budget ingest --source claude-statusline <&3 >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; my-statusline
+  f=$(mktemp); cat >| "$f"; exec 3<"$f" 4<"$f"; rm -f "$f"; unset f; staple budget ingest --source claude-statusline <&3 >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; my-statusline
   ```
 
   A plain command list rather than a `bash -c '…'`, so `my-statusline` runs in
   the same shell Claude Code already gives it (under `sh` or `zsh`, `echo`
   reads `\033` as an escape, where a nested bash would print it literally).
+  `>|` because `mktemp` has already created the file and a shell with
+  `set -C` (noclobber) refuses `>` onto it.
 
   Both readers open the file before it is unlinked, so nothing is left in the
   temp directory and neither reader can lose it to the other. Nothing waits on
@@ -1184,7 +1186,7 @@ staple budget unsetup --yes                                                     
   command, verbatim:
 
   ```bash
-  : staple-statusline-wrapper/v2; __stf=$(mktemp); cat > "$__stf"; exec 3<"$__stf" 4<"$__stf"; rm -f "$__stf"; '/Users/me/.local/bin/staple' budget ingest --source claude-statusline --config-dir '/Users/me/.claude' <&3 >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; my-statusline
+  : staple-statusline-wrapper/v2; __stf=$(mktemp); cat >| "$__stf"; exec 3<"$__stf" 4<"$__stf"; rm -f "$__stf"; unset __stf; '/Users/me/.local/bin/staple' budget ingest --source claude-statusline --config-dir '/Users/me/.claude' <&3 >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; my-statusline
   ```
 
   It is not wrapped in another shell: the shell Claude Code runs the status

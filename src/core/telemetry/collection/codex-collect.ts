@@ -9,7 +9,9 @@
  * stores nothing twice.
  *
  * A grown file is read from where the last read stopped (`completeBytes`), not from the
- * start, when that is safe: its first bytes are unchanged (a hash of the head) and the
+ * start, when that is safe: the first 4 KiB and the 4 KiB the last read ended on are
+ * unchanged (two hashes; the second catches a file truncated and regrown past the old
+ * offset with the same head), the file is no shorter than that offset, and the
  * last read saw the end of any leading run of fork copies, so no copy test needs the
  * lines before it. Otherwise (a fork still inside its copied history, a rewritten file,
  * a cursor from before this was recorded) the whole file is read again.
@@ -26,8 +28,8 @@
  *
  * Local only: stat, read and hub.db. No network call.
  */
-import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { appendFileSync, closeSync, linkSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { join, sep } from "node:path";
 import { writeFileAtomic } from "../../../config/atomic.js";
 import { readConfig } from "../../../config/file.js";
@@ -54,6 +56,13 @@ export interface CursorEntry {
   /** sha256 of the first `headLength` bytes when last read. */
   readonly head?: string;
   readonly headLength?: number;
+  /**
+   * sha256 of the `tailLength` bytes just before `completeBytes`. A file truncated and
+   * regrown past the old offset can keep its first 4 KiB and still differ here, and is
+   * then read whole.
+   */
+  readonly tail?: string;
+  readonly tailLength?: number;
   readonly meta?: SessionMeta | null;
   /** The last read saw the end of any leading fork-copy run, so a tail read is safe. */
   readonly leadingRunEnded?: boolean;
@@ -166,11 +175,20 @@ function processAlive(pid: number): boolean {
   }
 }
 
-/** Take the collect lock, or return false when a live run holds it. */
+/**
+ * Take the collect lock, or return false when a live run holds it.
+ *
+ * Holding it always means having CREATED the file with O_EXCL (`wx`), so two runs can
+ * never both proceed. A stale lock is first moved aside with one atomic rename (only one
+ * contender's rename can succeed) and checked to be the very lock judged stale; if it is
+ * not (a fresh one was created in between), it is linked back and this run gives way.
+ * A live pid keeps its lock even when its `at` cannot be read; only a dead or missing
+ * pid, or a readable `at` older than {@link LOCK_STALE_MS}, makes it stale.
+ */
 function acquireLock(home: string, nowMs: number): boolean {
   const path = lockPath(home);
   mkdirSync(join(home, "telemetry"), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const fd = openSync(path, "wx", 0o600);
       writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date(nowMs).toISOString() }));
@@ -179,31 +197,68 @@ function acquireLock(home: string, nowMs: number): boolean {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    let holder: { pid?: number; at?: string } = {};
+    let raw: string;
     try {
-      holder = JSON.parse(readFileSync(path, "utf8")) as { pid?: number; at?: string };
+      raw = readFileSync(path, "utf8");
     } catch {
-      // Unreadable: a crash mid-write. Treated as stale.
+      continue; // released between the two calls: try to create it again
     }
-    const age = holder.at === undefined ? Number.POSITIVE_INFINITY : nowMs - Date.parse(holder.at);
-    const live = typeof holder.pid === "number" && processAlive(holder.pid) && age < LOCK_STALE_MS;
+    let holder: { pid?: unknown; at?: unknown } = {};
+    try {
+      holder = JSON.parse(raw) as { pid?: unknown; at?: unknown };
+    } catch {
+      // Unreadable: a crash mid-write. No pid to vouch for it, so stale.
+    }
+    const at = typeof holder.at === "string" ? Date.parse(holder.at) : Number.NaN;
+    const tooOld = Number.isFinite(at) && nowMs - at >= LOCK_STALE_MS;
+    const live = typeof holder.pid === "number" && processAlive(holder.pid) && !tooOld;
     if (live) return false;
-    rmSync(path, { force: true });
+    const aside = `${path}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
+    try {
+      renameSync(path, aside);
+    } catch {
+      continue; // another run moved it first; race for the create
+    }
+    let moved = "";
+    try {
+      moved = readFileSync(aside, "utf8");
+    } catch {
+      // gone again; nothing to put back
+    }
+    if (moved !== raw) {
+      // Not the lock judged stale: a run created a fresh one in between. Put it back.
+      try {
+        linkSync(aside, path);
+      } catch {
+        // a newer lock is already there; either way this run is not the holder
+      }
+      rmSync(aside, { force: true });
+      return false;
+    }
+    rmSync(aside, { force: true });
   }
   return false;
 }
 
 function headOf(path: string, length: number): string {
+  return hashRange(path, 0, length);
+}
+
+/** sha256 of `length` bytes from `start`. */
+function hashRange(path: string, start: number, length: number): string {
   const bytes = Buffer.alloc(length);
   const fd = openSync(path, "r");
   try {
     let read = 0;
     while (read < length) {
-      const n = readSync(fd, bytes, read, length - read, read);
+      const n = readSync(fd, bytes, read, length - read, start + read);
       if (n === 0) break;
       read += n;
     }
-    return createHash("sha256").update(bytes.subarray(0, read)).digest("hex");
+    // A short read means the file is no longer as long as the cursor says: never hash a
+    // prefix of the window and call it a match.
+    if (read < length) throw new Error(`${path} is shorter than the ${start + length} bytes its cursor expects`);
+    return createHash("sha256").update(bytes).digest("hex");
   } finally {
     closeSync(fd);
   }
@@ -213,8 +268,12 @@ function headOf(path: string, length: number): string {
 function resumePoint(path: string, previous: CursorEntry | undefined, size: number): { offset: number; meta: SessionMeta | null } | null {
   if (previous === undefined || previous.leadingRunEnded !== true || previous.completeBytes === undefined) return null;
   if (previous.head === undefined || previous.headLength === undefined || previous.meta === undefined) return null;
-  if (size < previous.completeBytes) return null; // truncated or replaced
-  if (headOf(path, previous.headLength) !== previous.head) return null; // rewritten
+  if (previous.tail === undefined || previous.tailLength === undefined) return null;
+  if (size < previous.completeBytes) return null; // truncated below where the last read stopped
+  if (headOf(path, previous.headLength) !== previous.head) return null; // rewritten from the start
+  // Rewritten in the middle (truncated and regrown past the old offset): the bytes the
+  // last read ended on are not the same bytes any more.
+  if (hashRange(path, previous.completeBytes - previous.tailLength, previous.tailLength) !== previous.tail) return null;
   return { offset: previous.completeBytes, meta: previous.meta };
 }
 
@@ -300,7 +359,15 @@ function collectLocked(home: string, options: CollectOptions, now: () => string,
         nextFiles[candidate.path] = {
           ...candidate.entry,
           ...(found !== null
-            ? { completeBytes: found.completeBytes, head: headOf(candidate.path, headLength), headLength, meta: found.meta, leadingRunEnded: found.leadingRunEnded }
+            ? {
+                completeBytes: found.completeBytes,
+                head: headOf(candidate.path, headLength),
+                headLength,
+                tail: hashRange(candidate.path, found.completeBytes - headLength, headLength),
+                tailLength: headLength,
+                meta: found.meta,
+                leadingRunEnded: found.leadingRunEnded,
+              }
             : {}),
         };
         files.push({ file: candidate.path, accountRef: result.accountRef, storedCount: result.storedCount, skipped: result.skipped, error: null, mode });
