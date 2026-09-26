@@ -70,7 +70,7 @@ const noop = () => {};
 /**
  * A session with the fields these three components read and nothing else.
  *
- * `FilterBar` and `NoMatchesState` read the session rather than taking props, so the only
+ * `FilterBar` and `FilterEmptyState` read the session rather than taking props, so the only
  * way to ask what they PUT IN THE DOM is to supply one. Everything not read is a throwing
  * stub in spirit and a no-op in practice — the point of the object is that a test cannot
  * accidentally depend on a field the component does not use.

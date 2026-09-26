@@ -29,7 +29,7 @@ export interface FilterEmptyStateProps {
   rows: readonly IssueRow[];
   state: FilterState;
   context: FilterContext;
-  /** Passed through to `NoMatchesState`. */
+  /** What the page lists, in the headline: "No {noun} match these filters". */
   noun?: string;
 }
 
