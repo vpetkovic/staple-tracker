@@ -44,6 +44,8 @@ function limit(over: Partial<BudgetLimitForecast> = {}): BudgetLimitForecast {
     remainingPercent: null,
     highWaterPercent: null,
     stale: null,
+    observedAt: null,
+    readingAgeSeconds: null,
     quality: { state: "missing", reasons: [] },
     pace: null,
     exhaustion: null,

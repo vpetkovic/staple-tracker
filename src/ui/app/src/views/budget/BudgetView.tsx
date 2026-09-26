@@ -7,9 +7,20 @@
  * Budget readings live in this machine's hub and never synchronize, so the view takes no `ws` and
  * reads the same whichever workspace the switcher names. The rail lists it in its own Machine group.
  *
+ * ## Plain first, exact behind "Show details"
+ *
+ * Each limit with a current reading is a plain card (components/plain): the status word with an
+ * icon (`pressureStatus`: the store's provisional state — unsafe is At risk, within is On track,
+ * no state is Unknown), what is left as the figure (with its age when stale), a sentence with the
+ * reset and the verdict, and two frames, MEASURED (solid: the gauge with the reserve line, the
+ * observed pace, the reading's age) and FORECAST (dashed, "an early rule of thumb until a budget
+ * policy is set"). Accounts are named for people; limits with no current window collapse into one
+ * line per account. Everything the panel showed before — the technical header, badge and the two
+ * blocks below — is under each card's (or account's) Show details, unchanged.
+ *
  * ## Measured apart from forecast
  *
- * Each limit is one card with two blocks that never share a figure. MEASURED (a solid frame): what
+ * Each limit's technical blocks never share a figure. MEASURED (a solid frame): what
  * the provider reported, the remaining figure, the reset countdown, the observed pace and how old
  * the last reading is. FORECAST (a dashed frame, labelled provisional): the sustainable pace, the
  * pressure, when the pace uses the limit up and reaches the reserve, safe concurrency (not defined
@@ -58,6 +69,23 @@ import { formatDuration } from "@/lib/forecast-text";
 import type { BudgetAccountView, BudgetLimitReading, BudgetView as BudgetPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ConfidenceBadge, WarningChips } from "@/detail/ForecastSection";
+import { BudgetGauge } from "@/components/plain/BudgetGauge";
+import { PlainCard, ShowDetails } from "@/components/plain/PlainCard";
+import { StatusPill } from "@/components/plain/StatusPill";
+import {
+  PROVISIONAL_WORDS,
+  boundText,
+  budgetAbsentPlain,
+  forecastLine,
+  limitName,
+  measuredLine,
+  plainAge,
+  pressureSentence,
+  pressureStatus,
+  providerName,
+  readingGaugeDescription,
+  unreadableLine,
+} from "@/lib/plain-language";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 
@@ -235,68 +263,165 @@ function ForecastBlock({ limit, asOf }: { limit: BudgetLimitReading; asOf: strin
   );
 }
 
-function LimitCard({ limit, asOf, unsafeAt, heldSeconds }: { limit: BudgetLimitReading; asOf: string; unsafeAt: number; heldSeconds: number }) {
+/** The technical header and blocks of a limit, exactly as the panel drew them: behind Show details. */
+function LimitTechnical({ limit, asOf, unsafeAt, heldSeconds }: { limit: BudgetLimitReading; asOf: string; unsafeAt: number; heldSeconds: number }) {
   const state = pressureStateText(limit.pressure, unsafeAt);
-  const noWindow = noWindowText(limit);
   return (
-    <article
-      data-limit={limit.limitKey}
-      data-pressure-state={state.tone}
-      aria-label={`${limit.limitKey}: pressure ${state.word.toLowerCase()}`}
-      className={cn("relative overflow-hidden rounded-lg border bg-card py-2.5 pr-3 pl-4", state.tone === "unsafe" && "border-destructive")}
-    >
-      {state.tone === "unsafe" ? <span aria-hidden data-unsafe-hatch className="absolute inset-y-0 left-0 w-1.5" style={UNSAFE_HATCH} /> : null}
-      <header className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-        <h3 className="min-w-0 truncate font-mono text-[12px] font-medium" title={limit.limitKey}>
+    <div className="space-y-2" data-limit-technical={limit.limitKey}>
+      <header className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="min-w-0 truncate font-mono text-[12px] font-medium" title={limit.limitKey}>
           {limit.limitKey}
-        </h3>
+        </span>
         {limit.window?.label ? <span className="text-[11px] text-muted-foreground">{limit.window.label}</span> : null}
         <span className="ml-auto" />
         <PressureBadge tone={state.tone} word={state.word} provisional={state.tone !== "unknown"} />
       </header>
-      {noWindow ? null : (
-        <p className={cn("mb-2 text-[11px]", state.tone === "unsafe" ? "text-destructive" : "text-muted-foreground")} data-testid="budget-state-detail">
-          {state.tone === "unknown" ? `${state.word}: ${state.detail}` : `${state.word} (provisional): ${state.detail}`}
-        </p>
-      )}
-      {noWindow ? (
-        <div data-testid="budget-no-window">
-          <p className={UNKNOWN} data-unknown>
-            {noWindow.reason}
+      <p className={cn("text-[11px]", state.tone === "unsafe" ? "text-destructive" : "text-muted-foreground")} data-testid="budget-state-detail">
+        {state.tone === "unknown" ? `${state.word}: ${state.detail}` : `${state.word} (provisional): ${state.detail}`}
+      </p>
+      <div className="grid gap-2 @2xl:grid-cols-2">
+        <MeasuredBlock limit={limit} heldSeconds={heldSeconds} />
+        <ForecastBlock limit={limit} asOf={asOf} />
+      </div>
+    </div>
+  );
+}
+
+/** A limit with no current window, the technical way: the one line that says why. */
+function NoWindowTechnical({ limit }: { limit: BudgetLimitReading }) {
+  const noWindow = noWindowText(limit);
+  if (!noWindow) return null;
+  return (
+    <div data-limit={limit.limitKey} data-testid="budget-no-window">
+      <p className={UNKNOWN} data-unknown>
+        {noWindow.reason}
+      </p>
+      {noWindow.hint ? <p className="mt-0.5 text-[11px] text-muted-foreground">{noWindow.hint}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * One limit with a current reading, as a plain card: its status word (`pressureStatus`, the
+ * store's provisional state, said as such), what is left, the verdict, and two frames that never
+ * share a figure — MEASURED (solid: the gauge with the reserve line, the observed pace, the
+ * reading's age) and FORECAST (dashed: an early rule of thumb until a budget policy is set). The
+ * panel's technical header and blocks are behind Show details, unchanged.
+ */
+function LimitCard({ limit, asOf, unsafeAt, heldSeconds }: { limit: BudgetLimitReading; asOf: string; unsafeAt: number; heldSeconds: number }) {
+  const state = pressureStateText(limit.pressure, unsafeAt);
+  const { status } = pressureStatus(limit);
+  const { pressure } = limit;
+  const reset = pressure.secondsToReset !== null ? tickSeconds(pressure.secondsToReset, heldSeconds, "down") : null;
+  const age = pressure.lastReadingAgeSeconds !== null ? tickSeconds(pressure.lastReadingAgeSeconds, heldSeconds, "up") : null;
+  const remaining = limit.remainingPercent!;
+  return (
+    <PlainCard
+      data-limit={limit.limitKey}
+      data-pressure-state={state.tone}
+      title={limitName({ limitKey: limit.limitKey, windowSeconds: limit.window?.windowSeconds ?? null })}
+      className={cn("relative overflow-hidden", state.tone === "unsafe" && "border-destructive")}
+      pill={<StatusPill status={status} />}
+      figure={
+        <>
+          {Math.round(remaining)}% left
+          {limit.stale && age !== null ? (
+            <span className="text-[15px] font-normal text-muted-foreground" data-testid="budget-age">
+              {" "}
+              · {plainAge(age)} ago
+            </span>
+          ) : null}
+        </>
+      }
+      headline={pressureSentence(limit, reset)}
+      headlineTestId="budget-headline"
+      help={
+        <>
+          Your subscription allows a certain amount of use in each window, then resets. The bar is that allowance: blue is what is
+          left, grey is already used, and the dashed line is the safety reserve we try not to dip into. &ldquo;Measured&rdquo; is
+          what the provider reported; &ldquo;Forecast&rdquo; is what your recent pace suggests, {PROVISIONAL_WORDS}.
+        </>
+      }
+      details={<LimitTechnical limit={limit} asOf={asOf} unsafeAt={unsafeAt} heldSeconds={heldSeconds} />}
+    >
+      {state.tone === "unsafe" ? <span aria-hidden data-unsafe-hatch className="absolute inset-y-0 left-0 w-1.5" style={UNSAFE_HATCH} /> : null}
+      <div className="grid items-start gap-2 @2xl:grid-cols-2">
+        <section aria-label="Measured" data-plain-block="measured" className="min-w-0 space-y-2 rounded-lg border px-3 py-2.5">
+          <h4 className={EYEBROW}>Measured</h4>
+          <BudgetGauge
+            testId="budget-gauge"
+            remaining={remaining}
+            after={null}
+            reserve={pressure.reservePercent}
+            lowerBound={false}
+            description={readingGaugeDescription(remaining, pressure.reservePercent)}
+          />
+          <p className="text-[13px]" data-testid="budget-measured-line">
+            {measuredLine(limit, age)}
           </p>
-          {noWindow.hint ? <p className="mt-0.5 text-[11px] text-muted-foreground">{noWindow.hint}</p> : null}
-        </div>
-      ) : (
-        <div className="grid gap-2 md:grid-cols-2">
-          <MeasuredBlock limit={limit} heldSeconds={heldSeconds} />
-          <ForecastBlock limit={limit} asOf={asOf} />
-        </div>
-      )}
-    </article>
+        </section>
+        <section aria-label="Forecast" data-plain-block="forecast" className="min-w-0 space-y-1.5 rounded-lg border border-dashed px-3 py-2.5">
+          <h4 className={EYEBROW}>
+            Forecast <span className="normal-case tracking-normal">· {PROVISIONAL_WORDS}</span>
+          </h4>
+          <p className="text-[13px]" data-testid="budget-forecast-line">
+            {forecastLine(limit)}
+          </p>
+        </section>
+      </div>
+    </PlainCard>
   );
 }
 
 function AccountSection({ account, view, heldSeconds }: { account: BudgetAccountView; view: BudgetPayload; heldSeconds: number }) {
   const absent = account.limits.length === 0 ? accountAbsentText(account, view.budgetCapture) : null;
+  const names = providerName(account.provider, account.accountRef);
+  const readable = account.limits.filter((limit) => limit.status === "current" && limit.remainingPercent !== null);
+  const unreadable = account.limits.filter((limit) => !(limit.status === "current" && limit.remainingPercent !== null));
+  const line = unreadableLine(unreadable, names.short, readable.length > 0);
   return (
     <section aria-label={`Account ${account.accountRef}`} data-account={account.accountRef} className="space-y-2">
-      <h2 className="flex flex-wrap items-baseline gap-x-2 text-[13px] font-medium">
-        <span className="break-all">{account.accountRef}</span>
-        {account.provider ? <span className="text-[11px] font-normal text-muted-foreground">{account.provider}</span> : null}
-        <span className="text-[11px] font-normal text-muted-foreground" data-bound={account.bound ? "yes" : "no"}>
-          {account.bound ? "bound on this machine" : "not bound on this machine"}
+      <h2 className="flex flex-wrap items-baseline gap-x-2 text-[14px] font-medium">
+        <span>{names.name}</span>
+        {names.name !== account.accountRef ? <span className="text-[12px] font-normal text-muted-foreground break-all">{account.accountRef}</span> : null}
+        <span className="text-[12px] font-normal text-muted-foreground" data-bound={account.bound ? "yes" : "no"}>
+          {boundText(account.bound)}
         </span>
       </h2>
       {absent ? (
-        <div className="rounded-lg border border-dashed px-3 py-2.5" data-testid="budget-account-unknown">
-          <p className={UNKNOWN} data-unknown>
-            {absent.reason}
-          </p>
-          {absent.hint ? <p className="mt-1 text-[11px] text-muted-foreground">{absent.hint}</p> : null}
+        <p className="text-[14px]" data-testid="budget-account-plain">
+          {budgetAbsentPlain(account.missing.limits, view.budgetCapture, account.bound)}
+        </p>
+      ) : null}
+      {readable.length > 0 ? (
+        <div className="grid items-start gap-3">
+          {readable.map((limit) => (
+            <LimitCard key={limit.limitKey} limit={limit} asOf={view.asOf} unsafeAt={view.pressureRule.unsafeAtRatio} heldSeconds={heldSeconds} />
+          ))}
         </div>
-      ) : (
-        account.limits.map((limit) => <LimitCard key={limit.limitKey} limit={limit} asOf={view.asOf} unsafeAt={view.pressureRule.unsafeAtRatio} heldSeconds={heldSeconds} />)
-      )}
+      ) : null}
+      {line !== null ? (
+        <p className="text-[13px] text-muted-foreground" data-testid="budget-unreadable">
+          {line}
+        </p>
+      ) : null}
+      <ShowDetails label="Show account details">
+        <p className="font-mono text-[10px] text-muted-foreground">
+          {account.accountRef}
+          {account.provider ? ` · ${account.provider}` : ""} · {account.bound ? "bound on this machine" : "not bound on this machine"}
+        </p>
+        {absent ? (
+          <div data-testid="budget-account-unknown">
+            <p className={UNKNOWN} data-unknown>
+              {absent.reason}
+            </p>
+            {absent.hint ? <p className="mt-1 text-[11px] text-muted-foreground">{absent.hint}</p> : null}
+          </div>
+        ) : null}
+        {unreadable.map((limit) => (
+          <NoWindowTechnical key={limit.limitKey} limit={limit} />
+        ))}
+      </ShowDetails>
     </section>
   );
 }
@@ -306,29 +431,18 @@ export function BudgetReportView({ view, heldSeconds, onRefresh }: { view: Budge
   const absent = machineAbsentText(view);
   const unsafe = view.accounts.flatMap((account) => account.limits).filter((limit) => limit.pressure.state === "unsafe").length;
   return (
-    <div className="space-y-4" data-budget>
-      <header className="space-y-1.5">
-        <p className="text-[12px] text-muted-foreground">
-          Provider limits on this machine: what the provider reported, and apart from it a provisional forecast of the pace. Budget data never
-          synchronizes, so every workspace shows the same figures here.
+    <div className="@container space-y-5" data-budget>
+      <header className="space-y-2">
+        <p className="text-[15px] leading-relaxed" data-testid="budget-intro">
+          {absent
+            ? "We can't tell yet: budget tracking isn't collecting anything on this computer."
+            : `Your subscription limits on this computer, and whether your recent pace keeps a safety reserve of ${Math.round(view.reserve.percent * 10) / 10}%${
+                view.reserve.source === "provisional_default" ? " (a default until you set one)" : ""
+              }. The pace check is ${PROVISIONAL_WORDS}.`}
         </p>
-        <p className="text-[11px] text-muted-foreground" data-testid="budget-reserve">
-          Protected reserve: {reserveText(view.reserve)}.
-        </p>
-        <p className="text-[11px] text-muted-foreground" data-testid="budget-rule">
-          Pressure is the observed pace over the sustainable pace (what is left above the reserve over the time to the reset); unsafe at{" "}
-          {pressureRatioText(view.pressureRule.unsafeAtRatio)} or over. Provisional until an admission policy defines it.
-        </p>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-          <span data-testid="budget-as-of">
-            Read at {clockText(view.asOf)}, every {BUDGET_REFRESH_MS / 1000} s. Capture {view.budgetCapture ? "on" : "off"}.
-          </span>
-          {unsafe > 0 ? (
-            <span className="inline-flex items-center gap-1 font-medium text-destructive" data-testid="budget-unsafe-count">
-              <AlertTriangle className="size-3.5" aria-hidden />
-              {unsafe} unsafe limit{unsafe === 1 ? "" : "s"}
-            </span>
-          ) : null}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
+          {unsafe > 0 ? <StatusPill status="at_risk" label={`${unsafe} limit${unsafe === 1 ? "" : "s"} at risk`} /> : null}
+          <span>Updated {clockText(view.asOf)}</span>
           {onRefresh ? (
             <Button variant="outline" size="xs" className="ml-auto" onClick={onRefresh} data-testid="budget-refresh">
               <RefreshCw aria-hidden />
@@ -336,13 +450,33 @@ export function BudgetReportView({ view, heldSeconds, onRefresh }: { view: Budge
             </Button>
           ) : null}
         </div>
+        <ShowDetails label="Show rule details">
+          <p className="text-[11px] text-muted-foreground" data-testid="budget-reserve">
+            Protected reserve: {reserveText(view.reserve)}.
+          </p>
+          <p className="text-[11px] text-muted-foreground" data-testid="budget-rule">
+            Pressure is the observed pace over the sustainable pace (what is left above the reserve over the time to the reset); unsafe at{" "}
+            {pressureRatioText(view.pressureRule.unsafeAtRatio)} or over. Provisional until an admission policy defines it.
+          </p>
+          <p className="text-[11px] text-muted-foreground" data-testid="budget-as-of">
+            Read at {clockText(view.asOf)}, every {BUDGET_REFRESH_MS / 1000} s. Capture {view.budgetCapture ? "on" : "off"}.
+            {unsafe > 0 ? <span data-testid="budget-unsafe-count"> {unsafe} unsafe limit{unsafe === 1 ? "" : "s"}.</span> : null}
+          </p>
+        </ShowDetails>
       </header>
       {absent ? (
-        <div className="rounded-lg border border-dashed px-3 py-3" data-testid="budget-none">
-          <p className={UNKNOWN} data-unknown>
-            {absent.reason}
+        <div className="space-y-2 rounded-xl border border-dashed p-4">
+          <p className="text-[14px]" data-testid="budget-none-plain">
+            {budgetAbsentPlain(undefined, view.budgetCapture, false)}
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">{absent.hint}</p>
+          <ShowDetails>
+            <div data-testid="budget-none">
+              <p className={UNKNOWN} data-unknown>
+                {absent.reason}
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{absent.hint}</p>
+            </div>
+          </ShowDetails>
         </div>
       ) : (
         view.accounts.map((account) => <AccountSection key={`${account.provider}:${account.accountRef}`} account={account} view={view} heldSeconds={heldSeconds} />)

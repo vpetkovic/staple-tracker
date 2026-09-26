@@ -21,10 +21,10 @@ describe("the rail's groups", () => {
     expect(new Set(views).size).toBe(views.length);
   });
 
-  it("opens with the Workspace group, in the order Tasks, Queue, Graph, Milestones, Calibration", () => {
+  it("opens with the Workspace group, in the order Tasks, Queue, Graph, Milestones, Estimate accuracy (the calibration view)", () => {
     const first = NAV_GROUPS[0]!;
     expect(first.label).toBe("Workspace");
-    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Calibration"]);
+    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Estimate accuracy"]);
     expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "calibration"]);
   });
 
@@ -36,7 +36,7 @@ describe("the rail's groups", () => {
     expect(navItemForView("budget")).toMatchObject({ id: "view:budget", label: "Budget" });
   });
 
-  it("shows the issue filters on every issue view and not on the Calibration report or the Budget", () => {
+  it("shows the issue filters on every issue view and not on the Estimate accuracy report or the Budget", () => {
     expect(VIEWS.filter((view) => !viewUsesIssueFilters(view))).toEqual(["calibration", "budget"]);
   });
 
