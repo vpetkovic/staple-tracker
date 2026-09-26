@@ -196,6 +196,31 @@
   --status-task-icon-cancelled: #52585d;
   --status-task-icon-in_queue: var(--status-task-in_progress);    /* blocked shape, blue */
 
+  /* Plain-language analytics (components/plain, docs/web-ui.md "Forecast").
+     Status pills: a word + an icon on a tint; every fg clears 4.5:1 on its bg
+     (checked with the dataviz validator's contrast()). The viz hues are ONE
+     blue ramp (sequential): the likely band and the fill clear 3:1 on the
+     card; the wide band is a light tint whose edge clears 3:1; the marker is
+     the ink with a 2px card-coloured ring so it reads over the band. */
+  --plain-ok-fg: #15803d;      /* 4.79:1 on its bg */
+  --plain-ok-bg: #f0fdf4;
+  --plain-ok-border: #86efac;
+  --plain-tight-fg: #b45309;   /* 4.84:1 */
+  --plain-tight-bg: #fffbeb;
+  --plain-tight-border: #fcd34d;
+  --plain-risk-fg: #b91c1c;    /* 5.91:1 */
+  --plain-risk-bg: #fef2f2;
+  --plain-risk-border: #fca5a5;
+  --plain-unknown-fg: #525252; /* 7.17:1 */
+  --plain-unknown-bg: #f5f5f5;
+  --plain-unknown-border: #d4d4d4;
+  --viz-likely: #2563eb;       /* 5.17:1 on the card */
+  --viz-wide: #bfdbfe;
+  --viz-wide-edge: #3b82f6;    /* 3.68:1 */
+  --viz-track: #f5f5f5;
+  --viz-track-edge: #8a8a8a;   /* 3.45:1 on the card, drawn at full opacity */
+  --viz-marker: #0a0a0a;
+
   --folder-color-indigo: #6366f1;
   --folder-color-violet: #8b5cf6;
   --folder-color-emerald: #10b981;
@@ -377,6 +402,25 @@
   --status-task-icon-in_review: #9474f0;  /* deeper than violet-400, reads purple */
   --status-task-icon-done: #34d06f;
   --status-task-icon-cancelled: #9a958a;
+  /* Plain-language analytics, dark steps (validated against the dark card). */
+  --plain-ok-fg: #4ade80;      /* 8.55:1 on its bg */
+  --plain-ok-bg: #052e16;
+  --plain-ok-border: #166534;
+  --plain-tight-fg: #fbbf24;   /* 8.97:1 */
+  --plain-tight-bg: #451a03;
+  --plain-tight-border: #92400e;
+  --plain-risk-fg: #f87171;    /* 5.84:1 */
+  --plain-risk-bg: #450a0a;
+  --plain-risk-border: #991b1b;
+  --plain-unknown-fg: #d4d4d4; /* 9.16:1 */
+  --plain-unknown-bg: #2e2e2e;
+  --plain-unknown-border: #525252;
+  --viz-likely: #60a5fa;       /* 5.95:1 on the card */
+  --viz-wide: #1e3a8a;
+  --viz-wide-edge: #3b82f6;    /* 4.11:1 */
+  --viz-track: #2e2e2e;
+  --viz-track-edge: #737373;   /* 3.19:1 on the dark card, full opacity */
+  --viz-marker: #fafafa;
 }
 
 /* Base layer + coarse-pointer touch targets ----------------------------- */

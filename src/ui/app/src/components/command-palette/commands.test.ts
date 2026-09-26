@@ -181,7 +181,14 @@ describe("buildCommands", () => {
     expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones", "view:calibration", "view:budget"]);
   });
 
-  it("offers no issue filter commands on the Calibration report, which is not an issue list", () => {
+  it("names the calibration view in plain words, and still finds it by its old name", () => {
+    const command = buildCommands(context({ view: "tree" })).find((c) => c.id === "view:calibration")!;
+    expect(command.label).toBe("Go to Estimate accuracy");
+    // The view id stays `calibration`, so typing the old name still reaches it.
+    expect(command.keywords).toContain("calibration");
+  });
+
+  it("offers no issue filter commands on the Estimate accuracy report, which is not an issue list", () => {
     const onCalibration = buildCommands(context({ view: "calibration" })).map((c) => c.id);
     expect(onCalibration.filter((id) => id.startsWith("filter:"))).toEqual([]);
     const onTasks = buildCommands(context({ view: "tree" })).map((c) => c.id);

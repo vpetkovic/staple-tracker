@@ -36,7 +36,8 @@ export const VIEW_LABELS: Record<ViewName, string> = {
   queue: "Queue",
   graph: "Graph",
   milestones: "Milestones",
-  calibration: "Calibration",
+  // The id stays `calibration` (routes, saved preferences, commands key off it); readers see the plain name.
+  calibration: "Estimate accuracy",
   budget: "Budget",
 };
 
@@ -54,7 +55,7 @@ export function isMachineView(view: ViewName): boolean {
 
 /**
  * Whether the header's group, sort and filter controls act on a view. They narrow the issue list,
- * and the Calibration report is not an issue list: it reads the whole workspace's history, so the
+ * and the Estimate accuracy report is not an issue list: it reads the whole workspace's history, so the
  * controls would promise a filter that does nothing there. Neither is the machine's Budget view.
  */
 export function viewUsesIssueFilters(view: ViewName): boolean {

@@ -1438,7 +1438,9 @@ and every limit of it:
 
 - **The reading**, as `staple budget` reports it: the current window's high-water
   `remainingPercent`, `resetsAt`, `secondsToReset`, `windowSeconds`, `stale`, and its
-  quality.
+  quality; and `observedAt`, the newest sample of the current window, with
+  `readingAgeSeconds`, its age at `asOf` (null, with a reason, when the window has no
+  sample), so a stale figure can say how old it is.
 - **Pace**, `%/hour` of wall clock: the rise of the current window instance's high-water
   from its first reading to its latest, over the hours between them. Every use of the
   account moves it, from this workspace or not. It needs two readings.
