@@ -389,6 +389,18 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
+      /**
+       * Automatic budget collection, machine-local. The GET is the status
+       * read; the four POSTs are named in `BUDGET_COLLECTION_WRITES`, which the method
+       * gate pins as POST-only and the post-write sync trigger skips (collection makes
+       * no network call). setup and unsetup need `consent: true` in the body.
+       * `test/budget-collection-http.test.ts` pins them.
+       */
+      "/api/budget/collection",
+      "/api/budget/collection/collect",
+      "/api/budget/collection/plan",
+      "/api/budget/collection/setup",
+      "/api/budget/collection/unsetup",
       // `staple calibrate` / MCP `calibration_cohorts`: GET-only, a read.
       "/api/calibration",
       /**

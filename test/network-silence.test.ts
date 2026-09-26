@@ -1084,6 +1084,8 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         "/api/queue",
         "/api/settings",
         "/api/poll",
+        // Budget collection: the status the web Settings reads (local files and hub.db).
+        "/api/budget/collection",
       ];
 
       for (let round = 0; round < 3; round += 1) {
@@ -1170,6 +1172,19 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         ["/api/cloud/workspace/disconnect", { slug: "netsilenceui", confirm: true }],
         ["/api/hub/unregister", { slug: "netsilenceui" }],
         ["/api/hub/unregister", { slug: "no-such-workspace", confirm: true }],
+        /*
+         * Automatic budget collection. The contract is that it makes no
+         * network call, and these routes are excluded from the post-write sync
+         * trigger for that reason. The plan, setup without a ticket and with a made-up
+         * one (both refused from local state), a collect and an unsetup without a ticket.
+         * The applying path is driven with real tickets, and pinned as never arming the
+         * sync trigger, in `test/budget-collection-http.test.ts`.
+         */
+        ["/api/budget/collection/plan", { action: "setup", codexAccount: "codex-plus", watcher: false }, 200],
+        ["/api/budget/collection/setup", { codexAccount: "codex-plus", watcher: false }, 400],
+        ["/api/budget/collection/setup", { consent: "made-up", digest: "made-up" }, 404],
+        ["/api/budget/collection/collect", {}, 200],
+        ["/api/budget/collection/unsetup", {}, 400],
         /*
          * S18 (STA-279). A hub backup is offered unconditionally — the button is
          * never hidden and never gated on a connection — so it is reachable on a

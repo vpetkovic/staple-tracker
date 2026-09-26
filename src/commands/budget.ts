@@ -12,10 +12,17 @@
  *   budget bind --source claude-statusline|codex-rollout --account A [--provider P] [--config-dir D | --codex-home D]
  *   budget unbind --source claude-statusline|codex-rollout [--config-dir D | --codex-home D]
  *   budget bindings
+ *   budget setup [--claude-account A] [--codex-account B] [--claude-config-dir D] [--codex-home D]
+ *                [--no-statusline] [--no-watcher] [--interval MIN] [--yes]
+ *   budget unsetup [--yes]
+ *   budget status
+ *   budget collect [--max-files N] [--quiet]
  *
  * `ingest` calls the same `ingestBudget` the MCP tool `record_budget_sample` calls; the
  * two reads call `readBudget` and `listBudgetSamples`, as `get_budget` and
- * `list_budget_samples` do.
+ * `list_budget_samples` do. setup, unsetup, status and collect call the collection
+ * service (`core/telemetry/collection/service.ts`), as the UI server's
+ * `/api/budget/collection` routes do.
  */
 import { readSync, writeSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -32,10 +39,22 @@ import type { BindingSource } from "../core/telemetry/config.js";
 import { INGEST_SOURCES, ingestBudget, type IngestResult, type IngestSource } from "../core/telemetry/ingest.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
 import { listBudgetSamples, readBudget, type BudgetView, type HistorySample } from "../core/telemetry/read-budget.js";
+import {
+  applyBudgetSetup,
+  applyBudgetUnsetup,
+  budgetCollectionStatus,
+  collectBudget,
+  planBudgetSetup,
+  planBudgetUnsetup,
+  type CollectionOutcome,
+  type CollectionPlan,
+  type CollectionStatus,
+} from "../core/telemetry/collection/service.js";
+import type { CollectResult } from "../core/telemetry/collection/codex-collect.js";
 import type { TelemetryPage } from "../core/telemetry/read-page.js";
 import { limitFlag } from "./attempts.js";
 
-const USAGE = "Use: history, ingest, capture, bind, unbind, bindings (staple budget --help)";
+const USAGE = "Use: history, ingest, capture, bind, unbind, bindings, setup, unsetup, status, collect (staple budget --help)";
 
 const HELP = `staple budget — provider budget telemetry on this machine (docs/execution-telemetry.md)
 
@@ -66,8 +85,90 @@ const HELP = `staple budget — provider budget telemetry on this machine (docs/
   budget unbind --source S [--config-dir D | --codex-home D]
   budget bindings                       capture state and every binding
 
+Automatic collection (one explicit consent; nothing changes without --yes)
+  budget setup [--claude-account A] [--codex-account B] [--claude-config-dir D]
+              [--codex-home D] [--no-statusline] [--no-watcher] [--interval MIN] [--yes]
+              capture on, the two bindings, a status-line wrapper in front of the
+              Claude statusLine command you already have (settings.json backed up
+              first), and a launch agent that runs budget collect every MIN minutes
+              (default 5; macOS; elsewhere it prints a cron line). Without --yes it
+              prints what it would change and changes nothing. Re-running is a no-op
+  budget unsetup [--yes]                reverse exactly what setup changed: the
+              original statusLine command back byte for byte, the agent unloaded
+              and deleted, capture and bindings back to what they were before
+  budget status                         capture, each source's newest reading and
+              its age, the wrapper and the watcher (loaded? last run, last error)
+              and every problem found
+  budget collect [--max-files N] [--quiet]
+              ingest the Codex rollouts that are new or have grown since the last
+              run (newest first, at most N, default 100); what the watcher runs
+
 Samples and limit windows live in this machine's hub.db and never replicate.
 Ingestion reads stdin and local files only and makes no network call.`;
+
+const MARK: Record<string, string> = { change: "+", unchanged: "=", skip: "-", refuse: "!" };
+
+function sayPlan(plan: CollectionPlan): void {
+  for (const step of plan.steps) console.log(`  ${MARK[step.action]} ${step.part.padEnd(15)} ${step.summary}`);
+}
+
+function planText(plan: CollectionPlan): string {
+  return plan.steps.map((step) => `  ${MARK[step.action]} ${step.part.padEnd(15)} ${step.summary}`).join("\n");
+}
+
+function sayOutcome(outcome: CollectionOutcome): void {
+  if (outcome.applied.length === 0) console.log(`${outcome.plan.action}: nothing to change`);
+  else console.log(`${outcome.plan.action}: ${outcome.applied.length} change(s) made`);
+  sayPlan(outcome.plan);
+  const problems = outcome.status.problems;
+  if (problems.length > 0) console.log(`problems: ${problems.map((problem) => problem.code).join(", ")} (staple budget status)`);
+}
+
+const age = (seconds: number | null): string => {
+  if (seconds === null) return "never";
+  if (seconds < 90) return `${seconds}s ago`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 172_800) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86_400)}d ago`;
+};
+
+function sayStatus(status: CollectionStatus): void {
+  console.log(`capture    ${status.budgetCapture ? "on" : "off"}${status.setup.recorded ? `  (set up ${status.setup.setupAt})` : ""}`);
+  if (status.sources.length === 0) console.log("sources    none bound");
+  for (const source of status.sources) {
+    const last = source.lastReading === null ? "no reading yet" : `last reading ${source.lastReading.observedAt} (stored ${age(source.lastReading.ageSeconds)})`;
+    console.log(`  ${source.source.padEnd(23)} ${source.accountRef.padEnd(16)} ${last}`);
+  }
+  for (const line of status.statusline) console.log(`statusline ${line.state.padEnd(14)} ${line.settingsPath}`);
+  const w = status.watcher;
+  if (w.supported) {
+    console.log(`watcher    ${w.installed ? "installed" : "not installed"}, ${w.loaded ? "loaded" : "not loaded"}${w.intervalMinutes !== null ? `, every ${w.intervalMinutes} min` : ""}`);
+  } else console.log(`watcher    no launch agent on ${status.platform}; schedule: ${w.cronLine}`);
+  if (w.lastRun !== null) {
+    const run = w.lastRun;
+    console.log(`  last run ${run.at} (${age(w.lastRunAgeSeconds)}): ${run.skippedReason ?? `${run.ingested} read, ${run.storedCount} stored, ${run.deferred} deferred, ${run.errors.length} error(s)`}`);
+  } else console.log("  last run never");
+  if (w.lastError !== null) console.log(`  last error ${w.lastError.at}: ${w.lastError.message}`);
+  if (status.problems.length === 0) console.log("problems   none");
+  for (const problem of status.problems) console.log(`  ! ${problem.code}: ${problem.message}`);
+}
+
+function sayCollect(result: CollectResult): void {
+  if (result.skippedReason !== null) {
+    const why = { capture_disabled: "budget capture is off", no_codex_binding: "no codex-rollout binding", locked: "another collect is running" }[result.skippedReason];
+    console.log(`collect: nothing read (${why})`);
+    return;
+  }
+  console.log(`collect: ${result.scanned} rollout(s) seen, ${result.changed} new or grown, ${result.ingested} read, ${result.storedCount} reading(s) stored, ${result.deferred} left for the next run`);
+  for (const error of result.errors) console.log(`  ! ${error.file}: ${error.message}`);
+}
+
+function positiveNumber(raw: string | undefined, flag: string): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (raw.trim() === "" || !Number.isFinite(value)) throw new StapleError("validation", `${flag} takes a number; got "${raw}".`);
+  return value;
+}
 
 const PARK = new Int32Array(new SharedArrayBuffer(4));
 
@@ -184,6 +285,30 @@ function sayConfig(view: BudgetConfigView): void {
   }
 }
 
+/**
+ * Without --yes: a plan with nothing to change is printed and exits 0; one that would
+ * change something is the refusal `staple install` gives, with the plan as its detail, so
+ * a --json caller reads the plan off the error path. Nothing has been written either way.
+ */
+function refuseWithoutYes(plan: CollectionPlan, json: boolean): void {
+  if (plan.changes === 0 && plan.refusals === 0) {
+    if (json) console.log(JSON.stringify({ plan, applied: [] }));
+    else {
+      console.log(`${plan.action}: nothing to change`);
+      sayPlan(plan);
+    }
+    return;
+  }
+  if (plan.refusals > 0) {
+    throw new StapleError("validation", `budget ${plan.action} is refused; nothing was changed.\n${planText(plan)}`, { reason: "plan_refused", plan });
+  }
+  throw new StapleError(
+    "validation",
+    `Refusing to ${plan.action === "setup" ? "set up budget collection" : "undo budget collection"} without --yes. Nothing was changed. The plan:\n${planText(plan)}\nRe-run with --yes to apply it.`,
+    { reason: "consent_required", plan },
+  );
+}
+
 export function runBudgetCommand(argv: string[]): void {
   // Through FIRST, before argv is even parsed: a typo in the flags must not blank the
   // operator's status line. Only the refusal that follows goes to stderr.
@@ -207,6 +332,15 @@ export function runBudgetCommand(argv: string[]): void {
       since: { type: "string" },
       limit: { type: "string" },
       cursor: { type: "string" },
+      "claude-account": { type: "string" },
+      "codex-account": { type: "string" },
+      "claude-config-dir": { type: "string" },
+      "no-statusline": { type: "boolean" },
+      "no-watcher": { type: "boolean" },
+      interval: { type: "string" },
+      "max-files": { type: "string" },
+      yes: { type: "boolean" },
+      quiet: { type: "boolean" },
     },
   });
   const [sub, ...args] = positionals;
@@ -298,6 +432,51 @@ export function runBudgetCommand(argv: string[]): void {
     case "bindings": {
       const view = budgetConfig(home);
       print(view, () => sayConfig(view));
+      return;
+    }
+    case "setup": {
+      const options = {
+        claudeAccount: values["claude-account"],
+        codexAccount: values["codex-account"],
+        claudeConfigDir: values["claude-config-dir"],
+        codexHome: values["codex-home"],
+        statusline: values["no-statusline"] !== true,
+        watcher: values["no-watcher"] !== true,
+        intervalMinutes: positiveNumber(values.interval, "--interval"),
+      };
+      const deps = { home, attemptLinker: attemptLinkerFor(home) };
+      if (values.yes !== true) {
+        const plan = planBudgetSetup(options, deps);
+        refuseWithoutYes(plan, json);
+        return;
+      }
+      const outcome = applyBudgetSetup(options, deps);
+      print(outcome, () => sayOutcome(outcome));
+      return;
+    }
+    case "unsetup": {
+      const deps = { home };
+      if (values.yes !== true) {
+        refuseWithoutYes(planBudgetUnsetup(deps), json);
+        return;
+      }
+      const outcome = applyBudgetUnsetup(deps);
+      print(outcome, () => sayOutcome(outcome));
+      return;
+    }
+    case "status": {
+      const status = budgetCollectionStatus({ home });
+      print(status, () => sayStatus(status));
+      return;
+    }
+    case "collect": {
+      const result = collectBudget({ maxFiles: positiveNumber(values["max-files"], "--max-files") }, { home, attemptLinker: attemptLinkerFor(home) });
+      if (values.quiet === true) {
+        // The watcher's own log line is written by collect; stderr carries only failures.
+        for (const error of result.errors) console.error(`budget collect: ${error.file}: ${error.message}`);
+        return;
+      }
+      print(result, () => sayCollect(result));
       return;
     }
     default:
