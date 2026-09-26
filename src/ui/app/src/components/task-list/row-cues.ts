@@ -250,7 +250,9 @@ export function buildRowCueIndex(
       const reason = row.reason;
       if (row.eligibility === "gated") return { state: "gated", position: null, scope: "effective", reason };
       if (row.eligibility === "blocked") return { state: "waiting", position: null, scope: "effective", reason };
-      if (row.eligibility === "unavailable") return { state: "unavailable", position: null, scope: "effective", reason };
+      // The resolver's sentence here only names the raw status id ("… is in_review, which
+      // cannot be checked out"); the hint says the same in words, and the row shows its status.
+      if (row.eligibility === "unavailable") return { state: "unavailable", position: null, scope: "effective", reason: null };
       if (row.eligibility === "claimed") {
         return { state: "in_flight", position: null, scope: "effective", reason };
       }

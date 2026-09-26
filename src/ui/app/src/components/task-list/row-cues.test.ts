@@ -122,6 +122,9 @@ describe("pickable is the resolver's answer, not a predicate", () => {
       ],
     });
     expect(stateOf(review, "STA-1")).toMatchObject({ state: "unavailable", position: null });
+    // …and says so without the raw status id the resolver's sentence carries.
+    expect(rowCueSentence(stateOf(review, "STA-1")!)).toBe(`Unavailable — ${ROW_CUE_PRESENTATION.unavailable.hint}`);
+    expect(rowCueSentence(stateOf(review, "STA-1")!)).not.toContain("in_review");
     expect(stateOf(review, "STA-2")?.state).toBe("pickable");
   });
 
