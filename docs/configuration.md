@@ -295,6 +295,14 @@ staple budget status
 staple budget unsetup --yes                                                         # reverse exactly what setup did
 ```
 
+The web app does the same from **Settings → Usage & budget**
+([web-ui.md](web-ui.md#usage--budget)): capture on and off, bindings listed,
+added, edited and removed, and automatic collection turned on and off after
+its plan is shown. It calls the same store methods through
+`POST /api/budget/capture` and `POST /api/budget/bindings/{bind,unbind}`, with
+the CLI's validation, and writes the same `config.json`. Those writes are
+accepted only from this computer's browser.
+
 Automatic collection keeps its own machine-local state in the staple home, none
 of it in `config.json` and none of it replicated:
 

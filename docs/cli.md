@@ -1236,6 +1236,15 @@ an expired or used ticket is 404; a wrong digest, a ticket for the other
 action, or a plan that no longer reads the same (`plan_changed`) is 409. The
 routes are machine-local and never trigger a sync.
 
+`capture`, `bind`, `unbind` and `bindings` have routes too, for the web
+Settings' *Usage & budget* section ([web-ui.md](web-ui.md#usage--budget)):
+`POST /api/budget/capture` (`{enabled}`), `POST /api/budget/bindings/bind`
+(`{source, account, provider?, configDir? | codexHome?, replacing?}`, `source`
+spelled as `--source`; `replacing` names the binding an edit swaps out in the
+same write), `POST /api/budget/bindings/unbind` and `GET /api/budget/bindings`.
+Same store methods, same validation and refusal sentences as the CLI, same
+`config.json`.
+
 ### Reading budget and attempts back
 
 ```bash

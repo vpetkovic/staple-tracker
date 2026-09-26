@@ -1005,7 +1005,8 @@ event key.
 
 Capture stays opt-in and off by default. What automatic collection adds is that
 the opt-in is **one explicit action** rather than five manual steps:
-`staple budget setup … --yes` (or `consent: true` on the UI server's
+`staple budget setup … --yes` (or, from the web Settings, the consent ticket
+`POST /api/budget/collection/plan` returned with the plan, sent back to
 `POST /api/budget/collection/setup`). Without that, nothing below is enabled,
 installed or run, and `staple budget setup` alone only prints its plan.
 
