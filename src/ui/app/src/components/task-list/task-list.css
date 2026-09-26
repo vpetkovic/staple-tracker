@@ -1310,15 +1310,12 @@
 }
 
 /* A one-digit badge is 34px wide. Its target is measured from inside its 1px border: at a
-   40px minimum that is 38 + 2 × 3 = 44px across (and 18 + 2 × 13 = 44px tall). The badges
-   beside each other stand 6px apart so their targets never overlap. */
+   40px minimum that is 38 + 2 × 3 = 44px across (and 18 + 2 × 13 = 44px tall). Two badges
+   side by side stand 4px apart, so their targets, 2px past each border, meet and never
+   overlap. */
 .staple-row[data-layout="compact"] .staple-dep-badge {
   min-width: 40px;
   justify-content: center;
-}
-
-.staple-row[data-layout="compact"] .staple-dep-badges {
-  gap: 6px;
 }
 
 /*
@@ -1417,9 +1414,6 @@
   .staple-row .staple-dep-badge {
     min-width: 40px;
     justify-content: center;
-  }
-  .staple-row .staple-dep-badges {
-    gap: 6px;
   }
   /* The same separation as the compact row above: the `⋯` target meets the badge's, it
      never overlaps it. */

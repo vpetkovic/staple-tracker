@@ -574,6 +574,22 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
       };
       return { w: reach(-1, 0) + reach(1, 0) + 0.25, h: reach(0, -1) + reach(0, 1) + 0.25, drawnH: r.height };
     }, [selector, index] as const);
+  /** Drag the Graph's canvas with a finger until `selector`'s right edge is 90px inside the pane. */
+  const dragIntoView = async ({ page: p, context }: { page: Page; context: BrowserContext }, selector: string) => {
+    const at = (await p.locator(selector).boundingBox())!;
+    const pane = (await p.locator(".react-flow__pane").boundingBox())!;
+    const y = pane.y + 50;
+    const from = pane.x + pane.width - 20;
+    const shift = at.x + at.width - (pane.x + pane.width - 90);
+    if (shift <= 0) return;
+    const cdp = await context.newCDPSession(p);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y }] });
+    for (let step = 1; step <= 10; step++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: from - (shift * step) / 10, y }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await settle(p, 300);
+  };
   const atLeast44 = async (p: Page, selector: string, index = 0) => {
     const t = await target(p, selector, index);
     expect(t, selector).not.toBeNull();
@@ -596,21 +612,8 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     const graph = await page("/?ws=beta&view=graph");
     await settle(graph.page, 600);
     for (const control of ["Zoom In", "Zoom Out", "Fit View"]) await atLeast44(graph.page, `.react-flow__controls-button[aria-label="${control}"]`);
-    // The epic's box is wider than a phone and its chevron sits at the right end: drag the
-    // canvas left until the chevron is on screen.
-    const chevron = graph.page.locator('[aria-label="collapse BET-5"]');
-    const at = (await chevron.boundingBox())!;
-    const pane = (await graph.page.locator(".react-flow__pane").boundingBox())!;
-    const y = pane.y + 50;
-    const from = pane.x + pane.width - 20;
-    const shift = at.x + at.width - 300;
-    const cdp = await graph.context.newCDPSession(graph.page);
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: from, y }] });
-    for (let step = 1; step <= 10; step++) {
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: from - (shift * step) / 10, y }] });
-    }
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await settle(graph.page, 300);
+    // The epic's box is wider than a phone and its chevron sits at the right end.
+    await dragIntoView(graph, '[aria-label="collapse BET-5"]');
     expect((await atLeast44(graph.page, '[aria-label="collapse BET-5"]')).drawnH).toBeLessThan(20);
     await graph.page.locator('[aria-label="collapse BET-5"]').tap();
     await settle(graph.page, 600);
@@ -666,6 +669,16 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     const badges = await count(p, ".staple-dep-badge");
     for (let index = 0; index < badges; index++) expect((await atLeast44(p, ".staple-dep-badge", index)).drawnH).toBe(20);
     await context.close();
+
+    // The Graph frames a tablet at zoom 1, where its handles are drawn smallest.
+    const graph = await page("/?ws=beta&view=graph", TABLET);
+    await settle(graph.page, 800);
+    await dragIntoView(graph, '[aria-label="collapse BET-5"]');
+    expect((await atLeast44(graph.page, '[aria-label="collapse BET-5"]')).drawnH).toBeLessThan(20);
+    await graph.page.locator('[aria-label="collapse BET-5"]').tap();
+    await settle(graph.page, 600);
+    expect((await atLeast44(graph.page, '[aria-label="expand BET-5"]')).drawnH).toBeLessThan(20);
+    await graph.context.close();
   }, 30_000);
 
   it("phone search takes the header row: nothing wider than the screen, nothing scrolled sideways", async () => {

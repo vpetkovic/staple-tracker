@@ -38,7 +38,12 @@ const NODE_SEP = 24;
  * EpicContainerNode imports them.
  */
 export const CONTAINER_PAD = 14;
-export const CONTAINER_HEADER_H = 42;
+/**
+ * 46, not less: the header's right end is the collapse chevron's touch target, and nothing
+ * between the box's 1px border and its first member can be taller than the header. At a
+ * tablet's zoom of 1 that leaves the chevron 45px on screen (graph/phone-fit.ts).
+ */
+export const CONTAINER_HEADER_H = 46;
 
 /**
  * The smallest a box may be — one member's worth of room.

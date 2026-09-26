@@ -146,9 +146,10 @@ export const EpicContainerNode = memo(function EpicContainerNode({
           // stopPropagation: it must not ALSO reach onNodeClick and open the panel behind.
           // Touch: the house 44px button rule (unlayered, hence the `!`) would push the title out of this fixed-size
           // node, so the button keeps its drawn size and a ::before carries the target. On touch it
-          // reaches 16px each side, 10px up (the node clips above that) and 24px down: past 44px on
-          // screen at the phone's minimum zoom (graph/phone-fit.ts).
-          className="nodrag relative shrink-0 rounded-sm p-0.5 leading-none hover:bg-muted pointer-coarse:min-h-0! before:absolute before:-inset-3 before:content-[''] pointer-coarse:before:-inset-x-4 pointer-coarse:before:-top-2.5 pointer-coarse:before:-bottom-6"
+          // reaches 10px up and about 8px right (the node clips past those), 28px down and 24px
+          // left, over the count: past 44px on screen from the tablet's minimum zoom of 1 up
+          // (graph/phone-fit.ts).
+          className="nodrag relative shrink-0 rounded-sm p-0.5 leading-none hover:bg-muted pointer-coarse:min-h-0! before:absolute before:-inset-3 before:content-[''] pointer-coarse:before:-top-2.5 pointer-coarse:before:-right-4 pointer-coarse:before:-bottom-7 pointer-coarse:before:-left-6"
           aria-label={`collapse ${epic.id}`}
           onClick={(event) => {
             event.stopPropagation();
