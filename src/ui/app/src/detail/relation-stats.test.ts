@@ -1,16 +1,16 @@
 /**
- * The strip's wording, pinned character for character — O2b (STA-132).
+ * The Connections summary, pinned sentence for sentence.
  *
- * The ticket writes the strip out as a literal sentence, and the failure it is guarding
- * against is not a crash: it is a segment silently renamed so that "N upstream total"
- * starts reading "blocked by N". Both are integers, both typecheck, and the wrong one
- * changes whether somebody thinks they can start work. So the strings are the assertion.
+ * The failure guarded against is not a crash: it is a sentence silently built from the
+ * other number, so that "Waiting on N tasks" starts counting the transitive pile, or a
+ * resolved blocker. Both are integers, both typecheck, and the wrong one changes whether
+ * somebody thinks they can start work. So the strings are the assertion.
  *
  * Relative imports, like every other test under `src/ui/app/`.
  */
 import { describe, expect, it } from "vitest";
 import type { RelationCounts } from "../lib/relation-context";
-import { relationStats } from "./relation-stats";
+import { directCounts, relationStats } from "./relation-stats";
 
 const counts = (overrides: Partial<RelationCounts> = {}): RelationCounts => ({
   ancestors: 0,
@@ -28,44 +28,52 @@ const counts = (overrides: Partial<RelationCounts> = {}): RelationCounts => ({
   ...overrides,
 });
 
+const texts = (c: RelationCounts) => relationStats(c).map((stat) => stat.text);
+
 describe("relationStats", () => {
-  it("reads exactly as the ticket specifies", () => {
-    const stats = relationStats(
-      counts({
-        ancestors: 2,
-        children: 5,
-        childrenResolved: 3,
-        blockedByDirect: 4,
-        blockedByUnresolved: 2,
-        blockedByTotal: 9,
-        blocksDirect: 1,
-        crossEdges: 3,
-      }),
+  it("reads as plain sentences, in order", () => {
+    expect(
+      texts(
+        counts({
+          ancestors: 2,
+          children: 5,
+          childrenResolved: 3,
+          blockedByDirect: 4,
+          blockedByUnresolved: 2,
+          blockedByTotal: 9,
+          blocksDirect: 1,
+          crossEdges: 3,
+        }),
+      ),
+    ).toEqual([
+      "Waiting on 2 tasks",
+      "5 tasks further up the chain",
+      "1 task is waiting on this",
+      "3 of 5 sub-tasks finished",
+      "3 links to other workspaces",
+    ]);
+  });
+
+  it("says the two answers a reader always wants even when both are nothing, and nothing else", () => {
+    expect(texts(counts())).toEqual(["Nothing is blocking this", "Nothing is waiting on this"]);
+  });
+
+  it("leads with the UNRESOLVED direct blockers, never the direct total or the transitive pile", () => {
+    // 4 direct, 1 unresolved, 9 upstream: the lead is 1, and the pile is said separately.
+    const lead = relationStats(counts({ blockedByDirect: 4, blockedByUnresolved: 1, blockedByTotal: 9 }))[0]!;
+    expect(lead.text).toBe("Waiting on 1 task");
+    expect(texts(counts({ blockedByDirect: 4, blockedByUnresolved: 1, blockedByTotal: 9 }))).toContain(
+      "5 tasks further up the chain",
     );
-    expect(stats.map((stat) => stat.text)).toEqual([
-      "ancestors 2",
-      "children 3/5",
-      "blocked by 4 direct (2 unresolved)",
-      "9 upstream total",
-      "blocks 1",
-      "cross-workspace 3",
-    ]);
   });
 
-  it("prints zeros rather than dropping segments", () => {
-    const stats = relationStats(counts());
-    expect(stats).toHaveLength(6);
-    expect(stats.map((stat) => stat.text)).toEqual([
-      "ancestors 0",
-      "children 0/0",
-      "blocked by 0 direct (0 unresolved)",
-      "0 upstream total",
-      "blocks 0",
-      "cross-workspace 0",
-    ]);
+  it("says a task whose blockers are all finished is not waiting", () => {
+    expect(texts(counts({ blockedByDirect: 3, blockedByUnresolved: 0, blockedByTotal: 3 }))[0]).toBe(
+      "Everything it waited on is finished",
+    );
   });
 
-  it("tints only the blocked-by segment, and only when something is unresolved", () => {
+  it("tints only the lead sentence, and only when something is unresolved", () => {
     const clear = relationStats(counts({ blockedByDirect: 3, blockedByUnresolved: 0 }));
     expect(clear.every((stat) => !stat.blocked)).toBe(true);
 
@@ -73,14 +81,41 @@ describe("relationStats", () => {
     expect(stuck.filter((stat) => stat.blocked).map((stat) => stat.key)).toEqual(["blocked-by"]);
   });
 
-  it("counts cross-workspace EDGES, which is what the canvas dashes", () => {
-    const stats = relationStats(counts({ crossEdges: 2, crossNodes: 7 }));
-    expect(stats.at(-1)?.text).toBe("cross-workspace 2");
+  it("counts cross-workspace EDGES, which is what the map dashes", () => {
+    expect(texts(counts({ crossEdges: 2, crossNodes: 7 }))).toContain("2 links to other workspaces");
   });
 
   it("keys are unique and stable", () => {
-    const keys = relationStats(counts()).map((stat) => stat.key);
+    const keys = relationStats(
+      counts({ children: 1, blockedByDirect: 1, blockedByTotal: 2, crossEdges: 1 }),
+    ).map((stat) => stat.key);
     expect(new Set(keys).size).toBe(keys.length);
-    expect(keys).toEqual(["ancestors", "children", "blocked-by", "upstream", "blocks", "cross"]);
+    expect(keys).toEqual(["blocked-by", "upstream", "blocks", "children", "cross"]);
+  });
+});
+
+describe("directCounts", () => {
+  const resolved = (status: string) => status === "done" || status === "cancelled";
+
+  it("counts from the detail payload, unresolved local and cross blockers both", () => {
+    const c = directCounts({
+      ancestors: 1,
+      children: [{ status: "done" }, { status: "todo" }],
+      blockedBy: [{ status: "done" }, { status: "in_progress" }],
+      blocks: 2,
+      crossBlockers: [{ resolved: false }],
+      isResolved: resolved,
+    });
+    expect(c).toMatchObject({
+      children: 2,
+      childrenResolved: 1,
+      blockedByDirect: 3,
+      blockedByUnresolved: 2,
+      blockedByTotal: 3,
+      blocksDirect: 2,
+      crossEdges: 1,
+    });
+    // Without the graph the transitive figure equals the direct one, so nothing is claimed about it.
+    expect(texts(c)).not.toContain(expect.stringContaining("further up"));
   });
 });
