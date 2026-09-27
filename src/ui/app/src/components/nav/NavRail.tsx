@@ -1,78 +1,84 @@
 /**
  * The navigation rail — the left column of the shell.
  *
- * Top to bottom, Linear's order: the workspace switcher; a bordered New task button
- * beside a bordered search button; the grouped views from `nav-model.ts`; and at the
- * foot, where Linear keeps them, Settings and Dark mode as ordinary rows above a
- * hairline. Everything the old two-tier header held is here, and nothing here decides
- * what the view shows — that is the content header's job (see AppShell.tsx).
+ * ── THREE PLAIN GROUPS, TOP TO BOTTOM ─────────────────────────────────────────────────
  *
- * ── The register ──────────────────────────────────────────────────────────────────────
+ *   WORKSPACES   every workspace, listed — All workspaces first — so what the page is
+ *                scoped to, and the way to change it, are on screen without opening a menu.
+ *                One click switches. Past `RAIL_WORKSPACE_LIMIT` the rest sit behind "More
+ *                workspaces", which opens the searchable switcher.
+ *   VIEWS        what you can look at in that scope: Tasks (with its projects under it),
+ *                Queue, Graph, Milestones, Estimates.
+ *   THIS COMPUTER  at the foot, apart from the workspace's views, because it reads the same
+ *                whichever workspace is chosen: Usage. Under it, Settings and the theme.
  *
- * Rows are 28px, 13px text, 6px corners, 8px of side padding, no gap between them.
- * Icons are 16px in the tertiary tone and take the foreground when the row is hovered or
- * active; the active row is a fill (`surface-selected`) and NOTHING ELSE — no weight
- * change, because a bold row in a 13px list reads as a heading, not a selection. The
- * group label is sentence case, 12px, muted, with its collapse chevron shown on hover
- * and focus only. Shortcuts live in tooltips, not in chips beside the words.
+ * The global verbs — find anything, New task — moved to the top bar, where the page's
+ * primary action belongs (see AppShell). The rail is only where you are.
  *
- * ── Rows are buttons, groups are sections ─────────────────────────────────────────────
+ * ── THE REGISTER ──────────────────────────────────────────────────────────────────────
  *
- * A view row is a `<button>` with `aria-current="page"` when it is the view on screen. Not
- * a link — there is no URL per view — and not a Radix Tab, because the rows control no
- * `TabsContent`: App.tsx swaps the view. A group is a `<section>` headed by a real
- * disclosure button (`aria-expanded`), so a folded group is a fact a screen reader hears
- * rather than a row that went missing.
+ * Rows are 32px (text-body, 13px), 8px corners, an icon or a letter tile in the tertiary
+ * tone. The ACTIVE row is unmistakable: a filled surface, medium weight, foreground icon.
+ * Group labels are text-label, sentence case, tertiary. Every control has the one focus
+ * ring (`focus-ring-inset`, inside the row so the rail's edge never clips it).
  *
- * ── Projects hang off Tasks ───────────────────────────────────────────────────────────
+ * ── ROWS ARE BUTTONS, GROUPS ARE SECTIONS ─────────────────────────────────────────────
  *
- * The Tasks row carries a `+` (visible on hover and focus, always in the tab order) that
- * opens the project dialog, and lists every tracked project beneath itself, each with a
- * project glyph one indent step in, its open-task count on the right, and a gear on
- * hover that opens the same dialog on that project. A project row does one thing:
- * `focusProject` — switch to Tasks and narrow it to that project. Which row does what is
- * data in `nav-model.ts` (`action`, `subItems`); the rail maps the ids to verbs.
+ * A view row is a `<button>` with `aria-current="page"`; a workspace row carries
+ * `aria-current="true"` (it is a place, not the page). A group is a `<section>` headed by a
+ * real disclosure button (`aria-expanded`), so a folded group is a fact a screen reader
+ * hears. Projects hang off Tasks exactly as before: the `+` makes one, each project row
+ * narrows Tasks to it, and its gear opens its settings.
+ *
+ * ── ON A PHONE ────────────────────────────────────────────────────────────────────────
+ *
+ * The same component is the phone's menu drawer, and there it keeps its phone shape: no
+ * workspace list (the top bar's switcher pill is the phone's), 44px rows, and a close
+ * button in place of the collapse control.
  */
 import {
   ChevronDown,
   Cog,
   FolderKanban,
+  LayoutGrid,
   Moon,
   PanelLeftClose,
   Plus,
-  Search,
   Settings,
-  SquarePen,
   Sun,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCompactHeader } from "@/components/filters/useCompactHeader";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { projectsForWorkspace } from "@/lib/projects";
 import { isResolvedStatus } from "@/lib/settings";
-import { openCommandPalette, openCreateIssue, openProjectDialog, openSettings } from "@/lib/shell-events";
+import { openProjectDialog, openSettings } from "@/lib/shell-events";
 import { scopeName, useSession, type ViewName } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { NAV_GROUPS, projectCaption, type NavGroup, type NavItem } from "./nav-model";
+import { NAV_GROUPS, chooseRailWorkspace, projectCaption, railWorkspaces, type NavGroup, type NavItem } from "./nav-model";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const THEME_KEY = "staple:theme";
 
 /**
- * One rail row. The active row is marked with `aria-current` and the styling reads
- * that attribute rather than a prop so the DOM and the paint cannot disagree. The icon
- * follows the row: tertiary at rest, foreground when hovered or current.
+ * One rail row. The active row is marked with `aria-current` and the styling reads that
+ * attribute rather than a prop, so the DOM and the paint cannot disagree.
  */
 export const RAIL_ROW_CLASS = cn(
-  "flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-[13px] font-normal outline-none",
-  // In the phone's drawer every row is a 44px target at a readable size.
-  "max-md:h-11 max-md:gap-3 max-md:text-[15px]",
-  "text-sidebar-foreground/90 transition-colors hover:bg-surface-hover hover:text-foreground",
-  "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-  "aria-[current]:bg-surface-selected aria-[current]:text-foreground",
+  "flex h-8 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left text-body font-normal focus-ring-inset",
+  // In the phone's drawer every row is a 44px target at a readable size; under a finger on a
+  // desk-width tablet it is a 44px target too.
+  "max-md:h-11 max-md:gap-3 max-md:text-[15px] pointer-coarse:h-11",
+  "text-sidebar-foreground/85 transition-colors duration-(--duration-fast) hover:bg-surface-hover hover:text-foreground",
+  "aria-[current]:bg-surface-selected aria-[current]:font-medium aria-[current]:text-foreground",
   "[&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-text-tertiary hover:[&_svg]:text-foreground aria-[current]:[&_svg]:text-foreground",
 );
+
+/** A group's label: sentence case, tertiary, and a real disclosure button. */
+const GROUP_LABEL_CLASS =
+  "group flex h-7 w-full items-center gap-1 rounded-md px-2 text-label font-medium text-text-tertiary hover:text-foreground focus-ring-inset max-md:h-11 max-md:text-[13px] pointer-coarse:h-11";
 
 /**
  * An icon button that sits on a row's right edge: invisible until the row is hovered or
@@ -80,24 +86,38 @@ export const RAIL_ROW_CLASS = cn(
  * find is not a control.
  */
 const ROW_ACTION_CLASS = cn(
-  "absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded",
-  "text-text-tertiary opacity-0 transition-opacity outline-none",
+  "absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded-md",
+  "text-text-tertiary opacity-0 transition-opacity focus-ring-inset",
   "group-hover/row:opacity-100 group-focus-within/row:opacity-100 hover:bg-surface-active hover:text-foreground",
   // A touch screen has no hover: the action is simply always there, at thumb size.
   "[@media(hover:none)]:opacity-100 max-md:right-0 max-md:size-11 pointer-coarse:right-0 pointer-coarse:size-11",
-  "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
 );
 
-/** A control's tooltip: the words, then the shortcut in mono, the way Linear labels its buttons. */
+/** A control's tooltip: the words, then the shortcut in mono. */
 function Hint({ label, keys, children }: { label: string; keys?: string; children: ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent side="bottom">
         {label}
-        {keys ? <span className="ml-1.5 font-mono text-[11px] opacity-70">{keys}</span> : null}
+        {keys ? <span className="ml-1.5 font-mono text-caption opacity-70">{keys}</span> : null}
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+/** The app's mark: a half-filled circle on an ink tile. */
+export function BrandMark({ large = false }: { large?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-md bg-foreground leading-none text-background",
+        large ? "size-6 text-[14px]" : "size-5 text-[12px]",
+      )}
+    >
+      &#9680;
+    </span>
   );
 }
 
@@ -149,18 +169,18 @@ function ProjectSubItems({ onNavigate }: { onNavigate?: () => void }) {
                 onNavigate?.();
               }}
               // One indent step: the glyph lands at the parent's icon x plus 16px.
-              className={cn(RAIL_ROW_CLASS, "pr-7 pl-6 max-md:pr-12")}
+              className={cn(RAIL_ROW_CLASS, "pr-8 pl-7 max-md:pr-12")}
             >
               <FolderKanban aria-hidden />
               <span className="truncate">{project.name}</span>
               {caption ? (
-                <span className="ml-auto shrink-0 text-[11px] text-text-tertiary">{caption}</span>
+                <span className="ml-auto shrink-0 text-caption text-text-tertiary">{caption}</span>
               ) : null}
               <span
                 data-nav-project-count
                 aria-label={`${open} open`}
                 className={cn(
-                  "shrink-0 font-mono text-[11px] text-text-tertiary tabular-nums transition-opacity",
+                  "shrink-0 text-caption font-normal text-text-tertiary tabular-nums transition-opacity",
                   !caption && "ml-auto",
                   "group-hover/row:opacity-0 group-focus-within/row:opacity-0 [@media(hover:none)]:opacity-100",
                 )}
@@ -212,7 +232,7 @@ function NavItemRow({
           data-nav-item={entry.id}
           aria-current={active ? "page" : undefined}
           onClick={() => onSelect(entry.view)}
-          className={cn(RAIL_ROW_CLASS, entry.action && "pr-7 max-md:pr-12 pointer-coarse:pr-12")}
+          className={cn(RAIL_ROW_CLASS, entry.action && "pr-8 max-md:pr-12 pointer-coarse:pr-12")}
         >
           <Icon aria-hidden />
           <span className="truncate">{entry.label}</span>
@@ -239,23 +259,23 @@ function NavItemRow({
   );
 }
 
-function NavGroupSection({
-  group,
-  view,
-  onSelect,
-  onNavigate,
+/** A labelled, foldable group of rows. */
+function RailSection({
+  id,
+  label,
+  children,
+  className,
 }: {
-  group: NavGroup;
-  view: ViewName;
-  onSelect: (view: ViewName) => void;
-  onNavigate?: () => void;
+  id: string;
+  label: string;
+  children: ReactNode;
+  className?: string;
 }) {
-  const session = useSession();
   const [open, setOpen] = useState(true);
-  const headingId = `nav-group-${group.id}`;
-  const listId = `nav-group-${group.id}-items`;
+  const headingId = `nav-group-${id}`;
+  const listId = `nav-group-${id}-items`;
   return (
-    <section aria-labelledby={headingId} data-nav-group={group.id} className="mt-4 first:mt-0">
+    <section aria-labelledby={headingId} data-nav-group={id} className={cn("mt-5 first:mt-0", className)}>
       <button
         type="button"
         id={headingId}
@@ -263,11 +283,10 @@ function NavGroupSection({
         aria-controls={listId}
         onClick={() => setOpen((o) => !o)}
         data-nav-group-label
-        className="group flex h-7 w-full items-center gap-1 rounded-md px-2 text-[12px] text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring max-md:h-11 max-md:text-[13px]"
+        className={GROUP_LABEL_CLASS}
       >
-        {/* The workspace group is named for what it is scoped to: the selected workspace, or All workspaces. */}
         <span data-nav-group-name className="truncate">
-          {group.id === "workspace" ? scopeName(session) : group.label}
+          {label}
         </span>
         <ChevronDown
           aria-hidden
@@ -278,18 +297,87 @@ function NavGroupSection({
         />
       </button>
       {open ? (
-        <ul id={listId} role="list">
-          {group.items.map((entry) => (
-            <NavItemRow key={entry.id} entry={entry} view={view} onSelect={onSelect} onNavigate={onNavigate} />
-          ))}
+        <ul id={listId} role="list" className="flex flex-col gap-px">
+          {children}
         </ul>
       ) : null}
     </section>
   );
 }
 
-/** The theme, as an ordinary rail row rather than a lone icon. */
-function ThemeRow() {
+function NavGroupSection({
+  group,
+  label,
+  view,
+  onSelect,
+  onNavigate,
+  className,
+}: {
+  group: NavGroup;
+  label: string;
+  view: ViewName;
+  onSelect: (view: ViewName) => void;
+  onNavigate?: () => void;
+  className?: string;
+}) {
+  return (
+    <RailSection id={group.id} label={label} className={className}>
+      {group.items.map((entry) => (
+        <NavItemRow key={entry.id} entry={entry} view={view} onSelect={onSelect} onNavigate={onNavigate} />
+      ))}
+    </RailSection>
+  );
+}
+
+/**
+ * Every workspace, one click each — the scope, visible and changeable without a menu.
+ * A workspace row is marked `aria-current="true"` when it is the one the page shows.
+ */
+function WorkspaceRows() {
+  const session = useSession();
+  const { rows, hidden } = railWorkspaces(session);
+  const hub = session.mode === "hub";
+  if (rows.length === 0) return null;
+  return (
+    <RailSection id="workspaces" label={hub ? "Workspaces" : "Workspace"}>
+      {rows.map((row) => (
+        <li key={row.value || "__all__"}>
+          <button
+            type="button"
+            data-nav-workspace={row.value}
+            aria-current={row.current ? "true" : undefined}
+            title={row.value ? `Show ${row.name}` : "Show every workspace together"}
+            onClick={() => chooseRailWorkspace(session, row)}
+            className={RAIL_ROW_CLASS}
+          >
+            {row.value === "" ? (
+              <LayoutGrid aria-hidden />
+            ) : (
+              <span
+                aria-hidden
+                className={cn(
+                  "flex size-4 shrink-0 items-center justify-center rounded-[5px] text-[10px] leading-none font-semibold",
+                  row.current ? "bg-foreground text-background" : "bg-surface-active text-text-secondary",
+                )}
+              >
+                {row.initials}
+              </span>
+            )}
+            <span className="truncate">{row.name}</span>
+          </button>
+        </li>
+      ))}
+      {hidden > 0 ? (
+        <li>
+          <WorkspaceSwitcher variant="more" moreCount={hidden} />
+        </li>
+      ) : null}
+    </RailSection>
+  );
+}
+
+/** The theme, as a switch: a row on the phone, an icon beside Settings on a desk. */
+function ThemeToggle({ asRow }: { asRow: boolean }) {
   const [dark, setDark] = useState(
     () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
   );
@@ -301,19 +389,31 @@ function ThemeRow() {
       /* private mode: the choice lasts for this page load */
     }
   }, [dark]);
+  const props = {
+    type: "button" as const,
+    role: "switch",
+    "aria-checked": dark,
+    "aria-label": "Dark mode",
+    "data-nav-theme": "",
+    onClick: () => setDark((d) => !d),
+  };
+  if (asRow) {
+    return (
+      <button {...props} className={RAIL_ROW_CLASS}>
+        {dark ? <Sun aria-hidden /> : <Moon aria-hidden />}
+        Dark mode
+      </button>
+    );
+  }
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={dark}
-      aria-label="Dark mode"
-      data-nav-theme
-      onClick={() => setDark((d) => !d)}
-      className={RAIL_ROW_CLASS}
-    >
-      {dark ? <Sun aria-hidden /> : <Moon aria-hidden />}
-      Dark mode
-    </button>
+    <Hint label={dark ? "Switch to light mode" : "Switch to dark mode"}>
+      <button
+        {...props}
+        className="flex size-8 shrink-0 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring-inset pointer-coarse:size-11"
+      >
+        {dark ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}
+      </button>
+    </Hint>
   );
 }
 
@@ -327,20 +427,32 @@ export function NavRail({
   onNavigate?: () => void;
 }) {
   const session = useSession();
+  const phone = useCompactHeader();
   const select = (view: ViewName) => {
     session.setView(view);
     onNavigate?.();
   };
+  const [views, machine] = NAV_GROUPS;
 
   return (
     <nav
       aria-label="Primary"
       data-nav-rail
-      className="flex h-full w-[232px] shrink-0 flex-col bg-sidebar text-sidebar-foreground max-md:w-[min(18rem,85vw)]"
+      className="flex h-full w-rail shrink-0 flex-col bg-sidebar text-sidebar-foreground max-md:w-[min(18rem,85vw)]"
     >
-      {/* ── the switcher, and the way to put the rail away. 40px, level with the content header. ── */}
-      <div className="flex min-h-10 shrink-0 items-center gap-1 py-1 pr-2 pl-2.5">
-        <WorkspaceSwitcher />
+      {/* ── the mark, and the way to put the rail away. Level with the top bar. ── */}
+      {/* The content card starts one gutter down, so this row does too: the two centres line up. */}
+      <div className="flex h-topbar shrink-0 items-center gap-2 pr-2 pl-4 md:mt-gutter max-md:h-auto max-md:min-h-14 max-md:pl-3">
+        {phone ? (
+          <div className="min-w-0 flex-1">
+            <WorkspaceSwitcher />
+          </div>
+        ) : (
+          <span className="flex min-w-0 flex-1 items-center gap-2" data-nav-brand>
+            <BrandMark />
+            <span className="truncate text-body font-semibold tracking-[var(--tracking-heading)]">staple</span>
+          </span>
+        )}
         {/*
           A desk collapses the rail; a phone's drawer has nothing to collapse, so it offers a
           plain close instead (the scrim and the system Back close it too).
@@ -352,7 +464,7 @@ export function NavRail({
             aria-label="Hide navigation"
             onClick={onHide}
             // A tablet is a desk layout under a finger: its controls are 44px there too.
-            className="size-7 text-text-tertiary hover:text-foreground max-md:hidden pointer-coarse:size-11"
+            className="size-8 rounded-lg text-text-tertiary hover:text-foreground max-md:hidden pointer-coarse:size-11"
           >
             <PanelLeftClose className="size-4" />
           </Button>
@@ -369,62 +481,35 @@ export function NavRail({
         </Button>
       </div>
 
-      {/*
-        ── the two global verbs on one row: make a task, find anything ──
-        Not in the phone's drawer: the phone's top bar already has both, one tap away.
-      */}
-      <div className="flex h-7 shrink-0 items-center gap-1.5 px-2.5 max-md:hidden pointer-coarse:h-11">
-        <Hint label="New task" keys="C">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              openCreateIssue();
-              onNavigate?.();
-            }}
-            data-nav-new-task
-            className="h-7 flex-1 justify-start gap-2 px-2 text-[13px] font-normal max-md:h-11 max-md:text-[15px]"
-          >
-            <SquarePen className="size-4 text-text-tertiary" aria-hidden />
-            New task
-          </Button>
-        </Hint>
-        <Hint label="Search and commands" keys="⌘K">
-          <Button
-            variant="outline"
-            size="icon-xs"
-            aria-label="Open the command palette"
-            data-nav-search
-            onClick={() => {
-              openCommandPalette();
-              onNavigate?.();
-            }}
-            className="size-7 shrink-0 text-text-tertiary hover:text-foreground max-md:size-11 pointer-coarse:size-11"
-          >
-            <Search className="size-4" aria-hidden />
-          </Button>
-        </Hint>
+      {/* ── where you are: the workspace, then what you can look at in it ── */}
+      <div className="staple-momentum flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pt-2 pb-3 max-md:px-2.5">
+        {phone ? null : <WorkspaceRows />}
+        <NavGroupSection
+          group={views!}
+          // A phone has no workspace list above, so its views group is named for the scope.
+          label={phone ? scopeName(session) : views!.label}
+          view={session.view}
+          onSelect={select}
+          onNavigate={onNavigate}
+        />
+        <NavGroupSection
+          group={machine!}
+          label={machine!.label}
+          view={session.view}
+          onSelect={select}
+          onNavigate={onNavigate}
+          // Pushed to the foot on a desk: it is about the computer, not the workspace above.
+          className="md:mt-auto md:pt-5"
+        />
       </div>
 
-      {/* ── the views, grouped ── */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-2.5 pt-3">
-        {NAV_GROUPS.map((group) => (
-          <NavGroupSection
-            key={group.id}
-            group={group}
-            view={session.view}
-            onSelect={select}
-            onNavigate={onNavigate}
-          />
-        ))}
-      </div>
-
-      {/* ── the foot: what changes the workspace or the page, not the view ── */}
-      <div className="shrink-0 border-t px-2.5 py-2">
+      {/* ── the foot: Settings, and the theme ── */}
+      <div className="flex shrink-0 items-center gap-1 border-t border-sidebar-border/70 px-3 py-2 max-md:block max-md:px-2.5">
         <button
           type="button"
           aria-label="Settings"
           title="Settings — this computer and every workspace"
+          data-nav-settings
           onClick={() => {
             openSettings();
             onNavigate?.();
@@ -434,7 +519,7 @@ export function NavRail({
           <Settings aria-hidden />
           Settings
         </button>
-        <ThemeRow />
+        <ThemeToggle asRow={phone} />
       </div>
     </nav>
   );

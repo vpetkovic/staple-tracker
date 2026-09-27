@@ -45,6 +45,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { SearchX } from "lucide-react";
+import { EmptyState } from "@/components/plain/States";
 import { action, getIssues } from "@/lib/api";
 import { withDimension } from "@/lib/filters";
 import { useSession, type Selection } from "@/lib/session";
@@ -52,6 +54,10 @@ import { workspaceSettings } from "@/lib/settings";
 import { openSettings } from "@/lib/shell-events";
 import type { IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
+import { cn } from "@/lib/utils";
+
+/** A key, drawn as a key: the palette's footer legend. */
+const KEY = "inline-flex h-5 min-w-5 items-center justify-center rounded-md border bg-surface-raised px-1 font-sans text-caption text-text-secondary";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import {
   buildCommands,
@@ -304,8 +310,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         </DialogDescription>
       </DialogHeader>
       <DialogContent
-        // A phone: the palette rises from the top safe area and uses the width it has.
-        className="top-[18%] translate-y-0 overflow-hidden p-0 max-md:top-[max(0.75rem,env(safe-area-inset-top))] max-md:max-w-[calc(100vw-1.5rem)]"
+        // A desk: anchored high (14% down) so the list grows downward without the input
+        // jumping, 640px wide. A phone: it rises from the top safe area and uses the width
+        // it has.
+        className="top-[max(0.75rem,env(safe-area-inset-top))] translate-y-0 gap-0 overflow-hidden rounded-xl p-0 shadow-xl max-md:max-w-[calc(100vw-1.5rem)] md:top-[14vh] md:max-w-[40rem] md:translate-y-0"
         showCloseButton={false}
         aria-label="Command palette"
         // Radix listens for Escape on the document in the capture phase, so it fires
@@ -323,12 +331,22 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           // non-match that is dropped rather than sunk. cmdk's default scorer knows
           // none of that.
           shouldFilter={false}
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:tracking-[var(--tracking-eyebrow)] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-muted-foreground"
+          // The system's register: a 48px input, sentence-case group labels in the tertiary
+          // tone, 36px rows with 8px corners and the selected-surface fill.
+          className={cn(
+            "rounded-xl bg-surface-overlay",
+            "**:data-[slot=command-input-wrapper]:h-12 **:data-[slot=command-input-wrapper]:gap-2.5 **:data-[slot=command-input-wrapper]:px-4",
+            "**:data-[slot=command-input]:text-reading [&_[data-slot=command-input-wrapper]_svg]:size-4.5 [&_[data-slot=command-input-wrapper]_svg]:opacity-60",
+            "**:data-[slot=command-list]:max-h-[min(26rem,60dvh)] **:data-[slot=command-list]:p-1.5",
+            "[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-label [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-text-tertiary",
+            "**:data-[slot=command-item]:min-h-9 **:data-[slot=command-item]:rounded-lg **:data-[slot=command-item]:px-2.5 **:data-[slot=command-item]:text-body",
+            "**:data-[slot=command-item]:data-[selected=true]:bg-surface-selected",
+          )}
         >
           <CommandInput
             value={query}
             onValueChange={setQuery}
-            placeholder={page ? PAGE_PLACEHOLDER[page] : "jump to an issue, or type a command…"}
+            placeholder={page ? PAGE_PLACEHOLDER[page] : "Find a task, or type a command…"}
             onKeyDown={(event) => {
               if (page && event.key === "Backspace" && query === "") {
                 event.preventDefault();
@@ -352,22 +370,26 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
           <CommandList data-palette-list>
             {page ? (
-              <div className="px-3 py-4 text-sm">
+              <div className="px-3 py-4 text-reading">
                 <div className="text-muted-foreground">
                   {page === "checkout"
                     ? `Check out ${selected?.ref ?? "—"} as the agent named above, then press enter.`
                     : "Type an assignee and press enter. Empty clears the filter."}
                 </div>
-                <div className="mt-2 text-[11px] text-muted-foreground">
-                  backspace on an empty line goes back · esc goes back
+                <div className="mt-2 text-label text-text-tertiary">
+                  Backspace on an empty line or Esc goes back.
                 </div>
               </div>
             ) : (
               <>
-                <CommandEmpty>nothing matches “{query}”</CommandEmpty>
+                <CommandEmpty className="py-0">
+                  <EmptyState compact icon={SearchX} title={`Nothing matches “${query}”`}>
+                    Try fewer words, or a task’s number.
+                  </EmptyState>
+                </CommandEmpty>
 
                 {visibleCommands.length > 0 ? (
-                  <CommandGroup heading={selected ? `commands · ${selected.ref} selected` : "commands"}>
+                  <CommandGroup heading={selected ? `Actions for ${selected.ref}` : "Actions"}>
                     {visibleCommands.map((command) => (
                       <CommandItem
                         key={command.id}
@@ -378,7 +400,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                       >
                         <span className="truncate">{command.label}</span>
                         {command.hint ? (
-                          <CommandShortcut className="font-mono normal-case">{command.hint}</CommandShortcut>
+                          <CommandShortcut className="text-caption tracking-normal text-text-tertiary normal-case">{command.hint}</CommandShortcut>
                         ) : null}
                       </CommandItem>
                     ))}
@@ -388,7 +410,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 {visibleIssues.length > 0 ? (
                   // `data-preset` so the stylesheet can reach these rows: they are `bare`,
                   // so unlike <TaskList> there is no list root of ours around them.
-                  <CommandGroup heading="issues" data-preset="popup">
+                  <CommandGroup heading="Tasks" data-preset="popup">
                     {visibleIssues.map(({ row, command }) => (
                       <CommandItem
                         key={command.id}
@@ -411,13 +433,34 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 ) : null}
 
                 {!selected ? (
-                  <div className="px-3 pt-1 pb-3 text-[11px] text-muted-foreground">
-                    open an issue to get status, checkout and release commands
+                  <div className="px-2.5 pt-1 pb-2 text-label text-text-tertiary">
+                    Open a task to change its status, check it out or release it from here.
                   </div>
                 ) : null}
               </>
             )}
           </CommandList>
+
+          {/* The keys, said once, on a desk. A phone has no arrow keys to explain. */}
+          <div
+            data-palette-footer
+            aria-hidden
+            className="flex h-9 items-center gap-4 border-t bg-surface-sunken px-4 text-caption text-text-tertiary max-md:hidden"
+          >
+            <span className="flex items-center gap-1.5">
+              <kbd className={KEY}>↑</kbd>
+              <kbd className={KEY}>↓</kbd>
+              to move
+            </span>
+            <span className="flex items-center gap-1.5">
+              <kbd className={KEY}>↵</kbd>
+              to choose
+            </span>
+            <span className="flex items-center gap-1.5">
+              <kbd className={KEY}>esc</kbd>
+              {page ? "to go back" : "to close"}
+            </span>
+          </div>
 
           {refusal ? (
             // The palette stays open on a refusal, and since V2 (STA-87) it renders the
