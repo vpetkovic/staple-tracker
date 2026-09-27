@@ -198,6 +198,13 @@ export interface CrossBlockerState {
 export interface CrossBlockerDetail extends CrossBlockerState {
   /** Null when the blocker's workspace file is not on this machine. */
   title: string | null;
+  /**
+   * Why an unresolvable blocker cannot be read, so a person is told the truth about it:
+   * `"workspace"` — its workspace is not on this computer (unregistered, or its file is gone);
+   * `"task"` — the workspace is here but has no such task (deleted, renamed, mistyped).
+   * Null when the blocker was read.
+   */
+  missing: "workspace" | "task" | null;
 }
 
 /** What {@link Hub.unregister} would do, without doing it. */
@@ -1421,7 +1428,7 @@ export class Hub {
    * graceful-degradation rule from the evaluation).
    */
   crossBlockersOf(identifier: string): CrossBlockerState[] {
-    return this.crossBlockerRows(identifier).map(({ title: _title, ...state }) => state);
+    return this.crossBlockerRows(identifier).map(({ title: _title, missing: _missing, ...state }) => state);
   }
 
   /** {@link crossBlockersOf}, plus each blocker's title. Read by the web UI's detail only. */
@@ -1447,6 +1454,7 @@ export class Hub {
           resolved: false,
           unresolvable: true,
           title: null,
+          missing: "workspace",
         };
       }
       const ws = openWorkspace(entry.path);
@@ -1459,6 +1467,7 @@ export class Hub {
           resolved: (RESOLVED_STATUSES as readonly string[]).includes(issue.status),
           unresolvable: false,
           title: issue.title,
+          missing: null,
         };
       } catch {
         return {
@@ -1468,6 +1477,7 @@ export class Hub {
           resolved: false,
           unresolvable: true,
           title: null,
+          missing: "task",
         };
       } finally {
         ws.store.db.close();

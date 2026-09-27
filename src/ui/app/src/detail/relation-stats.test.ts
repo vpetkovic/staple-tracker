@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { RelationCounts } from "../lib/relation-context";
-import { directCounts, relationStats } from "./relation-stats";
+import { directCounts, relationStats, unreachableWords } from "./relation-stats";
 
 const counts = (overrides: Partial<RelationCounts> = {}): RelationCounts => ({
   ancestors: 0,
@@ -117,5 +117,40 @@ describe("directCounts", () => {
     });
     // Without the graph the transitive figure equals the direct one, so nothing is claimed about it.
     expect(texts(c)).not.toContain(expect.stringContaining("further up"));
+  });
+});
+
+describe("unreachableWords", () => {
+  const blocker = (over: Partial<Parameters<typeof unreachableWords>[0]> = {}) => ({
+    identifier: "STA-9999",
+    workspace: "staple",
+    unresolvable: true,
+    ...over,
+  });
+
+  it("says nothing about a blocker that was read", () => {
+    expect(unreachableWords(blocker({ unresolvable: false }))).toBeNull();
+  });
+
+  it("tells a missing task apart from a missing workspace, from the hub's own reason", () => {
+    expect(unreachableWords(blocker({ missing: "task" }))).toEqual({
+      kind: "task",
+      headline: "STA-9999 can't be found in staple.",
+      advice: "It may have been deleted or renamed. Remove the link if it no longer applies.",
+    });
+    expect(unreachableWords(blocker({ identifier: "GAM-9", workspace: "gamma", missing: "workspace" }))).toEqual({
+      kind: "workspace",
+      headline: "GAM-9 is in gamma, which isn't on this computer.",
+      advice: "Open that workspace on this computer, or remove the link if it no longer applies.",
+    });
+  });
+
+  it("trusts the hub over the page's list: a registered but absent workspace is still absent", () => {
+    expect(unreachableWords(blocker({ missing: "workspace" }), ["staple"])!.kind).toBe("workspace");
+  });
+
+  it("falls back to the workspaces this page knows when an older server sends no reason", () => {
+    expect(unreachableWords(blocker(), ["staple"])!.kind).toBe("task");
+    expect(unreachableWords(blocker(), ["alpha"])!.kind).toBe("workspace");
   });
 });
