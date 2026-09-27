@@ -227,3 +227,16 @@ describe("ReorderList", () => {
     expect(html).not.toMatch(/<div[^>]*data-reorder-row="a"[^>]*data-invalid=""/);
   });
 });
+
+describe("the action bar stays reachable", () => {
+  it("sticks to the foot of the section's scroll pane, on a surface of its own, with a place for Saved", () => {
+    const html = renderToStaticMarkup(
+      <ActionBar state={actionBarState({ dirty: true, status: "idle" })} onSave={() => {}} onCancel={() => {}} />,
+    );
+    const bar = /<div[^>]*data-action-bar[^>]*>/.exec(html)?.[0] ?? "";
+    expect(bar).toContain("sticky");
+    expect(bar).toContain("bottom-0");
+    expect(bar).toContain("bg-surface-raised");
+    expect(html).toMatch(/data-saved-confirmation="true" aria-live="polite"/);
+  });
+});

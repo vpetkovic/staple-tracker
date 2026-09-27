@@ -336,10 +336,9 @@ function NavGroupSection({
 function WorkspaceRows() {
   const session = useSession();
   const { rows, hidden } = railWorkspaces(session);
-  const hub = session.mode === "hub";
   if (rows.length === 0) return null;
   return (
-    <RailSection id="workspaces" label={hub ? "Workspaces" : "Workspace"}>
+    <RailSection id="workspaces" label="Workspaces">
       {rows.map((row) => (
         <li key={row.value || "__all__"}>
           <button
@@ -357,7 +356,7 @@ function WorkspaceRows() {
                 aria-hidden
                 className={cn(
                   "flex size-4 shrink-0 items-center justify-center rounded-[5px] text-[10px] leading-none font-semibold",
-                  row.current ? "bg-foreground text-background" : "bg-surface-active text-text-secondary",
+                  row.current ? "bg-foreground text-background" : "bg-surface-selected text-foreground",
                 )}
               >
                 {row.initials}

@@ -51,6 +51,13 @@ function DialogOverlay({
   )
 }
 
+/**
+ * The dialog's close button: one focus ring, a 32px target on a desk and 44px on a phone
+ * (and under any finger), and a hover surface like every other icon button.
+ */
+export const DIALOG_CLOSE_CLASS =
+  "text-text-tertiary hover:bg-surface-hover hover:text-foreground focus-ring absolute top-4 right-4 flex size-8 items-center justify-center rounded-lg transition-colors disabled:pointer-events-none max-md:size-11 pointer-coarse:size-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+
 function DialogContent({
   className,
   children,
@@ -78,8 +85,7 @@ function DialogContent({
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            // One focus ring, a 32px target, and a hover surface like every other icon button.
-            className="text-text-tertiary hover:bg-surface-hover hover:text-foreground focus-ring absolute top-4 right-4 flex size-8 items-center justify-center rounded-lg transition-colors disabled:pointer-events-none max-md:size-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            className={DIALOG_CLOSE_CLASS}
           >
             <XIcon />
             <span className="sr-only">Close</span>

@@ -62,7 +62,7 @@ import { getCloudStatus, getCloudWorkspaces } from "@/lib/api";
 import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
 import { FilterBar } from "@/components/filters/FilterBar";
 import { FilterChips } from "@/components/filters/FilterChips";
-import { Toolbar } from "@/components/filters/Toolbar";
+import { DoneToggle, Toolbar, doneLivesInTopBar } from "@/components/filters/Toolbar";
 import { NavRail } from "@/components/nav/NavRail";
 import { ViewTabBar } from "@/components/nav/ViewTabBar";
 import { WorkspaceSwitcher } from "@/components/nav/WorkspaceSwitcher";
@@ -121,7 +121,7 @@ function paletteKeys(): string {
  * Right: find anything (the command palette, as a field-shaped button that shows its
  * shortcut) and the page's PRIMARY action, New task — the one filled button in the chrome.
  */
-function TopBar({
+export function TopBar({
   railVisible,
   onShowRail,
   cloud,
@@ -156,14 +156,20 @@ function TopBar({
             <Monitor aria-hidden className="size-3.5 text-text-tertiary" />
             This computer
           </span>
-        ) : (
+        ) : session.mode === "hub" ? (
           <WorkspaceSwitcher variant="crumb" />
+        ) : (
+          // One workspace, nothing to switch to: its name, as words, not a menu of one.
+          <span data-scope-name className="truncate text-body text-text-secondary">
+            {scopeName(session)}
+          </span>
         )}
         <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" />
         <h1 className="truncate pl-0.5 text-heading font-semibold">{title}</h1>
       </div>
       {machine ? null : <CloudStrip report={cloud} hub={hubCloud} />}
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {doneLivesInTopBar(viewControls(session.view)) ? <DoneToggle /> : null}
         <button
           type="button"
           data-top-search

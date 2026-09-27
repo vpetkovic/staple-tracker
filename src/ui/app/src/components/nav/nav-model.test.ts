@@ -49,7 +49,8 @@ describe("the rail's groups", () => {
   it("shows each view only the header controls it honours", () => {
     expect(viewControls("tree")).toEqual({ arrange: true, filter: true, done: true });
     // The graph draws the filtered nodes; it has no rows to group or sort.
-    expect(viewControls("graph")).toEqual({ arrange: false, filter: true, done: true });
+    // Finished work on the graph is its own View menu's (show, fade, hide): no second Done.
+    expect(viewControls("graph")).toEqual({ arrange: false, filter: true, done: false });
     // Milestones lists finished milestones when Done is on, and filters nothing else.
     expect(viewControls("milestones")).toEqual({ arrange: false, filter: false, done: true });
     for (const view of ["queue", "calibration", "budget"] as const) {
@@ -125,14 +126,20 @@ describe("the rail's workspace list", () => {
     chooseRailWorkspace(scope, rows[2]!);
     expect(calls).toEqual(["pinecone", ""]);
     // A single-workspace page never asks the session to switch.
-    chooseRailWorkspace({ mode: "workspace", setWs: (next) => calls.push(next) }, { ...rows[1]!, current: false });
+    chooseRailWorkspace({ mode: "workspace", setWs: (next: string) => calls.push(next) }, { ...rows[1]!, current: false });
     expect(calls).toEqual(["pinecone", ""]);
   });
 
-  it("lists the one workspace of a single-workspace page, current, with nothing to switch to", () => {
+  it("lists nothing on a single-workspace page: one row that switches nowhere is a dead control", () => {
     const { rows, hidden } = railWorkspaces({ mode: "workspace", ws: "", workspaces: [ws("staple", "STA")] });
-    expect(rows).toEqual([{ value: "staple", name: "staple", initials: "S", current: true }]);
+    expect(rows).toEqual([]);
     expect(hidden).toBe(0);
+  });
+
+  it("marks no workspace current on a view about this computer, and the chosen one elsewhere", () => {
+    const scope = { mode: "hub", ws: "", workspaces: [ws("staple")] };
+    expect(railWorkspaces({ ...scope, view: "budget" }).rows.some((row) => row.current)).toBe(false);
+    expect(railWorkspaces({ ...scope, view: "tree" }).rows.filter((row) => row.current).map((row) => row.value)).toEqual([""]);
   });
 });
 

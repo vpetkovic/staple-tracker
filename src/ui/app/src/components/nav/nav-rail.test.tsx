@@ -12,12 +12,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
-import { AppShell } from "@/components/AppShell";
+import { AppShell, TopBar } from "@/components/AppShell";
 import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters } from "@/lib/filters";
 import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
-import type { IssueRow, IssueStatus, Project, ProjectRow } from "@/lib/types";
+import type { HubCloudReport, IssueRow, IssueStatus, Project, ProjectRow } from "@/lib/types";
 import { NAV_GROUPS } from "./nav-model";
 import { NavRail, RAIL_ROW_CLASS } from "./NavRail";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -105,7 +105,7 @@ describe("the shell", () => {
   });
 
   it("reads 'scope › page' in the top bar, then find-anything and the one primary action, New task", () => {
-    const markup = shell();
+    const markup = shell({ mode: "hub", ws: "", workspaces: [{ slug: "staple", prefix: "STA" }, { slug: "pinecone", prefix: "PIN" }] });
     expect(markup).toMatch(/<h1[^>]*>Tasks<\/h1>/);
     const bar = markup.slice(markup.indexOf("data-top-bar"), markup.indexOf("data-toolbar"));
     expect(
@@ -120,10 +120,27 @@ describe("the shell", () => {
     expect(shell({ view: "queue" })).toMatch(/<h1[^>]*>Queue<\/h1>/);
   });
 
-  it("says This computer — not a workspace — as the scope of a view about this computer", () => {
+  it("says This computer — not a workspace — as the scope of a view about this computer, in the top bar AND the rail", () => {
     const markup = shell({ view: "budget", mode: "hub", ws: "", workspaces: [{ slug: "staple", prefix: "STA" }] });
     expect(markup).toMatch(/data-scope-name[^>]*>[\s\S]*?This computer<\/span>/);
     expect(markup).not.toContain('data-workspace-switcher="crumb"');
+    // The rail agrees: no workspace row claims the page.
+    expect(markup).not.toMatch(/data-nav-workspace="[^"]*" aria-current/);
+    expect(markup).toMatch(/data-nav-item="view:budget" aria-current="page"/);
+  });
+
+  it("shows the sync pill for a workspace view, and never on a view about this computer", () => {
+    const hub = { connected: 2, total: 3, automatic: 1 };
+    const report = { counts: hub, workspaces: [] } as unknown as HubCloudReport;
+    const bar = (view: StapleSession["view"]) =>
+      inSession(<TopBar railVisible onShowRail={noop} cloud={null} hubCloud={report} />, {
+        view,
+        mode: "hub",
+        ws: "",
+        workspaces: [{ slug: "staple", prefix: "STA" }],
+      });
+    expect(bar("tree")).toContain("2 of 3 syncing");
+    expect(bar("budget")).not.toContain("syncing");
   });
 
   it("keeps the whole filter and view-options cluster in ONE toolbar: which tasks left, how they look right", () => {
@@ -152,11 +169,13 @@ describe("the shell", () => {
     for (const view of ["queue", "calibration", "budget"] as const) {
       expect(shell({ view })).not.toContain("data-toolbar");
     }
-    // Milestones honours Done alone, so its toolbar holds exactly that.
+    // Milestones honours Done alone: no 44px row for one button — it sits in the top bar.
     const milestones = shell({ view: "milestones" });
-    expect(milestones).toContain("data-toolbar");
-    expect(milestones).toContain('aria-label="Show finished milestones"');
-    expect(milestones).not.toContain('aria-label="Add a filter"');
+    expect(milestones).not.toContain("data-toolbar");
+    const bar = milestones.slice(milestones.indexOf("data-top-bar"), milestones.indexOf("<main"));
+    expect(bar).toContain('aria-label="Show finished milestones"');
+    expect(bar.indexOf('aria-label="Show finished milestones"')).toBeLessThan(bar.indexOf("data-top-new-task"));
+    expect(shell()).not.toMatch(/data-top-bar[\s\S]*?data-filter-done[\s\S]*?data-toolbar/);
   });
 
   it("offers no 'show navigation' button while the rail is on screen", () => {
@@ -230,9 +249,13 @@ describe("the rail", () => {
     const chosen = rail({ ...hub, ws: "staple" });
     expect(chosen).toMatch(/data-nav-workspace="staple" aria-current="true"/);
     expect(chosen).not.toMatch(/data-nav-workspace="" aria-current/);
-    // A single-workspace page lists its one workspace under "Workspace".
-    expect(rail()).toMatch(/data-nav-workspace="staple" aria-current="true"/);
-    expect(rail()).toMatch(/data-nav-group-name="true" class="truncate">Workspace</);
+    // A single-workspace page has nothing to switch to: no section, and the top bar names the
+    // workspace as words rather than a switcher with one entry.
+    expect(rail()).not.toContain("data-nav-workspace");
+    expect(rail()).not.toContain('data-nav-group="workspaces"');
+    const single = shell();
+    expect(single).not.toContain('data-workspace-switcher="crumb"');
+    expect(single).toMatch(/<span data-scope-name="true"[^>]*>staple<\/span>/);
   });
 
   it("puts the workspaces that do not fit behind More workspaces, with a count", () => {

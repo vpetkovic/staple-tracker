@@ -142,11 +142,15 @@ describe("the desk toolbar", () => {
     expect(lane).not.toContain("border-b");
   });
 
-  it("renders nothing on a view with no controls, and only Done on Milestones", () => {
-    for (const view of ["queue", "calibration", "budget"] as const) expect(atWidth(1440, { view })).toBe("");
-    const milestones = atWidth(1440, { view: "milestones" });
-    expect(milestones).toContain('aria-label="Show finished milestones"');
-    expect(milestones).not.toContain("data-filter-chips");
-    expect(milestones).not.toContain('aria-label="Group tasks"');
+  it("renders nothing where there is nothing to filter or arrange — Milestones' lone Done lives in the top bar", () => {
+    for (const view of ["queue", "calibration", "budget", "milestones"] as const) expect(atWidth(1440, { view })).toBe("");
+  });
+
+  it("on the Graph: filters and search, which says what it searches, and no duplicate Done", () => {
+    const graph = atWidth(1440, { view: "graph" });
+    expect(graph).toContain('placeholder="Search the graph"');
+    expect(graph).not.toContain("data-filter-done");
+    expect(graph).not.toContain('aria-label="Group tasks"');
+    expect(atWidth(1440)).toContain('placeholder="Search this list"');
   });
 });

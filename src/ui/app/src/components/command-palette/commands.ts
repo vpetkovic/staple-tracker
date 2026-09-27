@@ -243,11 +243,11 @@ export interface PaletteContext {
  */
 const HANDOFF_COPY: Record<HandoffRisk, { label: string; keywords: string }> = {
   stale: {
-    label: "Handoff risk · stale worklog",
+    label: "Tasks whose progress notes are out of date",
     keywords: "handoff risk stale worklog behind checkpoint silent stuck resume takeover",
   },
   none: {
-    label: "Handoff risk · no worklog",
+    label: "Tasks being worked on with no progress notes",
     keywords: "handoff risk no missing worklog never checkpointed undocumented abandoned orphan",
   },
 };
@@ -334,7 +334,8 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
     commands.push({
       id: "checkout",
       group: "actions",
-      label: "Check out as…",
+      // The drawer's words for the same act (detail/plain-actions.ts).
+      label: "Start working on it as…",
       hint: ref,
       keywords: `checkout claim start agent assign ${ref}`,
       action: { type: "page", page: "checkout" },
@@ -342,7 +343,7 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
     commands.push({
       id: "release",
       group: "actions",
-      label: "Release the checkout",
+      label: "Stop working on it",
       hint: ref,
       keywords: `release unclaim give back ${ref}`,
       action: { type: "release" },
