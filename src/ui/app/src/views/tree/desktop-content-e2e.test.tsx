@@ -329,6 +329,9 @@ describe("the queue in plain words", () => {
     expect(html).toContain('data-testid="queue-progress"');
     expect(html).toContain('data-segment="active"');
     expect(html).toContain('data-segment="waiting"');
+    // One palette: waiting is the blocked red, ready the to-do amber, as on the rows' glyphs.
+    expect(html).toMatch(/data-segment="waiting" style="flex-grow:\d+;background:var\(--status-task-blocked\)"/);
+    expect(html).toMatch(/data-legend="ready"[^>]*><span class="staple-progress-dot" style="background:var\(--status-task-todo\)"/);
     expect(html).toMatch(/<details[^>]*data-technical-details[\s\S]*data-queue-revision="\d+"/);
     expect(html).not.toContain("entries · revision");
   });
