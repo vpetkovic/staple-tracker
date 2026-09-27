@@ -49,7 +49,8 @@ import { statusLabel } from "@/lib/settings";
 import { WORKLOG_KEY, type DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { EmptyState, PersonChip, PersonDisc, RelativeTime, cn, formatExact, useNow } from "../parts";
+import { EmptyState, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, useNow } from "../parts";
+import { Dot } from "./Dot";
 import { buildTimeline, groupByDay, type TimelineEntry } from "../timeline";
 import type { TabProps } from "./registry";
 import "./tabs.css";
@@ -65,7 +66,8 @@ const clock = (iso: string) =>
   new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(iso));
 
 function When({ iso, today, now }: { iso: string; today: boolean; now: Date }) {
-  if (today) return <RelativeTime iso={iso} now={now} className="text-text-tertiary" />;
+  // Mid-line, after "moved to Backlog ·": "just now", not "Just now".
+  if (today) return <RelativeTime iso={iso} now={now} inSentence className="text-text-tertiary" />;
   return (
     <time dateTime={iso} title={formatExact(iso) ?? undefined} className="whitespace-nowrap text-text-tertiary">
       {clock(iso)}
@@ -159,7 +161,7 @@ function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean;
                 </span>
               ))
             : null}
-          <span aria-hidden className="mx-1.5 text-text-tertiary">·</span>
+          <Dot />
           <When iso={entry.at} today={today} now={now} />
         </p>
         {note && !noteIsFallback ? (
@@ -189,12 +191,12 @@ function CommentRow({ entry, today, now }: { entry: TimelineEntry; today: boolea
       </span>
       <article className="min-w-0 flex-1 rounded-xl border border-border bg-surface-raised">
         <header className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 pt-2.5 text-body">
-          <span className="min-w-0 truncate font-medium text-foreground">{entry.actor ?? "Someone"}</span>
+          <span className="min-w-0 truncate font-medium text-foreground">{actorLabel(entry.actor)}</span>
           {kind === "agent" ? (
             <span className="rounded-md bg-surface-sunken px-1.5 text-caption text-text-secondary">agent</span>
           ) : null}
           <span className="text-text-tertiary">commented</span>
-          <span aria-hidden className="text-text-tertiary">·</span>
+          <Dot />
           <When iso={entry.at} today={today} now={now} />
         </header>
         {entry.body ? (

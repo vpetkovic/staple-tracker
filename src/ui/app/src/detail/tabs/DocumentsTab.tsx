@@ -26,6 +26,7 @@ import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { diffBodies } from "../diff";
 import { DocumentDiff } from "../DocumentDiff";
 import { EmptyState, PersonChip, RelativeTime, SectionHeading, cn } from "../parts";
+import { Dot } from "./Dot";
 import { takePendingDocumentKey, type TabProps } from "./registry";
 import "./tabs.css";
 
@@ -122,8 +123,8 @@ function RevisionRow({
         </div>
         <div className="flex flex-wrap items-center gap-x-1.5 text-label text-text-secondary">
           {rev.author ? <PersonChip name={rev.author} kind={personKind(rev.author)} /> : <span>Unknown author</span>}
-          <span aria-hidden className="text-text-tertiary">·</span>
-          <RelativeTime iso={rev.createdAt} />
+          <Dot />
+          <RelativeTime iso={rev.createdAt} inSentence />
         </div>
         {rev.changeSummary ? <p className="text-body text-pretty text-text-secondary">{rev.changeSummary}</p> : null}
       </div>
@@ -293,7 +294,9 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
           <h3 className="truncate text-title font-medium text-foreground">{meta ? documentName(meta.key, meta.title) : ""}</h3>
           {meta ? (
             <p className="text-label text-text-secondary">
-              Updated <RelativeTime iso={meta.updatedAt} /> · revision {meta.currentRevision}
+              Updated <RelativeTime iso={meta.updatedAt} inSentence />
+              <Dot />
+              revision {meta.currentRevision}
             </p>
           ) : null}
         </div>
@@ -356,8 +359,8 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
                 <header className="mb-3 flex flex-wrap items-center gap-x-1.5 border-b border-border pb-3 text-label text-text-secondary">
                   <span>Written by</span>
                   <PersonChip name={body.data.author} kind={personKind(body.data.author)} />
-                  <span aria-hidden className="text-text-tertiary">·</span>
-                  <RelativeTime iso={body.data.createdAt} />
+                  <Dot />
+                  <RelativeTime iso={body.data.createdAt} inSentence />
                 </header>
               ) : null}
               {body.data.body.trim() ? (

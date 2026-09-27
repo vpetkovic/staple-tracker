@@ -84,6 +84,19 @@ describe("Activity", () => {
     expect(html).toContain("picked this up");
   });
 
+  it("reads as one sentence with real spaces round the dot and a lowercase 'just now'", () => {
+    const html = render(ActivityTab, detail({ comments: [comment("c1", "VP", "user", "hi")] }));
+    const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+    const text = header.replace(/<[^>]+>/g, "");
+    expect(text).toMatch(/commented · just now$/);
+    expect(text).not.toContain("Just now");
+  });
+
+  it("names the web app's own actor as a person would", () => {
+    const html = render(ActivityTab, detail({ comments: [comment("c1", "ui", "user", "from the page")] }));
+    expect(html).toContain(">Someone in the web app<");
+  });
+
   it("keeps the composer at the bottom, labelled for a screen reader", () => {
     const html = render(ActivityTab, detail({ comments: [comment("c1", "VP", "user", "hi")] }));
     expect(html.indexOf("data-timeline-kind")).toBeLessThan(html.indexOf('aria-label="Add a comment"'));
@@ -195,6 +208,9 @@ describe("Documents", () => {
     expect(html).toContain(">Worklog</button>");
     expect(html).not.toContain("@r3");
     expect(html).toContain("revision 3");
+    // "Updated just now · revision 3": lowercase mid-sentence, real spaces round the dot.
+    const line = html.slice(html.indexOf("Updated"), html.indexOf("revision 3") + "revision 3".length).replace(/<[^>]+>/g, "");
+    expect(line).toBe("Updated just now · revision 3");
     expect(html).toContain('aria-label="Document view"');
   });
 });
