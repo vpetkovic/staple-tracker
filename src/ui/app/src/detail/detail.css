@@ -299,16 +299,29 @@
  * "there is more" without a scrollbar.
  */
 .staple-detail-panel[data-mode="sheet"] .staple-detail-segments {
-  height: 40px;
-  padding: 3px;
-  border-radius: 12px;
+  height: 48px;
+  padding: 4px;
+  border-radius: 14px;
 }
 
+/*
+ * The segment is a <button>, and the shell gives every coarse-pointer button a 44px
+ * minimum height. A 34px segment in a 40px track therefore grew to 44px and its white thumb
+ * poked out of the track. So the segment states its own min-height too: 40px, which is a
+ * finger-sized target, inside a 48px track with 4px of track showing round the thumb.
+ */
 .staple-detail-panel[data-mode="sheet"] .staple-detail-segments [role="tab"] {
-  height: 34px;
+  height: 40px;
+  min-height: 40px;
   padding-inline: 14px;
-  border-radius: 9px;
+  border-radius: 10px;
   font-size: 14px;
+}
+
+/* The strip is stuck and content scrolls under it: a hairline says where the strip ends. */
+.staple-detail-panel[data-mode="sheet"] [data-detail-tabs][data-stuck] {
+  border-bottom-color: var(--border);
+  box-shadow: 0 6px 12px -10px rgb(0 0 0 / 0.18);
 }
 
 .staple-detail-tabfade[data-fade-end] .staple-detail-tabstrip {

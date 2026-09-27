@@ -46,11 +46,11 @@ import type { DetailMode, DetailPresentation } from "./drawer";
 import type { NavState, NavTarget } from "./navigation";
 import {
   ActionRefusal,
-  actionStateOf,
+  actionContextOf,
+  openBlockerCount,
   GateSection,
   OverflowMenu,
   PrimaryAction,
-  primaryActionOf,
   StatusMenu,
   useIssueActions,
   type IssueActionsController,
@@ -105,7 +105,7 @@ export function IssueDetailPanel({
     if (issue) pin(selection.workspace, selection.ref, issue.id);
   }, [issue, pin, selection.workspace, selection.ref]);
 
-  const controller = useIssueActions({ id: issue?.id ?? target }, detail?.workspace ?? selection.workspace, session.refresh);
+  const controller = useIssueActions(session.refresh);
   const [requestOpen, setRequestOpen] = useState(false);
   const gateRef = useRef<HTMLDivElement>(null);
   const reviewGate = useCallback(() => {
@@ -169,26 +169,14 @@ export function IssueDetailPanel({
       {/* The phone's primary action: in the thumb's reach, never scrolled away. The sheet's
           own bottom padding keeps it above the home indicator (detail.css). */}
       {sheet && detail ? (
-        <div data-detail-actionbar="" className="staple-detail-actionbar shrink-0 border-t bg-card px-4 pt-3 pb-3">
-          <PrimaryReason detail={detail} />
+        <div data-detail-actionbar="" className="staple-detail-actionbar flex shrink-0 flex-col gap-2 border-t bg-card px-4 pt-3 pb-3">
+          {/* A refusal from the bottom bar or the top bar's ⋯ shows here, next to the thumb
+              that caused it, never at the top of a long scroll. */}
+          <ActionRefusal controller={controller} className="max-h-[40vh] overflow-y-auto" />
           <PrimaryAction detail={detail} controller={controller} onReview={reviewGate} size="lg" className="w-full" />
         </div>
       ) : null}
     </aside>
-  );
-}
-
-/**
- * Why the primary action cannot run, in words above it. A pointer gets the same sentence as
- * a tooltip; a finger has no hover, so the phone says it out loud.
- */
-function PrimaryReason({ detail }: { detail: IssueDetail }) {
-  const reason = primaryActionOf(detail).disabledReason;
-  if (!reason) return null;
-  return (
-    <p className="m-0 mb-2 text-center text-label text-text-secondary" data-primary-reason="">
-      {reason}
-    </p>
   );
 }
 
@@ -416,7 +404,7 @@ export function DetailContent({
 
         <InlineTitle issue={issue} workspace={detail.workspace} refresh={refresh} size={sheet ? "heading" : "display"} />
 
-        <StatusLine detail={detail} controller={controller} withPill={!sheet} className="mt-3">
+        <StatusLine detail={detail} controller={controller} withPill={!sheet} onRequestApproval={onRequestApproval} className="mt-3">
           {sheet ? null : (
             <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
               <PrimaryAction detail={detail} controller={controller} onReview={onReview} />
@@ -425,9 +413,10 @@ export function DetailContent({
           )}
         </StatusLine>
 
-        {sheet ? <SummaryChips detail={detail} controller={controller} refresh={refresh} className="mt-4" /> : null}
+        {sheet ? <SummaryChips detail={detail} controller={controller} refresh={refresh} onRequestApproval={onRequestApproval} className="mt-4" /> : null}
 
-        <ActionRefusal controller={controller} className="mt-4" />
+        {/* On a desk the refusal sits right under the controls that caused it. */}
+        {sheet ? null : <ActionRefusal controller={controller} className="mt-4" />}
 
         <div ref={gateRef} tabIndex={-1} className="scroll-mt-4 outline-none empty:hidden [&:not(:empty)]:mt-5" data-detail-gate="">
           {gate}
@@ -473,36 +462,43 @@ function StatusLine({
   detail,
   controller,
   withPill,
+  onRequestApproval,
   className,
   children,
 }: {
   detail: IssueDetail;
   controller: IssueActionsController;
   withPill: boolean;
+  onRequestApproval: () => void;
   className?: string;
   children?: ReactNode;
 }) {
+  const ctx = actionContextOf(detail, controller.me);
+  const queuedAncestor = detail.queuedBy ? detail.ancestors.find((a) => a.identifier === detail.queuedBy!.identifier) : undefined;
   const sentence = statusSentence(
     {
-      ...actionStateOf(detail),
+      ...ctx,
       issue: detail.issue,
       childrenTotal: detail.children.length,
       childrenDone: detail.children.filter((child) => statusCategory(child.status) === "done").length,
-      openBlockers: detail.blockedBy.filter((ref) => !["done", "cancelled"].includes(statusCategory(ref.status))).length + detail.crossBlockers.filter((b) => !b.status || !["done", "cancelled"].includes(statusCategory(b.status))).length,
+      openBlockers: openBlockerCount(detail),
+      // The breadcrumb names the parent by title, so the sentence does too, never by id.
+      queuedByTitle: queuedAncestor?.title ?? null,
+      queuedByParent: Boolean(queuedAncestor && queuedAncestor.id === detail.issue.parentId),
     },
     statusCategory,
   );
 
   return (
     <div className={cn("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2", className)} data-status-line="">
-      {withPill ? <StatusMenu issue={detail.issue} controller={controller} /> : null}
+      {withPill ? <StatusMenu detail={detail} controller={controller} onRequestApproval={onRequestApproval} /> : null}
       <p
         data-status-sentence=""
         data-tone={sentence.tone}
-        className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary", sentence.tone === "attention" && "text-foreground")}
+        className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary wrap-anywhere", sentence.tone === "attention" && "text-foreground")}
       >
         {sentence.lead ? <span>{sentence.lead}</span> : null}
-        {sentence.person ? <PersonChip name={sentence.person.name} kind={sentence.person.kind} className="font-medium" /> : null}
+        {sentence.person ? <PersonChip name={sentence.person.name} kind={sentence.person.kind} className="max-w-full font-medium" /> : null}
         {sentence.tail ? <span>{sentence.tail}</span> : null}
         {sentence.at ? (
           <>
@@ -511,7 +507,7 @@ function StatusLine({
             </span>
             <span className="text-text-tertiary">
               {sentence.atPrefix ? `${sentence.atPrefix} ` : ""}
-              <RelativeTime iso={sentence.at} inSentence={Boolean(sentence.atPrefix)} />
+              <RelativeTime iso={sentence.at} inSentence />
             </span>
           </>
         ) : null}
@@ -567,24 +563,24 @@ function Properties({
         </PropertyRow>
         {issue.startedAt ? (
           <PropertyRow label="Started">
-            <RelativeTime iso={issue.startedAt} />
+            <RelativeTime iso={issue.startedAt} inSentence />
           </PropertyRow>
         ) : null}
         {issue.completedAt ? (
           <PropertyRow label="Finished">
-            <RelativeTime iso={issue.completedAt} />
+            <RelativeTime iso={issue.completedAt} inSentence />
           </PropertyRow>
         ) : null}
         {issue.cancelledAt ? (
           <PropertyRow label="Cancelled">
-            <RelativeTime iso={issue.cancelledAt} />
+            <RelativeTime iso={issue.cancelledAt} inSentence />
           </PropertyRow>
         ) : null}
         <PropertyRow label="Updated">
-          <RelativeTime iso={issue.updatedAt} />
+          <RelativeTime iso={issue.updatedAt} inSentence />
         </PropertyRow>
         <PropertyRow label="Created">
-          <RelativeTime iso={issue.createdAt} />
+          <RelativeTime iso={issue.createdAt} inSentence />
         </PropertyRow>
         <PropertyRow label="Labels" span>
           <InlineLabels {...editor} />
@@ -603,21 +599,23 @@ function SummaryChips({
   detail,
   controller,
   refresh,
+  onRequestApproval,
   className,
 }: {
   detail: IssueDetail;
   controller: IssueActionsController;
   refresh: () => void;
+  onRequestApproval: () => void;
   className?: string;
 }) {
   const { issue, workspace } = detail;
   const editor = { issue, workspace, refresh, variant: "chip" as const };
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)} data-summary-chips="">
-      <StatusMenu issue={issue} controller={controller} className="h-9 px-3" />
+      <StatusMenu detail={detail} controller={controller} onRequestApproval={onRequestApproval} className="h-9 px-3" />
       <InlinePriority {...editor} />
       <InlineKind {...editor} />
-      <span className="inline-flex h-9 min-w-0 items-center rounded-full border border-border bg-surface-raised px-3 text-label font-medium" data-summary-assignee="">
+      <span className="inline-flex h-9 max-w-full min-w-0 items-center rounded-full border border-border bg-surface-raised px-3 text-label font-medium pointer-coarse:h-11" data-summary-assignee="">
         {issue.assignee ? (
           <PersonChip name={issue.assignee} kind={issue.assignee === issue.checkoutAgent ? "agent" : "human"} />
         ) : (
@@ -658,6 +656,8 @@ function DetailTabs({
   const active = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "overview");
   const stripRef = useRef<HTMLDivElement>(null);
   const edges = useScrollEdges(stripRef, tabs.length);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const stuck = useStuck(sentinelRef);
 
   // Bring the active tab into view inside the strip, horizontally only: scrollIntoView
   // would also scroll the panel to the strip, which is not what choosing a tab means.
@@ -671,7 +671,14 @@ function DetailTabs({
 
   return (
     <Tabs value={active} onValueChange={setTab} className={cn("gap-0", sheet ? "mt-5" : "mt-8")}>
-      <div className={cn("sticky top-0 z-10 bg-card", sheet ? "-mx-4 px-4 py-2" : "border-b")} data-detail-tabs="">
+      {/* Zero-height marker just above the strip: once it scrolls out, the strip is stuck
+          and content runs under it, so the strip grows a hairline to separate the two. */}
+      <div ref={sentinelRef} aria-hidden className="h-0" />
+      <div
+        className={cn("sticky top-0 z-10 bg-card transition-[border-color,box-shadow] duration-150", sheet ? "-mx-4 border-b border-transparent px-4 py-2" : "border-b")}
+        data-detail-tabs=""
+        data-stuck={stuck ? "" : undefined}
+      >
         <div className="staple-detail-tabfade" data-fade-start={edges.start ? "" : undefined} data-fade-end={edges.end ? "" : undefined}>
           <TabsList
             ref={stripRef}
@@ -719,4 +726,18 @@ function useScrollEdges(ref: RefObject<HTMLElement | null>, contentKey: unknown)
     };
   }, [ref, contentKey]);
   return edges;
+}
+
+/** Whether the element after `sentinel` is stuck: the sentinel has scrolled out of the panel. */
+function useStuck(sentinel: RefObject<HTMLElement | null>): boolean {
+  const [stuck, setStuck] = useState(false);
+  useEffect(() => {
+    const element = sentinel.current;
+    const root = element?.closest(".staple-detail-scroll");
+    if (!element || !root || typeof IntersectionObserver !== "function") return;
+    const observer = new IntersectionObserver(([entry]) => setStuck(!entry!.isIntersecting && entry!.boundingClientRect.top < (entry!.rootBounds?.top ?? 0) + 1), { root, threshold: 0 });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [sentinel]);
+  return stuck;
 }
