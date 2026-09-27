@@ -6,3 +6,4 @@ export { RelativeTime, useNow } from "./RelativeTime";
 export { formatDuration, formatExact, formatRelative, type RelativeTimeOptions } from "./relative-time";
 export { PersonChip, PersonDisc, type PersonKind } from "./PersonChip";
 export { DetailCard, EmptyState, SectionHeading } from "./layout";
+export { cn } from "./cn";

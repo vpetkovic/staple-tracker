@@ -5,7 +5,7 @@
  */
 import type { LucideIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { cn } from "./cn";
 
 /**
  * A section heading in sentence case: `text-label`, secondary text, never ALL CAPS.

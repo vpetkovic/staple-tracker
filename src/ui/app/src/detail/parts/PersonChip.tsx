@@ -8,7 +8,7 @@
  */
 import type { ReactNode } from "react";
 import { initials } from "@/components/task-list/avatar";
-import { cn } from "@/lib/utils";
+import { cn } from "./cn";
 
 export type PersonKind = "agent" | "human";
 

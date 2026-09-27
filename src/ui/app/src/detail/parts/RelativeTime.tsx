@@ -6,7 +6,7 @@
  * once a minute while mounted, so "Just now" does not stay "Just now" in a tab left open.
  */
 import { useEffect, useState } from "react";
-import { cn } from "@/lib/utils";
+import { cn } from "./cn";
 import { formatExact, formatRelative } from "./relative-time";
 
 const TICK_MS = 60_000;
