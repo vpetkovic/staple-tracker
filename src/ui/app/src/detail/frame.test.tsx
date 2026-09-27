@@ -16,6 +16,7 @@ import { claim, detail, issue } from "./detail-fixture";
 import type { DetailPresentation } from "./drawer";
 import { DetailContent } from "./IssueDetailPanel";
 import { useIssueActions } from "./IssueActions";
+import { formatWhen } from "./properties";
 import { TABS } from "./tabs/registry";
 
 const noop = () => {};
@@ -36,7 +37,7 @@ const LOADED = detail({
 });
 
 function Content({ d, presentation }: { d: IssueDetail; presentation: DetailPresentation }) {
-  const controller = useIssueActions(d.issue, d.workspace, noop);
+  const controller = useIssueActions(noop);
   return (
     <DetailContent
       detail={d}
@@ -107,7 +108,7 @@ describe("the properties", () => {
     expect(more).toContain(">STA-313<");
     expect(more).toContain(">in_progress<");
     expect(more).toContain(">orchestrator<");
-    expect(more).toContain("2026-09-01 22:13");
+    expect(more).toContain(formatWhen("2026-09-01T22:13:04Z")!);
   });
 
   it("sit in a compact two-column list in the drawer", () => {

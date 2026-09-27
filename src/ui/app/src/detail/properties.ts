@@ -15,9 +15,9 @@
  *   rows on every issue, populated or not; everything else appears only when it carries
  *   something.
  *
- *   NO CLOCK ARITHMETIC HERE. These are the raw values, so every timestamp renders as the
- *   server sent it. The relative reading ("12 min ago") is the readable list's, with this
- *   exact value one hover away in its tooltip. The one duration in this file, how long a
+ *   NO CLOCK ARITHMETIC HERE. These are the exact values: every timestamp is the instant the
+ *   server sent, in the viewer's local time with its zone, never "ago". The relative reading
+ *   ("12 min ago") is the readable list's, with this same exact value in its tooltip. The one duration in this file, how long a
  *   holder has been silent, is a server reading, formatted rather than recomputed.
  *
  * Editable properties are deliberately NOT here: kind, priority, project and labels are
@@ -27,6 +27,7 @@
  * why. `properties.test.ts` pins kind's absence for that reason.
  */
 import { formatAgo } from "../lib/claim";
+import { actorLabel, formatStamp } from "./parts";
 import type { IssueDetail, IssuePriority, UiMode } from "../lib/types";
 
 export interface DetailFact {
@@ -42,15 +43,12 @@ export interface DetailFact {
 }
 
 /**
- * `2026-09-01 22:44` — the same minute-precision stamp ActivityTab and DocumentsTab
- * already print. Sliced rather than parsed on purpose: `new Date(iso).toLocale…`
- * would silently re-express a UTC instant in the viewer's zone, so two surfaces
- * showing "the same" timestamp would disagree by hours, and the mono column would
- * stop being a column.
+ * `Sep 2, 2026, 12:14 AM EDT` — the viewer's local time WITH its zone, the same reading the
+ * relative dates' tooltips give. The raw ISO value stays on the row as its `title`. (The old
+ * UTC slice disagreed by hours with every local date around it and did not say so.)
  */
-export function formatWhen(iso: string | null): string | null {
-  if (!iso) return null;
-  return iso.slice(0, 16).replace("T", " ");
+export function formatWhen(iso: string | null, timeZone?: string): string | null {
+  return formatStamp(iso, { timeZone });
 }
 
 /** A row, but only if it has something in it. Keeps the builder below flat. */
@@ -91,7 +89,7 @@ export function detailFacts(detail: IssueDetail, mode: UiMode): DetailFact[] {
     // In single-workspace mode it is the one fact on the page that is true of
     // every row on the page, which makes it furniture.
     ...(mode === "hub" ? [{ id: "workspace", label: "Workspace", value: detail.workspace, mono: true }] : []),
-    ...(issue.createdBy ? [{ id: "createdBy", label: "Created by", value: issue.createdBy }] : []),
+    ...(issue.createdBy ? [{ id: "createdBy", label: "Created by", value: actorLabel(issue.createdBy) }] : []),
     ...when("created", "Created", issue.createdAt),
     ...when("updated", "Updated", issue.updatedAt),
     ...when("started", "Started", issue.startedAt),

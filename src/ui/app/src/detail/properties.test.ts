@@ -28,8 +28,11 @@ const byId = (d: IssueDetail, id: string, mode: "workspace" | "hub" = "workspace
   detailFacts(d, mode).find((fact) => fact.id === id);
 
 describe("formatWhen", () => {
-  it("renders the same minute-precision stamp the rest of the app uses", () => {
-    expect(formatWhen("2026-09-01T22:44:31Z")).toBe("2026-09-01 22:44");
+  it("renders the instant in local time WITH its zone, like the tooltips, never a bare UTC slice", () => {
+    expect(formatWhen("2026-09-01T22:44:31Z", "UTC")).toBe("Sep 1, 2026, 10:44 PM UTC");
+    // The same instant in New York is the evening before midnight, and says so.
+    expect(formatWhen("2026-09-02T04:14:00Z", "America/New_York")).toBe("Sep 2, 2026, 12:14 AM EDT");
+    expect(formatWhen("2026-09-01T22:44:31Z")).not.toBe("2026-09-01 22:44");
   });
 
   it("passes null through, so an absent date is absent rather than 'Invalid Date'", () => {
@@ -164,7 +167,8 @@ describe("detailFacts — what it refuses to do", () => {
    */
   it("renders timestamps verbatim rather than as a client-computed 'ago'", () => {
     const fact = byId(detail(), "updated");
-    expect(fact?.value).toBe("2026-09-01 22:44");
+    expect(fact?.value).toBe(formatWhen("2026-09-01T22:44:31Z"));
+    expect(fact?.value).toMatch(/2026, \d{1,2}:\d{2} [AP]M \S+$/);
     expect(fact?.value).not.toMatch(/ago/);
   });
 
