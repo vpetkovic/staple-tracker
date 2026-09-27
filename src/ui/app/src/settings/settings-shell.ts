@@ -241,7 +241,9 @@ export function settingsFrameClass(mode: ShellMode, layout: ShellLayout): string
   // A phone: the whole dynamic viewport, so a collapsing browser toolbar never hides the foot.
   if (layout === "stacked") return "inset-x-0 top-0 h-dvh rounded-none";
   if (mode === "full") return "inset-0 rounded-none";
-  return "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[min(44rem,calc(100dvh-2rem))] w-[min(64rem,calc(100vw-2rem))] rounded-lg border";
+  // A desk: a preferences window — wide enough for a sidebar and a readable section beside
+  // it, with the page still showing round its edges.
+  return "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[min(48rem,calc(100dvh-4rem))] w-[min(72rem,calc(100vw-4rem))] rounded-xl border";
 }
 
 // ---------------------------------------------------------------- scroll memory
@@ -260,4 +262,22 @@ export function rememberScroll(memory: ScrollMemory, category: string | null, to
 
 export function recallScroll(memory: ScrollMemory, category: string | null): number {
   return category === null ? 0 : (memory.get(category) ?? 0);
+}
+
+// ---------------------------------------------------------------- plain names and icons
+
+/**
+ * What a section is CALLED in the sheet. The registry's labels are the store's vocabulary
+ * ("Kinds", "Workflow", "This machine"); a person looking for where to change what a task can
+ * be, or how agents pick work up, reads these instead. Anything not listed keeps its label,
+ * so a section added to the registry still shows up with a name.
+ */
+const PLAIN_NAMES: Record<string, string> = {
+  kinds: "Task types",
+  queue: "Picking up work",
+  machine: "This computer",
+};
+
+export function settingsName(category: Pick<SettingCategoryView, "id" | "label">): string {
+  return PLAIN_NAMES[category.id] ?? category.label;
 }

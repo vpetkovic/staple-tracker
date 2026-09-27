@@ -23,6 +23,7 @@ import type { SettingCategoryView } from "@/lib/settings";
 import { SETTINGS_TITLE, SettingsShell, type SettingsShellProps } from "./SettingsShell";
 import { CLOUD_CATEGORY } from "./cloud-settings";
 import { TELEMETRY_CATEGORY } from "./telemetry-settings";
+import { settingsIcon } from "./settings-icons";
 import {
   HUB_REGISTRY_CATEGORY,
   SETTINGS_PARAM,
@@ -32,6 +33,7 @@ import {
   closeAction,
   needsWorkspaceChoice,
   settingsTarget,
+  settingsName,
   withShellCategories,
   readSettingsRoute,
   recallScroll,
@@ -110,6 +112,28 @@ describe("the header", () => {
   });
 });
 
+describe("plain names and icons", () => {
+  it("names the store's sections in plain words, and keeps any other label as served", () => {
+    expect(settingsName({ id: "kinds", label: "Kinds" })).toBe("Task types");
+    expect(settingsName({ id: "queue", label: "Workflow" })).toBe("Picking up work");
+    expect(settingsName({ id: "machine", label: "This machine" })).toBe("This computer");
+    expect(settingsName({ id: "statuses", label: "Statuses" })).toBe("Statuses");
+    expect(settingsName({ id: "pigeons", label: "Pigeon lofts" })).toBe("Pigeon lofts");
+  });
+
+  it("gives every section an icon on a desk — a generic one for a section it has never heard of — and none on a phone", () => {
+    const html = render();
+    expect(html).toMatch(/data-settings-category="kinds"[^>]*><svg[^>]*lucide-shapes/);
+    expect(html).toMatch(/data-settings-category="pigeons"[^>]*><svg[^>]*lucide-sliders-horizontal/);
+    expect(settingsIcon("telemetry")).not.toBe(settingsIcon("unheard-of"));
+  });
+
+  it("uses the plain name for the section's own heading, too", () => {
+    const html = render({ active: "kinds" });
+    expect(html).toMatch(/<h3 id="settings-category-kinds"[^>]*>Task types<\/h3>/);
+  });
+});
+
 describe("the navigation is the registry", () => {
   it("lists every served category, including one the shell has never heard of", () => {
     const html = render();
@@ -127,9 +151,10 @@ describe("the navigation is the registry", () => {
     expect(across).toBeGreaterThan(-1);
     expect(per).toBeGreaterThan(across);
     // The global section sits under its own heading; every workspace section under the other.
-    expect(html.indexOf("This machine")).toBeGreaterThan(across);
-    expect(html.indexOf("This machine")).toBeLessThan(per);
-    for (const label of ["Statuses", "Kinds", "Pigeon lofts"]) expect(html.lastIndexOf(label)).toBeGreaterThan(per);
+    // DELIBERATELY CHANGED: the registry's "This machine" and "Kinds" read as plain names now.
+    expect(html.indexOf("This computer")).toBeGreaterThan(across);
+    expect(html.indexOf("This computer")).toBeLessThan(per);
+    for (const label of ["Statuses", "Task types", "Pigeon lofts"]) expect(html.lastIndexOf(label)).toBeGreaterThan(per);
     expect(html).toContain('data-settings-group="global"');
     expect(html).toContain('data-settings-group="workspace"');
   });

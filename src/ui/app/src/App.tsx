@@ -95,7 +95,7 @@ import { GraphView } from "@/views/GraphView";
 import { MilestonesView } from "@/views/milestones/MilestonesView";
 import { QueueView } from "@/views/queue/QueueView";
 import { TreeView } from "@/views/TreeView";
-import { ErrorState, LoadingState } from "@/views/ViewChrome";
+import { LoadingState, ProblemState } from "@/components/plain/States";
 
 /**
  * The only place a view name becomes a component. One entry per member of `VIEWS`, and
@@ -637,16 +637,16 @@ export function App() {
 
   if (bootstrap.error) {
     return (
-      <div className="p-6">
-        <ErrorState error={bootstrap.error} />
+      <div className="flex h-dvh items-start justify-center bg-sidebar p-6">
+        <ProblemState title="staple could not start this page" message={bootstrap.error.message} />
       </div>
     );
   }
 
   if (!session) {
     return (
-      <div className="p-6">
-        <LoadingState />
+      <div className="h-dvh bg-sidebar p-6">
+        <LoadingState label="Opening staple" />
       </div>
     );
   }

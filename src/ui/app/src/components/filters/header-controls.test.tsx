@@ -112,12 +112,12 @@ describe("the header row", () => {
     expect(narrow.match(/data-compact=""/g)).toHaveLength(5);
   });
 
-  it("wears one recipe on every control: 28px, 13px, a 16px icon, 6px gap", () => {
-    for (const cls of ["h-7", "text-[13px]", "gap-1.5", "[&_svg:not([class*='size-'])]:size-4"]) {
+  it("wears one recipe on every control: 32px, the body size, a 16px icon, 6px gap, the one focus ring", () => {
+    for (const cls of ["h-control-md", "text-body", "gap-1.5", "rounded-lg", "focus-ring", "[&_svg:not([class*='size-'])]:size-4"]) {
       expect(HEADER_BUTTON_CLASS).toContain(cls);
     }
     const wide = atWidth(1440);
-    expect(wide.match(/class="[^"]*\bh-7\b[^"]*"/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    expect(wide.match(/class="[^"]*\bh-control-md\b[^"]*"/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
   });
 
   it("folds the search into an icon when narrow, and keeps the field while it holds text", () => {

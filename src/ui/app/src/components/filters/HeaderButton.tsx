@@ -1,7 +1,8 @@
 /**
- * The one button recipe every control on the content header wears — Group, Sort, Filter,
- * Done and the search trigger — so the row reads as one vocabulary: 28px, 13px, a 16px icon,
- * 6px between icon and word, ghost until hovered.
+ * The one button recipe every control on the toolbar wears — Group, Sort, Filter, Done and
+ * the search trigger — so the row reads as one vocabulary: 32px (h-control-md), text-body
+ * (13px), a 16px icon, 6px between icon and word, 8px corners, ghost until hovered, and the
+ * one focus ring.
  *
  * `compact` drops the word and leaves the icon; the word then lives in the tooltip and in
  * `aria-label`, so a narrow header is read out exactly as a wide one. A tooltip is shown
@@ -14,14 +15,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 
 export const HEADER_BUTTON_CLASS = cn(
-  "h-7 gap-1.5 rounded-md px-2 text-[13px] font-normal [&_svg:not([class*='size-'])]:size-4",
+  "h-control-md gap-1.5 rounded-lg px-2.5 text-body font-normal focus-ring [&_svg:not([class*='size-'])]:size-4",
   // A phone: every control is a 44px target, and the icon grows to match.
   "max-md:h-11 max-md:min-w-11 max-md:[&_svg:not([class*='size-'])]:size-5",
   "text-muted-foreground hover:text-foreground",
 );
 
-/** The compact form: a 28px square. */
-const HEADER_ICON_CLASS = "size-7 px-0 max-md:size-11";
+/** The compact form: a 32px square. */
+const HEADER_ICON_CLASS = "size-control-md px-0 max-md:size-11";
 
 /**
  * Can this device hover? A tooltip is a hover affordance: on a touch screen it opens when
@@ -69,7 +70,7 @@ export const HeaderButton = forwardRef<HTMLButtonElement, HeaderButtonProps>(fun
       size="sm"
       aria-label={ariaLabel ?? label}
       data-compact={compact ? "" : undefined}
-      // Compact is a 28px square — unless a badge rides along, when the square would
+      // Compact is a 32px square — unless a badge rides along, when the square would
       // crowd the icon against the count and the button keeps its side padding instead.
       className={cn(
         HEADER_BUTTON_CLASS,

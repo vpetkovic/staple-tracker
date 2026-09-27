@@ -54,13 +54,13 @@ import {
 } from "./presets";
 import { useBackToClose } from "@/lib/back-to-close";
 
-const FOCUS = "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
+const FOCUS = "focus-ring-inset";
 
 /** A chip's hit area: 28px on a desk, 44px under a thumb. The pill inside carries the look. */
 const HIT = "flex shrink-0 items-center max-md:h-11 md:h-7";
 
 const PILL =
-  "flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] whitespace-nowrap transition-colors max-md:h-9 max-md:px-3.5 max-md:text-[14px]";
+  "flex h-7 items-center gap-1.5 rounded-full border px-3 text-label whitespace-nowrap transition-colors max-md:h-9 max-md:px-3.5 max-md:text-[14px]";
 
 /** The page's vocabulary as the presets need it. Read at render, like every other status surface. */
 export function presetContextNow(me: string | null): PresetContext {
@@ -71,11 +71,19 @@ export function presetContextNow(me: string | null): PresetContext {
   };
 }
 
-export function FilterChips() {
+/**
+ * `strip` (the phone): its own row under the header, with a hairline, scrolling sideways.
+ * `inline` (a desk): a lane inside the Toolbar beside the Filter button — one line, no border
+ * of its own, scrolling sideways behind a fade when the lane is narrower than the chips.
+ */
+export type FilterChipsVariant = "strip" | "inline";
+
+export function FilterChips({ variant = "strip" }: { variant?: FilterChipsVariant } = {}) {
   const session = useSession();
   const [me, setMe] = useState<string | null>(() => loadMe());
   return (
     <FilterChipStrip
+      variant={variant}
       rows={session.issues.data ?? []}
       state={session.filters}
       context={session.filterContext}
@@ -99,6 +107,7 @@ export interface FilterChipStripProps {
   presetContext?: PresetContext;
   /** "My tasks" learned who "me" is (or forgot it, with null). */
   onChooseMe?: (name: string | null) => void;
+  variant?: FilterChipsVariant;
 }
 
 /** "Which of these is you?" — asked once, the first time "My tasks" is tapped. */
@@ -182,6 +191,7 @@ export function FilterChipStrip({
   onChange: setFilters,
   presetContext = { statuses: [], kinds: ["bug"], me: null },
   onChooseMe,
+  variant = "strip",
 }: FilterChipStripProps) {
   const presets = useMemo(() => filterPresets(presetContext), [presetContext]);
   const [asking, setAsking] = useState(false);
@@ -243,9 +253,16 @@ export function FilterChipStrip({
       data-filter-chips
       role="toolbar"
       aria-label="Quick filters"
+      data-variant={variant}
       className={cn(
-        "staple-momentum staple-no-scrollbar flex shrink-0 items-center gap-1.5 border-b px-4",
-        "max-md:gap-2 max-md:overflow-x-auto max-md:px-3 md:flex-wrap md:py-1.5",
+        "staple-momentum staple-no-scrollbar flex items-center gap-1.5",
+        variant === "inline"
+          ? // The lane: one line, sideways scroll, and a fade at the right edge that says "more".
+            "min-w-0 flex-1 overflow-x-auto py-1 pr-6 [mask-image:linear-gradient(to_right,black_calc(100%-2rem),transparent)]"
+          : cn(
+              "shrink-0 border-b px-4",
+              "max-md:gap-2 max-md:overflow-x-auto max-md:px-3 md:flex-wrap md:py-1.5",
+            ),
       )}
     >
       {litPresets.map(renderPreset)}

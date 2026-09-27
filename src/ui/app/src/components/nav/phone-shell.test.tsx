@@ -134,14 +134,18 @@ describe("on a desk", () => {
 });
 
 describe("All workspaces never presents the first workspace as current", () => {
+  // The scope is now the top bar's crumb — the switcher itself — ahead of the view's name.
+  const scope = (markup: string) => /<button[^>]*data-scope-name="true"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
+
   it("the header says All workspaces beside the view's name", () => {
     const markup = shell(1440);
-    expect(markup).toMatch(/<span data-scope-name="true"[^>]*>All workspaces<\/span>/);
-    expect(markup).not.toMatch(/data-scope-name="true"[^>]*>aardvark</);
+    expect(scope(markup)).toContain(">All workspaces</span>");
+    expect(scope(markup)).not.toContain(">aardvark<");
+    expect(markup.indexOf("data-scope-name")).toBeLessThan(markup.indexOf("<h1"));
   });
 
   it("the header names the workspace once one is chosen", () => {
-    expect(shell(1440, { ws: "staple" })).toMatch(/<span data-scope-name="true"[^>]*>staple<\/span>/);
+    expect(scope(shell(1440, { ws: "staple" }))).toContain(">staple</span>");
   });
 
   it("a new project from All workspaces asks which workspace, with none preselected", () => {
