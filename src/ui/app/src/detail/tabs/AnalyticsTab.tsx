@@ -418,13 +418,13 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
                     </span>
                   }
                   right={
-                    <span className="flex items-center gap-2">
+                    <span className="flex items-center gap-2 max-sm:hidden">
                       {childQualityText(row) !== null ? (
-                        <span className="text-caption text-text-tertiary max-sm:hidden" data-testid="child-quality">
+                        <span className="text-caption text-text-tertiary" data-testid="child-quality">
                           {childQualityText(row)}
                         </span>
                       ) : null}
-                      <span className="text-caption max-sm:hidden">{statusLabel(row.status)}</span>
+                      <span className="text-caption">{statusLabel(row.status)}</span>
                     </span>
                   }
                   rightTone="text-text-secondary"
