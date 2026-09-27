@@ -285,7 +285,7 @@ export function GateReview({
   return (
     <section aria-label="Review gate" className="staple-gate">
       <div className="staple-gate-head">
-        <span className="staple-gate-eyebrow">Review gate</span>
+        <h3 className="staple-gate-eyebrow m-0">Approval</h3>
         <span className="staple-gate-state">{gateStateSummary(gate, now)}</span>
       </div>
 

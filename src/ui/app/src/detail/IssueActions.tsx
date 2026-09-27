@@ -1,42 +1,51 @@
 /**
- * The lifecycle actions on an issue — set status, claim, release, and (C3) take over or
- * free a claim whose holder has gone silent.
+ * The lifecycle actions on an issue: change status, start and stop work, mark done, reopen,
+ * take over or free a silent holder's claim, and ask for or give an approval.
  *
- * Property editing deliberately does NOT live here. U5 put title, priority and labels
- * in InlineProperties.tsx instead, rendered in the panel header where those values are
- * READ: a title you have to come down to a form to change is not inline editing. What
- * is left here is the set of things that are verbs rather than fields.
+ * ONE STATUS CONTROL, ONE PRIMARY ACTION, AND A MENU FOR THE REST. The old panel drew a
+ * dropdown, a "Change status" button, "Start working on it" and "Stop working on it" side by
+ * side, which is four controls and two of them always contradicted the state. Now:
  *
- * The comment composer is the other absentee — it lives with the rest of the thread in
- * the Activity tab.
+ *   - `StatusMenu` is the status pill itself. It opens a menu of the workspace's statuses,
+ *     each with a one-line meaning, and choosing one writes it.
+ *   - `PrimaryAction` is the single verb the state calls for (plain-actions.ts decides which).
+ *   - `OverflowMenu` (⋯) holds every other verb that applies right now.
+ *
+ * The pieces sit in different places per layout (header, phone top bar, phone bottom bar), so
+ * they share one controller from `useIssueActions`: one busy latch and one refusal, whichever
+ * button caused it. Every write goes through the same `action` / gate calls as before and a
+ * refusal renders in place through `describeRefusal` + `GuardRefusal`.
+ *
+ * Title, kind, priority, project and labels are editors, not verbs; they live in
+ * InlineProperties.tsx where they are read. The comment composer lives in the Activity tab.
  */
-import { useId, useState } from "react";
+import { Check, ChevronDown, Copy, Ellipsis, Hand, LogOut, RotateCcw, ShieldCheck, UserRoundCheck } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
+import { StatusIcon } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { action, approveGate, requestGate, requestGateChanges } from "@/lib/api";
-import { STALE_CLAIM_SECONDS, isStaleClaim, staleClaimSummary } from "@/lib/claim";
-import { gateRefusalReason, isActiveGate } from "@/lib/derived-queued";
-import { describeRefusal, type Refusal } from "@/lib/refusal";
 import {
-  ISSUE_STATUSES,
-  type ClaimActivity,
-  type GateQueueEntry,
-  type Issue,
-  type IssueGate,
-  type IssueStatus,
-  type QueuedBy,
-} from "@/lib/types";
-import { GateReview } from "./GateReview";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { action, approveGate, requestGate, requestGateChanges } from "@/lib/api";
+import { STALE_CLAIM_SECONDS, isStaleClaim } from "@/lib/claim";
+import { isActiveGate } from "@/lib/derived-queued";
+import { describeRefusal, type Refusal } from "@/lib/refusal";
+import { configuredStatusOrder, statusCategory, statusLabel } from "@/lib/settings";
+import { ISSUE_STATUSES, type ActionPayload, type Issue, type IssueDetail, type IssueStatus } from "@/lib/types";
+import { cn } from "./parts/cn";
 import { idsOf } from "@/lib/write-ref";
-import { configuredStatusOrder, statusLabel } from "@/lib/settings";
-import { ACTION_WORDS, statusChoices } from "./plain-actions";
+import { GateReview } from "./GateReview";
+import { ACTION_WORDS, STATUS_DESCRIPTIONS, firstStatusIn, primaryActionFor, statusChoices, type ActionState, type PrimaryAction } from "./plain-actions";
 
 /**
  * Who is doing this? Asked, remembered, and asked again with the remembered answer
- * pre-filled — the same three lines the claim button has always used, lifted out so that
- * "take over" cannot drift into a different identity story than "claim".
+ * pre-filled, so "take over" cannot drift into a different identity story than "start".
  *
  * Returns null when the user cancels or clears the box, and the caller must treat that as
  * "do nothing": checkoutIssue sets BOTH checkoutAgent and assignee to the actor, so
@@ -50,87 +59,36 @@ function askActor(prompt: string): string | null {
   return name;
 }
 
-export function IssueActions({
-  issue,
-  workspace,
-  claim,
-  gate = null,
-  queuedBy = null,
-  children = [],
-  childrenQueued = [],
-  refresh,
-}: {
-  issue: Issue;
-  workspace: string;
-  /**
-   * Holder liveness from /api/issue. Past the staleness threshold this grows two extra
-   * buttons; under it, and when null, the action row is exactly what it was.
-   */
-  claim?: ClaimActivity | null;
-  /**
-   * The gate pair and the children, from `/api/issue` — Q2 (STA-144). All four are
-   * OPTIONAL and default to the inert value, so a caller that has no opinion about
-   * gates (a test, a future surface) renders exactly the action row that was here
-   * before this ticket.
-   */
-  gate?: IssueGate | null;
-  queuedBy?: QueuedBy | null;
-  children?: readonly Issue[];
-  childrenQueued?: readonly GateQueueEntry[];
-  refresh: () => void;
-}) {
-  const [status, setStatus] = useState<IssueStatus>(issue.status);
+/** The status order the menu and the state-driven actions resolve against. */
+function statusOrder(current: string): string[] {
+  return statusChoices(configuredStatusOrder(), ISSUE_STATUSES, current);
+}
+
+/** The facts the action decisions read, from the detail payload. */
+export function actionStateOf(detail: Pick<IssueDetail, "issue" | "claim" | "gate" | "queuedBy">): ActionState {
+  return {
+    issue: detail.issue,
+    claim: detail.claim ?? null,
+    gate: detail.gate ?? null,
+    queuedBy: detail.queuedBy ?? null,
+    parked: isActiveGate(detail.gate),
+    stale: isStaleClaim(detail.claim),
+  };
+}
+
+export function primaryActionOf(detail: Pick<IssueDetail, "issue" | "claim" | "gate" | "queuedBy">): PrimaryAction {
+  return primaryActionFor(actionStateOf(detail), statusOrder(detail.issue.status), statusCategory);
+}
+
+/**
+ * One busy latch and one refusal for every action on the panel. A refused action is
+ * information ("someone else holds this"), so it renders in place rather than vanishing.
+ */
+export function useIssueActions(issue: Pick<Issue, "id">, workspace: string, refresh: () => void) {
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [busy, setBusy] = useState(false);
-  const stale = isStaleClaim(claim);
 
-  /**
-   * Which of the three gate faces this issue wears, decided once.
-   *
-   *   - `parked`   — it holds an ACTIVE gate (pending OR changes_requested). The
-   *     reviewer's controls appear. `changes_requested` counts because approve must
-   *     still be able to end a review the reviewer objected to; otherwise asking for
-   *     changes would trap the subtree until somebody opened a whole new cycle.
-   *   - `gateable` — it has children and no active gate, so it CAN be parked.
-   *   - neither    — a leaf, or already parked from above. The store refuses a gate on
-   *     a leaf and says to use `in_review` instead, so offering the button would be
-   *     offering a refusal.
-   */
-  const parked = isActiveGate(gate);
-  const gateable = !parked && children.length > 0;
-
-
-  const run = async (payload: Parameters<typeof action>[1], actor?: string) => {
-    if (busy) return;
-    setBusy(true);
-    setRefusal(null);
-    try {
-      await action({ ws: workspace, ref: issue.id, ...(actor ? { actor } : {}) }, payload);
-      refresh();
-    } catch (caught) {
-      // A refused action is information, not a failure: "someone else holds this" is
-      // exactly what the user needs to read, so it renders in place rather than
-      // disappearing into a console. Through the same describeRefusal/GuardRefusal
-      // pair the board and the inline editors use, so every refusal on this page
-      // reaches the user by one route and in the store's own words.
-      setRefusal(describeRefusal(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /**
-   * The same three lines as `run`, for the gate routes.
-   *
-   * Not folded into `run` because `run` builds an `/api/action` body from a target and
-   * a payload, and these calls do not have that shape — see `lib/api.ts`. What they DO
-   * share is the part that matters: busy-latch, clear the last refusal, refresh on
-   * success, and render a refusal in place through the one `describeRefusal` /
-   * `GuardRefusal` pair every other refusal on this page reaches the user by. A gate
-   * refusal is information — "that child is not underneath this gate" is exactly what
-   * the reviewer needs to read — so it must not disappear into a console.
-   */
-  const runGate = async (call: () => Promise<unknown>) => {
+  const guarded = async (call: () => Promise<unknown>) => {
     if (busy) return;
     setBusy(true);
     setRefusal(null);
@@ -144,276 +102,367 @@ export function IssueActions({
     }
   };
 
+  return {
+    busy,
+    refusal,
+    dismiss: () => setRefusal(null),
+    run: (payload: ActionPayload, actor?: string) =>
+      guarded(() => action({ ws: workspace, ref: issue.id, ...(actor ? { actor } : {}) }, payload)),
+    runGate: (call: () => Promise<unknown>) => guarded(call),
+    approveAll: (comment?: string) => guarded(() => approveGate({ ws: workspace, ref: issue.id, comment })),
+    approveSelected: (children: string[]) => guarded(() => approveGate({ ws: workspace, ref: issue.id, children })),
+    requestChanges: (comment: string) => guarded(() => requestGateChanges({ ws: workspace, ref: issue.id, comment })),
+    requestApproval: (owner: string) => guarded(() => requestGate({ ws: workspace, ref: issue.id, owner })),
+  };
+}
+
+export type IssueActionsController = ReturnType<typeof useIssueActions>;
+
+// ───────────────────────────────────────────────────────────────── status
+
+/**
+ * The status pill, which is also the only status control. Tinted by category through the
+ * shared `.status-chip` recipe, with the category's icon so it never relies on colour.
+ */
+export function StatusMenu({ issue, controller, className }: { issue: Issue; controller: IssueActionsController; className?: string }) {
+  const choices = statusOrder(issue.status);
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select value={status} onValueChange={(v) => setStatus(v as IssueStatus)}>
-          <SelectTrigger size="sm" className="w-[11rem]" aria-label="Status">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {statusChoices(configuredStatusOrder(), ISSUE_STATUSES, issue.status).map((s) => (
-              <SelectItem key={s} value={s} data-status-choice={s}>
-                {statusLabel(s)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          size="sm"
-          data-action="status"
-          disabled={busy || status === issue.status}
-          onClick={() => void run({ type: "status", status })}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild disabled={controller.busy}>
+        <button
+          type="button"
+          aria-label={`Status: ${statusLabel(issue.status)}. Change status`}
+          data-status-menu=""
+          data-status-category={statusCategory(issue.status)}
+          className={cn(
+            "status-chip focus-ring inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border pr-2 pl-2 text-label font-medium whitespace-nowrap transition-[filter] duration-150 hover:brightness-[0.97] disabled:opacity-60 dark:hover:brightness-110 pointer-coarse:h-9 pointer-coarse:px-3",
+            className,
+          )}
         >
-          {ACTION_WORDS.status}
-        </Button>
-        {/*
-          THE CLAIM BUTTON, DISABLED WHILE THIS ROW IS QUEUED — Q2 (STA-144).
+          <StatusIcon status={issue.status} className="size-3.5" />
+          {statusLabel(issue.status)}
+          <ChevronDown aria-hidden className="size-3.5 opacity-70" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[min(20rem,calc(100vw-2rem))] p-1.5">
+        {choices.map((status) => {
+          const current = status === issue.status;
+          return (
+            <DropdownMenuItem
+              key={status}
+              data-status-choice={status}
+              aria-current={current ? "true" : undefined}
+              className="items-start gap-2.5 rounded-lg px-2 py-2"
+              onSelect={() => {
+                if (!current) void controller.run({ type: "status", status: status as IssueStatus });
+              }}
+            >
+              <StatusIcon status={status} className="mt-0.5 size-4" />
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-body font-medium text-foreground">{statusLabel(status)}</span>
+                <span className="text-label text-text-secondary">{STATUS_DESCRIPTIONS[statusCategory(status)]}</span>
+              </span>
+              {current ? <Check aria-hidden className="mt-0.5 size-4 text-foreground" /> : null}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
-          The store already refuses the checkout with a `gated` code and a sentence
-          naming the gate, so this is not a second guard and cannot disagree with the
-          first: it is the same fact, shown BEFORE the click instead of after it. A
-          button that looks live and always fails teaches people to distrust the page.
+// ──────────────────────────────────────────────────────────────── primary
 
-          `title` for the pointer and `aria-description` for a screen reader, both
-          carrying the SAME sentence from `gateRefusalReason` — one wording, so what
-          the tooltip says and what the row's caption says cannot drift. `disabled`
-          rather than hidden, because a control that vanishes leaves no explanation of
-          why the thing you wanted to do is not offered.
-        */}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy || queuedBy !== null}
-          title={queuedBy ? gateRefusalReason(queuedBy) : undefined}
-          aria-description={queuedBy ? gateRefusalReason(queuedBy) : undefined}
-          data-action="checkout"
-          onClick={() => {
-            const name = askActor(ACTION_WORDS.checkoutPrompt);
-            if (!name) return;
-            void run({ type: "checkout" }, name);
+const PRIMARY_ICON = {
+  review: ShieldCheck,
+  reopen: RotateCcw,
+  "take-over": Hand,
+  done: Check,
+  start: UserRoundCheck,
+} as const;
+
+/** The one verb the state calls for. `onReview` takes the reader to the approval block. */
+export function PrimaryAction({
+  detail,
+  controller,
+  onReview,
+  className,
+  size = "sm",
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  onReview: () => void;
+  className?: string;
+  size?: "sm" | "lg";
+}) {
+  const primary = primaryActionOf(detail);
+  const Icon = PRIMARY_ICON[primary.kind];
+  const claim = detail.claim;
+
+  const onClick = () => {
+    switch (primary.kind) {
+      case "review":
+        onReview();
+        return;
+      case "start": {
+        const name = askActor(ACTION_WORDS.checkoutPrompt);
+        if (name) void controller.run({ type: "checkout" }, name);
+        return;
+      }
+      case "take-over": {
+        if (!claim) return;
+        const name = askActor(ACTION_WORDS.takeOverPrompt(claim.heldBy));
+        if (name) void controller.run({ type: "checkout", stealIfIdleSeconds: STALE_CLAIM_SECONDS }, name);
+        return;
+      }
+      case "done":
+      case "reopen":
+        if (primary.status) void controller.run({ type: "status", status: primary.status });
+    }
+  };
+
+  return (
+    <Button
+      size={size === "lg" ? "lg" : "sm"}
+      data-action="primary"
+      data-primary={primary.kind}
+      disabled={controller.busy || Boolean(primary.disabledReason)}
+      title={primary.disabledReason}
+      aria-description={primary.disabledReason}
+      onClick={onClick}
+      className={cn("gap-1.5", className)}
+    >
+      <Icon aria-hidden className="size-4" />
+      {primary.label}
+    </Button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────── overflow
+
+/**
+ * Every other verb that applies right now, behind ⋯. Built from the same state as the primary
+ * action, so the primary is never repeated here and nothing is offered that contradicts it.
+ */
+export function OverflowMenu({
+  detail,
+  controller,
+  onRequestApproval,
+  triggerClassName,
+  align = "end",
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  /** Opens the "ask for approval" form; offered only for a parent with no active gate. */
+  onRequestApproval: () => void;
+  triggerClassName?: string;
+  align?: "start" | "end";
+}) {
+  const { issue, claim, queuedBy } = detail;
+  const primary = primaryActionOf(detail);
+  const state = actionStateOf(detail);
+  const category = statusCategory(issue.status);
+  const resolved = category === "done" || category === "cancelled";
+  const doneStatus = firstStatusIn(statusOrder(issue.status), statusCategory, ["done"]);
+  const gateable = !state.parked && detail.children.length > 0;
+  const busy = controller.busy;
+
+  const items: ReactNode[] = [];
+  if (primary.kind !== "start" && !issue.checkoutAgent && !resolved) {
+    items.push(
+      <DropdownMenuItem
+        key="start"
+        data-action="checkout"
+        disabled={busy || queuedBy !== null}
+        reason={queuedBy ? `Waiting for ${queuedBy.owner} to approve ${queuedBy.identifier} first.` : undefined}
+        onSelect={() => {
+          const name = askActor(ACTION_WORDS.checkoutPrompt);
+          if (name) void controller.run({ type: "checkout" }, name);
+        }}
+      >
+        <UserRoundCheck aria-hidden />
+        {ACTION_WORDS.checkout}
+      </DropdownMenuItem>,
+    );
+  }
+  if (primary.kind !== "done" && doneStatus && !resolved) {
+    items.push(
+      <DropdownMenuItem key="done" data-action="done" disabled={busy} onSelect={() => void controller.run({ type: "status", status: doneStatus as IssueStatus })}>
+        <Check aria-hidden />
+        {ACTION_WORDS.done}
+      </DropdownMenuItem>,
+    );
+  }
+  if (issue.checkoutAgent && !state.stale) {
+    items.push(
+      <DropdownMenuItem key="release" data-action="release" disabled={busy} onSelect={() => void controller.run({ type: "release" })}>
+        <LogOut aria-hidden />
+        {ACTION_WORDS.release}
+      </DropdownMenuItem>,
+    );
+  }
+  if (state.stale && claim) {
+    if (primary.kind !== "take-over") {
+      items.push(
+        <DropdownMenuItem
+          key="take-over"
+          data-action="take-over"
+          disabled={busy}
+          onSelect={() => {
+            const name = askActor(ACTION_WORDS.takeOverPrompt(claim.heldBy));
+            if (name) void controller.run({ type: "checkout", stealIfIdleSeconds: STALE_CLAIM_SECONDS }, name);
           }}
         >
-          {ACTION_WORDS.checkout}
-        </Button>
-        <Button size="sm" variant="outline" data-action="release" disabled={busy} onClick={() => void run({ type: "release" })}>
-          {ACTION_WORDS.release}
-        </Button>
-      </div>
+          <Hand aria-hidden />
+          {ACTION_WORDS.takeOver}
+        </DropdownMenuItem>,
+      );
+    }
+    items.push(
+      // No prompt: freeing hands the task back to the pool rather than to a person. The store
+      // still refuses if the holder has come back to life since this rendered.
+      <DropdownMenuItem
+        key="free"
+        data-action="release-stale"
+        disabled={busy}
+        onSelect={() => void controller.run({ type: "release", ifIdleSeconds: STALE_CLAIM_SECONDS })}
+      >
+        <LogOut aria-hidden />
+        {ACTION_WORDS.releaseStale}
+      </DropdownMenuItem>,
+    );
+  }
+  if (gateable) {
+    items.push(
+      <DropdownMenuItem key="gate" data-action="request-approval" disabled={busy} onSelect={onRequestApproval}>
+        <ShieldCheck aria-hidden />
+        {ACTION_WORDS.requestApproval}
+      </DropdownMenuItem>,
+    );
+  }
 
-      {/* The words above are for people; the names the tracker and its agents use are here,
-          one tap away, for whoever needs to type them. */}
-      <details className="text-[12px] text-muted-foreground" data-technical-details="">
-        <summary className="cursor-pointer select-none py-1">Show details</summary>
-        <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
-          <dt>Status name</dt>
-          <dd className="font-mono">{issue.status}</dd>
-          <dt>Who is working on it</dt>
-          <dd className="font-mono">{issue.checkoutAgent ?? "nobody (not checked out)"}</dd>
-          <dt>Reference</dt>
-          <dd className="font-mono break-all">{issue.identifier} · {issue.id}</dd>
-        </dl>
-        <p className="mt-1">
-          {ACTION_WORDS.checkout} is a checkout (<span className="font-mono">staple checkout</span>);{" "}
-          {ACTION_WORDS.release.toLowerCase()} is a release (<span className="font-mono">staple release</span>).
-        </p>
-      </details>
-
-      {/*
-        C3 — the takeover affordance, and the only place in this app that can move a claim
-        that is not yours.
-
-        It exists ONLY while the holder has been silent past the threshold, and it exists
-        only as buttons. Nothing here runs on a timer, nothing fires on render, and the
-        panel will happily sit on a claim that has been dead for a week until somebody
-        clicks. That is the point of the ticket: a dead claim should be VISIBLE and
-        FIXABLE, never quietly reaped.
-
-        Both buttons send STALE_CLAIM_SECONDS — the same number the badge above is drawn
-        from — so the page can never ask the store to take a claim it has not told the
-        user is stale. And the store re-checks that number against its own clock: if the
-        holder came back to life in the seconds since this rendered, the write is refused
-        and the sentence below is the store's, verbatim.
-      */}
-      {stale && claim ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-[var(--status-task-blocked)]/50 p-2">
-          <span className="text-[11px] text-muted-foreground">{staleClaimSummary(claim)}</span>
-          <Button
-            size="sm"
-            variant="outline"
-            className="ml-auto"
-            disabled={busy}
-            onClick={() => {
-              const name = askActor(ACTION_WORDS.takeOverPrompt(claim.heldBy));
-              if (!name) return;
-              void run({ type: "checkout", stealIfIdleSeconds: STALE_CLAIM_SECONDS }, name);
-            }}
-          >
-            {ACTION_WORDS.takeOver}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            // No prompt: releasing hands the ticket back to the pool rather than to a
-            // person, so there is no identity to attribute the result to. The store
-            // allows any caller to do this precisely because the holder is demonstrably
-            // gone — and it still refuses if that stops being true.
-            onClick={() => void run({ type: "release", ifIdleSeconds: STALE_CLAIM_SECONDS })}
-          >
-            {ACTION_WORDS.releaseStale}
-          </Button>
-        </div>
-      ) : null}
-      {/*
-        THE REVIEW GATE — Q2 (STA-144), rebuilt as its own component by Q4 (STA-147).
-
-        Below the claim row rather than in it, because these are a DIFFERENT PERSON'S
-        verbs. Everything above is what an agent does to its own work; this is what the
-        human named in the gate does to somebody else's. Mixing them into one wrap of
-        buttons would put "Approve all" one tab stop from "release" and make the row
-        answer two questions at once.
-
-        Monochrome and bordered like the stale-claim block above it — the detail panel
-        spends its only colour on status, and a gate is not a status.
-
-        It lives in GateReview.tsx now. Q2 kept it inline while it was six lines; VP's
-        review turned it into a header, a grid checklist with a layout contract, three
-        verbs and a disclosure, and that is a component rather than a branch of this one.
-      */}
-      {parked && gate ? (
-        <GateReview
-          identifier={issue.identifier}
-          gate={gate}
-          /*
-            Straight through from `/api/issue`, unfiltered. Q2 filtered it here with
-            `queuedChildrenOf`; Q5 moved eligibility into the store, where the release
-            flag and the open-subtree rule already live, and deleted the browser's copy —
-            see the note at the top of lib/derived-queued.ts on why a second definition
-            here is the one thing this feature cannot afford.
-          */
-          queue={childrenQueued}
-          busy={busy}
-          onApproveAll={(comment) =>
-            void runGate(() => approveGate({ ws: workspace, ref: issue.id, comment }))
-          }
-          onApproveSelected={(refs) =>
-            void runGate(() =>
-              approveGate({
-                ws: workspace,
-                ref: issue.id,
-                // The ticked rows by id, never by number (`lib/write-ref.ts`).
-                children: idsOf(childrenQueued, refs),
-              }),
-            )
-          }
-          onRequestChanges={(comment) =>
-            void runGate(() => requestGateChanges({ ws: workspace, ref: issue.id, comment }))
-          }
-        />
-      ) : null}
-
-      {gateable ? (
-        <RequestGatePanel
-          busy={busy}
-          childCount={children.length}
-          onRequest={(owner) => void runGate(() => requestGate({ ws: workspace, ref: issue.id, owner }))}
-        />
-      ) : null}
-
-      {refusal ? (
-        <div className="rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/5 p-2">
-          <GuardRefusal refusal={refusal} onDismiss={() => setRefusal(null)} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * The eyebrow the request-approval panel wears, in the register the detail panel's
- * headings use. `GateReview` draws the same thing from `.staple-gate-eyebrow`, because
- * it is a sheet-styled block and this is a Tailwind-styled one; the two are one
- * declaration apart and neither is worth exporting to the other.
- */
-function GateHeading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">
-      {children}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label="More actions" title="More actions" data-overflow-menu="" className={cn("focus-ring", triggerClassName)}>
+          <Ellipsis className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align={align} className="min-w-[13rem] p-1.5">
+        {items}
+        {items.length > 0 ? <DropdownMenuSeparator /> : null}
+        <DropdownMenuItem
+          data-action="copy-id"
+          onSelect={() => {
+            void navigator.clipboard?.writeText(issue.identifier).catch(() => {});
+          }}
+        >
+          <Copy aria-hidden />
+          Copy task ID <span className="ml-auto text-label text-text-tertiary">{issue.identifier}</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────── feedback
+
+/** The store's refusal, in its own words, wherever the action was pressed. */
+export function ActionRefusal({ controller, className }: { controller: IssueActionsController; className?: string }) {
+  if (!controller.refusal) return null;
+  return (
+    <div className={cn("rounded-xl border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/5 p-3", className)}>
+      <GuardRefusal refusal={controller.refusal} onDismiss={controller.dismiss} />
     </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────── gate
+
 /**
- * PARK THIS PARENT — for an issue that has children and no active gate.
+ * The approval surface: the reviewer's block while a gate is active, or the "ask for
+ * approval" form once it has been opened from the ⋯ menu. A different person's verbs from
+ * the ones above, so they get their own card rather than joining the action row.
+ */
+export function GateSection({
+  detail,
+  controller,
+  requestOpen,
+  onCloseRequest,
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  requestOpen: boolean;
+  onCloseRequest: () => void;
+}) {
+  const { issue, gate, childrenQueued } = detail;
+  if (isActiveGate(gate)) {
+    return (
+      <GateReview
+        identifier={issue.identifier}
+        gate={gate}
+        // Straight through from `/api/issue`, unfiltered: eligibility lives in the store.
+        queue={childrenQueued}
+        busy={controller.busy}
+        onApproveAll={(comment) => void controller.approveAll(comment)}
+        // The ticked rows by id, never by number (`lib/write-ref.ts`).
+        onApproveSelected={(refs) => void controller.approveSelected(idsOf(childrenQueued, refs))}
+        onRequestChanges={(comment) => void controller.requestChanges(comment)}
+      />
+    );
+  }
+  if (requestOpen && detail.children.length > 0) {
+    return (
+      <RequestGatePanel
+        busy={controller.busy}
+        childCount={detail.children.length}
+        onCancel={onCloseRequest}
+        onRequest={(owner) => {
+          void controller.requestApproval(owner).then(onCloseRequest);
+        }}
+      />
+    );
+  }
+  return null;
+}
+
+/**
+ * ASK FOR APPROVAL: park this parent behind a named person's review.
  *
- * The owner defaults to "VP" and is editable, per the ticket. It is a real text input
- * rather than a `window.prompt` (which `askActor` above still uses for identity, and
- * which is the thing this panel deliberately does not copy): a prompt cannot be styled,
- * cannot be labelled for a screen reader, and cannot show a default the user can see
- * before deciding whether to change it.
- *
- * Submit is disabled on an empty owner. The store refuses an owner-less gate — "name
- * the human who must approve" — and a gate nobody owns is a gate nobody opens, so this
- * makes that refusal unreachable from the page rather than merely unlikely.
+ * The approver defaults to "VP" and is editable. It is a real, labelled text input rather
+ * than a `window.prompt`, so the default is visible before deciding. Submit is disabled on an
+ * empty name: the store refuses an owner-less gate, and this makes that refusal unreachable.
  */
 function RequestGatePanel({
   busy,
   childCount,
   onRequest,
+  onCancel,
 }: {
   busy: boolean;
   childCount: number;
   onRequest: (owner: string) => void;
+  onCancel: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [owner, setOwner] = useState("VP");
   const panelId = useId();
-
-  if (!open) {
-    return (
-      <div className="flex">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          aria-expanded={false}
-          aria-controls={panelId}
-          title={`Park this behind a review — its ${childCount} ${childCount === 1 ? "child" : "children"} become queued`}
-          onClick={() => setOpen(true)}
-        >
-          Request approval
-        </Button>
-      </div>
-    );
-  }
+  const children = childCount === 1 ? "The 1 task under this one waits" : `The ${childCount} tasks under this one wait`;
 
   return (
-    <section
-      id={panelId}
-      aria-label="Request approval"
-      className="space-y-2 rounded-md border border-dashed p-2"
-    >
-      <GateHeading>Request approval</GateHeading>
-      <p className="text-[12px] text-muted-foreground">
-        {childCount} {childCount === 1 ? "child" : "children"} will be queued until this is
-        approved. Nobody can check them out in the meantime.
-      </p>
+    <section id={panelId} aria-label="Ask for approval" data-request-gate="" className="flex flex-col gap-3 rounded-xl border bg-surface-raised p-4">
+      <div className="flex flex-col gap-1">
+        <h3 className="text-body font-medium">Ask for approval</h3>
+        <p className="text-label text-text-secondary">{children} until the approver says yes. Nobody can start them in the meantime.</p>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={`${panelId}-owner`} className="text-[11px] text-muted-foreground">
+        <label htmlFor={`${panelId}-owner`} className="text-label text-text-secondary">
           Approver
         </label>
-        <Input
-          id={`${panelId}-owner`}
-          autoFocus
-          className="h-8 w-[9rem] text-[12px]"
-          value={owner}
-          onChange={(event) => setOwner(event.target.value)}
-        />
+        <Input id={`${panelId}-owner`} autoFocus className="h-8 w-[10rem] text-body" value={owner} onChange={(event) => setOwner(event.target.value)} />
         <Button size="sm" disabled={busy || owner.trim().length === 0} onClick={() => onRequest(owner.trim())}>
-          Park it
+          Ask for approval
         </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setOpen(false)}>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
           Cancel
         </Button>
       </div>

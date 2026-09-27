@@ -20,8 +20,7 @@
 import { Check, Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
-import { PriorityLabel } from "@/components/PriorityLabel";
-import { KindGlyph } from "@/components/task-list";
+import { KindGlyph, PrioritySignal } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -30,13 +29,31 @@ import { projectsForWorkspace } from "@/lib/projects";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
-import { cn } from "@/lib/utils";
+import { cn } from "./parts/cn";
 import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssueKind, type IssuePriority } from "@/lib/types";
+import { PRIORITY_WORDS } from "./properties";
+
+/**
+ * How an editor's trigger is drawn: `row` for a value in the property list (quiet, grows a
+ * hover wash), `chip` for the phone's summary chips (a bordered, finger-sized pill).
+ */
+export type EditorVariant = "row" | "chip";
 
 interface EditorProps {
   issue: Issue;
   workspace: string;
   refresh: () => void;
+  variant?: EditorVariant;
+}
+
+/** The trigger classes for both variants, so kind, priority and project look like one family. */
+function triggerClass(variant: EditorVariant): string {
+  // Sizes are arbitrary values on purpose: the Select trigger merges these with its own
+  // `text-base md:text-sm` through the shared `cn`, which does not know the type-scale
+  // tokens (see parts/cn.ts). 13px is `text-body`.
+  return variant === "chip"
+    ? "focus-ring w-auto gap-1.5 rounded-full border border-border bg-surface-raised px-3 text-[13px] md:text-[13px] font-medium text-foreground shadow-none hover:bg-surface-hover data-[size=sm]:h-9 [&>svg:last-child]:size-3.5 [&>svg:last-child]:opacity-60"
+    : "focus-ring -ml-1.5 w-auto max-w-full gap-1.5 rounded-md border-0 bg-transparent px-1.5 text-[13px] md:text-[13px] text-foreground shadow-none hover:bg-surface-hover data-[size=sm]:h-8 pointer-coarse:data-[size=sm]:h-10 [&>svg:last-child]:size-3.5 [&>svg:last-child]:opacity-0 hover:[&>svg:last-child]:opacity-60 focus-visible:[&>svg:last-child]:opacity-60";
 }
 
 /**
@@ -78,7 +95,7 @@ function RefusalSlot({ refusal, onDismiss }: { refusal: Refusal | null; onDismis
 
 // ---------------------------------------------------------------- title
 
-export function InlineTitle({ issue, workspace, refresh }: EditorProps) {
+export function InlineTitle({ issue, workspace, refresh, size = "display" }: EditorProps & { size?: "display" | "heading" }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(issue.title);
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
@@ -112,12 +129,22 @@ export function InlineTitle({ issue, workspace, refresh }: EditorProps) {
           data-edit-title
           onClick={() => setEditing(true)}
           title="Rename"
-          className="group mt-1 flex w-full items-start gap-1.5 rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="group focus-ring flex w-full items-start gap-2 rounded-md text-left"
         >
-          <h2 className="text-base leading-snug font-semibold">{issue.title}</h2>
+          <h2
+            className={cn(
+              "min-w-0 font-semibold text-balance break-words text-foreground",
+              size === "display" ? "text-display" : "text-heading",
+            )}
+          >
+            {issue.title}
+          </h2>
           <Pencil
             aria-hidden
-            className="mt-1 size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+            className={cn(
+              "shrink-0 text-text-tertiary opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100",
+              size === "display" ? "mt-2 size-4" : "mt-1.5 size-3.5",
+            )}
           />
         </button>
         <RefusalSlot refusal={refusal} onDismiss={dismiss} />
@@ -126,7 +153,7 @@ export function InlineTitle({ issue, workspace, refresh }: EditorProps) {
   }
 
   return (
-    <div className="mt-1">
+    <div>
       <div className="flex items-center gap-1.5">
         <Input
           ref={inputRef}
@@ -135,6 +162,8 @@ export function InlineTitle({ issue, workspace, refresh }: EditorProps) {
           value={draft}
           disabled={busy}
           aria-label="Title"
+          // Arbitrary sizes: Input merges through the shared `cn` (see parts/cn.ts).
+          className={cn("h-auto py-1 font-semibold", size === "display" ? "text-[24px] leading-[30px] md:text-[24px]" : "text-[18px] leading-[26px] md:text-[18px]")}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -190,7 +219,7 @@ export function InlineTitle({ issue, workspace, refresh }: EditorProps) {
  * it would win against the poll for as long as the component stayed mounted and lose the
  * moment it did not.
  */
-export function InlineKind({ issue, workspace, refresh }: EditorProps) {
+export function InlineKind({ issue, workspace, refresh, variant = "row" }: EditorProps) {
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
   const kinds = configuredKindOrder();
 
@@ -211,7 +240,7 @@ export function InlineKind({ issue, workspace, refresh }: EditorProps) {
           size="sm"
           data-edit-kind
           aria-label="Kind"
-          className="h-auto w-auto gap-1.5 rounded-sm border-0 bg-transparent px-1 py-0 text-[12px] shadow-none hover:bg-accent"
+          className={triggerClass(variant)}
         >
           <span className="flex items-center gap-1.5">
             {/* `labelled={false}`: the label is right there in text, and two readings of
@@ -253,7 +282,7 @@ const NO_PROJECT = "__none__";
  * editor does not share `useUpdate` with its neighbours; the refetch-on-success rule is
  * the same.
  */
-export function InlineProject({ issue, workspace, refresh }: EditorProps) {
+export function InlineProject({ issue, workspace, refresh, variant = "row" }: EditorProps) {
   const session = useSession();
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [busy, setBusy] = useState(false);
@@ -286,7 +315,7 @@ export function InlineProject({ issue, workspace, refresh }: EditorProps) {
           size="sm"
           data-edit-project
           aria-label="Project"
-          className="h-auto w-auto gap-1.5 rounded-sm border-0 bg-transparent px-1 py-0 text-[12px] shadow-none hover:bg-accent"
+          className={triggerClass(variant)}
         >
           <span className={cn("truncate", !current && "text-text-tertiary")}>
             {current ? current.project.name : "No project"}
@@ -308,7 +337,7 @@ export function InlineProject({ issue, workspace, refresh }: EditorProps) {
 
 // ------------------------------------------------------------- priority
 
-export function InlinePriority({ issue, workspace, refresh }: EditorProps) {
+export function InlinePriority({ issue, workspace, refresh, variant = "row" }: EditorProps) {
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
 
   return (
@@ -327,9 +356,9 @@ export function InlinePriority({ issue, workspace, refresh }: EditorProps) {
           size="sm"
           data-edit-priority
           aria-label="Priority"
-          className="h-auto w-auto gap-1 rounded-sm border-0 bg-transparent px-1 py-0 shadow-none hover:bg-accent"
+          className={triggerClass(variant)}
         >
-          <PriorityLabel priority={issue.priority} />
+          <PriorityValue priority={issue.priority} />
         </SelectTrigger>
         {/*
           `position="popper"`, not the vendored default of "item-aligned".
@@ -343,13 +372,25 @@ export function InlinePriority({ issue, workspace, refresh }: EditorProps) {
         <SelectContent position="popper" align="start">
           {ISSUE_PRIORITIES.map((priority) => (
             <SelectItem key={priority} value={priority}>
-              {priority}
+              <PriorityValue priority={priority} />
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
       <RefusalSlot refusal={refusal} onDismiss={dismiss} />
     </>
+  );
+}
+
+/** The priority's icon (the list's own signal) and its word, "Urgent" for `critical`. */
+export function PriorityValue({ priority }: { priority: IssuePriority }) {
+  return (
+    <span className="flex items-center gap-1.5" data-priority-value={priority}>
+      <span aria-hidden className="flex">
+        <PrioritySignal priority={priority} />
+      </span>
+      {PRIORITY_WORDS[priority]}
+    </span>
   );
 }
 
@@ -387,7 +428,7 @@ export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
           <span
             key={label}
             data-label-chip={label}
-            className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground"
+            className="inline-flex h-6 items-center gap-1 rounded-full border bg-surface-sunken pr-1 pl-2.5 text-label text-foreground"
           >
             {label}
             <button
@@ -396,7 +437,7 @@ export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
               aria-label={`Remove label ${label}`}
               disabled={busy}
               onClick={() => void commitSet(issue.labels.filter((existing) => existing !== label))}
-              className="-mr-0.5 rounded-full p-0.5 hover:text-foreground focus-visible:outline-1 focus-visible:outline-ring"
+              className="focus-ring rounded-full p-0.5 text-text-tertiary hover:text-foreground"
             >
               <X className="size-3" />
             </button>
@@ -411,7 +452,7 @@ export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
             disabled={busy}
             aria-label="New label"
             placeholder="label"
-            className="h-6 w-28 px-2 py-0 text-[11px]"
+            className="h-7 w-32 px-2.5 py-0 text-label"
             onChange={(event) => setDraft(event.target.value)}
             onBlur={() => void add()}
             onKeyDown={(event) => {
@@ -431,10 +472,11 @@ export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
             type="button"
             data-label-add
             onClick={() => setAdding(true)}
-            className="inline-flex items-center gap-0.5 rounded-full border border-dashed px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground focus-visible:outline-1 focus-visible:outline-ring"
+            aria-label="Add label"
+            className="focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-label text-text-tertiary hover:bg-surface-hover hover:text-foreground pointer-coarse:h-9"
           >
-            <Plus className="size-3" aria-hidden />
-            {issue.labels.length === 0 ? "add label" : null}
+            <Plus className="size-3.5" aria-hidden />
+            {issue.labels.length === 0 ? "Add label" : null}
           </button>
         )}
       </div>

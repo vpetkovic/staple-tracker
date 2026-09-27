@@ -1,63 +1,64 @@
 /**
- * The detail panel's contents: chrome bar, title, actions, properties, tab slot.
+ * The detail panel's contents: the bar, the header (breadcrumb, title, status line, actions),
+ * the properties, and the tab slot.
  *
- * This file still knows *nothing* about any individual tab. It reads
- * detail/tabs/registry.ts, renders whatever is in it, and passes every tab the same
- * props — the seam that let U2/U3/U4 each add a file and a registry line without
- * opening this one. V3 rebuilt everything around that seam and did not touch it.
+ * This file knows nothing about any individual tab. It reads detail/tabs/registry.ts,
+ * renders whatever is in it, and passes every tab the same props. The panel owns the fetch,
+ * so a tab always gets a loaded `IssueDetail`.
  *
- * The panel owns the fetch, so a tab always gets a loaded `IssueDetail` and never has
- * to handle the "not loaded yet" case itself.
+ * ── THE SHAPE, AND WHY ──────────────────────────────────────────────────────────────────
  *
- * ─────────────────────────────────────────────────────────────────────────────
- * V3 (STA-88) — WHAT THE LAYOUT IS NOW, AND WHY
+ * Calm and typographic, one clear action, nothing that reads as a database dump:
  *
- * The frame is IssueDetailMount's problem; this file is the ClickUp half of the
- * ticket. Four things were taken from ClickUp's task view, in the order they matter:
+ *   1. A QUIET BAR. Where you are (the parent's title, not its id) and how to move: position
+ *      in the list, previous/next, and the frame controls. Fixed height, never scrolls.
  *
- *  1. A CHROME BAR THAT IS NOT CONTENT. Identifier, status, ancestry, and the two
- *     controls that act on the frame rather than on the issue (expand, close). It is
- *     fixed height and never scrolls, so the two things you always need — "which
- *     ticket is this" and "how do I get out" — are never below the fold.
+ *   2. THE TITLE IS THE SUBJECT: `text-display` on a desk, `text-heading` on a phone.
  *
- *  2. TITLE FIRST, AT A SIZE THAT ADMITS IT IS THE SUBJECT. The old panel set the
- *     title at 16px under a row of metadata chips, which is a caption. It is now the
- *     first thing in the reading column, and it grows when the panel does.
+ *   3. ONE STATUS LINE IN PLAIN WORDS: the status pill (which is the only status control)
+ *      and a sentence ("Being worked on by dux-shell · started 12 min ago"). The one primary
+ *      action the state calls for sits at its end; every other verb is in ⋯.
  *
- *  3. VERBS SEPARATED FROM FACTS. The status/claim/release controls sit in one
- *     bordered strip; everything the issue *is* sits below in an aligned label→value
- *     grid (PropertyGrid). The old panel interleaved them into a wrapping line of
- *     chips where "@vp" and a clickable priority dropdown looked identical.
+ *   4. PROPERTIES AS A QUIET LIST: people as chips, dates relative, priority as icon + word.
+ *      The raw values sit behind "More details".
  *
- *  4. SECTION RHYTHM. Eyebrow, hairline, content — the same three-part beat for
- *     properties and for the tab strip, so the panel has a pulse you can scan
- *     against instead of one continuous column of 11px text.
+ * Three presentations share one DOM and one scroll container:
  *
- * The two modes share one scroll container and one DOM. Expanding does not swap
- * layouts; it moves the property grid from under the actions to a sticky right rail
- * — which is ClickUp's own move at width, and, more practically, the only difference
- * worth having. A second layout would be a second thing to keep correct.
+ *   drawer — one calm column; properties in a compact two-column list under the status line.
+ *   full   — a readable column (`max-w-readable`) and a sticky properties rail to its right.
+ *   sheet  — the phone: a compact bar (Back, "3 of 24", previous/next, ⋯), summary chips
+ *            under the status line, and the primary action in a sticky bottom bar within
+ *            thumb reach, above the home indicator.
  */
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { StaleClaimBadge } from "@/components/StaleClaimBadge";
-import { StatusBadge } from "@/components/StatusBadge";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getIssue } from "@/lib/api";
-import { selectionTarget } from "@/lib/session";
 import type { AuthError } from "@/lib/api";
-import { isStaleClaim } from "@/lib/claim";
-import { useSession, type Selection } from "@/lib/session";
+import { selectionTarget, useSession, type Selection } from "@/lib/session";
+import { statusCategory } from "@/lib/settings";
 import type { IssueDetail, UiMode } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
-import { cn } from "@/lib/utils";
+import { cn } from "./parts/cn";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import type { DetailMode, DetailPresentation } from "./drawer";
 import type { NavState, NavTarget } from "./navigation";
-import { IssueActions } from "./IssueActions";
+import {
+  ActionRefusal,
+  actionStateOf,
+  GateSection,
+  OverflowMenu,
+  PrimaryAction,
+  primaryActionOf,
+  StatusMenu,
+  useIssueActions,
+  type IssueActionsController,
+} from "./IssueActions";
 import { InlineKind, InlineLabels, InlinePriority, InlineProject, InlineTitle } from "./InlineProperties";
-import { FactRow, PropertyGrid, type PropertyLayout } from "./PropertyGrid";
+import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout } from "./PropertyGrid";
+import { PersonChip, RelativeTime } from "./parts";
+import { statusSentence } from "./plain-actions";
 import { detailFacts } from "./properties";
 import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
 
@@ -85,23 +86,13 @@ export function IssueDetailPanel({
   onAuthError: (error: AuthError) => void;
 }) {
   const session = useSession();
-  const [tab, setTab] = useState("overview");
   const sheet = presentation === "sheet";
   const expanded = !sheet && mode === "full";
 
   /**
-   * A tab asking to hand the reader to another tab — W3 (STA-115). Overview's worklog
-   * panel has a "Show all" that belongs on Documents, and this file still knows nothing
-   * about either: it subscribes to a verb and sets its own state. See the comment on
-   * `onOpenDetailTab` in tabs/registry.ts for why this is an event and not a prop.
-   */
-  useEffect(() => onOpenDetailTab(setTab), []);
-
-  /**
    * By the issue the selection was pinned to once it loaded, not by the identifier it was
    * opened with: sync can move an open issue off its number, and the number then names
-   * another issue — re-fetched by it on the next tick, the pane and every button on it
-   * became that other issue's (`selectionTarget`).
+   * another issue (`selectionTarget`).
    */
   const target = selectionTarget(selection);
   const load = useCallback(() => getIssue({ ws: selection.workspace, ref: target }), [selection.workspace, target]);
@@ -113,123 +104,38 @@ export function IssueDetailPanel({
   useEffect(() => {
     if (issue) pin(selection.workspace, selection.ref, issue.id);
   }, [issue, pin, selection.workspace, selection.ref]);
-  const stale = isStaleClaim(detail?.claim);
-  const tabs = detail ? visibleTabs(detail) : [];
-  const active = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "overview");
+
+  const controller = useIssueActions({ id: issue?.id ?? target }, detail?.workspace ?? selection.workspace, session.refresh);
+  const [requestOpen, setRequestOpen] = useState(false);
+  const gateRef = useRef<HTMLDivElement>(null);
+  const reviewGate = useCallback(() => {
+    const element = gateRef.current;
+    if (!element) return;
+    element.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    element.focus({ preventScroll: true });
+  }, []);
 
   return (
-    // `aria-label` and the `aside` role are kept from the pre-V3 panel on purpose:
-    // they are what the evidence scripts select on, and there was no reason to break
-    // them just because the element moved into a portal.
+    // `aria-label` and the `aside` role are what the evidence scripts select on.
     <aside aria-label="Issue detail" className="flex h-full min-h-0 flex-col">
-      {/* ── chrome ────────────────────────────────────────────────────────────
-          A fixed 44px bar rather than padding-derived height: this and the app
-          header are the persistent chrome on the page, and when their heights are
-          computed from different padding they never quite line up across a resize. */}
-      <div
-        className={cn("flex shrink-0 items-center gap-2 border-b px-3 pr-2", sheet ? "staple-detail-sheet-bar h-12 pl-1" : "h-11")}
-        data-detail-bar={sheet ? "sheet" : undefined}
-      >
-        {sheet ? (
-          /* Where the thumb and the iOS habit both expect the way out. It is the same
-             `session.close()` the X calls; the X goes, so there is one exit, not two. */
-          <Button
-            variant="ghost"
-            onClick={onClose}
-            aria-label="Back to the list"
-            data-detail-back=""
-            className="h-11 min-w-11 gap-0.5 px-2 text-[15px] font-normal text-foreground"
-          >
-            <ChevronLeft className="size-5" aria-hidden />
-            Back
-          </Button>
-        ) : null}
-        {/* Never wraps: on a phone this is the only place the identifier is drawn (the row
-            gives its column to the title), so it has to read as one word. */}
-        <span className="shrink-0 font-mono text-[11px] whitespace-nowrap text-text-tertiary" data-detail-identifier="">
-          {issue?.identifier ?? selection.ref}
-        </span>
-        {issue ? <StatusBadge status={issue.status} /> : null}
+      <DetailBar
+        selection={selection}
+        detail={detail}
+        presentation={presentation}
+        expanded={expanded}
+        nav={nav}
+        onNavigate={onNavigate}
+        onToggleMode={onToggleMode}
+        onClose={onClose}
+        overflow={
+          sheet && detail ? (
+            <OverflowMenu detail={detail} controller={controller} onRequestApproval={() => setRequestOpen(true)} triggerClassName="size-11" />
+          ) : null
+        }
+      />
 
-        {/* Ancestry as a breadcrumb, and clickable — the old panel printed the same
-            path as inert mono text two lines down, which is the one place in this
-            app you most want to navigate FROM. Truncated rather than wrapped: the
-            bar is fixed-height and a deep tree must not push the controls out. */}
-        {detail && detail.ancestors.length > 0 ? (
-          <nav aria-label="Ancestry" className="flex min-w-0 items-center gap-0.5 text-[11px]">
-            <ChevronRight aria-hidden className="size-3 shrink-0 text-text-tertiary" />
-            {detail.ancestors.map((ancestor, index) => (
-              <span key={ancestor.id} className="flex min-w-0 items-center gap-0.5">
-                {index > 0 ? (
-                  <ChevronRight aria-hidden className="size-3 shrink-0 text-text-tertiary" />
-                ) : null}
-                <button
-                  type="button"
-                  title={ancestor.title}
-                  onClick={() => session.open(detail.workspace, ancestor.identifier)}
-                  className="hover:bg-surface-hover truncate rounded-sm px-1 py-0.5 font-mono text-text-tertiary hover:text-foreground focus-visible:outline-1 focus-visible:outline-ring pointer-coarse:min-w-11"
-                >
-                  {ancestor.identifier}
-                </button>
-              </span>
-            ))}
-          </nav>
-        ) : null}
-
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
-          {/* ── prev/next (R6 / STA-106) ─────────────────────────────────────
-              Left of the frame controls, and separated from them by a hairline,
-              because they are answering a different question. Expand and close act
-              on this panel; these two act on WHICH ISSUE the panel is showing. Three
-              same-sized ghost icon buttons in an undifferentiated row would be four
-              controls that all look like chrome, and the one that navigates you away
-              from the ticket you are reading is the one worth a beat of separation.
-
-              Up is previous and down is next, matching the list they move through —
-              not left/right, which would imply a sequence the list does not have. */}
-          <NavButton
-            direction="prev"
-            target={nav.prev}
-            nav={nav}
-            onNavigate={onNavigate}
-            icon={<ChevronUp className="size-4" />}
-            large={sheet}
-          />
-          <NavButton
-            direction="next"
-            target={nav.next}
-            nav={nav}
-            onNavigate={onNavigate}
-            icon={<ChevronDown className="size-4" />}
-            large={sheet}
-          />
-          {sheet ? null : (
-            <>
-              <span aria-hidden className="bg-border mx-1 h-4 w-px" />
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={expanded ? "Collapse to drawer" : "Expand to full screen"}
-                aria-pressed={expanded}
-                title={expanded ? "Collapse to drawer" : "Expand to full screen"}
-                onClick={onToggleMode}
-              >
-                {expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-              </Button>
-              <Button variant="ghost" size="icon" aria-label="Close detail" onClick={onClose}>
-                <X className="size-4" />
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* ── one scroll container, both modes ──────────────────────────────────
-          Expanding changes where the property grid sits, not how many scroll
-          regions there are. Two independently-scrolling columns is the ClickUp
-          detail people complain about — you scroll the wrong one, twice, before
-          you learn which is which. A sticky rail inside one scroll gets the same
-          layout with one place for the scrollbar to be. */}
+      {/* ONE scroll container in every presentation. A sticky rail inside one scroll gets the
+          two-column page without two scrollbars to choose between. */}
       <div className="staple-detail-scroll scrollbar-auto-hide min-h-0 flex-1 overflow-y-auto">
         {resource.error ? (
           <div className="px-5 py-4">
@@ -242,174 +148,175 @@ export function IssueDetailPanel({
           </div>
         ) : null}
 
-        {detail && issue ? (
-          <div
-            className={cn(
-              "flex w-full flex-col",
-              expanded
-                ? // R3 (STA-104) MOVED THE CAP IN HERE, and it is the same 86rem it
-                  // always was. The panel used to be capped and the content used to
-                  // fill it; the panel is now the whole viewport, so if nothing were
-                  // capped, a 2560px display would give the description a ~200
-                  // character line and strand the property rail a thousand pixels to
-                  // its right — the exact "floating with dead space beside it" bug
-                  // the first cut had, scaled up.
-                  //
-                  // Capping HERE rather than back on the panel is the difference
-                  // between a page and a modal: the chrome bar, the surface and the
-                  // background all still reach the edges; only the reading measure
-                  // is bounded, centred by `mx-auto`. That is what Linear, GitHub and
-                  // ClickUp's task page all do, for the same reason. Below 1376px —
-                  // every laptop this runs on — the cap never engages and this is
-                  // byte-identical to what shipped.
-                  "mx-auto max-w-[86rem] gap-8 px-6 pt-6 pb-10 lg:flex-row lg:items-start lg:gap-10 lg:px-10"
-                : "px-5 pt-5 pb-8 sm:px-6",
-            )}
-          >
-            {/* The reading measure is capped again, INSIDE the 86rem row, and the rail
-                is pushed to the row's edge with `ml-auto` to absorb what is left over.
-                Two caps is not redundancy: 86rem bounds the SURFACE the content sits
-                on (see the container above), and 56rem bounds the PROSE within it.
-                Without the inner one, an 86rem column gives the description a
-                ~140-character line and the activity timeline a row with the actor at
-                one end and the timestamp 1300px away at the other — technically more
-                room, and materially worse to read. 56rem is wide enough for the things
-                that genuinely want width here (the revision diff, the agent payload, a
-                table) and short enough that prose does not turn into a ribbon. */}
-            <div className={cn("flex min-w-0 flex-1 flex-col", expanded && "lg:max-w-[56rem]")}>
-              {/* Title. Bigger when the panel is bigger — the reading measure
-                  roughly doubles on expand, and a 16px heading in an 80rem column
-                  reads as a subtitle to nothing. */}
-              <div className={cn(expanded && "[&_h2]:text-[22px] [&_h2]:leading-tight")}>
-                <InlineTitle issue={issue} workspace={detail.workspace} refresh={session.refresh} />
-              </div>
-
-              {/* The stale-claim badge is the one piece of metadata loud enough to
-                  belong above the fold rather than in the property grid. It only
-                  ever renders past the silence threshold, so it is never furniture
-                  — see StaleClaimBadge. Under the threshold, "held by" is a
-                  perfectly ordinary fact and lives in the grid with the others. */}
-              {stale && detail.claim ? (
-                <div className="mt-3">
-                  <StaleClaimBadge claim={detail.claim} variant="detail" />
-                </div>
-              ) : null}
-
-              {/* ── verbs ──────────────────────────────────────────────────────
-                  A bordered, inset strip. In dark mode `--field` sits BELOW the
-                  panel surface and in light it sits above it, which is exactly the
-                  relationship a control strip wants in each: this reads as a place
-                  where things are done, distinct from the facts under it. */}
-              {/* `w-fit`, not full width. A bordered strip stretched across a 56rem
-                  column with four small controls huddled at its left end reads as an
-                  empty box, and an empty box looks like something failed to load. It
-                  grows on its own when it has more to say: a guard refusal renders
-                  inside it, and `max-w-full` is what stops that growth at the column
-                  edge instead of at the sentence's natural width. */}
-              <div className="bg-field mt-4 w-fit max-w-full rounded-lg border p-2.5">
-                <IssueActions
-                  issue={issue}
-                  workspace={detail.workspace}
-                  claim={detail.claim}
-                  /* Q2 (STA-144). All four already ride on the detail payload, so the
-                     gate controls cost no extra fetch and cannot disagree with the
-                     children listed on the Overview tab below. */
-                  gate={detail.gate}
-                  queuedBy={detail.queuedBy}
-                  children={detail.children}
-                  childrenQueued={detail.childrenQueued}
-                  refresh={session.refresh}
-                />
-              </div>
-
-              {/* In the drawer, properties are a section here. Expanded, they are
-                  the rail below — one `PropertyGrid`, rendered in one of two
-                  places, never both. */}
-              {!expanded ? (
-                <Section title="Properties" className="mt-6">
-                  <PropertiesBlock detail={detail} layout="inline" mode={session.mode} refresh={session.refresh} />
-                </Section>
-              ) : null}
-
-              {/* ── tabs ───────────────────────────────────────────────────────
-                  `variant="line"` — the underline strip, not the segmented pill.
-                  A pill is a MODE switch for a whole surface (it is what the app
-                  header uses for views, correctly). These four are sections of one
-                  document, and ClickUp, Linear and GitHub all draw that as an
-                  underlined strip on a rule. The strip is sticky so it is still
-                  reachable a thousand rows into an activity timeline. */}
-              <Tabs value={active} onValueChange={setTab} className="mt-7 gap-0">
-                <div className="bg-card sticky top-0 z-10 -mt-1 border-b pt-1">
-                  <TabsList variant="line" className="staple-detail-tabstrip w-full justify-start">
-                    {tabs.map((definition) => (
-                      <TabsTrigger key={definition.id} value={definition.id} className="flex-none">
-                        {definition.label}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                </div>
-                {tabs.map((definition) => {
-                  const Tab = definition.component;
-                  return (
-                    <TabsContent key={definition.id} value={definition.id} className="pt-4">
-                      <Tab
-                        detail={detail}
-                        workspace={detail.workspace}
-                        onAuthError={onAuthError}
-                        refresh={session.refresh}
-                      />
-                    </TabsContent>
-                  );
-                })}
-              </Tabs>
-            </div>
-
-            {expanded ? (
-              // `max-lg:order-first`: below the rail breakpoint the expanded view is
-              // just a wide drawer, and properties belong above the content there —
-              // not stranded under a thousand-row activity feed.
-              //
-              // `border-l` rather than relying on the gap. Whitespace alone did not
-              // separate them: the rail read as a third column of the content rather
-              // than as chrome about it, which is the exact confusion a hairline
-              // costs one pixel to remove.
-              //
-              // `top-6` matches the container's own top padding, so the rail sticks
-              // at the same offset it started at instead of jumping flush to the
-              // header the moment you scroll.
-              <aside className="w-full shrink-0 max-lg:order-first lg:sticky lg:top-6 lg:ml-auto lg:w-[16.5rem] lg:border-l lg:pl-8">
-                <Section title="Properties">
-                  <PropertiesBlock detail={detail} layout="rail" mode={session.mode} refresh={session.refresh} />
-                </Section>
-              </aside>
-            ) : null}
-          </div>
+        {detail ? (
+          <DetailContent
+            detail={detail}
+            presentation={presentation}
+            expanded={expanded}
+            mode={session.mode}
+            controller={controller}
+            refresh={session.refresh}
+            onAuthError={onAuthError}
+            requestOpen={requestOpen}
+            onRequestApproval={() => setRequestOpen(true)}
+            onCloseRequest={() => setRequestOpen(false)}
+            onReview={reviewGate}
+            gateRef={gateRef}
+          />
         ) : null}
       </div>
+
+      {/* The phone's primary action: in the thumb's reach, never scrolled away. The sheet's
+          own bottom padding keeps it above the home indicator (detail.css). */}
+      {sheet && detail ? (
+        <div data-detail-actionbar="" className="staple-detail-actionbar shrink-0 border-t bg-card px-4 pt-3 pb-3">
+          <PrimaryReason detail={detail} />
+          <PrimaryAction detail={detail} controller={controller} onReview={reviewGate} size="lg" className="w-full" />
+        </div>
+      ) : null}
     </aside>
   );
 }
 
 /**
- * One of the two navigation chevrons.
- *
- * The interesting part is the TITLE, which is why this is a component and not two
- * inline `<Button>`s. A disabled icon button with no explanation is the most
- * annoying control in any app — it has decided something about your situation and
- * will not say what — and this one has three genuinely different reasons to be off:
- *
- *   - you are at that end of the list (the ordinary one)
- *   - the panel is showing an issue the visible list does not contain, because you
- *     arrived here from a blocker chip or a breadcrumb past the filter
- *   - there is no list to move through at all — the graph view, or a filter that
- *     matched nothing
- *
- * The first is obvious from context; the second and third are not, and a user who
- * cannot tell them apart concludes the feature is broken. Enabled, the title names
- * the destination, so the arrow is never a leap of faith.
- *
- * `aria-label` stays constant ("Previous task" / "Next task") while the title
- * varies: the label is the control's identity and must not churn under a screen
+ * Why the primary action cannot run, in words above it. A pointer gets the same sentence as
+ * a tooltip; a finger has no hover, so the phone says it out loud.
+ */
+function PrimaryReason({ detail }: { detail: IssueDetail }) {
+  const reason = primaryActionOf(detail).disabledReason;
+  if (!reason) return null;
+  return (
+    <p className="m-0 mb-2 text-center text-label text-text-secondary" data-primary-reason="">
+      {reason}
+    </p>
+  );
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+// ───────────────────────────────────────────────────────────────────── bar
+
+function DetailBar({
+  selection,
+  detail,
+  presentation,
+  expanded,
+  nav,
+  onNavigate,
+  onToggleMode,
+  onClose,
+  overflow,
+}: {
+  selection: Selection;
+  detail: IssueDetail | undefined;
+  presentation: DetailPresentation;
+  expanded: boolean;
+  nav: NavState;
+  onNavigate: (target: NavTarget | null) => void;
+  onToggleMode: () => void;
+  onClose: () => void;
+  overflow: ReactNode;
+}) {
+  const sheet = presentation === "sheet";
+  const position = nav.index >= 0 && nav.total > 0 ? `${nav.index + 1} of ${nav.total}` : null;
+
+  if (sheet) {
+    return (
+      <div className="staple-detail-sheet-bar flex h-14 shrink-0 items-center gap-1 border-b px-1" data-detail-bar="sheet">
+        {/* Where the thumb and the iOS habit both expect the way out. It is the same
+            `session.close()` the X calls; the X goes, so there is one exit, not two. */}
+        <Button
+          variant="ghost"
+          onClick={onClose}
+          aria-label="Back to the list"
+          data-detail-back=""
+          className="h-11 min-w-11 gap-0.5 px-2 text-[15px] font-normal text-foreground"
+        >
+          <ChevronLeft className="size-5" aria-hidden />
+          Back
+        </Button>
+        <span className="min-w-0 flex-1 truncate text-center text-label text-text-tertiary tabular-nums" data-detail-position="">
+          {position}
+        </span>
+        <NavButton direction="prev" target={nav.prev} nav={nav} onNavigate={onNavigate} icon={<ChevronUp className="size-5" />} large />
+        <NavButton direction="next" target={nav.next} nav={nav} onNavigate={onNavigate} icon={<ChevronDown className="size-5" />} large />
+        {overflow}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-12 shrink-0 items-center gap-2 border-b pr-2 pl-4">
+      <Breadcrumb selection={selection} detail={detail} className="flex-1" />
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+        {position ? (
+          <span className="mr-1.5 text-label text-text-tertiary tabular-nums" data-detail-position="">
+            {position}
+          </span>
+        ) : null}
+        {/* Previous/next act on WHICH task the panel shows; expand and close act on the panel.
+            A hairline between the two groups says so. Up is previous and down is next,
+            matching the list they move through. */}
+        <NavButton direction="prev" target={nav.prev} nav={nav} onNavigate={onNavigate} icon={<ChevronUp className="size-4" />} />
+        <NavButton direction="next" target={nav.next} nav={nav} onNavigate={onNavigate} icon={<ChevronDown className="size-4" />} />
+        <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={expanded ? "Collapse to drawer" : "Expand to full screen"}
+          aria-pressed={expanded}
+          title={expanded ? "Collapse to drawer" : "Expand to full screen"}
+          onClick={onToggleMode}
+          className="focus-ring text-text-secondary"
+        >
+          {expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+        </Button>
+        <Button variant="ghost" size="icon" aria-label="Close detail" title="Close (Esc)" onClick={onClose} className="focus-ring text-text-secondary">
+          <X className="size-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Where this task sits: its parents by TITLE (they are what a person recognises), each one a
+ * link, then this task's own reference in the quietest register. Truncates rather than wraps.
+ */
+function Breadcrumb({ selection, detail, className }: { selection: Selection; detail: IssueDetail | undefined; className?: string }) {
+  const session = useSession();
+  const ancestors = detail?.ancestors ?? [];
+  return (
+    <nav aria-label="Ancestry" className={cn("flex min-w-0 items-center gap-1 text-label text-text-tertiary", className)} data-detail-breadcrumb="">
+      {ancestors.map((ancestor) => (
+        <span key={ancestor.id} className="flex min-w-0 items-center gap-1">
+          <button
+            type="button"
+            title={`${ancestor.identifier} · ${ancestor.title}`}
+            onClick={() => session.open(detail!.workspace, ancestor.identifier)}
+            className="focus-ring max-w-[18rem] min-w-0 truncate rounded-md px-1 py-0.5 text-text-secondary hover:bg-surface-hover hover:text-foreground pointer-coarse:py-2"
+          >
+            {ancestor.title}
+          </button>
+          <ChevronRight aria-hidden className="size-3.5 shrink-0" />
+        </span>
+      ))}
+      {/* Never wraps: on a phone the row gives its column to the title, so this is where the
+          reference is read, and it has to read as one word. */}
+      <span className="shrink-0 px-1 whitespace-nowrap" data-detail-identifier="">
+        {detail?.issue.identifier ?? selection.ref}
+      </span>
+    </nav>
+  );
+}
+
+/**
+ * One of the two navigation chevrons. The TITLE is why this is a component: a disabled icon
+ * button with no explanation has three different reasons to be off (at the end of the list,
+ * showing a task the list does not contain, no list at all), and enabled, the title names
+ * the destination. The `aria-label` stays constant so it does not churn under a screen
  * reader every time the selection moves.
  */
 function NavButton({
@@ -429,8 +336,7 @@ function NavButton({
   icon: ReactNode;
 }) {
   const label = direction === "prev" ? "Previous task" : "Next task";
-  const hint =
-    direction === "prev" ? "K, or Alt+Up" : "J, or Alt+Down";
+  const hint = direction === "prev" ? "K, or Alt+Up" : "J, or Alt+Down";
 
   let title: string;
   if (target) title = `${label} — ${target.ref}  (${hint})`;
@@ -446,7 +352,7 @@ function NavButton({
       title={title}
       disabled={!target}
       data-detail-nav={direction}
-      className={cn("pointer-coarse:min-w-11", large && "size-11")}
+      className={cn("focus-ring text-text-secondary pointer-coarse:min-w-11", large && "size-11")}
       onClick={() => onNavigate(target)}
     >
       {icon}
@@ -454,80 +360,361 @@ function NavButton({
   );
 }
 
+// ──────────────────────────────────────────────────────────────── content
+
 /**
- * Eyebrow + hairline + content. The unit the panel's rhythm is made of, and the
- * reason it is a component rather than three classes: a section heading that is 11px
- * in one place and 12px in another is how a panel stops looking designed.
+ * Everything under the bar, for a loaded detail. Exported so a test can render the loaded
+ * layout directly; the panel above only adds the fetch, the bar and the phone's action bar.
  */
-function Section({
-  title,
-  className,
-  children,
+export function DetailContent({
+  detail,
+  presentation,
+  expanded,
+  mode,
+  controller,
+  refresh,
+  onAuthError,
+  requestOpen,
+  onRequestApproval,
+  onCloseRequest,
+  onReview,
+  gateRef,
 }: {
-  title: string;
-  className?: string;
-  children: ReactNode;
+  detail: IssueDetail;
+  presentation: DetailPresentation;
+  expanded: boolean;
+  mode: UiMode;
+  controller: IssueActionsController;
+  refresh: () => void;
+  onAuthError: (error: AuthError) => void;
+  requestOpen: boolean;
+  onRequestApproval: () => void;
+  onCloseRequest: () => void;
+  onReview: () => void;
+  gateRef?: RefObject<HTMLDivElement | null>;
 }) {
+  const sheet = presentation === "sheet";
+  const { issue } = detail;
+  const gate = <GateSection detail={detail} controller={controller} requestOpen={requestOpen} onCloseRequest={onCloseRequest} />;
+
   return (
-    <section className={className}>
-      <h3 className="mb-2 border-b pb-1.5 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">
-        {title}
-      </h3>
-      {children}
-    </section>
+    <div
+      data-detail-layout={sheet ? "sheet" : expanded ? "page" : "drawer"}
+      className={cn(
+        "flex w-full flex-col",
+        expanded
+          ? // The page: a readable column and a rail, centred as one block so neither is
+            // stranded on a wide screen. Below `lg` the rail moves above the content.
+            "mx-auto max-w-[calc(var(--container-readable)+17.5rem+3.5rem)] gap-8 px-6 pt-8 pb-12 lg:flex-row lg:items-start lg:gap-14 lg:px-8"
+          : sheet
+            ? "px-4 pt-3 pb-6"
+            : "px-6 pt-6 pb-10",
+      )}
+    >
+      <div className={cn("flex min-w-0 flex-1 flex-col", expanded && "lg:max-w-readable")}>
+        {sheet ? <Breadcrumb selection={{ workspace: detail.workspace, ref: issue.identifier }} detail={detail} className="-ml-1 mb-1.5" /> : null}
+
+        <InlineTitle issue={issue} workspace={detail.workspace} refresh={refresh} size={sheet ? "heading" : "display"} />
+
+        <StatusLine detail={detail} controller={controller} withPill={!sheet} className="mt-3">
+          {sheet ? null : (
+            <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
+              <PrimaryAction detail={detail} controller={controller} onReview={onReview} />
+              <OverflowMenu detail={detail} controller={controller} onRequestApproval={onRequestApproval} />
+            </div>
+          )}
+        </StatusLine>
+
+        {sheet ? <SummaryChips detail={detail} controller={controller} refresh={refresh} className="mt-4" /> : null}
+
+        <ActionRefusal controller={controller} className="mt-4" />
+
+        <div ref={gateRef} tabIndex={-1} className="scroll-mt-4 outline-none empty:hidden [&:not(:empty)]:mt-5" data-detail-gate="">
+          {gate}
+        </div>
+
+        {!sheet && !expanded ? (
+          <section aria-label="Properties" className="mt-6 border-t pt-4">
+            <Properties detail={detail} layout="grid" mode={mode} refresh={refresh} />
+          </section>
+        ) : null}
+
+        {sheet ? (
+          <section aria-label="Properties" className="mt-3">
+            <MoreDetails facts={detailFacts(detail, mode)}>
+              <Properties detail={detail} layout="rail" mode={mode} refresh={refresh} phone />
+            </MoreDetails>
+          </section>
+        ) : null}
+
+        <DetailTabs detail={detail} sheet={sheet} refresh={refresh} onAuthError={onAuthError} />
+      </div>
+
+      {expanded ? (
+        <aside
+          aria-label="Properties"
+          data-detail-rail=""
+          className="w-full shrink-0 max-lg:order-first lg:sticky lg:top-8 lg:w-[17.5rem] lg:border-l lg:pl-6"
+        >
+          <Properties detail={detail} layout="rail" mode={mode} refresh={refresh} />
+        </aside>
+      ) : null}
+    </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────────── status
+
 /**
- * The fact grid plus the editable properties that read as facts.
- *
- * Priority is a value you look up in a table of values — ClickUp puts it in the
- * property block and so does this — but unlike everything else in the grid it is
- * WRITABLE, and the writable thing has to be the same element that displayed it or
- * it is not inline editing (U5's rule). So it leads the block as a `FactRow` sharing
- * the grid's own tracks, rather than being passed through properties.ts, which
- * models facts and cannot model a control the store is allowed to refuse.
- *
- * O1b (STA-125) adds KIND on exactly that argument, and puts it FIRST. Kind is the
- * answer to "what IS this ticket", which is the question this whole block exists to
- * answer in one glance, so it leads; priority is how urgent the thing is, which you can
- * only ask once you know what the thing is. It is declared and never derived (STA-120),
- * so it must be writable here or it is not declared by anyone.
+ * The status in plain words: the pill (the one status control) and one sentence. `children`
+ * is the end of the line, where the desktop puts its primary action and ⋯.
  */
-function PropertiesBlock({
+function StatusLine({
+  detail,
+  controller,
+  withPill,
+  className,
+  children,
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  withPill: boolean;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const sentence = statusSentence(
+    {
+      ...actionStateOf(detail),
+      issue: detail.issue,
+      openBlockers: detail.blockedBy.filter((ref) => !["done", "cancelled"].includes(statusCategory(ref.status))).length + detail.crossBlockers.filter((b) => !b.status || !["done", "cancelled"].includes(statusCategory(b.status))).length,
+    },
+    statusCategory,
+  );
+
+  return (
+    <div className={cn("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2", className)} data-status-line="">
+      {withPill ? <StatusMenu issue={detail.issue} controller={controller} /> : null}
+      <p
+        data-status-sentence=""
+        data-tone={sentence.tone}
+        className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary", sentence.tone === "attention" && "text-foreground")}
+      >
+        {sentence.lead ? <span>{sentence.lead}</span> : null}
+        {sentence.person ? <PersonChip name={sentence.person.name} kind={sentence.person.kind} className="font-medium" /> : null}
+        {sentence.tail ? <span>{sentence.tail}</span> : null}
+        {sentence.at ? (
+          <>
+            <span aria-hidden className="text-text-tertiary">
+              ·
+            </span>
+            <span className="text-text-tertiary">
+              {sentence.atPrefix ? `${sentence.atPrefix} ` : ""}
+              <RelativeTime iso={sentence.at} inSentence={Boolean(sentence.atPrefix)} />
+            </span>
+          </>
+        ) : null}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────── properties
+
+/**
+ * The readable properties. Kind leads (what IS this), then priority, the people, where it is
+ * filed, and when things happened. Kind, priority, project and labels are editable where they
+ * are read; the rest are facts. The raw values follow behind "More details" (except on the
+ * phone, where the whole list is itself inside that disclosure).
+ */
+function Properties({
   detail,
   layout,
   mode,
   refresh,
+  phone = false,
 }: {
   detail: IssueDetail;
   layout: PropertyLayout;
   mode: UiMode;
   refresh: () => void;
+  /** Inside the phone's "More details": the chips already carry kind, priority and assignee. */
+  phone?: boolean;
 }) {
+  const { issue, workspace } = detail;
+  const editor = { issue, workspace, refresh };
+
   return (
-    <PropertyGrid
-      facts={detailFacts(detail, mode)}
-      layout={layout}
-      trailing={
-        // Labels take the rest of the row because they are the one property whose
-        // value has no ceiling — six of them wrap, and wrapping inside a 1fr track
-        // beside another pair would push that pair's baseline down the block.
-        <FactRow label="Labels" layout={layout} span>
-          <InlineLabels issue={detail.issue} workspace={detail.workspace} refresh={refresh} />
-        </FactRow>
-      }
-    >
-      <FactRow label="Kind" layout={layout}>
-        <InlineKind issue={detail.issue} workspace={detail.workspace} refresh={refresh} />
-      </FactRow>
-      <FactRow label="Priority" layout={layout}>
-        <InlinePriority issue={detail.issue} workspace={detail.workspace} refresh={refresh} />
-      </FactRow>
-      {/* Project (migration 009): where the ticket is filed, editable where it is read. */}
-      <FactRow label="Project" layout={layout}>
-        <InlineProject issue={detail.issue} workspace={detail.workspace} refresh={refresh} />
-      </FactRow>
-    </PropertyGrid>
+    <div className="flex flex-col gap-3">
+      <PropertyList layout={layout}>
+        {phone ? null : (
+          <>
+            <PropertyRow label="Kind">
+              <InlineKind {...editor} />
+            </PropertyRow>
+            <PropertyRow label="Priority">
+              <InlinePriority {...editor} />
+            </PropertyRow>
+            <PropertyRow label="Assignee">
+              {issue.assignee ? <PersonChip name={issue.assignee} kind={issue.assignee === issue.checkoutAgent ? "agent" : "human"} /> : <EmptyValue>No one yet</EmptyValue>}
+            </PropertyRow>
+          </>
+        )}
+        <PropertyRow label="Project">
+          <InlineProject {...editor} />
+        </PropertyRow>
+        {issue.startedAt ? (
+          <PropertyRow label="Started">
+            <RelativeTime iso={issue.startedAt} />
+          </PropertyRow>
+        ) : null}
+        {issue.completedAt ? (
+          <PropertyRow label="Finished">
+            <RelativeTime iso={issue.completedAt} />
+          </PropertyRow>
+        ) : null}
+        {issue.cancelledAt ? (
+          <PropertyRow label="Cancelled">
+            <RelativeTime iso={issue.cancelledAt} />
+          </PropertyRow>
+        ) : null}
+        <PropertyRow label="Updated">
+          <RelativeTime iso={issue.updatedAt} />
+        </PropertyRow>
+        <PropertyRow label="Created">
+          <RelativeTime iso={issue.createdAt} />
+        </PropertyRow>
+        <PropertyRow label="Labels" span>
+          <InlineLabels {...editor} />
+        </PropertyRow>
+      </PropertyList>
+      {phone ? null : <MoreDetails facts={detailFacts(detail, mode)} />}
+    </div>
   );
+}
+
+/**
+ * The phone's summary: status, priority, kind and the assignee as wrapping chips, each a
+ * finger-sized control (the status and the two editors) or a fact (the person).
+ */
+function SummaryChips({
+  detail,
+  controller,
+  refresh,
+  className,
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  refresh: () => void;
+  className?: string;
+}) {
+  const { issue, workspace } = detail;
+  const editor = { issue, workspace, refresh, variant: "chip" as const };
+  return (
+    <div className={cn("flex flex-wrap items-center gap-2", className)} data-summary-chips="">
+      <StatusMenu issue={issue} controller={controller} className="h-9 px-3" />
+      <InlinePriority {...editor} />
+      <InlineKind {...editor} />
+      <span className="inline-flex h-9 min-w-0 items-center rounded-full border border-border bg-surface-raised px-3 text-label font-medium" data-summary-assignee="">
+        {issue.assignee ? (
+          <PersonChip name={issue.assignee} kind={issue.assignee === issue.checkoutAgent ? "agent" : "human"} />
+        ) : (
+          <span className="text-text-tertiary">No assignee</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────── tabs
+
+/**
+ * The tab strip. Sticky, so it is still reachable a thousand rows into an activity feed. On
+ * a desk it is an underlined strip; on the phone a scrollable segmented control that never
+ * clips a label mid-word: the edges fade while there is more to scroll, and the active tab
+ * is scrolled into view.
+ */
+function DetailTabs({
+  detail,
+  sheet,
+  refresh,
+  onAuthError,
+}: {
+  detail: IssueDetail;
+  sheet: boolean;
+  refresh: () => void;
+  onAuthError: (error: AuthError) => void;
+}) {
+  const [tab, setTab] = useState("overview");
+  /**
+   * A tab asking to hand the reader to another tab (Details' worklog "Show all" lands on
+   * Documents). This file subscribes to a verb and sets its own state; see
+   * `onOpenDetailTab` in tabs/registry.ts for why it is an event and not a prop.
+   */
+  useEffect(() => onOpenDetailTab(setTab), []);
+  const tabs = visibleTabs(detail);
+  const active = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "overview");
+  const stripRef = useRef<HTMLDivElement>(null);
+  const edges = useScrollEdges(stripRef, tabs.length);
+
+  // Bring the active tab into view inside the strip, horizontally only: scrollIntoView
+  // would also scroll the panel to the strip, which is not what choosing a tab means.
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    const trigger = strip?.querySelector<HTMLElement>('[role="tab"][data-state="active"]');
+    if (!strip || !trigger || strip.scrollWidth <= strip.clientWidth) return;
+    const left = trigger.offsetLeft - (strip.clientWidth - trigger.offsetWidth) / 2;
+    strip.scrollTo({ left: Math.max(0, left), behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  }, [active]);
+
+  return (
+    <Tabs value={active} onValueChange={setTab} className={cn("gap-0", sheet ? "mt-5" : "mt-8")}>
+      <div className={cn("sticky top-0 z-10 bg-card", sheet ? "-mx-4 px-4 py-2" : "border-b")} data-detail-tabs="">
+        <div className="staple-detail-tabfade" data-fade-start={edges.start ? "" : undefined} data-fade-end={edges.end ? "" : undefined}>
+          <TabsList
+            ref={stripRef}
+            variant={sheet ? "default" : "line"}
+            className={cn("staple-detail-tabstrip w-full justify-start", sheet && "staple-detail-segments")}
+          >
+            {tabs.map((definition) => (
+              <TabsTrigger key={definition.id} value={definition.id} className="focus-ring-inset flex-none">
+                {definition.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
+      </div>
+      {tabs.map((definition) => {
+        const Tab = definition.component;
+        return (
+          <TabsContent key={definition.id} value={definition.id} className="pt-5">
+            <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} />
+          </TabsContent>
+        );
+      })}
+    </Tabs>
+  );
+}
+
+/** Whether a horizontal scroller has more content before or after what is showing. */
+function useScrollEdges(ref: RefObject<HTMLElement | null>, contentKey: unknown): { start: boolean; end: boolean } {
+  const [edges, setEdges] = useState({ start: false, end: false });
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => {
+      const max = element.scrollWidth - element.clientWidth;
+      const next = { start: element.scrollLeft > 1, end: max - element.scrollLeft > 1 };
+      setEdges((current) => (current.start === next.start && current.end === next.end ? current : next));
+    };
+    measure();
+    element.addEventListener("scroll", measure, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(element);
+    return () => {
+      element.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [ref, contentKey]);
+  return edges;
 }
