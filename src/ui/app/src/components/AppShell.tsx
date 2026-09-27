@@ -56,7 +56,7 @@
  * the view. `aria-current="page"` on a button is what this actually is.
  */
 import { ChevronRight, Menu, Monitor, PanelLeft, Plus, Search, SquarePen } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CloudStrip } from "@/components/CloudStrip";
 import { getCloudStatus, getCloudWorkspaces } from "@/lib/api";
 import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
@@ -79,30 +79,10 @@ import { isAllWorkspaces, isMachineView, scopeName, useSession, viewControls, vi
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBackToClose } from "@/lib/back-to-close";
 import { cn } from "@/lib/utils";
+import { useIsDesk } from "@/lib/use-media";
 
-/** Above this the rail is a column; below it, a sheet. */
-const WIDE_QUERY = "(min-width: 768px)";
-
-function subscribeWide(onChange: () => void): () => void {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
-  const query = window.matchMedia(WIDE_QUERY);
-  query.addEventListener?.("change", onChange);
-  return () => query.removeEventListener?.("change", onChange);
-}
-
-function readWide(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
-  return window.matchMedia(WIDE_QUERY).matches;
-}
-
-/**
- * Is the viewport wide enough for the rail to be a column? True where nothing can answer.
- * The server snapshot reads the same stub a test installs, so a string render can be asked
- * for the phone layout (see `useCompactHeader`).
- */
-function useWideViewport(): boolean {
-  return useSyncExternalStore(subscribeWide, readWide, readWide);
-}
+/** Is the viewport wide enough for the rail to be a column? The one breakpoint (lib/use-media). */
+const useWideViewport = useIsDesk;
 
 const storage = () => (typeof localStorage === "undefined" ? undefined : localStorage);
 
@@ -338,7 +318,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="fixed inset-0 z-40 flex" data-nav-overlay>
           <div
             aria-hidden
-            className="absolute inset-0 bg-black/35 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-scrim backdrop-blur-[2px]"
             onClick={closeOverlay}
           />
           <div className="relative h-full max-w-[85vw] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-sidebar shadow-lg">
