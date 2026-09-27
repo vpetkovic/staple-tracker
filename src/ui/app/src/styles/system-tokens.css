@@ -118,21 +118,19 @@
   --scrim: rgb(0 0 0 / 0.32);
 
   /* A second text step between foreground and tertiary, for supporting sentences. */
-  --text-secondary: #4d4d4d;
+  --text-secondary: var(--ds-gray-900);
 
   --focus-ring-color: var(--ring);
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
 
-  --duration-fast: 120ms;
-  --duration-base: 180ms;
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  /* Motion: use the house --motion-duration-* / --motion-ease-* in theme-tokens.css. */
 }
 
 .dark {
   --surface-sunken: color-mix(in oklab, #000 18%, var(--card));
   --scrim: rgb(0 0 0 / 0.55);
-  --text-secondary: #b4b4b4;
+  --text-secondary: var(--ds-gray-800);
 }
 
 @media (min-width: 1280px) {

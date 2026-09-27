@@ -215,9 +215,11 @@
   --secondary-foreground: var(--ds-gray-1000);
 
   --muted: var(--ds-gray-100);
-  /* Secondary text. #666 on white is 5.7:1, #a1a1a1 on #0a0a0a is 8.9:1 — this
-     token carries most of the metadata in the app and had to clear AA in both. */
-  --muted-foreground: var(--ds-gray-800);
+  /* Secondary text. It carries most of the metadata in the app and must clear AA
+     solid AND where it is drawn at 80% (hints: `text-muted-foreground/80`). #666 did the
+     first (5.7:1) but not the second (3.7:1 on white). #525252 is 7.8:1 solid and 4.6:1 at
+     80% on white. Dark mode is unchanged: #a1a1a1 is 8.9:1 solid, 4.6:1 at 80% on a card. */
+  --muted-foreground: #525252;
 
   /* shadcn's `--accent` is a HOVER SURFACE, not the brand accent. Keeping it
      neutral is the single most important line in this file for not looking
@@ -259,8 +261,11 @@
      3.0:1 — fine as a non-text hairline, below AA as words. #737373 is 4.7:1 on
      #ffffff and 4.6:1 on the #fafafa page, so the whole tier clears AA on both
      surfaces it can land on. Dark mode needs no such nudge: gray-700 there is
-     #7d7d7d, which is 4.9:1 on the page and 4.7:1 on a card. */
-  --text-tertiary: #737373;
+     #7d7d7d, which is 4.9:1 on the page and 4.7:1 on a card.
+     The desk shell puts this tier on the SIDEBAR tint (#f2f2f2) and in sunken fields
+     (#f6f6f6), where #737373 is only 4.2–4.4:1. #6b6b6b clears 4.5:1 on every light
+     surface it lands on (4.8:1 on #f2f2f2, 5.3:1 on white). */
+  --text-tertiary: #6b6b6b;
 
   /* One knob for the corner language; the ladder in theme-tokens.css is
      multiplicative off it. An 8px anchor puts buttons, rows and chips at ~6px

@@ -71,7 +71,7 @@ export const RAIL_ROW_CLASS = cn(
   // In the phone's drawer every row is a 44px target at a readable size; under a finger on a
   // desk-width tablet it is a 44px target too.
   "max-md:h-11 max-md:gap-3 max-md:text-[15px] pointer-coarse:h-11",
-  "text-sidebar-foreground/85 transition-colors duration-(--duration-fast) hover:bg-surface-hover hover:text-foreground",
+  "text-sidebar-foreground/85 transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover hover:text-foreground",
   "aria-[current]:bg-surface-selected aria-[current]:font-medium aria-[current]:text-foreground",
   "[&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-text-tertiary hover:[&_svg]:text-foreground aria-[current]:[&_svg]:text-foreground",
 );

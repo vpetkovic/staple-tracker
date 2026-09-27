@@ -37,6 +37,7 @@
  * or, after a deep-link arrival, strips the parameters in place (`closeAction`).
  */
 import type { WorkspaceScope } from "@/lib/session";
+import { PHONE_QUERY } from "@/lib/use-media";
 import { defaultTargetWorkspace } from "@/lib/session-workspace";
 import type { SettingCategoryView, SettingScope, WorkspaceSettingsEnvelope } from "@/lib/settings";
 
@@ -225,7 +226,7 @@ export type ShellPane = "nav" | "content";
 export type ShellMode = "drawer" | "full";
 
 /** Below Tailwind's `md` the two panes cannot both be usable, so the shell stacks. */
-export const STACKED_QUERY = "(max-width: 767px)";
+export const STACKED_QUERY = PHONE_QUERY;
 
 export function otherShellMode(mode: ShellMode): ShellMode {
   return mode === "drawer" ? "full" : "drawer";
