@@ -44,6 +44,14 @@ describe("formatRelative", () => {
     expect(at("2026-09-28T09:00:00Z")).toBe("Tomorrow");
   });
 
+  it("drops the capital mid-sentence, but never from a weekday or a month", () => {
+    const mid = (iso: string) => formatRelative(iso, { now: NOW, timeZone: "UTC", inSentence: true });
+    expect(mid("2026-09-27T14:59:40Z")).toBe("just now");
+    expect(mid("2026-09-26T23:30:00Z")).toBe("yesterday");
+    expect(mid("2026-09-24T10:00:00Z")).toBe("Thursday");
+    expect(mid("2026-09-12T10:00:00Z")).toBe("Sep 12");
+  });
+
   it("returns null for a missing or unreadable value, never 'Invalid Date'", () => {
     expect(at("")).toBeNull();
     expect(formatRelative(null)).toBeNull();

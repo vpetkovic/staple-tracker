@@ -280,6 +280,50 @@
 }
 
 /*
+ * The desk's strip scrolls too, quietly, so a narrow drawer never clips a tab either.
+ */
+.staple-detail-tabstrip {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.staple-detail-tabstrip::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * On the phone the strip is a segmented control with finger-sized segments (40px track).
+ * A label is never cut mid-word: the strip scrolls, and the edge that has more beyond it
+ * fades out (`data-fade-start` / `data-fade-end`, set from the scroll position), which says
+ * "there is more" without a scrollbar.
+ */
+.staple-detail-panel[data-mode="sheet"] .staple-detail-segments {
+  height: 40px;
+  padding: 3px;
+  border-radius: 12px;
+}
+
+.staple-detail-panel[data-mode="sheet"] .staple-detail-segments [role="tab"] {
+  height: 34px;
+  padding-inline: 14px;
+  border-radius: 9px;
+  font-size: 14px;
+}
+
+.staple-detail-tabfade[data-fade-end] .staple-detail-tabstrip {
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+
+.staple-detail-tabfade[data-fade-start] .staple-detail-tabstrip {
+  mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+
+.staple-detail-tabfade[data-fade-start][data-fade-end] .staple-detail-tabstrip {
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
+
+/*
  * ═════════════════════════════════════════════════════════════════════════════════════
  * THE REVIEW GATE BLOCK — Q4 (STA-147). Component: detail/GateReview.tsx.
  * ═════════════════════════════════════════════════════════════════════════════════════
@@ -314,10 +358,11 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
+  gap: 12px;
+  padding: 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-xl);
+  background: var(--surface-raised);
 }
 
 /*
@@ -332,26 +377,24 @@
 .staple-gate-head {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 8px;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .staple-gate-eyebrow {
   flex: none;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: var(--tracking-eyebrow);
-  text-transform: uppercase;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
 }
 
 /* `overflow-wrap: anywhere` for the pathological owner name. A gate owner is a free-text
    string from the CLI; one 60-character token must break rather than push the card. */
 .staple-gate-state {
   min-width: 0;
-  color: var(--text-tertiary);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 13px;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -369,9 +412,9 @@
    card's text edge — a misalignment small enough to look like a rendering bug. */
 .staple-gate-legend {
   padding: 0;
-  margin-bottom: 6px;
-  color: var(--text-tertiary);
-  font-size: 11px;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 /*
@@ -382,8 +425,9 @@
  */
 .staple-gate-rows {
   min-width: 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
 }
 
 /*
@@ -415,7 +459,7 @@
 .staple-gate-row {
   display: grid;
   min-width: 0;
-  height: 28px;
+  height: 36px;
   align-items: center;
   grid-template-columns:
     [check] 16px
@@ -423,7 +467,7 @@
     [status] 16px
     [title] minmax(0, 1fr);
   column-gap: 8px;
-  padding: 0 6px;
+  padding: 0 10px;
   /*
    * THE INDENT — Q5 (STA-154). `--gate-depth` is set per row by the component, already
    * clamped (see `indentSteps`); the fallback keeps a row flush if it is ever missing.
@@ -438,7 +482,7 @@
    * 14px per step, which is one checkbox width: an indented row's checkbox starts where
    * its parent's identifier does, so the eye follows a column rather than a diagonal.
    */
-  padding-inline-start: calc(6px + var(--gate-depth, 0) * 14px);
+  padding-inline-start: calc(10px + var(--gate-depth, 0) * 14px);
   cursor: pointer;
   /* Background ONLY. Never a transform, never a layout property: at 28px with a hairline
      separator even a 1px shift on hover reads as the whole list twitching. */
@@ -449,7 +493,7 @@
    takes in task-list.css, so the two lists stay the same height on the same device. */
 @media (pointer: coarse) {
   .staple-gate-row {
-    height: 36px;
+    height: 44px;
   }
 }
 
@@ -503,11 +547,10 @@
  * the case a `MAX_ID_CH` clamp in the component has to bite.
  */
 .staple-gate-row-id {
-  width: var(--gate-id-w, 6ch);
+  width: calc(var(--gate-id-w, 6ch) + 4px);
   overflow: hidden;
   color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -556,8 +599,7 @@
 .staple-gate-row-implies {
   flex: none;
   color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -580,8 +622,8 @@
 
 .staple-gate-empty {
   margin: 0;
-  color: var(--text-tertiary);
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 /* Wraps, and the buttons keep their own `white-space: nowrap` from the Button variant —
@@ -605,8 +647,8 @@
 }
 
 .staple-gate-objection-label {
-  color: var(--text-tertiary);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 /*
@@ -621,9 +663,9 @@
 .staple-gate-objection-help {
   margin: 0;
   max-width: 52ch;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 1.45;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /*
@@ -696,4 +738,76 @@
 .staple-relations-canvas .staple-epic-container-bar,
 .staple-relations-canvas .react-flow__node-task {
   cursor: pointer;
+}
+
+/*
+ * ── The Details tab's description, as reading content ───────────────────────────────
+ *
+ * `lib/markdown.tsx` is shared and sets its own small spacing. Inside the detail the
+ * description is the thing being read, so it gets the reading size and a paragraph rhythm.
+ * These rules are unlayered, so they win over the component's utility classes without
+ * touching the shared renderer.
+ */
+.staple-detail-prose {
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.staple-detail-prose p {
+  margin: 0 0 8px;
+}
+
+.staple-detail-prose p.font-semibold {
+  margin: 18px 0 6px;
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.staple-detail-prose > div.h-2 {
+  height: 4px;
+}
+
+.staple-detail-prose ul {
+  margin: 4px 0 10px;
+  padding-left: 20px;
+}
+
+.staple-detail-prose li + li {
+  margin-top: 4px;
+}
+
+.staple-detail-prose li::marker {
+  color: var(--text-tertiary);
+}
+
+.staple-detail-prose code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-sunken);
+  font-size: 12.5px;
+}
+
+.staple-detail-prose pre {
+  margin: 8px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-sunken);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.staple-detail-prose pre code {
+  padding: 0;
+  background: none;
+}
+
+.staple-detail-prose a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong, var(--border));
+  text-underline-offset: 3px;
 }

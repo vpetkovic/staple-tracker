@@ -29,7 +29,9 @@ export interface TabProps {
 }
 
 export interface TabDefinition {
+  /** Stable: code, tests and the open-tab event key off it. Never rename. */
   id: string;
+  /** What a person reads on the strip: plain words, not engineer words. */
   label: string;
   component: ComponentType<TabProps>;
   /** Hide the tab entirely when it has nothing to show (documents on a doc-less issue). */
@@ -44,13 +46,13 @@ import { AnalyticsTab } from "./AnalyticsTab";
 import { RelationsTab } from "./RelationsTab";
 
 export const TABS: readonly TabDefinition[] = [
-  { id: "overview", label: "Overview", component: OverviewTab },
+  { id: "overview", label: "Details", component: OverviewTab },
   /**
    * O2b (STA-132) — the ticket's place in the plan, on a mini canvas.
    *
-   * SECOND, straight after Overview, because it answers the question a reader has while
-   * still looking at Overview: "what is this attached to?". Overview lists the relations
-   * as chips; this draws them, and the two belong next to each other rather than either
+   * SECOND, straight after Details, because it answers the question a reader has while
+   * still looking at Details: "what is this attached to?". Details lists the relations
+   * as rows; this draws them, and the two belong next to each other rather than either
    * side of the activity feed.
    *
    * NO `available` predicate, deliberately, and for the same reason Analytics has none:
@@ -58,7 +60,7 @@ export const TABS: readonly TabDefinition[] = [
    * that vanishes teaches nobody that the feature exists. The tab renders "no relations"
    * rather than an empty canvas, which is the honest version of the same answer.
    */
-  { id: "relations", label: "Relations", component: RelationsTab },
+  { id: "relations", label: "Connections", component: RelationsTab },
   {
     id: "documents",
     label: "Documents",
@@ -66,9 +68,9 @@ export const TABS: readonly TabDefinition[] = [
     available: (detail) => detail.documents.length > 0,
   },
   { id: "activity", label: "Activity", component: ActivityTab },
-  { id: "agent", label: "Agent view", component: AgentViewTab },
+  { id: "agent", label: "For agents", component: AgentViewTab },
   /**
-   * STA-82 — estimate vs actual. LAST, after "Agent view", per the epic.
+   * STA-82 — estimate vs actual. LAST, after "For agents", per the epic.
    *
    * Deliberately has NO `available` predicate. It is tempting to hide the tab
    * when nothing is estimated, but that is exactly backwards: an issue with no
@@ -77,7 +79,7 @@ export const TABS: readonly TabDefinition[] = [
    * teaches nobody that the feature exists. Hiding it would also make the tab
    * strip's width jump around as work moves through statuses.
    */
-  { id: "analytics", label: "Analytics", component: AnalyticsTab },
+  { id: "analytics", label: "Time", component: AnalyticsTab },
 ];
 
 export function visibleTabs(detail: IssueDetail): TabDefinition[] {

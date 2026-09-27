@@ -26,6 +26,7 @@ export function RelativeTime({
   now,
   timeZone,
   fallback = null,
+  inSentence = false,
   className,
 }: {
   iso: string | null | undefined;
@@ -34,10 +35,12 @@ export function RelativeTime({
   timeZone?: string;
   /** What to render when there is no date. Nothing, by default. */
   fallback?: React.ReactNode;
+  /** Mid-sentence: "started just now" rather than "started Just now". */
+  inSentence?: boolean;
   className?: string;
 }) {
   const live = useNow();
-  const text = formatRelative(iso, { now: now ?? live, timeZone });
+  const text = formatRelative(iso, { now: now ?? live, timeZone, inSentence });
   if (!text || !iso) return <>{fallback}</>;
   return (
     <time dateTime={iso} title={formatExact(iso, { timeZone }) ?? undefined} className={cn("whitespace-nowrap", className)}>

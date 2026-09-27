@@ -18,6 +18,11 @@ export interface RelativeTimeOptions {
   now?: Date;
   /** An IANA zone for the calendar words (Yesterday, weekday, date). Defaults to the viewer's. */
   timeZone?: string;
+  /**
+   * The reading sits mid-sentence ("started just now", "asked yesterday"): the relative
+   * words lose their capital. Weekday and month names keep theirs.
+   */
+  inSentence?: boolean;
 }
 
 function parse(iso: string | null | undefined): Date | null {
@@ -48,6 +53,12 @@ function year(at: Date, timeZone: string | undefined): string {
  * Null for a missing or unreadable value, so a caller can decide what "nothing" looks like.
  */
 export function formatRelative(iso: string | null | undefined, options: RelativeTimeOptions = {}): string | null {
+  const text = formatRelativeWords(iso, options);
+  if (text && options.inSentence && ["Just now", "Yesterday", "Tomorrow"].includes(text)) return text.toLowerCase();
+  return text;
+}
+
+function formatRelativeWords(iso: string | null | undefined, options: RelativeTimeOptions): string | null {
   const at = parse(iso);
   if (!at) return null;
   const now = options.now ?? new Date();
