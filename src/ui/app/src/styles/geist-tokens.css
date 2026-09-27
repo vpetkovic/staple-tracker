@@ -314,6 +314,9 @@
   /* The foreground drops to 900. Pure white on charcoal glares; #ededed on
      #1f1f1f is 14:1 and reads as ink rather than light. */
   --foreground: var(--ds-gray-900);
+  /* Muted text on charcoal: #a1a1a1, 8.9:1 solid and 4.6:1 at 80% on a card. (The light
+     value is a fixed #525252, so dark has to say its own.) */
+  --muted-foreground: var(--ds-gray-800);
   --card-foreground: var(--ds-gray-900);
   --popover-foreground: var(--ds-gray-900);
   --primary: var(--ds-gray-900);

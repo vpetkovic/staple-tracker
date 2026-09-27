@@ -10,9 +10,12 @@ const geist = readFileSync(fileURLToPath(new URL("./geist-tokens.css", import.me
 // Every `.dark { … }` block removed: what is left is the light theme.
 const lightRoot = geist.replace(/^\.dark\s*\{[^}]*\}/gm, "");
 
-function hexOf(name: string): string {
-  const scale = (key: string) => new RegExp(`${key}:\\s*(#[0-9a-f]{6})`, "i").exec(lightRoot)?.[1];
-  const raw = new RegExp(`\\n\\s*${name}:\\s*([^;]+);`).exec(lightRoot)?.[1]?.trim() ?? "";
+// And only the `.dark { … }` blocks: what dark mode overrides.
+const darkRoot = [...geist.matchAll(/^\.dark\s*\{([^}]*)\}/gm)].map((m) => m[1]).join("\n");
+
+function hexOf(name: string, sheet: string = lightRoot): string {
+  const scale = (key: string) => new RegExp(`${key}:\\s*(#[0-9a-f]{6})`, "i").exec(sheet)?.[1];
+  const raw = new RegExp(`\\n\\s*${name}:\\s*([^;]+);`).exec(sheet)?.[1]?.trim() ?? "";
   const ref = /var\((--[a-z0-9-]+)\)/.exec(raw)?.[1];
   const hex = ref ? scale(ref) : raw;
   expect(hex, name).toMatch(/^#[0-9a-f]{6}$/i);
@@ -43,5 +46,20 @@ describe("light-mode text contrast", () => {
     const muted = rgb(hexOf("--muted-foreground"));
     for (const bg of [WHITE, SIDEBAR]) expect(ratio(muted, bg)).toBeGreaterThanOrEqual(4.5);
     expect(ratio(over(muted, WHITE, 0.8), WHITE)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("dark-mode text contrast", () => {
+  const CARD = rgb("#1f1f1f"); // --ds-gray-200, the dark card
+  const RAIL = rgb("#1a1a1a"); // --ds-gray-100, the dark rail
+
+  it("dark mode says its own muted and tertiary text, AA on the card and the rail, muted AA at 80%", () => {
+    const muted = rgb(hexOf("--muted-foreground", darkRoot));
+    const tertiary = rgb(hexOf("--text-tertiary", darkRoot));
+    for (const bg of [CARD, RAIL]) {
+      expect(ratio(muted, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(tertiary, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(ratio(over(muted, CARD, 0.8), CARD)).toBeGreaterThanOrEqual(4.5);
   });
 });

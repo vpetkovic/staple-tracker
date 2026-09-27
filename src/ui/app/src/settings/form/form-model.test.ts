@@ -18,6 +18,7 @@ import {
   sameValue,
   snapshotSignature,
   validateFieldValue,
+  savedJustNow,
 } from "./form-model";
 
 describe("actionBarState — save, cancel, reset and dirty state agree", () => {
@@ -165,5 +166,17 @@ describe("parseFieldInput and sameValue", () => {
     expect(sameValue(1, 1)).toBe(true);
     expect(sameValue("a", "b")).toBe(false);
     expect(sameValue({ a: 1 }, { a: 1 })).toBe(true);
+  });
+});
+
+describe("the saved confirmation", () => {
+  const idle = { saving: false, canCancel: false };
+  it("says Saved exactly when a save finished cleanly", () => {
+    expect(savedJustNow(true, idle, null)).toBe(true);
+    // Still saving, never started, failed, or left a draft behind: no confirmation.
+    expect(savedJustNow(true, { saving: true, canCancel: false }, null)).toBe(false);
+    expect(savedJustNow(false, idle, null)).toBe(false);
+    expect(savedJustNow(true, idle, "The store refused it.")).toBe(false);
+    expect(savedJustNow(true, { saving: false, canCancel: true }, null)).toBe(false);
   });
 });

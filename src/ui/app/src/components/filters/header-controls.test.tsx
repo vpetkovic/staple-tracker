@@ -147,12 +147,14 @@ describe("the header row", () => {
 });
 
 describe("each view shows only the controls it honours", () => {
-  it("Graph: filter, Done and search — no Group or Sort, which a graph cannot do", () => {
+  // DELIBERATELY CHANGED: the graph's View menu owns finished work (show, fade, hide), so the
+  // header's Done — a second control for the same thing — is gone there.
+  it("Graph: filter and search — no Group, Sort or duplicate Done", () => {
     const graph = atWidth(1440, { view: "graph" });
     expect(graph).not.toContain('aria-label="Group tasks"');
     expect(graph).not.toContain("Sort:");
     expect(graph).toContain('aria-label="Add a filter"');
-    expect(graph).toContain('aria-label="Show done and cancelled tasks"');
+    expect(graph).not.toContain("data-filter-done");
     expect(graph).toContain('aria-label="Search tasks"');
   });
 

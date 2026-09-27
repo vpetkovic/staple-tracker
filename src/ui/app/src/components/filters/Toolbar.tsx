@@ -34,6 +34,41 @@ import { FilterChips } from "./FilterChips";
 import { FilterMenu } from "./FilterMenu";
 import { HeaderButton } from "./HeaderButton";
 
+/** The words for what Done shows or hides on a view. */
+function doneNoun(view: string): string {
+  return view === "milestones" ? "finished milestones" : "done and cancelled tasks";
+}
+
+/**
+ * Show or hide finished work — one control, drawn in the toolbar where there is one, and in
+ * the top bar on a view whose only control it is (Milestones), so no 44px row is spent on a
+ * single button.
+ */
+export function DoneToggle({ compact = false }: { compact?: boolean }) {
+  const session = useSession();
+  const { filters, setFilters } = session;
+  const noun = doneNoun(session.view);
+  const sentence = noun.charAt(0).toUpperCase() + noun.slice(1);
+  return (
+    <HeaderButton
+      icon={filters.showDone ? <Eye aria-hidden /> : <EyeOff aria-hidden />}
+      label={filters.showDone ? "Showing done" : "Done hidden"}
+      aria-pressed={filters.showDone}
+      aria-label={`${filters.showDone ? "Hide" : "Show"} ${noun}`}
+      hint={filters.showDone ? `${sentence} are shown — click to hide them` : `${sentence} are hidden — click to show them`}
+      compact={compact}
+      active={filters.showDone}
+      data-filter-done={filters.showDone ? "shown" : "hidden"}
+      onClick={() => setFilters(withShowDone(filters, !filters.showDone))}
+    />
+  );
+}
+
+/** Does this view put its only control, Done, in the top bar instead of a toolbar? */
+export function doneLivesInTopBar(controls: { arrange: boolean; filter: boolean; done: boolean }): boolean {
+  return controls.done && !controls.arrange && !controls.filter;
+}
+
 export function Toolbar() {
   const session = useSession();
   const { filters, setFilters } = session;
@@ -43,8 +78,6 @@ export function Toolbar() {
   // Wide where nothing can answer (a string render), which is the roomy desk.
   const roomy = useMediaQuery(ROOMY_QUERY, true);
   const compact = !roomy;
-  const doneNoun = session.view === "milestones" ? "finished milestones" : "done and cancelled tasks";
-  const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -53,7 +86,8 @@ export function Toolbar() {
     if (compact && searchOpen) searchRef.current?.focus();
   }, [compact, searchOpen]);
 
-  if (!controls.arrange && !controls.filter && !controls.done) return null;
+  // Nothing to filter or arrange: no toolbar row. (A lone Done goes to the top bar.)
+  if (!controls.arrange && !controls.filter) return null;
 
   return (
     <div
@@ -96,23 +130,7 @@ export function Toolbar() {
           </>
         ) : null}
 
-        {controls.done ? (
-          <HeaderButton
-            icon={filters.showDone ? <Eye aria-hidden /> : <EyeOff aria-hidden />}
-            label={filters.showDone ? "Showing done" : "Done hidden"}
-            aria-pressed={filters.showDone}
-            aria-label={`${filters.showDone ? "Hide" : "Show"} ${doneNoun}`}
-            hint={
-              filters.showDone
-                ? `${sentence(doneNoun)} are shown — click to hide them`
-                : `${sentence(doneNoun)} are hidden — click to show them`
-            }
-            compact={compact}
-            active={filters.showDone}
-            data-filter-done={filters.showDone ? "shown" : "hidden"}
-            onClick={() => setFilters(withShowDone(filters, !filters.showDone))}
-          />
-        ) : null}
+        {controls.done ? <DoneToggle compact={compact} /> : null}
 
         {!controls.filter ? null : searchShown ? (
           <div className="relative ml-1">
@@ -134,7 +152,7 @@ export function Toolbar() {
                   setFilters(withText(filters, ""));
                 }
               }}
-              placeholder="Search this list"
+              placeholder={session.view === "graph" ? "Search the graph" : "Search this list"}
               aria-label="Search tasks"
               data-filter-search
               className={cn(

@@ -62,8 +62,9 @@ export function isMachineView(view: ViewName): boolean {
  *
  *   Tasks       — everything: how the rows are arranged (Group, Sort), which rows (the
  *                 filters, the quick filters, search), and whether finished work shows.
- *   Graph       — the filters, search and Done decide which nodes it draws; it has no
- *                 rows to group or sort.
+ *   Graph       — the filters and search decide which nodes it draws; it has no rows to
+ *                 group or sort, and finished work has its own control in the graph's View
+ *                 menu (show, fade, hide), so a second Done here would be a duplicate.
  *   Milestones  — Done alone: it lists finished milestones when finished work is shown.
  *   Queue, Estimates, Usage — none. The queue is the pickup order itself, and the two
  *                 reports read a workspace's (or the machine's) whole history.
@@ -79,7 +80,7 @@ export interface ViewControls {
 
 const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
   tree: { arrange: true, filter: true, done: true },
-  graph: { arrange: false, filter: true, done: true },
+  graph: { arrange: false, filter: true, done: false },
   milestones: { arrange: false, filter: false, done: true },
   queue: { arrange: false, filter: false, done: false },
   calibration: { arrange: false, filter: false, done: false },
