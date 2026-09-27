@@ -742,7 +742,7 @@ export function QueueBoard({
       data-desk={desk ? "" : undefined}
       className={cn(
         "flex h-full min-h-0 w-full flex-col",
-        desk ? "staple-queue-desk mx-auto max-w-[68rem] gap-4 px-6 pt-6 pb-3" : "gap-3 px-4 py-3",
+        desk ? "staple-queue-desk mx-auto max-w-[68rem] gap-4 px-4 pt-6 pb-3 min-[1280px]:px-6" : "gap-3 px-4 py-3",
       )}
     >
       {desk ? (
