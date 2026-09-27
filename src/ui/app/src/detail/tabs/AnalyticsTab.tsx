@@ -63,7 +63,6 @@ import {
   computeSummary,
   computeTotals,
   explainMissingDelta,
-  formatDuration,
   isAggregated,
   isStillRunning,
   plainDelta,
@@ -247,7 +246,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   }
   // Review is a queue, not execution — named, but never counted as active time.
   if (timing.reviewSeconds) {
-    caveats.push(`${formatDuration(timing.reviewSeconds)} in review, not counted as active time.`);
+    caveats.push(`${spokenDuration(timing.reviewSeconds)} in review, not counted as active time.`);
   }
 
   /**
@@ -271,7 +270,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   // The work figure beside its state: the ratio's actual, from attempts, which the headline's
   // category time is not.
   const workState = qualityText(timing.quality?.work);
-  const workQuality = workState === null ? null : timing.workSeconds === null ? workState : `${formatDuration(timing.workSeconds)} · ${workState}`;
+  const workQuality = workState === null ? null : timing.workSeconds === null ? workState : `${spokenDuration(timing.workSeconds)} · ${workState}`;
   const wallQuality = qualityText(timing.quality?.wall);
   const beneath = cohort.data ? cohortLine(cohort.data) : null;
 
@@ -320,8 +319,9 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
             ) : null}
             {summary.planHint || actualHint ? (
               <p className="text-label text-text-secondary">
-                {[summary.planHint ? `Plan ${summary.planHint}` : null, actualHint ? `Time ${actualHint}` : null]
-                  .filter(Boolean)
+                {[summary.planHint, actualHint]
+                  .filter((hint): hint is string => Boolean(hint))
+                  .map((hint) => hint.charAt(0).toUpperCase() + hint.slice(1))
                   .join(" · ")}
               </p>
             ) : null}

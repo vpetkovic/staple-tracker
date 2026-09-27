@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { issue } from "@/components/task-list/fixtures";
 import type { Issue, IssueDetail, IssueTiming, SubtreePlan } from "@/lib/types";
-import { formatDuration, spokenDuration } from "./analytics";
+import { spokenDuration } from "./analytics";
 import { AnalyticsTab } from "./tabs/AnalyticsTab";
 
 const NOW = Date.now();
@@ -172,7 +172,7 @@ describe("a parent leads with the rolled-up plan", () => {
   it("STA-157 leads with 11h planned, not with 'no estimate recorded'", () => {
     const html = render(STA_157);
     expect(html).toContain(figure("11 hours"));
-    expect(html).toContain("inherited from 3 of 3 units");
+    expect(html).toMatch(/[Ii]nherited from 3 of 3 units/);
     expect(html).not.toContain("no estimate recorded");
     // The 11h is the FIRST figure on the page (the spoken sentence before it is
     // `sr-only` text, not a figure — see "the headline is spoken" below).
@@ -182,7 +182,7 @@ describe("a parent leads with the rolled-up plan", () => {
   it("STA-156 leads with the recursive descendant plan, not with '0 of 6 estimated'", () => {
     const html = render(STA_156);
     expect(html).toContain(figure("11 hours"));
-    expect(html).toContain("inherited from 3 of 9 units");
+    expect(html).toMatch(/[Ii]nherited from 3 of 9 units/);
     expect(html).not.toContain("0 of 6");
     expect(html).not.toContain("6 of 6");
     // The coverage caveat measures PLANS, so STA-157 counts as planned.
@@ -264,7 +264,7 @@ describe("the This issue and Children rows state the source of each number", () 
     expect(html).toContain("aggregated from 3 children");
     // The headline is the own estimate; the disagreement with the children is visible, not summed.
     expect(html).toContain(figure("6 hours"));
-    expect(html).toContain("descendants add up to 11h");
+    expect(html).toContain("descendants add up to 11 hours");
     expect(html).toContain("never added together");
   });
 
@@ -341,7 +341,7 @@ describe("the caveats stay visible but concise", () => {
       ),
     );
     expect(html).toContain("Approximate — no usable history");
-    expect(html).toContain("30m in review, not counted as active time.");
+    expect(html).toContain("30 minutes in review, not counted as active time.");
     expect(html).not.toContain(">in review<");
   });
 
@@ -599,7 +599,7 @@ describe("each record says how far it can be trusted", () => {
       ),
     );
     expect(html).toContain('aria-label="Measurement quality"');
-    expect(html).toContain(`data-testid="quality-work">${formatDuration(2400)} · approximate · silences over 30 min<`);
+    expect(html).toContain(`data-testid="quality-work">${spokenDuration(2400)} · approximate · silences over 30 min<`);
     expect(html).toContain('data-testid="quality-wall">exact<');
   });
 
@@ -616,7 +616,7 @@ describe("each record says how far it can be trusted", () => {
       ),
     );
     // The state qualifies the work figure, which sits beside it; the row's "ran" is category time.
-    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["work 30s · under a minute", "exact"]);
+    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["work 30 seconds · under a minute", "exact"]);
     // The measurement section sits after the per-child rows: it qualifies them, it does not lead.
     expect(html.indexOf('aria-label="Per child"')).toBeLessThan(html.indexOf('aria-label="Measurement quality"'));
   });

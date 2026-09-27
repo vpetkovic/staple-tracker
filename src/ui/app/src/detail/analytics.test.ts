@@ -653,7 +653,7 @@ describe("the summary leads with the recursive plan", () => {
       }),
     );
     expect(summary.plannedSeconds).toBe(21_600);
-    expect(summary.planHint).toMatch(/descendants add up to 11h/);
+    expect(summary.planHint).toMatch(/descendants add up to 11 hours/);
   });
 
   it("is a leaf's own estimate against its own time, with nothing to add", () => {
@@ -779,7 +779,7 @@ describe("the subtree plan says where its number came from", () => {
           totalCount: 3,
         }),
       ),
-    ).toBe("own estimate; descendants add up to 11h (3 of 3 units)");
+    ).toBe("own estimate; descendants add up to 11 hours (3 of 3 units)");
   });
 
   it("adds nothing under an own estimate with no planned work beneath it, or under no plan at all", () => {
@@ -841,7 +841,7 @@ describe("child rows carry the effective plan and say where it came from", () =>
       }),
     });
     expect(rows[0]!.plannedSeconds).toBe(21_600);
-    expect(rows[0]!.planHint).toBe("own estimate; descendants add up to 11h (3 of 3 units)");
+    expect(rows[0]!.planHint).toBe("own estimate; descendants add up to 11 hours (3 of 3 units)");
   });
 
   it("has no hint when there is no plan to explain", () => {
@@ -995,7 +995,7 @@ describe("quality states are named, never decided, here", () => {
   });
 
   it("puts the work figure beside a child's state, since the row's ran is category time", () => {
-    expect(childQualityText({ workState: "reconstructed", workSeconds: 1010, workReasons: ["reconstructed"] })).toBe("work 16m50s · reconstructed");
+    expect(childQualityText({ workState: "reconstructed", workSeconds: 1010, workReasons: ["reconstructed"] })).toBe("work 17 minutes · reconstructed");
     expect(childQualityText({ workState: "missing", workSeconds: null, workReasons: ["never_started"] })).toBe("not started");
     expect(childQualityText({ workState: "missing", workSeconds: null, workReasons: ["no_worker_attempt"] })).toBe("not measured");
     expect(childQualityText({ workState: null, workSeconds: null, workReasons: [] })).toBeNull();

@@ -149,7 +149,7 @@ export function AgentViewTab({ detail, workspace, onAuthError }: TabProps) {
             {copied ? "Copied" : "Copy"}
           </Button>
         </header>
-        <pre className="tab-code max-h-[28rem] overflow-auto p-3.5 font-mono text-[12px] leading-relaxed text-foreground">
+        <pre className="tab-code max-h-[28rem] overflow-auto p-3.5 font-mono text-[12px] leading-relaxed text-foreground max-sm:whitespace-pre-wrap max-sm:[overflow-wrap:anywhere]">
           {stats.pretty}
         </pre>
       </section>

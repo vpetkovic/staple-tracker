@@ -434,7 +434,7 @@ export function stateLabel(state: string, reasons: readonly string[]): string {
 export function childQualityText(row: Pick<ChildRow, "workState" | "workSeconds" | "workReasons">): string | null {
   if (row.workState === null) return null;
   const label = stateLabel(row.workState, row.workReasons);
-  return row.workSeconds === null ? label : `work ${formatDuration(row.workSeconds)} · ${label}`;
+  return row.workSeconds === null ? label : `work ${spokenDuration(row.workSeconds)} · ${label}`;
 }
 
 /** `"approximate · silences over 30 min"`: the state and why, in words. Null when there is no state. */
@@ -538,7 +538,7 @@ export function subtreePlanHint(plan: SubtreePlan): string | null {
   const coverage = planCoverage(plan);
   if (plan.source === "descendants") return `inherited from ${coverage}`;
   if (plan.source === "own" && plan.descendantsEstimatedSeconds !== null) {
-    return `own estimate; descendants add up to ${formatDuration(plan.descendantsEstimatedSeconds)} (${coverage})`;
+    return `own estimate; descendants add up to ${spokenDuration(plan.descendantsEstimatedSeconds)} (${coverage})`;
   }
   return null;
 }
