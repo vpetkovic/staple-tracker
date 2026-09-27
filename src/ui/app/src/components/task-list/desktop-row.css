@@ -14,7 +14,7 @@
   --row-height: 40px;
   --row-id-width: 60px;
   --desk-who-w: 104px;
-  --desk-trail-w: 80px;
+  --desk-trail-w: 48px;
 }
 
 @media (pointer: coarse) {
@@ -78,7 +78,9 @@
 
 /* ── The cue cluster ───────────────────────────────────────────────────────────────── */
 
+/* Positioned, so the quick actions can lay over its right end (see the trailing slot). */
 .staple-row[data-desk] .staple-row-meta {
+  position: relative;
   gap: 12px;
 }
 
@@ -151,15 +153,16 @@
 
 /* ── Who ───────────────────────────────────────────────────────────────────────────── */
 
+/* A minimum, not a width: two people (assignee and holder) widen their own row's slot. */
 .staple-row-who {
   display: inline-flex;
-  width: var(--desk-who-w);
+  min-width: var(--desk-who-w);
   flex-shrink: 0;
   align-items: center;
 }
 
 .staple-row-who[data-word="off"] {
-  --desk-who-w: 48px;
+  --desk-who-w: 20px;
 }
 
 .staple-who {
@@ -206,12 +209,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ── The trailing slot: the date, and the quick actions in the same box ──────────────── */
-
+/*
+ * ── The trailing slot: the date, and the quick actions laid over the cluster's end ───────
+ *
+ * The slot is only as wide as the date. The quick actions do not reserve a box of their own
+ * on every row: on hover, focus, the open row and selected rows they appear OVER the right
+ * end of the cue cluster (which is positioned), on the row's own opaque ground, so nothing
+ * underneath moves and no title pays for three buttons it only needs on one row at a time.
+ */
 .staple-row-trail {
-  position: relative;
   display: inline-flex;
-  width: var(--desk-trail-w);
+  min-width: var(--desk-trail-w);
   height: 28px;
   flex-shrink: 0;
   align-items: center;
@@ -225,14 +233,32 @@
 
 .staple-row-quick {
   position: absolute;
-  inset: 0;
+  top: 50%;
+  right: 0;
   display: flex;
+  height: 28px;
+  padding-left: 6px;
+  translate: 0 -50%;
+  /* The row's own ground, opaque: the card, with the row's state tint painted over it. */
+  background: var(--card);
+  box-shadow: inset 0 0 0 100px var(--staple-ring-tint, transparent);
   align-items: center;
   justify-content: flex-end;
   gap: 2px;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+/* A short fade into the ground, so the actions do not cut the cue beneath them off hard. */
+.staple-row-quick::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 100%;
+  bottom: 0;
+  width: 16px;
+  background: linear-gradient(to right, transparent, var(--card));
 }
 
 .staple-row-quick-btn {
@@ -286,8 +312,15 @@
   }
   .staple-row[data-desk] .staple-row-quick {
     position: static;
+    padding-left: 0;
+    translate: none;
+    background: none;
+    box-shadow: none;
     opacity: 1;
     pointer-events: auto;
+  }
+  .staple-row[data-desk] .staple-row-quick::before {
+    content: none;
   }
   .staple-row[data-desk] .staple-row-quick-btn:not([data-quick="menu"]) {
     display: none;
@@ -341,11 +374,24 @@
 
 /* ── Widths ────────────────────────────────────────────────────────────────────────── */
 
-/* Below 1280px the who slot and the trailing slot give the title back what they can. */
+/*
+ * Below 1280px the who slot gives the title back what it can: the avatar only (the word and
+ * the name stay in its tooltip and accessible name), with a tighter cluster.
+ */
 @media (max-width: 1279.98px) {
   .staple-row[data-desk] {
-    --desk-who-w: 92px;
-    --desk-trail-w: 76px;
+    --desk-who-w: 20px;
+    --desk-trail-w: 40px;
+  }
+  .staple-row[data-desk] .staple-row-meta {
+    gap: 8px;
+  }
+  .staple-row[data-desk] .staple-who-word {
+    display: none;
+  }
+  /* An empty slot is not a column worth its gap here: nobody on it, no signals, no width. */
+  .staple-row[data-desk] :is(.staple-row-who, .staple-row-signals):empty {
+    display: none;
   }
 }
 
@@ -362,10 +408,6 @@
   }
   .staple-row[data-desk] {
     --desk-who-w: 184px;
-  }
-  .staple-row[data-desk] .staple-row-who {
-    width: auto;
-    min-width: var(--desk-who-w);
   }
   .staple-row[data-desk] .staple-who-name {
     display: inline;
@@ -414,4 +456,9 @@
   align-items: center;
   gap: 6px;
   color: var(--foreground);
+}
+
+/* No date on this row (below 880px the ladder drops it): the slot takes no width. */
+.staple-row-trail:not(:has(.staple-row-date)) {
+  min-width: 0;
 }
