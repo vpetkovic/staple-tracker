@@ -116,8 +116,28 @@ export interface ActionContext {
    * on another workspace is still waiting.
    */
   openBlockers: number;
-  /** The name this browser last worked under (`staple:actor`), or null. */
-  me: string | null;
+  /**
+   * Blockers this computer cannot see at all: the task is missing from its workspace, or the
+   * workspace is not on this computer. They can never finish from here, so they get their own
+   * wording rather than "waiting for it to finish".
+   */
+  unreachable: readonly UnreachableBlocker[];
+  /**
+   * Under the Strict queue setting, the plan row that has to be taken before this one, or null
+   * when the queue has nothing to say (policy off, or this is next).
+   */
+  queueAhead: { identifier: string; title: string } | null;
+  /**
+   * WHO IS WORKING ON IT: the name Start work last used (`staple:actor`). It may be an
+   * agent's name, so it only ever attributes claims: starting, taking over, stopping.
+   */
+  worker: string | null;
+  /**
+   * WHO I AM: the person using this browser (`staple:me`). Status changes carry it, and a
+   * decision (approve, send back, ask for approval) is confirmed with it pre-filled. Never
+   * filled from the working name.
+   */
+  person: string | null;
   /** The status vocabulary in configured order, and each status's category and label. */
   order: readonly string[];
   categoryOf: (status: string) => StatusCategory;
@@ -130,12 +150,24 @@ const CLAIMABLE: readonly StatusCategory[] = ["ready", "unstarted", "blocked"];
 
 /** Where the name a write is attributed to comes from. */
 export type ActorSource =
-  /** Ask (window.prompt, pre-filled with the remembered name): the write makes someone the holder. */
-  | { from: "prompt"; prompt: string }
-  /** The remembered name, when there is one; the server's default otherwise. */
-  | { from: "remembered" }
-  /** The remembered name, or ask once when there is none: a decision a person signs. */
-  | { from: "remembered-or-prompt"; prompt: string };
+  /** Ask who works on it, pre-filled with the working name; the answer becomes the working name. */
+  | { from: "worker-prompt"; prompt: string; need: string }
+  /** The working name as it is (a release by the holder). */
+  | { from: "worker" }
+  /** The person's own name when set; the server's default ("ui") otherwise. */
+  | { from: "person" }
+  /**
+   * A decision a person signs: always confirmed, pre-filled only with the person's own name,
+   * never with the working name.
+   */
+  | { from: "person-confirm"; prompt: string; need: string };
+
+/** A blocker this computer can't see, and why. */
+export interface UnreachableBlocker {
+  identifier: string;
+  workspace: string;
+  missing: "workspace" | "task";
+}
 
 export type WriteCall =
   | { route: "action"; ws: string; ref: string; payload: ActionPayload; actor: ActorSource }
@@ -167,32 +199,26 @@ export function toRequest(call: WriteCall, actor: string | null): ApiRequest {
   }
 }
 
-/**
- * The name to send. A prompt asks (and a cancelled prompt means "do nothing", signalled by
- * `undefined`); a remembered name is sent when there is one.
- */
-export function resolveActor(source: ActorSource, me: string | null, ask: (prompt: string, remembered: string) => string | null): string | null | undefined {
-  if (source.from === "remembered") return me;
-  if (source.from === "remembered-or-prompt" && me) return me;
-  const name = ask(source.prompt, me ?? "")?.trim();
-  return name ? name : undefined;
-}
-
-const REMEMBERED: ActorSource = { from: "remembered" };
+const PERSON: ActorSource = { from: "person" };
+const WORKER: ActorSource = { from: "worker" };
 
 function statusCall(ctx: ActionContext, status: string): WriteCall {
-  return { route: "action", ws: ctx.ws, ref: ctx.issue.id, payload: { type: "status", status: status as IssueStatus }, actor: REMEMBERED };
+  return { route: "action", ws: ctx.ws, ref: ctx.issue.id, payload: { type: "status", status: status as IssueStatus }, actor: PERSON };
 }
 
-/** Who signs a gate decision: the remembered name, or asked once. */
-const SIGNED: ActorSource = { from: "remembered-or-prompt", prompt: "Who is deciding? Type your name." };
+/** The confirmation each decision asks for, in words that fit what is being signed. */
+export const SIGN = {
+  approve: { from: "person-confirm", prompt: "Who is approving? Type your own name.", need: "Approving needs your name." },
+  sendBack: { from: "person-confirm", prompt: "Who is sending it back? Type your own name.", need: "Sending it back needs your name." },
+  ask: { from: "person-confirm", prompt: "Who is asking? Type your own name.", need: "Asking for approval needs your name." },
+} as const satisfies Record<string, ActorSource>;
 
-/** The gate writes, for GateReview and the "Ask for approval" form. Each carries a name. */
+/** The gate writes, for GateReview and the "Ask for approval" form. Each is signed by a person. */
 export const gateCalls = {
-  request: (ctx: Pick<ActionContext, "ws" | "issue">, owner: string): WriteCall => ({ route: "gate-request", ws: ctx.ws, ref: ctx.issue.id, owner, actor: SIGNED }),
-  approveAll: (ctx: Pick<ActionContext, "ws" | "issue">, comment?: string): WriteCall => ({ route: "gate-approve", ws: ctx.ws, ref: ctx.issue.id, ...(comment ? { comment } : {}), actor: SIGNED }),
-  approveSelected: (ctx: Pick<ActionContext, "ws" | "issue">, children: string[]): WriteCall => ({ route: "gate-approve", ws: ctx.ws, ref: ctx.issue.id, children, actor: SIGNED }),
-  requestChanges: (ctx: Pick<ActionContext, "ws" | "issue">, comment: string): WriteCall => ({ route: "gate-changes", ws: ctx.ws, ref: ctx.issue.id, comment, actor: SIGNED }),
+  request: (ctx: Pick<ActionContext, "ws" | "issue">, owner: string): WriteCall => ({ route: "gate-request", ws: ctx.ws, ref: ctx.issue.id, owner, actor: SIGN.ask }),
+  approveAll: (ctx: Pick<ActionContext, "ws" | "issue">, comment?: string): WriteCall => ({ route: "gate-approve", ws: ctx.ws, ref: ctx.issue.id, ...(comment ? { comment } : {}), actor: SIGN.approve }),
+  approveSelected: (ctx: Pick<ActionContext, "ws" | "issue">, children: string[]): WriteCall => ({ route: "gate-approve", ws: ctx.ws, ref: ctx.issue.id, children, actor: SIGN.approve }),
+  requestChanges: (ctx: Pick<ActionContext, "ws" | "issue">, comment: string): WriteCall => ({ route: "gate-changes", ws: ctx.ws, ref: ctx.issue.id, comment, actor: SIGN.sendBack }),
 };
 
 // ────────────────────────────────────────────────────────────── the items
@@ -212,13 +238,33 @@ const tasks = (n: number) => (n === 1 ? "1 other task" : `${n} other tasks`);
 const blockedReason = (n: number) => `Waiting on ${tasks(n)} to finish first.`;
 const queuedReason = (q: QueuedBy) => `Waiting for ${q.owner} to approve the parent task first.`;
 
+/** "a task this computer can't see (STA-9999)", or the count when there are several. */
+export function unreachablePhrase(list: readonly UnreachableBlocker[]): string {
+  return list.length === 1 ? `a task this computer can't see (${list[0]!.identifier})` : `${list.length} tasks this computer can't see (${list.map((b) => b.identifier).join(", ")})`;
+}
+
+/** The queue's head, by title when there is one. */
+const queueReason = (ahead: { identifier: string; title: string }) => `${ahead.title ? `“${ahead.title}”` : ahead.identifier} is next in the queue.`;
+
+/**
+ * Why work cannot start here, in the order the store would say it: a gate, then what it
+ * waits on (unreachable first, since that never finishes on its own), then the strict queue.
+ */
+function startBlocker(ctx: ActionContext): string | null {
+  if (ctx.queuedBy) return queuedReason(ctx.queuedBy);
+  if (ctx.unreachable.length > 0) return `Waiting on ${unreachablePhrase(ctx.unreachable)}.`;
+  if (ctx.openBlockers > 0) return blockedReason(ctx.openBlockers);
+  if (ctx.queueAhead) return queueReason(ctx.queueAhead);
+  return null;
+}
+
 function startItem(ctx: ActionContext): ActionItem {
   const item: ActionItem = { id: "start", label: ACTION_WORDS.checkout };
-  if (ctx.queuedBy) return { ...item, disabledReason: queuedReason(ctx.queuedBy) };
-  if (ctx.openBlockers > 0) return { ...item, disabledReason: blockedReason(ctx.openBlockers) };
+  const reason = startBlocker(ctx);
+  if (reason) return { ...item, disabledReason: reason };
   return {
     ...item,
-    call: { route: "action", ws: ctx.ws, ref: ctx.issue.id, payload: { type: "checkout" }, actor: { from: "prompt", prompt: ACTION_WORDS.checkoutPrompt } },
+    call: { route: "action", ws: ctx.ws, ref: ctx.issue.id, payload: { type: "checkout" }, actor: { from: "worker-prompt", prompt: ACTION_WORDS.checkoutPrompt, need: "Starting work needs a name." } },
   };
 }
 
@@ -232,7 +278,7 @@ function takeOverItem(ctx: ActionContext, holder: string): ActionItem {
       ws: ctx.ws,
       ref: ctx.issue.id,
       payload: { type: "checkout", stealIfIdleSeconds: STALE_SECONDS },
-      actor: { from: "prompt", prompt: ACTION_WORDS.takeOverPrompt(holder) },
+      actor: { from: "worker-prompt", prompt: ACTION_WORDS.takeOverPrompt(holder), need: "Taking it over needs a name." },
     },
   };
 }
@@ -292,13 +338,13 @@ export function overflowItems(ctx: ActionContext): ActionItem[] {
       items.push({
         id: "free",
         label: ACTION_WORDS.releaseStale,
-        call: { route: "action", ws: ctx.ws, ref: ctx.issue.id, payload: { type: "release", ifIdleSeconds: STALE_SECONDS }, actor: REMEMBERED },
+        call: { route: "action", ws: ctx.ws, ref: ctx.issue.id, payload: { type: "release", ifIdleSeconds: STALE_SECONDS }, actor: PERSON },
       });
-    } else if (ctx.me && ctx.me === holder) {
+    } else if (ctx.worker && ctx.worker === holder) {
       items.push({
         id: "release",
         label: ACTION_WORDS.release,
-        call: { route: "action", ws: ctx.ws, ref: ctx.issue.id, payload: { type: "release" }, actor: REMEMBERED },
+        call: { route: "action", ws: ctx.ws, ref: ctx.issue.id, payload: { type: "release" }, actor: WORKER },
       });
     } else {
       items.push({
@@ -343,8 +389,11 @@ export function statusItems(ctx: ActionContext): StatusItem[] {
       items.push(item);
       continue;
     }
+    // Into the active category is starting work by another door: it is held back for every
+    // reason Start work is, so the menu never offers a way round a gate, a blocker or the queue.
+    const cannotStart = category === "active" ? startBlocker(ctx) : null;
     if (currentCategory === "gated") item.disabledReason = "Approve it or send it back first.";
-    else if (category === "active" && ctx.openBlockers > 0) item.disabledReason = blockedReason(ctx.openBlockers);
+    else if (cannotStart) item.disabledReason = cannotStart;
     else if (category === "active" && !ctx.issue.assignee) item.disabledReason = "Use Start work, so the tracker knows who is on it.";
     else item.call = statusCall(ctx, status);
     items.push(item);
@@ -379,6 +428,8 @@ export interface SentenceInput {
   stale: boolean;
   /** Blockers that are not finished, in this workspace and in others. */
   openBlockers: number;
+  /** Blockers this computer can't see. */
+  unreachable?: readonly UnreachableBlocker[];
   /** The task's direct children, and how many of them are finished. */
   childrenTotal?: number;
   childrenDone?: number;
@@ -404,6 +455,7 @@ export function statusSentence(input: SentenceInput, categoryOf: (status: string
     const what = input.queuedByParent ? "the parent task" : input.queuedByTitle ? `“${input.queuedByTitle}”` : "the task above this one";
     return { lead: "Waiting for", person: { name: input.queuedBy.owner, kind: "human" }, tail: `to approve ${what}`, tone: "attention" };
   }
+  if (input.unreachable && input.unreachable.length > 0) return { lead: `Waiting on ${unreachablePhrase(input.unreachable)}`, tone: "attention" };
   if (input.openBlockers > 0) return { lead: `Waiting on ${tasks(input.openBlockers)}`, tone: "attention" };
   if (input.stale && claim) {
     return { lead: "", person: { name: claim.heldBy, kind: "agent" }, tail: "has gone quiet", atPrefix: "last active", at: claim.lastActivityAt, tone: "attention" };
@@ -443,9 +495,48 @@ export function plainRefusal(message: string, code: string): string {
   if (/requires an assignee/.test(message)) return "Use Start work, so the tracker knows who is on it.";
   if ((m = /Checkout refused: status is "([^"]+)"/.exec(message))) return "This task can't be started from its current status.";
   if ((m = /held by (\S+?),? /.exec(message))) return `${m[1]} is still working on this.`;
+  if ((m = /later in the queue than (\S+?), which is ready/.exec(message))) return `${m[1]} is next in the queue. Take that first, or change the queue's order.`;
+  if (code === "out_of_order") return "Something else is next in the queue. Take that first, or change the queue's order.";
   if (code === "gated") return "This waits for someone's approval first.";
+  if (code === "revision_conflict") return "Someone changed this at the same time. Look again and retry.";
+  if (code === "cycle") return "That would make tasks wait on each other in a loop.";
+  if (code === "duplicate") return "Something with that name already exists.";
+  if (code === "auth" || code === "forbidden" || code === "revoked") return "This page is no longer allowed to make changes. Reload it from the link staple printed.";
+  if (code === "rate_limited") return "Too many changes at once. Wait a moment and try again.";
+  if (code === "unavailable" || code === "offline") return "The tracker can't be reached right now. Try again in a moment.";
+  if (code === "payload_too_large") return "That is too large to save.";
+  if (code === "epoch_changed" || code === "cursor_invalid" || code === "schema_ahead" || code === "protocol_unsupported") return "The tracker's sync needs attention before this can be saved.";
   if (code === "conflict") return "The task changed while you were looking. Check it and try again.";
   if (code === "validation") return "The tracker didn't accept that change.";
   if (code === "not_found") return "This task could not be found. It may have moved.";
   return "That didn't go through.";
+}
+
+// ─────────────────────────────────────────────────────────────── the queue
+
+/** The fields of a queue row the strict check reads (`EffectiveQueueRow`). */
+export interface QueueRowLike {
+  issueId: string;
+  identifier: string;
+  title: string;
+  position: number;
+  unqueued: boolean;
+  eligibility: string;
+}
+
+/**
+ * Under the Strict queue setting, the plan row that must be taken before `issueId`, exactly as
+ * the store's order check decides it: an eligible row in the plan band that comes before this
+ * one (or any eligible plan row, when this one is not in the plan). Null when nothing is ahead.
+ */
+export function queueAheadOf(rows: readonly QueueRowLike[], issueId: string): { identifier: string; title: string } | null {
+  const target = rows.find((row) => row.issueId === issueId) ?? null;
+  const ahead = rows.find(
+    (row) =>
+      !row.unqueued &&
+      row.eligibility === "eligible" &&
+      row.issueId !== issueId &&
+      (target === null || target.unqueued || row.position < target.position),
+  );
+  return ahead ? { identifier: ahead.identifier, title: ahead.title } : null;
 }

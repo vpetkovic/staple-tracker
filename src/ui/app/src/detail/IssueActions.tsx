@@ -13,7 +13,7 @@
  * they share one controller from `useIssueActions`: one busy latch and one refusal.
  */
 import { Check, ChevronDown, Copy, Ellipsis, Hand, LogOut, RotateCcw, ShieldCheck, UserRoundCheck, X } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { StatusIcon } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -27,51 +27,73 @@ import { ISSUE_STATUSES, type IssueDetail } from "@/lib/types";
 import { idsOf } from "@/lib/write-ref";
 import { GateReview } from "./GateReview";
 import { cn } from "./parts/cn";
+import { createActionController, gateHandlers, overflowEntries, primaryEntry, statusEntries, type Names } from "./action-controller";
 import {
   ACTION_WORDS,
-  gateCalls,
   overflowItems,
   plainRefusal,
   primaryItem,
-  resolveActor,
   statusChoices,
   statusItems,
-  toRequest,
   type ActionContext,
   type ActionId,
-  type ActionItem,
-  type ApiRequest,
+  type UnreachableBlocker,
   type WriteCall,
 } from "./plain-actions";
 
 // ─────────────────────────────────────────────────────────────── context
 
-const ACTOR_KEY = "staple:actor";
+/** The working name (who is on it; may be an agent) and the person's own name, kept apart. */
+const NAME_KEYS: Record<keyof Names, string> = { worker: "staple:actor", person: "staple:me" };
 
-function readActor(): string | null {
+function readName(which: keyof Names): string | null {
   try {
-    return window.localStorage.getItem(ACTOR_KEY) || null;
+    return window.localStorage.getItem(NAME_KEYS[which]) || null;
   } catch {
     return null;
   }
 }
 
-function saveActor(name: string): void {
+function saveName(which: keyof Names, name: string): void {
   try {
-    window.localStorage.setItem(ACTOR_KEY, name);
+    window.localStorage.setItem(NAME_KEYS[which], name);
   } catch {
     /* private mode: the name lasts for this page load */
   }
 }
 
-/** Blockers that are not finished, here and in other workspaces. */
+/** A cross-workspace blocker, with the fields the detail payload may add to it. */
+type CrossBlockerRow = IssueDetail["crossBlockers"][number] & { missing?: "workspace" | "task" | null };
+
+/**
+ * Blockers this computer cannot see. The server says which kind when it knows (`missing`);
+ * without it, a workspace this page lists means the task is missing there, and one it does
+ * not list means the workspace is not on this computer.
+ */
+export function unreachableBlockers(detail: Pick<IssueDetail, "crossBlockers">, workspaces: readonly string[]): UnreachableBlocker[] {
+  return (detail.crossBlockers as CrossBlockerRow[])
+    .filter((b) => b.unresolvable || b.missing)
+    .map((b) => ({
+      identifier: b.identifier,
+      workspace: b.workspace,
+      missing: b.missing ?? (workspaces.includes(b.workspace) ? "task" : "workspace"),
+    }));
+}
+
+/** Blockers that are not finished, here and in other workspaces (unreachable ones included). */
 export function openBlockerCount(detail: Pick<IssueDetail, "blockedBy" | "crossBlockers">): number {
   const open = (status: string | null) => !status || !["done", "cancelled"].includes(statusCategory(status));
   return detail.blockedBy.filter((ref) => open(ref.status)).length + detail.crossBlockers.filter((b) => !b.resolved && open(b.status)).length;
 }
 
-/** The facts the action decisions read, from the detail payload and this browser's name. */
-export function actionContextOf(detail: IssueDetail, me: string | null): ActionContext {
+/** What the page knows beyond the detail payload: the strict queue's head and the workspaces. */
+export interface ContextExtras {
+  queueAhead?: { identifier: string; title: string } | null;
+  workspaces?: readonly string[];
+}
+
+/** The facts the action decisions read, from the detail payload and this browser's names. */
+export function actionContextOf(detail: IssueDetail, names: Names, extras: ContextExtras = {}): ActionContext {
   return {
     ws: detail.workspace,
     issue: detail.issue,
@@ -82,7 +104,10 @@ export function actionContextOf(detail: IssueDetail, me: string | null): ActionC
     stale: isStaleClaim(detail.claim),
     childCount: detail.children.length,
     openBlockers: openBlockerCount(detail),
-    me,
+    unreachable: unreachableBlockers(detail, extras.workspaces ?? []),
+    queueAhead: extras.queueAhead ?? null,
+    worker: names.worker,
+    person: names.person,
     order: statusChoices(configuredStatusOrder(), ISSUE_STATUSES, detail.issue.status),
     categoryOf: statusCategory,
     labelOf: statusLabel,
@@ -91,57 +116,68 @@ export function actionContextOf(detail: IssueDetail, me: string | null): ActionC
 
 // ──────────────────────────────────────────────────────────── controller
 
-function send(request: ApiRequest): Promise<unknown> {
-  switch (request.fn) {
-    case "action":
-      return action(request.target, request.payload);
-    // The gate helpers accept the actor through their body; passed as a variable, so the
-    // name rides along without widening their declared shapes.
-    case "requestGate":
-      return requestGate(request.body);
-    case "approveGate":
-      return approveGate(request.body);
-    case "requestGateChanges":
-      return requestGateChanges(request.body);
-  }
-}
+/** What the panel shows after a write that did not go through. */
+export type Feedback = { kind: "refused"; refusal: Refusal } | { kind: "notice"; message: string };
 
 /**
- * One busy latch and one refusal for every write on the panel. `execute` resolves the actor
- * (asking when the write makes someone the holder), sends the call, refreshes on success and
- * keeps the refusal on failure. It resolves to whether the write went through.
+ * The page's side of `createActionController`: the real API functions, `window.prompt`, the
+ * two remembered names, one busy latch and one feedback slot for every write on the panel.
+ * `run` resolves to whether the write went through. Field editors report their refusals
+ * here too (`report`), so a refusal has one look and one place.
  */
-export function useIssueActions(refresh: () => void) {
-  const [refusal, setRefusal] = useState<Refusal | null>(null);
+export function useIssueActions(refresh: () => void, extras: ContextExtras = {}) {
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
-  const [me, setMe] = useState<string | null>(() => (typeof window === "undefined" ? null : readActor()));
+  const [names, setNames] = useState<Names>(() =>
+    typeof window === "undefined" ? { worker: null, person: null } : { worker: readName("worker"), person: readName("person") },
+  );
+  const namesRef = useRef(names);
+  namesRef.current = names;
 
-  const execute = useCallback(
+  const controller = useMemo(
+    () =>
+      createActionController({
+        // The gate helpers accept the actor in their body; passed as a value, the name rides
+        // along without widening their declared shapes in lib/.
+        post: { action, requestGate, approveGate, requestGateChanges },
+        ask: (prompt, prefill) => window.prompt(prompt, prefill),
+        names: () => namesRef.current,
+        remember: (which, name) => {
+          saveName(which, name);
+          setNames((current) => ({ ...current, [which]: name }));
+        },
+      }),
+    [],
+  );
+
+  const run = useCallback(
     async (call: WriteCall): Promise<boolean> => {
       if (busy) return false;
-      const actor = resolveActor(call.actor, me, (prompt, remembered) => window.prompt(prompt, remembered));
-      if (actor === undefined) return false;
-      if (actor && call.actor.from !== "remembered" && actor !== me) {
-        saveActor(actor);
-        setMe(actor);
-      }
       setBusy(true);
-      setRefusal(null);
+      setFeedback(null);
       try {
-        await send(toRequest(call, actor));
-        refresh();
-        return true;
-      } catch (caught) {
-        setRefusal(describeRefusal(caught));
+        const outcome = await controller.run(call);
+        if (outcome.kind === "sent") {
+          refresh();
+          return true;
+        }
+        setFeedback(outcome.kind === "cancelled" ? { kind: "notice", message: outcome.message } : { kind: "refused", refusal: describeRefusal(outcome.error) });
         return false;
       } finally {
         setBusy(false);
       }
     },
-    [busy, me, refresh],
+    [busy, controller, refresh],
   );
 
-  return { busy, refusal, me, execute, dismiss: () => setRefusal(null) };
+  const report = useCallback((refusal: Refusal | null) => setFeedback(refusal ? { kind: "refused", refusal } : null), []);
+
+  return { busy, feedback, names, extras, run, report, dismiss: () => setFeedback(null) };
+}
+
+/** The context for a detail, as the controller's names and extras see it. */
+export function contextOf(detail: IssueDetail, controller: Pick<IssueActionsController, "names" | "extras">): ActionContext {
+  return actionContextOf(detail, controller.names, controller.extras);
 }
 
 export type IssueActionsController = ReturnType<typeof useIssueActions>;
@@ -169,8 +205,8 @@ export function StatusMenu({
   className?: string;
 }) {
   const { issue } = detail;
-  const ctx = actionContextOf(detail, controller.me);
-  const items = statusItems(ctx);
+  const ctx = contextOf(detail, controller);
+  const entries = statusEntries(statusItems(ctx), controller.run);
   const askable = overflowItems(ctx).some((item) => item.id === "request-approval");
   const currentRef = useRef<HTMLDivElement>(null);
 
@@ -198,7 +234,7 @@ export function StatusMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[min(20rem,calc(100vw-2rem))] p-1.5">
-        {items.map((item) => (
+        {entries.map((item) => (
           <DropdownMenuItem
             key={item.status}
             ref={item.current ? currentRef : undefined}
@@ -206,9 +242,7 @@ export function StatusMenu({
             aria-current={item.current ? "true" : undefined}
             disabled={!item.current && (controller.busy || !item.call)}
             className={cn("items-start gap-2.5 rounded-lg px-2 py-2", MENU_ITEM)}
-            onSelect={() => {
-              if (item.call) void controller.execute(item.call);
-            }}
+            onSelect={item.select}
           >
             <StatusIcon status={item.status} className="mt-0.5 size-4" />
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -263,7 +297,7 @@ export function PrimaryAction({
   className?: string;
   size?: "sm" | "lg";
 }) {
-  const item = primaryItem(actionContextOf(detail, controller.me));
+  const item = primaryEntry(primaryItem(contextOf(detail, controller)), controller.run, onReview);
   const Icon = ICON[item.id];
   return (
     <Button
@@ -273,10 +307,7 @@ export function PrimaryAction({
       disabled={controller.busy || Boolean(item.disabledReason)}
       title={item.disabledReason}
       aria-description={item.disabledReason}
-      onClick={() => {
-        if (item.id === "review") onReview();
-        else if (item.call) void controller.execute(item.call);
-      }}
+      onClick={item.click}
       className={cn("gap-1.5", className)}
     >
       <Icon aria-hidden className="size-4" />
@@ -309,7 +340,12 @@ export function OverflowMenu({
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const handingFocus = useRef(false);
-  const items = overflowItems(actionContextOf(detail, controller.me));
+  const items = overflowEntries(overflowItems(contextOf(detail, controller)), controller.run, {
+    requestApproval: () => {
+      handingFocus.current = true;
+      onRequestApproval();
+    },
+  });
 
   useEffect(() => {
     if (!copied) return;
@@ -320,7 +356,7 @@ export function OverflowMenu({
     return () => window.clearTimeout(id);
   }, [copied]);
 
-  const row = (item: ActionItem): ReactNode => {
+  const row = (item: (typeof items)[number]) => {
     const Icon = ICON[item.id];
     return (
       <DropdownMenuItem
@@ -329,12 +365,7 @@ export function OverflowMenu({
         disabled={controller.busy || Boolean(item.disabledReason)}
         reason={item.disabledReason}
         className={MENU_ITEM}
-        onSelect={() => {
-          if (item.id === "request-approval") {
-            handingFocus.current = true;
-            onRequestApproval();
-          } else if (item.call) void controller.execute(item.call);
-        }}
+        onSelect={item.select}
       >
         <Icon aria-hidden />
         {item.label}
@@ -388,15 +419,30 @@ export function OverflowMenu({
  * the thumb that caused it.
  */
 export function ActionRefusal({ controller, className }: { controller: IssueActionsController; className?: string }) {
-  const refusal = controller.refusal;
-  if (!refusal) return null;
-  const plain = refusal.crossOrigin ? refusal.message : plainRefusal(refusal.message, refusal.code);
-  const said = refusal.crossOrigin ? refusal.serverMessage : refusal.message;
+  if (!controller.feedback) return null;
+  return <RefusalNotice feedback={controller.feedback} onDismiss={controller.dismiss} className={className} />;
+}
+
+/**
+ * THE one refusal the detail shows, for actions and field editors alike: a plain sentence
+ * first, the tracker's own words one tap away, and a dismiss. A notice (nothing was sent,
+ * for example a cancelled name) uses the same shape in a neutral tone.
+ */
+export function RefusalNotice({ feedback, onDismiss, className }: { feedback: Feedback; onDismiss: () => void; className?: string }) {
+  const refused = feedback.kind === "refused";
+  const refusal = refused ? feedback.refusal : null;
+  const plain = refusal ? (refusal.crossOrigin ? refusal.message : plainRefusal(refusal.message, refusal.code)) : (feedback as { message: string }).message;
+  const said = refusal ? (refusal.crossOrigin ? refusal.serverMessage : refusal.message) : undefined;
   return (
     <div
-      role="alert"
+      role={refused ? "alert" : "status"}
       data-action-refusal=""
-      className={cn("flex items-start gap-3 rounded-xl border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/[0.06] py-2.5 pr-1.5 pl-3.5", className)}
+      data-feedback={feedback.kind}
+      className={cn(
+        "flex items-start gap-3 rounded-xl border py-2.5 pr-1.5 pl-3.5",
+        refused ? "border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/[0.06]" : "bg-surface-sunken",
+        className,
+      )}
     >
       <div className="min-w-0 flex-1">
         <p className="m-0 text-body font-medium text-foreground wrap-anywhere" data-refusal-plain="">
@@ -412,7 +458,7 @@ export function ActionRefusal({ controller, className }: { controller: IssueActi
           </details>
         ) : null}
       </div>
-      <Button variant="ghost" size="icon" aria-label="Dismiss" onClick={controller.dismiss} className="focus-ring size-8 shrink-0 text-text-secondary pointer-coarse:size-10">
+      <Button variant="ghost" size="icon" aria-label="Dismiss" onClick={onDismiss} className="focus-ring size-8 shrink-0 text-text-secondary pointer-coarse:size-10">
         <X className="size-4" />
       </Button>
     </div>
@@ -438,7 +484,7 @@ export function GateSection({
   onCloseRequest: () => void;
 }) {
   const { issue, gate, childrenQueued } = detail;
-  const ctx = { ws: detail.workspace, issue };
+  const handlers = gateHandlers({ ws: detail.workspace, issue }, controller.run);
   if (isActiveGate(gate)) {
     return (
       <GateReview
@@ -449,10 +495,10 @@ export function GateSection({
         // Straight through from `/api/issue`, unfiltered: eligibility lives in the store.
         queue={childrenQueued}
         busy={controller.busy}
-        onApproveAll={(comment) => void controller.execute(gateCalls.approveAll(ctx, comment))}
+        onApproveAll={(comment) => void handlers.approveAll(comment)}
         // The ticked rows by id, never by number (`lib/write-ref.ts`).
-        onApproveSelected={(refs) => void controller.execute(gateCalls.approveSelected(ctx, idsOf(childrenQueued, refs)))}
-        onRequestChanges={(comment) => controller.execute(gateCalls.requestChanges(ctx, comment))}
+        onApproveSelected={(refs) => void handlers.approveSelected(idsOf(childrenQueued, refs))}
+        onRequestChanges={handlers.requestChanges}
       />
     );
   }
@@ -463,7 +509,7 @@ export function GateSection({
         childCount={detail.children.length}
         onCancel={onCloseRequest}
         onRequest={(owner) => {
-          void controller.execute(gateCalls.request(ctx, owner)).then((ok) => {
+          void handlers.requestApproval(owner).then((ok) => {
             if (ok) onCloseRequest();
           });
         }}

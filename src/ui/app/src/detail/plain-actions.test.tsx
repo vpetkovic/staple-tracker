@@ -20,7 +20,7 @@ import {
   overflowItems,
   plainRefusal,
   primaryItem,
-  resolveActor,
+  queueAheadOf,
   statusChoices,
   statusItems,
   statusSentence,
@@ -47,7 +47,7 @@ const categoryOf = (status: string): StatusCategory => CATEGORY[status] ?? "unst
 
 /** The context the components build, on a hub workspace that is not the default one. */
 function ctx(d: IssueDetail, over: Partial<ActionContext> = {}): ActionContext {
-  return { ...actionContextOf({ ...d, workspace: "exercises" }, "tester"), order: ORDER, categoryOf, labelOf: (s) => s, ...over };
+  return { ...actionContextOf({ ...d, workspace: "exercises" }, { worker: "tester", person: null }), order: ORDER, categoryOf, labelOf: (s) => s, ...over };
 }
 
 const GATE = { state: "pending" as const, owner: "VP", requestedBy: "lead", requestedAt: "2026-09-01T22:00:00Z", resolvedBy: null, resolvedAt: null };
@@ -123,7 +123,7 @@ describe("every write carries its workspace and its issue", () => {
 describe("stopping work", () => {
   it("sends a release, as the remembered holder, when this browser is the holder", () => {
     const stop = overflowItems(ctx(HELD("tester"))).find((i) => i.id === "release")!;
-    expect(stop.call).toMatchObject({ payload: { type: "release" }, actor: { from: "remembered" } });
+    expect(stop.call).toMatchObject({ payload: { type: "release" }, actor: { from: "worker" } });
     expect(toRequest(stop.call!, "tester")).toMatchObject({ fn: "action", target: { actor: "tester" }, payload: { type: "release" } });
   });
 
@@ -136,7 +136,7 @@ describe("stopping work", () => {
   it("becomes Take it over and Free it up once the holder has gone quiet", () => {
     const quiet = detail({ issue: issue({ status: "in_progress", checkoutAgent: "dux" }), claim: claim({ heldBy: "dux", idleSeconds: 7200 }) });
     const c = ctx(quiet);
-    expect(primaryItem(c).call).toMatchObject({ payload: { type: "checkout", stealIfIdleSeconds: 1800 }, actor: { from: "prompt" } });
+    expect(primaryItem(c).call).toMatchObject({ payload: { type: "checkout", stealIfIdleSeconds: 1800 }, actor: { from: "worker-prompt" } });
     expect(overflowItems(c).find((i) => i.id === "free")?.call).toMatchObject({ payload: { type: "release", ifIdleSeconds: 1800 } });
     expect(overflowItems(c).find((i) => i.id === "release")).toBeUndefined();
   });
@@ -146,7 +146,7 @@ describe("the one primary action, chosen by state", () => {
   const primary = (d: IssueDetail, over: Partial<ActionContext> = {}) => primaryItem(ctx(d, over));
 
   it("is Start work on a claimable task, asking who is working", () => {
-    expect(primary(detail({ issue: issue({ status: "todo" }) })).call).toMatchObject({ payload: { type: "checkout" }, actor: { from: "prompt", prompt: ACTION_WORDS.checkoutPrompt } });
+    expect(primary(detail({ issue: issue({ status: "todo" }) })).call).toMatchObject({ payload: { type: "checkout" }, actor: { from: "worker-prompt", prompt: ACTION_WORDS.checkoutPrompt } });
   });
 
   it("is Mark done while held, in review, or active with nobody holding it", () => {
@@ -175,18 +175,62 @@ describe("the one primary action, chosen by state", () => {
   });
 });
 
-describe("whose name a write carries", () => {
-  const ask = (answer: string | null) => () => answer;
-  it("asks for Start work and Take it over, and a cancelled prompt means do nothing", () => {
-    expect(resolveActor({ from: "prompt", prompt: "?" }, "tester", ask("ada"))).toBe("ada");
-    expect(resolveActor({ from: "prompt", prompt: "?" }, "tester", ask(null))).toBeUndefined();
-    expect(resolveActor({ from: "prompt", prompt: "?" }, "tester", ask("  "))).toBeUndefined();
+describe("whose name a write carries (the controller resolves it; see action-controller.test.ts)", () => {
+  it("claims carry the working name; status changes and decisions carry the person", () => {
+    const c = ctx(detail({ issue: issue({ status: "todo", assignee: "vp" }) }));
+    expect(primaryItem(c).call?.actor.from).toBe("worker-prompt");
+    expect(statusItems(c).find((i) => i.call)?.call?.actor).toEqual({ from: "person" });
+    expect(gateCalls.approveAll(c).actor.from).toBe("person-confirm");
+    expect(gateCalls.requestChanges(c, "x").actor.from).toBe("person-confirm");
+    expect(gateCalls.request(c, "VP").actor.from).toBe("person-confirm");
+  });
+});
+
+describe("what a task waits on, beyond this workspace", () => {
+  const cross = (over: Record<string, unknown> = {}) => ({ identifier: "EXE-9", workspace: "exercises-api", status: "todo", resolved: false, unresolvable: false, ...over });
+
+  it("holds Start work back for an open blocker in another workspace, as the queue does", () => {
+    expect(primaryItem(ctx(detail({ issue: issue({ status: "todo" }), crossBlockers: [cross()] })))).toMatchObject({ id: "start", disabledReason: "Waiting on 1 other task to finish first." });
   });
 
-  it("signs a gate decision with the remembered name, and asks only when there is none", () => {
-    const call = gateCalls.approveAll(ctx(detail()));
-    expect(resolveActor(call.actor, "tester", ask("never asked"))).toBe("tester");
-    expect(resolveActor(call.actor, null, ask("VP"))).toBe("VP");
+  it("says a blocker this computer can't see plainly, never 'to finish'", () => {
+    const gone = detail({ issue: issue({ status: "todo" }), crossBlockers: [cross({ identifier: "STA-9999", workspace: "staple", status: null, unresolvable: true })] });
+    const withWs = { ...actionContextOf({ ...gone, workspace: "exercises" }, { worker: null, person: null }, { workspaces: ["staple"] }), order: ORDER, categoryOf, labelOf: (s: string) => s };
+    expect(withWs.unreachable).toEqual([{ identifier: "STA-9999", workspace: "staple", missing: "task" }]);
+    expect(primaryItem(withWs).disabledReason).toBe("Waiting on a task this computer can't see (STA-9999).");
+    const noWs = actionContextOf({ ...gone, workspace: "exercises" }, { worker: null, person: null }, { workspaces: [] });
+    expect(noWs.unreachable[0]!.missing).toBe("workspace");
+    const told = actionContextOf({ ...gone, crossBlockers: [{ ...gone.crossBlockers[0]!, missing: "workspace" } as never], workspace: "exercises" }, { worker: null, person: null }, { workspaces: ["staple"] });
+    expect(told.unreachable[0]!.missing).toBe("workspace");
+  });
+});
+
+describe("the strict queue", () => {
+  const rows = [
+    { issueId: "a", identifier: "STA-28", title: "Queue head", position: 1, unqueued: false, eligibility: "eligible" },
+    { issueId: "uuid-1", identifier: "STA-88", title: "This", position: 5, unqueued: true, eligibility: "eligible" },
+  ];
+
+  it("finds the row that must be taken first, as the store's order check does", () => {
+    expect(queueAheadOf(rows, "uuid-1")).toEqual({ identifier: "STA-28", title: "Queue head" });
+    expect(queueAheadOf([{ ...rows[0]!, eligibility: "claimed" }, rows[1]!], "uuid-1")).toBeNull();
+    expect(queueAheadOf(rows, "a")).toBeNull();
+  });
+
+  it("holds Start work and In Progress back, naming the head by its title", () => {
+    const c = ctx(detail({ issue: issue({ status: "todo", assignee: "vp" }) }), { queueAhead: { identifier: "STA-28", title: "Queue head" } });
+    expect(primaryItem(c).disabledReason).toBe("“Queue head” is next in the queue.");
+    expect(statusItems(c).find((i) => i.status === "in_progress")?.disabledReason).toBe("“Queue head” is next in the queue.");
+  });
+});
+
+describe("a queued child never gets a way round its parent's gate", () => {
+  it("holds In Progress back with the gate's reason, with or without an assignee", () => {
+    for (const assignee of [null, "vp"]) {
+      const c = ctx(detail({ issue: issue({ status: "todo", assignee }), queuedBy: QUEUED }));
+      expect(statusItems(c).find((i) => i.status === "in_progress")).toMatchObject({ disabledReason: "Waiting for VP to approve the parent task first." });
+      expect(statusItems(c).find((i) => i.status === "in_progress")?.call).toBeUndefined();
+    }
   });
 });
 
@@ -233,6 +277,13 @@ describe("the status sentence", () => {
 });
 
 describe("a refusal, said plainly", () => {
+  it("words every refusal code, including the strict queue's", () => {
+    expect(plainRefusal("STA-294 is later in the queue than STA-28, which is ready. Take STA-28, or ask a human to reorder or override.", "out_of_order")).toBe("STA-28 is next in the queue. Take that first, or change the queue's order.");
+    for (const code of ["out_of_order", "gated", "revision_conflict", "cycle", "duplicate", "auth", "forbidden", "revoked", "rate_limited", "unavailable", "offline", "payload_too_large", "epoch_changed", "cursor_invalid", "schema_ahead", "protocol_unsupported"]) {
+      expect(plainRefusal("x", code), code).not.toBe("That didn't go through.");
+    }
+  });
+
   it("translates the store's sentences a person would hit", () => {
     expect(plainRefusal("Cannot release: held by review-bot, not ui", "conflict")).toBe("Only review-bot can stop working on this.");
     expect(plainRefusal('Cannot set "awaiting_approval" directly — park the issue with `staple gate <ref> --owner <who>`', "validation")).toBe("To wait for someone's approval, use Ask for approval in the ⋯ menu.");

@@ -22,12 +22,14 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { IssueDetail } from "@/lib/types";
+import { DatabaseSync } from "node:sqlite";
+import { settingValueIn, type WorkspaceSettingsEnvelope } from "@/lib/settings";
+import type { IssueDetail, QueueView } from "@/lib/types";
 import { setClock } from "../../../../core/types.ts";
 import { initWorkspace } from "../../../../core/workspace.ts";
 import { startUiServer } from "../../../server.ts";
 import { actionContextOf } from "./IssueActions";
-import { overflowItems, primaryItem, statusItems, toRequest, type ActionItem, type StatusItem, type WriteCall } from "./plain-actions";
+import { overflowItems, primaryItem, queueAheadOf, statusItems, toRequest, type ActionContext, type ActionItem, type StatusItem, type WriteCall } from "./plain-actions";
 
 type Store = ReturnType<typeof initWorkspace>["store"];
 
@@ -59,13 +61,108 @@ afterAll(() => {
 /** One state of the world: build it in a fresh workspace, return the issue to look at. */
 interface Scenario {
   name: string;
+  /** The working name this browser remembers (Start work's last name). */
   me: string | null;
-  build: (store: Store) => string;
+  build: (store: Store, ws: string) => string;
+  /**
+   * Items the page holds back ON PURPOSE although the store alone would accept them, keyed
+   * to the words the reason must contain: work waiting on another workspace (the queue reads
+   * that as blocked too), and In Progress by the status menu while a gate or the strict queue
+   * says no (a way round them). For these the audit asserts the hold-back and its reason.
+   */
+  stricter?: Record<string, string>;
+}
+
+/** Link `blocked` (in `ws`) behind a task in another workspace, as the hub records it. */
+function crossLink(blockerWs: string, blockerIdentifier: string, blockedWs: string, blocked: string): void {
+  const hub = new DatabaseSync(join(home, "hub.db"));
+  try {
+    hub
+      .prepare("INSERT INTO cross_links (blocker_ws, blocker_identifier, blocked_ws, blocked_identifier, type, created_at) VALUES (?, ?, ?, ?, 'blocks', ?)")
+      .run(blockerWs, blockerIdentifier, blockedWs, blocked, new Date(T0).toISOString());
+  } finally {
+    hub.close();
+  }
+}
+
+/** A task in the second workspace, open, for a cross-workspace blocker. */
+function otherTask(): string {
+  const other = initWorkspace({ global: true, slug: "other" }).store;
+  try {
+    return other.createIssue({ title: `other ${++titles}` }).identifier;
+  } finally {
+    other.db.close();
+  }
 }
 
 const ME = "tester";
 
 const SCENARIOS: Scenario[] = [
+  {
+    name: "todo, waiting only on an open task in another workspace",
+    me: ME,
+    build: (s, ws) => {
+      const id = todo(s);
+      crossLink("other", otherTask(), ws, id);
+      return id;
+    },
+    stricter: { "primary:start": "Waiting on 1 other task to finish first." },
+  },
+  {
+    name: "todo, waiting on a task missing from a workspace on this computer",
+    me: ME,
+    build: (s, ws) => {
+      const id = todo(s);
+      crossLink("other", `${otherTask().split("-")[0]}-9999`, ws, id);
+      return id;
+    },
+    stricter: { "primary:start": "Waiting on a task this computer can't see" },
+  },
+  {
+    name: "todo, waiting on a task in a workspace not on this computer",
+    me: ME,
+    build: (s, ws) => {
+      const id = todo(s);
+      crossLink("gone", "GON-1", ws, id);
+      return id;
+    },
+    stricter: { "primary:start": "Waiting on a task this computer can't see (GON-1)" },
+  },
+  {
+    name: "strict queue, another task is next",
+    me: ME,
+    build: (s) => {
+      (s as unknown as { setSetting(k: string, v: unknown, a: string): void }).setSetting("queue.policy", "strict", "w");
+      const head = todo(s);
+      (s as unknown as { queue(): { mutate(op: string, args: object, actor: string): void } }).queue().mutate("add", { ref: head }, "w");
+      return todo(s);
+    },
+  },
+  {
+    name: "strict queue, another task is next, and this one has an assignee",
+    me: ME,
+    build: (s) => {
+      (s as unknown as { setSetting(k: string, v: unknown, a: string): void }).setSetting("queue.policy", "strict", "w");
+      const head = todo(s);
+      (s as unknown as { queue(): { mutate(op: string, args: object, actor: string): void } }).queue().mutate("add", { ref: head }, "w");
+      const id = todo(s);
+      s.updateIssue(id, { assignee: "vp" }, "w");
+      return id;
+    },
+    stricter: { "status:in_progress": "is next in the queue." },
+  },
+  {
+    name: "a queued child with an assignee",
+    me: ME,
+    build: (s) => {
+      const parent = todo(s);
+      const child = s.createIssue({ title: `child ${++titles}`, parent }).identifier;
+      s.updateIssue(child, { status: "todo", assignee: "vp" }, "w");
+      s.gateIssue(parent, { owner: "VP" }, "lead");
+      return child;
+    },
+    stricter: { "status:in_progress": "Waiting for VP to approve the parent task first." },
+  },
   { name: "backlog, nobody on it", me: ME, build: (s) => s.createIssue({ title: `task ${++titles}` }).identifier },
   { name: "todo, nobody on it", me: ME, build: (s) => todo(s) },
   {
@@ -188,6 +285,8 @@ const SCENARIOS: Scenario[] = [
 ];
 
 let titles = 0;
+/** The workspaces on this computer, as the page's session lists them. */
+const created: string[] = ["other"];
 
 function todo(store: Store): string {
   const id = store.createIssue({ title: `task ${++titles}` }).identifier;
@@ -208,8 +307,9 @@ function world(scenario: Scenario): { ws: string; ref: string } {
   const n = ++counter;
   const ws = [676, 26, 1].map((d, i) => String.fromCharCode((i === 0 ? 98 : 97) + (Math.floor(n / d) % 26))).join("");
   const store = initWorkspace({ global: true, slug: ws }).store;
+  created.push(ws);
   try {
-    return { ws, ref: scenario.build(store) };
+    return { ws, ref: scenario.build(store, ws) };
   } finally {
     store.db.close();
   }
@@ -240,9 +340,22 @@ function send(call: WriteCall, actor: string | null) {
 
 type Offered = { key: string; item: ActionItem | StatusItem };
 
+async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${origin}${path}`, { headers: { "x-staple-token": ui.token } });
+  return (await response.json()) as T;
+}
+
+/** The context exactly as the page builds it: names, workspaces, and the strict queue's head. */
+async function contextFor(scenario: Scenario, ws: string, detail: IssueDetail): Promise<ActionContext> {
+  const settings = await getJson<WorkspaceSettingsEnvelope>(`/api/settings?ws=${ws}`);
+  const strict = settingValueIn(settings, "queue.policy")?.value === "strict";
+  const queueAhead = strict ? queueAheadOf((await getJson<QueueView>(`/api/queue?ws=${ws}`)).effective, detail.issue.id) : null;
+  return actionContextOf(detail, { worker: scenario.me, person: null }, { workspaces: created, queueAhead });
+}
+
 async function offered(scenario: Scenario): Promise<Offered[]> {
   const { ws, ref } = world(scenario);
-  const ctx = actionContextOf(await detailOf(ws, ref), scenario.me);
+  const ctx = await contextFor(scenario, ws, await detailOf(ws, ref));
   return [
     { key: `primary:${primaryItem(ctx).id}`, item: primaryItem(ctx) },
     ...overflowItems(ctx).map((item) => ({ key: `more:${item.id}`, item })),
@@ -268,7 +381,7 @@ describe("every action the detail offers is one the store accepts", () => {
         // A fresh world per write, so each item is judged against the state it was offered in.
         const { ws, ref } = world(scenario);
         const detail = await detailOf(ws, ref);
-        const ctx = actionContextOf(detail, scenario.me);
+        const ctx = await contextFor(scenario, ws, detail);
         const all: Offered[] = [
           { key: `primary:${primaryItem(ctx).id}`, item: primaryItem(ctx) },
           ...overflowItems(ctx).map((item) => ({ key: `more:${item.id}`, item })),
@@ -281,11 +394,19 @@ describe("every action the detail offers is one the store accepts", () => {
           expect(response.status, `${scenario.name} / ${key} was offered but refused: ${response.text}`).toBe(200);
         } else if (item.disabledReason) {
           const body = naive(key, { ws, ref: detail.issue.id, me: scenario.me });
-          if (body) {
+          const intended = scenario.stricter?.[key];
+          if (intended) {
+            // Held back on purpose: assert the reason, and that it really is stricter than the store.
+            expect(item.disabledReason, `${scenario.name} / ${key}`).toContain(intended);
+            if (body) expect((await post("/api/action", body)).status, `${scenario.name} / ${key} is stricter than the store`).toBe(200);
+          } else if (body) {
             const response = await post("/api/action", body);
             expect(response.status, `${scenario.name} / ${key} was held back ("${item.disabledReason}") but the store accepts it`).not.toBe(200);
           }
         }
+      }
+      for (const key of Object.keys(scenario.stricter ?? {})) {
+        expect(keys, `${scenario.name}: ${key} is listed`).toContain(key);
       }
     }, 60_000);
   }
@@ -310,11 +431,17 @@ describe("the primary action per state", () => {
     "a parent with open children": "start",
     "a parent parked behind a review": "review",
     "a child queued behind its parent's review": "start (disabled)",
+    "todo, waiting only on an open task in another workspace": "start (disabled)",
+    "todo, waiting on a task missing from a workspace on this computer": "start (disabled)",
+    "todo, waiting on a task in a workspace not on this computer": "start (disabled)",
+    "strict queue, another task is next": "start (disabled)",
+    "strict queue, another task is next, and this one has an assignee": "start (disabled)",
+    "a queued child with an assignee": "start (disabled)",
   };
   for (const scenario of SCENARIOS) {
     it(scenario.name, async () => {
       const { ws, ref } = world(scenario);
-      const primary = primaryItem(actionContextOf(await detailOf(ws, ref), scenario.me));
+      const primary = primaryItem(await contextFor(scenario, ws, await detailOf(ws, ref)));
       expect(`${primary.id}${primary.disabledReason ? " (disabled)" : ""}`).toBe(expected[scenario.name]);
     });
   }
