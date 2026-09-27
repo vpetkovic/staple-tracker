@@ -153,6 +153,26 @@ function useQueueRowConfig() {
   return useMemo(() => resolveTaskListConfig("tree", { columns: QUEUE_ROW_COLUMNS, plan, desk: true }), [plan]);
 }
 
+/**
+ * The resolver's sentence for a row, as its caption — except, on the desk row, what the row
+ * already says: a claim (the who cue: "Working", "Quiet 1h") and a blocker (the "Blocked by 1"
+ * cue). "STA-313 is held by dux-shell" beside the holder's avatar would say it twice.
+ */
+export function queueCaption(
+  effective: EffectiveQueueRow | null,
+  config: { desk?: boolean; plan?: { layout: string } },
+  row: Pick<TaskRow, "claim" | "issue"> & { deps?: TaskRow["deps"] },
+): string | undefined {
+  if (!effective) return undefined;
+  const desk = config.desk && config.plan?.layout === "line";
+  // Only when the who cue really names the holder; a row built from the plan alone may not.
+  const whoSaysIt = Boolean(row.claim?.heldBy ?? row.issue.checkoutAgent);
+  if (desk && effective.eligibility === "claimed" && whoSaysIt) return undefined;
+  // Likewise a blocker: the row's "Blocked by 1" cue says it, and names them on hover.
+  if (desk && effective.eligibility === "blocked" && (row.deps?.blockedBy.length ?? 0) > 0) return undefined;
+  return reasonLabel(effective) ?? undefined;
+}
+
 /** What the view shows when a write went wrong, and how it went wrong. */
 export interface QueueWriteFailure {
   kind: "conflict" | "refusal";
@@ -381,7 +401,7 @@ export function QueueTreeLine({
            * question a reader asks while SCANNING, and an answer that needs a click first is
            * an answer they will not get.
            */
-          caption={entry.effective ? reasonLabel(entry.effective) ?? undefined : undefined}
+          caption={queueCaption(entry.effective, config, entry.row)}
           onOpen={onOpen}
           onFocus={onFocus}
           onKeyDown={onKeyDown}
@@ -673,7 +693,7 @@ function PlanRowContent({
             semantics="bare"
             now={now}
             isExpanded={expanded}
-            caption={plan.effective ? reasonLabel(plan.effective) ?? undefined : undefined}
+            caption={queueCaption(plan.effective, config, row)}
             onOpen={() => onOpen(plan.row.workspace, entry.identifier)}
             onToggleExpand={foldable ? onToggleExpand : undefined}
             actionsMenu={actions ? (trigger, control) => actions(row, trigger, control) : undefined}
@@ -733,7 +753,7 @@ export function QueueBoard({
   onReload: () => void;
   onRetry: () => void;
   onDismissFailure: () => void;
-  /** The desktop page (720px and up): a centred column, plain words and a progress summary. */
+  /** The desktop page (the shell's desk breakpoint and up): a centred column, plain words and a progress summary. */
   desk?: boolean;
 }) {
   const resolved = view.entries.filter((entry) => entry.resolved).length;
@@ -873,7 +893,7 @@ export function QueueBoard({
           }}
           placeholder="Queue a task, epic or milestone…"
           actionLabel="Queue another…"
-          searchPlaceholder="search or type an identifier…"
+          searchPlaceholder={desk ? "Search by title or reference…" : "search or type an identifier…"}
           emptyText="nothing matches — or it is already in the plan"
           disabled={busy}
           mono

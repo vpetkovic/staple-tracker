@@ -94,7 +94,7 @@ import { ProgressStrip } from "@/views/ProgressStrip";
 import { EmptyState as PlainEmptyState } from "@/components/plain/States";
 import "./milestones-desk.css";
 
-/** The desktop page, from 720px up. The phone keeps the page exactly as it shipped. */
+/** The desktop page, from the shell's desk breakpoint up. The phone keeps the page as it shipped. */
 export function useMilestonesDesk(): boolean {
   return useRowPlan().layout === "line";
 }
@@ -306,10 +306,21 @@ export interface MemberWriteFailure {
 /** The panel row, plus the disclosure column — that column is what carries the indent. */
 const MEMBER_ROW_COLUMNS = { disclosure: true } as const;
 
-/** The member row at this width — the tree's own ladder (row-layout.ts). */
+/**
+ * The member row at this width — the tree's own ladder (row-layout.ts). On the desk it is the
+ * list's desktop row (identifier alone, the kind slot, the cue cluster), with no date and no
+ * quick actions: the member row carries its own open, move and remove buttons.
+ */
+const DESK_MEMBER_COLUMNS = { select: false, disclosure: true, date: false, actions: false, worklog: false } as const;
 function useMemberRowConfig() {
   const plan = useRowPlan();
-  return useMemo(() => resolveTaskListConfig("panel", { columns: MEMBER_ROW_COLUMNS, plan }), [plan]);
+  return useMemo(
+    () =>
+      plan.layout === "line"
+        ? resolveTaskListConfig("tree", { columns: DESK_MEMBER_COLUMNS, plan, desk: true })
+        : resolveTaskListConfig("panel", { columns: MEMBER_ROW_COLUMNS, plan }),
+    [plan],
+  );
 }
 
 /** The member `⋯` menu, held open by its own state so phone Back can close it. */
@@ -497,6 +508,7 @@ export function MilestoneDetailPane({
   onReload,
   onDismissFailure,
   desk = false,
+  exampleRef = null,
 }: {
   view: MilestoneViewData;
   /** The queue's effective rows, which is where blocked and gated are counted from. */
@@ -515,6 +527,8 @@ export function MilestoneDetailPane({
   onDismissFailure: () => void;
   /** The desktop pane: a plain header, a progress card, the raw rollups under Show details. */
   desk?: boolean;
+  /** A real reference from this workspace, for the add box's example. */
+  exampleRef?: string | null;
 }) {
   const { milestone } = view;
   const [addRef, setAddRef] = useState("");
@@ -703,7 +717,7 @@ export function MilestoneDetailPane({
           <Input
             value={addRef}
             aria-label="Identifier to add"
-            placeholder={desk ? "Task, like STA-66" : "STA-66"}
+            placeholder={desk ? (exampleRef ? `Task, like ${exampleRef}` : "Task reference") : "STA-66"}
             disabled={busy}
             onChange={(event) => setAddRef(event.target.value)}
             className={cn("h-7 text-[12px]", desk ? "h-8 w-40" : "w-28 font-mono")}
@@ -948,7 +962,13 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
   );
 
   const detailPane = !selectedRef ? (
-    <EmptyState>select a milestone</EmptyState>
+    desk ? (
+      <PlainEmptyState compact icon={Milestone} title="Pick a milestone">
+        Choose one on the left to see what is in it and how far it has got.
+      </PlainEmptyState>
+    ) : (
+      <EmptyState>select a milestone</EmptyState>
+    )
   ) : detail.error ? (
     <ErrorState error={detail.error} />
   ) : !view ? (
@@ -970,6 +990,7 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
       onReload={onReload}
       onDismissFailure={() => setFailure(null)}
       desk={desk}
+      exampleRef={(session.issues.data ?? []).find((r) => r.workspace === workspace && r.issue.kind !== "milestone")?.issue.identifier ?? null}
     />
   );
 

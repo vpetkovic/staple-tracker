@@ -30,6 +30,7 @@ import { QueueBoard } from "../queue/QueueView";
 import { effectivePreview, planRows } from "../queue/queue-model";
 import { queueSummary, summarySentence } from "../queue/queue-summary";
 import { TreeGrid } from "./TreeGrid";
+import { attachRowCues, buildRowCueIndex } from "@/components/task-list/row-cues";
 
 /** Fixed, so due-date words are pinned: October cut is due 2026-10-31. */
 const NOW = new Date("2026-09-04T12:00:00.000Z");
@@ -444,5 +445,39 @@ describe("changing a status from the row", () => {
     const nextRow = markup.indexOf('data-testid="task-row"', rowAt + 10);
     expect(noticeAt).toBeGreaterThan(rowAt);
     expect(noticeAt).toBeLessThan(nextRow);
+  });
+});
+
+describe("the plan and blocker cues in plain words (single-workspace list)", () => {
+  const cued = () => {
+    const titles = new Map(milestones.map((m) => [m.milestone.identifier, m.milestone.title]));
+    const rows = attachRowCues(issues, buildRowCueIndex(queue, titles));
+    return atWidth(DESK, () =>
+      renderToStaticMarkup(
+        <TreeGrid rows={rows} allRows={rows} mode="workspace" groupBy="none" currentRef={null} showResolved onOpen={noop} onCloseDrawer={noop} onVisibleOrder={noop} />,
+      ),
+    );
+  };
+
+  it("shows the plan as Next and Queued pills after the title, never as marks before it", () => {
+    const markup = cued();
+    expect(markup).toMatch(/data-pickup-pill="(next|queued)"/);
+    expect(markup).not.toMatch(/<span aria-hidden="true">(▸|·|#\d+|plan #\d+)<\/span>/);
+    // Every cued row still carries the whole sentence for a screen reader.
+    const cues = [...markup.matchAll(/data-testid="row-pickup-cue"[\s\S]*?<\/span><\/span>/g)].map((m) => m[0]);
+    expect(cues.length).toBeGreaterThan(0);
+    for (const cue of cues) expect(cue).toContain('class="sr-only"');
+  });
+
+  it("names the milestone a task is planned under in a chip", () => {
+    expect(cued()).toContain('class="staple-row-milestone-name">October cut<');
+  });
+
+  it("gives the blocked task the strong, worded cue and the blocking task a neutral one", () => {
+    const markup = list(DESK);
+    // MSC-4 waits on MSC-3.
+    expect(row(markup, SCENARIO.q2)).toMatch(/data-kind="blocked-by" data-words=""[\s\S]*?<span>Blocked by 1<\/span>/);
+    expect(row(markup, SCENARIO.q1)).toMatch(/data-kind="blocks" data-words=""[\s\S]*?<span>Blocks 1<\/span>/);
+    expect(row(markup, SCENARIO.q1)).not.toContain('data-kind="blocked-by"');
   });
 });
