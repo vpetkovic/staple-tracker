@@ -259,7 +259,7 @@ export interface TaskRowLineProps {
    * a ready-made trigger and the caller wraps it in a menu that knows how to write. Absent
    * means the row draws no status action (a read-only surface).
    */
-  statusMenu?: (trigger: ReactNode) => ReactNode;
+  statusMenu?: (trigger: ReactNode, control: RowMenuControl) => ReactNode;
   onToggleSelect?: () => void;
   onFocus?: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -311,6 +311,8 @@ export function TaskRowLine({
   const geometry = plan.geometry;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuControl: RowMenuControl = { open: menuOpen, onOpenChange: setMenuOpen };
+  const [statusOpen, setStatusOpen] = useState(false);
+  const statusControl: RowMenuControl = { open: statusOpen, onOpenChange: setStatusOpen };
   // Long-press opens the row's menu on touch. Only where there IS a menu: a row whose `⋯`
   // would only open the drawer already does that on a plain tap.
   // `bare` rows get it too: the Queue's plan rows are bare (the reorder list owns their
@@ -630,7 +632,8 @@ export function TaskRowLine({
                         className="staple-row-quick-btn"
                         data-quick="status"
                         aria-label={`Change status of ${issue.identifier}`}
-                        title="Change status"
+                        aria-keyshortcuts="S"
+                        title="Change status (S)"
                         // Pointer shortcuts: the keyboard opens the task with Enter and changes
                         // it there, so these do not add a tab stop to every row.
                         tabIndex={-1}
@@ -638,6 +641,7 @@ export function TaskRowLine({
                       >
                         <StatusIcon status={issue.status} />
                       </button>,
+                      statusControl,
                     )
                   : null}
                 <button
@@ -815,7 +819,33 @@ export function TaskRowLine({
       onPointerCancel={longPress.onPointerEnd}
       onContextMenu={longPress.onContextMenu}
       onFocus={bare ? undefined : onFocus}
-      onKeyDown={bare ? undefined : onKeyDown}
+      onKeyDown={
+        bare
+          ? undefined
+          : (event) => {
+              /*
+               * S changes the status of the focused row, on the desk row that offers it: the
+               * keyboard's way to the quick action the pointer gets on hover. Only a bare
+               * key on the row itself, so typing in a field inside it is never taken.
+               */
+              if (
+                desk &&
+                statusMenu &&
+                !ghost &&
+                event.target === event.currentTarget &&
+                (event.key === "s" || event.key === "S") &&
+                !event.metaKey &&
+                !event.ctrlKey &&
+                !event.altKey
+              ) {
+                event.preventDefault();
+                event.stopPropagation();
+                setStatusOpen(true);
+                return;
+              }
+              onKeyDown?.(event);
+            }
+      }
       className={cn(
         "staple-row",
         anySelected && !ghost && "staple-row-selecting",

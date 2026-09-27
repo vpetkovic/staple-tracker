@@ -1,16 +1,13 @@
 /**
- * The row's quick "change status" menu — the first of the desktop row's hover actions.
+ * The row's quick "change status" menu — the desktop row's first action, and the same list
+ * as the "Change status" submenu in the row's `⋯` menu (for a keyboard or a finger).
  *
- * The menu is a list of the workspace's own statuses, each with its glyph and its configured
- * name, and picking one applies it: the same `status` action the detail's status control
- * sends, so there is one write path. The current status is shown checked and cannot be
- * picked again.
- *
- * Like `QueueRowMenu`, it does not know how to write; the caller hands it `onPick` and owns
- * the refusal. It only knows how to ask.
+ * The choices are the ROW'S workspace vocabulary (`row-status.ts`), loaded by the caller;
+ * `null` while they load. Picking one hands it to `onPick`; the caller writes and owns the
+ * refusal, which it shows at the row.
  */
 import { Check } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,43 +16,76 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useBackToClose } from "@/lib/back-to-close";
-import { configuredStatusOrder, statusLabel } from "@/lib/settings";
-import { ISSUE_STATUSES, type StatusId } from "@/lib/types";
-import { statusChoices } from "@/detail/plain-actions";
+import type { RowStatusChoice } from "./row-status";
 import { StatusIcon } from "./StatusIcon";
+
+/** The status items themselves, for this menu and for the `⋯` menu's submenu. */
+export function StatusChoiceItems({
+  choices,
+  disabled = false,
+  onPick,
+}: {
+  choices: readonly RowStatusChoice[] | null;
+  disabled?: boolean;
+  onPick: (status: string, label: string) => void;
+}) {
+  if (choices === null) {
+    return (
+      <DropdownMenuItem disabled data-status-loading="">
+        Loading this workspace's statuses…
+      </DropdownMenuItem>
+    );
+  }
+  if (choices.length === 0) {
+    return (
+      <DropdownMenuItem disabled data-status-failed="">
+        Couldn't load this workspace's statuses. Open the task to change it.
+      </DropdownMenuItem>
+    );
+  }
+  return (
+    <>
+      {choices.map((choice) => (
+        <DropdownMenuItem
+          key={choice.id}
+          data-status-choice={choice.id}
+          data-current={choice.current ? "" : undefined}
+          disabled={disabled || choice.disabled}
+          onSelect={() => onPick(choice.id, choice.label)}
+        >
+          <StatusIcon status={choice.id} category={choice.category} />
+          <span className="flex-1">{choice.label}</span>
+          {choice.current ? <Check aria-label="current status" className="size-3.5" /> : null}
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
+}
 
 export function RowStatusMenu({
   trigger,
   identifier,
-  status,
+  choices,
   disabled = false,
+  open,
+  onOpenChange,
   onPick,
 }: {
   trigger: ReactNode;
   identifier: string;
-  status: StatusId;
+  choices: readonly RowStatusChoice[] | null;
   disabled?: boolean;
-  onPick: (status: StatusId) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onPick: (status: string, label: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  useBackToClose(open, () => setOpen(false));
+  useBackToClose(open, () => onOpenChange(false));
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent aria-label={`Change status of ${identifier}`} data-row-status-menu={identifier} align="end">
         <DropdownMenuLabel className="normal-case tracking-normal">Move to</DropdownMenuLabel>
-        {statusChoices(configuredStatusOrder(), ISSUE_STATUSES, status).map((choice) => (
-          <DropdownMenuItem
-            key={choice}
-            data-status-choice={choice}
-            disabled={disabled || choice === status}
-            onSelect={() => onPick(choice)}
-          >
-            <StatusIcon status={choice} />
-            <span className="flex-1">{statusLabel(choice)}</span>
-            {choice === status ? <Check aria-label="current status" className="size-3.5" /> : null}
-          </DropdownMenuItem>
-        ))}
+        <StatusChoiceItems choices={choices} disabled={disabled} onPick={onPick} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

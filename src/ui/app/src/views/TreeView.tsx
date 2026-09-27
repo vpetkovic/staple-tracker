@@ -24,8 +24,20 @@
  * prev/next arrows would keep paging a list that is no longer on the page.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { action, dequeueTask, enqueueTask, getInbox, getQueue, isRevisionConflict, type AuthError } from "@/lib/api";
+import { action, dequeueTask, enqueueTask, getInbox, getQueue, getSettings, isRevisionConflict, type AuthError } from "@/lib/api";
 import { RowStatusMenu } from "@/components/task-list/RowStatusMenu";
+import { RowNotice } from "@/components/task-list/RowNotice";
+import { StatusSubmenu } from "@/components/QueueRowMenu";
+import { useRowPlan } from "@/components/task-list/useRowPlan";
+import {
+  applyRowStatus,
+  plainRowRefusal,
+  rowStatusChoices,
+  rowWriteTarget,
+  type RowRefusalWords,
+  type RowStatusChoice,
+  type StatusChoice,
+} from "@/components/task-list/row-status";
 import {
   attachRowCues,
   buildRowCueIndex,
@@ -99,6 +111,118 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   );
 
   /**
+   * CHANGING A TASK'S STATUS FROM ITS ROW — the desktop row's quick action, `S` on a focused
+   * row, and the "Change status" submenu of the row's `⋯` (the keyboard's and a finger's way).
+   *
+   * THE ROW'S WORKSPACE, twice over. The choices are that workspace's own statuses (read on
+   * first open and kept), not the page's: in All workspaces the page's vocabulary can offer a
+   * status the row's workspace does not have. And the write goes to that workspace
+   * (`applyRowStatus` → `rowWriteTarget`), never the page's scope.
+   *
+   * A REFUSAL IS SHOWN AT THE ROW, in plain words, with the fix when there is one ("Assign
+   * me"), and it is cleared by the next thing the reader does. It used to go to the banner at
+   * the top of the scrolled list, where nobody looking at the row could see it.
+   */
+  const desk = useRowPlan().layout === "line";
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [vocabularies, setVocabularies] = useState<Record<string, StatusChoice[] | "loading" | "failed">>({});
+  const loadVocabulary = useCallback((ws: string) => {
+    setVocabularies((current) => {
+      if (current[ws] !== undefined && current[ws] !== "failed") return current;
+      getSettings({ ws }).then(
+        (settings) =>
+          setVocabularies((now) => ({
+            ...now,
+            [ws]: settings.statuses.map((status) => ({ id: status.id, label: status.label, category: status.category })),
+          })),
+        () => setVocabularies((now) => ({ ...now, [ws]: "failed" })),
+      );
+      return { ...current, [ws]: "loading" };
+    });
+  }, []);
+  const choicesFor = useCallback(
+    (row: TaskRow): RowStatusChoice[] | null => {
+      const vocabulary = vocabularies[row.workspace];
+      if (vocabulary === undefined || vocabulary === "loading") return null;
+      if (vocabulary === "failed") return [];
+      return rowStatusChoices(vocabulary, row.issue.status);
+    },
+    [vocabularies],
+  );
+
+  const [notice, setNotice] = useState<RowNoticeState | null>(null);
+  const changeStatus = useCallback(
+    async (row: TaskRow, status: string, label: string) => {
+      setNotice(null);
+      setQueueRefusal(null);
+      setStatusBusy(true);
+      try {
+        await applyRowStatus(row, status, (target, payload) =>
+          action(target, { type: "status", status: payload.status as IssueStatus }),
+        );
+        session.refresh();
+      } catch (error) {
+        setNotice({ key: row.issue.id, row, status, label, words: plainRowRefusal(describeRefusal(error), { label }) });
+      } finally {
+        setStatusBusy(false);
+      }
+    },
+    [session],
+  );
+  const assignAndRetry = useCallback(
+    async (state: RowNoticeState) => {
+      const name = askName();
+      if (!name) return;
+      setStatusBusy(true);
+      try {
+        await action(rowWriteTarget(state.row), { type: "assignee", assignee: name });
+      } catch (error) {
+        setNotice({ ...state, words: { sentence: plainRowRefusal(describeRefusal(error), state).sentence, needsAssignee: false } });
+        setStatusBusy(false);
+        return;
+      }
+      setStatusBusy(false);
+      await changeStatus(state.row, state.status, state.label);
+    },
+    [changeStatus],
+  );
+  const rowStatusMenu = useCallback(
+    (row: TaskRow, trigger: ReactNode, control: RowMenuControl) => (
+      <RowStatusMenu
+        trigger={trigger}
+        identifier={row.issue.identifier}
+        choices={choicesFor(row)}
+        disabled={statusBusy}
+        open={control.open}
+        onOpenChange={(open) => {
+          if (open) loadVocabulary(row.workspace);
+          control.onOpenChange(open);
+        }}
+        onPick={(status, label) => void changeStatus(row, status, label)}
+      />
+    ),
+    [choicesFor, statusBusy, loadVocabulary, changeStatus],
+  );
+  const rowNotice = useCallback(
+    (row: TaskRow) =>
+      notice && !row.ghost && notice.key === row.issue.id ? (
+        <RowNotice
+          identifier={row.issue.identifier}
+          sentence={notice.words.sentence}
+          needsAssignee={notice.words.needsAssignee}
+          busy={statusBusy}
+          onAssign={() => void assignAndRetry(notice)}
+          onOpen={() => {
+            setNotice(null);
+            session.open(row.workspace, row.issue.identifier);
+          }}
+          onDismiss={() => setNotice(null)}
+        />
+      ) : null,
+    [notice, statusBusy, assignAndRetry, session],
+  );
+
+  /**
    * THE ROW MENU'S WRITES — the `⋯` slot, wired to the queue.
    *
    * Every one of them is the SAME `POST /api/queue/…` the Queue view sends, carrying the
@@ -118,6 +242,8 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   const queueWrite = useCallback(
     async (run: (baseRevision: number) => Promise<unknown>) => {
       if (queueRevision === undefined) return;
+      setNotice(null);
+      setQueueRefusal(null);
       setQueueBusy(true);
       try {
         await run(queueRevision);
@@ -180,6 +306,8 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
     async (ws: string, run: (baseRevision: number) => Promise<unknown>) => {
       const { revision } = rowQueueMenu(rowQueues[ws], ws);
       if (revision === null) return;
+      setNotice(null);
+      setQueueRefusal(null);
       setQueueBusy(true);
       try {
         await run(revision);
@@ -192,6 +320,20 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
       }
     },
     [rowQueues, loadRowQueue, session],
+  );
+
+  /** The `⋯` menu's "Change status" submenu, on the desk only: the phone menu is unchanged. */
+  const statusSubmenu = useCallback(
+    (row: TaskRow) =>
+      desk && !row.ghost ? (
+        <StatusSubmenu
+          choices={choicesFor(row)}
+          disabled={statusBusy}
+          onOpen={() => loadVocabulary(row.workspace)}
+          onPick={(status, label) => void changeStatus(row, status, label)}
+        />
+      ) : undefined,
+    [desk, choicesFor, statusBusy, loadVocabulary, changeStatus],
   );
 
   const rowActionsMenu = useCallback(
@@ -217,6 +359,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
             onQueueNext={() => void rowQueueWrite(ws, (baseRevision) => enqueueTask({ ws, ref: row.issue.id, at: 1, baseRevision }))}
             onQueueLast={() => void rowQueueWrite(ws, (baseRevision) => enqueueTask({ ws, ref: row.issue.id, baseRevision }))}
             onDequeue={() => void rowQueueWrite(ws, (baseRevision) => dequeueTask({ ws, ref: row.issue.id, baseRevision }))}
+            statusSubmenu={statusSubmenu(row)}
           />
         );
       }
@@ -235,38 +378,11 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
           }
           onQueueLast={() => void queueWrite((baseRevision) => enqueueTask({ ws, ref: row.issue.id, baseRevision }))}
           onDequeue={() => void queueWrite((baseRevision) => dequeueTask({ ws, ref: row.issue.id, baseRevision }))}
+          statusSubmenu={statusSubmenu(row)}
         />
       );
     },
-    [wantQueue, rowQueues, loadRowQueue, rowQueueWrite, queuedIds, queueBusy, queueRevision, queueWrite, session],
-  );
-
-  /**
-   * THE ROW'S QUICK STATUS CHANGE — the desktop row's first hover action.
-   *
-   * The same `status` action the detail's status control sends, to the row's own workspace,
-   * and the same re-read afterwards. A refusal lands in the banner above the list, like a
-   * refused queue write: a menu item that appears to do nothing is worse than one that says
-   * it was refused.
-   */
-  const [statusBusy, setStatusBusy] = useState(false);
-  const rowStatusMenu = useCallback(
-    (row: TaskRow, trigger: ReactNode) => (
-      <RowStatusMenu
-        trigger={trigger}
-        identifier={row.issue.identifier}
-        status={row.issue.status}
-        disabled={statusBusy}
-        onPick={(status) => {
-          setStatusBusy(true);
-          action({ ws: row.workspace, ref: row.issue.id }, { type: "status", status: status as IssueStatus })
-            .then(() => session.refresh())
-            .catch((error: unknown) => setQueueRefusal(describeRefusal(error)))
-            .finally(() => setStatusBusy(false));
-        }}
-      />
-    ),
-    [statusBusy, session],
+    [wantQueue, rowQueues, loadRowQueue, rowQueueWrite, queuedIds, queueBusy, queueRevision, queueWrite, session, statusSubmenu],
   );
 
   /**
@@ -449,6 +565,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
                */
               rowActionsMenu={rowActionsMenu}
               rowStatusMenu={rowStatusMenu}
+              rowNotice={rowNotice}
               onCloseDrawer={session.close}
               onVisibleOrder={publishVisibleOrder}
             />
@@ -457,4 +574,23 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
       </ViewState>
     </div>
   );
+}
+
+/** A refused row status change, and what to say about it. */
+interface RowNoticeState {
+  key: string;
+  row: TaskRow;
+  status: string;
+  label: string;
+  words: RowRefusalWords;
+}
+
+/** Who "Assign me" assigns: the name this browser remembers, or asked once. */
+function askName(): string | null {
+  const remembered = localStorage.getItem("staple:actor") ?? "";
+  if (remembered.trim()) return remembered.trim();
+  const name = window.prompt("Who should this be assigned to? Type your name.", "")?.trim();
+  if (!name) return null;
+  localStorage.setItem("staple:actor", name);
+  return name;
 }
