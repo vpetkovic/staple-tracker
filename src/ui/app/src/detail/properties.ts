@@ -27,7 +27,7 @@
  * why. `properties.test.ts` pins kind's absence for that reason.
  */
 import { formatAgo } from "../lib/claim";
-import { actorLabel, formatStamp } from "./parts";
+import { formatStamp } from "./parts";
 import type { IssueDetail, IssuePriority, UiMode } from "../lib/types";
 
 export interface DetailFact {
@@ -89,7 +89,7 @@ export function detailFacts(detail: IssueDetail, mode: UiMode): DetailFact[] {
     // In single-workspace mode it is the one fact on the page that is true of
     // every row on the page, which makes it furniture.
     ...(mode === "hub" ? [{ id: "workspace", label: "Workspace", value: detail.workspace, mono: true }] : []),
-    ...(issue.createdBy ? [{ id: "createdBy", label: "Created by", value: actorLabel(issue.createdBy) }] : []),
+    ...(issue.createdBy ? [{ id: "createdBy", label: "Created by", value: issue.createdBy }] : []),
     ...when("created", "Created", issue.createdAt),
     ...when("updated", "Updated", issue.updatedAt),
     ...when("started", "Started", issue.startedAt),

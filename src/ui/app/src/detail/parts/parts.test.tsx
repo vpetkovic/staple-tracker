@@ -39,9 +39,11 @@ describe("formatRelative", () => {
     expect(formatRelative("2026-09-27T01:00:00Z", { now: NOW, timeZone: "UTC" })).toBe("14 hr ago");
   });
 
-  it("reads a date a minute or so in the future as clock skew: just now", () => {
+  it("reads anything under 5 minutes in the future as clock skew: just now", () => {
     expect(at("2026-09-27T15:01:30Z")).toBe("Just now");
-    expect(at("2026-09-27T15:03:00Z")).toBe("in 3 min");
+    expect(at("2026-09-27T15:02:00Z")).toBe("Just now");
+    expect(at("2026-09-27T15:04:59Z")).toBe("Just now");
+    expect(at("2026-09-27T15:05:00Z")).toBe("in 5 min");
   });
 
   it("speaks forwards for a future date", () => {

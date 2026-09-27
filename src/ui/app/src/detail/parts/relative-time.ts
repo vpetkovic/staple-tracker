@@ -67,8 +67,8 @@ function formatRelativeWords(iso: string | null | undefined, options: RelativeTi
   const future = seconds < 0;
   const age = Math.abs(seconds);
 
-  // A date a little in the future is clock skew between machines, not a plan: "just now".
-  if (age < 45 || (future && age < 120)) return "Just now";
+  // A date a few minutes in the future is clock skew between machines, not a plan: "just now".
+  if (age < 45 || (future && age < 5 * MINUTE)) return "Just now";
   if (age < HOUR) {
     const minutes = Math.max(1, Math.floor(age / MINUTE));
     return future ? `in ${minutes} min` : `${minutes} min ago`;

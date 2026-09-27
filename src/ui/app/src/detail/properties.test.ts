@@ -151,6 +151,10 @@ describe("detailFacts — the raw values behind More details", () => {
     expect(facts.at(-1)).toMatchObject({ id: "internalId", value: "uuid-1", mono: true });
   });
 
+  it("shows the stored name, even the web app's default: raw facts are for exactly that", () => {
+    expect(byId(detail({ issue: issue({ createdBy: "ui" }) }), "createdBy")?.value).toBe("ui");
+  });
+
   it("never sets a person or a date in mono", () => {
     const d = detail({ issue: issue({ assignee: "vp", createdBy: "orchestrator", checkoutAgent: "v3-drawer", startedAt: "2026-09-01T22:40:00Z" }), claim: claim() });
     for (const id of ["assignee", "createdBy", "holder", "created", "updated", "started"]) {
