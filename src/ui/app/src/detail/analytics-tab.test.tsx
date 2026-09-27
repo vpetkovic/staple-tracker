@@ -289,6 +289,8 @@ describe("placeholders are muted words in the interface face, never figures", ()
     expect(html).not.toContain(figure("No work recorded"));
     expect(html).not.toContain("data-plan-bar");
     expect(html).toContain("No estimate and no time recorded yet.");
+    // And a friendly line about what would fill the tab, rather than a blank card.
+    expect(html).toContain('data-testid="time-empty"');
   });
 
   it("never draws a placeholder as a dash that reads as zero in the headline", () => {

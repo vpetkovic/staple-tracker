@@ -322,6 +322,12 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
                 {plainDelta(summary.delta, running)}
               </p>
             ) : null}
+            {summary.plannedSeconds === null && summary.actualSeconds === null ? (
+              <p className="text-body text-pretty text-text-secondary" data-testid="time-empty">
+                Nothing to compare yet. Give the task an estimate when you plan it, and the time spent on it will
+                be measured against that here.
+              </p>
+            ) : null}
             {summary.planHint || actualHint ? (
               <p className="text-label text-text-secondary">
                 {[summary.planHint, actualHint]
