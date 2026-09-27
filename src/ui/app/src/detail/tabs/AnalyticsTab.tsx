@@ -176,9 +176,11 @@ function ChildLine({
   muted?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className={cn("min-w-0 flex-1 truncate", muted && "text-text-secondary")}>{left}</span>
-      <span className={cn("shrink-0 tabular-nums", rightTone)}>{right}</span>
+    // On a phone the title takes the whole first line and the figure drops beneath it,
+    // rather than both being cut to a few characters each.
+    <div className="flex items-center gap-2 max-sm:flex-wrap max-sm:gap-y-0.5">
+      <span className={cn("min-w-0 flex-1 truncate max-sm:basis-full", muted && "text-text-secondary")}>{left}</span>
+      <span className={cn("shrink-0 tabular-nums max-sm:pl-5.5", rightTone)}>{right}</span>
     </div>
   );
 }
@@ -418,11 +420,11 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
                   right={
                     <span className="flex items-center gap-2">
                       {childQualityText(row) !== null ? (
-                        <span className="text-caption text-text-tertiary" data-testid="child-quality">
+                        <span className="text-caption text-text-tertiary max-sm:hidden" data-testid="child-quality">
                           {childQualityText(row)}
                         </span>
                       ) : null}
-                      <span className="text-caption">{statusLabel(row.status)}</span>
+                      <span className="text-caption max-sm:hidden">{statusLabel(row.status)}</span>
                     </span>
                   }
                   rightTone="text-text-secondary"

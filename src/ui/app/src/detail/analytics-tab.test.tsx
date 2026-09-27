@@ -449,7 +449,7 @@ describe("a child shows the plan its parent counts it as", () => {
     expect(list).not.toMatch(/>[^<]*inherited/);
     // Two lines per child, six children — twelve `ChildLine` divs, and not one more. (The
     // identifier and status badge share a span with the same classes INSIDE line one.)
-    expect((list.match(/<div class="flex items-center gap-2">/g) ?? []).length).toBe(12);
+    expect((list.match(/<div class="flex items-center gap-2[^"]*">/g) ?? []).length).toBe(12);
   });
 
   it("names an own estimate as own, so a typed 4h and a flowed-up 11h are told apart", () => {
