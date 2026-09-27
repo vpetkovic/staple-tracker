@@ -34,10 +34,10 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getIssue } from "@/lib/api";
+import { getIssue, getQueue, getSettings } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { selectionTarget, useSession, type Selection } from "@/lib/session";
-import { statusCategory } from "@/lib/settings";
+import { settingValueIn, statusCategory } from "@/lib/settings";
 import type { IssueDetail, UiMode } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "./parts/cn";
@@ -46,7 +46,7 @@ import type { DetailMode, DetailPresentation } from "./drawer";
 import type { NavState, NavTarget } from "./navigation";
 import {
   ActionRefusal,
-  actionContextOf,
+  contextOf,
   openBlockerCount,
   GateSection,
   OverflowMenu,
@@ -58,7 +58,7 @@ import {
 import { InlineKind, InlineLabels, InlinePriority, InlineProject, InlineTitle } from "./InlineProperties";
 import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout } from "./PropertyGrid";
 import { PersonChip, RelativeTime } from "./parts";
-import { statusSentence } from "./plain-actions";
+import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
 import { detailFacts } from "./properties";
 import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
 
@@ -105,7 +105,10 @@ export function IssueDetailPanel({
     if (issue) pin(selection.workspace, selection.ref, issue.id);
   }, [issue, pin, selection.workspace, selection.ref]);
 
-  const controller = useIssueActions(session.refresh);
+  // Strict queue: the plan row that has to be taken first, read the way the Queue view reads
+  // it. Only fetched when the workspace's policy is strict.
+  const queueAhead = useQueueAhead(detail, onAuthError, session.version);
+  const controller = useIssueActions(session.refresh, { queueAhead, workspaces: session.workspaces.map((w) => w.slug) });
   const [requestOpen, setRequestOpen] = useState(false);
   const gateRef = useRef<HTMLDivElement>(null);
   const reviewGate = useCallback(() => {
@@ -173,11 +176,36 @@ export function IssueDetailPanel({
           {/* A refusal from the bottom bar or the top bar's ⋯ shows here, next to the thumb
               that caused it, never at the top of a long scroll. */}
           <ActionRefusal controller={controller} className="max-h-[40vh] overflow-y-auto" />
+          <PrimaryReason detail={detail} controller={controller} />
           <PrimaryAction detail={detail} controller={controller} onReview={reviewGate} size="lg" className="w-full" />
         </div>
       ) : null}
     </aside>
   );
+}
+
+/**
+ * Why the primary cannot run, as one short line above it on the phone: a finger has no hover,
+ * so the reason the desk gets as a tooltip is said out loud here.
+ */
+function PrimaryReason({ detail, controller }: { detail: IssueDetail; controller: IssueActionsController }) {
+  const reason = primaryItem(contextOf(detail, controller)).disabledReason;
+  if (!reason) return null;
+  return (
+    <p className="m-0 text-center text-label text-text-secondary wrap-anywhere" data-primary-reason="">
+      {reason}
+    </p>
+  );
+}
+
+/** The strict queue's head for this task, or null (policy off, not loaded, or nothing ahead). */
+function useQueueAhead(detail: IssueDetail | undefined, onAuthError: (error: AuthError) => void, version: number): { identifier: string; title: string } | null {
+  const ws = detail?.workspace;
+  const issueId = detail?.issue.id;
+  const settings = useResource(useCallback(() => (ws ? getSettings({ ws }) : Promise.resolve(null)), [ws]), [ws, version], onAuthError);
+  const strict = settings.data ? settingValueIn(settings.data, "queue.policy")?.value === "strict" : false;
+  const queue = useResource(useCallback(() => (ws && strict ? getQueue({ ws }) : Promise.resolve(null)), [ws, strict]), [ws, strict, version], onAuthError);
+  return strict && queue.data && issueId ? queueAheadOf(queue.data.effective, issueId) : null;
 }
 
 function prefersReducedMotion(): boolean {
@@ -473,7 +501,7 @@ function StatusLine({
   className?: string;
   children?: ReactNode;
 }) {
-  const ctx = actionContextOf(detail, controller.me);
+  const ctx = contextOf(detail, controller);
   const queuedAncestor = detail.queuedBy ? detail.ancestors.find((a) => a.identifier === detail.queuedBy!.identifier) : undefined;
   const sentence = statusSentence(
     {
@@ -482,6 +510,7 @@ function StatusLine({
       childrenTotal: detail.children.length,
       childrenDone: detail.children.filter((child) => statusCategory(child.status) === "done").length,
       openBlockers: openBlockerCount(detail),
+      unreachable: ctx.unreachable,
       // The breadcrumb names the parent by title, so the sentence does too, never by id.
       queuedByTitle: queuedAncestor?.title ?? null,
       queuedByParent: Boolean(queuedAncestor && queuedAncestor.id === detail.issue.parentId),
@@ -609,7 +638,9 @@ function SummaryChips({
   className?: string;
 }) {
   const { issue, workspace } = detail;
-  const editor = { issue, workspace, refresh, variant: "chip" as const };
+  // Chip editors report a refusal to the panel's one refusal slot instead of drawing it inside
+  // the chip row, where it would break the row and fall out of view on a phone.
+  const editor = { issue, workspace, refresh, variant: "chip" as const, report: controller.report };
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)} data-summary-chips="">
       <StatusMenu detail={detail} controller={controller} onRequestApproval={onRequestApproval} className="h-9 px-3" />

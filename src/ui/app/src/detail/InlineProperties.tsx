@@ -13,13 +13,13 @@
  * refuse, so the value the UI guessed and the value the store kept are not reliably the
  * same thing. On a loopback SQLite round trip there is nothing to buy by guessing.
  *
- * Refusals go through describeRefusal() + GuardRefusal, now lib/ and components/ — the shared
- * primitive, imported and not re-implemented, so an editor can never show a sentence
- * the store did not say.
+ * Refusals go through describeRefusal() and the detail's one refusal look (RefusalNotice in
+ * IssueActions.tsx): a plain sentence first, the store's own words one tap away. An editor
+ * given `report` hands its refusal to the panel instead (the phone's chips), so it is shown
+ * in the panel's one refusal slot and never breaks the chip row.
  */
 import { Check, Pencil, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { GuardRefusal } from "@/components/GuardRefusal";
 import { KindGlyph, PrioritySignal } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +31,7 @@ import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
 import { cn } from "./parts/cn";
 import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssueKind, type IssuePriority } from "@/lib/types";
+import { RefusalNotice } from "./IssueActions";
 import { PRIORITY_WORDS } from "./properties";
 
 /**
@@ -44,6 +45,8 @@ interface EditorProps {
   workspace: string;
   refresh: () => void;
   variant?: EditorVariant;
+  /** Send a refusal to the panel's refusal slot instead of drawing it here. */
+  report?: (refusal: Refusal | null) => void;
 }
 
 /** The trigger classes for both variants, so kind, priority and project look like one family. */
@@ -84,18 +87,17 @@ function useUpdate(issue: Issue, workspace: string, refresh: () => void) {
 }
 
 /** The refusal panel, in the one style all three editors share. */
-function RefusalSlot({ refusal, onDismiss }: { refusal: Refusal | null; onDismiss: () => void }) {
-  if (!refusal) return null;
-  return (
-    <div className="mt-2 rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/5 p-2">
-      <GuardRefusal refusal={refusal} onDismiss={onDismiss} />
-    </div>
-  );
+function RefusalSlot({ refusal, onDismiss, report }: { refusal: Refusal | null; onDismiss: () => void; report?: (refusal: Refusal | null) => void }) {
+  useEffect(() => {
+    if (report && refusal) report(refusal);
+  }, [report, refusal]);
+  if (!refusal || report) return null;
+  return <RefusalNotice feedback={{ kind: "refused", refusal }} onDismiss={onDismiss} className="mt-2" />;
 }
 
 // ---------------------------------------------------------------- title
 
-export function InlineTitle({ issue, workspace, refresh, size = "display" }: EditorProps & { size?: "display" | "heading" }) {
+export function InlineTitle({ issue, workspace, refresh, size = "display", report }: EditorProps & { size?: "display" | "heading" }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(issue.title);
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
@@ -147,7 +149,7 @@ export function InlineTitle({ issue, workspace, refresh, size = "display" }: Edi
             )}
           />
         </button>
-        <RefusalSlot refusal={refusal} onDismiss={dismiss} />
+        <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />
       </>
     );
   }
@@ -183,7 +185,7 @@ export function InlineTitle({ issue, workspace, refresh, size = "display" }: Edi
           <Check className="size-4" />
         </Button>
       </div>
-      <RefusalSlot refusal={refusal} onDismiss={dismiss} />
+      <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />
     </div>
   );
 }
@@ -219,7 +221,7 @@ export function InlineTitle({ issue, workspace, refresh, size = "display" }: Edi
  * it would win against the poll for as long as the component stayed mounted and lose the
  * moment it did not.
  */
-export function InlineKind({ issue, workspace, refresh, variant = "row" }: EditorProps) {
+export function InlineKind({ issue, workspace, refresh, variant = "row", report }: EditorProps) {
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
   const kinds = configuredKindOrder();
 
@@ -263,7 +265,7 @@ export function InlineKind({ issue, workspace, refresh, variant = "row" }: Edito
           ))}
         </SelectContent>
       </Select>
-      <RefusalSlot refusal={refusal} onDismiss={dismiss} />
+      <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />
     </>
   );
 }
@@ -282,7 +284,7 @@ const NO_PROJECT = "__none__";
  * editor does not share `useUpdate` with its neighbours; the refetch-on-success rule is
  * the same.
  */
-export function InlineProject({ issue, workspace, refresh, variant = "row" }: EditorProps) {
+export function InlineProject({ issue, workspace, refresh, variant = "row", report }: EditorProps) {
   const session = useSession();
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [busy, setBusy] = useState(false);
@@ -330,14 +332,14 @@ export function InlineProject({ issue, workspace, refresh, variant = "row" }: Ed
           ))}
         </SelectContent>
       </Select>
-      <RefusalSlot refusal={refusal} onDismiss={() => setRefusal(null)} />
+      <RefusalSlot refusal={refusal} onDismiss={() => setRefusal(null)} report={report} />
     </>
   );
 }
 
 // ------------------------------------------------------------- priority
 
-export function InlinePriority({ issue, workspace, refresh, variant = "row" }: EditorProps) {
+export function InlinePriority({ issue, workspace, refresh, variant = "row", report }: EditorProps) {
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
 
   return (
@@ -377,7 +379,7 @@ export function InlinePriority({ issue, workspace, refresh, variant = "row" }: E
           ))}
         </SelectContent>
       </Select>
-      <RefusalSlot refusal={refusal} onDismiss={dismiss} />
+      <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />
     </>
   );
 }
@@ -396,7 +398,7 @@ export function PriorityValue({ priority }: { priority: IssuePriority }) {
 
 // --------------------------------------------------------------- labels
 
-export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
+export function InlineLabels({ issue, workspace, refresh, report }: EditorProps) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
@@ -482,7 +484,7 @@ export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
           </button>
         )}
       </div>
-      <RefusalSlot refusal={refusal} onDismiss={dismiss} />
+      <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />
     </div>
   );
 }

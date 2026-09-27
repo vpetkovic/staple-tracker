@@ -50,6 +50,7 @@ import { cn } from "../parts/cn";
 import { displayExcerptLine, excerptWorklog, WORKLOG_KEY } from "@/lib/worklog";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { DetailCard, PersonChip, RelativeTime, SectionHeading, actorLabel } from "../parts";
+import { unreachableBlockers } from "../IssueActions";
 import { openDetailTab, type TabProps } from "./registry";
 
 /**
@@ -77,26 +78,31 @@ function RelationRow({ relation, onOpen }: { relation: IssueRef; onOpen: (identi
 }
 
 /**
- * A blocker in another workspace file. The hub knows it exists but this page cannot open it,
- * so it is a row that says where it lives rather than a link. Marked when the file is not on
- * this machine at all, which is a real state an agent needs to see.
+ * A blocker in another workspace file. Reachable ones read like any other row, with their
+ * workspace. One this computer can't see says which of the two reasons it is, and what the
+ * person can do, in the wording the Connections tab uses too.
  */
-function CrossRow({ blocker }: { blocker: CrossBlocker }) {
+function CrossRow({ blocker, missing }: { blocker: CrossBlocker & { title?: string | null }; missing: "workspace" | "task" | null }) {
+  if (missing) {
+    return (
+      <li data-cross-blocker={blocker.identifier} data-missing={missing} className="flex min-w-0 items-start gap-2.5 rounded-lg border border-dashed px-2 py-2 text-body">
+        <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-[var(--status-task-blocked)]" />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-foreground wrap-anywhere">
+            {missing === "workspace" ? `${blocker.identifier} is in ${blocker.workspace}, which isn't on this computer.` : `${blocker.identifier} can't be found in ${blocker.workspace}.`}
+          </span>
+          <span className="text-label text-text-secondary">
+            {missing === "workspace" ? "Open that workspace on this computer, or remove the link if it no longer applies." : "It may have been deleted or renamed. Remove the link if it no longer applies."}
+          </span>
+        </span>
+      </li>
+    );
+  }
   return (
-    <li
-      data-cross-blocker={blocker.identifier}
-      className="flex min-h-10 min-w-0 items-center gap-2.5 rounded-lg border border-dashed px-2 text-body"
-      title={`${blocker.workspace}${blocker.unresolvable ? " — workspace file not on this machine" : ""}`}
-    >
-      {blocker.unresolvable ? (
-        <CircleAlert aria-hidden className="size-4 shrink-0 text-[var(--status-task-blocked)]" />
-      ) : blocker.status ? (
-        <StatusIcon status={blocker.status} className="size-4 shrink-0" />
-      ) : null}
-      <span className="min-w-0 flex-1 truncate text-foreground">{blocker.identifier}</span>
-      <span className="shrink-0 text-label text-text-tertiary">
-        {blocker.unresolvable ? `in ${blocker.workspace}, not on this machine` : `in ${blocker.workspace}${blocker.status ? ` · ${statusLabel(blocker.status)}` : ""}`}
-      </span>
+    <li data-cross-blocker={blocker.identifier} className="flex min-h-10 min-w-0 items-center gap-2.5 rounded-lg border border-dashed px-2 text-body" title={blocker.workspace}>
+      {blocker.status ? <StatusIcon status={blocker.status} className="size-4 shrink-0" /> : null}
+      <span className="min-w-0 flex-1 truncate text-foreground">{blocker.title || blocker.identifier}</span>
+      <span className="shrink-0 text-label text-text-tertiary">{`${blocker.title ? `${blocker.identifier} · ` : ""}in ${blocker.workspace}${blocker.status ? ` · ${statusLabel(blocker.status)}` : ""}`}</span>
     </li>
   );
 }
@@ -232,6 +238,7 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
   /** Absent means no worklog: the panel is not rendered, so nothing is fetched. */
   const worklog = detail.documents.find((document) => document.key === WORKLOG_KEY);
   const waitingOn = detail.blockedBy.length + detail.crossBlockers.length;
+  const unreachable = unreachableBlockers(detail, session.workspaces.map((w) => w.slug));
 
   return (
     <div className="flex flex-col" data-details-tab="">
@@ -303,7 +310,7 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
               <RelationRow key={relation.identifier} relation={relation} onOpen={openRef} />
             ))}
             {detail.crossBlockers.map((blocker) => (
-              <CrossRow key={blocker.identifier} blocker={blocker} />
+              <CrossRow key={blocker.identifier} blocker={blocker} missing={unreachable.find((u) => u.identifier === blocker.identifier)?.missing ?? null} />
             ))}
           </ul>
         </section>
