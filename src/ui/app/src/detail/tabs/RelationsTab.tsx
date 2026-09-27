@@ -372,7 +372,8 @@ function Summary({ detail, graph }: { detail: IssueDetail; graph: Graph | undefi
     return relationStats({ ...direct, blockedByTotal: direct.blockedByDirect + further });
   }, [detail, context]);
 
-  const [lead, ...rest] = stats;
+  // Sub-task progress is said once, beside the Sub-tasks list, not twice.
+  const [lead, ...rest] = stats.filter((stat) => stat.key !== "children");
   if (!lead) return null;
   const LeadIcon = lead.blocked ? OctagonAlert : CircleCheck;
   return (

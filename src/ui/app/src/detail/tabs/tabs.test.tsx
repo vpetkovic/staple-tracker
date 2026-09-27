@@ -104,7 +104,9 @@ describe("Connections", () => {
     const html = render(RelationsTab, busy);
     expect(html).toContain("Waiting on 1 task");
     expect(html).toContain("1 task is waiting on this");
-    expect(html).toContain("1 of 2 sub-tasks finished");
+    // Sub-task progress is said beside the list, once.
+    expect(html).not.toContain("sub-tasks finished");
+    expect(html).toContain("1 of 2 finished");
     const at = (needle: string) => {
       const index = html.indexOf(needle);
       expect(index, needle).toBeGreaterThanOrEqual(0);
