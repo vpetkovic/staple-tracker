@@ -630,10 +630,10 @@ function AccountBudget({ account, asOf }: { account: BudgetForecast["accounts"][
 function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string }) {
   const reserve = budget.reserve;
   return (
-    <section aria-label="Budget forecast" data-block="budget" className="space-y-3 rounded-xl border border-dashed p-3">
+    <section aria-label="Usage forecast" data-block="budget" className="space-y-3 rounded-xl border border-dashed p-3">
       <div className="space-y-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
-          <h3 className={HEADING}>Budget</h3>
+          <h3 className={HEADING}>Usage</h3>
           <span className="text-[12px] text-muted-foreground" data-testid="budget-subtitle">
             Usage measured on this computer
           </span>
@@ -663,7 +663,7 @@ function BudgetBlock({ budget, asOf }: { budget: BudgetForecast; asOf: string })
         </p>
         {budget.accounts.length === 0 ? (
           <p className={UNKNOWN} data-unknown data-testid="budget-none">
-            No budget forecast: {budget.missing.accounts ? missingText(budget.missing.accounts) : "no accounts"}.
+            No usage forecast: {budget.missing.accounts ? missingText(budget.missing.accounts) : "no accounts"}.
           </p>
         ) : null}
       </ShowDetails>

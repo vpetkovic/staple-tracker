@@ -192,6 +192,9 @@ describe("layoutFor", () => {
     expect(layoutFor(SPLIT_MIN_WIDTH_PX - 1)).toBe("stacked");
     expect(layoutFor(SPLIT_MIN_WIDTH_PX)).toBe("split");
     expect(layoutFor(390)).toBe("stacked");
+    // A tablet stacks too: beside the navigation rail a split would leave the detail ~280px.
+    expect(layoutFor(768)).toBe("stacked");
+    expect(layoutFor(1024)).toBe("split");
     expect(layoutFor(1440)).toBe("split");
   });
 });

@@ -13,6 +13,7 @@
  *
  * WAVE 2: import from here. Adding an endpoint means adding a function here.
  */
+import { replaceUrl } from "./back-to-close";
 import type {
   ActionPayload,
   AgentContext,
@@ -155,7 +156,7 @@ let token: string = (() => {
   writeSession(fromUrl);
   params.delete("token");
   const qs = params.toString();
-  history.replaceState({}, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
+  replaceUrl(location.pathname + (qs ? `?${qs}` : "") + location.hash);
   return fromUrl;
 })();
 
@@ -233,7 +234,8 @@ export const getPoll = () => request<Poll>("/api/poll");
  * poll — connection state changes when a human runs a command, not while they
  * read a page.
  */
-export const getCloudStatus = () => request<CloudSurfaceReport>("/api/cloud/status");
+export const getCloudStatus = (params: { ws?: string } = {}) =>
+  request<CloudSurfaceReport>(`/api/cloud/status${qs({ ws: params.ws })}`);
 
 /**
  * `GET /api/cloud/workspaces` — every registered workspace with its own

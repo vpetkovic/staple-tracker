@@ -51,7 +51,8 @@ export const TELEMETRY_CATEGORY_ID = "telemetry";
  */
 export const TELEMETRY_CATEGORY: SettingCategoryView = {
   id: TELEMETRY_CATEGORY_ID,
-  label: "Usage & budget",
+  // The Usage page's own name: one word for it everywhere (the rail, the tab bar, here).
+  label: "Usage",
   description:
     "Whether this computer keeps track of how much of your Claude and Codex plans your agents use. " +
     "Stored on this computer only, never in the workspace.",

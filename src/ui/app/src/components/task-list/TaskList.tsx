@@ -31,6 +31,7 @@ import { useCallback, useMemo } from "react";
 import type { KeyboardEvent } from "react";
 import { TaskRowLine } from "./TaskRowLine";
 import { resolveTaskListConfig, type TaskListDensity, type TaskListPreset } from "./config";
+import { useRowPlan } from "./useRowPlan";
 import { flatRow, type TaskRow, type TaskSource } from "./model";
 import { clampIndex, useRovingFocus } from "./roving";
 import "./task-list.css";
@@ -55,7 +56,10 @@ export function TaskList({
   empty?: React.ReactNode;
   onOpen: (workspace: string, identifier: string) => void;
 }) {
-  const config = useMemo(() => resolveTaskListConfig(preset, { density }), [preset, density]);
+  // The same width ladder as the tree (row-layout.ts), so a child list in the detail sheet on
+  // a phone is the compact one-line row too.
+  const plan = useRowPlan();
+  const config = useMemo(() => resolveTaskListConfig(preset, { density, plan }), [preset, density, plan]);
 
   const placed = useMemo<TaskRow[]>(
     () => rows.map((row) => ("depth" in row ? row : flatRow(row))),

@@ -53,7 +53,7 @@
  */
 import { isStaleClaim } from "./claim";
 import { isGateParked, isQueuedBehindGate } from "./derived-queued";
-import { configuredKindOrder, kindLabel } from "./settings";
+import { configuredKindOrder, isResolvedStatus, kindLabel, statusCategory } from "./settings";
 import { worklogStaleness } from "./worklog";
 import {
   ISSUE_KINDS,
@@ -300,6 +300,21 @@ const matchGate = (row: IssueRow, value: string) =>
   value === "awaiting" ? isGateParked(row) : value === "queued" && isQueuedBehindGate(row);
 
 const matchStatus = (row: IssueRow, value: string) => row.issue.status === value;
+
+/**
+ * BLOCKED, the way a person means it: the task cannot move until something else happens.
+ * That is a status in the `blocked` category (somebody parked it) OR an unresolved blocker
+ * on it (it waits on another task) — the second is exactly what the row's "Blocked by N"
+ * badge counts (`row.deps.blockedBy`, already filtered to blockers that still matter).
+ * Finished work is not blocked on anything.
+ */
+export const BLOCKED_VALUE = "blocked";
+export function isBlockedRow(row: IssueRow): boolean {
+  if (isResolvedStatus(row.issue.status)) return false;
+  return statusCategory(row.issue.status) === "blocked" || (row.deps?.blockedBy.length ?? 0) > 0;
+}
+const matchBlocked = (row: IssueRow, value: string) => value === BLOCKED_VALUE && isBlockedRow(row);
+const BLOCKED_LABEL = "Blocked or waiting on another task";
 const matchPriority = (row: IssueRow, value: string) => row.issue.priority === value;
 /**
  * O1c (STA-130). EXACT, like `matchStatus` and unlike `matchAssignee` — a kind is an id
@@ -350,6 +365,18 @@ export const FILTER_DIMENSIONS: readonly FilterDimension[] = [
       ),
     matches: matchStatus,
     format: (value) => STATUS_LABELS[value as IssueStatus] ?? titleCase(value),
+  },
+  /**
+   * BLOCKED — directly after Status, because it is the question people ask of status: "what
+   * is stuck?". One value, the union `isBlockedRow` defines; the "Blocked" quick filter is
+   * this dimension, so a task waiting on another task is found whatever its status says.
+   */
+  {
+    id: "blocked",
+    label: "Blocked",
+    options: (rows) => closedOptions(rows, [BLOCKED_VALUE], () => BLOCKED_LABEL, matchBlocked),
+    matches: matchBlocked,
+    format: () => BLOCKED_LABEL,
   },
   /**
    * KIND — O1c (STA-130). Directly after Status, and INSERTED rather than appended.

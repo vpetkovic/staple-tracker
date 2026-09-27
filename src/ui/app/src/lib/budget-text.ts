@@ -140,8 +140,8 @@ export const SETUP_HINT =
 /** Why the whole machine shows nothing, with what to do about it. */
 export function machineAbsentText(view: Pick<BudgetView, "budgetCapture" | "accounts">): { reason: string; hint: string } | null {
   if (view.accounts.length > 0) return null;
-  if (!view.budgetCapture) return { reason: "Budget capture is off on this machine, and no account has readings.", hint: SETUP_HINT };
-  return { reason: "Capture is on, but no account is bound and no reading has arrived.", hint: SETUP_HINT };
+  if (!view.budgetCapture) return { reason: "Usage tracking is off on this computer, and no account has readings.", hint: SETUP_HINT };
+  return { reason: "Usage tracking is on, but no account is bound and no reading has arrived.", hint: SETUP_HINT };
 }
 
 /** Why an account has no limits: its `missing.limits`, with what to do about it. */
@@ -149,12 +149,12 @@ export function accountAbsentText(account: BudgetAccountView, budgetCapture: boo
   const code = account.missing.limits;
   if (code === "no_sample_yet") {
     return {
-      reason: "No reading yet: capture is on and a source is bound, and nothing has arrived.",
+      reason: "No reading yet: usage tracking is on and a source is bound, and nothing has arrived.",
       hint: "Readings arrive with the next Claude Code status-line render, or the next `staple budget collect` for Codex. `staple budget status` shows each source's newest reading.",
     };
   }
   if (code === "source_unavailable") {
-    const why = !budgetCapture ? "budget capture is off" : account.bound ? "no ingestion path runs for it" : "no source is bound to it";
+    const why = !budgetCapture ? "usage tracking is off" : account.bound ? "no ingestion path runs for it" : "no source is bound to it";
     return { reason: `Unknown: ${why}.`, hint: SETUP_HINT };
   }
   return { reason: `Unknown: ${code === undefined ? "no limits read" : pressureMissingText(code)}.`, hint: null };

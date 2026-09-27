@@ -385,10 +385,13 @@ describe("a category nothing was written for reaches the page by being registere
     // It is in the navigation, under the scope its category declared…
     expect(markup).toContain('data-settings-category="verification"');
     expect(markup).toContain("Verification");
-    expect(markup.indexOf("Verification")).toBeLessThan(markup.indexOf(">Global<"));
-    // …selected, with its scope line…
+    // Settings is global now: the global group leads ("Across all workspaces") and a
+    // workspace category is listed under "Per workspace", after it.
+    expect(markup.indexOf("Verification")).toBeGreaterThan(markup.indexOf(">Per workspace<"));
+    expect(markup.indexOf(">Across all workspaces<")).toBeLessThan(markup.indexOf(">Per workspace<"));
+    // …selected, with its scope line naming the workspace it applies to…
     expect(markup).toContain('data-settings-category="verification" aria-current="page"');
-    expect(markup).toContain(">Workspace scope</span>");
+    expect(markup).toMatch(/data-settings-category-scope="true"[^>]*>Applies to [^<]+ only<\/span>/);
     // …and its control, chosen from the value schema alone.
     expect(markup).toMatch(/<input[^>]*id="setting-verification\.enabled"[^>]*type="checkbox"[^>]*role="switch"/);
     expect(markup).toContain("Fixture switch");

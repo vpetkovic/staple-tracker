@@ -532,16 +532,20 @@ const IMPOSSIBLE_PAIRS: readonly {
   a: { dimension: string; values: readonly string[] };
   b: { dimension: string; values: readonly string[] };
   because: string;
+  /** The same reason for a reader who does not know the model's words. */
+  plainly: string;
 }[] = [
   {
     a: { dimension: "status", values: ["done", "cancelled"] },
     b: { dimension: "pickup", values: [...PICKUP_STATES] },
     because: "finished work has no pickup state",
+    plainly: "finished work is never waiting to be picked up",
   },
   {
     a: { dimension: "gate", values: ["awaiting", "queued"] },
     b: { dimension: "pickup", values: ["pickable", "queued", "waiting", "in_flight"] },
     because: "a row behind a gate is gated, and nothing else",
+    plainly: "work waiting for an approval cannot be picked up until it is approved",
   },
 ];
 
@@ -550,8 +554,16 @@ export interface NoMatchExplanation {
   dimensions: string[];
   /** True when the selection could not match a row whatever the data said. */
   impossible: boolean;
-  /** One sentence, ready to render. "" when there is nothing to explain. */
+  /**
+   * One sentence, ready to render. "" when there is nothing to explain. It names the
+   * dimensions by their menu names, so the page shows it behind "Show details" and leads
+   * with the plain version built from `restores` / `plainly` (components/filters).
+   */
   sentence: string;
+  /** For a narrowed page: each dimension whose removal brings rows back, with how many. */
+  restores: { id: string; count: number }[];
+  /** For an impossible pair: why, in words for a reader who does not know the model. */
+  plainly?: string;
 }
 
 /** The search box is not a dimension, but it narrows and it has to be blameable. */
@@ -597,7 +609,7 @@ export function explainNoMatches(
     (id) => (state.dims[id] ?? []).length > 0,
   );
   if (state.text.trim().length > 0) active.push(TEXT_DIMENSION);
-  if (active.length === 0) return { dimensions: [], impossible: false, sentence: "" };
+  if (active.length === 0) return { dimensions: [], impossible: false, sentence: "", restores: [] };
 
   for (const pair of IMPOSSIBLE_PAIRS) {
     const chosenA = (state.dims[pair.a.dimension] ?? []).filter((v) => pair.a.values.includes(v));
@@ -615,6 +627,8 @@ export function explainNoMatches(
         dimensions: [first!, second!],
         impossible: true,
         sentence: `${listLabels([first!, second!])} cannot both be true — ${pair.because}. Remove one of them.`,
+        restores: [],
+        plainly: pair.plainly,
       };
     }
   }
@@ -640,12 +654,14 @@ export function explainNoMatches(
       dimensions: relieving.map((entry) => entry.id),
       impossible: false,
       sentence: `Nothing matches. Removing ${list} would bring rows back — the number is what each would show.`,
+      restores: relieving,
     };
   }
 
   return {
     dimensions: active,
     impossible: false,
+    restores: [],
     sentence:
       active.length > 1
         ? `Nothing matches: ${listLabels(active)} exclude every row together, so no single one of them explains it.`

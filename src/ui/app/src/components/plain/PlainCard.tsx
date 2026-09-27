@@ -93,7 +93,7 @@ export function HelpToggle({ children, label = "What does this mean?" }: { child
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((value) => !value)}
-        className={cn("inline-flex min-h-6 items-center gap-1.5 rounded-md text-[12px] text-muted-foreground hover:text-foreground", FOCUS)}
+        className={cn("inline-flex min-h-6 items-center gap-1.5 rounded-md text-[12px] text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:min-h-11", FOCUS)}
       >
         <CircleHelp aria-hidden className="size-3.5" />
         {label}
@@ -111,7 +111,7 @@ export function ShowDetails({ children, testId, label = "Show details" }: { chil
     <details className="group open:basis-full" data-testid={testId} data-details>
       <summary
         className={cn(
-          "inline-flex min-h-6 cursor-pointer list-none items-center gap-1 rounded-md text-[12px] text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden",
+          "inline-flex min-h-6 cursor-pointer list-none items-center gap-1 rounded-md text-[12px] text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden [@media(pointer:coarse)]:min-h-11",
           FOCUS,
         )}
       >

@@ -32,6 +32,8 @@
  * asserted in the tests so it stays one.
  */
 
+import type { RowPlan } from "./row-layout";
+
 export type TaskListDensity = "comfortable" | "compact";
 
 /**
@@ -152,6 +154,10 @@ export interface TaskListColumns {
  * icon, the title, the assignee avatar and the working pill's dot. Title is not listed
  * because it is not optional — there is no switch for it.
  *
+ * The identifier's one exception is the phone (row-layout.ts, below 480px): the column stays
+ * ON in every preset and the identifier stays in the row's accessible text, but it is not
+ * drawn, because the detail sheet's header prints it and the title needs the 62px.
+ *
  * Not enforced at runtime; a preset is a literal, and a test is the right place to catch a
  * literal that got it wrong. `task-list.test.tsx` asserts every preset against this, which
  * is what stops "the palette one can lose the status icon, it's only a popup" from ever
@@ -257,7 +263,13 @@ export const TASK_LIST_PRESETS: Record<TaskListPreset, PresetShape> = {
   },
 };
 
-export interface TaskListConfig extends PresetShape {}
+export interface TaskListConfig extends PresetShape {
+  /**
+   * What the row keeps at the current width — row-layout.ts. Absent means the full row,
+   * which is what every surface that does not measure (the palette, a fixture) wants.
+   */
+  plan?: RowPlan;
+}
 
 /**
  * A preset plus per-call overrides.
@@ -268,12 +280,16 @@ export interface TaskListConfig extends PresetShape {}
  */
 export function resolveTaskListConfig(
   preset: TaskListPreset,
-  over?: { density?: TaskListDensity; columns?: Partial<TaskListColumns>; labelMax?: number },
+  over?: { density?: TaskListDensity; columns?: Partial<TaskListColumns>; labelMax?: number; plan?: RowPlan },
 ): TaskListConfig {
   const base = TASK_LIST_PRESETS[preset];
+  const labelMax = over?.labelMax ?? base.labelMax;
   return {
     density: over?.density ?? base.density,
     columns: over?.columns ? { ...base.columns, ...over.columns } : base.columns,
-    labelMax: over?.labelMax ?? base.labelMax,
+    // The narrower of the preset's cap and the width's: a panel that never names labels
+    // does not start naming them on a wide screen.
+    labelMax: over?.plan ? Math.min(labelMax, over.plan.labelMax) : labelMax,
+    ...(over?.plan ? { plan: over.plan } : {}),
   };
 }

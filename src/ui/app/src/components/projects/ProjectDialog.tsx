@@ -33,7 +33,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createProject, deleteProject, updateProject } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
+import { PHONE_SHEET_CLASS } from "@/components/CreateIssueDialog";
 import { useSession } from "@/lib/session";
+import { asksForWorkspace, defaultTargetWorkspace, loadRememberedWorkspace, rememberWorkspace } from "@/lib/session-workspace";
 import type { ProjectDialogRequest } from "@/lib/shell-events";
 import { PROJECT_KINDS, PROJECT_SOURCE_KINDS, type ProjectKind, type ProjectSourceKind } from "@/lib/types";
 import { ConfirmDialog } from "@/settings/form/ConfirmDialog";
@@ -97,7 +99,8 @@ export function ProjectForm({
   const errors = tried ? validateProjectDraft(draft) : {};
   const dirty = mode.mode === "create" || isProjectDraftDirty(draft, baseline);
   // Only a create in hub mode, with more than one workspace, has to ask where.
-  const askWorkspace = mode.mode === "create" && session.mode === "hub" && session.workspaces.length > 1;
+  const askWorkspace = mode.mode === "create" && asksForWorkspace(session);
+  const workspaceError = tried && mode.mode === "create" && ws === "" ? "Choose which workspace this project belongs to." : undefined;
   // The managed half of the union, or null: what the Source section is drawn from.
   const managed = draft.kind === "managed" ? draft : null;
 
@@ -105,11 +108,16 @@ export function ProjectForm({
     if (busy) return;
     setTried(true);
     if (!isProjectDraftValid(draft)) return;
+    // No workspace chosen: sending none would let the server pick the first one.
+    if (mode.mode === "create" && ws === "") return;
     setBusy(true);
     setRefusal(null);
     try {
       const payload = projectDraftPayload(draft);
-      if (mode.mode === "create") await createProject({ ws: ws || undefined, ...payload });
+      if (mode.mode === "create") {
+        await createProject({ ws: ws || undefined, ...payload });
+        if (askWorkspace) rememberWorkspace(ws);
+      }
       else await updateProject({ ws: mode.row.workspace, ref: mode.row.project.id, ...payload });
       session.refresh();
       onDone();
@@ -152,11 +160,11 @@ export function ProjectForm({
           {section.id === "general" ? (
             <>
               {askWorkspace ? (
-                <Field id="project-workspace" label="Workspace" className={FIELD_CLASS}>
+                <Field id="project-workspace" label="Workspace" error={workspaceError} className={FIELD_CLASS}>
                   {(aria) => (
-                    <Select value={ws} onValueChange={setWs}>
+                    <Select value={ws || undefined} onValueChange={setWs}>
                       <SelectTrigger {...aria} data-project-workspace className="w-full">
-                        <SelectValue />
+                        <SelectValue placeholder="Choose a workspace" />
                       </SelectTrigger>
                       <SelectContent position="popper" align="start">
                         {session.workspaces.map((workspace) => (
@@ -298,14 +306,16 @@ export function ProjectDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const session = useSession();
+  // A create lands in the named workspace, the page's own, or — on All workspaces — the
+  // remembered choice; with none of those it is "" and the form asks (never the first).
   const mode: ProjectFormMode =
     request.mode === "edit"
       ? { mode: "edit", row: request.row }
-      : { mode: "create", workspace: request.workspace || session.ws || session.workspaces[0]?.slug || "" };
+      : { mode: "create", workspace: request.workspace || defaultTargetWorkspace(session, loadRememberedWorkspace()) };
   const copy = projectFormCopy(mode);
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent data-project-dialog className="sm:max-w-md">
+      <DialogContent data-project-dialog className={`sm:max-w-md ${PHONE_SHEET_CLASS}`}>
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>

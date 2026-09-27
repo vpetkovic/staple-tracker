@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VIEWS, VIEW_LABELS, viewUsesIssueFilters } from "@/lib/session";
+import { VIEWS, VIEW_LABELS, VIEW_SHORT_LABELS, viewControls, viewUsesIssueFilters } from "@/lib/session";
 import {
   NAV_GROUPS,
   RAIL_STORAGE_KEY,
@@ -21,23 +21,38 @@ describe("the rail's groups", () => {
     expect(new Set(views).size).toBe(views.length);
   });
 
-  it("opens with the Workspace group, in the order Tasks, Queue, Graph, Milestones, Estimate accuracy (the calibration view)", () => {
+  it("opens with the Workspace group, in the order Tasks, Queue, Graph, Milestones, Estimates (the calibration view)", () => {
     const first = NAV_GROUPS[0]!;
     expect(first.label).toBe("Workspace");
-    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Estimate accuracy"]);
+    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Estimates"]);
     expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "calibration"]);
   });
 
-  it("lists the machine's Budget in its own Machine group, after the workspace's views", () => {
-    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["Workspace", "Machine"]);
+  it("lists the machine's Usage in its own This machine group — Settings' name for it — after the workspace's views", () => {
+    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["Workspace", "This machine"]);
     const machine = NAV_GROUPS[1]!;
-    expect(machine.items.map((entry) => entry.label)).toEqual(["Budget"]);
+    expect(machine.items.map((entry) => entry.label)).toEqual(["Usage"]);
     expect(machine.items.map((entry) => entry.view)).toEqual(["budget"]);
-    expect(navItemForView("budget")).toMatchObject({ id: "view:budget", label: "Budget" });
+    expect(navItemForView("budget")).toMatchObject({ id: "view:budget", label: "Usage" });
   });
 
-  it("shows the issue filters on every issue view and not on the Estimate accuracy report or the Budget", () => {
-    expect(VIEWS.filter((view) => !viewUsesIssueFilters(view))).toEqual(["calibration", "budget"]);
+  it("calls every view by ONE name: the tab bar says exactly what the rail says", () => {
+    for (const view of VIEWS) expect(VIEW_SHORT_LABELS[view]).toBe(VIEW_LABELS[view]);
+  });
+
+  it("offers the issue filters only where they narrow something: Tasks and Graph", () => {
+    expect(VIEWS.filter((view) => viewUsesIssueFilters(view))).toEqual(["tree", "graph"]);
+  });
+
+  it("shows each view only the header controls it honours", () => {
+    expect(viewControls("tree")).toEqual({ arrange: true, filter: true, done: true });
+    // The graph draws the filtered nodes; it has no rows to group or sort.
+    expect(viewControls("graph")).toEqual({ arrange: false, filter: true, done: true });
+    // Milestones lists finished milestones when Done is on, and filters nothing else.
+    expect(viewControls("milestones")).toEqual({ arrange: false, filter: false, done: true });
+    for (const view of ["queue", "calibration", "budget"] as const) {
+      expect(viewControls(view)).toEqual({ arrange: false, filter: false, done: false });
+    }
   });
 
   it("calls the tree view Tasks and keeps its internal value", () => {

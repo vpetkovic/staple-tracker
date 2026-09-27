@@ -70,7 +70,7 @@ export type CommandAction =
    * verb the header's gear does, so there is one way in with two triggers rather than
    * two ways in.
    */
-  | { type: "settings" };
+  | { type: "settings"; section?: string };
 
 export type PalettePage = "checkout" | "assignee";
 
@@ -262,6 +262,12 @@ function issueCount(count: number): string {
  * Every non-issue command, in natural order. Ordering for display is a separate
  * concern — see `orderCommands`.
  */
+/** Words the pages were once called, so muscle memory still finds them in the palette. */
+const FORMER_VIEW_NAMES: Partial<Record<ViewName, string>> = {
+  calibration: "estimate accuracy calibration",
+  budget: "budget limits",
+};
+
 /**
  * Where a palette write on the open issue goes: the issue the selection was pinned to, not
  * the number it was opened by — a renumber in between would otherwise aim it at another
@@ -351,13 +357,14 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       id: `view:${view}`,
       group: "view",
       label: `Go to ${viewLabel(view)}`,
-      keywords: `view switch ${view} ${viewLabel(view)}`,
+      // The names these pages used to have still find them.
+      keywords: `view switch ${view} ${viewLabel(view)} ${FORMER_VIEW_NAMES[view] ?? ""}`,
       action: { type: "view", view },
     });
   }
 
   /*
-   * The issue filters, only where they filter something: the Estimate accuracy report is not an issue
+   * The issue filters, only where they filter something: the Estimates report is not an issue
    * list, and the header hides the same controls there (`viewUsesIssueFilters`).
    */
   if (viewUsesIssueFilters(context.view)) pushIssueFilters(commands, context);
@@ -370,18 +377,36 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
   commands.push({
     id: "settings",
     group: "view",
-    label: "Workspace settings — statuses and kinds",
+    label: "Settings",
+    hint: "this computer and every workspace",
     keywords:
-      "settings workspace statuses kinds vocabulary configure reorder rename category customise",
+      "settings preferences workspace statuses kinds vocabulary configure reorder rename category customise cloud usage budget machine",
     action: { type: "settings" },
   });
+  /*
+   * The sections people come looking for by name, straight to the section — from any page,
+   * All workspaces included, since Settings is global.
+   */
+  for (const [section, label, keywords] of [
+    ["telemetry", "Settings: Usage", "usage budget telemetry claude codex plan limits tracking"],
+    ["cloud", "Settings: Cloud account", "cloud sync hub connect devices backup"],
+    ["statuses", "Settings: Statuses", "statuses status vocabulary workflow states"],
+  ] as const) {
+    commands.push({
+      id: `settings:${section}`,
+      group: "view",
+      label,
+      keywords: `settings ${keywords}`,
+      action: { type: "settings", section },
+    });
+  }
 
   if (context.hub) {
     if (context.ws !== "") {
       commands.push({
         id: "ws:all",
         group: "filter",
-        label: "Workspace → all",
+        label: "Switch to All workspaces",
         keywords: "workspace all every hub",
         action: { type: "workspace", ws: "" },
       });
@@ -391,7 +416,7 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       commands.push({
         id: `ws:${workspace.slug}`,
         group: "filter",
-        label: `Workspace → ${workspace.slug}`,
+        label: `Switch to ${workspace.slug}`,
         hint: workspace.prefix,
         keywords: `workspace ${workspace.slug} ${workspace.prefix}`,
         action: { type: "workspace", ws: workspace.slug },

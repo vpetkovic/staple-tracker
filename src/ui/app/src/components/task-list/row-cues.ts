@@ -116,10 +116,30 @@ export const MILESTONE_CUE_GLYPH = "◇";
  * because a container's number and a leaf's number are different numbers, and a reader who
  * cannot tell which one they are looking at cannot use either.
  */
-export function rowCueShort(cue: RowPickupCue): string {
+export function rowCueShort(cue: RowPickupCue, compact = false): string {
+  // A phone keeps the glyph and the bare number (`#2`, `▸`): the words "plan" and "next"
+  // are in the sentence the cue carries, and on a 360px row they are title.
+  if (compact) return cue.position === null || cue.state === "pickable" ? "" : String(cue.position);
   if (cue.state === "pickable") return "next";
   if (cue.position === null) return "";
   return cue.scope === "plan" ? `plan #${cue.position}` : `#${cue.position}`;
+}
+
+/**
+ * The phone's one pill in place of the pickup marks, or null for a row that gets none.
+ *
+ *   Next    — the task an agent would pick up now (`pickable`).
+ *   Queued  — a task with a place in the plan that is not being worked on yet.
+ *
+ * Work in progress gets no pill (its claim avatar already says someone is on it), and the
+ * states with no place in the plan say nothing: on a phone a mark on every row is noise.
+ */
+export type RowCuePill = "Next" | "Queued";
+
+export function rowCuePill(cue: RowPickupCue): RowCuePill | null {
+  if (cue.state === "pickable") return "Next";
+  if (cue.state === "in_flight") return null;
+  return cue.position !== null ? "Queued" : null;
 }
 
 /**
@@ -230,7 +250,9 @@ export function buildRowCueIndex(
       const reason = row.reason;
       if (row.eligibility === "gated") return { state: "gated", position: null, scope: "effective", reason };
       if (row.eligibility === "blocked") return { state: "waiting", position: null, scope: "effective", reason };
-      if (row.eligibility === "unavailable") return { state: "unavailable", position: null, scope: "effective", reason };
+      // The resolver's sentence here only names the raw status id ("… is in_review, which
+      // cannot be checked out"); the hint says the same in words, and the row shows its status.
+      if (row.eligibility === "unavailable") return { state: "unavailable", position: null, scope: "effective", reason: null };
       if (row.eligibility === "claimed") {
         return { state: "in_flight", position: null, scope: "effective", reason };
       }

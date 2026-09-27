@@ -10,13 +10,17 @@
  * ── THE URL IS THE OPEN FLAG ──────────────────────────────────────────────────────────
  *
  * Since R6b the flag is not a boolean but the `?settings` parameter, read through
- * `readSettingsRoute`. Three things can change it and all three go through the URL first:
+ * `readSettingsRoute`, with `settings-ws` naming the workspace the per-workspace sections
+ * edit. Four things can change them and all four go through the URL first:
  *
  *   the gear / the palette  — pushes ONE history entry carrying `?settings`;
  *   selecting a category    — replaces that entry with `?settings=<id>` (no new entry,
  *                             so Back still means "the page I was on");
+ *   the workspace picker    — replaces it with `settings-ws=<slug>`, same reason;
  *   Back / forward          — `popstate` re-reads the URL, which is what closes the
- *                             shell on Back and reopens it on Forward.
+ *                             shell on Back and reopens it on Forward. Back is held
+ *                             for the dialog's guard: the entry goes back on and the
+ *                             dialog leaves as the X does, asking over unsaved edits.
  *
  * Closing with the X or Esc pops the entry this mount pushed, so the URL and the dialog
  * cannot disagree; a deep-link arrival pushed nothing, so the parameter is stripped in
@@ -28,52 +32,120 @@
  * something that deserves it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  afterHistorySettles,
+  leaveOverlays,
+  overlayEntryIsOpen,
+  popOverlay,
+  pushOverlayEntry,
+  replaceUrl,
+  traversalKind,
+  whenHistoryIsFree,
+} from "@/lib/back-to-close";
 import { onOpenSettings } from "@/lib/shell-events";
+import { rememberWorkspace } from "@/lib/session-workspace";
 import { SettingsDialog } from "./SettingsDialog";
 import { closeAction, readSettingsRoute, withSettingsRoute, type SettingsRoute } from "./settings-shell";
 
 export function SettingsMount() {
   const [route, setRoute] = useState<SettingsRoute | null>(() => readSettingsRoute(window.location.search));
-  /** Did WE push the history entry the shell is open on? Decides how closing leaves. */
-  const pushed = useRef(false);
+  /**
+   * The overlay entry WE pushed when the shell opened (lib/back-to-close.ts), or null after
+   * a deep-link arrival, which pushed nothing. Decides how closing leaves: `closeAction`.
+   */
+  const entry = useRef<string | null>(null);
+  /** What is open — read by the Back guard below. */
+  const held = useRef(route);
+  held.current = route;
+  /** Bumped when Back was held; the dialog decides through its own guard (`leaveRequest`). */
+  const [leaveRequest, setLeaveRequest] = useState(0);
 
   useEffect(
     () =>
-      onOpenSettings(() => {
-        // Already open (the palette re-dispatching over an open shell): nothing to do.
-        if (readSettingsRoute(window.location.search)) return;
-        window.history.pushState(null, "", withSettingsRoute(window.location.href, ""));
-        pushed.current = true;
-        setRoute({ category: "" });
+      onOpenSettings((request) => {
+        const category = request.section ?? "";
+        const workspace = request.workspace ?? "";
+        // Queued behind whatever was closing when this was asked for — the drawer the gear
+        // sits in, the palette — so the entry lands on top of the page, not under a Back.
+        whenHistoryIsFree(() => {
+          // Already open (the palette re-dispatching over an open shell): re-point it in place.
+          if (readSettingsRoute(window.location.search)) {
+            replaceUrl(withSettingsRoute(window.location.href, category, workspace || undefined));
+            setRoute(readSettingsRoute(window.location.search));
+            return;
+          }
+          entry.current = pushOverlayEntry(withSettingsRoute(window.location.href, category, workspace || null));
+          setRoute({ category, workspace });
+        });
       }),
     [],
   );
 
   useEffect(() => {
+    // Back, Forward, or an overlay above the shell closing: the address says what is open.
     const onPop = () => {
-      // Whatever entry we are on now, the browser put us there; there is nothing of ours
-      // left to pop, whichever way the next close goes.
-      pushed.current = false;
-      setRoute(readSettingsRoute(window.location.search));
+      const next = readSettingsRoute(window.location.search);
+      const open = held.current;
+      /*
+       * BACK DOES NOT DISCARD. The person's Back took Settings' own entry: it closes the way
+       * the X does, through the dialog's unsaved-changes guard. The entry goes back on (so a
+       * Keep leaves the page's Back unspent) and the dialog is asked to leave: clean, it
+       * closes through `close` below at once; with unsaved edits it asks "Discard unsaved
+       * changes?" first. Only the person's Back is held — a close or a navigation this app
+       * started has already decided, and holding it would ask forever.
+       */
+      if (next === null && open !== null && entry.current !== null && traversalKind() === "overlay-back") {
+        entry.current = null;
+        // A label still being typed in commits when it loses focus, and the X gets that for
+        // free (pressing it moves focus); Back does not, so the field is blurred here, before
+        // the dialog is asked.
+        const typing = document.activeElement;
+        if (typing instanceof HTMLElement && typing.closest("[data-settings-dialog]")) typing.blur();
+        whenHistoryIsFree(() => {
+          entry.current = pushOverlayEntry(withSettingsRoute(window.location.href, open.category, open.workspace || null));
+          setLeaveRequest((count) => count + 1);
+        });
+        return;
+      }
+      setRoute(next);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   const focusCategory = useCallback((category: string) => {
-    window.history.replaceState(null, "", withSettingsRoute(window.location.href, category));
-    setRoute({ category });
+    afterHistorySettles(() => replaceUrl(withSettingsRoute(window.location.href, category)));
+    setRoute((current) => ({ category, workspace: current?.workspace ?? "" }));
+  }, []);
+
+  /**
+   * The in-Settings workspace picker. Replaces the entry (Back still means "the page I was
+   * on"), keeps the section, and is remembered as the default answer to "which workspace?".
+   */
+  const focusWorkspace = useCallback((workspace: string) => {
+    rememberWorkspace(workspace);
+    afterHistorySettles(() => {
+      const current = readSettingsRoute(window.location.search);
+      replaceUrl(withSettingsRoute(window.location.href, current?.category ?? "", workspace));
+    });
+    setRoute((held) => ({ category: held?.category ?? "", workspace }));
   }, []);
 
   const close = useCallback(() => {
-    if (closeAction(pushed.current) === "history-back") {
-      pushed.current = false;
-      // The popstate handler closes the dialog once the browser has moved.
-      window.history.back();
+    const ours = entry.current;
+    entry.current = null;
+    if (closeAction(ours !== null && overlayEntryIsOpen(ours)) === "history-back") {
+      // Back past our entry and anything above it (a section's own entry on a phone); the
+      // popstate handler closes the dialog once the browser has moved.
+      popOverlay(ours!);
       return;
     }
-    window.history.replaceState(null, "", withSettingsRoute(window.location.href, null));
-    setRoute(null);
+    // A deep-link arrival: step out of any overlay entries above the page, then strip the
+    // parameters in place.
+    leaveOverlays(() => {
+      replaceUrl(withSettingsRoute(window.location.href, null));
+      setRoute(null);
+    });
   }, []);
 
   const onOpenChange = useCallback(
@@ -88,8 +160,11 @@ export function SettingsMount() {
     <SettingsDialog
       open
       category={route.category}
+      workspace={route.workspace}
       onCategoryChange={focusCategory}
+      onWorkspaceChange={focusWorkspace}
       onOpenChange={onOpenChange}
+      leaveRequest={leaveRequest}
     />
   );
 }

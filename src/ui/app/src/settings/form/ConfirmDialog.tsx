@@ -12,6 +12,7 @@
  * "Remove" / "Cancel". The safe action is the one focus starts on.
  */
 import { useRef } from "react";
+import { useBackToClose } from "@/lib/back-to-close";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { DialogDescription, DialogOverlay, DialogPortal, DialogTitle } from "@/components/ui/dialog";
@@ -39,6 +40,8 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const safe = useRef<HTMLButtonElement>(null);
+  // Phone Back is the safe answer — Keep editing, Cancel — and never reaches what is beneath.
+  useBackToClose(open, onCancel);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(next) => (next ? undefined : onCancel())}>
       <DialogPortal>

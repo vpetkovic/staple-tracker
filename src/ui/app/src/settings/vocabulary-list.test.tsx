@@ -96,3 +96,57 @@ describe("the Kinds editor is the same editor without the category column", () =
     expect(kinds).not.toMatch(/data-reorder-row="epic"[\s\S]*?>0</);
   });
 });
+
+/** The whole opening tag that carries `attr`, whatever order its attributes come in. */
+function tagWith(markup: string, attr: string): string {
+  const at = markup.indexOf(attr);
+  if (at < 0) return "";
+  return markup.slice(markup.lastIndexOf("<", at), markup.indexOf(">", at) + 1);
+}
+
+describe("on a narrow pane each entry is a card with every control at thumb size", () => {
+  const cards = renderToStaticMarkup(
+    <VocabularyList
+      target="statuses"
+      rows={statusRows(SEED_SETTINGS.statuses)}
+      usage={{ todo: 3, done: 0 }}
+      categories={SEED_SETTINGS.categories}
+      requiredCategories={SEED_SETTINGS.requiredCategories}
+      write={write}
+      layout="cards"
+    />,
+  );
+
+  it("drops the table's column headings and its drag handles", () => {
+    expect(cards).toContain('data-reorder-layout="cards"');
+    expect(cards).not.toContain(">category<");
+    expect(cards).not.toContain("to reorder");
+    expect(cards).toContain('data-vocabulary-card="todo"');
+  });
+
+  it("puts the label first, full width, at 44px, and the category below it at 44px", () => {
+    expect(tagWith(cards, 'aria-label="Label for todo"')).toMatch(/class="[^"]*\bh-11\b[^"]*\bflex-1\b/);
+    expect(tagWith(cards, 'aria-label="Category for todo"')).toMatch(/class="[^"]*\bh-11\b/);
+    // The label comes before the category in the card.
+    expect(cards.indexOf('aria-label="Label for todo"')).toBeLessThan(cards.indexOf('aria-label="Category for todo"'));
+  });
+
+  it("gathers Move up, Move down and Remove into one 44px ⋯ menu per entry", () => {
+    expect(tagWith(cards, 'aria-label="More for Todo"')).toMatch(/class="[^"]*\bsize-11\b/);
+    expect(cards).not.toContain('aria-label="Move Todo up"');
+    expect(cards).not.toContain('aria-label="Remove Todo"');
+  });
+
+  it("says how many tasks use a status in words, and keeps the id in small print", () => {
+    expect(cards).toContain("Used by 3 tasks");
+    expect(cards).toContain("ID todo");
+  });
+
+  it("stacks the add form full width at 44px", () => {
+    expect(tagWith(cards, 'id="new-statuses-id"')).toMatch(/class="[^"]*\bh-11\b[^"]*\bw-full\b/);
+  });
+
+  it("a wide pane keeps the table", () => {
+    expect(statuses).toContain('data-reorder-layout="rows"');
+  });
+});

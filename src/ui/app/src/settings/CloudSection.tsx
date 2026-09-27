@@ -386,7 +386,7 @@ function ConnectDisclosure({ hasDraft, children }: { hasDraft: boolean; children
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="cursor-pointer py-1.5 text-[13px] font-medium">Enter connection details</summary>
+      <summary className="cursor-pointer py-1.5 text-[13px] font-medium [@media(pointer:coarse)]:py-0 [@media(pointer:coarse)]:leading-[44px]">Enter connection details</summary>
       {children}
     </details>
   );
@@ -399,8 +399,18 @@ function ConnectDisclosure({ hasDraft, children }: { hasDraft: boolean; children
  * — and never parses `detail` or `failure.summary`, which are rendered as
  * sentences for a human and are never inputs to a decision.
  */
-export function CloudPanel(props: CloudPanelProps) {
-  const { report, busy, draft, pending, devices } = props;
+/**
+ * Which part of the surface a Settings section shows. Settings lists the hub (Cloud), the
+ * hub's registry (Hub registry) and one workspace's connection (Cloud sync, per workspace)
+ * as three sections; `all` is the whole surface in one, as it was before the split.
+ */
+export type CloudPart = "all" | "machine" | "registry" | "workspace";
+
+export function CloudPanel(props: CloudPanelProps & { part?: CloudPart }) {
+  const { report, busy, draft, pending, devices, part = "all" } = props;
+  const showsHub = part === "all" || part === "machine";
+  const showsRegistry = part === "all" || part === "registry";
+  const showsWorkspace = part === "all" || part === "workspace";
   const connected = report.mode !== "disconnected";
   const formProblem = connectFormProblem({ endpoint: draft.endpoint, token: draft.enrollment });
 
@@ -421,18 +431,20 @@ export function CloudPanel(props: CloudPanelProps) {
         the list until the current workspace happens to be connected would make
         it invisible exactly when it answers the question.
       */}
-      <HubSelfPanel
-        report={props.workspaces}
-        hub={props.hub}
-        actions={props.hubActions}
-        outcome={props.hub.outcomes[""]}
-      />
+      {showsHub ? (
+        <HubSelfPanel
+          report={props.workspaces}
+          hub={props.hub}
+          actions={props.hubActions}
+          outcome={props.hub.outcomes[""]}
+        />
+      ) : null}
       {/*
         The hub's own leg to a sync service — STA-289. Directly under the hub,
         because its subject is the hub, and above the list, because it acts on no
         row. The publish switch lives here now, beside the Publish button it unlocks.
       */}
-      {props.workspaces !== null ? (
+      {showsRegistry && props.workspaces !== null ? (
         <HubRegistryPanel
           report={props.workspaces}
           state={props.registry}
@@ -440,13 +452,17 @@ export function CloudPanel(props: CloudPanelProps) {
           locked={props.hub.busy !== null || props.hub.wide.busy !== null || props.hub.backingUp}
         />
       ) : null}
-      <HubWorkspaceList
-        report={props.workspaces}
-        currentRepositoryId={report.repositoryId}
-        hub={props.hub}
-        actions={props.hubActions}
-      />
+      {showsHub ? (
+        <HubWorkspaceList
+          report={props.workspaces}
+          currentRepositoryId={report.repositoryId}
+          hub={props.hub}
+          actions={props.hubActions}
+        />
+      ) : null}
 
+      {showsWorkspace ? (
+      <>
       <Section
         title={connected ? "This workspace · Connected" : "This workspace · Not connected"}
         description={report.detail}
@@ -682,6 +698,8 @@ export function CloudPanel(props: CloudPanelProps) {
           </Section>
         </>
       ) : null}
+      </>
+      ) : null}
     </div>
   );
 }
@@ -763,7 +781,7 @@ function HubSelfPanel({
           {report.self.backupHeadline}
         </p>
         <details data-cloud-hub-backup-details className="mt-1">
-          <summary className="cursor-pointer text-[11px] text-muted-foreground">
+          <summary className="cursor-pointer text-[11px] text-muted-foreground [@media(pointer:coarse)]:text-[13px] [@media(pointer:coarse)]:leading-[44px]">
             What a hub backup contains
           </summary>
           <ul className="m-0 mt-1 list-disc space-y-1 pl-4 text-[11px] text-muted-foreground">
@@ -1642,7 +1660,7 @@ function HubRow({
       */}
       {view.rationale !== null ? (
         <details data-cloud-workspace-details className="mt-1">
-          <summary className="cursor-pointer text-[11px] text-muted-foreground">Details</summary>
+          <summary className="cursor-pointer text-[11px] text-muted-foreground [@media(pointer:coarse)]:text-[13px] [@media(pointer:coarse)]:leading-[44px]">Details</summary>
           <p className="mt-1 text-[11px] leading-relaxed wrap-anywhere text-muted-foreground">
             {view.rationale}
           </p>
@@ -1754,7 +1772,7 @@ const IDLE_WIDE: HubWideState = {
 };
 
 /** The data half: one read on mount, and one round trip per press. */
-export function CloudSection({ ws }: { ws?: string }) {
+export function CloudSection({ ws, part = "all" }: { ws?: string; part?: CloudPart }) {
   const [report, setReport] = useState<CloudSurfaceReport | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1823,7 +1841,8 @@ export function CloudSection({ ws }: { ws?: string }) {
    */
   useEffect(() => {
     let live = true;
-    getCloudStatus()
+    // `ws` so a per-workspace section reads ITS workspace, not whichever the server defaults to.
+    getCloudStatus({ ws })
       .then((next) => {
         if (live) {
           setReport(next);
@@ -2350,7 +2369,7 @@ export function CloudSection({ ws }: { ws?: string }) {
 
   if (loadError !== null) {
     return (
-      <Section title="Cloud">
+      <Section title="Cloud account">
         <InlineError>{loadError}</InlineError>
       </Section>
     );
@@ -2359,6 +2378,7 @@ export function CloudSection({ ws }: { ws?: string }) {
 
   return (
     <CloudPanel
+      part={part}
       report={report}
       error={error}
       busy={busy}

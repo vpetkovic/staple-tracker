@@ -30,6 +30,7 @@ import {
   MILESTONE_CUE_GLYPH,
   ROW_CUE_PRESENTATION,
   milestoneCueSentence,
+  rowCuePill,
   rowCueShort,
   rowCueSentence,
 } from "./row-cues";
@@ -41,10 +42,10 @@ import {
  * one (docs/queue.md, "Presentation sort is not the queue"). Making it clickable would
  * advertise an affordance that does not and must not exist here.
  */
-export function PickupCue({ cue }: { cue: RowPickupCue }) {
+export function PickupCue({ cue, compact = false }: { cue: RowPickupCue; compact?: boolean }) {
   const { glyph } = ROW_CUE_PRESENTATION[cue.state];
   const sentence = rowCueSentence(cue);
-  const short = rowCueShort(cue);
+  const short = rowCueShort(cue, compact);
 
   return (
     <span
@@ -77,6 +78,26 @@ export function PickupCue({ cue }: { cue: RowPickupCue }) {
  * of work is the badge wall the ticket exists to avoid; the glyph says "there is a
  * commitment here" and the tooltip and the accessible name say which one.
  */
+/**
+ * The phone's pickup cue: one word in a pill, or nothing. See `rowCuePill`.
+ */
+export function PickupPill({ cue }: { cue: RowPickupCue }) {
+  const pill = rowCuePill(cue);
+  if (!pill) return null;
+  return (
+    <span
+      className="staple-row-pickup-pill"
+      data-testid="row-pickup-pill"
+      data-pickup-pill={pill.toLowerCase()}
+      data-pickup-cue={cue.state}
+      title={rowCueSentence(cue)}
+    >
+      <span aria-hidden="true">{pill}</span>
+      <span className="sr-only">{rowCueSentence(cue)}</span>
+    </span>
+  );
+}
+
 export function MilestoneCue({
   cue,
   onOpen,

@@ -67,6 +67,13 @@ export interface ReorderListProps<T> {
   renderActions?: (item: T, index: number) => ReactNode;
   /** Marks a row, e.g. the one a refusal named. */
   rowState?: (item: T) => { invalid?: boolean; dirty?: boolean } | undefined;
+  /**
+   * CARDS, for a narrow pane (a phone, a tablet's settings pane). Each row is a card; the
+   * drag handle and the two move buttons give way to whatever `renderActions` offers (the
+   * vocabulary editors put Move up, Move down and Remove in one ⋯ menu), because four
+   * 36px controls on the right of a 330px row leave the row nothing. Alt+arrow still moves.
+   */
+  cards?: boolean;
 }
 
 function Row<T>({
@@ -81,7 +88,9 @@ function Row<T>({
   renderItem,
   renderBelow,
   renderActions,
+  cards = false,
 }: {
+  cards?: boolean;
   item: T;
   index: number;
   count: number;
@@ -116,58 +125,65 @@ function Row<T>({
         }
       }}
       className={cn(
-        "flex flex-col gap-2 rounded-md border px-2 py-1.5",
-        droppable.isOver && !draggable.isDragging ? "border-ring bg-surface-hover" : "border-transparent",
+        cards ? "flex flex-col gap-2 rounded-xl border bg-card p-3" : "flex flex-col gap-2 rounded-md border px-2 py-1.5",
+        droppable.isOver && !draggable.isDragging ? "border-ring bg-surface-hover" : cards ? "" : "border-transparent",
         state?.invalid && "border-[var(--status-task-blocked)]",
         draggable.isDragging && "opacity-50",
       )}
     >
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          ref={draggable.setNodeRef}
-          {...draggable.listeners}
-          {...draggable.attributes}
-          aria-label={`Drag ${label} to reorder`}
-          title="Drag to reorder"
-          className="shrink-0 cursor-grab rounded p-1 text-text-tertiary hover:bg-surface-hover hover:text-foreground active:cursor-grabbing"
-        >
-          <GripVertical className="size-3.5" aria-hidden />
-        </button>
-
-        {renderItem(item, index)}
-
-        {/*
-          THE KEYBOARD ALTERNATIVE. Two ordinary buttons, always present, never a
-          hover-reveal: an affordance that only exists once you have already pointed at
-          the row is not an alternative to pointing at the row.
-        */}
-        <div className="flex shrink-0 items-center">
-          <Button
-            variant="ghost"
-            size="icon"
-            data-reorder-control="up"
-            aria-label={`Move ${label} up`}
-            disabled={disabled || index === 0}
-            onClick={() => onMoveBy(index, "up", id)}
-          >
-            <ChevronUp className="size-3.5" aria-hidden />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            data-reorder-control="down"
-            aria-label={`Move ${label} down`}
-            disabled={disabled || index === count - 1}
-            onClick={() => onMoveBy(index, "down", id)}
-          >
-            <ChevronDown className="size-3.5" aria-hidden />
-          </Button>
+      {cards ? (
+        <div className="flex items-start gap-2">
+          <div className="flex min-w-0 flex-1 items-start gap-2">{renderItem(item, index)}</div>
           {renderActions?.(item, index)}
         </div>
-      </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            ref={draggable.setNodeRef}
+            {...draggable.listeners}
+            {...draggable.attributes}
+            aria-label={`Drag ${label} to reorder`}
+            title="Drag to reorder"
+            className="shrink-0 cursor-grab rounded p-1 text-text-tertiary hover:bg-surface-hover hover:text-foreground active:cursor-grabbing"
+          >
+            <GripVertical className="size-3.5" aria-hidden />
+          </button>
+
+          {renderItem(item, index)}
+
+          {/*
+            THE KEYBOARD ALTERNATIVE. Two ordinary buttons, always present, never a
+            hover-reveal: an affordance that only exists once you have already pointed at
+            the row is not an alternative to pointing at the row.
+          */}
+          <div className="flex shrink-0 items-center">
+            <Button
+              variant="ghost"
+              size="icon"
+              data-reorder-control="up"
+              aria-label={`Move ${label} up`}
+              disabled={disabled || index === 0}
+              onClick={() => onMoveBy(index, "up", id)}
+            >
+              <ChevronUp className="size-3.5" aria-hidden />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              data-reorder-control="down"
+              aria-label={`Move ${label} down`}
+              disabled={disabled || index === count - 1}
+              onClick={() => onMoveBy(index, "down", id)}
+            >
+              <ChevronDown className="size-3.5" aria-hidden />
+            </Button>
+            {renderActions?.(item, index)}
+          </div>
+        </div>
+      )}
       {renderBelow ? (
-        <div style={{ paddingLeft: HANDLE_COLUMN_PX }}>{renderBelow(item, index)}</div>
+        <div style={{ paddingLeft: cards ? 0 : HANDLE_COLUMN_PX }}>{renderBelow(item, index)}</div>
       ) : null}
     </div>
   );
@@ -183,6 +199,7 @@ export function ReorderList<T>({
   renderBelow,
   renderActions,
   rowState,
+  cards = false,
 }: ReorderListProps<T>) {
   const root = useRef<HTMLDivElement>(null);
   /** Where focus goes once the move has re-rendered. Null when the move was a drag. */
@@ -231,7 +248,7 @@ export function ReorderList<T>({
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-      <div ref={root} role="list" data-reorder-list className="space-y-0.5">
+      <div ref={root} role="list" data-reorder-list data-reorder-layout={cards ? "cards" : "rows"} className={cards ? "space-y-2" : "space-y-0.5"}>
         {items.map((item, index) => (
           <Row
             key={ids[index]}
@@ -246,6 +263,7 @@ export function ReorderList<T>({
             renderItem={renderItem}
             renderBelow={renderBelow}
             renderActions={renderActions}
+            cards={cards}
           />
         ))}
       </div>

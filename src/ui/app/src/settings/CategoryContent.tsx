@@ -30,6 +30,7 @@ import { VocabularyList } from "./VocabularyList";
 import { servedGlyphMap } from "./glyph-picker/glyph-picker-model";
 import { sanitizeThroughServer } from "./glyph-picker/sanitize";
 import { kindRows, statusRows } from "./settings-ops";
+import { isHubRegistryCategory, isWorkspaceCloudCategory } from "./settings-shell";
 
 export interface ApplyTo {
   (target: "statuses" | "kinds", ops: VocabularyOp[]): Promise<Refusal | null>;
@@ -41,7 +42,7 @@ export interface CategoryContentProps {
   settings: WorkspaceSettingsEnvelope;
   applyTo: ApplyTo;
   onDirtyChange: (dirty: boolean) => void;
-  /** The workspace whose sync identity the cloud section acts on. */
+  /** The workspace a per-workspace section edits (the cloud section's sync identity included). */
   ws?: string;
 }
 
@@ -62,7 +63,14 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
    * down: `applyTo` writes `/api/settings`, and there is nothing in this section
    * that route could ever legally carry.
    */
-  if (isCloudCategory(category.id)) return <CloudSection ws={ws} />;
+  if (isCloudCategory(category.id)) return <CloudSection ws={ws} part="machine" />;
+  /**
+   * The two sections split out of Cloud when Settings became global: the hub registry
+   * (the computer's, like Cloud) and one workspace's own connection (per workspace, `ws`
+   * is the in-Settings picker's choice). Same component, same state machine, one part each.
+   */
+  if (isHubRegistryCategory(category.id)) return <CloudSection ws={ws} part="registry" />;
+  if (isWorkspaceCloudCategory(category.id)) return <CloudSection ws={ws} part="workspace" />;
   /** "Usage & budget": machine-local like Cloud, matched by id for the same reason (`telemetry-settings.ts`). */
   if (isTelemetryCategory(category.id)) return <TelemetrySection />;
 

@@ -1458,7 +1458,7 @@ samples, "no change" still does not mean the provider measured again (see
 | Timing semantics, lifecycle gaps, controlled validation, quality states | Attempt `activeSeconds` vs issue `timing` ([The attempt record](#the-attempt-record)), pause vs interruption ([Lifecycle](#lifecycle)), `provenance`/`endDetection` and [History before capture](#history-before-capture) as quality inputs |
 | Calibration and forecasting | `estimateAtStart`, outcomes, `chain`, per-attempt burn and `attribution`, the no-conversion rule ([Units](#units)), resolution caveat |
 | Admission policy, ranking, checkpointing, dry runs | Current windows and `resetsAt`, high-water `remainingPercent` with `missing`, `storedOpenAttemptsOnAccountStartedHere`, `attempt_paused` with `checkpoint_before_reset`, milestone pointers to the worklog |
-| Pressure panel, decision history, guidance | `get_budget` shape and its provisional [`pressure`](#pressure) block (the web UI's Budget view renders it), `missing` reasons to show as unknown, attempt `id` as the join key from a decision to its outcome, the `sessionRef` rule for guidance |
+| Pressure panel, decision history, guidance | `get_budget` shape and its provisional [`pressure`](#pressure) block (the web UI's Usage view renders it), `missing` reasons to show as unknown, attempt `id` as the join key from a decision to its outcome, the `sessionRef` rule for guidance |
 | Fixtures, policy comparisons, cold-agent trials, release gate | Every record here is plain JSON with explicit instants, so a fixture is a list of records. `source.kind: "fixture"` is refused outside disposable databases. |
 
 ## Open questions

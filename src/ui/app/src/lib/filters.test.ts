@@ -34,6 +34,7 @@
  * app's `@` alias (src/ui/app/vite.config.ts) does not exist at test time.
  */
 import { afterEach, describe, expect, it } from "vitest";
+import { filterPresets, togglePreset } from "../components/filters/presets";
 import { STALE_CLAIM_SECONDS } from "./claim.ts";
 import {
   publishWorkspaceSettings,
@@ -46,8 +47,10 @@ import {
   FILTERS_STORAGE_KEY,
   FILTER_DIMENSIONS,
   HANDOFF_RISKS,
+  BLOCKED_VALUE,
   UNASSIGNED,
   activeChips,
+  isBlockedRow,
   applyFilters,
   claimStateOf,
   countActive,
@@ -681,7 +684,7 @@ describe("the hidden-parent invariant (STA-97)", () => {
 // ---------- the registry ----------
 
 describe("the dimension registry", () => {
-  it("carries the eight menu dimensions (text has its own box)", () => {
+  it("carries the nine menu dimensions (text has its own box)", () => {
     // Order is the menu order AND the chip order. `handoff` sits directly after `claim`
     // because that is the pair it means something in — see the note on the entry.
     //
@@ -693,8 +696,12 @@ describe("the dimension registry", () => {
     //
     // `gate` (STA-144) is last, for the reason its own entry gives, and stays last: it is
     // the only dimension about a decision somebody owes rather than about the issue.
+    // `blocked` (the Blocked quick filter's dimension) sits directly after `status`: "what
+    // is stuck" is the question people ask of status, and it is answered by status OR by
+    // an unresolved blocker — see `isBlockedRow`.
     expect(FILTER_DIMENSIONS.map((d) => d.id)).toEqual([
       "status",
+      "blocked",
       "kind",
       "assignee",
       "priority",
@@ -1001,5 +1008,40 @@ describe("gate", () => {
     expect(dimension.label).toBe("Gate");
     expect(dimension.format("awaiting")).toBe("Awaiting approval");
     expect(dimension.format("queued")).toBe("Queued behind a gate");
+  });
+});
+
+// ---------- Blocked: a blocked status OR a task it waits on ----------
+
+describe("the Blocked dimension and the Blocked quick filter", () => {
+  const withBlockers = (over: Partial<Issue>, blockedBy: string[]): IssueRow => ({
+    ...row(over),
+    deps: { blockedBy, blocks: [] },
+  });
+  const board = [
+    withBlockers({ identifier: "STA-1", status: "todo" }, ["STA-9"]), // waits on another task
+    withBlockers({ identifier: "STA-2", status: "blocked" }, []), // parked as blocked
+    withBlockers({ identifier: "STA-3", status: "in_progress" }, ["STA-9"]), // moving, but waiting
+    withBlockers({ identifier: "STA-4", status: "todo" }, []), // free
+    withBlockers({ identifier: "STA-5", status: "done" }, ["STA-9"]), // finished work waits on nothing
+  ];
+
+  it("finds tasks waiting on another task whatever their status, and parked ones", () => {
+    expect(board.filter(isBlockedRow).map((r) => r.issue.identifier)).toEqual(["STA-1", "STA-2", "STA-3"]);
+  });
+
+  it("the quick filter is that rule on the page, not the blocked statuses alone", () => {
+    const blocked = filterPresets({ statuses: [{ id: "blocked", category: "blocked" }], kinds: [], me: null }).find(
+      (preset) => preset.id === "blocked",
+    )!;
+    const on = togglePreset(emptyFilters(), blocked);
+    expect(ids(applyFilters(board, on))).toEqual(["STA-1", "STA-2", "STA-3"]);
+    // The same rows the "Blocked by N" badge marks, plus the ones parked by hand.
+    expect(board.filter((r) => (r.deps?.blockedBy.length ?? 0) > 0 && r.issue.status !== "done").every(isBlockedRow)).toBe(true);
+  });
+
+  it("reads as one plain chip", () => {
+    const chips = activeChips(state({ dims: { blocked: [BLOCKED_VALUE] } }));
+    expect(chips.map((chip) => chip.label)).toEqual(["Blocked or waiting on another task"]);
   });
 });

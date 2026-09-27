@@ -26,11 +26,19 @@
  * plus alt+arrow on the row. The task list carries no drag wiring (only the settings
  * editor does), and the brief's fallback for that case is exactly this.
  */
-import { ArrowLeft, ArrowUpRight, ChevronDown, ChevronUp, Maximize2, Minimize2, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, ChevronDown, ChevronUp, Maximize2, Minimize2, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { resolveTaskListConfig, TaskRowLine } from "@/components/task-list";
+import { useRowPlan } from "@/components/task-list/useRowPlan";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   addMilestoneMember,
@@ -43,6 +51,7 @@ import {
   type AuthError,
 } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
+import { useBackToClose } from "@/lib/back-to-close";
 import { useSession } from "@/lib/session";
 import type {
   EffectiveQueueRow,
@@ -53,9 +62,12 @@ import type {
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState, SectionHeading } from "@/views/ViewChrome";
+import { workspaceScope } from "@/views/workspace-scope";
 import { idsOf, pinnedRef } from "@/lib/write-ref";
+import { AllWorkspacesMilestones, MilestonesOff } from "./AllWorkspacesMilestones";
 import {
   dateLabel,
+  isMissingMilestoneKind,
   layoutFor,
   memberListRows,
   milestoneRisk,
@@ -149,7 +161,11 @@ export function MilestoneListPane({
   onSelect: (identifier: string) => void;
 }) {
   if (rows.length === 0) {
-    return <EmptyState>no milestones yet — `staple milestone new "…" --target YYYY-MM-DD`</EmptyState>;
+    return (
+      <EmptyState>
+        No milestones here yet. A milestone gathers tasks that should be finished by a date; your agents can create one.
+      </EmptyState>
+    );
   }
   return (
     <ul aria-label="Milestones" data-milestone-list className="flex flex-col gap-1">
@@ -200,7 +216,24 @@ export interface MemberWriteFailure {
 }
 
 /** The panel row, plus the disclosure column — that column is what carries the indent. */
-const MEMBER_ROW_CONFIG = resolveTaskListConfig("panel", { columns: { disclosure: true } });
+const MEMBER_ROW_COLUMNS = { disclosure: true } as const;
+
+/** The member row at this width — the tree's own ladder (row-layout.ts). */
+function useMemberRowConfig() {
+  const plan = useRowPlan();
+  return useMemo(() => resolveTaskListConfig("panel", { columns: MEMBER_ROW_COLUMNS, plan }), [plan]);
+}
+
+/** The member `⋯` menu, held open by its own state so phone Back can close it. */
+function MemberMenu({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  useBackToClose(open, () => setOpen(false));
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      {children}
+    </DropdownMenu>
+  );
+}
 
 function MemberRow({
   entry,
@@ -221,6 +254,8 @@ function MemberRow({
 }) {
   const { row, role, memberIndex, member } = entry;
   const identifier = row.issue.identifier;
+  const config = useMemberRowConfig();
+  const compact = config.plan?.layout === "compact";
   return (
     <li
       data-milestone-member={identifier}
@@ -238,13 +273,53 @@ function MemberRow({
       className="flex items-center gap-1"
     >
       <div className="min-w-0 flex-1">
-        <TaskRowLine row={row} config={MEMBER_ROW_CONFIG} semantics="bare" now={now} />
+        <TaskRowLine row={row} config={config} semantics="bare" now={now} />
         {member?.note ? (
           <div className="pb-1 pl-8 text-[11px] text-muted-foreground" data-member-note>
             {member.note}
           </div>
         ) : null}
       </div>
+      {compact && role === "member" ? (
+        /* On a phone the four buttons cost the title ~110px. One `⋯` holds the same four
+           acts, with words, and a 44px target. */
+        <MemberMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Actions for ${identifier}`}
+              data-member-actions={identifier}
+              className="shrink-0 text-text-tertiary"
+            >
+              <MoreHorizontal aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            aria-label={`Actions for ${identifier}`}
+            className="pointer-coarse:[&_[role=menuitem]]:min-h-11 pointer-coarse:[&_[role=menuitem]]:text-[15px]"
+          >
+            <DropdownMenuItem data-menu-item="open" onSelect={() => onOpen(row.workspace, identifier)}>
+              <ArrowUpRight aria-hidden />
+              Open details
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem disabled={busy || memberIndex === 0} onSelect={() => onMove(memberIndex, memberIndex - 1)}>
+              <ChevronUp aria-hidden />
+              Move up
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={busy || memberIndex === count - 1} onSelect={() => onMove(memberIndex, memberIndex + 1)}>
+              <ChevronDown aria-hidden />
+              Move down
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={busy} onSelect={() => onRemove(identifier)}>
+              <Trash2 aria-hidden />
+              Remove from this milestone
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </MemberMenu>
+      ) : (
       <div className="flex shrink-0 items-center">
         <Button
           variant="ghost"
@@ -284,12 +359,13 @@ function MemberRow({
               <Trash2 aria-hidden />
             </Button>
           </>
-        ) : (
+        ) : compact ? null : (
           // A child is here for context only: same width as the three buttons it lacks,
           // so the rows' Open buttons line up.
           <span aria-hidden className="inline-block w-[4.5rem]" />
         )}
       </div>
+      )}
     </li>
   );
 }
@@ -505,7 +581,7 @@ export function MilestonesLayout({
       )}
     >
       {detailOnly ? null : (
-        <div data-milestones-pane="list" className="min-h-0 overflow-y-auto border-r px-3 py-3">
+        <div data-milestones-pane="list" className={cn("min-h-0 overflow-y-auto px-3 py-3", listOnly ? null : "border-r")}>
           {list}
         </div>
       )}
@@ -538,6 +614,15 @@ function useLayout(): LayoutName {
 
 export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  const scope = workspaceScope(session.mode, session.ws, session.workspaces);
+  if (scope.kind === "choose") {
+    return <AllWorkspacesMilestones workspaces={scope.workspaces} onAuthError={onAuthError} />;
+  }
+  return <WorkspaceMilestones key={scope.slug} workspace={scope.slug} onAuthError={onAuthError} />;
+}
+
+function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
+  const session = useSession();
   const layout = useLayout();
   const [selectedRef, setSelectedRef] = useState<string | null>(session.milestoneFocus);
   const [fullScreen, setFullScreen] = useState(false);
@@ -546,8 +631,8 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
   /** The last write's answer, shown until the next read lands — a writer redraws from its result. */
   const [written, setWritten] = useState<MilestoneViewData | null>(null);
 
-  const ws = session.ws || undefined;
-  const workspace = session.ws || session.workspaces[0]?.slug || "";
+  // Always the workspace the page names — never the server's own first (workspace-scope.ts).
+  const ws = workspace || undefined;
 
   const loadList = useCallback(() => getMilestones({ ws, all: session.filters.showDone }), [ws, session.filters.showDone]);
   const list = useResource(loadList, [ws, session.filters.showDone, session.version], onAuthError);
@@ -672,6 +757,9 @@ export function MilestonesView({ onAuthError }: { onAuthError: (error: AuthError
     (rowWorkspace: string, identifier: string) => session.open(rowWorkspace || workspace, identifier),
     [session, workspace],
   );
+
+  // The workspace has no milestone kind: the whole page says so, in words, with the fix.
+  if (list.error && isMissingMilestoneKind(list.error)) return <MilestonesOff workspace={workspace} />;
 
   const listPane = list.error ? (
     <ErrorState error={list.error} />

@@ -41,14 +41,16 @@
  * for this file is the part that is actually staple's: which mode, how wide, and the
  * two places Radix's defaults are wrong for this panel (see onEscapeKeyDown).
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog as DialogPrimitive, VisuallyHidden } from "radix-ui";
 import type { AuthError } from "@/lib/api";
+import { useBackToClose } from "@/lib/back-to-close";
 import { isTyping } from "@/lib/keyboard";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
-import { loadMode, otherMode, panelClass, saveMode, type DetailMode } from "./drawer";
+import { loadMode, otherMode, panelClass, presentationFor, saveMode, SHEET_BELOW, type DetailMode } from "./drawer";
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { focusRow } from "./focus-return";
 import { neighbours, type NavTarget } from "./navigation";
 import "./detail.css";
 
@@ -70,6 +72,28 @@ function safeStorage(): Storage | undefined {
  * is data loss with a keyboard shortcut.
  */
 
+/**
+ * The viewport width as the sheet rule sees it: below `SHEET_BELOW` or not. Asked through
+ * `matchMedia` and kept live, so rotating a tablet moves between sheet and drawer.
+ */
+function readViewportWidth(): number {
+  const narrow =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(`(max-width: ${SHEET_BELOW - 1}px)`).matches;
+  return narrow ? 0 : Number.POSITIVE_INFINITY;
+}
+
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(readViewportWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(readViewportWidth());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return width;
+}
+
 export function IssueDetailMount() {
   const session = useSession();
   const selection = session.selection;
@@ -81,6 +105,7 @@ export function IssueDetailMount() {
    * It is a preference about how you are working, not a property of the ticket.
    */
   const [mode, setMode] = useState<DetailMode>(() => loadMode(safeStorage()));
+  const presentation = presentationFor(useViewportWidth(), mode);
   const toggleMode = useCallback(() => {
     setMode((current) => {
       const next = otherMode(current);
@@ -133,6 +158,21 @@ export function IssueDetailMount() {
     [session],
   );
 
+  /**
+   * PHONE BACK CLOSES THE DETAIL. One history entry while the detail is open, whatever it
+   * shows: Previous/Next and a blocker chip change the selection, not whether it is open,
+   * so they add no Back steps. Back pops the entry and closes; the Back button, the X and
+   * Escape close through `session.close` and the hook takes the entry back out.
+   */
+  useBackToClose(selection !== null, session.close);
+
+  /**
+   * The task the detail showed last, for focus return. Kept past the close, because the
+   * close is what clears `selection` and the focus decision runs after it.
+   */
+  const lastRef = useRef<string | null>(null);
+  if (selection) lastRef.current = selection.ref;
+
   return (
     <DialogPrimitive.Root
       open={selection !== null}
@@ -145,10 +185,10 @@ export function IssueDetailMount() {
       }}
     >
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay data-mode={mode} className="staple-detail-scrim" />
+        <DialogPrimitive.Overlay data-mode={presentation} className="staple-detail-scrim" />
 
         <DialogPrimitive.Content
-          data-mode={mode}
+          data-mode={presentation}
           data-detail-overlay=""
           // Radix warns when a dialog has no description. There is nothing here that
           // would honestly serve as one — the panel's content IS the description —
@@ -157,7 +197,7 @@ export function IssueDetailMount() {
           aria-describedby={undefined}
           className={cn(
             "staple-detail-panel bg-card text-foreground fixed z-50 flex flex-col overflow-hidden shadow-xl outline-none",
-            panelClass(mode),
+            panelClass(presentation),
           )}
           /**
            * Radix's default sends focus to the first tabbable thing, which here is
@@ -186,6 +226,14 @@ export function IssueDetailMount() {
            * expects; it is only a special case because Radix cannot know which of
            * its descendants are editors.
            */
+          /**
+           * FOCUS GOES BACK TO THE ROW of the task that was showing — not to whatever held
+           * focus when the detail opened (on a phone, nothing; from the row menu, its `⋯`;
+           * after Previous/Next, a different task's row). See focus-return.ts.
+           */
+          onCloseAutoFocus={(event) => {
+            if (focusRow(document, lastRef.current)) event.preventDefault();
+          }}
           onEscapeKeyDown={(event) => {
             if (isTyping(event.target)) event.preventDefault();
           }}
@@ -252,6 +300,7 @@ export function IssueDetailMount() {
               key={`${selection.workspace}:${selection.ref}`}
               selection={selection}
               mode={mode}
+              presentation={presentation}
               onToggleMode={toggleMode}
               nav={nav}
               onNavigate={navigate}

@@ -118,8 +118,12 @@ describe("the filter menu lists every dimension", () => {
     ]) {
       expect(markup).toContain(`data-filter-dimension="${id}"`);
     }
-    expect(markup).toContain("Pickup state");
+    // Plain headings: the menu reads as the questions, not the field names behind them.
+    expect(markup).toContain("Ready for an agent");
     expect(markup).toContain("Milestone");
+    expect(markup).toContain("Assigned to");
+    expect(markup).not.toContain(">Pickup state<");
+    expect(markup).not.toContain(">Handoff<");
   });
 
   it("shows how many values a dimension already has on, so re-opening says where you were", () => {
@@ -161,8 +165,15 @@ describe("the chip strip", () => {
       <FilterChipStrip rows={rows} state={filters} context={context} onChange={noop} />,
     );
 
-  it("is not rendered at all when nothing is filtering", () => {
-    expect(strip(emptyFilters())).toBe("");
+  /**
+   * DELIBERATELY CHANGED. The strip used to vanish when nothing was filtering; it now always
+   * carries the quick filters (one tap each), and still shows no chip and no Clear all.
+   */
+  it("shows only the quick filters, with no chip and no Clear all, when nothing is filtering", () => {
+    const markup = strip(emptyFilters());
+    expect(markup).toContain('data-filter-preset="in-progress"');
+    expect(markup).not.toContain("data-filter-chip=");
+    expect(markup).not.toContain("data-filter-clear");
   });
 
   it("RENDERS for a new dimension alone — the V4 check would have hidden it", () => {
@@ -170,11 +181,12 @@ describe("the chip strip", () => {
     expect(markup).toContain('data-filter-chip="milestone"');
   });
 
-  it("names the dimension AND the value, and offers a remove for each", () => {
+  it("says each filter as a plain phrase, and offers a remove for each", () => {
     const markup = strip(state({ dims: { pickup: ["gated"], epic: ["EPIC"] } }));
-    expect(markup).toContain("Pickup state");
-    expect(markup).toContain("Gated");
-    expect(markup).toContain("R: work orchestration");
+    expect(markup).toContain(">Waiting for approval<");
+    expect(markup).toContain(">Part of R: work orchestration<");
+    // No field name is VISIBLE; the screen-reader names keep the dimension (below).
+    expect(markup).not.toMatch(/>Pickup state</);
     expect(markup).toContain('aria-label="Remove filter Pickup state Gated"');
     expect(markup).toContain('aria-label="Remove filter Epic R: work orchestration"');
   });

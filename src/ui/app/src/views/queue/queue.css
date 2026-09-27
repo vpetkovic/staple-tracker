@@ -1,0 +1,56 @@
+/*
+ * The Queue on a phone — the mobile list lane.
+ *
+ * The desktop board spends ~150px of every row on furniture: a 48px ordinal gutter, the
+ * reorder row's padding, and two 36px arrow buttons. At 360px that left the title of a
+ * queued epic zero pixels. Below 720px (the row ladder's compact line, row-layout.ts):
+ *
+ *   - the gutter narrows to the width of "#12";
+ *   - the up/down arrows are not drawn — the same one-step moves are in the row's `⋯`
+ *     menu (QueueView passes them only on compact), which a long-press also opens, and
+ *     alt+arrow still works from a keyboard;
+ *   - the drag handle claims the touch gesture (`touch-action: none`), so dragging a row
+ *     on a phone moves it instead of scrolling the page.
+ *
+ * The reorder list is a shared form component (settings/form/ReorderList); this sheet only
+ * reaches it through the attributes it already publishes, and only inside the Queue board.
+ */
+@media (max-width: 719px) {
+  [data-queue-board] {
+    padding-left: 12px;
+    padding-right: 8px;
+  }
+
+  [data-queue-board] .staple-queue-gutter {
+    width: 26px;
+    padding-right: 4px;
+  }
+
+  [data-queue-board] [data-reorder-row] {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  [data-queue-board] [data-reorder-row] > div:first-child {
+    gap: 2px;
+  }
+
+  [data-queue-board] [data-reorder-control] {
+    display: none;
+  }
+}
+
+[data-queue-board] [data-reorder-row] button[aria-label^="Drag "] {
+  touch-action: none;
+}
+
+/* The expansion's "and N more" and the notes line up with the narrowed gutter. */
+@media (max-width: 719px) {
+  [data-queue-board] [data-queue-expansion-more],
+  [data-queue-board] [data-queue-unqueued-more] {
+    padding-left: 32px;
+  }
+  [data-queue-board] [data-queue-note] {
+    padding-left: 28px;
+  }
+}
