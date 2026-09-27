@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { resolveTaskListConfig, TaskRowLine } from "@/components/task-list";
 import { useRowPlan } from "@/components/task-list/useRowPlan";
+import { ROOMY_QUERY, useMediaQuery } from "@/lib/use-media";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -354,7 +355,13 @@ function MemberRow({
   const { row, role, memberIndex, member } = entry;
   const identifier = row.issue.identifier;
   const config = useMemberRowConfig();
-  const compact = config.plan?.layout === "compact";
+  /*
+   * On a phone, and on a desk narrower than 1280px where the split leaves the member list a
+   * narrow pane, the four buttons fold into one `⋯` with the same four acts, in words: they
+   * cost the title ~100px it cannot spare there.
+   */
+  const roomy = useMediaQuery(ROOMY_QUERY, true);
+  const compact = config.plan?.layout === "compact" || !roomy;
   return (
     <li
       data-milestone-member={identifier}
@@ -768,7 +775,9 @@ export function MilestonesLayout({
       data-full-screen={fullScreen ? "true" : undefined}
       className={cn(
         "grid h-full min-h-0",
-        detailOnly || listOnly ? "grid-cols-1" : "grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]",
+        detailOnly || listOnly
+          ? "grid-cols-1"
+          : "grid-cols-[minmax(15rem,18rem)_minmax(0,1fr)] min-[1280px]:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]",
       )}
     >
       {detailOnly ? null : (
