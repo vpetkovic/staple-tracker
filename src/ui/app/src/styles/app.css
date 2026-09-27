@@ -10,11 +10,13 @@
  * The order is the mechanism and it is not incidental: the theme sheet keeps owning
  * the Tailwind `@theme` mapping and the extracted geometry dictionary that the shadcn
  * primitives reference by name; Geist overrides every value a human can see; this
- * file has the last word on staple's own vocabulary. Adding a sheet here means
- * putting it AFTER geist-tokens.css or it will be silently overruled.
+ * file has the last word on staple's own vocabulary. system-tokens.css follows Geist and
+ * only ADDS names (type scale, shell geometry, surfaces, the focus ring). Adding a sheet
+ * here means putting it AFTER geist-tokens.css or it will be silently overruled.
  */
 @import "./theme-tokens.css";
 @import "./geist-tokens.css";
+@import "./system-tokens.css";
 
 /*
  * Status -> hue. The token sheet names one hue per task status, so this is a pure

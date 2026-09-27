@@ -11,6 +11,8 @@ import {
   overlayFocusTarget,
   projectCaption,
   railKeyAction,
+  railWorkspaces,
+  chooseRailWorkspace,
   saveRailCollapsed,
 } from "./nav-model";
 
@@ -21,15 +23,15 @@ describe("the rail's groups", () => {
     expect(new Set(views).size).toBe(views.length);
   });
 
-  it("opens with the Workspace group, in the order Tasks, Queue, Graph, Milestones, Estimates (the calibration view)", () => {
+  it("opens with the Views group, in the order Tasks, Queue, Graph, Milestones, Estimates (the calibration view)", () => {
     const first = NAV_GROUPS[0]!;
-    expect(first.label).toBe("Workspace");
+    expect(first.label).toBe("Views");
     expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Estimates"]);
     expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "calibration"]);
   });
 
-  it("lists the machine's Usage in its own This machine group — Settings' name for it — after the workspace's views", () => {
-    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["Workspace", "This machine"]);
+  it("lists the machine's Usage in its own This computer group — Settings' name for it — after the workspace's views", () => {
+    expect(NAV_GROUPS.map((group) => group.label)).toEqual(["Views", "This computer"]);
     const machine = NAV_GROUPS[1]!;
     expect(machine.items.map((entry) => entry.label)).toEqual(["Usage"]);
     expect(machine.items.map((entry) => entry.view)).toEqual(["budget"]);
@@ -47,7 +49,8 @@ describe("the rail's groups", () => {
   it("shows each view only the header controls it honours", () => {
     expect(viewControls("tree")).toEqual({ arrange: true, filter: true, done: true });
     // The graph draws the filtered nodes; it has no rows to group or sort.
-    expect(viewControls("graph")).toEqual({ arrange: false, filter: true, done: true });
+    // Finished work on the graph is its own View menu's (show, fade, hide): no second Done.
+    expect(viewControls("graph")).toEqual({ arrange: false, filter: true, done: false });
     // Milestones lists finished milestones when Done is on, and filters nothing else.
     expect(viewControls("milestones")).toEqual({ arrange: false, filter: false, done: true });
     for (const view of ["queue", "calibration", "budget"] as const) {
@@ -79,6 +82,64 @@ describe("the rail's groups", () => {
     expect(projectCaption("staple", new Set(["staple"]))).toBeNull();
     expect(projectCaption("staple", new Set(["staple", "pinecone"]))).toBe("staple");
     expect(projectCaption("staple", new Set())).toBeNull();
+  });
+});
+
+describe("the rail's workspace list", () => {
+  const ws = (slug: string, prefix = slug.slice(0, 3).toUpperCase()) => ({ slug, prefix });
+  const hub = (count: number, current = "") => ({
+    mode: "hub",
+    ws: current,
+    workspaces: Array.from({ length: count }, (_, i) => ws(`w${i + 1}`, `W${i + 1}`)),
+  });
+
+  it("lists All workspaces first, then every workspace, and marks the one on screen", () => {
+    const { rows, hidden } = railWorkspaces({ mode: "hub", ws: "staple", workspaces: [ws("pinecone"), ws("staple")] });
+    expect(rows.map((row) => row.value)).toEqual(["", "pinecone", "staple"]);
+    expect(rows.map((row) => row.name)).toEqual(["All workspaces", "pinecone", "staple"]);
+    expect(rows.filter((row) => row.current).map((row) => row.value)).toEqual(["staple"]);
+    expect(rows[2]!.initials).toBe("S");
+    expect(hidden).toBe(0);
+  });
+
+  it("marks All workspaces — and nothing else — as current when no workspace is chosen", () => {
+    const { rows } = railWorkspaces(hub(3));
+    expect(rows.filter((row) => row.current).map((row) => row.value)).toEqual([""]);
+  });
+
+  it("caps the list and counts the rest, never cutting the workspace on screen", () => {
+    const capped = railWorkspaces(hub(9), 6);
+    expect(capped.rows).toHaveLength(7);
+    expect(capped.hidden).toBe(3);
+    const deep = railWorkspaces(hub(9, "w9"), 6);
+    expect(deep.rows.map((row) => row.value)).toEqual(["", "w1", "w2", "w3", "w4", "w5", "w9"]);
+    expect(deep.rows.at(-1)!.current).toBe(true);
+    expect(deep.hidden).toBe(3);
+  });
+
+  it("switches on a click — to the workspace, or to All workspaces — and does nothing on the current row", () => {
+    const calls: string[] = [];
+    const scope = { mode: "hub", setWs: (next: string) => calls.push(next) };
+    const { rows } = railWorkspaces({ mode: "hub", ws: "staple", workspaces: [ws("pinecone"), ws("staple")] });
+    chooseRailWorkspace(scope, rows[1]!);
+    chooseRailWorkspace(scope, rows[0]!);
+    chooseRailWorkspace(scope, rows[2]!);
+    expect(calls).toEqual(["pinecone", ""]);
+    // A single-workspace page never asks the session to switch.
+    chooseRailWorkspace({ mode: "workspace", setWs: (next: string) => calls.push(next) }, { ...rows[1]!, current: false });
+    expect(calls).toEqual(["pinecone", ""]);
+  });
+
+  it("lists nothing on a single-workspace page: one row that switches nowhere is a dead control", () => {
+    const { rows, hidden } = railWorkspaces({ mode: "workspace", ws: "", workspaces: [ws("staple", "STA")] });
+    expect(rows).toEqual([]);
+    expect(hidden).toBe(0);
+  });
+
+  it("marks no workspace current on a view about this computer, and the chosen one elsewhere", () => {
+    const scope = { mode: "hub", ws: "", workspaces: [ws("staple")] };
+    expect(railWorkspaces({ ...scope, view: "budget" }).rows.some((row) => row.current)).toBe(false);
+    expect(railWorkspaces({ ...scope, view: "tree" }).rows.filter((row) => row.current).map((row) => row.value)).toEqual([""]);
   });
 });
 

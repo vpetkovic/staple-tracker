@@ -731,13 +731,12 @@ export function VocabularyList({
 
       {target === "statuses" && requiredCategories ? (
         <p className="text-[12px] leading-relaxed text-muted-foreground">
-          Behaviour follows the CATEGORY, never the id — a custom status in{" "}
-          <code className="font-mono">active</code> is claimable and wears the in-progress
-          glyph and colour. Lists group by category first (active, review, gated, blocked,
-          ready, unstarted, then done and cancelled) and by the order below within each
-          one, so moving a status between groups means changing its category. staple writes
-          into {requiredCategories.join(", ")}, so the last status in one of those cannot
-          be removed.
+          A status behaves like the group it belongs to, whatever you name it: a new status
+          in the “active” group can be picked up and looks like In progress. Lists show the
+          groups in a fixed order, then your statuses in the order below, so to move a status
+          to another place in the list, change its group. Every workspace needs at least one
+          status in each of these groups: {requiredCategories.join(", ")}, so the last one in
+          a group cannot be removed.
         </p>
       ) : null}
     </Section>

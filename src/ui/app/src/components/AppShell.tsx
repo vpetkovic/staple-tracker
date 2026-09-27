@@ -1,27 +1,26 @@
 /**
  * The chrome. Everything true of the page regardless of which view is showing.
  *
- * ── A rail on the left, the view on the right ─────────────────────────────────────────
+ * ── On a desk: a rail, a top bar, one toolbar, the view ─────────────────────────────────
  *
- * The shell used to be a two-tier header: identity and global actions on one row, the
- * view tabs and the filter controls on a second, and a note here saying "no sidebar, per
- * VP" because with two views a rail had nothing to hold. There are four views now, with
- * projects arriving underneath one of them, and VP asked for Linear's layout instead. So
- * the split is by DIRECTION rather than by altitude:
+ *   THE RAIL (w-rail: 240px, 264px from 1680px) — `components/nav/NavRail.tsx`. Where you
+ *     are: the workspaces, listed (so the scope and the way to change it are on screen
+ *     without a menu), the views in that scope, and at the foot what belongs to this
+ *     computer, Settings and the theme. It collapses (`[`, or cmd-\) and remembers that.
+ *   THE TOP BAR (h-topbar: 52px) — `TopBar` below. "All workspaces › Tasks": the scope (a
+ *     click opens the switcher) and the page's name, the sync pill, then on the right find
+ *     anything (the palette, cmd-K) and the page's one primary action, New task.
+ *   THE TOOLBAR (h-toolbar: 44px) — `components/filters/Toolbar.tsx`. Which tasks (Filter,
+ *     the quick filters beside it, the filters that are on, search) and how they look
+ *     (Group, Sort, Done). Only on the views that honour them (`viewControls`); a report
+ *     page has no toolbar at all rather than a row of controls that do nothing.
  *
- *   THE RAIL (232px, left) — `components/nav/NavRail.tsx`. Where you are and what you
- *     can do from anywhere: the workspace switcher, New task, search, the views in named
- *     groups, and at the foot the settings and the theme. Nothing in it changes what the
- *     view below shows. It collapses (`[`, or cmd-\) and remembers that it did.
- *   THE CONTENT HEADER (44px, top of the pane) — what the view IS and how much of it.
- *     The view's name on the left; on the right the group, sort, search, filter and
- *     done controls that used to live on tier 2. Everything on this row scopes the thing
- *     underneath it, which is why it sits directly on top of it. `FilterChips` stays
- *     directly below it, as before, and still renders nothing when no filter is on.
+ * The content is a card on the desk (`--shell-gutter` of the sidebar tint round it). Every
+ * size, surface and ring here is a token from styles/system-tokens.css.
  *
  * ── The rail is in-flow on a wide viewport and an overlay on a narrow one ─────────────
  *
- * Below 768px a permanent 232px column is 232px the list does not get, so the rail
+ * Below 768px a permanent rail column is width the list does not get, so the rail
  * becomes a sheet opened from the menu button in the content header and closed by a
  * row, the scrim or Escape. The two states are held separately: `collapsed` is the
  * persisted desktop preference, `overlayOpen` is transient. A narrow window never
@@ -56,13 +55,14 @@
  * They switch what the whole page is, and they control no `TabsContent` — App.tsx swaps
  * the view. `aria-current="page"` on a button is what this actually is.
  */
-import { Menu, PanelLeft, Search, SquarePen } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { ChevronRight, Menu, Monitor, PanelLeft, Plus, Search, SquarePen } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CloudStrip } from "@/components/CloudStrip";
 import { getCloudStatus, getCloudWorkspaces } from "@/lib/api";
 import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
 import { FilterBar } from "@/components/filters/FilterBar";
 import { FilterChips } from "@/components/filters/FilterChips";
+import { DoneToggle, Toolbar, doneLivesInTopBar } from "@/components/filters/Toolbar";
 import { NavRail } from "@/components/nav/NavRail";
 import { ViewTabBar } from "@/components/nav/ViewTabBar";
 import { WorkspaceSwitcher } from "@/components/nav/WorkspaceSwitcher";
@@ -75,32 +75,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
 import { openCommandPalette, openCreateIssue } from "@/lib/shell-events";
-import { isAllWorkspaces, scopeName, useSession, viewControls, viewLabel } from "@/lib/session";
+import { isAllWorkspaces, isMachineView, scopeName, useSession, viewControls, viewLabel } from "@/lib/session";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBackToClose } from "@/lib/back-to-close";
+import { cn } from "@/lib/utils";
+import { useIsDesk } from "@/lib/use-media";
 
-/** Above this the rail is a column; below it, a sheet. */
-const WIDE_QUERY = "(min-width: 768px)";
-
-function subscribeWide(onChange: () => void): () => void {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
-  const query = window.matchMedia(WIDE_QUERY);
-  query.addEventListener?.("change", onChange);
-  return () => query.removeEventListener?.("change", onChange);
-}
-
-function readWide(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
-  return window.matchMedia(WIDE_QUERY).matches;
-}
-
-/**
- * Is the viewport wide enough for the rail to be a column? True where nothing can answer.
- * The server snapshot reads the same stub a test installs, so a string render can be asked
- * for the phone layout (see `useCompactHeader`).
- */
-function useWideViewport(): boolean {
-  return useSyncExternalStore(subscribeWide, readWide, readWide);
-}
+/** Is the viewport wide enough for the rail to be a column? The one breakpoint (lib/use-media). */
+const useWideViewport = useIsDesk;
 
 const storage = () => (typeof localStorage === "undefined" ? undefined : localStorage);
 
@@ -118,6 +100,109 @@ function BarButton({ label, onClick, children, ...rest }: { label: string; onCli
     >
       {children}
     </Button>
+  );
+}
+
+/** "⌘K" on a Mac, "Ctrl K" elsewhere — the palette's shortcut as the keyboard spells it. */
+function paletteKeys(): string {
+  if (typeof navigator === "undefined") return "⌘K";
+  return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl K";
+}
+
+/**
+ * THE DESK'S TOP BAR — where you are, and the two things you can do from anywhere.
+ *
+ * Left: the scope, then the page — "All workspaces › Tasks" — so the first words on the page
+ * say which workspace it is about and what it is. The scope is itself the switcher (a click
+ * opens the workspace list), which keeps it changeable while the rail is put away; a view
+ * about this computer (Usage) says "This computer" there instead, because it is the same
+ * whichever workspace is chosen. Then the sync state, as one pill.
+ *
+ * Right: find anything (the command palette, as a field-shaped button that shows its
+ * shortcut) and the page's PRIMARY action, New task — the one filled button in the chrome.
+ */
+export function TopBar({
+  railVisible,
+  onShowRail,
+  cloud,
+  hubCloud,
+}: {
+  railVisible: boolean;
+  onShowRail: () => void;
+  cloud: CloudSurfaceReport | null;
+  hubCloud: HubCloudReport | null;
+}) {
+  const session = useSession();
+  const title = viewLabel(session.view);
+  const machine = isMachineView(session.view);
+  return (
+    <header data-top-bar className="flex h-topbar shrink-0 items-center gap-3 border-b px-page">
+      {railVisible ? null : (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Show navigation"
+          title="Show navigation ([)"
+          data-nav-show
+          onClick={onShowRail}
+          className="-ml-2 rounded-lg text-text-tertiary hover:text-foreground pointer-coarse:size-11"
+        >
+          <PanelLeft className="size-4" />
+        </Button>
+      )}
+      <div className="flex min-w-0 items-center gap-1" data-top-bar-title>
+        {machine ? (
+          <span data-scope-name className="flex shrink-0 items-center gap-1.5 text-body text-text-secondary">
+            <Monitor aria-hidden className="size-3.5 text-text-tertiary" />
+            This computer
+          </span>
+        ) : session.mode === "hub" ? (
+          <WorkspaceSwitcher variant="crumb" />
+        ) : (
+          // One workspace, nothing to switch to: its name, as words, not a menu of one.
+          <span data-scope-name className="truncate text-body text-text-secondary">
+            {scopeName(session)}
+          </span>
+        )}
+        <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" />
+        <h1 className="truncate pl-0.5 text-heading font-semibold">{title}</h1>
+      </div>
+      {machine ? null : <CloudStrip report={cloud} hub={hubCloud} />}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        {doneLivesInTopBar(viewControls(session.view)) ? <DoneToggle /> : null}
+        <button
+          type="button"
+          data-top-search
+          aria-label="Find a task or run a command"
+          aria-keyshortcuts="Meta+K Control+K"
+          onClick={openCommandPalette}
+          className={cn(
+            "flex h-control-md items-center gap-2 rounded-lg border bg-surface-sunken pointer-coarse:h-11",
+            // Below 1024px the top bar has no room for a field: it is a square icon button,
+            // named the same, with the shortcut in its tooltip-free accessible name.
+            "w-control-md justify-center px-0 pointer-coarse:w-11 lg:w-[clamp(14rem,20vw,20rem)] lg:justify-start lg:pr-1.5 lg:pl-2.5",
+            "text-body text-text-tertiary transition-colors hover:border-border-strong hover:text-text-secondary focus-ring",
+          )}
+        >
+          <Search aria-hidden className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-left max-lg:hidden">Find a task or command</span>
+          <kbd className="shrink-0 max-lg:hidden rounded-md border bg-surface-raised px-1.5 font-sans text-caption leading-5 text-text-tertiary">
+            {paletteKeys()}
+          </kbd>
+        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button data-top-new-task onClick={openCreateIssue} className="h-control-md gap-1.5 rounded-lg px-3 text-body pointer-coarse:h-11">
+              <Plus aria-hidden className="size-4" />
+              New task
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            Create a task<span className="ml-1.5 font-mono text-caption opacity-70">C</span>
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    </header>
   );
 }
 
@@ -225,12 +310,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     /*
-      THE FRAME. The whole page is the sidebar tint; the rail sits on it with no border
-      of its own, and the content is an inset CARD — one hairline, an 8px gutter on
-      top, right and bottom, a rounded top-left corner where it meets the rail — so the
-      pane reads as a sheet laid on the desk rather than a region ruled off it. Below
-      768px the gutter and the radius go: a phone has no desk to show. `h-dvh`: the
-      frame is the DYNAMIC viewport, so a collapsing browser toolbar never hides the foot.
+      THE FRAME. The whole page is the desk (the sidebar tint); the rail sits on it with no
+      border of its own, and the content is a CARD laid on it — one hairline, 8px of desk
+      showing round it (`--shell-gutter`), rounded corners — so the pane reads as a sheet on
+      the desk rather than a region ruled off it. Below 768px the gutter and the radius go:
+      a phone has no desk to show. `h-dvh`: the frame is the DYNAMIC viewport, so a
+      collapsing browser toolbar never hides the foot.
     */
     <div className="flex h-dvh bg-sidebar text-foreground" data-shell={wide ? "wide" : "phone"}>
       {wide && railVisible ? <NavRail onHide={toggleRail} /> : null}
@@ -239,7 +324,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="fixed inset-0 z-40 flex" data-nav-overlay>
           <div
             aria-hidden
-            className="absolute inset-0 bg-black/35 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-scrim backdrop-blur-[2px]"
             onClick={closeOverlay}
           />
           <div className="relative h-full max-w-[85vw] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-sidebar shadow-lg">
@@ -250,67 +335,54 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div
         data-content-frame
-        className="flex min-w-0 flex-1 flex-col overflow-hidden bg-card md:mt-2 md:mr-2 md:mb-2 md:rounded-tl-lg md:border"
-      >
-        {wide ? null : (
-          /* ── the phone's top bar: menu, where you are, and the three global verbs ── */
-          <div
-            data-app-bar
-            className="flex shrink-0 items-center gap-1 border-b bg-card px-1.5 pt-[max(0.25rem,env(safe-area-inset-top))] pb-1"
-          >
-            <BarButton label="Menu" onClick={toggleRail} data-nav-show>
-              <Menu aria-hidden />
-            </BarButton>
-            <div className="flex min-w-0 flex-1 justify-start">
-              <WorkspaceSwitcher variant="bar" />
-            </div>
-            <CloudStrip report={cloud} hub={hubCloud} compact />
-            <BarButton label="Search and commands" onClick={openCommandPalette} data-bar-search>
-              <Search aria-hidden />
-            </BarButton>
-            <BarButton label="New task" onClick={openCreateIssue} data-bar-new-task>
-              <SquarePen aria-hidden />
-            </BarButton>
-          </div>
+        className={cn(
+          "flex min-w-0 flex-1 flex-col overflow-hidden bg-card md:my-gutter md:mr-gutter md:rounded-xl md:border md:shadow-xs",
+          wide && !railVisible && "md:ml-gutter",
         )}
-
-        {/* ── the content header: what the view is, where, and how much of it ── */}
-        <header className="shrink-0 border-b">
-          <div className="relative flex min-h-10 items-center gap-2 px-4 max-md:min-h-13 max-md:gap-1 max-md:pr-2">
-            {!wide || railVisible ? null : (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Show navigation"
-                title="Show navigation ([)"
-                data-nav-show
-                onClick={toggleRail}
-                className="-ml-2 text-text-tertiary hover:text-foreground"
-              >
-                <PanelLeft className="size-4" />
-              </Button>
-            )}
-            <div className="flex min-w-0 items-baseline gap-2">
-              <h1 className="truncate text-[13px] font-medium max-md:text-[20px] max-md:font-semibold max-md:tracking-tight">
-                {title}
-              </h1>
-              {wide ? (
-                <span data-scope-name className="truncate text-[13px] text-text-tertiary">
-                  {scope}
-                </span>
-              ) : null}
+      >
+        {wide ? (
+          <>
+            {/* ── the desk: where you are and the primary action; then which tasks and how ── */}
+            <TopBar railVisible={railVisible} onShowRail={toggleRail} cloud={cloud} hubCloud={hubCloud} />
+            <Toolbar />
+          </>
+        ) : (
+          <>
+            {/* ── the phone's top bar: menu, where you are, and the three global verbs ── */}
+            <div
+              data-app-bar
+              className="flex shrink-0 items-center gap-1 border-b bg-card px-1.5 pt-[max(0.25rem,env(safe-area-inset-top))] pb-1"
+            >
+              <BarButton label="Menu" onClick={toggleRail} data-nav-show>
+                <Menu aria-hidden />
+              </BarButton>
+              <div className="flex min-w-0 flex-1 justify-start">
+                <WorkspaceSwitcher variant="bar" />
+              </div>
+              <CloudStrip report={cloud} hub={hubCloud} compact />
+              <BarButton label="Search and commands" onClick={openCommandPalette} data-bar-search>
+                <Search aria-hidden />
+              </BarButton>
+              <BarButton label="New task" onClick={openCreateIssue} data-bar-new-task>
+                <SquarePen aria-hidden />
+              </BarButton>
             </div>
-            {wide ? <CloudStrip report={cloud} hub={hubCloud} /> : null}
-            {/* `FilterBar` owns its own `ml-auto`, so this row says nothing about its right. */}
-            {hasHeaderControls ? <FilterBar /> : null}
-          </div>
-        </header>
 
-        {/*
-          The quick-filter strip, directly under the header: presets, the filters that are
-          on, and Clear all. See FilterChips.
-        */}
-        {filterable ? <FilterChips /> : null}
+            {/* ── the phone's content header: what the view is, and its controls ── */}
+            <header className="shrink-0 border-b">
+              <div className="relative flex min-h-13 items-center gap-1 pr-2 pl-4">
+                <div className="flex min-w-0 items-baseline gap-2">
+                  <h1 className="truncate text-[20px] font-semibold tracking-tight">{title}</h1>
+                </div>
+                {/* `FilterBar` owns its own `ml-auto`, so this row says nothing about its right. */}
+                {hasHeaderControls ? <FilterBar /> : null}
+              </div>
+            </header>
+
+            {/* The quick-filter strip, directly under the header. See FilterChips. */}
+            {filterable ? <FilterChips /> : null}
+          </>
+        )}
 
         {/*
           `relative` so anything that wants to anchor to the content area rather than the

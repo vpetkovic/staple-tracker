@@ -79,6 +79,7 @@ export function ParentRollupBar({
   rollup,
   collapsed,
   showPlan = false,
+  plainPlan = false,
   progress = "bar",
   className,
 }: {
@@ -90,6 +91,8 @@ export function ParentRollupBar({
    * decides (comfortable density only); this component never reads the config.
    */
   showPlan?: boolean;
+  /** The desktop row: the plan in words ("about 6 days of work") rather than `est 6d5h`. */
+  plainPlan?: boolean;
   /**
    * `ring` on a phone (row-layout.ts, `rollupBar`): the same done fraction as a 12px circle
    * beside the count, where the 36px bar would come straight out of the title.
@@ -114,7 +117,7 @@ export function ParentRollupBar({
         {rollup.resolved}/{rollup.total}
       </span>
       {collapsed ? progress === "ring" ? <Ring rollup={rollup} /> : <Segments rollup={rollup} /> : null}
-      {collapsed && showPlan ? <Plan plan={rollup.plan} /> : null}
+      {collapsed && showPlan ? <Plan plan={rollup.plan} plain={plainPlan} /> : null}
       {collapsed && rollup.live ? <ChildLive rollup={rollup} /> : null}
     </span>
   );
@@ -133,10 +136,24 @@ export function ParentRollupBar({
  * Absent — not `est —` — when the subtree has no plan: a dash in a numeric slot reads as
  * zero, and "no plan" is already what silence says.
  */
-function Plan({ plan }: { plan: Rollup["plan"] }) {
+function Plan({ plan, plain = false }: { plan: Rollup["plan"]; plain?: boolean }) {
   if (plan.estimatedSeconds === null) return null;
   const figure = formatDuration(plan.estimatedSeconds);
   const sentence = `planned ${figure}, ${PLAN_SOURCE[plan.source]}`;
+  if (plain) {
+    const words = plainWork(plan.estimatedSeconds);
+    return (
+      <span
+        className="staple-rollup-count"
+        data-testid="parent-rollup-plan"
+        data-plan-source={plan.source}
+        aria-label={`Planned at ${words}, ${PLAN_SOURCE[plan.source]}`}
+        title={`Planned at ${words} (${figure}), ${PLAN_SOURCE[plan.source]}`}
+      >
+        {words}
+      </span>
+    );
+  }
   return (
     <span
       className="staple-rollup-count"
@@ -252,4 +269,15 @@ function summarize(rollup: Rollup): string {
     (s) => `${rollup.segments[s]} ${SEGMENT_LABEL[s]}`,
   );
   return parts.join(", ");
+}
+
+/** A plan in words, compact: "about 6 days of work", "about 3 hours of work". */
+export function plainWork(seconds: number): string {
+  if (seconds < 3600) return "under an hour of work";
+  if (seconds < 86_400) {
+    const hours = Math.round(seconds / 3600);
+    return `about ${hours} ${hours === 1 ? "hour" : "hours"} of work`;
+  }
+  const days = Math.round(seconds / 86_400);
+  return `about ${days} ${days === 1 ? "day" : "days"} of work`;
 }

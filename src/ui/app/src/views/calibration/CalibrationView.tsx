@@ -446,7 +446,7 @@ function WorkspaceCalibration({ workspace, onAuthError }: { workspace: string; o
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-4 py-5">
+      <div className="mx-auto max-w-wide px-page py-5">
         {report.error ? (
           <ErrorState error={report.error} />
         ) : data ? (

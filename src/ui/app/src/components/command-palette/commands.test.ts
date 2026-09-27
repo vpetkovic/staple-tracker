@@ -393,8 +393,18 @@ describe("filterCommands", () => {
   );
 
   it("matches on keywords the label never shows", () => {
-    // "claim" is what an agent calls it; the label says "Check out as…".
+    // "claim" is what an agent calls it; the label says "Start working on it as…".
     expect(filterCommands(commands, "claim").map((c) => c.id)).toContain("checkout");
+  });
+
+  it("says what the drawer says, in plain words, with the old jargon kept as keywords", () => {
+    const label = (id: string) => commands.find((c) => c.id === id)?.label;
+    expect(label("checkout")).toBe("Start working on it as…");
+    expect(label("release")).toBe("Stop working on it");
+    for (const command of commands) expect(command.label, command.id).not.toMatch(/check ?out|checkout|release the|handoff|worklog/i);
+    // Still found by the words an agent uses.
+    expect(filterCommands(commands, "release").map((c) => c.id)).toContain("release");
+    expect(filterCommands(commands, "worklog").length).toBeGreaterThan(0);
   });
 
   it("narrows to one command for an unambiguous query", () => {

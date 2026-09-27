@@ -897,11 +897,11 @@ describe("parent rollup plan", () => {
     expect(markup).toContain('data-testid="parent-rollup-bar"');
   });
 
-  it("is dropped below 720px by the row plan — absent from the DOM, the count stays", () => {
+  it("is dropped below 768px by the row plan — absent from the DOM, the count stays", () => {
     // The compact one-line row has no room for an aside; the ladder's `rollupPlan` rung
     // takes it off the row, and `x/y` stays because a folded epic must say it at any width.
-    expect(PLAN.exec(renderPlanned({ width: 720 }))).not.toBeNull();
-    const narrow = renderPlanned({ width: 719 });
+    expect(PLAN.exec(renderPlanned({ width: 768 }))).not.toBeNull();
+    const narrow = renderPlanned({ width: 767 });
     expect(narrow).not.toContain('data-testid="parent-rollup-plan"');
     expect(narrow).toContain('aria-label="0 of 3 done"');
     expect(narrow).toContain("0/3");

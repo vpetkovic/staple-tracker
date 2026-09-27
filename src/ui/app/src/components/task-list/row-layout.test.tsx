@@ -141,14 +141,16 @@ describe("the collapse ladder — precedence as data", () => {
     expect(rowPlan(768).labelMax).toBe(0);
   });
 
-  it("switches to the compact line exactly at 720px", () => {
-    expect(COMPACT_BELOW).toBe(720);
-    expect(rowPlan(720).layout).toBe("line");
-    expect(rowPlan(719).layout).toBe("compact");
+  it("switches to the compact line exactly at the shell's breakpoint (768px)", () => {
+    // Moved from 720 on purpose: 720–767px is the phone shell, and it must draw phone rows.
+    expect(COMPACT_BELOW).toBe(768);
+    expect(rowPlan(768).layout).toBe("line");
+    expect(rowPlan(767).layout).toBe("compact");
+    expect(rowPlan(740).layout).toBe("compact");
   });
 
   it("reads the viewport through matchMedia thresholds, landing every rung as the real width would", () => {
-    for (const real of [300, 360, 390, 479, 480, 600, 719, 720, 768, 879, 880, 959, 960, 1023, 1024, 1279, 1280, 1440, 2560]) {
+    for (const real of [300, 360, 390, 479, 480, 600, 719, 720, 767, 768, 879, 880, 959, 960, 1023, 1024, 1279, 1280, 1440, 2560]) {
       const seen = ladderWidth((min) => real >= min);
       expect(samePlan(rowPlan(seen), rowPlan(real)), `${real}px seen as ${seen}`).toBe(true);
     }
@@ -333,10 +335,11 @@ describe("the compact row's cues — one line, the title first", () => {
     expect(sentence(phone)).toContain("Plan position 2.");
   });
 
-  it("marks the row compact below 720px and the full row everywhere without a plan", () => {
+  it("marks the row compact below 768px and the full row everywhere without a plan", () => {
     const line = flatRow(row({ identifier: "STA-13" }));
     expect(render(line, 390)).toContain('data-layout="compact"');
-    expect(render(line, 720)).toContain('data-layout="line"');
+    expect(render(line, 740)).toContain('data-layout="compact"');
+    expect(render(line, 768)).toContain('data-layout="line"');
     const noPlan = renderToStaticMarkup(
       <TaskRowLine row={line} config={resolveTaskListConfig("tree")} semantics="grid" now={NOW} />,
     );

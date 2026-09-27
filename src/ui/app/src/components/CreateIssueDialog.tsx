@@ -249,7 +249,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
           <DialogDescription>
             {asksWhere && ws === ""
               ? "Choose a workspace and give it a title — everything else is optional."
-              : "Everything except the title is optional — the store fills in the rest."}
+              : "Only the title is needed. Everything else can be filled in now or later."}
           </DialogDescription>
         </DialogHeader>
 

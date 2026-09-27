@@ -118,6 +118,7 @@ import { initialFit } from "./graph/phone-fit";
 import { scopeGraph } from "./graph/graph-scope";
 import { nodeTypes, type GraphFlowNode } from "./graph/node-types";
 import { EmptyState, ViewState } from "./ViewChrome";
+import { useRowPlan } from "@/components/task-list/useRowPlan";
 
 /** Height is explicit because React Flow measures its container and the shell scrolls. */
 /*
@@ -128,6 +129,44 @@ import { EmptyState, ViewState } from "./ViewChrome";
  * a scrolling page to measure against the viewport.
  */
 const CANVAS_CLASS = "min-h-0 w-full flex-1 rounded-lg border bg-card";
+
+/**
+ * The desktop legend: what the picture means in one sentence, and the two line styles in
+ * plain words. From 720px up; the phone keeps the compact legend below.
+ */
+function DeskLegend() {
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5 px-1 py-2" data-graph-legend="desk">
+      <p className="text-body text-foreground">
+        How your tasks depend on each other. An arrow runs from a task to the work that waits for it,
+        so work on the left has to finish first.
+      </p>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-label text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <svg width="18" height="8" aria-hidden>
+            <line x1="0" y1="4" x2="18" y2="4" className="staple-graph-edge" />
+          </svg>
+          has to finish first
+        </span>
+        <span className="flex items-center gap-1.5">
+          <svg width="18" height="8" aria-hidden>
+            <line x1="0" y1="4" x2="18" y2="4" className="staple-graph-edge cross" />
+          </svg>
+          has to finish first, in another workspace
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span aria-hidden className="block h-1 w-5 overflow-hidden rounded-full bg-[var(--surface-hover)]">
+            <span className="block h-full w-3/5 rounded-full bg-[var(--status-task-done)]" />
+          </span>
+          how much of an epic is done
+        </span>
+        <span className="text-muted-foreground/80 pointer-coarse:hidden" data-graph-hint="pointer">
+          Point at a task, or select it, to light up everything it waits on.
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function Legend() {
   return (
@@ -146,10 +185,10 @@ function Legend() {
       </span>
       {/* Two sentences, one shown: a touch screen has no hover, and on a phone a tap opens the
           task full screen rather than tracing its chain beside it. */}
-      <span className="text-muted-foreground/70 pointer-coarse:hidden" data-graph-hint="pointer">
+      <span className="text-muted-foreground/80 pointer-coarse:hidden" data-graph-hint="pointer">
         Hover over a task or select it to trace what it waits on
       </span>
-      <span className="hidden text-muted-foreground/70 pointer-coarse:inline" data-graph-hint="touch">
+      <span className="hidden text-muted-foreground/80 pointer-coarse:inline" data-graph-hint="touch">
         Tap a task to open it. Pinch to zoom, drag to move around.
       </span>
     </div>
@@ -180,6 +219,8 @@ function GraphCanvas({
    */
   hiddenByFilter: ReadonlySet<string>;
 }) {
+  // The desktop legend from 720px up; the phone keeps the compact one it shipped with.
+  const desk = useRowPlan().layout === "line";
   const session = useSession();
   const [hovered, setHovered] = useState<string | null>(null);
   const [positions, setPositions] = useState<Record<string, XY>>({});
@@ -944,7 +985,7 @@ function GraphCanvas({
   return (
     <>
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <Legend />
+        {desk ? <DeskLegend /> : <Legend />}
         <div className="flex flex-wrap items-center gap-1.5">
           <GraphToolbar
             mode={mode}

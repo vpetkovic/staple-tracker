@@ -20,14 +20,14 @@
  * the sentence a screen reader gives for a field is the label, then the description,
  * then what is wrong with it. Refusal text is the store's, verbatim (lib/refusal.ts).
  */
-import type { ReactNode } from "react";
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AlertTriangle, Check, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { SettingScope } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { scopeLabel } from "../settings-shell";
-import type { ActionBarState } from "./form-model";
+import { savedJustNow, type ActionBarState } from "./form-model";
 
 // ---------------------------------------------------------------- errors
 
@@ -83,10 +83,11 @@ export function ScopeTag({ scope, source }: { scope: SettingScope; source?: stri
     <span
       data-scope-tag={scope}
       title={source ? `${scopeLabel(scope)} scope · value from ${source}` : `${scopeLabel(scope)} scope`}
-      className="rounded-sm border px-1 py-px font-mono text-[10px] tracking-wide text-text-tertiary uppercase"
+      // A quiet caption in sentence case: where the value lives is worth a glance, not a shout.
+      className="rounded-full bg-surface-sunken px-2 py-px text-caption text-text-tertiary"
     >
       {scopeLabel(scope)}
-      {source ? <span className="normal-case"> · {source}</span> : null}
+      {source ? <span> · {source}</span> : null}
     </span>
   );
 }
@@ -197,11 +198,30 @@ export function ActionBar({
   /** "3 unsaved changes", or nothing. */
   summary?: string;
 }) {
+  /**
+   * "Saved", for a few seconds after a save lands — the answer to "did that work?" that used
+   * to be only a Save button going grey. Cleared by the next edit (a draft appears).
+   */
+  const wasSaving = useRef(state.saving);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    if (savedJustNow(wasSaving.current, state, error)) setSaved(true);
+    if (state.canCancel || state.saving) setSaved(false);
+    wasSaving.current = state.saving;
+  }, [state, error]);
+  useEffect(() => {
+    if (!saved) return;
+    const timer = setTimeout(() => setSaved(false), 4000);
+    return () => clearTimeout(timer);
+  }, [saved]);
+
   return (
     <div
       data-action-bar
       data-saving={state.saving ? "" : undefined}
-      className="flex flex-wrap items-center gap-2 border-t pt-3"
+      // STICKY at the foot of the section's scroll pane, so Save is on screen however long
+      // the section is — it used to sit below the fold with nothing saying it was there.
+      className="sticky bottom-0 z-[1] -mx-1 flex flex-wrap items-center gap-2 border-t bg-surface-raised px-1 py-3 shadow-[0_-8px_12px_-10px_var(--elevation)]"
     >
       <Button type="button" size="sm" disabled={!state.canSave} onClick={onSave} aria-busy={state.saving}>
         {state.saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
@@ -227,6 +247,14 @@ export function ActionBar({
           {summary}
         </span>
       ) : null}
+      <span data-saved-confirmation aria-live="polite" className="flex items-center gap-1 text-label text-[var(--plain-ok-fg)]">
+        {saved ? (
+          <>
+            <Check className="size-3.5" aria-hidden />
+            Saved
+          </>
+        ) : null}
+      </span>
       {error ? (
         <span className="basis-full">
           <InlineError>{error}</InlineError>

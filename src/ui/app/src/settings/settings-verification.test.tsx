@@ -155,7 +155,8 @@ describe("every breakpoint holds both kinds of category", () => {
   it("drawer: a centred frame, both panes, and the offer to grow", () => {
     const at = atBreakpoint("two-pane", "nav", "drawer");
     expect(at.frame).toContain("-translate-x-1/2");
-    expect(at.frame).toContain("w-[min(64rem,calc(100vw-2rem))]");
+    // A preferences window: wide enough for the sidebar and a readable section beside it.
+    expect(at.frame).toContain("w-[min(72rem,calc(100vw-4rem))]");
     for (const [which, html] of Object.entries({ fields: at.fields, vocabulary: at.vocabulary })) {
       expect(html, which).not.toContain(NAV_HIDDEN);
       expect(html, which).not.toContain(CONTENT_HIDDEN);
@@ -210,7 +211,7 @@ describe("every breakpoint holds both kinds of category", () => {
     for (const [which, html] of Object.entries({ fields: at.fields, vocabulary: at.vocabulary })) {
       expect(html, which).toContain('data-layout="two-pane"');
       // The nav is the fixed-width left column, the content the flexible right one.
-      expect(html, which).toContain("w-56 border-r");
+      expect(html, which).toContain("w-64 flex-col border-r bg-surface-canvas");
       expect(html, which).toContain('data-settings-content="true"');
       expect(html, which).not.toContain(NAV_HIDDEN);
       expect(html, which).not.toContain(CONTENT_HIDDEN);

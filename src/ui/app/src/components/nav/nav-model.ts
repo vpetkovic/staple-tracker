@@ -72,27 +72,79 @@ function item(view: ViewName): NavItem {
 }
 
 /**
- * The rail's sections, top to bottom.
+ * The rail's sections of VIEWS, top to bottom. (The workspaces the views are scoped to are
+ * listed above them from the session, not from here: they are data, not a registry.)
  *
- * The Workspace group lists every view in `VIEWS` order — the tuple is the registry and
- * the rail must not keep a second copy of it — except the machine's views, which are
- * listed in the Machine group below (`MACHINE_VIEWS`): the provider budget is this
- * machine's and reads the same whichever workspace the switcher names, so filing it
- * under the workspace would say otherwise.
+ * The Views group lists every view in `VIEWS` order — the tuple is the registry and the rail
+ * must not keep a second copy of it — except the machine's views, which sit in "This
+ * computer" at the foot of the rail (`MACHINE_VIEWS`): the provider budget is this
+ * computer's and reads the same whichever workspace is chosen, so filing it among the
+ * workspace's views would say otherwise.
  */
 export const NAV_GROUPS: readonly NavGroup[] = [
   {
-    id: "workspace",
-    label: "Workspace",
+    id: "views",
+    label: "Views",
     items: VIEWS.filter((view) => !isMachineView(view)).map(item),
   },
   {
     id: "machine",
-    // Settings' own name for the computer-wide section ("This machine").
-    label: "This machine",
+    // The same words Settings uses for its computer-wide half.
+    label: "This computer",
     items: MACHINE_VIEWS.map(item),
   },
 ];
+
+/** How many workspaces the rail lists before the rest go behind "More workspaces". */
+export const RAIL_WORKSPACE_LIMIT = 6;
+
+export interface RailWorkspaceRow {
+  /** "" is All workspaces. */
+  value: string;
+  name: string;
+  /** One or two letters for the row's tile. */
+  initials: string;
+  current: boolean;
+}
+
+/**
+ * The workspaces the rail lists, and how many did not fit.
+ *
+ * Hub mode: All workspaces first, then every workspace in registry order — capped at
+ * `limit`, with the CURRENT one always kept (it replaces the last listed one when it would
+ * have been cut), so the rail never hides where you are. A single-workspace page lists
+ * nothing (one row that does nothing is a dead control), and on a view about this computer
+ * no row is marked current — the page is not in a workspace.
+ */
+export function railWorkspaces(
+  scope: { mode: string; ws: string; workspaces: readonly { slug: string; prefix: string }[]; view?: ViewName },
+  limit: number = RAIL_WORKSPACE_LIMIT,
+): { rows: RailWorkspaceRow[]; hidden: number } {
+  const tile = (slug: string, prefix: string) => (prefix || slug).slice(0, 1).toUpperCase();
+  // A single-workspace page has nothing to switch to: no list at all (the top bar names it).
+  if (scope.mode !== "hub") return { rows: [], hidden: 0 };
+  // A view about THIS COMPUTER is in no workspace, so no workspace row claims to be current.
+  const inWorkspace = !(scope.view && isMachineView(scope.view));
+  const all: RailWorkspaceRow = { value: "", name: "All workspaces", initials: "", current: inWorkspace && scope.ws === "" };
+  let listed = scope.workspaces.slice(0, limit);
+  const current = scope.workspaces.find((workspace) => workspace.slug === scope.ws);
+  if (current && !listed.includes(current)) listed = [...listed.slice(0, Math.max(0, limit - 1)), current];
+  const rows = listed.map((workspace) => ({
+    value: workspace.slug,
+    name: workspace.slug,
+    initials: tile(workspace.slug, workspace.prefix),
+    current: inWorkspace && workspace.slug === scope.ws,
+  }));
+  return { rows: [all, ...rows], hidden: scope.workspaces.length - listed.length };
+}
+
+/**
+ * What a click on a workspace row does: switch to it — unless it is already the one on
+ * screen, or the page is a single workspace and has nothing to switch to.
+ */
+export function chooseRailWorkspace(scope: { mode: string; setWs: (ws: string) => void }, row: RailWorkspaceRow): void {
+  if (scope.mode === "hub" && !row.current) scope.setWs(row.value);
+}
 
 /**
  * How a project sub-row is captioned. The workspace joins the name only when the rows on

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { AppShell } from "@/components/AppShell";
+import { NavRail } from "@/components/nav/NavRail";
 import { FilterChipStrip } from "@/components/filters/FilterChips";
 import { ProjectForm } from "@/components/projects/ProjectDialog";
 import { buildFilterContext } from "@/lib/filter-dimensions";
@@ -124,6 +125,27 @@ describe("on a phone", () => {
   });
 });
 
+describe("the phone's menu drawer keeps its phone shape", () => {
+  const hub = { mode: "hub" as const, ws: "", workspaces: [{ slug: "aardvark", prefix: "AAR" }, { slug: "staple", prefix: "STA" }] };
+
+  it("has the switcher pill, no workspace list, and the views named for the scope", () => {
+    const drawer = at(390, <NavRail onHide={noop} />, hub);
+    expect(drawer).toContain('data-workspace-switcher="rail"');
+    expect(drawer).not.toContain("data-nav-workspace");
+    expect(drawer).not.toContain("data-nav-brand");
+    expect(drawer).toMatch(/data-nav-group-name="true" class="truncate">All workspaces</);
+    // The theme is a full row there, not the desk's icon switch.
+    expect(drawer).toMatch(/data-nav-theme[^>]*>[\s\S]*?Dark mode<\/button>/);
+  });
+
+  it("while the desk rail lists the workspaces and wears the mark instead", () => {
+    const desk = at(1440, <NavRail onHide={noop} />, hub);
+    expect(desk).toContain("data-nav-brand");
+    expect(desk.match(/data-nav-workspace=/g)).toHaveLength(3);
+    expect(desk).not.toContain('data-workspace-switcher="rail"');
+  });
+});
+
 describe("on a desk", () => {
   it("keeps the rail and adds no tab bar or top bar", () => {
     const markup = shell(1440);
@@ -134,14 +156,18 @@ describe("on a desk", () => {
 });
 
 describe("All workspaces never presents the first workspace as current", () => {
+  // The scope is now the top bar's crumb — the switcher itself — ahead of the view's name.
+  const scope = (markup: string) => /<button[^>]*data-scope-name="true"[^>]*>[\s\S]*?<\/button>/.exec(markup)?.[0] ?? "";
+
   it("the header says All workspaces beside the view's name", () => {
     const markup = shell(1440);
-    expect(markup).toMatch(/<span data-scope-name="true"[^>]*>All workspaces<\/span>/);
-    expect(markup).not.toMatch(/data-scope-name="true"[^>]*>aardvark</);
+    expect(scope(markup)).toContain(">All workspaces</span>");
+    expect(scope(markup)).not.toContain(">aardvark<");
+    expect(markup.indexOf("data-scope-name")).toBeLessThan(markup.indexOf("<h1"));
   });
 
   it("the header names the workspace once one is chosen", () => {
-    expect(shell(1440, { ws: "staple" })).toMatch(/<span data-scope-name="true"[^>]*>staple<\/span>/);
+    expect(scope(shell(1440, { ws: "staple" }))).toContain(">staple</span>");
   });
 
   it("a new project from All workspaces asks which workspace, with none preselected", () => {

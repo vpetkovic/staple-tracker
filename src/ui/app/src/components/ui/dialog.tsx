@@ -42,13 +42,21 @@ function DialogOverlay({
         // still see the thing you are acting on. 50% black in dark mode is also
         // nearly a no-op (black over near-black), so the blur is what actually
         // does the separating there.
-        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/35 backdrop-blur-[2px] duration-100",
+        // The shared scrim token (--scrim): 32% black in light, 55% in dark.
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-scrim backdrop-blur-[2px] duration-100",
         className
       )}
       {...props}
     />
   )
 }
+
+/**
+ * The dialog's close button: one focus ring, a 32px target on a desk and 44px on a phone
+ * (and under any finger), and a hover surface like every other icon button.
+ */
+export const DIALOG_CLOSE_CLASS =
+  "text-text-tertiary hover:bg-surface-hover hover:text-foreground focus-ring absolute top-4 right-4 flex size-8 items-center justify-center rounded-lg transition-colors disabled:pointer-events-none max-md:size-11 pointer-coarse:size-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 
 function DialogContent({
   className,
@@ -68,7 +76,7 @@ function DialogContent({
           // dark mode the page is #0a0a0a while raised surfaces are #111 — using
           // the page colour made the dialog and the scrimmed page behind it the
           // same value, so the only thing holding the modal together was its border.
-          "bg-popover data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-[0.97] data-[state=open]:zoom-in-[0.97] data-[state=closed]:slide-out-to-top-[1%] data-[state=open]:slide-in-from-top-[1%] fixed top-(--sz-calc-26) md:top-(--pct-50) left-(--pct-50) z-50 grid w-full max-w-(--sz-calc-25) translate-x-(--pct-neg-50) translate-y-0 md:translate-y-(--pct-neg-50) gap-4 rounded-lg border p-6 shadow-lg duration-150 ease-(--e-cubic-bezier-0_16-1-0_3-1) outline-none sm:max-w-lg [&>*]:min-w-0",
+          "bg-surface-overlay data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-[0.97] data-[state=open]:zoom-in-[0.97] data-[state=closed]:slide-out-to-top-[1%] data-[state=open]:slide-in-from-top-[1%] fixed top-(--sz-calc-26) md:top-(--pct-50) left-(--pct-50) z-50 grid w-full max-w-(--sz-calc-25) translate-x-(--pct-neg-50) translate-y-0 md:translate-y-(--pct-neg-50) gap-4 rounded-xl border p-6 shadow-xl duration-150 ease-(--e-cubic-bezier-0_16-1-0_3-1) outline-none sm:max-w-lg [&>*]:min-w-0",
           className
         )}
         {...props}
@@ -77,7 +85,7 @@ function DialogContent({
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            className={DIALOG_CLOSE_CLASS}
           >
             <XIcon />
             <span className="sr-only">Close</span>
@@ -132,7 +140,7 @@ function DialogTitle({
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-lg leading-none font-semibold", className)}
+      className={cn("text-heading font-semibold", className)}
       {...props}
     />
   )
@@ -145,7 +153,7 @@ function DialogDescription({
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"
-      className={cn("text-muted-foreground text-sm", className)}
+      className={cn("text-muted-foreground text-reading", className)}
       {...props}
     />
   )

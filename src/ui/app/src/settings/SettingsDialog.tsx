@@ -81,6 +81,7 @@ import {
   withShellCategories,
   type ShellMode,
   type ShellPane,
+  settingsName,
 } from "./settings-shell";
 import { useTargetSettings } from "./useTargetSettings";
 import { WorkspaceChooser } from "./WorkspaceChooser";
@@ -306,7 +307,7 @@ export function SettingsDialog({
           data-mode={mode}
           data-layout={layout}
           className={cn(
-            "bg-popover text-foreground fixed z-50 flex flex-col overflow-hidden shadow-lg outline-none",
+            "bg-surface-overlay text-foreground fixed z-50 flex flex-col overflow-hidden shadow-xl outline-none",
             settingsFrameClass(mode, layout),
           )}
           /**
@@ -347,7 +348,7 @@ export function SettingsDialog({
             renderCategory={(shown) => {
               const perWorkspace = shown.scope === "workspace";
               if (needsWorkspaceChoice(shown, target)) {
-                return <WorkspaceChooser section={shown.label} workspaces={session.workspaces} onChoose={chooseWorkspace} />;
+                return <WorkspaceChooser section={settingsName(shown)} workspaces={session.workspaces} onChoose={chooseWorkspace} />;
               }
               if (perWorkspace && targetSettings.error) return <ErrorState error={targetSettings.error} />;
               const envelope = perWorkspace ? targetSettings.settings : page;

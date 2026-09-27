@@ -26,11 +26,12 @@
  * plus alt+arrow on the row. The task list carries no drag wiring (only the settings
  * editor does), and the brief's fallback for that case is exactly this.
  */
-import { ArrowLeft, ArrowUpRight, ChevronDown, ChevronUp, Maximize2, Minimize2, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, ChevronDown, ChevronUp, Maximize2, Milestone, Minimize2, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { resolveTaskListConfig, TaskRowLine } from "@/components/task-list";
 import { useRowPlan } from "@/components/task-list/useRowPlan";
+import { ROOMY_QUERY, useMediaQuery } from "@/lib/use-media";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -80,6 +81,36 @@ import {
   type MemberListRow,
   type MilestonesLayout as LayoutName,
 } from "./milestones-model";
+import {
+  nextSentence,
+  plainDue,
+  PROGRESS_WORDS,
+  progressSegments,
+  progressSentence,
+  progressState,
+  riskSentence,
+  type ProgressState,
+} from "./milestone-plain";
+import { ProgressStrip } from "@/views/ProgressStrip";
+import { EmptyState as PlainEmptyState } from "@/components/plain/States";
+import "./milestones-desk.css";
+
+/** The desktop page, from the shell's desk breakpoint up. The phone keeps the page as it shipped. */
+export function useMilestonesDesk(): boolean {
+  return useRowPlan().layout === "line";
+}
+
+/** How far it has got, as a quiet pill with one plain word (from progress, not the date). */
+function PlainStatePill({ state }: { state: ProgressState }) {
+  return (
+    <span
+      data-milestone-progress-state={state}
+      className="staple-milestone-pill inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-label font-medium"
+    >
+      {PROGRESS_WORDS[state]}
+    </span>
+  );
+}
 
 // ---------- small pieces ----------
 
@@ -153,13 +184,71 @@ export function MilestoneListPane({
   effective = [],
   selectedRef,
   onSelect,
+  desk = false,
 }: {
   rows: readonly MilestoneListRow[];
   /** The queue's effective rows, which is where blocked and gated are counted from. */
   effective?: readonly EffectiveQueueRow[];
   selectedRef: string | null;
   onSelect: (identifier: string) => void;
+  /** The desktop cards: plain due dates, a progress bar with its sentence. */
+  desk?: boolean;
 }) {
+  if (desk && rows.length === 0) {
+    return (
+      <PlainEmptyState compact icon={Milestone} title="No milestones here yet">
+        A milestone gathers tasks that should be finished by a date. Your agents can create one.
+      </PlainEmptyState>
+    );
+  }
+  if (desk) {
+    const now = new Date();
+    return (
+      <ul aria-label="Milestones" data-milestone-list data-desk="" className="flex flex-col gap-2">
+        {rows.map((row) => {
+          const selected = row.milestone.identifier === selectedRef;
+          const riskFacts = effective.length > 0 ? milestoneRisk(row, effective) : null;
+          const risk = riskFacts ? riskSentence(riskFacts) : null;
+          return (
+            <li key={row.milestone.identifier}>
+              <button
+                type="button"
+                data-milestone-row={row.milestone.identifier}
+                aria-current={selected ? "true" : undefined}
+                onClick={() => onSelect(row.milestone.identifier)}
+                className={cn(
+                  "staple-milestone-card flex w-full flex-col gap-2 rounded-xl border bg-card px-3.5 py-3 text-left outline-none",
+                  "hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                  selected && "border-ring",
+                )}
+              >
+                <span className="flex items-start gap-2">
+                  <span className="min-w-0 flex-1 text-reading font-medium">{row.milestone.title}</span>
+                  <PlainStatePill state={progressState(row.milestone.state, row.progress, riskFacts)} />
+                </span>
+                <span
+                  data-milestone-target
+                  className={cn(
+                    "text-label text-muted-foreground",
+                    row.milestone.state === "overdue" && "text-[var(--plain-risk-fg)]",
+                  )}
+                >
+                  {plainDue(row.milestone.targetDate, row.milestone.state, now)}
+                </span>
+                <ProgressStrip compact label={progressSentence(row.progress)} segments={progressSegments(row.progress, riskFacts)} />
+                <span className="flex flex-wrap items-baseline gap-x-2 text-label text-muted-foreground">
+                  <span data-milestone-progress-sentence className="text-foreground">
+                    {progressSentence(row.progress)}
+                  </span>
+                  {risk ? <span data-milestone-risk>{risk}</span> : null}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
   if (rows.length === 0) {
     return (
       <EmptyState>
@@ -218,10 +307,21 @@ export interface MemberWriteFailure {
 /** The panel row, plus the disclosure column — that column is what carries the indent. */
 const MEMBER_ROW_COLUMNS = { disclosure: true } as const;
 
-/** The member row at this width — the tree's own ladder (row-layout.ts). */
+/**
+ * The member row at this width — the tree's own ladder (row-layout.ts). On the desk it is the
+ * list's desktop row (identifier alone, the kind slot, the cue cluster), with no date and no
+ * quick actions: the member row carries its own open, move and remove buttons.
+ */
+const DESK_MEMBER_COLUMNS = { select: false, disclosure: true, date: false, actions: false, worklog: false } as const;
 function useMemberRowConfig() {
   const plan = useRowPlan();
-  return useMemo(() => resolveTaskListConfig("panel", { columns: MEMBER_ROW_COLUMNS, plan }), [plan]);
+  return useMemo(
+    () =>
+      plan.layout === "line"
+        ? resolveTaskListConfig("tree", { columns: DESK_MEMBER_COLUMNS, plan, desk: true })
+        : resolveTaskListConfig("panel", { columns: MEMBER_ROW_COLUMNS, plan }),
+    [plan],
+  );
 }
 
 /** The member `⋯` menu, held open by its own state so phone Back can close it. */
@@ -255,7 +355,13 @@ function MemberRow({
   const { row, role, memberIndex, member } = entry;
   const identifier = row.issue.identifier;
   const config = useMemberRowConfig();
-  const compact = config.plan?.layout === "compact";
+  /*
+   * On a phone, and on a desk narrower than 1280px where the split leaves the member list a
+   * narrow pane, the four buttons fold into one `⋯` with the same four acts, in words: they
+   * cost the title ~100px it cannot spare there.
+   */
+  const roomy = useMediaQuery(ROOMY_QUERY, true);
+  const compact = config.plan?.layout === "compact" || !roomy;
   return (
     <li
       data-milestone-member={identifier}
@@ -408,6 +514,8 @@ export function MilestoneDetailPane({
   onAdd,
   onReload,
   onDismissFailure,
+  desk = false,
+  exampleRef = null,
 }: {
   view: MilestoneViewData;
   /** The queue's effective rows, which is where blocked and gated are counted from. */
@@ -424,6 +532,10 @@ export function MilestoneDetailPane({
   onAdd: (ref: string, note: string) => void;
   onReload: () => void;
   onDismissFailure: () => void;
+  /** The desktop pane: a plain header, a progress card, the raw rollups under Show details. */
+  desk?: boolean;
+  /** A real reference from this workspace, for the add box's example. */
+  exampleRef?: string | null;
 }) {
   const { milestone } = view;
   const [addRef, setAddRef] = useState("");
@@ -437,8 +549,76 @@ export function MilestoneDetailPane({
     setAddNote("");
   };
 
+  const risk = milestoneRisk(view, effective);
   return (
-    <article data-milestone-detail={milestone.identifier} className="flex min-h-0 flex-1 flex-col gap-4">
+    <article
+      data-milestone-detail={milestone.identifier}
+      data-desk={desk ? "" : undefined}
+      className={cn("flex min-h-0 flex-1 flex-col", desk ? "mx-auto w-full max-w-wide gap-5 pt-2" : "gap-4")}
+    >
+      {desk ? (
+        <header className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-heading font-semibold">{milestone.title}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-muted-foreground">
+              <PlainStatePill state={progressState(milestone.state, view.progress, effective.length > 0 ? risk : null)} />
+              <span
+                data-milestone-target
+                className={cn(milestone.state === "overdue" && "text-[var(--plain-risk-fg)]")}
+              >
+                {plainDue(milestone.targetDate, milestone.state, now)}
+              </span>
+              {milestone.assignee ? <span>Owned by {milestone.assignee}</span> : null}
+            </div>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => onOpen("", milestone.identifier)}>
+            <ArrowUpRight aria-hidden />
+            Open
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={fullScreen ? "Collapse from full screen" : "Expand to full screen"}
+            aria-pressed={fullScreen}
+            title={fullScreen ? "Collapse from full screen" : "Expand to full screen"}
+            onClick={onToggleFullScreen}
+          >
+            {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+          </Button>
+        </header>
+      ) : null}
+      {desk ? (
+        <section aria-label="Progress" data-milestone-progress className="rounded-xl border bg-card px-4 py-4">
+          <p className="text-title font-medium" data-milestone-progress-sentence>
+            {progressSentence(view.progress)}
+          </p>
+          <p className="mt-0.5 mb-3 text-body text-muted-foreground">
+            {[riskSentence(risk), nextSentence(view.next)].filter(Boolean).join(" ")}
+          </p>
+          <ProgressStrip
+            testId="milestone-progress"
+            label={progressSentence(view.progress)}
+            segments={progressSegments(view.progress, effective.length > 0 ? risk : null)}
+          />
+          <details className="mt-3 text-label text-muted-foreground" data-technical-details="">
+            <summary className="cursor-pointer select-none py-1">Show details</summary>
+            <div className="mt-1 space-y-1.5">
+              <div className="flex flex-wrap gap-x-3 font-mono text-caption">
+                <span>{milestone.identifier}</span>
+                <span data-milestone-start>start {dateLabel(milestone.startDate)}</span>
+                <span>target {dateLabel(milestone.targetDate)}</span>
+                {milestone.planPosition !== null ? <span>plan #{milestone.planPosition}</span> : null}
+              </div>
+              <Rollups view={view} effective={effective} />
+              <div className="flex flex-wrap gap-x-3">
+                <RiskLine row={view} effective={effective} />
+                <NextWork next={view.next} />
+              </div>
+            </div>
+          </details>
+        </section>
+      ) : null}
+      {desk ? null : (
       <header className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 font-mono text-[11px] text-text-tertiary">
@@ -473,6 +653,8 @@ export function MilestoneDetailPane({
         </Button>
       </header>
 
+      )}
+      {desk ? null : (
       <section>
         <SectionHeading>Rollups</SectionHeading>
         <Rollups view={view} effective={effective} />
@@ -481,9 +663,19 @@ export function MilestoneDetailPane({
           <NextWork next={view.next} />
         </div>
       </section>
+      )}
 
       <section className="min-h-0">
-        <SectionHeading>Members</SectionHeading>
+        {desk ? (
+          <h3 className="mb-2 text-body font-semibold">
+            What is in this milestone
+            <span className="ml-2 font-normal text-muted-foreground">
+              {view.members.length} {view.members.length === 1 ? "item" : "items"}, in order
+            </span>
+          </h3>
+        ) : (
+          <SectionHeading>Members</SectionHeading>
+        )}
         {failure ? (
           failure.kind === "conflict" ? (
             <div
@@ -505,7 +697,13 @@ export function MilestoneDetailPane({
           )
         ) : null}
         {members.length === 0 ? (
-          <EmptyState>no members yet — add an epic or a task below</EmptyState>
+          desk ? (
+            <PlainEmptyState compact icon={Milestone} title="Nothing is in this milestone yet">
+              Add an epic or a task below.
+            </PlainEmptyState>
+          ) : (
+            <EmptyState>no members yet — add an epic or a task below</EmptyState>
+          )
         ) : (
           <ul aria-label={`Members of ${milestone.identifier}`} data-milestone-members className="flex flex-col">
             {members.map((entry) => (
@@ -526,21 +724,21 @@ export function MilestoneDetailPane({
           <Input
             value={addRef}
             aria-label="Identifier to add"
-            placeholder="STA-66"
+            placeholder={desk ? (exampleRef ? `Task, like ${exampleRef}` : "Task reference") : "STA-66"}
             disabled={busy}
             onChange={(event) => setAddRef(event.target.value)}
-            className="h-7 w-28 font-mono text-[12px]"
+            className={cn("h-7 text-[12px]", desk ? "h-8 w-40" : "w-28 font-mono")}
           />
           <Input
             value={addNote}
             aria-label="Note for the new member"
-            placeholder="note (optional)"
+            placeholder={desk ? "Why it is here (optional)" : "note (optional)"}
             disabled={busy}
             onChange={(event) => setAddNote(event.target.value)}
             className="h-7 min-w-0 flex-1 text-[12px]"
           />
-          <Button type="submit" variant="outline" size="xs" disabled={busy || addRef.trim() === ""}>
-            Add member
+          <Button type="submit" variant="outline" size={desk ? "sm" : "xs"} disabled={busy || addRef.trim() === ""}>
+            {desk ? "Add to milestone" : "Add member"}
           </Button>
         </form>
       </section>
@@ -577,7 +775,9 @@ export function MilestonesLayout({
       data-full-screen={fullScreen ? "true" : undefined}
       className={cn(
         "grid h-full min-h-0",
-        detailOnly || listOnly ? "grid-cols-1" : "grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]",
+        detailOnly || listOnly
+          ? "grid-cols-1"
+          : "grid-cols-[minmax(15rem,18rem)_minmax(0,1fr)] min-[1280px]:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]",
       )}
     >
       {detailOnly ? null : (
@@ -634,6 +834,7 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
   // Always the workspace the page names — never the server's own first (workspace-scope.ts).
   const ws = workspace || undefined;
 
+  const desk = useMilestonesDesk();
   const loadList = useCallback(() => getMilestones({ ws, all: session.filters.showDone }), [ws, session.filters.showDone]);
   const list = useResource(loadList, [ws, session.filters.showDone, session.version], onAuthError);
   const sorted = useMemo(() => (list.data ? sortMilestones(list.data) : []), [list.data]);
@@ -766,11 +967,17 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
   ) : list.data === undefined ? (
     <LoadingState />
   ) : (
-    <MilestoneListPane rows={sorted} effective={effective} selectedRef={selectedRef} onSelect={setSelectedRef} />
+    <MilestoneListPane rows={sorted} effective={effective} selectedRef={selectedRef} onSelect={setSelectedRef} desk={desk} />
   );
 
   const detailPane = !selectedRef ? (
-    <EmptyState>select a milestone</EmptyState>
+    desk ? (
+      <PlainEmptyState compact icon={Milestone} title="Pick a milestone">
+        Choose one on the left to see what is in it and how far it has got.
+      </PlainEmptyState>
+    ) : (
+      <EmptyState>select a milestone</EmptyState>
+    )
   ) : detail.error ? (
     <ErrorState error={detail.error} />
   ) : !view ? (
@@ -791,6 +998,8 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
       onAdd={onAdd}
       onReload={onReload}
       onDismissFailure={() => setFailure(null)}
+      desk={desk}
+      exampleRef={(session.issues.data ?? []).find((r) => r.workspace === workspace && r.issue.kind !== "milestone")?.issue.identifier ?? null}
     />
   );
 

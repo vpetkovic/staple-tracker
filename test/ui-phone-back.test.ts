@@ -672,7 +672,16 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
       await context.close();
       return out;
     };
-    expect(await heights("/?ws=alpha&view=queue", ["[data-queue-next-open]", 'button[aria-label="Hide navigation"]', '[data-workspace-switcher="rail"]'])).toEqual([24, 28, 28]);
+    // DELIBERATELY CHANGED with the desktop shell: the rail's collapse control is 32px, the
+    // switcher on a desk is the top bar's scope crumb (28px), and a rail workspace row is 32px.
+    expect(
+      await heights("/?ws=alpha&view=queue", [
+        "[data-queue-next-open]",
+        'button[aria-label="Hide navigation"]',
+        '[data-workspace-switcher="crumb"]',
+        '[data-nav-workspace="alpha"]',
+      ]),
+    ).toEqual([24, 32, 28, 32]);
     expect(await heights("/?view=budget", ['[data-testid="budget-refresh"]'])).toEqual([24]);
     expect((await heights("/?ws=alpha&view=estimate-accuracy", ["[data-include-reconstructed-label]"]))[0]).toBeLessThanOrEqual(24);
   }, 60_000);
@@ -680,11 +689,19 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
   it("a tablet's desk layout under a finger: the rail's controls and the rows' small controls are 44px targets", async () => {
     const { page: p, context } = await page("/?ws=beta&view=tasks", TABLET);
     await settle(p, 400);
+    // DELIBERATELY CHANGED with the desktop shell: find-anything and New task moved to the top
+    // bar, the switcher is the top bar's scope crumb, and the workspaces are rail rows.
     for (const control of [
       'button[aria-label="Hide navigation"]',
-      'button[aria-label="Open the command palette"]',
-      '[data-workspace-switcher="rail"]',
+      "[data-top-search]",
+      "[data-top-new-task]",
+      '[data-workspace-switcher="crumb"]',
+      '[data-nav-workspace="beta"]',
+      '[data-nav-item="view:tree"]',
       '[data-nav-action="new-project"]',
+      '[data-filter-add]',
+      '[data-filter-preset="mine"]',
+      'button[aria-label="Group tasks"]',
     ]) {
       await atLeast44(p, control);
     }
@@ -767,7 +784,8 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     const { page: p, context } = await page("/?view=tasks", DESK);
     const selected = () =>
       p.evaluate(() => document.querySelector("[data-workspace-list] [cmdk-item][data-selected=true]")?.getAttribute("data-workspace-option"));
-    await p.locator('[data-workspace-switcher="rail"]').focus();
+    // The desk's switcher is the top bar's scope crumb.
+    await p.locator('[data-workspace-switcher="crumb"]').focus();
     await p.keyboard.press("Enter");
     await settle(p, 300);
     expect(await selected()).toBe("");
@@ -784,7 +802,7 @@ describe.skipIf(Boolean(reason))("the shell, measured", () => {
     await settle(p, 500);
     expect(new URL(p.url()).searchParams.get("ws")).toBe("alpha");
     // Reopened on a workspace, the list starts on that workspace.
-    await p.locator('[data-workspace-switcher="rail"]').focus();
+    await p.locator('[data-workspace-switcher="crumb"]').focus();
     await p.keyboard.press("Enter");
     await settle(p, 300);
     expect(await selected()).toBe("alpha");

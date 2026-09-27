@@ -1,0 +1,163 @@
+/*
+ * staple · the desktop visual system — one type scale, one spacing rhythm, named surfaces,
+ * one focus ring.
+ *
+ * Cascade: theme-tokens.css → geist-tokens.css → THIS FILE → app.css. It adds names; it
+ * re-points nothing the older sheets define, so every existing class keeps its meaning
+ * (surface-hover/selected/active, text-tertiary, --plain-*, --text-compact, the status hues).
+ *
+ * ── TYPE SCALE ────────────────────────────────────────────────────────────────────────
+ *
+ * Seven steps, each a Tailwind utility with its own line height, so a size never arrives
+ * without the leading it was designed with:
+ *
+ *   text-caption   11/14  counts, key hints, timestamps beside a label
+ *   text-label     12/16  group labels, chip text, captions under a name
+ *   text-body      13/20  the desk's reading size: rows, menus, controls
+ *   text-reading   14/22  sentences meant to be read (help, empty states, dialogs)
+ *   text-title     15/22  a pane, card or Settings section title
+ *   text-heading   18/26  the page's own name in the top bar, a dialog's title
+ *   text-display   24/30  one headline figure (Usage, Estimates)
+ *
+ * Weights stay in the markup (font-medium / font-semibold); headings and display carry the
+ * tighter heading tracking with them.
+ *
+ * ── SPACING ───────────────────────────────────────────────────────────────────────────
+ *
+ * The rhythm is Tailwind's 4px step, used in 4 / 8 / 12 / 16 / 24 / 32. The shell's own
+ * geometry is named here so a view can line up with it instead of guessing:
+ *
+ *   --shell-rail-width     the sidebar (240px; 264px from 1680px)   → w-rail
+ *   --shell-topbar-height  the top bar (52px)                       → h-topbar
+ *   --shell-toolbar-height the filter + view-options toolbar (44px) → h-toolbar
+ *   --shell-gutter         the desk showing round the content card  → m-gutter / p-gutter
+ *   --page-pad-x           a view's side padding (16 / 24 / 32px by width) → px-page
+ *   --control-sm/md/lg     28 / 32 / 36px control heights           → h-control-sm/md/lg
+ *
+ * Readable widths, as max-w utilities: max-w-readable (720px, prose and forms),
+ * max-w-wide (1152px, reports and card grids), max-w-page (1600px, the list at 1920).
+ *
+ * ── SURFACES ──────────────────────────────────────────────────────────────────────────
+ *
+ * Four, from the back of the stack forward. Depth is a step in value plus a hairline, never
+ * a heavy shadow:
+ *
+ *   bg-surface-canvas   the desk: behind the sidebar and round the content card
+ *   bg-surface-raised   the content card, list rows, panels (= card)
+ *   bg-surface-sunken   a well inside a raised surface: a toolbar field, a code block
+ *   bg-surface-overlay  menus, popovers and dialogs (= popover)
+ *   bg-scrim            what covers the page under a dialog or sheet
+ *
+ * ── FOCUS ─────────────────────────────────────────────────────────────────────────────
+ *
+ * `focus-ring` is the one focus treatment for every control: a 2px ring in the ring blue,
+ * offset 2px, shown on keyboard focus only (`:focus-visible`). `focus-ring-inset` draws it
+ * inside the box, for controls that sit flush in a row or a scroll strip where an outside
+ * ring would be clipped.
+ */
+
+@theme inline {
+  /* type scale */
+  --text-caption: 11px;
+  --text-caption--line-height: 14px;
+  --text-label: 12px;
+  --text-label--line-height: 16px;
+  --text-body: 13px;
+  --text-body--line-height: 20px;
+  --text-reading: 14px;
+  --text-reading--line-height: 22px;
+  --text-title: 15px;
+  --text-title--line-height: 22px;
+  --text-title--letter-spacing: var(--tracking-heading);
+  --text-heading: 18px;
+  --text-heading--line-height: 26px;
+  --text-heading--letter-spacing: var(--tracking-heading);
+  --text-display: 24px;
+  --text-display--line-height: 30px;
+  --text-display--letter-spacing: var(--tracking-heading);
+
+  /* shell geometry, as spacing utilities (w-rail, h-topbar, h-toolbar, px-page, m-gutter) */
+  --spacing-rail: var(--shell-rail-width);
+  --spacing-topbar: var(--shell-topbar-height);
+  --spacing-toolbar: var(--shell-toolbar-height);
+  --spacing-gutter: var(--shell-gutter);
+  --spacing-page: var(--page-pad-x);
+  --spacing-control-sm: var(--control-sm);
+  --spacing-control-md: var(--control-md);
+  --spacing-control-lg: var(--control-lg);
+
+  /* readable widths (max-w-readable, max-w-wide, max-w-page) */
+  --container-readable: 45rem;
+  --container-wide: 72rem;
+  --container-page: 100rem;
+
+  /* surfaces */
+  --color-surface-canvas: var(--surface-canvas);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-scrim: var(--scrim);
+  --color-text-secondary: var(--text-secondary);
+}
+
+:root {
+  --shell-rail-width: 240px;
+  --shell-topbar-height: 52px;
+  --shell-toolbar-height: 44px;
+  --shell-gutter: 8px;
+  --page-pad-x: 16px;
+
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 36px;
+
+  --surface-canvas: var(--sidebar);
+  --surface-raised: var(--card);
+  --surface-sunken: color-mix(in oklab, var(--foreground) 3.5%, var(--card));
+  --surface-overlay: var(--popover);
+  --scrim: rgb(0 0 0 / 0.32);
+
+  /* A second text step between foreground and tertiary, for supporting sentences. */
+  --text-secondary: var(--ds-gray-900);
+
+  --focus-ring-color: var(--ring);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* Motion: use the house --motion-duration-* / --motion-ease-* in theme-tokens.css. */
+}
+
+.dark {
+  --surface-sunken: color-mix(in oklab, #000 18%, var(--card));
+  --scrim: rgb(0 0 0 / 0.55);
+  --text-secondary: var(--ds-gray-800);
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --page-pad-x: 24px;
+  }
+}
+
+@media (min-width: 1680px) {
+  :root {
+    --shell-rail-width: 264px;
+    --page-pad-x: 32px;
+  }
+}
+
+@utility focus-ring {
+  outline: none;
+  &:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+}
+
+@utility focus-ring-inset {
+  outline: none;
+  &:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: calc(var(--focus-ring-width) * -1);
+  }
+}

@@ -54,3 +54,17 @@
     padding-left: 28px;
   }
 }
+
+/*
+ * The desktop Queue below 1280px: the gutter, the reorder buttons and the row's own fixed
+ * slots all share one column, so the who cue keeps its avatar and gives its word back to the
+ * title. The word stays in the cue's tooltip and accessible name.
+ */
+@media (max-width: 1279.98px) {
+  .staple-queue-desk .staple-row[data-desk] .staple-row-who {
+    --desk-who-w: 48px;
+  }
+  .staple-queue-desk .staple-row[data-desk] .staple-who-word {
+    display: none;
+  }
+}

@@ -26,6 +26,8 @@
  */
 
 /** Elements the ladder can take away, in no particular order (the ladder gives the order). */
+import { DESK_MIN_WIDTH } from "@/lib/use-media";
+
 export type RowDrop =
   /** The second named label pill (two pills become one). */
   | "secondLabel"
@@ -96,12 +98,18 @@ export const COLLAPSE_LADDER: readonly RowRung[] = [
   { below: 1024, drops: ["prNumber", "labelNames", "staleSentence"] },
   { below: 960, drops: ["worklog"] },
   { below: 880, drops: ["date", "workingLabel"] },
-  { below: 720, drops: ["rollupPlan", "subtaskGlyph", "cueWords", "splitDeps"] },
+  { below: DESK_MIN_WIDTH, drops: ["rollupPlan", "subtaskGlyph", "cueWords", "splitDeps"] },
   { below: 480, drops: ["prBadge", "labelDots", "rollupBar", "identifier", "plainKindGlyph", "cueMarks", "milestoneMark"] },
 ];
 
-/** Below this the row switches to the compact one-line geometry (48px, tighter indent). */
-export const COMPACT_BELOW = 720;
+/**
+ * Below this the row switches to the compact one-line geometry (48px, tighter indent).
+ *
+ * The shell's own breakpoint (`lib/use-media`), so the phone shell never draws desktop rows
+ * and the desktop shell never draws phone rows. It used to be 720, which left 720–767px
+ * showing desk rows inside the phone shell.
+ */
+export const COMPACT_BELOW = DESK_MIN_WIDTH;
 
 /**
  * Where the tree hangs its children. Mirrored by nothing: the row sets these as inline

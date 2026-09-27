@@ -262,10 +262,11 @@ describe("what narrow actually changes", () => {
     expect(at(WIDE)).toContain("staple-row-date");
     expect(at(900)).toContain("staple-row-date");
     expect(at(900)).not.toContain("staple-worklog-cue");
-    // 800: the date and the "Working…" word follow (below 880).
+    // 800: the date and the "Working" word follow (below 880). The list draws the desktop
+    // row, where the word is the who cue's rather than the old pill's.
     expect(at(800)).not.toContain("staple-row-date");
-    expect(at(800)).not.toContain("staple-working-label");
-    expect(at(WIDE)).toContain("staple-working-label");
+    expect(at(800)).not.toContain("staple-who-word");
+    expect(at(WIDE)).toContain("staple-who-word");
   });
 });
 

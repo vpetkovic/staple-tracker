@@ -35,6 +35,15 @@ import type { SettingSchemaView } from "../../lib/settings";
 export type SaveStatus = "idle" | "pending" | "failed";
 
 /** What the action bar can do, from what the draft is. */
+/**
+ * Did a save just finish cleanly? True on the one render where `saving` went from on to off
+ * with no error and nothing left to save — the moment the bar says "Saved". A save that
+ * failed (an error), or left a draft behind, is not a confirmation.
+ */
+export function savedJustNow(wasSaving: boolean, state: Pick<ActionBarState, "saving" | "canCancel">, error?: string | null): boolean {
+  return wasSaving && !state.saving && !error && !state.canCancel;
+}
+
 export interface ActionBarState {
   canSave: boolean;
   /** Cancel discards the draft; it is offered exactly when there is one. */

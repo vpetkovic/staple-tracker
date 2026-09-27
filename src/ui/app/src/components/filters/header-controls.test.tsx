@@ -112,12 +112,12 @@ describe("the header row", () => {
     expect(narrow.match(/data-compact=""/g)).toHaveLength(5);
   });
 
-  it("wears one recipe on every control: 28px, 13px, a 16px icon, 6px gap", () => {
-    for (const cls of ["h-7", "text-[13px]", "gap-1.5", "[&_svg:not([class*='size-'])]:size-4"]) {
+  it("wears one recipe on every control: 32px, the body size, a 16px icon, 6px gap, the one focus ring", () => {
+    for (const cls of ["h-control-md", "text-body", "gap-1.5", "rounded-lg", "focus-ring", "[&_svg:not([class*='size-'])]:size-4"]) {
       expect(HEADER_BUTTON_CLASS).toContain(cls);
     }
     const wide = atWidth(1440);
-    expect(wide.match(/class="[^"]*\bh-7\b[^"]*"/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    expect(wide.match(/class="[^"]*\bh-control-md\b[^"]*"/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
   });
 
   it("folds the search into an icon when narrow, and keeps the field while it holds text", () => {
@@ -147,12 +147,14 @@ describe("the header row", () => {
 });
 
 describe("each view shows only the controls it honours", () => {
-  it("Graph: filter, Done and search — no Group or Sort, which a graph cannot do", () => {
+  // DELIBERATELY CHANGED: the graph's View menu owns finished work (show, fade, hide), so the
+  // header's Done — a second control for the same thing — is gone there.
+  it("Graph: filter and search — no Group, Sort or duplicate Done", () => {
     const graph = atWidth(1440, { view: "graph" });
     expect(graph).not.toContain('aria-label="Group tasks"');
     expect(graph).not.toContain("Sort:");
     expect(graph).toContain('aria-label="Add a filter"');
-    expect(graph).toContain('aria-label="Show done and cancelled tasks"');
+    expect(graph).not.toContain("data-filter-done");
     expect(graph).toContain('aria-label="Search tasks"');
   });
 
