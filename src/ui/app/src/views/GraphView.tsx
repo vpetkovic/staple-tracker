@@ -137,11 +137,11 @@ const CANVAS_CLASS = "min-h-0 w-full flex-1 rounded-lg border bg-card";
 function DeskLegend() {
   return (
     <div className="flex min-w-0 flex-col gap-1.5 px-1 py-2" data-graph-legend="desk">
-      <p className="text-[13px] text-foreground">
+      <p className="text-body text-foreground">
         How your tasks depend on each other. An arrow runs from a task to the work that waits for it,
         so work on the left has to finish first.
       </p>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[12px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-label text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <svg width="18" height="8" aria-hidden>
             <line x1="0" y1="4" x2="18" y2="4" className="staple-graph-edge" />

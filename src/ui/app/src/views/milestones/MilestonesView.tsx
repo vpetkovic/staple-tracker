@@ -26,7 +26,7 @@
  * plus alt+arrow on the row. The task list carries no drag wiring (only the settings
  * editor does), and the brief's fallback for that case is exactly this.
  */
-import { ArrowLeft, ArrowUpRight, ChevronDown, ChevronUp, Maximize2, Minimize2, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, ChevronDown, ChevronUp, Maximize2, Milestone, Minimize2, MoreHorizontal, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { resolveTaskListConfig, TaskRowLine } from "@/components/task-list";
@@ -89,6 +89,7 @@ import {
   STATE_WORDS,
 } from "./milestone-plain";
 import { ProgressStrip } from "@/views/ProgressStrip";
+import { EmptyState as PlainEmptyState } from "@/components/plain/States";
 import "./milestones-desk.css";
 
 /** The desktop page, from 720px up. The phone keeps the page exactly as it shipped. */
@@ -101,9 +102,9 @@ function PlainStatePill({ state }: { state: MilestoneState }) {
   return (
     <span
       data-milestone-state={state}
-      className="staple-milestone-pill inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11.5px] font-medium"
+      className="staple-milestone-pill inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-label font-medium"
     >
-      <span aria-hidden className="text-[10px]">
+      <span aria-hidden className="text-caption">
         {STATE_PRESENTATION[state].glyph}
       </span>
       {STATE_WORDS[state]}
@@ -193,7 +194,14 @@ export function MilestoneListPane({
   /** The desktop cards: plain due dates, a progress bar with its sentence. */
   desk?: boolean;
 }) {
-  if (desk && rows.length > 0) {
+  if (desk && rows.length === 0) {
+    return (
+      <PlainEmptyState compact icon={Milestone} title="No milestones here yet">
+        A milestone gathers tasks that should be finished by a date. Your agents can create one.
+      </PlainEmptyState>
+    );
+  }
+  if (desk) {
     const now = new Date();
     return (
       <ul aria-label="Milestones" data-milestone-list data-desk="" className="flex flex-col gap-2">
@@ -214,20 +222,20 @@ export function MilestoneListPane({
                 )}
               >
                 <span className="flex items-start gap-2">
-                  <span className="min-w-0 flex-1 text-[14px] leading-snug font-medium">{row.milestone.title}</span>
+                  <span className="min-w-0 flex-1 text-reading font-medium">{row.milestone.title}</span>
                   <PlainStatePill state={row.milestone.state} />
                 </span>
                 <span
                   data-milestone-target
                   className={cn(
-                    "text-[12.5px] text-muted-foreground",
+                    "text-label text-muted-foreground",
                     row.milestone.state === "overdue" && "text-[var(--plain-risk-fg)]",
                   )}
                 >
                   {plainDue(row.milestone.targetDate, row.milestone.state, now)}
                 </span>
                 <ProgressStrip compact label={progressSentence(row.progress)} segments={progressSegments(row.progress)} />
-                <span className="flex flex-wrap items-baseline gap-x-2 text-[12px] text-muted-foreground">
+                <span className="flex flex-wrap items-baseline gap-x-2 text-label text-muted-foreground">
                   <span data-milestone-progress-sentence className="text-foreground">
                     {progressSentence(row.progress)}
                   </span>
@@ -525,15 +533,13 @@ export function MilestoneDetailPane({
     <article
       data-milestone-detail={milestone.identifier}
       data-desk={desk ? "" : undefined}
-      className={cn("flex min-h-0 flex-1 flex-col", desk ? "mx-auto w-full max-w-[56rem] gap-5 pt-2" : "gap-4")}
+      className={cn("flex min-h-0 flex-1 flex-col", desk ? "mx-auto w-full max-w-wide gap-5 pt-2" : "gap-4")}
     >
       {desk ? (
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[22px] leading-tight font-semibold tracking-[var(--tracking-heading)]">
-              {milestone.title}
-            </h2>
-            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
+            <h2 className="text-heading font-semibold">{milestone.title}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-muted-foreground">
               <PlainStatePill state={milestone.state} />
               <span
                 data-milestone-target
@@ -562,10 +568,10 @@ export function MilestoneDetailPane({
       ) : null}
       {desk ? (
         <section aria-label="Progress" data-milestone-progress className="rounded-xl border bg-card px-4 py-4">
-          <p className="text-[15px] font-medium" data-milestone-progress-sentence>
+          <p className="text-title font-medium" data-milestone-progress-sentence>
             {progressSentence(view.progress)}
           </p>
-          <p className="mt-0.5 mb-3 text-[13px] text-muted-foreground">
+          <p className="mt-0.5 mb-3 text-body text-muted-foreground">
             {[riskSentence(risk), nextSentence(view.next)].filter(Boolean).join(" ")}
           </p>
           <ProgressStrip
@@ -573,10 +579,10 @@ export function MilestoneDetailPane({
             label={progressSentence(view.progress)}
             segments={progressSegments(view.progress)}
           />
-          <details className="mt-3 text-[12px] text-muted-foreground" data-technical-details="">
+          <details className="mt-3 text-label text-muted-foreground" data-technical-details="">
             <summary className="cursor-pointer select-none py-1">Show details</summary>
             <div className="mt-1 space-y-1.5">
-              <div className="flex flex-wrap gap-x-3 font-mono text-[11px]">
+              <div className="flex flex-wrap gap-x-3 font-mono text-caption">
                 <span>{milestone.identifier}</span>
                 <span data-milestone-start>start {dateLabel(milestone.startDate)}</span>
                 <span>target {dateLabel(milestone.targetDate)}</span>
@@ -640,7 +646,7 @@ export function MilestoneDetailPane({
 
       <section className="min-h-0">
         {desk ? (
-          <h3 className="mb-2 text-[13px] font-semibold">
+          <h3 className="mb-2 text-body font-semibold">
             What is in this milestone
             <span className="ml-2 font-normal text-muted-foreground">
               {view.members.length} {view.members.length === 1 ? "item" : "items"}, in order
@@ -670,9 +676,13 @@ export function MilestoneDetailPane({
           )
         ) : null}
         {members.length === 0 ? (
-          <EmptyState>
-            {desk ? "Nothing is in this milestone yet. Add an epic or a task below." : "no members yet — add an epic or a task below"}
-          </EmptyState>
+          desk ? (
+            <PlainEmptyState compact icon={Milestone} title="Nothing is in this milestone yet">
+              Add an epic or a task below.
+            </PlainEmptyState>
+          ) : (
+            <EmptyState>no members yet — add an epic or a task below</EmptyState>
+          )
         ) : (
           <ul aria-label={`Members of ${milestone.identifier}`} data-milestone-members className="flex flex-col">
             {members.map((entry) => (

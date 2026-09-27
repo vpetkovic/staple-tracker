@@ -26,13 +26,13 @@
 /* The identifier in the interface face with tabular figures: a reference, not code. */
 .staple-row[data-desk] .staple-row-id {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--text-label, 12px);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
 
 .staple-row[data-desk] .staple-row-title {
-  font-size: 13.5px;
+  font-size: var(--text-body, 13px);
   line-height: 1.25;
 }
 
@@ -111,7 +111,7 @@
 .staple-row[data-desk] .staple-label-pill {
   gap: 5px;
   padding: 0 9px 0 7px;
-  font-size: 11.5px;
+  font-size: var(--text-caption, 11px);
 }
 
 .staple-row[data-desk] .staple-label-overflow {
@@ -167,8 +167,14 @@
   align-items: center;
   gap: 6px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-label, 12px);
   white-space: nowrap;
+}
+
+/* The name: drawn from 1600px, where the list has a column for it. */
+.staple-who-name {
+  display: none;
+  color: var(--foreground);
 }
 
 .staple-who-holder {
@@ -315,7 +321,7 @@
 }
 
 .staple-tree[data-desk] .staple-group-name {
-  font-size: 13px;
+  font-size: var(--text-body, 13px);
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -327,19 +333,15 @@
   border-radius: 999px;
   background: var(--surface-hover);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-caption, 11px);
   font-weight: 500;
   line-height: 20px;
   text-align: center;
 }
 
-/* ── Wide screens: a reading width, centred ─────────────────────────────────────────── */
+/* ── Widths ────────────────────────────────────────────────────────────────────────── */
 
-/*
- * Past 1600px a row that runs edge to edge puts the title at one end of the screen and who
- * is on it at the other. The list keeps a deliberate width instead and sits centred, the way
- * the Budget and Estimates pages hold their cards.
- */
+/* Below 1280px the who slot and the trailing slot give the title back what they can. */
 @media (max-width: 1279.98px) {
   .staple-row[data-desk] {
     --desk-who-w: 92px;
@@ -347,14 +349,26 @@
   }
 }
 
+/*
+ * From 1600px the list holds the shell's page width (`max-w-page`, the toolbar's width) and
+ * spends the extra room on a real "who" column: the name beside the avatar, so who is on
+ * each task reads down the list without hovering. A long name widens its own row's slot
+ * rather than being cut short.
+ */
 @media (min-width: 1600px) {
   .staple-tree[data-desk] {
-    max-width: var(--desk-list-max, 1360px);
+    max-width: var(--container-page, 1600px);
     margin-inline: auto;
-    border-inline: 1px solid var(--border);
   }
   .staple-row[data-desk] {
-    --desk-who-w: 120px;
+    --desk-who-w: 184px;
+  }
+  .staple-row[data-desk] .staple-row-who {
+    width: auto;
+    min-width: var(--desk-who-w);
+  }
+  .staple-row[data-desk] .staple-who-name {
+    display: inline;
   }
 }
 

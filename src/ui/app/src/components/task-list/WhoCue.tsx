@@ -128,6 +128,9 @@ export function WhoCue({
               {facts.state === "working" ? <span className="staple-who-dot staple-working-dot" /> : null}
             </span>
           ) : null}
+          <span className="staple-who-name" aria-hidden="true">
+            {facts.holder ?? facts.assignee}
+          </span>
           {showWord && facts.word ? (
             <span className="staple-who-word" aria-hidden="true">
               {facts.word}

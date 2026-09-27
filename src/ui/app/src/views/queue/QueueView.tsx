@@ -80,7 +80,7 @@
  * The presentational pieces take everything as props and read no context, so
  * `queue-render.test.tsx` renders them to static markup.
  */
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, ListOrdered, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { QueueRowMenu, queueRowMenuState } from "@/components/QueueRowMenu";
@@ -132,6 +132,7 @@ import {
 import { knownRows, queueTreeRows, type QueueTreeRow } from "./queue-tree";
 import { BUCKET_ORDER, BUCKET_WORDS, queueSummary, summarySentence, type QueueBucket } from "./queue-summary";
 import { ProgressStrip } from "@/views/ProgressStrip";
+import { EmptyState as PlainEmptyState } from "@/components/plain/States";
 import { idsOf, pinnedRef } from "@/lib/write-ref";
 
 /**
@@ -248,23 +249,23 @@ export function NextUpBand({
         className="staple-queue-next flex min-w-0 items-center gap-4 rounded-xl border bg-card px-4 py-3"
       >
         <div className="min-w-0 flex-1">
-          <div className="text-[12px] font-medium text-muted-foreground">Next up</div>
+          <div className="text-label font-medium text-muted-foreground">Next up</div>
           {next ? (
             <>
               <div className="mt-0.5 flex min-w-0 items-baseline gap-2">
-                <span className="min-w-0 truncate text-[15px] font-medium" title={next.title}>
+                <span className="min-w-0 truncate text-title font-medium" title={next.title}>
                   {next.title}
                 </span>
-                <span data-queue-next-ref className="shrink-0 text-[12px] tabular-nums text-text-tertiary">
+                <span data-queue-next-ref className="shrink-0 text-label tabular-nums text-text-tertiary">
                   {next.identifier}
                 </span>
               </div>
-              <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+              <p className="mt-0.5 text-label text-muted-foreground">
                 An agent asking for work right now would get this task.
               </p>
             </>
           ) : (
-            <p className="mt-0.5 text-[13px] text-muted-foreground">
+            <p className="mt-0.5 text-body text-muted-foreground">
               Nothing can be picked up right now: every task in the plan is waiting on something.
             </p>
           )}
@@ -742,14 +743,14 @@ export function QueueBoard({
       data-desk={desk ? "" : undefined}
       className={cn(
         "flex h-full min-h-0 w-full flex-col",
-        desk ? "staple-queue-desk mx-auto max-w-[68rem] gap-4 px-4 pt-6 pb-3 min-[1280px]:px-6" : "gap-3 px-4 py-3",
+        desk ? "staple-queue-desk mx-auto max-w-wide gap-4 px-page pt-6 pb-3" : "gap-3 px-4 py-3",
       )}
     >
       {desk ? (
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[20px] font-semibold tracking-[var(--tracking-heading)]">Pickup order</h2>
-            <p className="mt-1 text-[13px] text-muted-foreground">
+            <h2 className="text-heading font-semibold">Pickup order</h2>
+            <p className="mt-1 text-body text-muted-foreground">
               The order your agents take work in. They start at the top and skip anything that is
               waiting on something else.
             </p>
@@ -767,7 +768,7 @@ export function QueueBoard({
           aria-label="How the plan stands"
           className="rounded-xl border bg-card px-4 py-3.5"
         >
-          <p data-queue-summary-sentence className={cn("text-[13.5px]", summary.planned > 0 && "mb-3")}>
+          <p data-queue-summary-sentence className={cn("text-reading", summary.planned > 0 && "mb-3")}>
             {summarySentence(summary)}
           </p>
           {summary.planned === 0 ? null : (
@@ -881,19 +882,18 @@ export function QueueBoard({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {desk && rows.length > 0 ? (
-          <p data-queue-legend className="mb-2 text-[12.5px] text-muted-foreground">
+          <p data-queue-legend className="mb-2 text-label text-muted-foreground">
             Drag a row, or use Alt and the arrow keys, to change the order. Rows nested under an
             entry are the open tasks inside it.
           </p>
         ) : null}
         {rows.length === 0 ? (
           desk ? (
-            <div data-queue-empty className="rounded-xl border border-dashed px-5 py-6 text-center">
-              <p className="text-[14px] font-medium">Nothing is in the plan yet</p>
-              <p className="mx-auto mt-1 max-w-[34rem] text-[13px] text-muted-foreground">
-                Until you add something above, agents take open work in list order. Add a task,
-                an epic or a milestone to put it first.
-              </p>
+            <div data-queue-empty>
+              <PlainEmptyState compact icon={ListOrdered} title="Nothing is in the plan yet">
+                Until you add something above, agents take open work in list order. Add a task, an
+                epic or a milestone to put it first.
+              </PlainEmptyState>
             </div>
           ) : (
             <EmptyState>
@@ -954,7 +954,7 @@ export function QueueBoard({
           onOpen={(identifier) => onOpen(workspace, identifier)}
         />
         {desk ? (
-          <details className="mt-4 text-[12px] text-muted-foreground" data-technical-details="">
+          <details className="mt-4 text-label text-muted-foreground" data-technical-details="">
             <summary className="cursor-pointer select-none py-1">Show details</summary>
             <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
               <dt>Plan entries</dt>

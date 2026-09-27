@@ -61,4 +61,11 @@ describe("WhoCue", () => {
     expect(html).toContain("OA");
     expect(html).toContain("opus-a is working on this");
   });
+
+  it("carries the person's name for the wide who column, drawn from 1600px", () => {
+    const html = renderToStaticMarkup(<WhoCue claim={claim(10, "dux-content")} checkoutAgent="dux-content" assignee={null} />);
+    expect(html).toContain('<span class="staple-who-name" aria-hidden="true">dux-content</span>');
+    const assigned = renderToStaticMarkup(<WhoCue claim={null} checkoutAgent={null} assignee="vp" />);
+    expect(assigned).toContain('<span class="staple-who-name" aria-hidden="true">vp</span>');
+  });
 });
