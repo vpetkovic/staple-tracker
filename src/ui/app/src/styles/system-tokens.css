@@ -15,8 +15,8 @@
  *   text-label     12/16  group labels, chip text, captions under a name
  *   text-body      13/20  the desk's reading size: rows, menus, controls
  *   text-reading   14/22  sentences meant to be read (help, empty states, dialogs)
- *   text-title     15/22  a pane or card title, a dialog's heading on a desk
- *   text-heading   18/26  the page's own name in the top bar
+ *   text-title     15/22  a pane, card or Settings section title
+ *   text-heading   18/26  the page's own name in the top bar, a dialog's title
  *   text-display   24/30  one headline figure (Usage, Estimates)
  *
  * Weights stay in the markup (font-medium / font-semibold); headings and display carry the

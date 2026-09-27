@@ -21,7 +21,7 @@
  * Choosing a workspace keeps the page you are on (see `afterWorkspaceSwitch` in
  * lib/session-url.ts) and is remembered as the default answer to "which workspace?".
  */
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, MoreHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useCompactHeader } from "@/components/filters/useCompactHeader";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -142,7 +142,20 @@ function SwitcherList({ onChosen, phone }: { onChosen: () => void; phone: boolea
   );
 }
 
-export function WorkspaceSwitcher({ variant = "rail" }: { variant?: "rail" | "bar" }) {
+/**
+ * `rail`: the phone drawer's trigger (the mark and the full name). `bar`: the phone top bar's
+ * pill. `more`: the desk rail's last workspace row, "More workspaces", shown only when the rail
+ * could not list them all (`railWorkspaces`), opening the same searchable list. `crumb`: the
+ * desk top bar's scope, "All workspaces ›", which opens the same list — so the scope can be
+ * changed from the top bar too, and still can when the rail is put away.
+ */
+export function WorkspaceSwitcher({
+  variant = "rail",
+  moreCount = 0,
+}: {
+  variant?: "rail" | "bar" | "more" | "crumb";
+  moreCount?: number;
+}) {
   const session = useSession();
   const phone = useCompactHeader();
   const [open, setOpen] = useState(false);
@@ -151,35 +164,63 @@ export function WorkspaceSwitcher({ variant = "rail" }: { variant?: "rail" | "ba
   const label = switcherTriggerLabel(session);
   const hub = session.mode === "hub";
 
-  const trigger = (
-    <button
-      type="button"
-      aria-label={`Workspace: ${label}. ${hub ? "Switch workspace" : "Workspace"}`}
-      aria-haspopup="dialog"
-      aria-expanded={open}
-      title={hub ? `${label} — switch workspace` : label}
-      data-workspace-switcher={variant}
-      onClick={phone ? () => setOpen(true) : undefined}
-      className={cn(
-        "flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
-        variant === "rail"
-          ? "min-h-7 flex-1 px-1.5 py-1 hover:bg-surface-hover data-[state=open]:bg-surface-selected max-md:min-h-11 pointer-coarse:min-h-11"
-          : "min-h-11 max-w-full rounded-full border bg-card px-3 py-1.5 shadow-xs active:bg-surface-hover",
-      )}
-    >
-      {variant === "rail" ? <BrandMark /> : null}
-      <span
-        data-workspace-name
+  const trigger =
+    variant === "crumb" ? (
+      <button
+        type="button"
+        aria-label={`Workspace: ${label}. ${hub ? "Switch workspace" : "Workspace"}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={hub ? `${label} — switch workspace` : label}
+        data-workspace-switcher="crumb"
+        data-scope-name
+        className="-ml-1.5 flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 pointer-coarse:h-11 text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring data-[state=open]:bg-surface-selected"
+      >
+        <span className="truncate">{label}</span>
+        <ChevronsUpDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
+      </button>
+    ) : variant === "more" ? (
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        data-workspace-switcher="more"
+        onClick={phone ? () => setOpen(true) : undefined}
+        className="flex h-8 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 pointer-coarse:h-11 text-left text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring-inset data-[state=open]:bg-surface-selected [&_svg]:size-4 [&_svg]:text-text-tertiary"
+      >
+        <MoreHorizontal aria-hidden />
+        <span className="truncate">More workspaces</span>
+        <span className="ml-auto text-caption text-text-tertiary tabular-nums">{moreCount}</span>
+      </button>
+    ) : (
+      <button
+        type="button"
+        aria-label={`Workspace: ${label}. ${hub ? "Switch workspace" : "Workspace"}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={hub ? `${label} — switch workspace` : label}
+        data-workspace-switcher={variant}
+        onClick={phone ? () => setOpen(true) : undefined}
         className={cn(
-          "min-w-0 flex-1 leading-tight font-semibold tracking-[var(--tracking-heading)] break-words",
-          variant === "rail" ? "line-clamp-2 text-[13px]" : "line-clamp-1 text-[15px]",
+          "flex min-w-0 items-center gap-2 rounded-md text-left focus-ring",
+          variant === "rail"
+            ? "min-h-7 flex-1 px-1.5 py-1 hover:bg-surface-hover data-[state=open]:bg-surface-selected max-md:min-h-11 pointer-coarse:min-h-11"
+            : "min-h-11 max-w-full rounded-full border bg-card px-3 py-1.5 shadow-xs active:bg-surface-hover",
         )}
       >
-        {label}
-      </span>
-      <ChevronsUpDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
-    </button>
-  );
+        {variant === "rail" ? <BrandMark /> : null}
+        <span
+          data-workspace-name
+          className={cn(
+            "min-w-0 flex-1 leading-tight font-semibold tracking-[var(--tracking-heading)] break-words",
+            variant === "rail" ? "line-clamp-2 text-[13px]" : "line-clamp-1 text-[15px]",
+          )}
+        >
+          {label}
+        </span>
+        <ChevronsUpDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
+      </button>
+    );
 
   if (phone) {
     return (
@@ -203,12 +244,14 @@ export function WorkspaceSwitcher({ variant = "rail" }: { variant?: "rail" | "ba
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         align="start"
+        side={variant === "more" ? "right" : "bottom"}
+        sideOffset={variant === "more" ? 8 : 4}
         className="w-[288px] p-1"
         data-workspace-popover
         // The list focuses itself (above); Radix focusing the first tabbable would pre-empt it.
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
-        <div className="px-2.5 pt-1.5 pb-1 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-text-tertiary uppercase">
+        <div className="px-2.5 pt-1.5 pb-1 text-label font-medium text-text-tertiary">
           {hub ? "Switch workspace" : "Workspace"}
         </div>
         <SwitcherList phone={false} onChosen={() => setOpen(false)} />
