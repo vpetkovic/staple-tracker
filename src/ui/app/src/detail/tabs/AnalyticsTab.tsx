@@ -68,6 +68,7 @@ import {
   plainDelta,
   shortDelta,
   spokenDuration,
+  spokenSpent,
   summarySentence,
   totalsCaveat,
   type Delta,
@@ -98,14 +99,14 @@ const PLACEHOLDER = "font-normal text-text-secondary";
  * A duration in the headline sentence, or the placeholder WORD in its place. The
  * two never share a style, which is the whole of the "giant 'not started'" fix.
  */
-function Figure({ name, seconds, absent }: { name: string; seconds: number | null; absent: string }) {
+function Figure({ name, seconds, absent, say = spokenDuration }: { name: string; seconds: number | null; absent: string; say?: (seconds: number) => string }) {
   return seconds === null ? (
     <span data-figure={name} className={PLACEHOLDER}>
       {absent}
     </span>
   ) : (
     <span data-figure={name} className={FIGURE}>
-      {spokenDuration(seconds)}
+      {say(seconds)}
     </span>
   );
 }
@@ -137,7 +138,9 @@ function BreakdownCell({
   seconds,
   absent,
   source,
+  say = spokenDuration,
 }: {
+  say?: (seconds: number) => string;
   verb: string;
   seconds: number | null;
   absent: string;
@@ -154,7 +157,7 @@ function BreakdownCell({
       ) : (
         <div className="text-foreground">
           <span className="text-text-secondary">{verb} </span>
-          {spokenDuration(seconds)}
+          {say(seconds)}
         </div>
       )}
       {seconds === null ? null : <div className="text-caption text-text-tertiary">{source}</div>}
@@ -201,7 +204,7 @@ function Pair({ planned, planHint, actual }: { planned: number | null; planHint:
       <span title={planHint ?? undefined} data-testid="child-plan">
         {planned === null ? "No plan" : `Planned ${spokenDuration(planned)}`}
       </span>
-      {actual === null ? " · not started" : ` · ${spokenDuration(actual)} spent`}
+      {actual === null ? " · not started" : ` · ${spokenSpent(actual)} spent`}
     </>
   );
 }
@@ -280,7 +283,12 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   // The work figure beside its state: the ratio's actual, from attempts, which the headline's
   // category time is not.
   const workState = qualityText(timing.quality?.work);
-  const workQuality = workState === null || workState === "not started" ? null : timing.workSeconds === null ? workState : `${spokenDuration(timing.workSeconds)}, ${workState}`;
+  const workQuality =
+    workState === null || workState === "not started"
+      ? null
+      : timing.workSeconds === null || timing.quality?.work.state === "timing-floor"
+        ? workState
+        : `${spokenSpent(timing.workSeconds)}, ${workState}`;
   // "not started" is what the headline's "No work recorded" already says; saying it again
   // in the measurement rows is the same sentence twice.
   const wallState = qualityText(timing.quality?.wall);
@@ -324,7 +332,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
                 <span className="text-text-tertiary"> · </span>
                 <span className="whitespace-nowrap">
                   {summary.actualSeconds !== null && !actualTense ? "took " : null}
-                  <Figure name="actual" seconds={summary.actualSeconds} absent={NOT_STARTED} />
+                  <Figure name="actual" seconds={summary.actualSeconds} absent={NOT_STARTED} say={spokenSpent} />
                   {summary.actualSeconds !== null && actualTense ? ` ${actualTense}` : null}
                 </span>
               </span>
@@ -368,7 +376,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
               >
                 <span className="font-medium text-foreground max-sm:col-span-2">{row.label}</span>
                 <BreakdownCell verb="Planned" seconds={row.plannedSeconds} absent={NO_ESTIMATE} source={row.planSource} />
-                <BreakdownCell verb="Spent" seconds={row.actualSeconds} absent={NOT_STARTED} source={row.actualSource} />
+                <BreakdownCell verb="Spent" seconds={row.actualSeconds} absent={NOT_STARTED} source={row.actualSource} say={spokenSpent} />
               </div>
             ))}
           </div>

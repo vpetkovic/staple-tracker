@@ -484,7 +484,10 @@ export function stateLabel(state: string, reasons: readonly string[]): string {
 export function childQualityText(row: Pick<ChildRow, "workState" | "workSeconds" | "workReasons">): string | null {
   if (row.workState === null) return null;
   const label = stateLabel(row.workState, row.workReasons);
-  return row.workSeconds === null ? label : `${spokenDuration(row.workSeconds)} of agent work, ${label}`;
+  // A timing-floor state IS the duration ("took under a minute"); a figure beside it would
+  // only say "0 seconds" in front of the same fact.
+  if (row.workSeconds === null || row.workState === "timing-floor") return label;
+  return `${spokenSpent(row.workSeconds)} of agent work, ${label}`;
 }
 
 /** `"approximate · silences over 30 min"`: the state and why, in words. Null when there is no state. */
@@ -643,26 +646,39 @@ export function summarySentence(
 ): string {
   const qualify = (text: string, hint: string | null | undefined) => (hint ? `${text} (${hint})` : text);
   const total = plan.contributingCount + plan.unplannedCount;
-  const coverage =
-    plan.totalCount === 0
-      ? "no tasks under it"
-      : total === 0
-        ? "no open tasks under it"
-        : `${plan.contributingCount} of the ${total} tasks under it ${plan.contributingCount === 1 ? "has" : "have"} an estimate`;
-  const source =
-    plan.source === "own"
-      ? "its own estimate"
-      : plan.source === "descendants"
-        ? "the estimates of the tasks under it"
-        : "no estimate";
-  const spoken = (seconds: number | null, absent: string) => (seconds === null ? absent : spokenDuration(seconds));
-  return [
-    `Planned: ${spoken(summary.plannedSeconds, NO_ESTIMATE)}.`,
-    `Time spent: ${qualify(spoken(summary.actualSeconds, NOT_STARTED), hints.actual)}.`,
-    `Difference: ${qualify(summary.delta ? shortDelta(summary.delta) : "nothing to compare", hints.difference)}.`,
-    `Estimates: ${coverage}.`,
-    `The plan comes from ${source}.`,
-  ].join(" ");
+  const sentences: string[] = [];
+  // 1. The plan. An absence is said as a fact, never as a plan that "comes from no estimate".
+  sentences.push(summary.plannedSeconds === null ? "No estimate yet." : `Planned ${spokenDuration(summary.plannedSeconds)}.`);
+  // 2. The time spent, as a person would say a few seconds: "less than a minute", not "0 seconds".
+  sentences.push(
+    summary.actualSeconds === null
+      ? "No time spent yet."
+      : `${qualify(`${upper(spokenSpent(summary.actualSeconds))} spent`, hints.actual)}.`,
+  );
+  // 3. The difference, only when there are two sides to compare.
+  if (summary.delta) sentences.push(`${qualify(upper(shortDelta(summary.delta)), hints.difference)}.`);
+  // 4. How much of the work under it is estimated, only when there is work under it.
+  if (plan.totalCount > 0) {
+    sentences.push(
+      total === 0
+        ? "None of the tasks under it is still open."
+        : `${plan.contributingCount} of the ${total} tasks under it ${plan.contributingCount === 1 ? "has" : "have"} an estimate.`,
+    );
+  }
+  // 5. Where the plan came from, only when there is a plan.
+  if (plan.source === "own") sentences.push("The plan is its own estimate.");
+  if (plan.source === "descendants") sentences.push("The plan comes from the estimates of the tasks under it.");
+  return sentences.join(" ");
+}
+
+const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * Time spent, as a person says it: anything under a minute is "less than a minute", never
+ * "0 seconds" (a figure that reads as "nothing happened" when the clock simply rounded down).
+ */
+export function spokenSpent(seconds: number): string {
+  return !Number.isFinite(seconds) || seconds < 60 ? "less than a minute" : spokenDuration(seconds);
 }
 
 /**
