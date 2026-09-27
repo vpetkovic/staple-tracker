@@ -27,6 +27,7 @@ import { ISSUE_STATUSES, type IssueDetail } from "@/lib/types";
 import { idsOf } from "@/lib/write-ref";
 import { GateReview } from "./GateReview";
 import { cn } from "./parts/cn";
+import { readPersonName, rememberPersonName } from "./parts/person";
 import { createActionController, gateHandlers, overflowEntries, primaryEntry, statusEntries, type Names } from "./action-controller";
 import {
   ACTION_WORDS,
@@ -43,20 +44,25 @@ import {
 
 // ─────────────────────────────────────────────────────────────── context
 
-/** The working name (who is on it; may be an agent) and the person's own name, kept apart. */
-const NAME_KEYS: Record<keyof Names, string> = { worker: "staple:actor", person: "staple:me" };
+/**
+ * The working name (who is on it; may be an agent) lives at `staple:actor`. The person's own
+ * name goes through parts/person.ts, which shares it with the My tasks filter.
+ */
+const WORKER_KEY = "staple:actor";
 
 function readName(which: keyof Names): string | null {
+  if (which === "person") return readPersonName();
   try {
-    return window.localStorage.getItem(NAME_KEYS[which]) || null;
+    return window.localStorage.getItem(WORKER_KEY) || null;
   } catch {
     return null;
   }
 }
 
 function saveName(which: keyof Names, name: string): void {
+  if (which === "person") return rememberPersonName(name);
   try {
-    window.localStorage.setItem(NAME_KEYS[which], name);
+    window.localStorage.setItem(WORKER_KEY, name);
   } catch {
     /* private mode: the name lasts for this page load */
   }
@@ -356,22 +362,6 @@ export function OverflowMenu({
     return () => window.clearTimeout(id);
   }, [copied]);
 
-  const row = (item: (typeof items)[number]) => {
-    const Icon = ICON[item.id];
-    return (
-      <DropdownMenuItem
-        key={item.id}
-        data-action={item.id}
-        disabled={controller.busy || Boolean(item.disabledReason)}
-        reason={item.disabledReason}
-        className={MENU_ITEM}
-        onSelect={item.select}
-      >
-        <Icon aria-hidden />
-        {item.label}
-      </DropdownMenuItem>
-    );
-  };
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -391,7 +381,22 @@ export function OverflowMenu({
           }
         }}
       >
-        {items.map(row)}
+        {items.map((item) => {
+          const Icon = ICON[item.id];
+          return (
+            <DropdownMenuItem
+              key={item.id}
+              data-action={item.id}
+              disabled={controller.busy || Boolean(item.disabledReason)}
+              reason={item.disabledReason}
+              className={MENU_ITEM}
+              onSelect={item.select}
+            >
+              <Icon aria-hidden />
+              {item.label}
+            </DropdownMenuItem>
+          );
+        })}
         {items.length > 0 ? <DropdownMenuSeparator /> : null}
         <DropdownMenuItem
           data-action="copy-id"
