@@ -83,10 +83,12 @@ import {
 import {
   nextSentence,
   plainDue,
+  PROGRESS_WORDS,
   progressSegments,
   progressSentence,
+  progressState,
   riskSentence,
-  STATE_WORDS,
+  type ProgressState,
 } from "./milestone-plain";
 import { ProgressStrip } from "@/views/ProgressStrip";
 import { EmptyState as PlainEmptyState } from "@/components/plain/States";
@@ -97,17 +99,14 @@ export function useMilestonesDesk(): boolean {
   return useRowPlan().layout === "line";
 }
 
-/** The state as a quiet pill with one plain word; the glyph stays, so colour is never alone. */
-function PlainStatePill({ state }: { state: MilestoneState }) {
+/** How far it has got, as a quiet pill with one plain word (from progress, not the date). */
+function PlainStatePill({ state }: { state: ProgressState }) {
   return (
     <span
-      data-milestone-state={state}
-      className="staple-milestone-pill inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-label font-medium"
+      data-milestone-progress-state={state}
+      className="staple-milestone-pill inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-label font-medium"
     >
-      <span aria-hidden className="text-caption">
-        {STATE_PRESENTATION[state].glyph}
-      </span>
-      {STATE_WORDS[state]}
+      {PROGRESS_WORDS[state]}
     </span>
   );
 }
@@ -207,7 +206,8 @@ export function MilestoneListPane({
       <ul aria-label="Milestones" data-milestone-list data-desk="" className="flex flex-col gap-2">
         {rows.map((row) => {
           const selected = row.milestone.identifier === selectedRef;
-          const risk = riskSentence(milestoneRisk(row, effective));
+          const riskFacts = effective.length > 0 ? milestoneRisk(row, effective) : null;
+          const risk = riskFacts ? riskSentence(riskFacts) : null;
           return (
             <li key={row.milestone.identifier}>
               <button
@@ -223,7 +223,7 @@ export function MilestoneListPane({
               >
                 <span className="flex items-start gap-2">
                   <span className="min-w-0 flex-1 text-reading font-medium">{row.milestone.title}</span>
-                  <PlainStatePill state={row.milestone.state} />
+                  <PlainStatePill state={progressState(row.milestone.state, row.progress, riskFacts)} />
                 </span>
                 <span
                   data-milestone-target
@@ -234,7 +234,7 @@ export function MilestoneListPane({
                 >
                   {plainDue(row.milestone.targetDate, row.milestone.state, now)}
                 </span>
-                <ProgressStrip compact label={progressSentence(row.progress)} segments={progressSegments(row.progress)} />
+                <ProgressStrip compact label={progressSentence(row.progress)} segments={progressSegments(row.progress, riskFacts)} />
                 <span className="flex flex-wrap items-baseline gap-x-2 text-label text-muted-foreground">
                   <span data-milestone-progress-sentence className="text-foreground">
                     {progressSentence(row.progress)}
@@ -540,7 +540,7 @@ export function MilestoneDetailPane({
           <div className="min-w-0 flex-1">
             <h2 className="text-heading font-semibold">{milestone.title}</h2>
             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-muted-foreground">
-              <PlainStatePill state={milestone.state} />
+              <PlainStatePill state={progressState(milestone.state, view.progress, effective.length > 0 ? risk : null)} />
               <span
                 data-milestone-target
                 className={cn(milestone.state === "overdue" && "text-[var(--plain-risk-fg)]")}
@@ -577,7 +577,7 @@ export function MilestoneDetailPane({
           <ProgressStrip
             testId="milestone-progress"
             label={progressSentence(view.progress)}
-            segments={progressSegments(view.progress)}
+            segments={progressSegments(view.progress, effective.length > 0 ? risk : null)}
           />
           <details className="mt-3 text-label text-muted-foreground" data-technical-details="">
             <summary className="cursor-pointer select-none py-1">Show details</summary>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daysFrom, plainDue, progressSentence, riskSentence } from "./milestone-plain";
+import { daysFrom, plainDue, progressBuckets, progressSegments, progressSentence, progressState, riskSentence } from "./milestone-plain";
 
 const NOW = new Date(2026, 8, 27, 15, 30); // 27 Sep 2026, afternoon, local time
 
@@ -42,5 +42,34 @@ describe("progress and risk sentences", () => {
   it("names blocked and gated work, and stays silent when there is none", () => {
     expect(riskSentence({ overdue: false, blocked: 1, gated: 2 })).toBe("1 is blocked and 2 wait for approval.");
     expect(riskSentence({ overdue: true, blocked: 0, gated: 0 })).toBeNull();
+  });
+});
+
+describe("progress state and bar, from progress and the queue", () => {
+  const p = (c: Partial<Record<string, number>>, countable: number, complete = false) => ({
+    total: countable,
+    countable,
+    percent: 0,
+    complete,
+    counts: { unstarted: 0, ready: 0, active: 0, review: 0, gated: 0, blocked: 0, done: 0, cancelled: 0, ...c },
+  });
+
+  it("names the state from progress, never from the date", () => {
+    expect(progressState("overdue", p({ done: 2, unstarted: 2 }, 4), null)).toBe("in_progress");
+    expect(progressState("planned", p({ unstarted: 3 }, 3), null)).toBe("not_started");
+    expect(progressState("active", p({ unstarted: 3 }, 3), { overdue: false, blocked: 3, gated: 0 })).toBe("blocked");
+    expect(progressState("overdue", p({ done: 4 }, 4, true), null)).toBe("done");
+    expect(progressState("cancelled", p({ done: 1, unstarted: 1 }, 2), null)).toBe("cancelled");
+  });
+
+  it("counts the queue's blocked tasks in the bar's waiting segment, so bar and sentence agree", () => {
+    // A docs milestone: five tasks, none started by status, four waiting on another by the queue.
+    const progress = p({ unstarted: 4, blocked: 1 }, 5);
+    const risk = { overdue: false, blocked: 4, gated: 0 };
+    expect(progressBuckets(progress, risk)).toEqual({ done: 0, active: 0, waiting: 4, notStarted: 1 });
+    expect(riskSentence(risk)).toBe("4 are blocked.");
+    const waiting = progressSegments(progress, risk).find((s) => s.key === "waiting")!;
+    expect(waiting.count).toBe(4);
+    expect(waiting.color).toBe("var(--status-task-blocked)");
   });
 });

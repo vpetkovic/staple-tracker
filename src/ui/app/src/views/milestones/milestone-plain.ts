@@ -8,6 +8,7 @@
  */
 import type { MilestoneNext, MilestoneProgress, MilestoneState } from "@/lib/types";
 import type { ProgressSegment } from "@/views/ProgressStrip";
+import { PROGRESS_COLOR } from "@/views/progress-palette";
 import type { MilestoneRisk } from "./milestones-model";
 
 const DAY_MS = 86_400_000;
@@ -58,39 +59,56 @@ export function plainDue(target: string | null, state: MilestoneState, now: Date
   return `Due ${day}, in ${dayCount(days)}`;
 }
 
-/** The state as one plain word for the pill. */
-export const STATE_WORDS: Readonly<Record<MilestoneState, string>> = {
-  planned: "Not started",
-  active: "In progress",
-  overdue: "Overdue",
+/**
+ * How far the milestone has got, in one plain word, from its PROGRESS — not from its dates.
+ * The date is a separate fact ("Was due 20 Sept, 7 days ago"), so an overdue milestone that
+ * is half done reads "In progress" and, beside it, late.
+ */
+export type ProgressState = "not_started" | "in_progress" | "blocked" | "done" | "cancelled";
+
+export const PROGRESS_WORDS: Readonly<Record<ProgressState, string>> = {
+  not_started: "Not started",
+  in_progress: "In progress",
+  blocked: "Blocked",
   done: "Done",
   cancelled: "Cancelled",
 };
 
-/** Segments over the COUNTABLE leaves, in bar order. */
-export function progressSegments(progress: MilestoneProgress): ProgressSegment[] {
-  const { counts } = progress;
+/**
+ * The four bar segments over the COUNTABLE leaves: finished, in progress, waiting, not started.
+ *
+ * "Waiting" is the QUEUE'S verdict (blocked or waiting for approval, `milestoneRisk`) when the
+ * queue has answered, so the bar and the sentence beside it count the same tasks — a task that
+ * waits on another is still `backlog` by status. Without a queue reading it falls back to the
+ * blocked and gated statuses.
+ */
+export function progressBuckets(progress: MilestoneProgress, risk: MilestoneRisk | null) {
+  const { counts, countable } = progress;
+  const done = counts.done;
+  const active = counts.active + counts.review;
+  const remaining = Math.max(0, countable - done - active);
+  const waitingRaw = risk ? risk.blocked + risk.gated : counts.blocked + counts.gated;
+  const waiting = Math.min(remaining, waitingRaw);
+  return { done, active, waiting, notStarted: remaining - waiting };
+}
+
+export function progressSegments(progress: MilestoneProgress, risk: MilestoneRisk | null = null): ProgressSegment[] {
+  const b = progressBuckets(progress, risk);
   return [
-    { key: "done", count: counts.done, word: "finished", color: "var(--status-task-done)" },
-    {
-      key: "active",
-      count: counts.active + counts.review,
-      word: "in progress",
-      color: "var(--status-task-in_progress)",
-    },
-    {
-      key: "waiting",
-      count: counts.blocked + counts.gated,
-      word: "waiting",
-      color: "var(--status-task-todo)",
-    },
-    {
-      key: "open",
-      count: counts.ready + counts.unstarted,
-      word: "not started",
-      color: "color-mix(in oklab, var(--foreground) 22%, transparent)",
-    },
+    { key: "done", count: b.done, word: "finished", color: PROGRESS_COLOR.done },
+    { key: "active", count: b.active, word: "in progress", color: PROGRESS_COLOR.active },
+    { key: "waiting", count: b.waiting, word: "waiting", color: PROGRESS_COLOR.waiting },
+    { key: "open", count: b.notStarted, word: "not started", color: PROGRESS_COLOR.notStarted },
   ];
+}
+
+export function progressState(state: MilestoneState, progress: MilestoneProgress, risk: MilestoneRisk | null = null): ProgressState {
+  if (state === "cancelled") return "cancelled";
+  if (progress.complete || state === "done") return "done";
+  const b = progressBuckets(progress, risk);
+  if (b.active === 0 && b.notStarted === 0 && b.waiting > 0) return "blocked";
+  if (b.active > 0 || b.done > 0) return "in_progress";
+  return "not_started";
 }
 
 /** "3 of 4 tasks finished (75%)." — or the honest sentence when nothing is countable. */

@@ -6,19 +6,19 @@
   color: var(--plain-unknown-fg);
 }
 
-.staple-milestone-pill[data-milestone-state="active"] {
+.staple-milestone-pill[data-milestone-progress-state="in_progress"] {
   border-color: color-mix(in oklab, var(--status-task-in_progress) 40%, transparent);
   background: color-mix(in oklab, var(--status-task-in_progress) 10%, transparent);
   color: var(--foreground);
 }
 
-.staple-milestone-pill[data-milestone-state="overdue"] {
+.staple-milestone-pill[data-milestone-progress-state="blocked"] {
   border-color: var(--plain-risk-border);
   background: var(--plain-risk-bg);
   color: var(--plain-risk-fg);
 }
 
-.staple-milestone-pill[data-milestone-state="done"] {
+.staple-milestone-pill[data-milestone-progress-state="done"] {
   border-color: var(--plain-ok-border);
   background: var(--plain-ok-bg);
   color: var(--plain-ok-fg);

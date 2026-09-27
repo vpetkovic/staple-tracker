@@ -132,6 +132,7 @@ import {
 import { knownRows, queueTreeRows, type QueueTreeRow } from "./queue-tree";
 import { BUCKET_ORDER, BUCKET_WORDS, queueSummary, summarySentence, type QueueBucket } from "./queue-summary";
 import { ProgressStrip } from "@/views/ProgressStrip";
+import { PROGRESS_COLOR } from "@/views/progress-palette";
 import { EmptyState as PlainEmptyState } from "@/components/plain/States";
 import { idsOf, pinnedRef } from "@/lib/write-ref";
 
@@ -971,12 +972,12 @@ export function QueueBoard({
   );
 }
 
-/** The four bucket colours: finished green, in progress blue, ready neutral, waiting amber. */
+/** The shared palette (`views/progress-palette.ts`): the same colour means the same thing everywhere. */
 const BUCKET_COLOR: Readonly<Record<QueueBucket, string>> = {
-  done: "var(--status-task-done)",
-  active: "var(--status-task-in_progress)",
-  ready: "color-mix(in oklab, var(--foreground) 38%, transparent)",
-  waiting: "var(--status-task-todo)",
+  done: PROGRESS_COLOR.done,
+  active: PROGRESS_COLOR.active,
+  ready: PROGRESS_COLOR.ready,
+  waiting: PROGRESS_COLOR.waiting,
 };
 
 // ---------- the view ----------
