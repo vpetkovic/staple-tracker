@@ -56,13 +56,13 @@
  * the view. `aria-current="page"` on a button is what this actually is.
  */
 import { ChevronRight, Menu, Monitor, PanelLeft, Plus, Search, SquarePen } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CloudStrip } from "@/components/CloudStrip";
 import { getCloudStatus, getCloudWorkspaces } from "@/lib/api";
 import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
 import { FilterBar } from "@/components/filters/FilterBar";
 import { FilterChips } from "@/components/filters/FilterChips";
-import { Toolbar } from "@/components/filters/Toolbar";
+import { DoneToggle, Toolbar, doneLivesInTopBar } from "@/components/filters/Toolbar";
 import { NavRail } from "@/components/nav/NavRail";
 import { ViewTabBar } from "@/components/nav/ViewTabBar";
 import { WorkspaceSwitcher } from "@/components/nav/WorkspaceSwitcher";
@@ -79,30 +79,10 @@ import { isAllWorkspaces, isMachineView, scopeName, useSession, viewControls, vi
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBackToClose } from "@/lib/back-to-close";
 import { cn } from "@/lib/utils";
+import { useIsDesk } from "@/lib/use-media";
 
-/** Above this the rail is a column; below it, a sheet. */
-const WIDE_QUERY = "(min-width: 768px)";
-
-function subscribeWide(onChange: () => void): () => void {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
-  const query = window.matchMedia(WIDE_QUERY);
-  query.addEventListener?.("change", onChange);
-  return () => query.removeEventListener?.("change", onChange);
-}
-
-function readWide(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
-  return window.matchMedia(WIDE_QUERY).matches;
-}
-
-/**
- * Is the viewport wide enough for the rail to be a column? True where nothing can answer.
- * The server snapshot reads the same stub a test installs, so a string render can be asked
- * for the phone layout (see `useCompactHeader`).
- */
-function useWideViewport(): boolean {
-  return useSyncExternalStore(subscribeWide, readWide, readWide);
-}
+/** Is the viewport wide enough for the rail to be a column? The one breakpoint (lib/use-media). */
+const useWideViewport = useIsDesk;
 
 const storage = () => (typeof localStorage === "undefined" ? undefined : localStorage);
 
@@ -141,7 +121,7 @@ function paletteKeys(): string {
  * Right: find anything (the command palette, as a field-shaped button that shows its
  * shortcut) and the page's PRIMARY action, New task — the one filled button in the chrome.
  */
-function TopBar({
+export function TopBar({
   railVisible,
   onShowRail,
   cloud,
@@ -176,14 +156,20 @@ function TopBar({
             <Monitor aria-hidden className="size-3.5 text-text-tertiary" />
             This computer
           </span>
-        ) : (
+        ) : session.mode === "hub" ? (
           <WorkspaceSwitcher variant="crumb" />
+        ) : (
+          // One workspace, nothing to switch to: its name, as words, not a menu of one.
+          <span data-scope-name className="truncate text-body text-text-secondary">
+            {scopeName(session)}
+          </span>
         )}
         <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" />
         <h1 className="truncate pl-0.5 text-heading font-semibold">{title}</h1>
       </div>
       {machine ? null : <CloudStrip report={cloud} hub={hubCloud} />}
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {doneLivesInTopBar(viewControls(session.view)) ? <DoneToggle /> : null}
         <button
           type="button"
           data-top-search
@@ -338,7 +324,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="fixed inset-0 z-40 flex" data-nav-overlay>
           <div
             aria-hidden
-            className="absolute inset-0 bg-black/35 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-scrim backdrop-blur-[2px]"
             onClick={closeOverlay}
           />
           <div className="relative h-full max-w-[85vw] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-sidebar shadow-lg">

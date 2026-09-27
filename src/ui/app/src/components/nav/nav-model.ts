@@ -112,19 +112,20 @@ export interface RailWorkspaceRow {
  *
  * Hub mode: All workspaces first, then every workspace in registry order — capped at
  * `limit`, with the CURRENT one always kept (it replaces the last listed one when it would
- * have been cut), so the rail never hides where you are. A single-workspace page lists that
- * one workspace, current, and nothing to switch to.
+ * have been cut), so the rail never hides where you are. A single-workspace page lists
+ * nothing (one row that does nothing is a dead control), and on a view about this computer
+ * no row is marked current — the page is not in a workspace.
  */
 export function railWorkspaces(
-  scope: { mode: string; ws: string; workspaces: readonly { slug: string; prefix: string }[] },
+  scope: { mode: string; ws: string; workspaces: readonly { slug: string; prefix: string }[]; view?: ViewName },
   limit: number = RAIL_WORKSPACE_LIMIT,
 ): { rows: RailWorkspaceRow[]; hidden: number } {
   const tile = (slug: string, prefix: string) => (prefix || slug).slice(0, 1).toUpperCase();
-  if (scope.mode !== "hub") {
-    const only = scope.workspaces[0];
-    return only ? { rows: [{ value: only.slug, name: only.slug, initials: tile(only.slug, only.prefix), current: true }], hidden: 0 } : { rows: [], hidden: 0 };
-  }
-  const all: RailWorkspaceRow = { value: "", name: "All workspaces", initials: "", current: scope.ws === "" };
+  // A single-workspace page has nothing to switch to: no list at all (the top bar names it).
+  if (scope.mode !== "hub") return { rows: [], hidden: 0 };
+  // A view about THIS COMPUTER is in no workspace, so no workspace row claims to be current.
+  const inWorkspace = !(scope.view && isMachineView(scope.view));
+  const all: RailWorkspaceRow = { value: "", name: "All workspaces", initials: "", current: inWorkspace && scope.ws === "" };
   let listed = scope.workspaces.slice(0, limit);
   const current = scope.workspaces.find((workspace) => workspace.slug === scope.ws);
   if (current && !listed.includes(current)) listed = [...listed.slice(0, Math.max(0, limit - 1)), current];
@@ -132,7 +133,7 @@ export function railWorkspaces(
     value: workspace.slug,
     name: workspace.slug,
     initials: tile(workspace.slug, workspace.prefix),
-    current: workspace.slug === scope.ws,
+    current: inWorkspace && workspace.slug === scope.ws,
   }));
   return { rows: [all, ...rows], hidden: scope.workspaces.length - listed.length };
 }

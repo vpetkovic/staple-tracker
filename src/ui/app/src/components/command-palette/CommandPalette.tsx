@@ -55,9 +55,6 @@ import { openSettings } from "@/lib/shell-events";
 import type { IssueStatus } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
-
-/** A key, drawn as a key: the palette's footer legend. */
-const KEY = "inline-flex h-5 min-w-5 items-center justify-center rounded-md border bg-surface-raised px-1 font-sans text-caption text-text-secondary";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import {
   buildCommands,
@@ -72,6 +69,9 @@ import {
   writeTarget,
 } from "./commands";
 
+/** A key, drawn as a key: the palette's footer legend. */
+const KEY = "inline-flex h-5 min-w-5 items-center justify-center rounded-md border bg-surface-raised px-1 font-sans text-caption text-text-secondary";
+
 /**
  * Recents outlive the dialog (which unmounts on close) but not the tab. Module scope is
  * exactly that lifetime, and it keeps the mount from re-rendering the whole app on every
@@ -80,8 +80,8 @@ import {
 let recents: string[] = [];
 
 const PAGE_PLACEHOLDER: Record<PalettePage, string> = {
-  checkout: "agent name to check out as…",
-  assignee: "assignee to filter by (empty clears)…",
+  checkout: "Who is working on it? Type a name…",
+  assignee: "Show tasks assigned to… (leave empty to show everyone)",
 };
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -373,8 +373,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               <div className="px-3 py-4 text-reading">
                 <div className="text-muted-foreground">
                   {page === "checkout"
-                    ? `Check out ${selected?.ref ?? "—"} as the agent named above, then press enter.`
-                    : "Type an assignee and press enter. Empty clears the filter."}
+                    ? `Type who is working on ${selected?.ref ?? "this task"}, then press Enter.`
+                    : "Type a name and press Enter. Leave it empty to show everyone again."}
                 </div>
                 <div className="mt-2 text-label text-text-tertiary">
                   Backspace on an empty line or Esc goes back.

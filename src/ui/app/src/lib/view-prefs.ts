@@ -106,7 +106,7 @@ export const GROUP_BY_OPTIONS: readonly { id: GroupBy; label: string; hint: stri
     // The label the trigger shows as "Group: Pickup order". Named for the QUESTION it
     // answers rather than the mechanism, which is why it is not "Readiness".
     label: "Pickup order",
-    hint: "what to grab next — up next, in flight, waiting; the inbox's own ordering",
+    hint: "What to pick up next: up next first, then in progress, then waiting.",
   },
   {
     id: "parent",

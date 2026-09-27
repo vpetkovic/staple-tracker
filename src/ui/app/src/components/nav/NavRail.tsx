@@ -71,7 +71,7 @@ export const RAIL_ROW_CLASS = cn(
   // In the phone's drawer every row is a 44px target at a readable size; under a finger on a
   // desk-width tablet it is a 44px target too.
   "max-md:h-11 max-md:gap-3 max-md:text-[15px] pointer-coarse:h-11",
-  "text-sidebar-foreground/85 transition-colors duration-(--duration-fast) hover:bg-surface-hover hover:text-foreground",
+  "text-sidebar-foreground/85 transition-colors duration-(--motion-duration-fast) hover:bg-surface-hover hover:text-foreground",
   "aria-[current]:bg-surface-selected aria-[current]:font-medium aria-[current]:text-foreground",
   "[&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-text-tertiary hover:[&_svg]:text-foreground aria-[current]:[&_svg]:text-foreground",
 );
@@ -336,10 +336,9 @@ function NavGroupSection({
 function WorkspaceRows() {
   const session = useSession();
   const { rows, hidden } = railWorkspaces(session);
-  const hub = session.mode === "hub";
   if (rows.length === 0) return null;
   return (
-    <RailSection id="workspaces" label={hub ? "Workspaces" : "Workspace"}>
+    <RailSection id="workspaces" label="Workspaces">
       {rows.map((row) => (
         <li key={row.value || "__all__"}>
           <button
@@ -357,7 +356,7 @@ function WorkspaceRows() {
                 aria-hidden
                 className={cn(
                   "flex size-4 shrink-0 items-center justify-center rounded-[5px] text-[10px] leading-none font-semibold",
-                  row.current ? "bg-foreground text-background" : "bg-surface-active text-text-secondary",
+                  row.current ? "bg-foreground text-background" : "bg-surface-selected text-foreground",
                 )}
               >
                 {row.initials}

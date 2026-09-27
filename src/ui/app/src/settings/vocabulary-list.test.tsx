@@ -74,7 +74,9 @@ describe("the Statuses editor keeps every operation", () => {
   });
 
   it("explains that behaviour follows the category and which categories are required", () => {
-    expect(statuses).toContain("Behaviour follows the CATEGORY");
+    // DELIBERATELY CHANGED: plain words, no capitalised jargon or "id".
+    expect(statuses).toContain("A status behaves like the group it belongs to");
+    expect(statuses).not.toContain("CATEGORY");
     expect(statuses).toContain("unstarted, ready, active, blocked, done, cancelled");
   });
 });
