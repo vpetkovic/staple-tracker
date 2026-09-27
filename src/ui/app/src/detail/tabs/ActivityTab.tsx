@@ -27,6 +27,10 @@ import { useCallback, useMemo, useState } from "react";
 import {
   CirclePlus,
   CircleStop,
+  Clock,
+  ListOrdered,
+  ShieldCheck,
+  Timer,
   Diamond,
   FileText,
   Link2,
@@ -89,7 +93,16 @@ function RailIcon({ entry }: { entry: TimelineEntry }) {
           ? entry.summary.startsWith("all sub-tasks")
             ? ListChecks
             : Link2
-          : (EVENT_ICON[entry.summary] ?? Sparkles);
+          : (EVENT_ICON[entry.summary] ??
+            (entry.summary.includes("estimate")
+              ? Clock
+              : entry.summary.includes("work session")
+                ? Timer
+                : entry.summary.includes("review")
+                  ? ShieldCheck
+                  : entry.summary.includes("queue")
+                    ? ListOrdered
+                    : Sparkles));
   return <Icon aria-hidden className={cn("size-3.5", entry.kind === "checkpoint" ? "text-foreground" : "text-text-tertiary")} />;
 }
 

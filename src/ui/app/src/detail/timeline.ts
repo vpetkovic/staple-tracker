@@ -117,6 +117,17 @@ export function humanizeStatus(id: string): string {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : id;
 }
 
+/** An estimate in words: `8 hours`, `90 minutes`, `2½ hours` — the way it was typed, near enough. */
+function estimateWords(seconds: number): string {
+  if (seconds < 3600 || seconds % 1800 !== 0) {
+    const minutes = Math.round(seconds / 60);
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  const hours = seconds / 3600;
+  const text = Number.isInteger(hours) ? String(hours) : `${Math.floor(hours)}½`;
+  return `${text} ${hours === 1 ? "hour" : "hours"}`;
+}
+
 /**
  * One event -> one row's worth of prose, or null when the event is a lossy duplicate
  * of something a richer source already contributes.
@@ -179,6 +190,26 @@ export function describeEvent(
         chips: children,
       };
     }
+
+    // The rest of the log, in words a reader who never saw the event table can follow.
+    case "attempt_started":
+      return { kind: "lifecycle", summary: "began a work session" };
+    case "attempt_ended":
+      return { kind: "lifecycle", summary: "ended a work session" };
+    case "estimate_changed": {
+      const to = typeof payload.to === "number" ? payload.to : null;
+      return { kind: "lifecycle", summary: to === null ? "removed the estimate" : `set the estimate to ${estimateWords(to)}` };
+    }
+    case "gate_requested":
+      return { kind: "lifecycle", summary: "asked for a review" };
+    case "gate_approved":
+      return { kind: "lifecycle", summary: "approved the review" };
+    case "claim_released_stale":
+      return { kind: "lifecycle", summary: "released a claim that had gone quiet" };
+    case "queue_enqueued":
+      return { kind: "lifecycle", summary: "added it to the queue" };
+    case "queue_dequeued":
+      return { kind: "lifecycle", summary: "took it off the queue" };
 
     default:
       // Fail soft: an unrecognised kind is still history.

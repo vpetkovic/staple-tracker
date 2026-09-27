@@ -105,6 +105,17 @@ describe("describeEvent", () => {
     expect(described.summary).toBe("some future event");
   });
 
+  it("says the other lifecycle events in plain words", () => {
+    expect(describeEvent(event(1, "estimate_changed", "2026-09-01T10:00:00Z", { from: 18000, to: 28800 }))!.summary).toBe(
+      "set the estimate to 8 hours",
+    );
+    expect(describeEvent(event(1, "estimate_changed", "2026-09-01T10:00:00Z", { to: 5400 }))!.summary).toBe(
+      "set the estimate to 1½ hours",
+    );
+    expect(describeEvent(event(1, "attempt_started", "2026-09-01T10:00:00Z"))!.summary).toBe("began a work session");
+    expect(describeEvent(event(1, "gate_requested", "2026-09-01T10:00:00Z"))!.summary).toBe("asked for a review");
+  });
+
   it("survives a payload that is missing the fields it expects", () => {
     const described = describeEvent(event(1, "status_changed", "2026-09-01T10:00:00Z", {}))!;
     expect(described.summary).toBe("changed the status");

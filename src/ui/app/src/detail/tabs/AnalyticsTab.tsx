@@ -300,15 +300,20 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
         </p>
         <div className="flex flex-wrap items-end gap-x-6 gap-y-3 rounded-xl border border-border bg-surface-raised p-4 sm:p-5" aria-hidden="true">
           <div className="w-full min-w-0 space-y-3">
-            <p className="flex items-start gap-2.5 text-heading text-text-secondary">
-              <Clock aria-hidden className="mt-1 size-4.5 shrink-0 text-text-tertiary" />
+            {/* Each half is kept on one line, so a narrow screen breaks at the dot, not mid-phrase. */}
+            <p className="flex items-start gap-2.5 text-title text-text-secondary sm:text-heading">
+              <Clock aria-hidden className="mt-0.5 size-4.5 shrink-0 text-text-tertiary sm:mt-1" />
               <span className="min-w-0">
-                {summary.plannedSeconds !== null ? "Planned " : null}
-                <Figure name="planned" seconds={summary.plannedSeconds} absent={NO_ESTIMATE} />
+                <span className="whitespace-nowrap">
+                  {summary.plannedSeconds !== null ? "Planned " : null}
+                  <Figure name="planned" seconds={summary.plannedSeconds} absent={NO_ESTIMATE} />
+                </span>
                 <span className="text-text-tertiary"> · </span>
-                {summary.actualSeconds !== null && !actualTense ? "took " : null}
-                <Figure name="actual" seconds={summary.actualSeconds} absent={NOT_STARTED} />
-                {summary.actualSeconds !== null && actualTense ? ` ${actualTense}` : null}
+                <span className="whitespace-nowrap">
+                  {summary.actualSeconds !== null && !actualTense ? "took " : null}
+                  <Figure name="actual" seconds={summary.actualSeconds} absent={NOT_STARTED} />
+                  {summary.actualSeconds !== null && actualTense ? ` ${actualTense}` : null}
+                </span>
               </span>
             </p>
             <PlanBar planned={summary.plannedSeconds} actual={summary.actualSeconds} />
