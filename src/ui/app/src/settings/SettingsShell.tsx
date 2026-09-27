@@ -277,16 +277,13 @@ export function SettingsShell({
           </p>
         ) : (
           <>
-            <p
-              data-settings-category-scope
-              className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border bg-surface-sunken px-2.5 py-0.5 text-label text-text-secondary"
-            >
+            <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border bg-surface-sunken px-2.5 py-0.5 text-label text-text-secondary">
               {current.scope === "global" ? (
                 <Globe aria-hidden className="size-3.5 text-text-tertiary" />
               ) : (
                 <Folder aria-hidden className="size-3.5 text-text-tertiary" />
               )}
-              {appliesToText(current.scope, scope.workspace)}
+              <span data-settings-category-scope>{appliesToText(current.scope, scope.workspace)}</span>
             </p>
             <p className="mt-2 max-w-readable text-reading text-muted-foreground">{current.description}</p>
           </>
