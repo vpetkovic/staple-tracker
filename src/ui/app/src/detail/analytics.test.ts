@@ -188,12 +188,12 @@ describe("a delta needs both sides, and says so when it does not have them", () 
      */
     const nothing = computeDelta(null, null);
     expect(nothing).toBeNull();
-    expect(explainMissingDelta(null, null)).toBe("No estimate and no time recorded yet.");
+    expect(explainMissingDelta(null, null)).toBe("Nothing to compare yet: there is no estimate and no time spent.");
   });
 
   it("names WHICH side is missing", () => {
-    expect(explainMissingDelta(null, 3600)).toMatch(/No estimate recorded/);
-    expect(explainMissingDelta(3600, null)).toMatch(/Not started yet/);
+    expect(explainMissingDelta(null, 3600)).toMatch(/There is no estimate/);
+    expect(explainMissingDelta(3600, null)).toMatch(/Nobody has worked on it yet/);
   });
 
   it("declines a non-positive estimate instead of dividing by it", () => {
@@ -267,7 +267,7 @@ describe("a frozen number is not a live one", () => {
   it("says RUNNING while the holder is still writing", () => {
     const state = activityState(agoIso(30), NOW);
     expect(state.kind).toBe("running");
-    expect(activityHint(state)).toBe("still running");
+    expect(activityHint(state)).toBe("still being worked on");
   });
 
   it("says IDLE once the evidence goes stale, and names how stale", () => {
@@ -276,7 +276,7 @@ describe("a frozen number is not a live one", () => {
     // why, or it is just a differently-worded lie.
     const state = activityState(agoIso(7200), NOW);
     expect(state).toEqual({ kind: "idle", idleSeconds: 7200 });
-    expect(activityHint(state)).toBe("idle 2h — clock stopped at last activity");
+    expect(activityHint(state)).toBe("quiet for 2 hours, so the clock has stopped");
   });
 
   it("flips at exactly the threshold the rest of the app calls stale", () => {
@@ -311,8 +311,8 @@ describe("a parent's number is labelled as an aggregation", () => {
   });
 
   it("names the count, with the singular right", () => {
-    expect(aggregationHint(3)).toBe("aggregated from 3 children");
-    expect(aggregationHint(1)).toBe("aggregated from 1 child");
+    expect(aggregationHint(3)).toBe("added up from its 3 sub-tasks");
+    expect(aggregationHint(1)).toBe("added up from its 1 sub-task");
   });
 });
 
@@ -460,7 +460,7 @@ describe("the caveat says out loud why a total might mislead", () => {
       timing({ childrenActiveSeconds: 3600 }),
       buildChildRows([child("STA-1"), child("STA-2")], {}),
     );
-    expect(totalsCaveat(totals)).toBe("None of the 2 children has a plan.");
+    expect(totalsCaveat(totals)).toBe("None of its 2 sub-tasks has an estimate.");
   });
 
   it("counts a child that INHERITED its plan as planned — the STA-156 caveat", () => {
@@ -498,7 +498,7 @@ describe("the caveat says out loud why a total might mislead", () => {
     const totals = computeTotals(timing(), rows);
     expect(totals.plannedCount).toBe(1);
     expect(totalsCaveat(totals)).toBe(
-      "5 of 6 children have no plan, so the plan and the actual cover different work.",
+      "5 of its 6 sub-tasks have no estimate, so the plan leaves some of the work out.",
     );
     expect(totalsCaveat(totals)).not.toMatch(/6 of 6/);
   });
@@ -520,8 +520,8 @@ describe("the caveat says out loud why a total might mislead", () => {
       {},
     );
     const caveat = totalsCaveat(computeTotals(timing(), rows))!;
-    expect(caveat).toMatch(/3 of 5 children have no plan/);
-    expect(caveat).toMatch(/cover different work/);
+    expect(caveat).toMatch(/3 of its 5 sub-tasks have no estimate/);
+    expect(caveat).toMatch(/the plan leaves some of the work out/);
   });
 
   it("gets the singular right for one missing plan", () => {
@@ -529,7 +529,7 @@ describe("the caveat says out loud why a total might mislead", () => {
       [child("STA-1", { estimatedSeconds: 600 }), child("STA-2")],
       {},
     );
-    expect(totalsCaveat(computeTotals(timing(), rows))!).toMatch(/1 of 2 child has no plan/);
+    expect(totalsCaveat(computeTotals(timing(), rows))!).toMatch(/1 of its 2 sub-tasks has no estimate/);
   });
 
   it("warns that a favourable total is provisional while children still run", () => {
@@ -542,7 +542,7 @@ describe("the caveat says out loud why a total might mislead", () => {
       NOW,
     );
     expect(totalsCaveat(computeTotals(timing(), rows))!).toBe(
-      "1 still running, so the actual is still growing.",
+      "1 sub-task is still being worked on, so the time spent is still growing.",
     );
   });
 
@@ -559,7 +559,7 @@ describe("the caveat says out loud why a total might mislead", () => {
       NOW,
     );
     expect(totalsCaveat(computeTotals(timing(), rows))!).toBe(
-      "1 unfinished but idle, so its clock has stopped at the last sign of work.",
+      "1 unfinished sub-task has gone quiet, so its clock has stopped.",
     );
   });
 
@@ -574,7 +574,7 @@ describe("the caveat says out loud why a total might mislead", () => {
     );
     const totals = computeTotals(timing(), rows);
     expect(totals.approximate).toBe(true);
-    expect(totalsCaveat(totals)!).toMatch(/no usable history/);
+    expect(totalsCaveat(totals)!).toMatch(/incomplete history/);
   });
 
   it("says nothing when a fully-estimated, fully-settled epic needs no caveat", () => {
@@ -628,13 +628,13 @@ describe("the summary leads with the recursive plan", () => {
   it("STA-157: an unestimated parent over three planned tasks plans 11h", () => {
     const summary = computeSummary(STA_157);
     expect(summary.plannedSeconds).toBe(39_600);
-    expect(summary.planHint).toBe("inherited from 3 of 3 units");
+    expect(summary.planHint).toBe("planned from the estimates of the tasks under it (all 3 have one)");
   });
 
   it("STA-156: the plan survives an unestimated middle level, whatever depth-1 says", () => {
     const summary = computeSummary(STA_156);
     expect(summary.plannedSeconds).toBe(39_600);
-    expect(summary.planHint).toBe("inherited from 3 of 9 units");
+    expect(summary.planHint).toBe("planned from the estimates of the tasks under it (3 of 9 have one)");
   });
 
   it("uses the own estimate when one is set, and says the descendants disagree", () => {
@@ -653,7 +653,7 @@ describe("the summary leads with the recursive plan", () => {
       }),
     );
     expect(summary.plannedSeconds).toBe(21_600);
-    expect(summary.planHint).toMatch(/descendants add up to 11 hours/);
+    expect(summary.planHint).toMatch(/the tasks under it add up to 11 hours/);
   });
 
   it("is a leaf's own estimate against its own time, with nothing to add", () => {
@@ -707,18 +707,18 @@ describe("the breakdown names the source of every number", () => {
         }),
       }),
     );
-    expect(rows.map((row) => row.label)).toEqual(["This issue", "Children"]);
+    expect(rows.map((row) => row.label)).toEqual(["This task itself", "Its sub-tasks"]);
     expect(rows[0]).toMatchObject({
       plannedSeconds: 21_600,
-      planSource: "top-down, set on this issue",
+      planSource: "its own estimate",
       actualSeconds: 900,
-      actualSource: "worked directly — not in the headline",
+      actualSource: "time spent on this task itself, not counted at the top",
     });
     expect(rows[1]).toMatchObject({
       plannedSeconds: 39_600,
-      planSource: "bottom-up, from 3 of 3 units",
+      planSource: "from the tasks under it (all 3 have one)",
       actualSeconds: 18_000,
-      actualSource: "aggregated from 3 children",
+      actualSource: "added up from its 3 sub-tasks",
     });
   });
 
@@ -726,22 +726,22 @@ describe("the breakdown names the source of every number", () => {
     const rows = buildBreakdown(timing({ childCount: 2, subtreePlan: plan({ unplannedCount: 2, totalCount: 2 }) }));
     expect(rows[0]).toMatchObject({
       plannedSeconds: null,
-      planSource: "no estimate set on this issue",
+      planSource: "No estimate of its own",
       actualSeconds: null,
-      actualSource: "never worked directly",
+      actualSource: "No time spent on it directly",
     });
     expect(rows[1]).toMatchObject({
       plannedSeconds: null,
-      planSource: "no estimate among 2 units",
+      planSource: "None of the 2 tasks under it has an estimate",
       actualSeconds: null,
     });
   });
 
   it("says there is no live work beneath, not 0 of 0, when every descendant is cancelled", () => {
     const rows = buildBreakdown(timing({ childCount: 2, subtreePlan: plan({ totalCount: 2 }) }));
-    expect(rows[1]).toMatchObject({ plannedSeconds: null, planSource: "no live descendants" });
+    expect(rows[1]).toMatchObject({ plannedSeconds: null, planSource: "No open tasks under it" });
     const cancelledOnly = timing({ childCount: 2, subtreePlan: plan({ totalCount: 2 }) });
-    expect(summarySentence(computeSummary(cancelledOnly), cancelledOnly.subtreePlan)).toContain("Coverage no live descendants.");
+    expect(summarySentence(computeSummary(cancelledOnly), cancelledOnly.subtreePlan)).toContain("Estimates: no open tasks under it.");
   });
 });
 
@@ -764,7 +764,7 @@ describe("the subtree plan says where its number came from", () => {
           totalCount: 4,
         }),
       ),
-    ).toBe("inherited from 3 of 3 units");
+    ).toBe("planned from the estimates of the tasks under it (all 3 have one)");
   });
 
   it("shows the bottom-up number beside an own estimate, so a disagreement is visible", () => {
@@ -779,7 +779,7 @@ describe("the subtree plan says where its number came from", () => {
           totalCount: 3,
         }),
       ),
-    ).toBe("own estimate; descendants add up to 11 hours (3 of 3 units)");
+    ).toBe("its own estimate; the tasks under it add up to 11 hours (all 3 have one)");
   });
 
   it("adds nothing under an own estimate with no planned work beneath it, or under no plan at all", () => {
@@ -814,7 +814,7 @@ describe("child rows carry the effective plan and say where it came from", () =>
     });
     expect(rows[0]!.estimatedSeconds).toBeNull();
     expect(rows[0]!.plannedSeconds).toBe(39_600);
-    expect(rows[0]!.planHint).toBe("inherited from 3 of 3 units");
+    expect(rows[0]!.planHint).toBe("planned from the estimates of the tasks under it (all 3 have one)");
   });
 
   it("names a plain own estimate as own — the column mixes typed and flowed-up figures", () => {
@@ -822,7 +822,7 @@ describe("child rows carry the effective plan and say where it came from", () =>
       "STA-1": timing({ estimatedSeconds: 3600, subtreePlan: plan({ estimatedSeconds: 3600, source: "own" }) }),
     });
     expect(rows[0]!.plannedSeconds).toBe(3600);
-    expect(rows[0]!.planHint).toBe("own estimate");
+    expect(rows[0]!.planHint).toBe("its own estimate");
   });
 
   it("keeps the descendants' disagreement in the hint when the own estimate wins", () => {
@@ -841,7 +841,7 @@ describe("child rows carry the effective plan and say where it came from", () =>
       }),
     });
     expect(rows[0]!.plannedSeconds).toBe(21_600);
-    expect(rows[0]!.planHint).toBe("own estimate; descendants add up to 11 hours (3 of 3 units)");
+    expect(rows[0]!.planHint).toBe("its own estimate; the tasks under it add up to 11 hours (all 3 have one)");
   });
 
   it("has no hint when there is no plan to explain", () => {
@@ -853,7 +853,7 @@ describe("child rows carry the effective plan and say where it came from", () =>
   it("falls back to the own field, and calls it own, when the timing entry is missing", () => {
     const [planned] = buildChildRows([child("STA-9", { estimatedSeconds: 600 })], {});
     expect(planned!.plannedSeconds).toBe(600);
-    expect(planned!.planHint).toBe("own estimate");
+    expect(planned!.planHint).toBe("its own estimate");
     const [bare] = buildChildRows([child("STA-9")], {});
     expect(bare!.planHint).toBeNull();
   });
@@ -868,8 +868,8 @@ describe("child rows carry the effective plan and say where it came from", () =>
   });
 
   it("childPlanHint: own says own, inherited says inherited, none says nothing", () => {
-    expect(childPlanHint(plan({ estimatedSeconds: 3600, source: "own" }))).toBe("own estimate");
-    expect(childPlanHint(INHERITED_11H)).toBe("inherited from 3 of 3 units");
+    expect(childPlanHint(plan({ estimatedSeconds: 3600, source: "own" }))).toBe("its own estimate");
+    expect(childPlanHint(INHERITED_11H)).toBe("planned from the estimates of the tasks under it (all 3 have one)");
     expect(childPlanHint(plan({ unplannedCount: 2, totalCount: 2 }))).toBeNull();
   });
 });
@@ -899,16 +899,16 @@ describe("the parent's headline is the sum of the child rows' plans", () => {
     expect(visible).toBe(39_600);
     expect(visible).toBe(computeSummary(STA_156).plannedSeconds);
     // ...and to the Children row of the breakdown — the same number under another label.
-    expect(visible).toBe(buildBreakdown(STA_156).find((row) => row.label === "Children")!.plannedSeconds);
+    expect(visible).toBe(buildBreakdown(STA_156).find((row) => row.label === "Its sub-tasks")!.plannedSeconds);
   });
 
   it("counts the inheriting child as planned, so the coverage caveat agrees with the sum", () => {
     expect(computeTotals(STA_156, rows).plannedCount).toBe(1);
-    expect(totalsCaveat(computeTotals(STA_156, rows))).toMatch(/5 of 6 children have no plan/);
+    expect(totalsCaveat(computeTotals(STA_156, rows))).toMatch(/5 of its 6 sub-tasks have no estimate/);
   });
 
   it("is the same arithmetic as the spoken sentence", () => {
-    expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toMatch(/^Planned 11h\./);
+    expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toMatch(/^Planned: 11 hours\./);
   });
 });
 
@@ -931,14 +931,14 @@ describe("the spoken headline says planned, actual, difference, coverage, source
 
   it("reads the STA-156 headline as one sentence", () => {
     expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toBe(
-      "Planned 11h. Actual 5h. Difference 6h under (55%). Coverage 3 of 9 units planned. Source inherited from descendants.",
+      "Planned: 11 hours. Time spent: 5 hours. Difference: 6 hours under the plan. Estimates: 3 of the 9 tasks under it have an estimate. The plan comes from the estimates of the tasks under it.",
     );
   });
 
   it("names every absence in words, never as a dash", () => {
     const empty = timing();
     expect(summarySentence(computeSummary(empty), empty.subtreePlan)).toBe(
-      "Planned No estimate. Actual No work recorded. Difference No comparison. Coverage no descendants. Source no plan.",
+      "Planned: No estimate. Time spent: No work recorded. Difference: nothing to compare. Estimates: no tasks under it. The plan comes from no estimate.",
     );
   });
 
@@ -955,11 +955,11 @@ describe("the spoken headline says planned, actual, difference, coverage, source
       expect(index, word).toBeGreaterThanOrEqual(0);
       return index;
     };
-    expect(at("Planned ")).toBeLessThan(at("Actual "));
-    expect(at("Actual ")).toBeLessThan(at("Difference "));
-    expect(at("Difference ")).toBeLessThan(at("Coverage "));
-    expect(at("Coverage ")).toBeLessThan(at("Source "));
-    expect(sentence).toMatch(/Source own estimate\.$/);
+    expect(at("Planned: ")).toBeLessThan(at("Time spent: "));
+    expect(at("Time spent: ")).toBeLessThan(at("Difference: "));
+    expect(at("Difference: ")).toBeLessThan(at("Estimates: "));
+    expect(at("Estimates: ")).toBeLessThan(at("The plan comes from "));
+    expect(sentence).toMatch(/The plan comes from its own estimate\.$/);
   });
 
   it("rides a qualifying hint beside the figure it qualifies, not at the end", () => {
@@ -969,11 +969,11 @@ describe("the spoken headline says planned, actual, difference, coverage, source
       subtreePlan: plan({ estimatedSeconds: 7200, source: "own" }),
     });
     const sentence = summarySentence(computeSummary(live), live.subtreePlan, {
-      actual: "still running",
-      difference: "provisional — not finished",
+      actual: "still being worked on",
+      difference: "not finished, so this can still change",
     });
-    expect(sentence).toContain("Actual 30m (still running).");
-    expect(sentence).toContain("Difference 1h30m under (75%) (provisional — not finished).");
+    expect(sentence).toContain("Time spent: 30 minutes (still being worked on).");
+    expect(sentence).toContain("Difference: 1 hour 30 minutes under the plan (not finished, so this can still change).");
   });
 });
 
@@ -981,21 +981,21 @@ describe("the spoken headline says planned, actual, difference, coverage, source
 
 describe("quality states are named, never decided, here", () => {
   it("prints the server's state and its reasons in words, and nothing for a cancelled issue", () => {
-    expect(qualityText({ state: "exact", reasons: [] })).toBe("exact");
-    expect(qualityText({ state: "approximate", reasons: ["sparse", "capture_gap"] })).toBe("approximate · silences over 30 min, work before the first attempt");
+    expect(qualityText({ state: "exact", reasons: [] })).toBe("measured exactly");
+    expect(qualityText({ state: "approximate", reasons: ["sparse", "capture_gap"] })).toBe("approximate, because it had pauses of over 30 minutes and some work happened before tracking started");
     // The state's own reason would only repeat it.
-    expect(qualityText({ state: "timing-floor", reasons: ["timing_floor"] })).toBe("under a minute");
-    expect(qualityText({ state: "reconstructed", reasons: ["reconstructed", "sparse"] })).toBe("reconstructed · silences over 30 min");
-    expect(qualityText({ state: "missing", reasons: ["no_worker_attempt"] })).toBe("not measured · no attempt recorded");
+    expect(qualityText({ state: "timing-floor", reasons: ["timing_floor"] })).toBe("took under a minute");
+    expect(qualityText({ state: "reconstructed", reasons: ["reconstructed", "sparse"] })).toBe("rebuilt from history, because it had pauses of over 30 minutes");
+    expect(qualityText({ state: "missing", reasons: ["no_worker_attempt"] })).toBe("not measured, because no work session was recorded");
     // A code from a newer server is shown verbatim rather than dropped.
-    expect(qualityText({ state: "approximate", reasons: ["brand_new"] })).toBe("approximate · brand_new");
+    expect(qualityText({ state: "approximate", reasons: ["brand_new"] })).toBe("approximate, because brand new");
     expect(qualityText({ state: null, reasons: [] })).toBeNull();
     // Never worked is "not started", not "not measured".
     expect(qualityText({ state: "missing", reasons: ["never_started"] })).toBe("not started");
   });
 
   it("puts the work figure beside a child's state, since the row's ran is category time", () => {
-    expect(childQualityText({ workState: "reconstructed", workSeconds: 1010, workReasons: ["reconstructed"] })).toBe("work 17 minutes · reconstructed");
+    expect(childQualityText({ workState: "reconstructed", workSeconds: 1010, workReasons: ["reconstructed"] })).toBe("17 minutes of agent work, rebuilt from history");
     expect(childQualityText({ workState: "missing", workSeconds: null, workReasons: ["never_started"] })).toBe("not started");
     expect(childQualityText({ workState: "missing", workSeconds: null, workReasons: ["no_worker_attempt"] })).toBe("not measured");
     expect(childQualityText({ workState: null, workSeconds: null, workReasons: [] })).toBeNull();
@@ -1016,7 +1016,7 @@ describe("quality states are named, never decided, here", () => {
       population: { issues: 9, eligible: 8, notEligible: { parents: 1, open: 0, cancelled: 0 } },
       work: { counts: { exact: 6, "timing-floor": 1, approximate: 1, reconstructed: 0, missing: 0 } },
     } as unknown as TimingQualityReport;
-    expect(cohortLine(report)).toBe("8 done leaves beneath: 6 exact (75%) · 1 under a minute · 1 approximate");
+    expect(cohortLine(report)).toBe("Of the 8 finished tasks under it: 6 measured exactly (75%), 1 took under a minute, 1 approximate.");
     expect(cohortLine({ ...report, population: { ...report.population, eligible: 0 } })).toBeNull();
   });
 });
@@ -1058,8 +1058,8 @@ describe("the difference as a sentence", () => {
   });
 
   it("has a short form for a sub-task row, with no percentage", () => {
-    expect(shortDelta(computeDelta(10_800, 3600)!)).toBe("2 hours under");
-    expect(shortDelta(computeDelta(3600, 4800)!)).toBe("20 minutes over");
-    expect(shortDelta(computeDelta(3600, 3600)!)).toBe("on plan");
+    expect(shortDelta(computeDelta(10_800, 3600)!)).toBe("2 hours under the plan");
+    expect(shortDelta(computeDelta(3600, 4800)!)).toBe("20 minutes over the plan");
+    expect(shortDelta(computeDelta(3600, 3600)!)).toBe("right on the plan");
   });
 });
