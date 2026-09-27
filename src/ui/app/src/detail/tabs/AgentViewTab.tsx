@@ -118,7 +118,7 @@ export function AgentViewTab({ detail, workspace, onAuthError }: TabProps) {
             aria-hidden
             className={cn(
               "relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors duration-150",
-              withDocuments ? "bg-foreground" : "bg-surface-sunken shadow-[inset_0_0_0_1px_var(--border)]",
+              withDocuments ? "bg-foreground" : "bg-text-tertiary/45",
             )}
           >
             <span
