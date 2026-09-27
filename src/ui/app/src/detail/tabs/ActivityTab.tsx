@@ -23,7 +23,7 @@
  * Times are relative inside today ("12 min ago") and a clock time on older days, where
  * the day heading already says the date. The exact instant is always in the tooltip.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CirclePlus,
   CircleStop,
@@ -211,6 +211,27 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
   const [sending, setSending] = useState(false);
   const ref = detail.issue.identifier;
   const now = useNow();
+  const composer = useRef<HTMLDivElement>(null);
+
+  /**
+   * Keep the comment box in sight while a phone keyboard is up. The keyboard shrinks the
+   * viewport AFTER the browser has scrolled the focused box into view, so the detail's
+   * scroller gets shorter and the box ends up under its bottom edge (just above the action
+   * bar). When the viewport resizes while the box has focus, bring it back into view.
+   */
+  useEffect(() => {
+    const keepInView = () => {
+      const box = composer.current;
+      if (box && box.contains(document.activeElement)) box.scrollIntoView({ block: "nearest" });
+    };
+    const viewport = window.visualViewport;
+    viewport?.addEventListener("resize", keepInView);
+    window.addEventListener("resize", keepInView);
+    return () => {
+      viewport?.removeEventListener("resize", keepInView);
+      window.removeEventListener("resize", keepInView);
+    };
+  }, []);
 
   // Both refetch when the issue changes under us: the panel reloads `detail` on every
   // fingerprint change, and comment count / updatedAt move whenever anything here does.
@@ -318,7 +339,11 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
         </section>
       ))}
 
-      <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-raised p-1.5 pl-3 focus-within:border-ring/60">
+      <div
+        ref={composer}
+        data-activity-composer=""
+        className="flex scroll-mb-3 items-center gap-2 rounded-xl border border-border bg-surface-raised p-1.5 pl-3 focus-within:border-ring/60"
+      >
         <Input
           value={draft}
           placeholder="Write a comment…"
