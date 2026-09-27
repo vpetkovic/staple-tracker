@@ -143,6 +143,12 @@
   justify-content: center;
 }
 
+/* "Picked up, no notes yet" is a finding for a power user and noise for everyone else: it
+   keeps its glyph and its sentence, at the quiet register. */
+.staple-row[data-desk] .staple-worklog-cue[data-state="empty"] {
+  color: var(--text-tertiary);
+}
+
 /* ── Who ───────────────────────────────────────────────────────────────────────────── */
 
 .staple-row-who {
