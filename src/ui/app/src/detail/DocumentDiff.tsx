@@ -9,7 +9,6 @@
  */
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import {
   collapse,
   isSkip,
@@ -18,6 +17,7 @@ import {
   type SplitRow,
   type UnifiedRow,
 } from "./diff";
+import { cn } from "./parts";
 
 const ADD_BG = "bg-[color-mix(in_oklab,var(--status-task-done)_14%,transparent)]";
 const DEL_BG = "bg-[color-mix(in_oklab,var(--status-task-blocked)_14%,transparent)]";
@@ -143,8 +143,8 @@ export function DocumentDiff({
       type="button"
       aria-pressed={layout === value}
       onClick={() => setLayout(value)}
-      className={"text-label " + cn(
-        "focus-ring h-7 rounded-md px-2.5 transition-colors duration-150 max-sm:h-9",
+      className={cn(
+        "text-label focus-ring h-7 rounded-md px-2.5 transition-colors duration-150 max-sm:h-9",
         layout === value ? "bg-surface-raised text-foreground shadow-[0_0_0_1px_var(--border)]" : "text-text-secondary hover:text-foreground",
       )}
     >

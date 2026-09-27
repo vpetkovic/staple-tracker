@@ -22,11 +22,10 @@ import { action, ApiError, getDocument, getRevisions } from "@/lib/api";
 import { Markdown } from "@/lib/markdown";
 import type { DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
-import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { diffBodies } from "../diff";
 import { DocumentDiff } from "../DocumentDiff";
-import { EmptyState, PersonChip, RelativeTime, SectionHeading } from "../parts";
+import { EmptyState, PersonChip, RelativeTime, SectionHeading, cn } from "../parts";
 import { takePendingDocumentKey, type TabProps } from "./registry";
 import "./tabs.css";
 
@@ -56,8 +55,8 @@ function Segmented<T extends string>({
           type="button"
           aria-pressed={value === option.value}
           onClick={() => onChange(option.value)}
-          className={"text-body " + cn(
-            "focus-ring inline-flex h-8 items-center gap-1.5 rounded-md px-3 transition-colors duration-150 max-sm:h-9",
+          className={cn(
+            "text-body focus-ring inline-flex h-8 items-center gap-1.5 rounded-md px-3 transition-colors duration-150 max-sm:h-9",
             value === option.value
               ? "bg-surface-raised text-foreground shadow-[0_0_0_1px_var(--border)]"
               : "text-text-secondary hover:text-foreground",
@@ -275,8 +274,8 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
               type="button"
               aria-pressed={doc.key === key}
               onClick={() => selectKey(doc.key)}
-              className={"text-body " + cn(
-                "focus-ring inline-flex h-8 items-center gap-1.5 rounded-full border px-3 transition-colors duration-150 max-sm:h-10",
+              className={cn(
+                "text-body focus-ring inline-flex h-8 items-center gap-1.5 rounded-full border px-3 transition-colors duration-150 max-sm:h-10",
                 doc.key === key
                   ? "border-foreground/20 bg-surface-sunken text-foreground"
                   : "border-border text-text-secondary hover:text-foreground",

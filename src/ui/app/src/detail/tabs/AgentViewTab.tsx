@@ -21,11 +21,11 @@ import { Button } from "@/components/ui/button";
 import { getAgentContext } from "@/lib/api";
 import type { AgentContext } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
-import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { breakdown, CHARS_PER_TOKEN, estimateTokens, thousands, wireJson } from "../agentPayload";
 import type { TabProps } from "./registry";
 import "./tabs.css";
+import { cn } from "../parts";
 
 const plural = (n: number, one: string, many: string) => `${thousands(n)} ${n === 1 ? one : many}`;
 

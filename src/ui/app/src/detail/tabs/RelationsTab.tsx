@@ -51,7 +51,6 @@ import { relationContext, type RelationContext } from "@/lib/relation-context";
 import { useSession } from "@/lib/session";
 import { isResolvedStatus, statusLabel } from "@/lib/settings";
 import type { CrossBlocker, Graph, IssueDetail } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import { useResource } from "@/lib/useStaple";
 import {
   canvasDimmed,
@@ -65,7 +64,7 @@ import { emphasisFor, type Emphasis } from "@/views/graph/graph-planning";
 import { selectionTarget } from "@/views/graph/graph-folding";
 import { nodeTypes, type GraphFlowNode } from "@/views/graph/node-types";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { EmptyState, SectionHeading } from "../parts";
+import { EmptyState, SectionHeading, cn } from "../parts";
 import { directCounts, relationStats } from "../relation-stats";
 import type { TabProps } from "./registry";
 
@@ -379,8 +378,8 @@ function Summary({ detail, graph }: { detail: IssueDetail; graph: Graph | undefi
   return (
     <div className="space-y-1" data-testid="relations-summary">
       <p
-        className={"text-reading " + cn(
-          "flex items-center gap-2 font-medium",
+        className={cn(
+          "text-reading flex items-center gap-2 font-medium",
           lead.blocked ? "text-[var(--status-task-blocked)]" : "text-foreground",
         )}
       >

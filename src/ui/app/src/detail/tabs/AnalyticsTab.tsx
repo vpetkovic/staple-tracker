@@ -49,7 +49,6 @@ import { getTimingQuality } from "@/lib/api";
 import { forecastMode } from "@/lib/forecast-text";
 import { statusCategory, statusLabel } from "@/lib/settings";
 import { useResource } from "@/lib/useStaple";
-import { cn } from "@/lib/utils";
 import {
   childQualityText,
   cohortLine,
@@ -75,7 +74,7 @@ import {
   type Delta,
 } from "../analytics";
 import { AwaitingForecast, IssueForecast } from "../ForecastSection";
-import { SectionHeading } from "../parts";
+import { SectionHeading, cn } from "../parts";
 import type { TabProps } from "./registry";
 import "./tabs.css";
 
@@ -315,7 +314,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
             </p>
             <PlanBar planned={summary.plannedSeconds} actual={summary.actualSeconds} />
             {summary.delta ? (
-              <p data-figure="difference" className={"text-reading " + cn("font-medium", deltaTone(summary.delta))}>
+              <p data-figure="difference" className={cn("text-reading font-medium", deltaTone(summary.delta))}>
                 {plainDelta(summary.delta, running)}
               </p>
             ) : null}

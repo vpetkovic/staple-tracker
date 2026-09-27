@@ -44,9 +44,8 @@ import { Markdown } from "@/lib/markdown";
 import { statusLabel } from "@/lib/settings";
 import { WORKLOG_KEY, type DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
-import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { EmptyState, PersonChip, PersonDisc, RelativeTime, formatExact, useNow } from "../parts";
+import { EmptyState, PersonChip, PersonDisc, RelativeTime, cn, formatExact, useNow } from "../parts";
 import { buildTimeline, groupByDay, type TimelineEntry } from "../timeline";
 import type { TabProps } from "./registry";
 import "./tabs.css";
@@ -152,9 +151,8 @@ function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean;
         </p>
         {note && !noteIsFallback ? (
           <p
-            // Type tokens stay OUT of cn(): tailwind-merge reads `text-body` as a colour and
-            // drops it when a real colour follows.
-            className={"mt-1 text-body text-pretty " + cn(
+            className={cn(
+              "mt-1 text-body text-pretty",
               entry.kind === "checkpoint"
                 ? "rounded-lg border-l-2 border-foreground/40 bg-surface-sunken px-3 py-1.5 text-foreground"
                 : "text-text-secondary",
