@@ -34,14 +34,13 @@
  * count of things that have happened. If a future ticket wants a *second* changing
  * thing here, it does not get to cite this comment — it has to make its own argument.
  */
-import { ArrowUpRight, CircleAlert, FileText, Hourglass, ListChecks, Square, SquareCheck } from "lucide-react";
+import { ArrowUpRight, CircleAlert, CircleCheck, FileText, Hourglass } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { StatusIcon, TaskList } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { getDocument } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { blockingDescriptor, needsBorrowedDescriptor } from "@/lib/derived-blocked";
-import { gateCaption, gateRefusalReason, isGateParked } from "@/lib/derived-queued";
 import { Markdown } from "@/lib/markdown";
 import { useSession } from "@/lib/session";
 import { statusCategory, statusLabel } from "@/lib/settings";
@@ -50,7 +49,7 @@ import { useResource } from "@/lib/useStaple";
 import { cn } from "../parts/cn";
 import { displayExcerptLine, excerptWorklog, WORKLOG_KEY } from "@/lib/worklog";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { DetailCard, PersonChip, RelativeTime, SectionHeading } from "../parts";
+import { DetailCard, PersonChip, RelativeTime, SectionHeading, actorLabel } from "../parts";
 import { openDetailTab, type TabProps } from "./registry";
 
 /**
@@ -158,7 +157,7 @@ function WorklogPanel({
     <section aria-label="Worklog" className="mt-8">
       <SectionHeading
         action={
-          <Button size="xs" variant="ghost" className="focus-ring text-text-secondary" onClick={showAll} title="Open the full worklog in the Documents tab">
+          <Button size="xs" variant="ghost" className="focus-ring text-text-secondary pointer-coarse:h-10 pointer-coarse:px-3" onClick={showAll} title="Open the full worklog in the Documents tab">
             Show all
           </Button>
         }
@@ -176,7 +175,7 @@ function WorklogPanel({
             </>
           ) : null}
           <span aria-hidden>·</span>
-          <RelativeTime iso={meta.updatedAt} />
+          <RelativeTime iso={meta.updatedAt} inSentence />
           <span className="ml-auto text-text-tertiary" title={`Revision ${meta.currentRevision}`}>
             Version {meta.currentRevision}
           </span>
@@ -192,7 +191,7 @@ function WorklogPanel({
             {excerpt.label ? <p className="m-0 text-body font-medium text-foreground">{excerpt.label}</p> : null}
             {/* Plain lines rather than Markdown on purpose: an excerpt is a FRAGMENT, and a
                 fragment ending mid-list renders as garbage. Documents keeps the formatting. */}
-            <div className="flex flex-col gap-0.5 text-body break-words whitespace-pre-wrap text-text-secondary">
+            <div className="flex min-w-0 flex-col gap-0.5 text-body wrap-anywhere whitespace-pre-wrap text-text-secondary">
               {excerpt.lines.map((line, i) => {
                 const { text, heading } = displayExcerptLine(line);
                 return (
@@ -247,42 +246,35 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
       {issue.acceptanceCriteria?.length ? (
         <section aria-label="Acceptance criteria" className="mt-8">
           <SectionHeading action={<span className="text-text-tertiary">{issue.acceptanceCriteria.length}</span>}>Done when</SectionHeading>
-          <ul className="m-0 flex list-none flex-col gap-0.5 p-0" data-criteria="">
-            {issue.acceptanceCriteria.map((criterion, i) => {
-              const Check = finished ? SquareCheck : Square;
-              return (
-                <li key={i} className="flex items-start gap-3 rounded-lg py-1.5 text-reading text-foreground">
-                  <Check aria-hidden className={cn("mt-[3px] size-4 shrink-0", finished ? "text-[var(--status-task-done)]" : "text-text-tertiary")} />
-                  <span className="min-w-0 text-pretty">{criterion}</span>
-                </li>
-              );
-            })}
+          <ul className="m-0 flex min-w-0 list-none flex-col gap-0.5 p-0" data-criteria="" aria-label={finished ? "Done when (met)" : "Done when"}>
+            {issue.acceptanceCriteria.map((criterion, i) => (
+              <li key={i} className="flex min-w-0 items-start gap-3 py-1.5 text-reading text-foreground" data-criterion={finished ? "met" : "open"}>
+                {/* Read-only: the tracker keeps no tick per criterion, so nothing here looks
+                    tickable. A quiet dot while open, a check once the task is done. */}
+                {finished ? (
+                  <CircleCheck aria-hidden className="mt-[3px] size-4 shrink-0 text-[var(--status-task-done)]" />
+                ) : (
+                  <span aria-hidden className="flex h-[22px] w-4 shrink-0 items-center justify-center">
+                    <span className="size-1.5 rounded-full bg-text-tertiary" />
+                  </span>
+                )}
+                <span className="min-w-0 flex-1 text-pretty wrap-anywhere">{criterion}</span>
+              </li>
+            ))}
           </ul>
         </section>
       ) : null}
 
       {issue.status === "blocked" && (issue.unblockOwner || issue.unblockAction) ? (
         <Note tone="blocked" icon={Hourglass} data-unblock="">
-          Waiting for <strong className="font-medium">{issue.unblockOwner ?? "someone"}</strong> to {issue.unblockAction ?? "unblock it"}.
+          <span className="wrap-anywhere">
+            Waiting for <strong className="font-medium">{actorLabel(issue.unblockOwner)}</strong> to {issue.unblockAction ?? "unblock it"}.
+          </span>
         </Note>
       ) : null}
 
-      {/*
-        THE GATE, from both sides. A review gate is the process working, not a fault, so it
-        stays neutral where the blocked notes borrow the blocked hue. `gateRefusalReason` is
-        the same sentence the disabled Start work control carries.
-      */}
-      {isGateParked(detail) ? (
-        <Note tone="neutral" icon={ListChecks} data-gate="parked">
-          This task and everything under it is parked until it is approved ({gateCaption(detail.gate!)}).
-        </Note>
-      ) : null}
-
-      {detail.queuedBy ? (
-        <Note tone="neutral" icon={Hourglass} data-gate="queued">
-          {gateRefusalReason(detail.queuedBy)}
-        </Note>
-      ) : null}
+      {/* A gate or a queue is said once, in the status line under the title, with the
+          approval card right below it; the tab does not repeat it. */}
 
       {/* A parent blocked BY ITS CHILDREN: each line names the child it came from and opens it. */}
       {borrowedBlockers.length > 0 ? (

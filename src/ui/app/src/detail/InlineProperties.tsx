@@ -133,7 +133,7 @@ export function InlineTitle({ issue, workspace, refresh, size = "display" }: Edi
         >
           <h2
             className={cn(
-              "min-w-0 font-semibold text-balance break-words text-foreground",
+              "min-w-0 font-semibold text-balance wrap-anywhere text-foreground",
               size === "display" ? "text-display" : "text-heading",
             )}
           >
@@ -254,7 +254,7 @@ export function InlineKind({ issue, workspace, refresh, variant = "row" }: Edito
             kind near the end of the vocabulary pushes the top of the list off-screen. */}
         <SelectContent position="popper" align="start">
           {kinds.map((kind) => (
-            <SelectItem key={kind} value={kind}>
+            <SelectItem key={kind} value={kind} className="pointer-coarse:min-h-11">
               <span className="flex items-center gap-1.5">
                 <KindGlyph kind={kind} size={16} labelled={false} />
                 {kindLabel(kind)}
@@ -322,9 +322,9 @@ export function InlineProject({ issue, workspace, refresh, variant = "row" }: Ed
           </span>
         </SelectTrigger>
         <SelectContent position="popper" align="start">
-          <SelectItem value={NO_PROJECT}>No project</SelectItem>
+          <SelectItem value={NO_PROJECT} className="pointer-coarse:min-h-11">No project</SelectItem>
           {rows.map((row) => (
-            <SelectItem key={row.project.id} value={row.project.id}>
+            <SelectItem key={row.project.id} value={row.project.id} className="pointer-coarse:min-h-11">
               {row.project.name}
             </SelectItem>
           ))}
@@ -371,7 +371,7 @@ export function InlinePriority({ issue, workspace, refresh, variant = "row" }: E
         */}
         <SelectContent position="popper" align="start">
           {ISSUE_PRIORITIES.map((priority) => (
-            <SelectItem key={priority} value={priority}>
+            <SelectItem key={priority} value={priority} className="pointer-coarse:min-h-11">
               <PriorityValue priority={priority} />
             </SelectItem>
           ))}
@@ -422,22 +422,24 @@ export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
     // directly under the title; they are now a row of the property grid, and a top
     // margin inside a grid cell pushes its own row off the baseline every other row
     // in the block is aligned to. Spacing belongs to whatever places this.
-    <div data-edit-labels>
-      <div className="flex flex-wrap items-center gap-1">
+    <div data-edit-labels className="min-w-0 max-w-full">
+      <div className="flex min-w-0 flex-wrap items-center gap-1">
         {issue.labels.map((label) => (
           <span
             key={label}
             data-label-chip={label}
-            className="inline-flex h-6 items-center gap-1 rounded-full border bg-surface-sunken pr-1 pl-2.5 text-label text-foreground"
+            className="inline-flex h-6 max-w-full min-w-0 items-center gap-1 rounded-full border bg-surface-sunken pr-1 pl-2.5 text-label text-foreground pointer-coarse:h-8"
           >
-            {label}
+            <span className="min-w-0 truncate" title={label}>
+              {label}
+            </span>
             <button
               type="button"
               data-label-remove={label}
               aria-label={`Remove label ${label}`}
               disabled={busy}
               onClick={() => void commitSet(issue.labels.filter((existing) => existing !== label))}
-              className="focus-ring rounded-full p-0.5 text-text-tertiary hover:text-foreground"
+              className="focus-ring flex shrink-0 items-center justify-center rounded-full p-0.5 text-text-tertiary hover:text-foreground pointer-coarse:-my-2 pointer-coarse:-mr-1 pointer-coarse:size-10"
             >
               <X className="size-3" />
             </button>
@@ -473,7 +475,7 @@ export function InlineLabels({ issue, workspace, refresh }: EditorProps) {
             data-label-add
             onClick={() => setAdding(true)}
             aria-label="Add label"
-            className="focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-label text-text-tertiary hover:bg-surface-hover hover:text-foreground pointer-coarse:h-9"
+            className="focus-ring inline-flex h-6 items-center gap-1 rounded-full px-2 text-label text-text-tertiary hover:bg-surface-hover hover:text-foreground pointer-coarse:h-10 pointer-coarse:px-3"
           >
             <Plus className="size-3.5" aria-hidden />
             {issue.labels.length === 0 ? "Add label" : null}
