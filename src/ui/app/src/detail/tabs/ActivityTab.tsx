@@ -51,6 +51,7 @@ import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { EmptyState, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, useNow } from "../parts";
 import { Dot } from "./Dot";
+import { isClear, shouldBringBack } from "./keep-in-view";
 import { buildTimeline, groupByDay, type TimelineEntry } from "../timeline";
 import type { TabProps } from "./registry";
 import "./tabs.css";
@@ -216,22 +217,53 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
   const composer = useRef<HTMLDivElement>(null);
 
   /**
-   * Keep the comment box in sight while a phone keyboard is up. The keyboard shrinks the
-   * viewport AFTER the browser has scrolled the focused box into view, so the detail's
-   * scroller gets shorter and the box ends up under its bottom edge (just above the action
-   * bar). When the viewport resizes while the box has focus, bring it back into view.
+   * Keep the comment box in sight while a phone keyboard opens under it. The keyboard
+   * shrinks the viewport AFTER the browser has scrolled the focused box into view, so the
+   * detail's scroller gets shorter and the box can end up behind the action bar. The rule
+   * for when to move it is in ./keep-in-view.ts: only when the box is actually hidden, and
+   * only when the reader was looking at it (not after they scrolled up to read).
    */
   useEffect(() => {
-    const keepInView = () => {
+    let wasClear = false;
+    const measure = (): boolean | null => {
       const box = composer.current;
-      if (box && box.contains(document.activeElement)) box.scrollIntoView({ block: "nearest" });
+      if (!box || !box.contains(document.activeElement)) return null;
+      const viewport = window.visualViewport;
+      const view = viewport
+        ? { top: viewport.offsetTop, bottom: viewport.offsetTop + viewport.height }
+        : { top: 0, bottom: window.innerHeight };
+      const covers = [...document.querySelectorAll("[data-detail-actionbar], [data-detail-tabs]")].map((el) =>
+        el.getBoundingClientRect(),
+      );
+      return isClear(box.getBoundingClientRect(), view, covers);
+    };
+    // Scrolling (by the reader or by us) and focusing say where the box is NOW; a resize
+    // compares against that.
+    const remember = () => {
+      const clear = measure();
+      if (clear !== null) wasClear = clear;
+    };
+    const onResize = () => {
+      const clear = measure();
+      if (clear === null) return;
+      if (shouldBringBack(wasClear, clear)) {
+        composer.current!.scrollIntoView({ block: "nearest" });
+        wasClear = measure() ?? wasClear;
+      } else {
+        wasClear = clear;
+      }
     };
     const viewport = window.visualViewport;
-    viewport?.addEventListener("resize", keepInView);
-    window.addEventListener("resize", keepInView);
+    document.addEventListener("scroll", remember, { capture: true, passive: true });
+    document.addEventListener("focusin", remember);
+    viewport?.addEventListener("resize", onResize);
+    // One path only: visualViewport where the browser has it, the window otherwise.
+    if (!viewport) window.addEventListener("resize", onResize);
     return () => {
-      viewport?.removeEventListener("resize", keepInView);
-      window.removeEventListener("resize", keepInView);
+      document.removeEventListener("scroll", remember, { capture: true });
+      document.removeEventListener("focusin", remember);
+      viewport?.removeEventListener("resize", onResize);
+      if (!viewport) window.removeEventListener("resize", onResize);
     };
   }, []);
 
