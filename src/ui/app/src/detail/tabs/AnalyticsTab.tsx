@@ -146,14 +146,18 @@ function BreakdownCell({
   return (
     <div className="min-w-0">
       {seconds === null ? (
-        <div className="text-text-secondary">{absent}</div>
+        // The source line already names the absence ("No estimate of its own"), so it is
+        // the whole cell rather than a second line under a placeholder saying the same thing.
+        <div className="text-text-secondary" data-absent={absent}>
+          {source}
+        </div>
       ) : (
         <div className="text-foreground">
           <span className="text-text-secondary">{verb} </span>
           {spokenDuration(seconds)}
         </div>
       )}
-      <div className="text-caption text-text-tertiary">{source}</div>
+      {seconds === null ? null : <div className="text-caption text-text-tertiary">{source}</div>}
     </div>
   );
 }
@@ -210,7 +214,7 @@ function Pair({ planned, planHint, actual }: { planned: number | null; planHint:
 function QualityRow({ label, text, testId }: { label: string; text: string | null; testId: string }) {
   if (text === null) return null;
   return (
-    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 px-3.5 py-2 text-label">
+    <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-3 px-3.5 py-2 text-label">
       <span className="font-medium text-foreground">{label}</span>
       <span className="text-text-secondary" data-testid={testId}>
         {text}
@@ -240,15 +244,19 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
    * time spent in review. Each is one sentence; none is a figure.
    */
   const caveats: string[] = [];
-  if (!summary.delta) caveats.push(explainMissingDelta(summary.plannedSeconds, summary.actualSeconds));
+  // Only the one absence the headline cannot explain on its own: time spent with no plan to
+  // hold it against. "No work recorded" and the empty-tab line already say the other two.
+  if (!summary.delta && summary.plannedSeconds === null && summary.actualSeconds !== null) {
+    caveats.push(explainMissingDelta(summary.plannedSeconds, summary.actualSeconds));
+  }
   const caveat = aggregated ? totalsCaveat(totals) : null;
   if (caveat) caveats.push(caveat);
   if (timing.approximate) {
-    caveats.push("Approximate — no usable history, so the time is completed-minus-started rather than a sum of intervals.");
+    caveats.push("This time is approximate: without a full history it is counted from start to finish.");
   }
   // Review is a queue, not execution — named, but never counted as active time.
   if (timing.reviewSeconds) {
-    caveats.push(`${spokenDuration(timing.reviewSeconds)} in review, not counted as active time.`);
+    caveats.push(`It also spent ${spokenDuration(timing.reviewSeconds)} waiting for review, which is not counted as work.`);
   }
 
   /**
@@ -257,7 +265,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
    * it is moving, a stalled leaf says how long ago it stopped.
    */
   const actualHint = aggregated ? aggregationHint(timing.childCount) : activityHint(activity);
-  const differenceHint = summary.delta && running ? "provisional — not finished" : null;
+  const differenceHint = summary.delta && running ? "not finished, so this can still change" : null;
 
   /**
    * A parent's cohort: the done leaves beneath it, counted by state over that eligible
@@ -272,8 +280,11 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   // The work figure beside its state: the ratio's actual, from attempts, which the headline's
   // category time is not.
   const workState = qualityText(timing.quality?.work);
-  const workQuality = workState === null ? null : timing.workSeconds === null ? workState : `${spokenDuration(timing.workSeconds)} · ${workState}`;
-  const wallQuality = qualityText(timing.quality?.wall);
+  const workQuality = workState === null || workState === "not started" ? null : timing.workSeconds === null ? workState : `${spokenDuration(timing.workSeconds)}, ${workState}`;
+  // "not started" is what the headline's "No work recorded" already says; saying it again
+  // in the measurement rows is the same sentence twice.
+  const wallState = qualityText(timing.quality?.wall);
+  const wallQuality = wallState === "not started" ? null : wallState;
   const beneath = cohort.data ? cohortLine(cohort.data) : null;
 
   /**
@@ -353,17 +364,17 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
             {breakdown.map((row) => (
               <div
                 key={row.label}
-                className="grid grid-cols-[5.5rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 px-3.5 py-2.5 text-label max-sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+                className="grid grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1fr)] gap-x-3 px-3.5 py-2.5 text-label max-sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
               >
                 <span className="font-medium text-foreground max-sm:col-span-2">{row.label}</span>
                 <BreakdownCell verb="Planned" seconds={row.plannedSeconds} absent={NO_ESTIMATE} source={row.planSource} />
-                <BreakdownCell verb="Worked" seconds={row.actualSeconds} absent={NOT_STARTED} source={row.actualSource} />
+                <BreakdownCell verb="Spent" seconds={row.actualSeconds} absent={NOT_STARTED} source={row.actualSource} />
               </div>
             ))}
           </div>
           <p className="mt-2 text-label text-text-secondary">
-            The plan above is this task&apos;s own estimate when one is set, otherwise its sub-tasks&apos;
-            — the two are alternatives, never added together.
+            The plan at the top uses this task&apos;s own estimate if it has one, and otherwise the
+            estimates of the tasks under it. The two are never added together.
           </p>
         </section>
       ) : null}
@@ -396,7 +407,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
                   }
                   right={
                     <>
-                      {row.delta ? shortDelta(row.delta) : <span className="text-text-tertiary">no comparison</span>}
+                      {row.delta ? shortDelta(row.delta) : <span className="text-text-tertiary">nothing to compare</span>}
                       {/*
                         An unfinished child's delta is a snapshot, not a verdict — and WHY
                         it is unfinished matters: a clock still being fed, or one that stopped.
@@ -446,8 +457,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
           ) : null}
 
           <p className="mt-2 text-label text-text-secondary">
-            A sub-task with sub-tasks of its own shows their total. Each task counts its own estimate if it has
-            one, otherwise its sub-tasks&apos; — never both.
+            A sub-task that has sub-tasks of its own shows their total.
           </p>
         </section>
       ) : null}
@@ -458,8 +468,8 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
           <SectionHeading>How exact these numbers are</SectionHeading>
           {workQuality !== null || wallQuality !== null ? (
           <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface-raised">
-            <QualityRow label="Work" text={workQuality} testId="quality-work" />
-            <QualityRow label="Elapsed" text={wallQuality} testId="quality-wall" />
+            <QualityRow label="Agent work" text={workQuality} testId="quality-work" />
+            <QualityRow label="Time on the clock" text={wallQuality} testId="quality-wall" />
           </div>
           ) : null}
           {beneath !== null ? (

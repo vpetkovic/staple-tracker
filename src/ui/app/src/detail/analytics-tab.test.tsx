@@ -172,7 +172,7 @@ describe("a parent leads with the rolled-up plan", () => {
   it("STA-157 leads with 11h planned, not with 'no estimate recorded'", () => {
     const html = render(STA_157);
     expect(html).toContain(figure("11 hours"));
-    expect(html).toMatch(/[Ii]nherited from 3 of 3 units/);
+    expect(html).toMatch(/[Pp]lanned from the estimates of the tasks under it \(all 3 have one\)/);
     expect(html).not.toContain("no estimate recorded");
     // The 11h is the FIRST figure on the page (the spoken sentence before it is
     // `sr-only` text, not a figure — see "the headline is spoken" below).
@@ -182,11 +182,11 @@ describe("a parent leads with the rolled-up plan", () => {
   it("STA-156 leads with the recursive descendant plan, not with '0 of 6 estimated'", () => {
     const html = render(STA_156);
     expect(html).toContain(figure("11 hours"));
-    expect(html).toMatch(/[Ii]nherited from 3 of 9 units/);
+    expect(html).toMatch(/[Pp]lanned from the estimates of the tasks under it \(3 of 9 have one\)/);
     expect(html).not.toContain("0 of 6");
     expect(html).not.toContain("6 of 6");
     // The coverage caveat measures PLANS, so STA-157 counts as planned.
-    expect(html).toContain("5 of 6 children have no plan");
+    expect(html).toContain("5 of its 6 sub-tasks have no estimate");
   });
 
   it("gives a parent exactly one summary and one breakdown", () => {
@@ -223,8 +223,9 @@ describe("a leaf gets one summary and nothing else", () => {
     const html = render(leaf);
     expect(html).toContain(figure("2 hours"));
     expect(html).toContain(figure("1 hour"));
-    // The spoken summary keeps the exact label; the visible line says what it means.
-    expect(html).toContain("1h under (50%)");
+    // The spoken summary says the same difference in the same words.
+    expect(html).toContain("Difference: 1 hour under the plan.");
+    expect(html).not.toContain("(50%)");
     expect(html).toContain(
       '<p data-figure="difference" class="text-reading font-medium text-[var(--status-task-done)]">Finished 1 hour under the plan</p>',
     );
@@ -256,23 +257,25 @@ describe("the This issue and Children rows state the source of each number", () 
         { "STA-10": timing({ estimatedSeconds: 39_600, activeSeconds: 18_000, subtreePlan: plan({ estimatedSeconds: 39_600, source: "own" }) }) },
       ),
     );
-    expect(html).toContain("This issue");
-    expect(html).toContain("top-down, set on this issue");
-    expect(html).toContain("worked directly — not in the headline");
-    expect(html).toContain("Children");
-    expect(html).toContain("bottom-up, from 3 of 3 units");
-    expect(html).toContain("aggregated from 3 children");
+    expect(html).toContain(">This task itself<");
+    expect(html).toContain("its own estimate");
+    expect(html).toContain("time spent on this task itself, not counted at the top");
+    expect(html).toContain(">Its sub-tasks<");
+    expect(html).toContain("from the tasks under it (all 3 have one)");
+    expect(html).toContain("added up from its 3 sub-tasks");
     // The headline is the own estimate; the disagreement with the children is visible, not summed.
     expect(html).toContain(figure("6 hours"));
-    expect(html).toContain("descendants add up to 11 hours");
+    expect(html).toContain("the tasks under it add up to 11 hours");
     expect(html).toContain("never added together");
   });
 
   it("names the absences in the rows, in words", () => {
     const html = render(STA_157);
-    expect(html).toContain("no estimate set on this issue");
-    expect(html).toContain("never worked directly");
-    expect(html).toContain("bottom-up, from 3 of 3 units");
+    expect(html).toContain("No estimate of its own");
+    expect(html).toContain("No time spent on it directly");
+    expect(html).toContain("from the tasks under it (all 3 have one)");
+    // Each absence is said once: no "No estimate" placeholder above its own explanation.
+    expect(html).not.toMatch(/>No estimate<\/div><div[^>]*>No estimate of its own/);
   });
 });
 
@@ -288,8 +291,9 @@ describe("placeholders are muted words in the interface face, never figures", ()
     expect(html).not.toContain(figure("No estimate"));
     expect(html).not.toContain(figure("No work recorded"));
     expect(html).not.toContain("data-plan-bar");
-    expect(html).toContain("No estimate and no time recorded yet.");
-    // And a friendly line about what would fill the tab, rather than a blank card.
+    // The headline already says both absences, so the caveat does not say them again...
+    expect(html).not.toContain("Nothing to compare yet: there is no estimate and no time spent.");
+    // ...and a friendly line about what would fill the tab, rather than a blank card.
     expect(html).toContain('data-testid="time-empty"');
   });
 
@@ -314,8 +318,8 @@ describe("the caveats stay visible but concise", () => {
         }),
       ),
     );
-    expect(html).toContain("still running");
-    expect(html).toContain("provisional — not finished");
+    expect(html).toContain("Still being worked on");
+    expect(html).toContain("not finished, so this can still change");
   });
 
   it("says idle, with how long, on a stalled leaf", () => {
@@ -325,7 +329,7 @@ describe("the caveats stay visible but concise", () => {
         timing({ activeSeconds: 1800, countedThrough: agoIso(7200) }),
       ),
     );
-    expect(html).toContain("idle 2h — clock stopped at last activity");
+    expect(html).toContain("Quiet for 2 hours, so the clock has stopped");
   });
 
   it("names approximation and review time as one-sentence caveats, not figures", () => {
@@ -342,8 +346,8 @@ describe("the caveats stay visible but concise", () => {
         }),
       ),
     );
-    expect(html).toContain("Approximate — no usable history");
-    expect(html).toContain("30 minutes in review, not counted as active time.");
+    expect(html).toContain("This time is approximate");
+    expect(html).toContain("It also spent 30 minutes waiting for review, which is not counted as work.");
     expect(html).not.toContain(">in review<");
   });
 
@@ -376,9 +380,9 @@ describe("the caveats stay visible but concise", () => {
         },
       ),
     );
-    expect(html).toContain("2 of 3 children have no plan");
-    expect(html).toContain("1 still running");
-    expect(html).toContain("1 unfinished but idle");
+    expect(html).toContain("2 of its 3 sub-tasks have no estimate");
+    expect(html).toContain("1 sub-task is still being worked on");
+    expect(html).toContain("1 unfinished sub-task has gone quiet");
     expect(html).toContain("still running, so its difference can still change");
     expect(html).toContain("unfinished but idle: its clock stopped");
     expect(html).toContain('data-child-activity="running"> so far<');
@@ -398,9 +402,9 @@ describe("the reading order is the same in every layout", () => {
     expect(at('aria-label="Summary"')).toBeLessThan(at('data-figure="planned"'));
     expect(at('data-figure="planned"')).toBeLessThan(at('data-figure="actual"'));
     expect(at('data-figure="actual"')).toBeLessThan(at('aria-label="Breakdown"'));
-    expect(at('aria-label="Breakdown"')).toBeLessThan(at(">This issue<"));
-    expect(at(">This issue<")).toBeLessThan(at(">Children<"));
-    expect(at(">Children<")).toBeLessThan(at('aria-label="Per child"'));
+    expect(at('aria-label="Breakdown"')).toBeLessThan(at(">This task itself<"));
+    expect(at(">This task itself<")).toBeLessThan(at(">Its sub-tasks<"));
+    expect(at(">Its sub-tasks<")).toBeLessThan(at('aria-label="Per child"'));
     expect(at('aria-label="Per child"')).toBeLessThan(at("STA-165"));
   });
 });
@@ -444,9 +448,9 @@ describe("a child shows the plan its parent counts it as", () => {
 
   it("puts the provenance in a tooltip, never a third line", () => {
     const list = perChild(render(STA_156));
-    expect(list).toContain('title="inherited from 3 of 3 units" data-testid="child-plan"');
-    // Not as text: nothing between the tags says "inherited".
-    expect(list).not.toMatch(/>[^<]*inherited/);
+    expect(list).toContain('title="planned from the estimates of the tasks under it (all 3 have one)" data-testid="child-plan"');
+    // Not as text: nothing between the tags says where the plan came from.
+    expect(list).not.toMatch(/>[^<]*planned from the estimates/);
     // Two lines per child, six children — twelve `ChildLine` divs, and not one more. (The
     // identifier and status badge share a span with the same classes INSIDE line one.)
     expect((list.match(/<div class="flex items-center gap-2[^"]*">/g) ?? []).length).toBe(12);
@@ -454,7 +458,7 @@ describe("a child shows the plan its parent counts it as", () => {
 
   it("names an own estimate as own, so a typed 4h and a flowed-up 11h are told apart", () => {
     const list = perChild(render(STA_157));
-    expect((list.match(/title="own estimate" data-testid="child-plan"/g) ?? []).length).toBe(3);
+    expect((list.match(/title="its own estimate" data-testid="child-plan"/g) ?? []).length).toBe(3);
   });
 });
 
@@ -491,17 +495,17 @@ describe("the headline is spoken as one sentence in a fixed order", () => {
     expect(start).toBeLessThan(html.indexOf(figure("11 hours")));
     const sentence = html.slice(start, html.indexOf("</p>", start));
     expect(sentence).toMatch(
-      /Planned 11h\. Actual 5h[^.]*\. Difference 6h under \(55%\)\. Coverage 3 of 9 units planned\. Source inherited from descendants\./,
+      /Planned: 11 hours\. Time spent: 5 hours[^.]*\. Difference: 6 hours under the plan\. Estimates: 3 of the 9 tasks under it have an estimate\. The plan comes from the estimates of the tasks under it\./,
     );
     const at = (word: string) => {
       const index = sentence.indexOf(word);
       expect(index, word).toBeGreaterThanOrEqual(0);
       return index;
     };
-    expect(at("Planned ")).toBeLessThan(at("Actual "));
-    expect(at("Actual ")).toBeLessThan(at("Difference "));
-    expect(at("Difference ")).toBeLessThan(at("Coverage "));
-    expect(at("Coverage ")).toBeLessThan(at("Source "));
+    expect(at("Planned: ")).toBeLessThan(at("Time spent: "));
+    expect(at("Time spent: ")).toBeLessThan(at("Difference: "));
+    expect(at("Difference: ")).toBeLessThan(at("Estimates: "));
+    expect(at("Estimates: ")).toBeLessThan(at("The plan comes from "));
   });
 
   it("hides the figure row from the accessibility tree, so the facts are heard once", () => {
@@ -513,7 +517,7 @@ describe("the headline is spoken as one sentence in a fixed order", () => {
   it("speaks the same absences the figures draw", () => {
     const html = render(detail({ identifier: "STA-1" }, timing()));
     expect(html).toContain(
-      "Planned No estimate. Actual No work recorded. Difference No comparison. Coverage no descendants. Source no plan.",
+      "Planned: No estimate. Time spent: No work recorded. Difference: nothing to compare. Estimates: no tasks under it. The plan comes from no estimate.",
     );
   });
 });
@@ -523,7 +527,7 @@ describe("regression stand-ins for the five screenshot states", () => {
     const html = render(STA_156);
     expect(html).toContain(figure("11 hours"));
     expect(childPlans(html)).toEqual(["11 hours", "—", "—", "—", "—", "—"]);
-    expect(html).toContain("5 of 6 children have no plan");
+    expect(html).toContain("5 of its 6 sub-tasks have no estimate");
   });
 
   it("no estimate: a bare issue names the absence small and muted, with no child slot at all", () => {
@@ -566,8 +570,8 @@ describe("regression stand-ins for the five screenshot states", () => {
     );
     expect(childPlans(html)).toEqual(["1 hour", "—", "—"]);
     expect(html).toContain(figure("1 hour"));
-    expect(html).toContain("2 of 3 children have no plan");
-    expect(html).toContain("Coverage 1 of 3 units planned.");
+    expect(html).toContain("2 of its 3 sub-tasks have no estimate");
+    expect(html).toContain("Estimates: 1 of the 3 tasks under it has an estimate.");
   });
 
   it("narrow width: child lines truncate the title and pin the figures; the headline wraps", () => {
@@ -587,6 +591,16 @@ describe("regression stand-ins for the five screenshot states", () => {
 // ------------------------------------------------------------------ measurement quality
 
 describe("each record says how far it can be trusted", () => {
+  it("does not repeat 'not started' under a headline that already says No work recorded", () => {
+    const notStarted = { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] };
+    const html = render(
+      detail({ identifier: "STA-21" }, timing({ quality: { work: notStarted, wall: { state: "missing", inputs: [], reasons: ["never_started"] } } } as never)),
+    );
+    expect(html).toContain(placeholder("No work recorded"));
+    expect(html).not.toContain("not started");
+    expect(html).not.toContain('aria-label="Measurement quality"');
+  });
+
   it("names the work state beside the work figure, and the elapsed state, after the per-child rows", () => {
     const html = render(
       detail(
@@ -601,15 +615,16 @@ describe("each record says how far it can be trusted", () => {
       ),
     );
     expect(html).toContain('aria-label="Measurement quality"');
-    expect(html).toContain(`data-testid="quality-work">${spokenDuration(2400)} · approximate · silences over 30 min<`);
-    expect(html).toContain('data-testid="quality-wall">exact<');
+    expect(html).toContain(`data-testid="quality-work">${spokenDuration(2400)}, approximate, because it had pauses of over 30 minutes<`);
+    expect(html).toContain('data-testid="quality-wall">measured exactly<');
   });
 
   it("labels every child with its state, a timing-floor child included", () => {
     const html = render(
       detail(
         { identifier: "STA-30", kind: "epic" },
-        timing({ childCount: 2 }),
+        // A measured parent, so the measurement section has something to say.
+        timing({ childCount: 2, quality: { work: { state: "exact", inputs: [], reasons: [], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
         [issue({ identifier: "STA-31" }), issue({ identifier: "STA-32" })],
         {
           "STA-31": timing({ activeSeconds: 1323, workSeconds: 30, quality: { work: { state: "timing-floor", inputs: [], reasons: ["timing_floor"], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
@@ -618,7 +633,7 @@ describe("each record says how far it can be trusted", () => {
       ),
     );
     // The state qualifies the work figure, which sits beside it; the row's "ran" is category time.
-    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["work 30 seconds · under a minute", "exact"]);
+    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["30 seconds of agent work, took under a minute", "measured exactly"]);
     // The measurement section sits after the per-child rows: it qualifies them, it does not lead.
     expect(html.indexOf('aria-label="Per child"')).toBeLessThan(html.indexOf('aria-label="Measurement quality"'));
   });
