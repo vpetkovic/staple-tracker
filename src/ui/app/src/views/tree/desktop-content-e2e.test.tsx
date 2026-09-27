@@ -19,6 +19,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { IssueRow, MilestoneListRow, MilestoneView, QueueView } from "@/lib/types";
 import { SCENARIO, SCENARIO_WS, seedScenarioWorkspace } from "../../../../../../test/fixtures/milestones-scenario.ts";
 import { startUiServer } from "../../../../server.ts";
+import { initWorkspace } from "../../../../../core/workspace.ts";
+import { ApiError } from "@/lib/api";
+import { describeRefusal } from "@/lib/refusal";
+import type { WorkspaceSettingsEnvelope } from "@/lib/settings";
+import { applyRowStatus, plainRowRefusal, rowStatusChoices, type StatusChoice } from "@/components/task-list/row-status";
 import { MilestoneDetailPane, MilestoneListPane } from "../milestones/MilestonesView";
 import { memberListRows, sortMilestones } from "../milestones/milestones-model";
 import { QueueBoard } from "../queue/QueueView";
@@ -30,6 +35,7 @@ import { TreeGrid } from "./TreeGrid";
 const NOW = new Date("2026-09-04T12:00:00.000Z");
 const noop = () => {};
 const DESK = 1440;
+const OTHER_WS = "otherws";
 const PHONE = 390;
 
 let home: string;
@@ -60,6 +66,15 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
   seedScenarioWorkspace(home);
+  // A second workspace with a status the scenario's does not have, and one task in it:
+  // the row's own vocabulary and the row's own workspace are what the status change must use.
+  const other = initWorkspace({ global: true, slug: OTHER_WS });
+  try {
+    other.store.addStatus({ id: "awaiting_qa", label: "Awaiting QA", category: "review" }, "fixture");
+    other.store.createIssue({ title: "Other workspace task", createdBy: "fixture" });
+  } finally {
+    other.store.db.close();
+  }
   ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
   origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
@@ -230,6 +245,11 @@ function rule(selector: string): string {
 }
 
 describe("nothing moves when the actions appear", () => {
+  it("keeps the actions invisible and out of the pointer's way until the row is hovered, focused, open or selected", () => {
+    expect(rule(".staple-row-quick")).toMatch(/opacity:\s*0;/);
+    expect(rule(".staple-row-quick")).toMatch(/pointer-events:\s*none/);
+  });
+
   it("lays the actions over the date's box instead of beside it", () => {
     expect(rule(".staple-row-quick")).toMatch(/position:\s*absolute/);
     expect(rule(".staple-row-quick")).toMatch(/inset:\s*0/);
@@ -347,5 +367,79 @@ describe("milestones in plain words", () => {
     expect(count(html, "data-milestone-row=")).toBe(milestones.length);
     expect(count(html, 'class="staple-progress"')).toBe(milestones.length);
     expect(html).toMatch(/\d+ (is|are) blocked\./);
+  });
+});
+
+/** `lib/api`'s `action`, over this test's real server: same body, same error type. */
+async function realAct(target: { ws: string; ref: string }, payload: Record<string, unknown>): Promise<unknown> {
+  const response = await fetch(`${origin}/api/action`, {
+    method: "POST",
+    headers: { "x-staple-token": ui.token, "content-type": "application/json" },
+    body: JSON.stringify({ ...target, actor: "vp", ...payload }),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new ApiError(response.status, body);
+  return body;
+}
+
+const vocabulary = async (ws: string): Promise<StatusChoice[]> =>
+  (await get<WorkspaceSettingsEnvelope>(`/api/settings?ws=${ws}`)).statuses.map((s) => ({ id: s.id, label: s.label, category: s.category }));
+
+describe("changing a status from the row", () => {
+  it("offers the row's own workspace statuses, never the current one again, and no gated status", async () => {
+    const mine = rowStatusChoices(await vocabulary(OTHER_WS), "backlog");
+    const theirs = rowStatusChoices(await vocabulary(SCENARIO_WS), "backlog");
+    expect(mine.map((c) => c.id)).toContain("awaiting_qa");
+    expect(theirs.map((c) => c.id)).not.toContain("awaiting_qa");
+    expect(mine.find((c) => c.id === "backlog")).toMatchObject({ current: true, disabled: true });
+    expect(mine.filter((c) => c.disabled).map((c) => c.id)).toEqual(["backlog"]);
+    expect(mine.some((c) => c.category === "gated")).toBe(false);
+  });
+
+  it("writes to the row's workspace, whatever the page is scoped to", async () => {
+    const otherRows = await get<IssueRow[]>(`/api/issues?ws=${OTHER_WS}`);
+    const row = otherRows.find((r) => r.issue.title === "Other workspace task")!;
+    await applyRowStatus(row, "awaiting_qa", realAct);
+    const after = await get<IssueRow[]>(`/api/issues?ws=${OTHER_WS}`);
+    expect(after.find((r) => r.issue.id === row.issue.id)!.issue.status).toBe("awaiting_qa");
+  });
+
+  it("turns the store's real refusal into a plain sentence with the fix", async () => {
+    const byId = new Map(issues.map((r) => [r.issue.identifier, r]));
+    const unassigned = byId.get(SCENARIO.s2)!;
+    expect(unassigned.issue.assignee).toBeNull();
+    const refusal = await applyRowStatus(unassigned, "in_progress", realAct).then(
+      () => null,
+      (error: unknown) => describeRefusal(error),
+    );
+    expect(refusal).not.toBeNull();
+    const words = plainRowRefusal(refusal!, { label: "In Progress" });
+    expect(words).toEqual({ sentence: "Can't move this to In Progress: it needs someone assigned first.", needsAssignee: true });
+    expect(words.sentence).not.toMatch(/refused|validation|retryable|requires/i);
+  });
+
+  it("draws the notice directly under its row, and nowhere else", () => {
+    const markup = atWidth(DESK, () =>
+      renderToStaticMarkup(
+        <TreeGrid
+          rows={issues}
+          allRows={issues}
+          mode="workspace"
+          groupBy="none"
+          currentRef={null}
+          showResolved
+          onOpen={noop}
+          rowNotice={(r) => (r.issue.identifier === SCENARIO.q2 ? <div data-row-notice={r.issue.identifier} /> : null)}
+          onCloseDrawer={noop}
+          onVisibleOrder={noop}
+        />,
+      ),
+    );
+    expect(count(markup, "data-row-notice=")).toBe(1);
+    const rowAt = markup.indexOf(`data-identifier="${SCENARIO.q2}"`);
+    const noticeAt = markup.indexOf(`data-row-notice="${SCENARIO.q2}"`);
+    const nextRow = markup.indexOf('data-testid="task-row"', rowAt + 10);
+    expect(noticeAt).toBeGreaterThan(rowAt);
+    expect(noticeAt).toBeLessThan(nextRow);
   });
 });
