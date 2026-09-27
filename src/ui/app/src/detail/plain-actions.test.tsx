@@ -197,9 +197,11 @@ describe("what a task waits on, beyond this workspace", () => {
     const gone = detail({ issue: issue({ status: "todo" }), crossBlockers: [cross({ identifier: "STA-9999", workspace: "staple", status: null, unresolvable: true })] });
     const withWs = { ...actionContextOf({ ...gone, workspace: "exercises" }, { worker: null, person: null }, { workspaces: ["staple"] }), order: ORDER, categoryOf, labelOf: (s: string) => s };
     expect(withWs.unreachable).toEqual([{ identifier: "STA-9999", workspace: "staple", missing: "task" }]);
-    expect(primaryItem(withWs).disabledReason).toBe("Waiting on a task this computer can't see (STA-9999).");
+    expect(primaryItem(withWs).disabledReason).toBe("Waiting on STA-9999, which can't be found in staple.");
+    expect(statusSentence({ ...withWs, issue: gone.issue, openBlockers: 1 } as SentenceInput, categoryOf).lead).toBe("Waiting on STA-9999, which can't be found in staple");
     const noWs = actionContextOf({ ...gone, workspace: "exercises" }, { worker: null, person: null }, { workspaces: [] });
     expect(noWs.unreachable[0]!.missing).toBe("workspace");
+    expect(statusSentence({ ...noWs, categoryOf, issue: gone.issue, openBlockers: 1 } as SentenceInput, categoryOf).lead).toBe("Waiting on STA-9999 in staple, which isn't on this computer");
     const told = actionContextOf({ ...gone, crossBlockers: [{ ...gone.crossBlockers[0]!, missing: "workspace" } as never], workspace: "exercises" }, { worker: null, person: null }, { workspaces: ["staple"] });
     expect(told.unreachable[0]!.missing).toBe("workspace");
   });
@@ -215,6 +217,12 @@ describe("the strict queue", () => {
     expect(queueAheadOf(rows, "uuid-1")).toEqual({ identifier: "STA-28", title: "Queue head" });
     expect(queueAheadOf([{ ...rows[0]!, eligibility: "claimed" }, rows[1]!], "uuid-1")).toBeNull();
     expect(queueAheadOf(rows, "a")).toBeNull();
+  });
+
+  it("says the task is next up after the queue's head, not 'Ready to pick up'", () => {
+    const d = detail({ issue: issue({ status: "todo" }) });
+    const c = ctx(d, { queueAhead: { identifier: "STA-28", title: "Queue head" } });
+    expect(statusSentence({ ...c, issue: d.issue, openBlockers: 0 } as SentenceInput, categoryOf).lead).toBe("Next up after “Queue head”");
   });
 
   it("holds Start work and In Progress back, naming the head by its title", () => {
@@ -372,4 +380,47 @@ describe("the sheet's Previous and Next", () => {
       expect(classes).toContain("pointer-coarse:min-w-11");
     }
   });
+});
+
+/**
+ * THE HOLD-BACK MATRIX. Every write the page can offer that STARTS work (a checkout, a takeover,
+ * or a status into the active category) meets the store's start checks: a gate above it, open
+ * blockers, the strict queue. This walks every hold-back reason against every claim state and
+ * every status, and asserts nothing that starts work is ever offered while a reason applies,
+ * and that the item says that reason.
+ */
+describe("no offered write can meet a hold-back the page ignores", () => {
+  const REASONS: Array<[string, Partial<ActionContext>, string]> = [
+    ["queued behind a gate", { queuedBy: QUEUED }, "Waiting for VP to approve the parent task first."],
+    ["an open blocker", { openBlockers: 1 }, "Waiting on 1 other task to finish first."],
+    ["a blocker this computer can't see", { openBlockers: 1, unreachable: [{ identifier: "GAM-1", workspace: "gamma", missing: "workspace" }] }, "Waiting on GAM-1 in gamma, which isn't on this computer."],
+    ["the strict queue", { queueAhead: { identifier: "STA-28", title: "Queue head" } }, "“Queue head” is next in the queue."],
+  ];
+  const CLAIMS: Array<[string, Partial<IssueDetail>, Partial<ActionContext>]> = [
+    ["nobody", {}, {}],
+    ["held by someone", { claim: claim({ heldBy: "dux" }) }, {}],
+    ["held by a quiet holder", { claim: claim({ heldBy: "dux", idleSeconds: 7200 }) }, {}],
+    ["held by me", { claim: claim({ heldBy: "tester" }) }, { worker: "tester" }],
+  ];
+  const starts = (call: WriteCall | undefined) =>
+    call?.route === "action" && (call.payload.type === "checkout" || (call.payload.type === "status" && CATEGORY[call.payload.status] === "active"));
+
+  for (const [reasonName, reason, words] of REASONS) {
+    for (const [claimName, claimDetail, claimCtx] of CLAIMS) {
+      for (const status of ORDER) {
+        it(`${reasonName} · ${claimName} · ${status}`, () => {
+          const holder = claimDetail.claim?.heldBy ?? null;
+          const d = detail({ issue: issue({ status: status as never, assignee: "vp", checkoutAgent: status === "in_progress" ? holder : null }), ...(status === "in_progress" ? claimDetail : {}) });
+          const c = ctx(d, { ...claimCtx, ...reason, stale: status === "in_progress" && (claimDetail.claim?.idleSeconds ?? 0) >= 1800 });
+          const items = [primaryItem(c), ...overflowItems(c), ...statusItems(c)];
+          for (const item of items) {
+            expect(starts(item.call), `${"id" in item ? item.id : item.status} is offered`).toBe(false);
+          }
+          for (const item of items.filter((i) => ("id" in i ? i.id === "start" || i.id === "take-over" : CATEGORY[i.status] === "active" && !i.current))) {
+            if (!item.call && item.disabledReason && !/^Approve it/.test(item.disabledReason)) expect(item.disabledReason).toBe(words);
+          }
+        });
+      }
+    }
+  }
 });

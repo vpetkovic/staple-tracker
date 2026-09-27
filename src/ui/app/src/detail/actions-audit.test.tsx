@@ -116,7 +116,7 @@ const SCENARIOS: Scenario[] = [
       crossLink("other", `${otherTask().split("-")[0]}-9999`, ws, id);
       return id;
     },
-    stricter: { "primary:start": "Waiting on a task this computer can't see" },
+    stricter: { "primary:start": "-9999, which can't be found in other." },
   },
   {
     name: "todo, waiting on a task in a workspace not on this computer",
@@ -126,7 +126,33 @@ const SCENARIOS: Scenario[] = [
       crossLink("gone", "GON-1", ws, id);
       return id;
     },
-    stricter: { "primary:start": "Waiting on a task this computer can't see (GON-1)" },
+    stricter: { "primary:start": "Waiting on GON-1 in gone, which isn't on this computer." },
+  },
+  {
+    name: "strict queue, and the holder went quiet",
+    me: ME,
+    build: (s) => {
+      // Claimed first, then the queue is made strict with another task at its head.
+      const id = held(s, "agent-a");
+      (s as unknown as { setSetting(k: string, v: unknown, a: string): void }).setSetting("queue.policy", "strict", "w");
+      const head = todo(s);
+      (s as unknown as { queue(): { mutate(op: string, args: object, actor: string): void } }).queue().mutate("add", { ref: head }, "w");
+      clock += 31 * 60_000;
+      return id;
+    },
+  },
+  {
+    name: "waiting on a task this computer can't see, and the holder went quiet",
+    me: ME,
+    build: (s, ws) => {
+      const id = held(s, "agent-a");
+      crossLink("gone", "GON-2", ws, id);
+      clock += 31 * 60_000;
+      return id;
+    },
+    // A takeover does not check other workspaces, so the store would take it; the page holds
+    // back because the work cannot finish from here.
+    stricter: { "primary:take-over": "Waiting on GON-2 in gone, which isn't on this computer." },
   },
   {
     name: "strict queue, another task is next",
@@ -437,6 +463,8 @@ describe("the primary action per state", () => {
     "strict queue, another task is next": "start (disabled)",
     "strict queue, another task is next, and this one has an assignee": "start (disabled)",
     "a queued child with an assignee": "start (disabled)",
+    "strict queue, and the holder went quiet": "take-over (disabled)",
+    "waiting on a task this computer can't see, and the holder went quiet": "take-over (disabled)",
   };
   for (const scenario of SCENARIOS) {
     it(scenario.name, async () => {

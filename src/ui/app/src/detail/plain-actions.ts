@@ -238,9 +238,15 @@ const tasks = (n: number) => (n === 1 ? "1 other task" : `${n} other tasks`);
 const blockedReason = (n: number) => `Waiting on ${tasks(n)} to finish first.`;
 const queuedReason = (q: QueuedBy) => `Waiting for ${q.owner} to approve the parent task first.`;
 
-/** "a task this computer can't see (STA-9999)", or the count when there are several. */
+/**
+ * What a blocker this computer can't see is, in the Connections tab's own words:
+ * "STA-9999, which can't be found in staple" or "GAM-1 in gamma, which isn't on this
+ * computer"; the count when there are several.
+ */
 export function unreachablePhrase(list: readonly UnreachableBlocker[]): string {
-  return list.length === 1 ? `a task this computer can't see (${list[0]!.identifier})` : `${list.length} tasks this computer can't see (${list.map((b) => b.identifier).join(", ")})`;
+  if (list.length !== 1) return `${list.length} tasks this computer can't see (${list.map((b) => b.identifier).join(", ")})`;
+  const only = list[0]!;
+  return only.missing === "workspace" ? `${only.identifier} in ${only.workspace}, which isn't on this computer` : `${only.identifier}, which can't be found in ${only.workspace}`;
 }
 
 /** The queue's head, by title when there is one. */
@@ -270,7 +276,10 @@ function startItem(ctx: ActionContext): ActionItem {
 
 function takeOverItem(ctx: ActionContext, holder: string): ActionItem {
   const item: ActionItem = { id: "take-over", label: ACTION_WORDS.takeOver };
-  if (ctx.openBlockers > 0) return { ...item, disabledReason: blockedReason(ctx.openBlockers) };
+  // A takeover is a checkout: the store runs the same gate, blocker and queue-order checks
+  // before it, so it is held back for exactly the reasons Start work is.
+  const reason = startBlocker(ctx);
+  if (reason) return { ...item, disabledReason: reason };
   return {
     ...item,
     call: {
@@ -430,6 +439,8 @@ export interface SentenceInput {
   openBlockers: number;
   /** Blockers this computer can't see. */
   unreachable?: readonly UnreachableBlocker[];
+  /** Under the Strict queue setting, the plan row to take first. */
+  queueAhead?: { identifier: string; title: string } | null;
   /** The task's direct children, and how many of them are finished. */
   childrenTotal?: number;
   childrenDone?: number;
@@ -462,6 +473,9 @@ export function statusSentence(input: SentenceInput, categoryOf: (status: string
   }
   if (issue.checkoutAgent) {
     return { lead: "Being worked on by", person: { name: claim?.heldBy ?? issue.checkoutAgent, kind: "agent" }, atPrefix: "started", at: claim?.checkoutAt ?? issue.checkoutAt ?? issue.startedAt, tone: "normal" };
+  }
+  if (input.queueAhead && (category === "ready" || category === "unstarted")) {
+    return { lead: `Next up after ${input.queueAhead.title ? `“${input.queueAhead.title}”` : input.queueAhead.identifier}`, tone: "normal" };
   }
   if (category === "blocked") {
     if (issue.unblockOwner) {
