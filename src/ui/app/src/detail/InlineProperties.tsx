@@ -92,7 +92,7 @@ function RefusalSlot({ refusal, onDismiss, report }: { refusal: Refusal | null; 
     if (report && refusal) report(refusal);
   }, [report, refusal]);
   if (!refusal || report) return null;
-  return <RefusalNotice feedback={{ kind: "refused", refusal }} onDismiss={onDismiss} className="mt-2" />;
+  return <RefusalNotice feedback={{ kind: "refused", refusal }} onDismiss={onDismiss} className="mt-2 w-full basis-full" />;
 }
 
 // ---------------------------------------------------------------- title
