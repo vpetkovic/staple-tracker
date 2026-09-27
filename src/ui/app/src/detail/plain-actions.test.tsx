@@ -100,6 +100,12 @@ describe("the status sentence", () => {
     expect(sentence(detail({ issue: issue({ status: "awaiting_approval" }), gate: GATE }))).toMatchObject({ lead: "Waiting for", person: { name: "VP", kind: "human" }, tail: "to approve" });
   });
 
+  it("counts an open parent's finished children, and says when nobody holds an active task", () => {
+    const parent = detail({ issue: issue({ status: "in_progress" }) });
+    expect(statusSentence({ ...actionStateOf(parent), issue: parent.issue, openBlockers: 0, childrenTotal: 4, childrenDone: 1 }, categoryOf).lead).toBe("1 of 4 tasks done");
+    expect(sentence(parent).lead).toBe("Nobody is working on it right now");
+  });
+
   it("never prints a raw status id", () => {
     for (const status of ORDER) {
       const words = sentence(detail({ issue: issue({ status: status as never }) }));

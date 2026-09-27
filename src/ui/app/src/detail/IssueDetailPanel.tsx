@@ -486,6 +486,8 @@ function StatusLine({
     {
       ...actionStateOf(detail),
       issue: detail.issue,
+      childrenTotal: detail.children.length,
+      childrenDone: detail.children.filter((child) => statusCategory(child.status) === "done").length,
       openBlockers: detail.blockedBy.filter((ref) => !["done", "cancelled"].includes(statusCategory(ref.status))).length + detail.crossBlockers.filter((b) => !b.status || !["done", "cancelled"].includes(statusCategory(b.status))).length,
     },
     statusCategory,

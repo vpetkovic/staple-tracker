@@ -147,6 +147,9 @@ export interface SentenceInput extends ActionState {
   >;
   /** Direct blockers that are not finished. */
   openBlockers: number;
+  /** The task's direct children, and how many of them are finished. */
+  childrenTotal?: number;
+  childrenDone?: number;
 }
 
 export function statusSentence(input: SentenceInput, categoryOf: (status: string) => StatusCategory): StatusSentence {
@@ -180,7 +183,11 @@ export function statusSentence(input: SentenceInput, categoryOf: (status: string
     return { lead: "Blocked", atPrefix: "since", at: issue.updatedAt, tone: "attention" };
   }
   if (category === "review") return { lead: "Waiting for a check", atPrefix: "updated", at: issue.updatedAt, tone: "normal" };
+  if (input.childrenTotal) {
+    const done = input.childrenDone ?? 0;
+    return { lead: `${done} of ${input.childrenTotal} ${input.childrenTotal === 1 ? "task" : "tasks"} done`, atPrefix: "updated", at: issue.updatedAt, tone: "normal" };
+  }
   if (category === "ready") return { lead: "Ready to pick up", atPrefix: "added", at: issue.createdAt, tone: "normal" };
-  if (category === "active") return { lead: "In progress", atPrefix: "updated", at: issue.updatedAt, tone: "normal" };
+  if (category === "active") return { lead: "Nobody is working on it right now", atPrefix: "updated", at: issue.updatedAt, tone: "normal" };
   return { lead: "Not started", atPrefix: "added", at: issue.createdAt, tone: "normal" };
 }
