@@ -152,8 +152,9 @@ function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean;
         </p>
         {note && !noteIsFallback ? (
           <p
-            className={cn(
-              "mt-1 text-body text-pretty",
+            // Type tokens stay OUT of cn(): tailwind-merge reads `text-body` as a colour and
+            // drops it when a real colour follows.
+            className={"mt-1 text-body text-pretty " + cn(
               entry.kind === "checkpoint"
                 ? "rounded-lg border-l-2 border-foreground/40 bg-surface-sunken px-3 py-1.5 text-foreground"
                 : "text-text-secondary",
@@ -311,7 +312,7 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
           value={draft}
           placeholder="Write a comment…"
           aria-label="Add a comment"
-          className="h-9 border-0 bg-transparent px-0 text-reading shadow-none focus-visible:ring-0 max-sm:h-10 dark:bg-transparent"
+          className="h-9 border-0 bg-transparent px-0 text-[14px] shadow-none focus-visible:ring-0 max-sm:h-10 dark:bg-transparent"
           onChange={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") void send();

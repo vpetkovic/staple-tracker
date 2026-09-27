@@ -379,8 +379,8 @@ function Summary({ detail, graph }: { detail: IssueDetail; graph: Graph | undefi
   return (
     <div className="space-y-1" data-testid="relations-summary">
       <p
-        className={cn(
-          "flex items-center gap-2 text-reading font-medium",
+        className={"text-reading " + cn(
+          "flex items-center gap-2 font-medium",
           lead.blocked ? "text-[var(--status-task-blocked)]" : "text-foreground",
         )}
       >
