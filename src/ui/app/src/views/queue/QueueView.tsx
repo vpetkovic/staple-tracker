@@ -270,7 +270,14 @@ export function NextUpBand({
           )}
         </div>
         {next ? (
-          <Button variant="outline" size="sm" data-queue-next-open onClick={() => onOpen(next.identifier)}>
+          /* The same drawn 24px and touch target as the phone band's Open. */
+          <Button
+            variant="outline"
+            size="xs"
+            data-queue-next-open
+            className="relative px-3 pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[11px] pointer-coarse:before:content-['']"
+            onClick={() => onOpen(next.identifier)}
+          >
             Open
           </Button>
         ) : null}

@@ -101,7 +101,7 @@
 
 /* Calm chips: a soft fill and no outline, so a row of them reads as one quiet cluster. */
 .staple-row[data-desk] :is(.staple-label-pill, .staple-dep-badge, .staple-pr-badge) {
-  height: 22px;
+  height: 20px;
   border-color: transparent;
   border-radius: 999px;
   background: var(--surface-hover);
@@ -268,14 +268,27 @@
   opacity: 0;
 }
 
-/* A device that cannot hover gets the actions, always; the date is on the task. */
-@media (hover: none) {
+/*
+ * A finger, or a device that cannot hover (a tablet's desk layout): nothing is hover-only.
+ * The date stays and the `⋯` sits beside it, always drawn, with the 44px target task-list.css
+ * gives it. The status and open shortcuts go: a tap on the row already opens the task, and
+ * three 24px buttons side by side cannot each carry a 44px target without overlapping.
+ */
+@media (hover: none), (pointer: coarse) {
+  .staple-row[data-desk] .staple-row-trail {
+    gap: 8px;
+  }
   .staple-row[data-desk] .staple-row-quick {
+    position: static;
     opacity: 1;
     pointer-events: auto;
   }
-  .staple-row[data-desk] .staple-row-date {
-    opacity: 0;
+  .staple-row[data-desk] .staple-row-quick-btn:not([data-quick="menu"]) {
+    display: none;
+  }
+  .staple-row[data-desk] .staple-row-date,
+  .staple-row[data-desk]:is(:hover, :focus-visible, [aria-current="true"], [aria-selected="true"]) .staple-row-date {
+    opacity: 1;
   }
 }
 
