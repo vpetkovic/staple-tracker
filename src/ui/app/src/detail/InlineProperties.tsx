@@ -19,12 +19,13 @@
  * in the panel's one refusal slot and never breaks the chip row.
  */
 import { Check, Pencil, Plus, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { KindGlyph, PrioritySignal } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
-import { action, assignProject } from "@/lib/api";
+import { action, assignProject, getMilestone } from "@/lib/api";
+import { useResource } from "@/lib/useStaple";
 import { projectsForWorkspace } from "@/lib/projects";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
@@ -39,7 +40,11 @@ export function fieldTarget(ws: string, ref: string): { ws: string; ref: string;
   const actor = personActor();
   return actor ? { ws, ref, actor } : { ws, ref };
 }
+import { MILESTONE_KIND, rekindReason } from "./plain-actions";
 import { PRIORITY_WORDS } from "./properties";
+
+/** lib/api broadcasts an auth failure on its own channel; the page handles it there. */
+const ignoreAuthError = () => {};
 
 /**
  * How an editor's trigger is drawn: `row` for a value in the property list (quiet, grows a
@@ -232,6 +237,15 @@ export function InlineTitle({ issue, workspace, refresh, size = "display", repor
 export function InlineKind({ issue, workspace, refresh, variant = "row", report }: EditorProps) {
   const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
   const kinds = configuredKindOrder();
+  // A milestone with members or dates cannot become another kind yet (the store refuses).
+  // Read the way the Milestones view reads it, only for a milestone.
+  const isMilestone = issue.kind === MILESTONE_KIND;
+  const milestone = useResource(
+    useCallback(() => (isMilestone ? getMilestone({ ws: workspace, ref: issue.id }) : Promise.resolve(null)), [isMilestone, workspace, issue.id]),
+    [isMilestone, workspace, issue.id, issue.updatedAt],
+    ignoreAuthError,
+  );
+  const held = milestone.data ? rekindReason(milestone.data.members.length, Boolean(milestone.data.milestone.targetDate || milestone.data.milestone.startDate)) : null;
 
   return (
     <>
@@ -263,14 +277,24 @@ export function InlineKind({ issue, workspace, refresh, variant = "row", report 
             vendored "item-aligned" default positions the list by the SELECTED row, so a
             kind near the end of the vocabulary pushes the top of the list off-screen. */}
         <SelectContent position="popper" align="start">
-          {kinds.map((kind) => (
-            <SelectItem key={kind} value={kind} className="pointer-coarse:min-h-11">
-              <span className="flex items-center gap-1.5">
-                <KindGlyph kind={kind} size={16} labelled={false} />
-                {kindLabel(kind)}
-              </span>
-            </SelectItem>
-          ))}
+          {kinds.map((kind) => {
+            const reason = held && kind !== issue.kind ? held : null;
+            return (
+              <SelectItem key={kind} value={kind} disabled={Boolean(reason)} data-kind-choice={kind} className="pointer-coarse:min-h-11">
+                <span className="flex flex-col gap-0.5">
+                  <span className="flex items-center gap-1.5">
+                    <KindGlyph kind={kind} size={16} labelled={false} />
+                    {kindLabel(kind)}
+                  </span>
+                  {reason ? (
+                    <span className="text-[12px] text-text-secondary" data-kind-reason="">
+                      {reason}
+                    </span>
+                  ) : null}
+                </span>
+              </SelectItem>
+            );
+          })}
         </SelectContent>
       </Select>
       <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />

@@ -508,6 +508,7 @@ export function plainRefusal(message: string, code: string): string {
   if ((m = /queued behind (\S+), awaiting approval by ([^.]+)\./.exec(message))) return `This waits for ${m[2]} to approve ${m[1]} first.`;
   if (/requires an assignee/.test(message)) return "Use Start work, so the tracker knows who is on it.";
   if ((m = /Checkout refused: status is "([^"]+)"/.exec(message))) return "This task can't be started from its current status.";
+  if ((m = /is a milestone with (\d+) members?( and dates)?;/.exec(message))) return `This is a milestone. ${rekindReason(Number(m[1]), Boolean(m[2]))}`;
   if ((m = /held by (\S+?),? /.exec(message))) return `${m[1]} is still working on this.`;
   if ((m = /later in the queue than (\S+?), which is ready/.exec(message))) return `${m[1]} is next in the queue. Take that first, or change the queue's order.`;
   if (code === "out_of_order") return "Something else is next in the queue. Take that first, or change the queue's order.";
@@ -553,4 +554,22 @@ export function queueAheadOf(rows: readonly QueueRowLike[], issueId: string): { 
       (target === null || target.unqueued || row.position < target.position),
   );
   return ahead ? { identifier: ahead.identifier, title: ahead.title } : null;
+}
+
+// ──────────────────────────────────────────────────────────────── milestones
+
+/** The kind the store keeps for milestones (core's MILESTONE_KIND). */
+export const MILESTONE_KIND = "milestone";
+
+/**
+ * Why a milestone cannot be re-declared as another kind yet, in plain words, or null when it
+ * can. The store refuses the change while the milestone has members or dates
+ * (`assertRekindAllowed`), so the kind menu holds the other kinds back and says this instead.
+ */
+export function rekindReason(members: number, dated: boolean): string | null {
+  const who = members === 1 ? "its 1 member" : `its ${members} members`;
+  if (members > 0 && dated) return `Remove ${who} and clear its dates first.`;
+  if (members > 0) return `Remove ${who} first.`;
+  if (dated) return "Clear its dates first.";
+  return null;
 }

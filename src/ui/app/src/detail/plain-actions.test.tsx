@@ -20,6 +20,7 @@ import {
   overflowItems,
   plainRefusal,
   primaryItem,
+  rekindReason,
   queueAheadOf,
   statusChoices,
   statusItems,
@@ -281,6 +282,21 @@ describe("the status sentence", () => {
       const words = sentence(detail({ issue: issue({ status: status as never }) }));
       expect(`${words.lead} ${words.tail ?? ""}`).not.toMatch(/_/);
     }
+  });
+});
+
+describe("a milestone's kind", () => {
+  it("is held while it has members or dates, and says what to do first", () => {
+    expect(rekindReason(1, false)).toBe("Remove its 1 member first.");
+    expect(rekindReason(3, false)).toBe("Remove its 3 members first.");
+    expect(rekindReason(2, true)).toBe("Remove its 2 members and clear its dates first.");
+    expect(rekindReason(0, true)).toBe("Clear its dates first.");
+    expect(rekindReason(0, false)).toBeNull();
+  });
+
+  it("turns the store's refusal into the same plain words", () => {
+    expect(plainRefusal("WOR-4 is a milestone with 1 member; remove them (`staple milestone rm`) and clear its dates before re-declaring it as a task.", "validation")).toBe("This is a milestone. Remove its 1 member first.");
+    expect(plainRefusal("WOR-4 is a milestone with 2 members and dates; remove them (`staple milestone rm`) and clear its dates before re-declaring it as a task.", "validation")).toBe("This is a milestone. Remove its 2 members and clear its dates first.");
   });
 });
 
