@@ -286,7 +286,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   const actualTense = running ? "so far" : null;
 
   return (
-    <div className="mx-auto w-full max-w-readable space-y-6 text-body">
+    <div className="w-full max-w-readable space-y-6 text-body">
       {/* ----------------------------------------------------------- headline */}
       <section aria-label="Summary">
         {/*

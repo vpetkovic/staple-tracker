@@ -288,7 +288,7 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
   const loading = (events.loading && !events.data) || (revisions.loading && !revisions.data);
 
   return (
-    <div className="activity-tab mx-auto w-full max-w-readable space-y-4">
+    <div className="activity-tab w-full max-w-readable space-y-4">
       {/* A failed side-source degrades the thread, it does not replace it: the comments
           are already in hand, so keep rendering them and say what is missing. */}
       {events.error ? <ErrorState error={events.error} /> : null}

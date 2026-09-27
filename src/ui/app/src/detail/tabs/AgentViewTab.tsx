@@ -87,7 +87,7 @@ export function AgentViewTab({ detail, workspace, onAuthError }: TabProps) {
   const relations = stats.payload.blockedBy.length + stats.payload.blocks.length;
 
   return (
-    <div className="mx-auto w-full max-w-readable space-y-4">
+    <div className="w-full max-w-readable space-y-4">
       <div className="space-y-1">
         <p className="text-reading text-foreground">This is exactly what an AI agent sees when it opens this task.</p>
         <p className="text-body text-text-secondary">

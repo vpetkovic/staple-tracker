@@ -265,7 +265,7 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
   const defaultFrom = Math.max(1, currentRevision - 1);
 
   return (
-    <div className="mx-auto w-full max-w-readable space-y-4">
+    <div className="w-full max-w-readable space-y-4">
       {detail.documents.length > 1 ? (
         <div role="group" aria-label="Documents" className="flex flex-wrap gap-1.5">
           {detail.documents.map((doc) => (

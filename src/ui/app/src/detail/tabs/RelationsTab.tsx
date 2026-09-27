@@ -443,7 +443,7 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
 
   if (nothing) {
     return (
-      <div className="mx-auto w-full max-w-readable">
+      <div className="w-full max-w-readable">
         <EmptyState icon={Network}>
           This task stands on its own: it has no parent, no sub-tasks, and nothing it waits on or holds up.
         </EmptyState>
@@ -452,7 +452,7 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-readable space-y-5">
+    <div className="w-full max-w-readable space-y-5">
       <Summary detail={detail} graph={resource.data} />
 
       {parent ? (
