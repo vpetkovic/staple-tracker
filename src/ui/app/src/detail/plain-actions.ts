@@ -3,8 +3,8 @@
  *
  * The tracker and its agents speak in checkouts, releases and status ids (`blocked`,
  * `in_progress`). A person opening a task on their phone needs to know what a button does to
- * the task, not what the command is called. The command names are not hidden (they sit under
- * "More details"); they are just not the labels.
+ * the task, not what the command is called. The status's own name and the raw ids are not
+ * hidden (they sit under "More details"); they are just not the labels.
  *
  * Everything here is pure: which action leads, what the status line says, and what each
  * status means, all decided from the detail payload and the workspace's vocabulary, so the
