@@ -1,7 +1,8 @@
 /**
- * What the issue is and what it is waiting on: description, acceptance criteria,
- * relations (including cross-workspace blockers), children, ancestry — and, since
- * W3, where the work stands.
+ * The Details tab: what the issue is and what it is waiting on. The description and the
+ * acceptance criteria read as clean content (the criteria as a checklist), then where the
+ * work stands, then what it waits on, what it holds up and the tasks inside it. Empty
+ * sections are not drawn; ancestry is the breadcrumb above the title.
  *
  * Deliberately the *static* half of the detail. Anything that changes over time —
  * comments, events, revisions — belongs in the Activity tab (U3), not here.
@@ -33,93 +34,108 @@
  * count of things that have happened. If a future ticket wants a *second* changing
  * thing here, it does not get to cite this comment — it has to make its own argument.
  */
-import { useCallback, useMemo, type ReactNode } from "react";
-import { StatusBadge } from "@/components/StatusBadge";
-import { TaskList } from "@/components/task-list";
+import { ArrowUpRight, CircleAlert, CircleCheck, FileText, Hourglass } from "lucide-react";
+import { useCallback, useMemo } from "react";
+import { StatusIcon, TaskList } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
 import { getDocument } from "@/lib/api";
 import type { AuthError } from "@/lib/api";
 import { blockingDescriptor, needsBorrowedDescriptor } from "@/lib/derived-blocked";
-import { gateCaption, gateRefusalReason, isGateParked } from "@/lib/derived-queued";
 import { Markdown } from "@/lib/markdown";
 import { useSession } from "@/lib/session";
+import { statusCategory, statusLabel } from "@/lib/settings";
 import type { CrossBlocker, IssueDocumentMeta, IssueRef } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
-import { cn } from "@/lib/utils";
+import { cn } from "../parts/cn";
 import { displayExcerptLine, excerptWorklog, WORKLOG_KEY } from "@/lib/worklog";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
+import { DetailCard, PersonChip, RelativeTime, SectionHeading, actorLabel } from "../parts";
+import { unreachableBlockers } from "../IssueActions";
 import { openDetailTab, type TabProps } from "./registry";
 
-function Heading({ children }: { children: ReactNode }) {
+/**
+ * A related task as one quiet row: its status icon, its title, and its reference at the end.
+ * The whole row opens it.
+ */
+function RelationRow({ relation, onOpen }: { relation: IssueRef; onOpen: (identifier: string) => void }) {
   return (
-    <h3 className="mt-4 mb-1.5 text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">
-      {children}
-    </h3>
-  );
-}
-
-function RelationChip({ relation, onOpen }: { relation: IssueRef; onOpen: (identifier: string) => void }) {
-  return (
-    <button
-      type="button"
-      data-status={relation.status}
-      title={relation.title}
-      onClick={() => onOpen(relation.identifier)}
-      className="status-chip rounded border px-1.5 py-0.5 font-mono text-[11px] hover:opacity-80"
-    >
-      {relation.identifier} · {relation.status}
-    </button>
+    <li>
+      <button
+        type="button"
+        data-status={relation.status}
+        data-relation={relation.identifier}
+        title={`${relation.identifier} · ${statusLabel(relation.status)}`}
+        onClick={() => onOpen(relation.identifier)}
+        className="focus-ring group flex min-h-10 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left hover:bg-surface-hover"
+      >
+        <StatusIcon status={relation.status} className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-body text-foreground">{relation.title}</span>
+        <span className="shrink-0 text-label text-text-tertiary">{relation.identifier}</span>
+        <ArrowUpRight aria-hidden className="size-3.5 shrink-0 text-text-tertiary opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+      </button>
+    </li>
   );
 }
 
 /**
- * A blocker in another workspace file. Dashed, because the hub knows it exists but this
- * page cannot open it; red when the file is not on this machine at all, which is a real
- * state an agent needs to see rather than an error to hide.
+ * A blocker in another workspace file. Reachable ones read like any other row, with their
+ * workspace. One this computer can't see says which of the two reasons it is, and what the
+ * person can do, in the wording the Connections tab uses too.
  */
-function CrossChip({ blocker }: { blocker: CrossBlocker }) {
+function CrossRow({ blocker, missing }: { blocker: CrossBlocker & { title?: string | null }; missing: "workspace" | "task" | null }) {
+  if (missing) {
+    return (
+      <li data-cross-blocker={blocker.identifier} data-missing={missing} className="flex min-w-0 items-start gap-2.5 rounded-lg border border-dashed px-2 py-2 text-body">
+        <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-[var(--status-task-blocked)]" />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-foreground wrap-anywhere">
+            {missing === "workspace" ? `${blocker.identifier} is in ${blocker.workspace}, which isn't on this computer.` : `${blocker.identifier} can't be found in ${blocker.workspace}.`}
+          </span>
+          <span className="text-label text-text-secondary">
+            {missing === "workspace" ? "Open that workspace on this computer, or remove the link if it no longer applies." : "It may have been deleted or renamed. Remove the link if it no longer applies."}
+          </span>
+        </span>
+      </li>
+    );
+  }
   return (
-    <span
-      title={`${blocker.workspace}${blocker.unresolvable ? " — workspace file not on this machine" : ""}`}
-      className={cn(
-        "rounded border border-dashed px-1.5 py-0.5 font-mono text-[11px]",
-        blocker.unresolvable
-          ? "border-[var(--status-task-blocked)] text-[var(--status-task-blocked)]"
-          : "border-border text-muted-foreground",
-      )}
-    >
-      {blocker.identifier} · {blocker.unresolvable ? "unresolvable" : (blocker.status ?? "?")}
-    </span>
+    <li data-cross-blocker={blocker.identifier} className="flex min-h-10 min-w-0 items-center gap-2.5 rounded-lg border border-dashed px-2 text-body" title={blocker.workspace}>
+      {blocker.status ? <StatusIcon status={blocker.status} className="size-4 shrink-0" /> : null}
+      <span className="min-w-0 flex-1 truncate text-foreground">{blocker.title || blocker.identifier}</span>
+      <span className="shrink-0 text-label text-text-tertiary">{`${blocker.title ? `${blocker.identifier} · ` : ""}in ${blocker.workspace}${blocker.status ? ` · ${statusLabel(blocker.status)}` : ""}`}</span>
+    </li>
   );
 }
 
-/** Same vocabulary DocumentsTab prints its `updated …` in, so the two agree on sight. */
-const stamp = (iso: string) => iso.slice(0, 16).replace("T", " ");
+/**
+ * A note about why the task is waiting: an icon, a sentence, and whatever the reader can do
+ * about it. `tone="blocked"` borrows the blocked hue; a review gate stays neutral, because a
+ * gate is the process working, not a fault.
+ */
+function Note({ tone, icon: Icon, children, ...rest }: { tone: "blocked" | "neutral"; icon: typeof Hourglass; children: React.ReactNode } & Record<`data-${string}`, string>) {
+  return (
+    <div
+      {...rest}
+      className={cn(
+        "mt-5 flex items-start gap-3 rounded-xl border px-4 py-3 text-body",
+        tone === "blocked"
+          ? "border-[var(--status-task-blocked)]/35 bg-[var(--status-task-blocked)]/[0.06]"
+          : "bg-surface-sunken",
+      )}
+    >
+      <Icon aria-hidden className={cn("mt-0.5 size-4 shrink-0", tone === "blocked" ? "text-[var(--status-task-blocked)]" : "text-text-secondary")} />
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
 
 /**
  * Where the work stands: the latest worklog, excerpted, with an honest way to the rest.
  *
- * THE GATE IS STRUCTURAL. This component is only rendered when `detail.documents`
- * already contains a worklog, so an issue without one does not mount the hook and
- * therefore cannot fire the request. A `useResource` that resolves `undefined` behind an
- * `if` would have been a request-shaped no-op that still ran on every poll; not
- * mounting is the version that is true by construction rather than by care.
- *
- * ONE FETCH, NO NEW API. Revision and last-written time ride in on `/api/issue`'s
- * `documents[]` for free (spec §2b), so the header renders before the body has landed
- * and never blanks while it reloads. Only the body costs a request.
- *
- * THE AUTHOR IS THE ONE THING NOT FREE. `IssueDocumentMeta` carries no author field —
- * `IssueDocument`, the fetched body, does. So the byline appears with the body rather
- * than with the header. That is a fetch away, not a lie: the alternative was adding an
- * author to the detail payload, and §5b says `/api/issue` changes nothing.
- *
- * THE TIME IS ABSOLUTE, NOT "41m ago". The spec's mock shows a relative age, and §4
- * rule 3 forbids deriving one on the client. Nothing on this payload carries a
- * server-computed document age — `claim.idleSeconds` is a different fact about a
- * different clock — so this prints the timestamp it was actually given. W1's
- * `WorklogSummary.updatedAt` is where a server-derived age will come from when the row
- * cue needs one.
+ * THE GATE IS STRUCTURAL. This component is only rendered when `detail.documents` already
+ * contains a worklog, so an issue without one does not mount the hook and cannot fire the
+ * request. Revision and last-written time ride in on `/api/issue`'s `documents[]` for free;
+ * only the body costs a request, and the author arrives with it.
  */
 function WorklogPanel({
   meta,
@@ -132,103 +148,77 @@ function WorklogPanel({
   issueRef: string;
   onAuthError: (error: AuthError) => void;
 }) {
-  // `currentRevision` in the dep list, not just the ref: a new checkpoint is exactly
-  // the change this panel exists to show, and it does not move the issue's updated_at.
+  // `currentRevision` in the dep list, not just the ref: a new checkpoint is exactly the
+  // change this panel exists to show, and it does not move the issue's updated_at.
   const body = useResource(
-    useCallback(
-      () => getDocument({ ws: workspace, ref: issueRef, key: WORKLOG_KEY }),
-      [workspace, issueRef],
-    ),
+    useCallback(() => getDocument({ ws: workspace, ref: issueRef, key: WORKLOG_KEY }), [workspace, issueRef]),
     [workspace, issueRef, meta.currentRevision],
     onAuthError,
   );
 
-  const excerpt = useMemo(
-    () => (body.data ? excerptWorklog(body.data.body) : null),
-    [body.data],
-  );
-
+  const excerpt = useMemo(() => (body.data ? excerptWorklog(body.data.body) : null), [body.data]);
   const showAll = () => openDetailTab("documents", WORKLOG_KEY);
 
   return (
-    <section aria-label="Worklog" className="mt-4">
-      {/* Eyebrow + hairline + content — the panel's own three-part beat
-          (IssueDetailPanel §4 SECTION RHYTHM), and the same `Heading` register the
-          rest of this tab uses. Monochrome throughout: the detail spends its only
-          colour on status, and a worklog is not a status. */}
-      <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <h3 className="text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">
-          Worklog
-        </h3>
-        <span className="font-mono text-[11px] text-muted-foreground">r{meta.currentRevision}</span>
-        {body.data?.author ? (
-          <span className="text-[11px] text-muted-foreground">@{body.data.author}</span>
-        ) : null}
-        <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-          {stamp(meta.updatedAt)}
-        </span>
-      </div>
+    <section aria-label="Worklog" className="mt-8">
+      <SectionHeading
+        action={
+          <Button size="xs" variant="ghost" className="focus-ring text-text-secondary pointer-coarse:h-10 pointer-coarse:px-3" onClick={showAll} title="Open the full worklog in the Documents tab">
+            Show all
+          </Button>
+        }
+      >
+        Where the work stands
+      </SectionHeading>
+      <DetailCard className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-label text-text-secondary" data-worklog-byline="">
+          <FileText aria-hidden className="size-3.5" />
+          <span>Worklog</span>
+          {body.data?.author ? (
+            <>
+              <span aria-hidden>·</span>
+              <PersonChip name={body.data.author} kind="agent" size="sm" />
+            </>
+          ) : null}
+          <span aria-hidden>·</span>
+          <RelativeTime iso={meta.updatedAt} inSentence />
+          <span className="ml-auto text-text-tertiary" title={`Revision ${meta.currentRevision}`}>
+            Version {meta.currentRevision}
+          </span>
+        </div>
 
-      <div className="rounded-md border bg-muted/40 px-3 py-2">
         {body.error ? <ErrorState error={body.error} /> : null}
         {!body.data && body.loading ? <LoadingState rows={2} /> : null}
 
         {excerpt ? (
-          <>
-            {/* Tiers 1 and 2 found a section and can name it. Tier 3 found the top of
-                the document and must not pretend otherwise — an unlabelled excerpt is
-                honest about being an opening, and a mislabelled one is not. */}
-            {excerpt.label ? (
-              <p className="mb-1 text-[12px] font-medium">{excerpt.label}</p>
-            ) : null}
-            {/* Real text, not a `title=` — the excerpt is the content, so it is
-                selectable, searchable and readable by a screen reader. Rendered as
-                plain lines rather than through `Markdown` on purpose: an excerpt is a
-                FRAGMENT, and a fragment ending mid-list or mid-table renders as
-                garbage. The Documents tab is where the body keeps its formatting. */}
-            <div className="space-y-0.5 text-[12px] leading-snug break-words whitespace-pre-wrap">
+          <div className="flex flex-col gap-1">
+            {/* Tiers 1 and 2 found a section and can name it; tier 3 found the top of the
+                document and must not pretend otherwise. */}
+            {excerpt.label ? <p className="m-0 text-body font-medium text-foreground">{excerpt.label}</p> : null}
+            {/* Plain lines rather than Markdown on purpose: an excerpt is a FRAGMENT, and a
+                fragment ending mid-list renders as garbage. Documents keeps the formatting. */}
+            <div className="flex min-w-0 flex-col gap-0.5 text-body wrap-anywhere whitespace-pre-wrap text-text-secondary">
               {excerpt.lines.map((line, i) => {
                 const { text, heading } = displayExcerptLine(line);
-                // A section heading inside the excerpt gets weight instead of its `##`,
-                // which is the same treatment `label` above already gets — otherwise a
-                // tier-3 excerpt would print raw markers beside a tier-1 one that does not.
                 return (
-                  <div key={i} className={cn(heading && "font-medium")}>
+                  <div key={i} className={cn(heading && "font-medium text-foreground")}>
                     {text}
                   </div>
                 );
               })}
             </div>
-          </>
-        ) : null}
-
-        {body.data && !excerpt ? (
-          <p className="text-[12px] text-muted-foreground">this worklog is empty</p>
-        ) : null}
-
-        {/* The honest footer. It says how much of the document you are looking at
-            BEFORE offering the rest, so "Show all" is a measured decision rather than
-            a hopeful click — and on a short worklog where the excerpt IS the document,
-            it says so and the button opens it anyway. */}
-        {body.data ? (
-          <div className="mt-2 flex flex-wrap items-center gap-x-2 border-t pt-1.5 text-[11px] text-muted-foreground">
-            <span>
-              {excerpt && excerpt.truncated
-                ? `showing ${excerpt.lines.length} of ${excerpt.totalLines} lines`
-                : `${excerpt?.totalLines ?? 0} lines`}
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto h-6 px-2"
-              onClick={showAll}
-              title="Open the full worklog in the Documents tab"
-            >
-              Show all
-            </Button>
           </div>
         ) : null}
-      </div>
+
+        {body.data && !excerpt ? <p className="m-0 text-body text-text-tertiary">This worklog is empty.</p> : null}
+
+        {/* How much of the document this is, BEFORE offering the rest. */}
+        {body.data && excerpt?.truncated ? (
+          <p className="m-0 text-label text-text-tertiary">
+            Showing {excerpt.lines.length} of {excerpt.totalLines} lines
+          </p>
+        ) : null}
+      </DetailCard>
     </section>
   );
 }
@@ -237,179 +227,121 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
   const session = useSession();
   const { issue } = detail;
   const openRef = (identifier: string) => session.open(workspace, identifier);
+  const finished = statusCategory(issue.status) === "done";
 
   /**
-   * A parent whose `blocked` was DERIVED from its children (STA-98) carries no
-   * descriptor of its own, so it borrows its blocking children's. Computed from
-   * `detail.children`, which is already on the wire — this panel needs no new
-   * API, and what it shows can never disagree with the children listed below it.
+   * A parent whose `blocked` was DERIVED from its children carries no descriptor of its own,
+   * so it borrows its blocking children's, from `detail.children` already on the wire.
    */
-  const borrowedBlockers = needsBorrowedDescriptor(issue)
-    ? detail.children.filter((child) => child.status === "blocked")
-    : [];
+  const borrowedBlockers = needsBorrowedDescriptor(issue) ? detail.children.filter((child) => child.status === "blocked") : [];
 
-  /**
-   * Already on the wire (spec §2b) — `documents[]` comes down with the detail and
-   * carries the key, the revision and the last-written time. Absent means no worklog,
-   * and the panel below is simply not rendered, so nothing is fetched and nothing
-   * empty is drawn. Same contract as `claimActivityFor`: missing is a state, not an
-   * error, and never a placeholder.
-   */
+  /** Absent means no worklog: the panel is not rendered, so nothing is fetched. */
   const worklog = detail.documents.find((document) => document.key === WORKLOG_KEY);
+  const waitingOn = detail.blockedBy.length + detail.crossBlockers.length;
+  const unreachable = unreachableBlockers(detail, session.workspaces.map((w) => w.slug));
 
   return (
-    <div className="text-sm">
-      {issue.description ? <Markdown text={issue.description} className="text-[13px]" /> : null}
+    <div className="flex flex-col" data-details-tab="">
+      {issue.description ? (
+        <Markdown text={issue.description} className="staple-detail-prose" />
+      ) : (
+        <p className="m-0 text-reading text-text-tertiary" data-no-description="">
+          No description yet.
+        </p>
+      )}
 
       {issue.acceptanceCriteria?.length ? (
-        <>
-          <Heading>Acceptance criteria</Heading>
-          <ul className="list-disc space-y-1 pl-5 text-[13px]">
+        <section aria-label="Acceptance criteria" className="mt-8">
+          <SectionHeading action={<span className="text-text-tertiary">{issue.acceptanceCriteria.length}</span>}>Done when</SectionHeading>
+          <ul className="m-0 flex min-w-0 list-none flex-col gap-0.5 p-0" data-criteria="" aria-label={finished ? "Done when (met)" : "Done when"}>
             {issue.acceptanceCriteria.map((criterion, i) => (
-              <li key={i}>{criterion}</li>
+              <li key={i} className="flex min-w-0 items-start gap-3 py-1.5 text-reading text-foreground" data-criterion={finished ? "met" : "open"}>
+                {/* Read-only: the tracker keeps no tick per criterion, so nothing here looks
+                    tickable. A quiet dot while open, a check once the task is done. */}
+                {finished ? (
+                  <CircleCheck aria-hidden className="mt-[3px] size-4 shrink-0 text-[var(--status-task-done)]" />
+                ) : (
+                  <span aria-hidden className="flex h-[22px] w-4 shrink-0 items-center justify-center">
+                    <span className="size-1.5 rounded-full bg-text-tertiary" />
+                  </span>
+                )}
+                <span className="min-w-0 flex-1 text-pretty wrap-anywhere">{criterion}</span>
+              </li>
             ))}
           </ul>
-        </>
+        </section>
       ) : null}
 
       {issue.status === "blocked" && (issue.unblockOwner || issue.unblockAction) ? (
-        <p className="mt-3 rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2 text-[13px]">
-          unblock: {issue.unblockOwner ?? "?"} must {issue.unblockAction ?? "?"}
-        </p>
+        <Note tone="blocked" icon={Hourglass} data-unblock="">
+          <span className="wrap-anywhere">
+            Waiting for <strong className="font-medium">{actorLabel(issue.unblockOwner)}</strong> to {issue.unblockAction ?? "unblock it"}.
+          </span>
+        </Note>
       ) : null}
 
-      {/*
-        THE GATE DESCRIPTOR — Q2 (STA-144). Same slot and same shape as the unblock
-        descriptor above, because it answers the identical question — who is this
-        waiting on — and the only difference is that the answer is a decision rather
-        than a dependency.
+      {/* A gate or a queue is said once, in the status line under the title, with the
+          approval card right below it; the tab does not repeat it. */}
 
-        MONOCHROME, unlike the two blocked descriptors, and that is the deliberate
-        part. Those borrow `--status-task-blocked` because blocked is a problem. A gate
-        is not a problem: it is the process working. Colouring it red would tell every
-        reader that a healthy review is a fault, which is the exact misreading STA-142
-        exists to end.
-
-        Both directions are stated here rather than only the parent's, because the
-        detail panel is where somebody lands from a queued child's row and asks why
-        they cannot claim it — and `gateRefusalReason` is the sentence that answers it,
-        the same one on the disabled claim button a few pixels above.
-      */}
-      {isGateParked(detail) ? (
-        <p data-gate="parked" className="mt-3 rounded-md border border-dashed px-3 py-2 text-[13px]">
-          {gateCaption(detail.gate!)} — this and everything under it is parked until it is
-          approved
-        </p>
-      ) : null}
-
-      {detail.queuedBy ? (
-        <p data-gate="queued" className="mt-3 rounded-md border border-dashed px-3 py-2 text-[13px]">
-          {gateRefusalReason(detail.queuedBy)}
-        </p>
-      ) : null}
-
-      {/*
-        A parent blocked BY ITS CHILDREN (STA-98). Same slot and same colour as
-        the descriptor above, because it answers the identical question — the
-        only difference is whose sentence it is, so each line names the child it
-        came from and opens it. Nothing here is styled as "derived": the
-        descriptor IS the point, and a reader who wants provenance has the child
-        identifier right there.
-      */}
+      {/* A parent blocked BY ITS CHILDREN: each line names the child it came from and opens it. */}
       {borrowedBlockers.length > 0 ? (
-        <div
-          data-derived-blocked="true"
-          className="mt-3 rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2 text-[13px]"
-        >
-          {borrowedBlockers.map((child) => (
-            <div key={child.id} className="flex flex-wrap items-baseline gap-x-1.5">
-              <span>{blockingDescriptor(child)}</span>
-              <button
-                type="button"
-                onClick={() => openRef(child.identifier)}
-                className="font-mono text-[11px] text-muted-foreground hover:underline"
-              >
-                {child.identifier}
-              </button>
-            </div>
-          ))}
-        </div>
+        <Note tone="blocked" icon={Hourglass} data-derived-blocked="true">
+          <ul className="m-0 flex list-none flex-col gap-1 p-0">
+            {borrowedBlockers.map((child) => (
+              <li key={child.id} className="flex flex-wrap items-baseline gap-x-2">
+                <span>{blockingDescriptor(child)}</span>
+                <button type="button" onClick={() => openRef(child.identifier)} className="focus-ring rounded text-label text-text-secondary underline-offset-2 hover:underline">
+                  {child.identifier}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Note>
       ) : null}
 
-      {/* After the description and the criteria, before the relations: the ticket
-          says what the work IS, then this says where it GOT TO, and only then does
-          the tab move on to what it is waiting on. */}
-      {worklog ? (
-        <WorklogPanel
-          meta={worklog}
-          workspace={workspace}
-          issueRef={issue.identifier}
-          onAuthError={onAuthError}
-        />
+      {/* After what the work IS, where it GOT TO, and only then what it is waiting on. */}
+      {worklog ? <WorklogPanel meta={worklog} workspace={workspace} issueRef={issue.identifier} onAuthError={onAuthError} /> : null}
+
+      {waitingOn > 0 ? (
+        <section aria-label="Blocked by" className="mt-8">
+          <SectionHeading action={<span className="text-text-tertiary">{waitingOn}</span>}>Waiting on</SectionHeading>
+          <ul className="-mx-2 m-0 flex list-none flex-col gap-0.5 p-0">
+            {detail.blockedBy.map((relation) => (
+              <RelationRow key={relation.identifier} relation={relation} onOpen={openRef} />
+            ))}
+            {detail.crossBlockers.map((blocker) => (
+              <CrossRow key={blocker.identifier} blocker={blocker} missing={unreachable.find((u) => u.identifier === blocker.identifier)?.missing ?? null} />
+            ))}
+          </ul>
+        </section>
       ) : null}
 
-      <Heading>Blocked by</Heading>
-      <div className="flex flex-wrap gap-1.5">
-        {detail.blockedBy.length === 0 && detail.crossBlockers.length === 0 ? (
-          <span className="text-[13px] text-muted-foreground">none</span>
-        ) : null}
-        {detail.blockedBy.map((relation) => (
-          <RelationChip key={relation.identifier} relation={relation} onOpen={openRef} />
-        ))}
-        {detail.crossBlockers.map((blocker) => (
-          <CrossChip key={blocker.identifier} blocker={blocker} />
-        ))}
-      </div>
-
-      <Heading>Blocks</Heading>
-      <div className="flex flex-wrap gap-1.5">
-        {detail.blocks.length === 0 ? (
-          <span className="text-[13px] text-muted-foreground">none</span>
-        ) : (
-          detail.blocks.map((relation) => (
-            <RelationChip key={relation.identifier} relation={relation} onOpen={openRef} />
-          ))
-        )}
-      </div>
+      {detail.blocks.length > 0 ? (
+        <section aria-label="Blocks" className="mt-8">
+          <SectionHeading action={<span className="text-text-tertiary">{detail.blocks.length}</span>}>Holding up</SectionHeading>
+          <ul className="-mx-2 m-0 flex list-none flex-col gap-0.5 p-0">
+            {detail.blocks.map((relation) => (
+              <RelationRow key={relation.identifier} relation={relation} onOpen={openRef} />
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {detail.children.length > 0 ? (
-        <>
-          <Heading>Children</Heading>
-          {/*
-            R4 (STA-102): the SAME Linear row the tree renders, in the `panel` preset —
-            compact, no checkbox, no connectors, no date column. It replaces a stack of
-            `IssueCard`s, which was a second visual language for the same object: a card
-            with a status badge, in a panel, beside a list that had spent a whole ticket
-            learning to be a row. One import, one element, and every future improvement to
-            the row lands here for free.
-          */}
-          <TaskList
-            label="Children"
-            preset="panel"
-            rows={detail.children.map((child) => ({ workspace, issue: child, claim: null }))}
-            currentRef={issue.identifier}
-            onOpen={session.open}
-          />
-        </>
-      ) : null}
-
-      {detail.ancestors.length > 0 ? (
-        <>
-          <Heading>Ancestry</Heading>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {detail.ancestors.map((ancestor) => (
-              <button
-                key={ancestor.id}
-                type="button"
-                onClick={() => openRef(ancestor.identifier)}
-                className="flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-[11px] hover:border-ring"
-              >
-                <StatusBadge status={ancestor.status} />
-                <span className="font-mono">{ancestor.identifier}</span>
-              </button>
-            ))}
-          </div>
-        </>
+        <section aria-label="Children" className="mt-8">
+          <SectionHeading action={<span className="text-text-tertiary">{detail.children.length}</span>}>Tasks inside</SectionHeading>
+          {/* The SAME row the list renders, in the `panel` preset: one visual language for
+              the same object, and every improvement to the row lands here for free. */}
+          <DetailCard padded={false} className="overflow-hidden">
+            <TaskList
+              label="Children"
+              preset="panel"
+              rows={detail.children.map((child) => ({ workspace, issue: child, claim: null }))}
+              currentRef={issue.identifier}
+              onOpen={session.open}
+            />
+          </DetailCard>
+        </section>
       ) : null}
     </div>
   );

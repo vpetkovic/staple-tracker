@@ -226,6 +226,7 @@ export function GateReview({
   queue,
   busy,
   now = new Date(),
+  showState = true,
   onApproveAll,
   onApproveSelected,
   onRequestChanges,
@@ -242,9 +243,15 @@ export function GateReview({
   busy: boolean;
   /** Injected so the header's age is a pure function of props in tests. */
   now?: Date;
+  /**
+   * The "awaiting VP · 2h" line. Off where the surrounding page already says who the gate
+   * waits for (the detail's status line), so it is said once.
+   */
+  showState?: boolean;
   onApproveAll: (comment?: string) => void;
   onApproveSelected: (children: string[]) => void;
-  onRequestChanges: (comment: string) => void;
+  /** May resolve to whether it went through; on success the note box clears and closes. */
+  onRequestChanges: (comment: string) => void | Promise<boolean>;
 }) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [objection, setObjection] = useState<string | null>(null);
@@ -285,8 +292,8 @@ export function GateReview({
   return (
     <section aria-label="Review gate" className="staple-gate">
       <div className="staple-gate-head">
-        <span className="staple-gate-eyebrow">Review gate</span>
-        <span className="staple-gate-state">{gateStateSummary(gate, now)}</span>
+        <h3 className="staple-gate-eyebrow m-0">Approval</h3>
+        {showState ? <span className="staple-gate-state">{gateStateSummary(gate, now)}</span> : null}
       </div>
 
       {count > 0 ? (
@@ -478,7 +485,12 @@ export function GateReview({
             <Button
               size="sm"
               disabled={busy || objection.trim().length === 0}
-              onClick={() => onRequestChanges(objection.trim())}
+              onClick={() => {
+                // Cleared and closed once it went through, so a second tap cannot resend it.
+                void Promise.resolve(onRequestChanges(objection.trim())).then((ok) => {
+                  if (ok !== false) setObjection(null);
+                });
+              }}
             >
               Send back with note
             </Button>

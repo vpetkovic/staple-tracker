@@ -86,6 +86,10 @@ export interface TimelineEntry {
   authorType?: string;
   /** Set on status entries so the rail can borrow --status-task-*. */
   status?: string;
+  /** The status a status entry moved FROM, when the event recorded it. */
+  from?: string;
+  /** Set on revision and checkpoint entries: which document, at which revision. */
+  document?: { key: string; revision: number };
   /** Extra chips: blocker identifiers, document key + revision. */
   chips?: string[];
 }
@@ -104,12 +108,33 @@ const asIdentifiers = (value: unknown): string[] =>
     : [];
 
 /**
+ * A status id as words, for the one place this module has to name a status without the
+ * workspace's configured labels: `in_progress` -> `In progress`. The UI swaps in the
+ * configured label when it renders; the sentence here is what a test (and a fallback) reads.
+ */
+export function humanizeStatus(id: string): string {
+  const words = id.replace(/_/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : id;
+}
+
+/** An estimate in words: `8 hours`, `90 minutes`, `2½ hours` — the way it was typed, near enough. */
+function estimateWords(seconds: number): string {
+  if (seconds < 3600 || seconds % 1800 !== 0) {
+    const minutes = Math.round(seconds / 60);
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  const hours = seconds / 3600;
+  const text = Number.isInteger(hours) ? String(hours) : `${Math.floor(hours)}½`;
+  return `${text} ${hours === 1 ? "hour" : "hours"}`;
+}
+
+/**
  * One event -> one row's worth of prose, or null when the event is a lossy duplicate
  * of something a richer source already contributes.
  */
 export function describeEvent(
   event: TimelineEvent,
-): Pick<TimelineEntry, "kind" | "summary" | "status" | "chips"> | null {
+): Pick<TimelineEntry, "kind" | "summary" | "status" | "from" | "chips"> | null {
   const payload = event.payload ?? {};
   switch (event.kind) {
     // Dropped: the comment thread and the revision list carry more than these do.
@@ -120,27 +145,30 @@ export function describeEvent(
     case "status_changed": {
       const from = asString(payload.from);
       const to = asString(payload.to);
+      // Plain words, not an arrow between two ids: the row says where the task went,
+      // and the status it left is kept for the tooltip.
       return {
         kind: "status",
         status: to ?? undefined,
-        summary: from && to ? `status ${from} → ${to}` : `status changed${to ? ` to ${to}` : ""}`,
+        from: from ?? undefined,
+        summary: to ? `moved to ${humanizeStatus(to)}` : "changed the status",
       };
     }
 
     case "issue_created":
-      return { kind: "lifecycle", summary: "issue created" };
+      return { kind: "lifecycle", summary: "created this task" };
 
     case "checkout":
-      return { kind: "lifecycle", summary: "claimed" };
+      return { kind: "lifecycle", summary: "started working on it" };
 
     case "release":
-      return { kind: "lifecycle", summary: "released the claim" };
+      return { kind: "lifecycle", summary: "stopped working on it" };
 
     case "blockers_changed": {
       const blockers = asIdentifiers(payload.blockedBy);
       return {
         kind: "blocker",
-        summary: blockers.length === 0 ? "dependencies cleared" : "dependencies set",
+        summary: blockers.length === 0 ? "no longer waits on anything" : "now waits on",
         chips: blockers,
       };
     }
@@ -149,7 +177,7 @@ export function describeEvent(
       const blockers = asIdentifiers(payload.blockers);
       return {
         kind: "blocker",
-        summary: "every blocker resolved — ready to pick up",
+        summary: "everything it waited on is finished, so it is ready to pick up",
         chips: blockers,
       };
     }
@@ -158,10 +186,30 @@ export function describeEvent(
       const children = asIdentifiers(payload.children);
       return {
         kind: "blocker",
-        summary: "every subtask finished",
+        summary: "all sub-tasks are finished",
         chips: children,
       };
     }
+
+    // The rest of the log, in words a reader who never saw the event table can follow.
+    case "attempt_started":
+      return { kind: "lifecycle", summary: "began a work session" };
+    case "attempt_ended":
+      return { kind: "lifecycle", summary: "ended a work session" };
+    case "estimate_changed": {
+      const to = typeof payload.to === "number" ? payload.to : null;
+      return { kind: "lifecycle", summary: to === null ? "removed the estimate" : `set the estimate to ${estimateWords(to)}` };
+    }
+    case "gate_requested":
+      return { kind: "lifecycle", summary: "asked for a review" };
+    case "gate_approved":
+      return { kind: "lifecycle", summary: "approved the review" };
+    case "claim_released_stale":
+      return { kind: "lifecycle", summary: "released a claim that had gone quiet" };
+    case "queue_enqueued":
+      return { kind: "lifecycle", summary: "added it to the queue" };
+    case "queue_dequeued":
+      return { kind: "lifecycle", summary: "took it off the queue" };
 
     default:
       // Fail soft: an unrecognised kind is still history.
@@ -222,7 +270,7 @@ export function buildTimeline(input: {
       at: event.createdAt,
       actor: event.actor,
       ...described,
-      order: described.kind === "lifecycle" && described.summary === "issue created" ? 0 : 1,
+      order: event.kind === "issue_created" ? 0 : 1,
       seq: event.seq,
     });
   }
@@ -250,6 +298,7 @@ export function buildTimeline(input: {
       actor: revision.author ?? revisionActors.get(id) ?? null,
       summary: isCheckpoint ? `checkpoint · ${written}` : written,
       chips: [`${revision.key} r${revision.revision}`],
+      document: { key: revision.key, revision: revision.revision },
       // Same slot as any revision: promotion changes how a row reads, not when it
       // happened, so a checkpoint and the status change beside it keep their order.
       order: 3,
@@ -262,4 +311,63 @@ export function buildTimeline(input: {
   );
 
   return entries.map(({ order: _order, seq: _seq, ...entry }) => entry);
+}
+
+/**
+ * The timeline, cut into calendar days — "Today", "Yesterday", a weekday within the last
+ * week, then a short date ("Sep 12", with the year only when it is not this year).
+ *
+ * Pure: the clock and the zone are parameters, so a test owns both, and the order of the
+ * entries is kept exactly as `buildTimeline` produced it (oldest first). A day is a
+ * calendar day in `timeZone` (the viewer's by default), not a rolling 24 hours, so
+ * something at 23:50 yesterday reads "Yesterday" at 00:10 today.
+ */
+export interface TimelineDay {
+  /** `YYYY-MM-DD` in the zone — stable, and the React key. */
+  key: string;
+  label: string;
+  /** True for the group that holds today's entries. */
+  today: boolean;
+  entries: TimelineEntry[];
+}
+
+function calendarKey(at: Date, timeZone: string | undefined): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+}
+
+export function dayLabel(iso: string, options: { now?: Date; timeZone?: string } = {}): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "Earlier";
+  const now = options.now ?? new Date();
+  const { timeZone } = options;
+  const days = Math.round(
+    (Date.parse(`${calendarKey(now, timeZone)}T00:00:00Z`) - Date.parse(`${calendarKey(at, timeZone)}T00:00:00Z`)) /
+      86_400_000,
+  );
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days > 1 && days < 7) return new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long" }).format(at);
+  const year = (d: Date) => new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric" }).format(d);
+  const monthDay = new Intl.DateTimeFormat("en-US", { timeZone, month: "short", day: "numeric" }).format(at);
+  return year(at) === year(now) ? monthDay : `${monthDay}, ${year(at)}`;
+}
+
+export function groupByDay(
+  entries: readonly TimelineEntry[],
+  options: { now?: Date; timeZone?: string } = {},
+): TimelineDay[] {
+  const now = options.now ?? new Date();
+  const todayKey = calendarKey(now, options.timeZone);
+  const days: TimelineDay[] = [];
+  for (const entry of entries) {
+    const at = new Date(entry.at);
+    const key = Number.isNaN(at.getTime()) ? "unknown" : calendarKey(at, options.timeZone);
+    const last = days.at(-1);
+    if (last && last.key === key) {
+      last.entries.push(entry);
+      continue;
+    }
+    days.push({ key, label: dayLabel(entry.at, { now, timeZone: options.timeZone }), today: key === todayKey, entries: [entry] });
+  }
+  return days;
 }

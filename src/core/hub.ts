@@ -189,6 +189,24 @@ export interface CrossBlockerState {
   unresolvable: boolean;
 }
 
+/**
+ * A cross-workspace blocker with its title, for the web UI's detail, which names every
+ * related task by title. A separate type on purpose: `CrossBlockerState` is the MCP
+ * `get_task` shape (pinned by a type assertion in mcp.ts and byte for byte by the
+ * agent-context test), and that payload stays exactly as it was.
+ */
+export interface CrossBlockerDetail extends CrossBlockerState {
+  /** Null when the blocker's workspace file is not on this machine. */
+  title: string | null;
+  /**
+   * Why an unresolvable blocker cannot be read, so a person is told the truth about it:
+   * `"workspace"` — its workspace is not on this computer (unregistered, or its file is gone);
+   * `"task"` — the workspace is here but has no such task (deleted, renamed, mistyped).
+   * Null when the blocker was read.
+   */
+  missing: "workspace" | "task" | null;
+}
+
 /** What {@link Hub.unregister} would do, without doing it. */
 export interface UnregisterPreview {
   entry: WorkspaceEntry;
@@ -1410,6 +1428,15 @@ export class Hub {
    * graceful-degradation rule from the evaluation).
    */
   crossBlockersOf(identifier: string): CrossBlockerState[] {
+    return this.crossBlockerRows(identifier).map(({ title: _title, missing: _missing, ...state }) => state);
+  }
+
+  /** {@link crossBlockersOf}, plus each blocker's title. Read by the web UI's detail only. */
+  crossBlockersWithTitles(identifier: string): CrossBlockerDetail[] {
+    return this.crossBlockerRows(identifier);
+  }
+
+  private crossBlockerRows(identifier: string): CrossBlockerDetail[] {
     const target = this.resolveIdentifier(identifier);
     const links = this.db
       .prepare("SELECT * FROM cross_links WHERE blocked_ws = ? AND blocked_identifier = ?")
@@ -1426,6 +1453,8 @@ export class Hub {
           status: null,
           resolved: false,
           unresolvable: true,
+          title: null,
+          missing: "workspace",
         };
       }
       const ws = openWorkspace(entry.path);
@@ -1437,6 +1466,8 @@ export class Hub {
           status: issue.status,
           resolved: (RESOLVED_STATUSES as readonly string[]).includes(issue.status),
           unresolvable: false,
+          title: issue.title,
+          missing: null,
         };
       } catch {
         return {
@@ -1445,6 +1476,8 @@ export class Hub {
           status: null,
           resolved: false,
           unresolvable: true,
+          title: null,
+          missing: "task",
         };
       } finally {
         ws.store.db.close();

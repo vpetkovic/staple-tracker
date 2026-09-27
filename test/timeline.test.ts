@@ -7,7 +7,7 @@
  * kind nobody has written yet still produces a row.
  */
 import { describe, expect, it } from "vitest";
-import { buildTimeline, describeEvent } from "../src/ui/app/src/detail/timeline.js";
+import { buildTimeline, dayLabel, describeEvent, groupByDay, humanizeStatus } from "../src/ui/app/src/detail/timeline.js";
 import type { DocumentRevision, IssueComment, StapleEvent } from "../src/ui/app/src/lib/types.js";
 
 const comment = (id: string, at: string, body: string, author = "vpetkovic"): IssueComment => ({
@@ -60,14 +60,15 @@ describe("describeEvent", () => {
     expect(describeEvent(event(1, "doc_updated", "2026-09-01T10:00:00Z", { key: "plan", revision: 2 }))).toBeNull();
   });
 
-  it("phrases a status change as from → to", () => {
+  it("phrases a status change in plain words, and keeps where it came from", () => {
     const described = describeEvent(event(1, "status_changed", "2026-09-01T10:00:00Z", {
       from: "todo",
       to: "in_progress",
     }))!;
     expect(described.kind).toBe("status");
     expect(described.status).toBe("in_progress");
-    expect(described.summary).toBe("status todo → in_progress");
+    expect(described.summary).toBe("moved to In progress");
+    expect(described.from).toBe("todo");
   });
 
   it("carries the blocker list on a blockers_resolved wake", () => {
@@ -91,11 +92,11 @@ describe("describeEvent", () => {
 
   it("distinguishes setting dependencies from clearing them", () => {
     expect(describeEvent(event(1, "blockers_changed", "2026-09-01T10:00:00Z", { blockedBy: [] }))!.summary).toBe(
-      "dependencies cleared",
+      "no longer waits on anything",
     );
     expect(
       describeEvent(event(1, "blockers_changed", "2026-09-01T10:00:00Z", { blockedBy: ["STA-13"] }))!.summary,
-    ).toBe("dependencies set");
+    ).toBe("now waits on");
   });
 
   it("fails soft on a kind it has never seen rather than dropping history", () => {
@@ -104,9 +105,21 @@ describe("describeEvent", () => {
     expect(described.summary).toBe("some future event");
   });
 
+  it("says the other lifecycle events in plain words", () => {
+    expect(describeEvent(event(1, "estimate_changed", "2026-09-01T10:00:00Z", { from: 18000, to: 28800 }))!.summary).toBe(
+      "set the estimate to 8 hours",
+    );
+    expect(describeEvent(event(1, "estimate_changed", "2026-09-01T10:00:00Z", { to: 5400 }))!.summary).toBe(
+      "set the estimate to 1½ hours",
+    );
+    expect(describeEvent(event(1, "attempt_started", "2026-09-01T10:00:00Z"))!.summary).toBe("began a work session");
+    expect(describeEvent(event(1, "gate_requested", "2026-09-01T10:00:00Z"))!.summary).toBe("asked for a review");
+  });
+
   it("survives a payload that is missing the fields it expects", () => {
     const described = describeEvent(event(1, "status_changed", "2026-09-01T10:00:00Z", {}))!;
-    expect(described.summary).toBe("status changed");
+    expect(described.summary).toBe("changed the status");
+    expect(described.from).toBeUndefined();
     expect(described.status).toBeUndefined();
   });
 });
@@ -260,6 +273,7 @@ describe("buildTimeline — worklog checkpoints", () => {
         actor: "opus-detail",
         summary: "restore revision 1",
         chips: ["plan r2"],
+        document: { key: "plan", revision: 2 },
       },
       {
         id: "revision:plan@3",
@@ -268,6 +282,7 @@ describe("buildTimeline — worklog checkpoints", () => {
         actor: "opus-detail",
         summary: "wrote plan",
         chips: ["plan r3"],
+        document: { key: "plan", revision: 3 },
       },
     ]);
   });
@@ -300,5 +315,56 @@ describe("buildTimeline — worklog checkpoints", () => {
       revisions: [worklog(2, at, "handing off")],
     });
     expect(merged.map((e) => e.kind)).toEqual(["status", "comment", "checkpoint"]);
+  });
+});
+
+/**
+ * The day grouping the Activity tab reads as a timeline: calendar days in a given zone,
+ * labelled the way a person says them, with the merge's order untouched.
+ */
+describe("groupByDay", () => {
+  const NOW = new Date("2026-09-27T15:00:00Z");
+  const opts = { now: NOW, timeZone: "UTC" };
+
+  it("labels today, yesterday, a weekday this week, then a short date", () => {
+    expect(dayLabel("2026-09-27T09:00:00Z", opts)).toBe("Today");
+    expect(dayLabel("2026-09-26T23:59:00Z", opts)).toBe("Yesterday");
+    expect(dayLabel("2026-09-24T10:00:00Z", opts)).toBe("Thursday");
+    expect(dayLabel("2026-09-12T10:00:00Z", opts)).toBe("Sep 12");
+    expect(dayLabel("2025-10-09T10:00:00Z", opts)).toBe("Oct 9, 2025");
+  });
+
+  it("cuts on calendar days in the zone, not on a rolling 24 hours", () => {
+    // 01:00 UTC on the 27th is still the 26th in New York.
+    expect(dayLabel("2026-09-27T01:00:00Z", { now: NOW, timeZone: "America/New_York" })).toBe("Yesterday");
+    expect(dayLabel("2026-09-27T01:00:00Z", opts)).toBe("Today");
+  });
+
+  it("groups consecutive entries of one day and keeps the merge's order", () => {
+    const merged = buildTimeline({
+      comments: [comment("c1", "2026-09-26T10:05:00Z", "yesterday"), comment("c2", "2026-09-27T14:00:00Z", "today")],
+      events: [
+        event(1, "issue_created", "2026-09-26T10:00:00Z"),
+        event(2, "status_changed", "2026-09-27T13:00:00Z", { from: "todo", to: "in_progress" }),
+      ],
+      revisions: [],
+    });
+    const days = groupByDay(merged, opts);
+    expect(days.map((day) => [day.label, day.today, day.entries.map((e) => e.kind)])).toEqual([
+      ["Yesterday", false, ["lifecycle", "comment"]],
+      ["Today", true, ["status", "comment"]],
+    ]);
+    expect(days.flatMap((day) => day.entries)).toEqual(merged);
+  });
+
+  it("returns no groups for an empty thread", () => {
+    expect(groupByDay([], opts)).toEqual([]);
+  });
+});
+
+describe("humanizeStatus", () => {
+  it("turns a status id into sentence-case words", () => {
+    expect(humanizeStatus("in_progress")).toBe("In progress");
+    expect(humanizeStatus("done")).toBe("Done");
   });
 });

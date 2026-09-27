@@ -1,419 +1,598 @@
 /**
- * The lifecycle actions on an issue — set status, claim, release, and (C3) take over or
- * free a claim whose holder has gone silent.
+ * The lifecycle controls on an issue: the status pill (the one status control), the one
+ * primary action, the ⋯ menu for everything else, the refusal, and the approval surface.
  *
- * Property editing deliberately does NOT live here. U5 put title, priority and labels
- * in InlineProperties.tsx instead, rendered in the panel header where those values are
- * READ: a title you have to come down to a form to change is not inline editing. What
- * is left here is the set of things that are verbs rather than fields.
+ * NONE OF THESE DECIDE WHAT A WRITE IS. plain-actions.ts turns the detail into items
+ * (label, reason it cannot run, and the `WriteCall`), mirroring the store's transition rules
+ * so nothing offered is a guaranteed refusal; this file renders the items and hands the
+ * chosen call to `execute`, which resolves the actor and sends `toRequest(call, actor)`.
+ * Keeping the write in data is what lets the tests pin "the menu sends the status you chose",
+ * "every write carries its workspace" and "Stop working sends a release" without a DOM.
  *
- * The comment composer is the other absentee — it lives with the rest of the thread in
- * the Activity tab.
+ * The pieces sit in different places per layout (header, phone top bar, phone bottom bar), so
+ * they share one controller from `useIssueActions`: one busy latch and one refusal.
  */
-import { useId, useState } from "react";
-import { GuardRefusal } from "@/components/GuardRefusal";
+import { Check, ChevronDown, Copy, Ellipsis, Hand, LogOut, RotateCcw, ShieldCheck, UserRoundCheck, X } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { StatusIcon } from "@/components/task-list";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { action, approveGate, requestGate, requestGateChanges } from "@/lib/api";
-import { STALE_CLAIM_SECONDS, isStaleClaim, staleClaimSummary } from "@/lib/claim";
-import { gateRefusalReason, isActiveGate } from "@/lib/derived-queued";
+import { isStaleClaim } from "@/lib/claim";
+import { isActiveGate } from "@/lib/derived-queued";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
-import {
-  ISSUE_STATUSES,
-  type ClaimActivity,
-  type GateQueueEntry,
-  type Issue,
-  type IssueGate,
-  type IssueStatus,
-  type QueuedBy,
-} from "@/lib/types";
-import { GateReview } from "./GateReview";
+import { configuredStatusOrder, statusCategory, statusLabel } from "@/lib/settings";
+import { ISSUE_STATUSES, type IssueDetail } from "@/lib/types";
 import { idsOf } from "@/lib/write-ref";
-import { configuredStatusOrder, statusLabel } from "@/lib/settings";
-import { ACTION_WORDS, statusChoices } from "./plain-actions";
+import { GateReview } from "./GateReview";
+import { cn } from "./parts/cn";
+import { readPersonName, rememberPersonName } from "./parts/person";
+import { createActionController, gateHandlers, overflowEntries, primaryEntry, statusEntries, type Names } from "./action-controller";
+import {
+  ACTION_WORDS,
+  overflowItems,
+  plainRefusal,
+  primaryItem,
+  statusChoices,
+  statusItems,
+  type ActionContext,
+  type ActionId,
+  type UnreachableBlocker,
+  type WriteCall,
+} from "./plain-actions";
+
+// ─────────────────────────────────────────────────────────────── context
 
 /**
- * Who is doing this? Asked, remembered, and asked again with the remembered answer
- * pre-filled — the same three lines the claim button has always used, lifted out so that
- * "take over" cannot drift into a different identity story than "claim".
- *
- * Returns null when the user cancels or clears the box, and the caller must treat that as
- * "do nothing": checkoutIssue sets BOTH checkoutAgent and assignee to the actor, so
- * proceeding without a name would hand the ticket to the literal string "ui".
+ * The working name (who is on it; may be an agent) lives at `staple:actor`. The person's own
+ * name goes through parts/person.ts, which shares it with the My tasks filter.
  */
-function askActor(prompt: string): string | null {
-  const remembered = localStorage.getItem("staple:actor") ?? "";
-  const name = window.prompt(prompt, remembered)?.trim();
-  if (!name) return null;
-  localStorage.setItem("staple:actor", name);
-  return name;
+const WORKER_KEY = "staple:actor";
+
+function readName(which: keyof Names): string | null {
+  if (which === "person") return readPersonName();
+  try {
+    return window.localStorage.getItem(WORKER_KEY) || null;
+  } catch {
+    return null;
+  }
 }
 
-export function IssueActions({
-  issue,
-  workspace,
-  claim,
-  gate = null,
-  queuedBy = null,
-  children = [],
-  childrenQueued = [],
-  refresh,
-}: {
-  issue: Issue;
-  workspace: string;
-  /**
-   * Holder liveness from /api/issue. Past the staleness threshold this grows two extra
-   * buttons; under it, and when null, the action row is exactly what it was.
-   */
-  claim?: ClaimActivity | null;
-  /**
-   * The gate pair and the children, from `/api/issue` — Q2 (STA-144). All four are
-   * OPTIONAL and default to the inert value, so a caller that has no opinion about
-   * gates (a test, a future surface) renders exactly the action row that was here
-   * before this ticket.
-   */
-  gate?: IssueGate | null;
-  queuedBy?: QueuedBy | null;
-  children?: readonly Issue[];
-  childrenQueued?: readonly GateQueueEntry[];
-  refresh: () => void;
-}) {
-  const [status, setStatus] = useState<IssueStatus>(issue.status);
-  const [refusal, setRefusal] = useState<Refusal | null>(null);
+function saveName(which: keyof Names, name: string): void {
+  if (which === "person") return rememberPersonName(name);
+  try {
+    window.localStorage.setItem(WORKER_KEY, name);
+  } catch {
+    /* private mode: the name lasts for this page load */
+  }
+}
+
+/** A cross-workspace blocker, with the fields the detail payload may add to it. */
+type CrossBlockerRow = IssueDetail["crossBlockers"][number] & { missing?: "workspace" | "task" | null };
+
+/**
+ * Blockers this computer cannot see. The server says which kind when it knows (`missing`);
+ * without it, a workspace this page lists means the task is missing there, and one it does
+ * not list means the workspace is not on this computer.
+ */
+export function unreachableBlockers(detail: Pick<IssueDetail, "crossBlockers">, workspaces: readonly string[]): UnreachableBlocker[] {
+  return (detail.crossBlockers as CrossBlockerRow[])
+    .filter((b) => b.unresolvable || b.missing)
+    .map((b) => ({
+      identifier: b.identifier,
+      workspace: b.workspace,
+      missing: b.missing ?? (workspaces.includes(b.workspace) ? "task" : "workspace"),
+    }));
+}
+
+/** Blockers that are not finished, here and in other workspaces (unreachable ones included). */
+export function openBlockerCount(detail: Pick<IssueDetail, "blockedBy" | "crossBlockers">): number {
+  const open = (status: string | null) => !status || !["done", "cancelled"].includes(statusCategory(status));
+  return detail.blockedBy.filter((ref) => open(ref.status)).length + detail.crossBlockers.filter((b) => !b.resolved && open(b.status)).length;
+}
+
+/** What the page knows beyond the detail payload: the strict queue's head and the workspaces. */
+export interface ContextExtras {
+  queueAhead?: { identifier: string; title: string } | null;
+  workspaces?: readonly string[];
+}
+
+/** The facts the action decisions read, from the detail payload and this browser's names. */
+export function actionContextOf(detail: IssueDetail, names: Names, extras: ContextExtras = {}): ActionContext {
+  return {
+    ws: detail.workspace,
+    issue: detail.issue,
+    claim: detail.claim ?? null,
+    gate: detail.gate ?? null,
+    queuedBy: detail.queuedBy ?? null,
+    parked: isActiveGate(detail.gate),
+    stale: isStaleClaim(detail.claim),
+    childCount: detail.children.length,
+    openBlockers: openBlockerCount(detail),
+    unreachable: unreachableBlockers(detail, extras.workspaces ?? []),
+    queueAhead: extras.queueAhead ?? null,
+    worker: names.worker,
+    person: names.person,
+    order: statusChoices(configuredStatusOrder(), ISSUE_STATUSES, detail.issue.status),
+    categoryOf: statusCategory,
+    labelOf: statusLabel,
+  };
+}
+
+// ──────────────────────────────────────────────────────────── controller
+
+/** What the panel shows after a write that did not go through. */
+export type Feedback = { kind: "refused"; refusal: Refusal } | { kind: "notice"; message: string };
+
+/**
+ * The page's side of `createActionController`: the real API functions, `window.prompt`, the
+ * two remembered names, one busy latch and one feedback slot for every write on the panel.
+ * `run` resolves to whether the write went through. Field editors report their refusals
+ * here too (`report`), so a refusal has one look and one place.
+ */
+export function useIssueActions(refresh: () => void, extras: ContextExtras = {}) {
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
-  const stale = isStaleClaim(claim);
+  const [names, setNames] = useState<Names>(() =>
+    typeof window === "undefined" ? { worker: null, person: null } : { worker: readName("worker"), person: readName("person") },
+  );
+  const namesRef = useRef(names);
+  namesRef.current = names;
 
-  /**
-   * Which of the three gate faces this issue wears, decided once.
-   *
-   *   - `parked`   — it holds an ACTIVE gate (pending OR changes_requested). The
-   *     reviewer's controls appear. `changes_requested` counts because approve must
-   *     still be able to end a review the reviewer objected to; otherwise asking for
-   *     changes would trap the subtree until somebody opened a whole new cycle.
-   *   - `gateable` — it has children and no active gate, so it CAN be parked.
-   *   - neither    — a leaf, or already parked from above. The store refuses a gate on
-   *     a leaf and says to use `in_review` instead, so offering the button would be
-   *     offering a refusal.
-   */
-  const parked = isActiveGate(gate);
-  const gateable = !parked && children.length > 0;
+  const controller = useMemo(
+    () =>
+      createActionController({
+        // The gate helpers accept the actor in their body; passed as a value, the name rides
+        // along without widening their declared shapes in lib/.
+        post: { action, requestGate, approveGate, requestGateChanges },
+        ask: (prompt, prefill) => window.prompt(prompt, prefill),
+        names: () => namesRef.current,
+        remember: (which, name) => {
+          saveName(which, name);
+          setNames((current) => ({ ...current, [which]: name }));
+        },
+      }),
+    [],
+  );
 
+  const run = useCallback(
+    async (call: WriteCall): Promise<boolean> => {
+      if (busy) return false;
+      setBusy(true);
+      setFeedback(null);
+      try {
+        const outcome = await controller.run(call);
+        if (outcome.kind === "sent") {
+          refresh();
+          return true;
+        }
+        setFeedback(outcome.kind === "cancelled" ? { kind: "notice", message: outcome.message } : { kind: "refused", refusal: describeRefusal(outcome.error) });
+        return false;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, controller, refresh],
+  );
 
-  const run = async (payload: Parameters<typeof action>[1], actor?: string) => {
-    if (busy) return;
-    setBusy(true);
-    setRefusal(null);
-    try {
-      await action({ ws: workspace, ref: issue.id, ...(actor ? { actor } : {}) }, payload);
-      refresh();
-    } catch (caught) {
-      // A refused action is information, not a failure: "someone else holds this" is
-      // exactly what the user needs to read, so it renders in place rather than
-      // disappearing into a console. Through the same describeRefusal/GuardRefusal
-      // pair the board and the inline editors use, so every refusal on this page
-      // reaches the user by one route and in the store's own words.
-      setRefusal(describeRefusal(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const report = useCallback((refusal: Refusal | null) => setFeedback(refusal ? { kind: "refused", refusal } : null), []);
 
-  /**
-   * The same three lines as `run`, for the gate routes.
-   *
-   * Not folded into `run` because `run` builds an `/api/action` body from a target and
-   * a payload, and these calls do not have that shape — see `lib/api.ts`. What they DO
-   * share is the part that matters: busy-latch, clear the last refusal, refresh on
-   * success, and render a refusal in place through the one `describeRefusal` /
-   * `GuardRefusal` pair every other refusal on this page reaches the user by. A gate
-   * refusal is information — "that child is not underneath this gate" is exactly what
-   * the reviewer needs to read — so it must not disappear into a console.
-   */
-  const runGate = async (call: () => Promise<unknown>) => {
-    if (busy) return;
-    setBusy(true);
-    setRefusal(null);
-    try {
-      await call();
-      refresh();
-    } catch (caught) {
-      setRefusal(describeRefusal(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
+  return { busy, feedback, names, extras, run, report, dismiss: () => setFeedback(null) };
+}
+
+/** The context for a detail, as the controller's names and extras see it. */
+export function contextOf(detail: IssueDetail, controller: Pick<IssueActionsController, "names" | "extras">): ActionContext {
+  return actionContextOf(detail, controller.names, controller.extras);
+}
+
+export type IssueActionsController = ReturnType<typeof useIssueActions>;
+
+/** Touch-sized rows for every menu the detail renders. */
+const MENU_ITEM = "pointer-coarse:min-h-11";
+
+// ───────────────────────────────────────────────────────────────── status
+
+/**
+ * The status pill, which is also the only status control. Tinted by category through the
+ * shared `.status-chip` recipe, with the category's icon so it never relies on colour. The
+ * menu opens on the current status, explains each one in a line, and holds back the ones the
+ * store would refuse, saying why.
+ */
+export function StatusMenu({
+  detail,
+  controller,
+  onRequestApproval,
+  className,
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  onRequestApproval: () => void;
+  className?: string;
+}) {
+  const { issue } = detail;
+  const ctx = contextOf(detail, controller);
+  const entries = statusEntries(statusItems(ctx), controller.run);
+  const askable = overflowItems(ctx).some((item) => item.id === "request-approval");
+  const currentRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select value={status} onValueChange={(v) => setStatus(v as IssueStatus)}>
-          <SelectTrigger size="sm" className="w-[11rem]" aria-label="Status">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {statusChoices(configuredStatusOrder(), ISSUE_STATUSES, issue.status).map((s) => (
-              <SelectItem key={s} value={s} data-status-choice={s}>
-                {statusLabel(s)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          size="sm"
-          data-action="status"
-          disabled={busy || status === issue.status}
-          onClick={() => void run({ type: "status", status })}
+    <DropdownMenu
+      onOpenChange={(open) => {
+        // Open on the status the task has now, so the arrow keys start from where it is.
+        if (open) requestAnimationFrame(() => currentRef.current?.focus());
+      }}
+    >
+      <DropdownMenuTrigger asChild disabled={controller.busy}>
+        <button
+          type="button"
+          aria-label={`Status: ${statusLabel(issue.status)}. Change status`}
+          data-status-menu=""
+          data-status-category={statusCategory(issue.status)}
+          className={cn(
+            "status-chip focus-ring inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border pr-2 pl-2 text-label font-medium whitespace-nowrap transition-[filter] duration-150 hover:brightness-[0.97] disabled:opacity-60 dark:hover:brightness-110 pointer-coarse:h-9 pointer-coarse:px-3",
+            className,
+          )}
         >
-          {ACTION_WORDS.status}
+          <StatusIcon status={issue.status} className="size-3.5" />
+          {statusLabel(issue.status)}
+          <ChevronDown aria-hidden className="size-3.5 opacity-70" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[min(20rem,calc(100vw-2rem))] p-1.5">
+        {entries.map((item) => (
+          <DropdownMenuItem
+            key={item.status}
+            ref={item.current ? currentRef : undefined}
+            data-status-choice={item.status}
+            aria-current={item.current ? "true" : undefined}
+            disabled={!item.current && (controller.busy || !item.call)}
+            className={cn("items-start gap-2.5 rounded-lg px-2 py-2", MENU_ITEM)}
+            onSelect={item.select}
+          >
+            <StatusIcon status={item.status} className="mt-0.5 size-4" />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-body font-medium text-foreground">{item.label}</span>
+              <span className="text-label text-text-secondary">{item.disabledReason ?? item.description}</span>
+            </span>
+            {item.current ? <Check aria-hidden className="mt-0.5 size-4 text-foreground" /> : null}
+          </DropdownMenuItem>
+        ))}
+        {askable ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem data-status-choice="ask-approval" className={cn("items-start gap-2.5 rounded-lg px-2 py-2", MENU_ITEM)} onSelect={onRequestApproval}>
+              <ShieldCheck aria-hidden className="mt-0.5 size-4" />
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-body font-medium text-foreground">{ACTION_WORDS.requestApproval}…</span>
+                <span className="text-label text-text-secondary">Park it until a person approves. The tasks under it wait.</span>
+              </span>
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────── primary
+
+const ICON: Record<ActionId, typeof Check> = {
+  review: ShieldCheck,
+  reopen: RotateCcw,
+  "take-over": Hand,
+  done: Check,
+  start: UserRoundCheck,
+  release: LogOut,
+  free: LogOut,
+  "request-approval": ShieldCheck,
+  "copy-id": Copy,
+};
+
+/** The one verb the state calls for. `onReview` takes the reader to the approval block. */
+export function PrimaryAction({
+  detail,
+  controller,
+  onReview,
+  className,
+  size = "sm",
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  onReview: () => void;
+  className?: string;
+  size?: "sm" | "lg";
+}) {
+  const item = primaryEntry(primaryItem(contextOf(detail, controller)), controller.run, onReview);
+  const Icon = ICON[item.id];
+  return (
+    <Button
+      size={size === "lg" ? "lg" : "sm"}
+      data-action="primary"
+      data-primary={item.id}
+      disabled={controller.busy || Boolean(item.disabledReason)}
+      title={item.disabledReason}
+      aria-description={item.disabledReason}
+      onClick={item.click}
+      className={cn("gap-1.5", className)}
+    >
+      <Icon aria-hidden className="size-4" />
+      {item.label}
+    </Button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────── overflow
+
+/**
+ * Every other verb that applies right now, behind ⋯, from the same context as the primary,
+ * so the primary is never repeated and nothing contradicts it. "Copy task ID" says "Copied"
+ * before the menu closes.
+ */
+export function OverflowMenu({
+  detail,
+  controller,
+  onRequestApproval,
+  triggerClassName,
+  align = "end",
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  /** Opens the "ask for approval" form, which takes the focus. */
+  onRequestApproval: () => void;
+  triggerClassName?: string;
+  align?: "start" | "end";
+}) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const handingFocus = useRef(false);
+  const items = overflowEntries(overflowItems(contextOf(detail, controller)), controller.run, {
+    requestApproval: () => {
+      handingFocus.current = true;
+      onRequestApproval();
+    },
+  });
+
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => {
+      setOpen(false);
+      setCopied(false);
+    }, 900);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label="More actions" title="More actions" data-overflow-menu="" className={cn("focus-ring", triggerClassName)}>
+          <Ellipsis className="size-4" />
         </Button>
-        {/*
-          THE CLAIM BUTTON, DISABLED WHILE THIS ROW IS QUEUED — Q2 (STA-144).
-
-          The store already refuses the checkout with a `gated` code and a sentence
-          naming the gate, so this is not a second guard and cannot disagree with the
-          first: it is the same fact, shown BEFORE the click instead of after it. A
-          button that looks live and always fails teaches people to distrust the page.
-
-          `title` for the pointer and `aria-description` for a screen reader, both
-          carrying the SAME sentence from `gateRefusalReason` — one wording, so what
-          the tooltip says and what the row's caption says cannot drift. `disabled`
-          rather than hidden, because a control that vanishes leaves no explanation of
-          why the thing you wanted to do is not offered.
-        */}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy || queuedBy !== null}
-          title={queuedBy ? gateRefusalReason(queuedBy) : undefined}
-          aria-description={queuedBy ? gateRefusalReason(queuedBy) : undefined}
-          data-action="checkout"
-          onClick={() => {
-            const name = askActor(ACTION_WORDS.checkoutPrompt);
-            if (!name) return;
-            void run({ type: "checkout" }, name);
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align={align}
+        className="min-w-[14rem] p-1.5"
+        onCloseAutoFocus={(event) => {
+          // The approval form takes the focus; giving it back to ⋯ would steal it.
+          if (handingFocus.current) {
+            handingFocus.current = false;
+            event.preventDefault();
+          }
+        }}
+      >
+        {items.map((item) => {
+          const Icon = ICON[item.id];
+          return (
+            <DropdownMenuItem
+              key={item.id}
+              data-action={item.id}
+              disabled={controller.busy || Boolean(item.disabledReason)}
+              reason={item.disabledReason}
+              className={MENU_ITEM}
+              onSelect={item.select}
+            >
+              <Icon aria-hidden />
+              {item.label}
+            </DropdownMenuItem>
+          );
+        })}
+        {items.length > 0 ? <DropdownMenuSeparator /> : null}
+        <DropdownMenuItem
+          data-action="copy-id"
+          className={MENU_ITEM}
+          onSelect={(event) => {
+            event.preventDefault();
+            void navigator.clipboard?.writeText(detail.issue.identifier).catch(() => {});
+            setCopied(true);
           }}
         >
-          {ACTION_WORDS.checkout}
-        </Button>
-        <Button size="sm" variant="outline" data-action="release" disabled={busy} onClick={() => void run({ type: "release" })}>
-          {ACTION_WORDS.release}
-        </Button>
-      </div>
-
-      {/* The words above are for people; the names the tracker and its agents use are here,
-          one tap away, for whoever needs to type them. */}
-      <details className="text-[12px] text-muted-foreground" data-technical-details="">
-        <summary className="cursor-pointer select-none py-1">Show details</summary>
-        <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
-          <dt>Status name</dt>
-          <dd className="font-mono">{issue.status}</dd>
-          <dt>Who is working on it</dt>
-          <dd className="font-mono">{issue.checkoutAgent ?? "nobody (not checked out)"}</dd>
-          <dt>Reference</dt>
-          <dd className="font-mono break-all">{issue.identifier} · {issue.id}</dd>
-        </dl>
-        <p className="mt-1">
-          {ACTION_WORDS.checkout} is a checkout (<span className="font-mono">staple checkout</span>);{" "}
-          {ACTION_WORDS.release.toLowerCase()} is a release (<span className="font-mono">staple release</span>).
-        </p>
-      </details>
-
-      {/*
-        C3 — the takeover affordance, and the only place in this app that can move a claim
-        that is not yours.
-
-        It exists ONLY while the holder has been silent past the threshold, and it exists
-        only as buttons. Nothing here runs on a timer, nothing fires on render, and the
-        panel will happily sit on a claim that has been dead for a week until somebody
-        clicks. That is the point of the ticket: a dead claim should be VISIBLE and
-        FIXABLE, never quietly reaped.
-
-        Both buttons send STALE_CLAIM_SECONDS — the same number the badge above is drawn
-        from — so the page can never ask the store to take a claim it has not told the
-        user is stale. And the store re-checks that number against its own clock: if the
-        holder came back to life in the seconds since this rendered, the write is refused
-        and the sentence below is the store's, verbatim.
-      */}
-      {stale && claim ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-[var(--status-task-blocked)]/50 p-2">
-          <span className="text-[11px] text-muted-foreground">{staleClaimSummary(claim)}</span>
-          <Button
-            size="sm"
-            variant="outline"
-            className="ml-auto"
-            disabled={busy}
-            onClick={() => {
-              const name = askActor(ACTION_WORDS.takeOverPrompt(claim.heldBy));
-              if (!name) return;
-              void run({ type: "checkout", stealIfIdleSeconds: STALE_CLAIM_SECONDS }, name);
-            }}
-          >
-            {ACTION_WORDS.takeOver}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            // No prompt: releasing hands the ticket back to the pool rather than to a
-            // person, so there is no identity to attribute the result to. The store
-            // allows any caller to do this precisely because the holder is demonstrably
-            // gone — and it still refuses if that stops being true.
-            onClick={() => void run({ type: "release", ifIdleSeconds: STALE_CLAIM_SECONDS })}
-          >
-            {ACTION_WORDS.releaseStale}
-          </Button>
-        </div>
-      ) : null}
-      {/*
-        THE REVIEW GATE — Q2 (STA-144), rebuilt as its own component by Q4 (STA-147).
-
-        Below the claim row rather than in it, because these are a DIFFERENT PERSON'S
-        verbs. Everything above is what an agent does to its own work; this is what the
-        human named in the gate does to somebody else's. Mixing them into one wrap of
-        buttons would put "Approve all" one tab stop from "release" and make the row
-        answer two questions at once.
-
-        Monochrome and bordered like the stale-claim block above it — the detail panel
-        spends its only colour on status, and a gate is not a status.
-
-        It lives in GateReview.tsx now. Q2 kept it inline while it was six lines; VP's
-        review turned it into a header, a grid checklist with a layout contract, three
-        verbs and a disclosure, and that is a component rather than a branch of this one.
-      */}
-      {parked && gate ? (
-        <GateReview
-          identifier={issue.identifier}
-          gate={gate}
-          /*
-            Straight through from `/api/issue`, unfiltered. Q2 filtered it here with
-            `queuedChildrenOf`; Q5 moved eligibility into the store, where the release
-            flag and the open-subtree rule already live, and deleted the browser's copy —
-            see the note at the top of lib/derived-queued.ts on why a second definition
-            here is the one thing this feature cannot afford.
-          */
-          queue={childrenQueued}
-          busy={busy}
-          onApproveAll={(comment) =>
-            void runGate(() => approveGate({ ws: workspace, ref: issue.id, comment }))
-          }
-          onApproveSelected={(refs) =>
-            void runGate(() =>
-              approveGate({
-                ws: workspace,
-                ref: issue.id,
-                // The ticked rows by id, never by number (`lib/write-ref.ts`).
-                children: idsOf(childrenQueued, refs),
-              }),
-            )
-          }
-          onRequestChanges={(comment) =>
-            void runGate(() => requestGateChanges({ ws: workspace, ref: issue.id, comment }))
-          }
-        />
-      ) : null}
-
-      {gateable ? (
-        <RequestGatePanel
-          busy={busy}
-          childCount={children.length}
-          onRequest={(owner) => void runGate(() => requestGate({ ws: workspace, ref: issue.id, owner }))}
-        />
-      ) : null}
-
-      {refusal ? (
-        <div className="rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/5 p-2">
-          <GuardRefusal refusal={refusal} onDismiss={() => setRefusal(null)} />
-        </div>
-      ) : null}
-    </div>
+          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+          <span aria-live="polite">{copied ? "Copied" : ACTION_WORDS.copyId}</span>
+          {copied ? null : <span className="ml-auto text-label text-text-tertiary">{detail.issue.identifier}</span>}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
+// ─────────────────────────────────────────────────────────────── feedback
+
 /**
- * The eyebrow the request-approval panel wears, in the register the detail panel's
- * headings use. `GateReview` draws the same thing from `.staple-gate-eyebrow`, because
- * it is a sheet-styled block and this is a Tailwind-styled one; the two are one
- * declaration apart and neither is worth exporting to the other.
+ * A refusal, said plainly first, with the store's own words one tap away. `role="alert"`, so
+ * it is announced wherever it renders; on the phone it renders in the action bar, next to
+ * the thumb that caused it.
  */
-function GateHeading({ children }: { children: React.ReactNode }) {
+export function ActionRefusal({ controller, className }: { controller: IssueActionsController; className?: string }) {
+  if (!controller.feedback) return null;
+  return <RefusalNotice feedback={controller.feedback} onDismiss={controller.dismiss} className={className} />;
+}
+
+/**
+ * THE one refusal the detail shows, for actions and field editors alike: a plain sentence
+ * first, the tracker's own words one tap away, and a dismiss. A notice (nothing was sent,
+ * for example a cancelled name) uses the same shape in a neutral tone.
+ */
+export function RefusalNotice({ feedback, onDismiss, className }: { feedback: Feedback; onDismiss: () => void; className?: string }) {
+  const refused = feedback.kind === "refused";
+  const refusal = refused ? feedback.refusal : null;
+  const plain = refusal ? (refusal.crossOrigin ? refusal.message : plainRefusal(refusal.message, refusal.code)) : (feedback as { message: string }).message;
+  const said = refusal ? (refusal.crossOrigin ? refusal.serverMessage : refusal.message) : undefined;
   return (
-    <div className="text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">
-      {children}
+    <div
+      role={refused ? "alert" : "status"}
+      data-action-refusal=""
+      data-feedback={feedback.kind}
+      className={cn(
+        "flex items-start gap-3 rounded-xl border py-2.5 pr-1.5 pl-3.5",
+        refused ? "border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/[0.06]" : "bg-surface-sunken",
+        className,
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="m-0 text-body font-medium text-foreground wrap-anywhere" data-refusal-plain="">
+          {plain}
+        </p>
+        {said && said !== plain ? (
+          <details className="group mt-1">
+            <summary className="focus-ring inline-flex cursor-pointer list-none items-center gap-1 rounded text-label text-text-secondary select-none pointer-coarse:min-h-10 [&::-webkit-details-marker]:hidden">
+              What the tracker said
+              <ChevronDown aria-hidden className="size-3.5 group-open:rotate-180 motion-safe:transition-transform" />
+            </summary>
+            <p className="m-0 mt-1 text-label text-text-secondary wrap-anywhere">{said}</p>
+          </details>
+        ) : null}
+      </div>
+      <Button variant="ghost" size="icon" aria-label="Dismiss" onClick={onDismiss} className="focus-ring size-8 shrink-0 text-text-secondary pointer-coarse:size-10">
+        <X className="size-4" />
+      </Button>
     </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────── gate
+
 /**
- * PARK THIS PARENT — for an issue that has children and no active gate.
+ * The approval surface: the reviewer's block while a gate is active, or the "ask for
+ * approval" form once it has been opened. A different person's verbs from the ones above, so
+ * they get their own card rather than joining the action row.
+ */
+export function GateSection({
+  detail,
+  controller,
+  requestOpen,
+  onCloseRequest,
+}: {
+  detail: IssueDetail;
+  controller: IssueActionsController;
+  requestOpen: boolean;
+  onCloseRequest: () => void;
+}) {
+  const { issue, gate, childrenQueued } = detail;
+  const handlers = gateHandlers({ ws: detail.workspace, issue }, controller.run);
+  if (isActiveGate(gate)) {
+    return (
+      <GateReview
+        identifier={issue.identifier}
+        gate={gate}
+        // The status line already says who it waits for and since when; say it once.
+        showState={false}
+        // Straight through from `/api/issue`, unfiltered: eligibility lives in the store.
+        queue={childrenQueued}
+        busy={controller.busy}
+        onApproveAll={(comment) => void handlers.approveAll(comment)}
+        // The ticked rows by id, never by number (`lib/write-ref.ts`).
+        onApproveSelected={(refs) => void handlers.approveSelected(idsOf(childrenQueued, refs))}
+        onRequestChanges={handlers.requestChanges}
+      />
+    );
+  }
+  if (requestOpen && detail.children.length > 0) {
+    return (
+      <RequestGatePanel
+        busy={controller.busy}
+        childCount={detail.children.length}
+        onCancel={onCloseRequest}
+        onRequest={(owner) => {
+          void handlers.requestApproval(owner).then((ok) => {
+            if (ok) onCloseRequest();
+          });
+        }}
+      />
+    );
+  }
+  return null;
+}
+
+/**
+ * ASK FOR APPROVAL: park this parent behind a named person's review.
  *
- * The owner defaults to "VP" and is editable, per the ticket. It is a real text input
- * rather than a `window.prompt` (which `askActor` above still uses for identity, and
- * which is the thing this panel deliberately does not copy): a prompt cannot be styled,
- * cannot be labelled for a screen reader, and cannot show a default the user can see
- * before deciding whether to change it.
- *
- * Submit is disabled on an empty owner. The store refuses an owner-less gate — "name
- * the human who must approve" — and a gate nobody owns is a gate nobody opens, so this
- * makes that refusal unreachable from the page rather than merely unlikely.
+ * The approver defaults to "VP" and is editable. It is a real, labelled text input rather
+ * than a `window.prompt`, so the default is visible before deciding. It takes the focus when
+ * it opens; Escape closes the form (not the panel) and gives the focus back to ⋯. Submit is
+ * disabled on an empty name: the store refuses an owner-less gate.
  */
 function RequestGatePanel({
   busy,
   childCount,
   onRequest,
+  onCancel,
 }: {
   busy: boolean;
   childCount: number;
   onRequest: (owner: string) => void;
+  onCancel: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [owner, setOwner] = useState("VP");
   const panelId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const children = childCount === 1 ? "The 1 task under this one waits" : `The ${childCount} tasks under this one wait`;
 
-  if (!open) {
-    return (
-      <div className="flex">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          aria-expanded={false}
-          aria-controls={panelId}
-          title={`Park this behind a review — its ${childCount} ${childCount === 1 ? "child" : "children"} become queued`}
-          onClick={() => setOpen(true)}
-        >
-          Request approval
-        </Button>
-      </div>
-    );
-  }
+  // After the menu that opened this has finished handing focus around.
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  const cancel = () => {
+    const panel = inputRef.current?.closest("[data-detail-overlay]");
+    onCancel();
+    requestAnimationFrame(() => panel?.querySelector<HTMLElement>("[data-overflow-menu]")?.focus());
+  };
 
   return (
-    <section
-      id={panelId}
-      aria-label="Request approval"
-      className="space-y-2 rounded-md border border-dashed p-2"
-    >
-      <GateHeading>Request approval</GateHeading>
-      <p className="text-[12px] text-muted-foreground">
-        {childCount} {childCount === 1 ? "child" : "children"} will be queued until this is
-        approved. Nobody can check them out in the meantime.
-      </p>
+    <section id={panelId} aria-label="Ask for approval" data-request-gate="" className="flex flex-col gap-3 rounded-xl border bg-surface-raised p-4">
+      <div className="flex flex-col gap-1">
+        <h3 className="m-0 text-body font-medium">Ask for approval</h3>
+        <p className="m-0 text-label text-text-secondary">{children} until the approver says yes. Nobody can start them in the meantime.</p>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={`${panelId}-owner`} className="text-[11px] text-muted-foreground">
+        <label htmlFor={`${panelId}-owner`} className="text-label text-text-secondary">
           Approver
         </label>
         <Input
+          ref={inputRef}
           id={`${panelId}-owner`}
-          autoFocus
-          className="h-8 w-[9rem] text-[12px]"
+          data-approver-input=""
+          className="h-8 w-[10rem] text-[13px] md:text-[13px] pointer-coarse:h-10"
           value={owner}
           onChange={(event) => setOwner(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              cancel();
+            }
+            if (event.key === "Enter" && owner.trim()) onRequest(owner.trim());
+          }}
         />
-        <Button size="sm" disabled={busy || owner.trim().length === 0} onClick={() => onRequest(owner.trim())}>
-          Park it
+        <Button size="sm" className="pointer-coarse:h-10" disabled={busy || owner.trim().length === 0} onClick={() => onRequest(owner.trim())}>
+          Ask for approval
         </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setOpen(false)}>
+        <Button size="sm" variant="ghost" className="pointer-coarse:h-10" disabled={busy} onClick={cancel}>
           Cancel
         </Button>
       </div>

@@ -16,18 +16,63 @@
  * this file is only the fetch plumbing and the mode switch.
  */
 import { useCallback, useMemo, useState } from "react";
+import { FileText, History, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { action, ApiError, getDocument, getRevisions } from "@/lib/api";
 import { Markdown } from "@/lib/markdown";
 import type { DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
-import { cn } from "@/lib/utils";
-import { EmptyState, ErrorState, LoadingState } from "@/views/ViewChrome";
+import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { diffBodies } from "../diff";
 import { DocumentDiff } from "../DocumentDiff";
+import { EmptyState, PersonChip, RelativeTime, SectionHeading, cn, personActor } from "../parts";
+import { Dot } from "./Dot";
+import { restoreWrite } from "./writes";
 import { takePendingDocumentKey, type TabProps } from "./registry";
+import "./tabs.css";
 
-const stamp = (iso: string) => iso.slice(0, 16).replace("T", " ");
+/** `plan` -> `Plan`, `design-notes` -> `Design notes`: a key as a name. */
+const documentName = (key: string, title?: string | null) =>
+  title?.trim() || (key.charAt(0).toUpperCase() + key.slice(1)).replace(/[-_]+/g, " ");
+
+const personKind = (name: string) => (/[-_]/.test(name) ? "agent" : "human");
+
+/** A two- or three-way choice drawn as one segmented control. */
+function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: Array<{ value: T; label: React.ReactNode }>;
+  onChange: (value: T) => void;
+  label: string;
+}) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex shrink-0 rounded-lg bg-surface-sunken p-0.5">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={cn(
+            "text-body focus-ring inline-flex h-8 items-center gap-1.5 rounded-md px-3 transition-colors duration-150 max-sm:h-9",
+            value === option.value
+              ? "bg-surface-raised text-foreground shadow-[0_0_0_1px_var(--border)]"
+              : "text-text-secondary hover:text-foreground",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const SELECT =
+  "focus-ring h-9 rounded-lg border border-border bg-surface-raised px-2.5 text-body text-foreground max-sm:h-10";
 
 /**
  * Which document opens first.
@@ -46,7 +91,7 @@ function defaultKey(keys: readonly string[]): string | undefined {
   return keys[0];
 }
 
-/** One row of the revision log. */
+/** One row of the revision log: which version, who wrote it, when, and what changed. */
 function RevisionRow({
   rev,
   current,
@@ -63,39 +108,39 @@ function RevisionRow({
   restoring: boolean;
 }) {
   return (
-    <li className="border-t py-1.5 first:border-t-0">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px]">
-        <button
-          type="button"
-          onClick={onRead}
-          className={cn("font-mono hover:underline", current && "font-semibold")}
-        >
-          r{rev.revision}
-        </button>
-        {current ? <span className="text-muted-foreground">current</span> : null}
-        <span className="font-mono text-muted-foreground">{stamp(rev.createdAt)}</span>
-        <span className="text-muted-foreground">{rev.author ?? "unknown"}</span>
-        <div className="ml-auto flex gap-1">
-          {rev.revision > 1 ? (
-            <Button size="sm" variant="ghost" className="h-6 px-2" onClick={onDiff}>
-              diff vs r{rev.revision - 1}
-            </Button>
+    <li className="flex flex-col gap-2 border-b border-border px-3.5 py-3 last:border-b-0 sm:flex-row sm:items-start">
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body">
+          <button
+            type="button"
+            onClick={onRead}
+            className="focus-ring rounded-sm font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            Revision {rev.revision}
+          </button>
+          {current ? (
+            <span className="rounded-full bg-surface-sunken px-2 text-caption leading-5 text-text-secondary">Latest</span>
           ) : null}
-          {current ? null : (
-            <Button
-              size="sm"
-              variant={restoring ? "default" : "ghost"}
-              className="h-6 px-2"
-              onClick={onRestore}
-            >
-              {restoring ? "confirm restore" : "restore"}
-            </Button>
-          )}
         </div>
+        <div className="flex flex-wrap items-center gap-x-1.5 text-label text-text-secondary">
+          {rev.author ? <PersonChip name={rev.author} kind={personKind(rev.author)} /> : <span>Unknown author</span>}
+          <Dot />
+          <RelativeTime iso={rev.createdAt} inSentence />
+        </div>
+        {rev.changeSummary ? <p className="text-body text-pretty text-text-secondary">{rev.changeSummary}</p> : null}
       </div>
-      {rev.changeSummary ? (
-        <p className="mt-0.5 text-[12px] text-muted-foreground">{rev.changeSummary}</p>
-      ) : null}
+      <div className="flex shrink-0 gap-1.5">
+        {rev.revision > 1 ? (
+          <Button size="sm" variant="ghost" className="max-sm:h-10" onClick={onDiff}>
+            Compare with previous
+          </Button>
+        ) : null}
+        {current ? null : (
+          <Button size="sm" variant={restoring ? "default" : "ghost"} className="max-sm:h-10" onClick={onRestore}>
+            {restoring ? "Confirm restore" : "Restore"}
+          </Button>
+        )}
+      </div>
     </li>
   );
 }
@@ -190,7 +235,8 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
     setBusy(true);
     setWriteError("");
     try {
-      await action({ ws: workspace, ref: detail.issue.id }, { type: "doc_restore", key, revision, baseRevision: currentRevision });
+      const write = restoreWrite(workspace, detail.issue.id, key, revision, currentRevision, personActor());
+      await action(write.target, write.payload);
       setArming(null);
       setReading(null);
       refresh();
@@ -211,53 +257,72 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
     }
   };
 
-  if (detail.documents.length === 0) return <EmptyState>no documents on this issue</EmptyState>;
+  if (detail.documents.length === 0) {
+    return (
+      <EmptyState icon={FileText}>
+        No documents yet. When someone writes a plan or notes for this task, they will show up here.
+      </EmptyState>
+    );
+  }
+
+  const defaultFrom = Math.max(1, currentRevision - 1);
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-1.5">
-        {detail.documents.map((doc) => (
-          <Button
-            key={doc.key}
-            size="sm"
-            variant={doc.key === key ? "secondary" : "outline"}
-            onClick={() => selectKey(doc.key)}
-          >
-            <span className="font-mono">{doc.key}</span>
-            <span className="text-muted-foreground">@r{doc.currentRevision}</span>
-          </Button>
-        ))}
-      </div>
+    <div className="w-full max-w-readable space-y-4">
+      {detail.documents.length > 1 ? (
+        <div role="group" aria-label="Documents" className="flex flex-wrap gap-1.5">
+          {detail.documents.map((doc) => (
+            <button
+              key={doc.key}
+              type="button"
+              aria-pressed={doc.key === key}
+              onClick={() => selectKey(doc.key)}
+              className={cn(
+                "text-body focus-ring inline-flex h-8 items-center gap-1.5 rounded-full border px-3 transition-colors duration-150 max-sm:h-10",
+                doc.key === key
+                  ? "border-foreground/20 bg-surface-sunken text-foreground"
+                  : "border-border text-text-secondary hover:text-foreground",
+              )}
+            >
+              <FileText aria-hidden className="size-3.5" />
+              {documentName(doc.key, doc.title)}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-      <div className="flex items-center gap-1 border-b pb-2">
-        <Button
-          size="sm"
-          variant={mode === "read" ? "secondary" : "ghost"}
-          className="h-7"
-          onClick={() => setMode("read")}
-        >
-          Read
-        </Button>
-        <Button
-          size="sm"
-          variant={mode === "history" ? "secondary" : "ghost"}
-          className="h-7"
-          onClick={() => setMode("history")}
-        >
-          History
-          {revisions.data ? (
-            <span className="ml-1 text-muted-foreground">{revisions.data.length}</span>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-title font-medium text-foreground">{meta ? documentName(meta.key, meta.title) : ""}</h3>
+          {meta ? (
+            <p className="text-label text-text-secondary">
+              Updated <RelativeTime iso={meta.updatedAt} inSentence />
+              <Dot />
+              revision {meta.currentRevision}
+            </p>
           ) : null}
-        </Button>
-        {meta ? (
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            updated {stamp(meta.updatedAt)}
-          </span>
-        ) : null}
+        </div>
+        <Segmented
+          label="Document view"
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: "read", label: "Read" },
+            {
+              value: "history",
+              label: (
+                <>
+                  History
+                  {revisions.data ? <span className="text-text-tertiary">{revisions.data.length}</span> : null}
+                </>
+              ),
+            },
+          ]}
+        />
       </div>
 
       {writeError ? (
-        <p className="rounded-md border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3 py-2 text-[13px]">
+        <p className="rounded-xl border border-[var(--status-task-blocked)]/40 bg-[var(--status-task-blocked)]/10 px-3.5 py-2.5 text-body">
           {writeError}
         </p>
       ) : null}
@@ -265,22 +330,24 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
       {mode === "read" ? (
         <>
           {reading !== null && reading !== currentRevision ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--status-task-in_review)]/40 bg-[var(--status-task-in_review)]/10 px-3 py-2 text-[12px]">
-              <span>
-                Viewing revision {reading} — the current revision is {currentRevision}.
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--status-task-in_review)]/40 bg-[var(--status-task-in_review)]/10 px-3.5 py-2.5 text-body">
+              <History aria-hidden className="size-4 shrink-0 text-text-secondary" />
+              <span className="min-w-0 flex-1">
+                You are reading revision {reading}. The latest is revision {currentRevision}.
               </span>
-              <div className="ml-auto flex gap-1">
-                <Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => setReading(null)}>
-                  back to current
+              <div className="flex gap-1.5">
+                <Button size="sm" variant="ghost" className="max-sm:h-10" onClick={() => setReading(null)}>
+                  Back to latest
                 </Button>
                 <Button
                   size="sm"
                   variant={arming === reading ? "default" : "outline"}
-                  className="h-6 px-2"
+                  className="max-sm:h-10"
                   disabled={busy}
                   onClick={() => void restore(reading)}
                 >
-                  {arming === reading ? "confirm restore" : "restore this revision"}
+                  <RotateCcw aria-hidden className="size-3.5" />
+                  {arming === reading ? "Confirm restore" : "Restore this version"}
                 </Button>
               </div>
             </div>
@@ -289,15 +356,20 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
           {body.error ? <ErrorState error={body.error} /> : null}
           {!body.data && body.loading ? <LoadingState rows={3} /> : null}
           {body.data ? (
-            <article className="rounded-md border bg-muted/40 px-4 py-3">
-              <header className="mb-2 flex flex-wrap items-baseline gap-2 text-[11px] text-muted-foreground">
-                <span className="font-mono">{body.data.key}</span>
-                {body.data.title ? <span>{body.data.title}</span> : null}
-                <span>revision {body.data.revision}</span>
-                {body.data.author ? <span>by {body.data.author}</span> : null}
-                <span className="ml-auto font-mono">{stamp(body.data.createdAt)}</span>
-              </header>
-              <Markdown text={body.data.body} className="text-[13px]" />
+            <article className="rounded-xl border border-border bg-surface-raised px-4 py-4 sm:px-6 sm:py-5">
+              {body.data.author ? (
+                <header className="mb-3 flex flex-wrap items-center gap-x-1.5 border-b border-border pb-3 text-label text-text-secondary">
+                  <span>Written by</span>
+                  <PersonChip name={body.data.author} kind={personKind(body.data.author)} />
+                  <Dot />
+                  <RelativeTime iso={body.data.createdAt} inSentence />
+                </header>
+              ) : null}
+              {body.data.body.trim() ? (
+                <Markdown text={body.data.body} className="tab-prose text-reading text-foreground" />
+              ) : (
+                <p className="text-reading text-text-secondary">This revision is empty.</p>
+              )}
             </article>
           ) : null}
         </>
@@ -307,13 +379,13 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
           {!revisions.data && revisions.loading ? <LoadingState rows={2} /> : null}
 
           {revisions.data && revisions.data.length > 1 ? (
-            <div className="flex flex-wrap items-center gap-2 text-[11px]">
-              <label className="flex items-center gap-1">
-                <span className="text-muted-foreground">from</span>
+            <section aria-label="Compare revisions" className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2 text-body text-text-secondary">
+                <span>Compare</span>
                 <select
                   aria-label="Diff from revision"
-                  className="rounded border bg-background px-1.5 py-0.5 font-mono"
-                  value={range?.from ?? Math.max(1, currentRevision - 1)}
+                  className={SELECT}
+                  value={range?.from ?? defaultFrom}
                   onChange={(e) =>
                     setRange({
                       from: Number(e.currentTarget.value),
@@ -323,74 +395,75 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
                 >
                   {revisions.data.map((rev) => (
                     <option key={rev.revision} value={rev.revision}>
-                      r{rev.revision}
+                      Revision {rev.revision}
                     </option>
                   ))}
                 </select>
-              </label>
-              <label className="flex items-center gap-1">
-                <span className="text-muted-foreground">to</span>
+                <span>with</span>
                 <select
                   aria-label="Diff to revision"
-                  className="rounded border bg-background px-1.5 py-0.5 font-mono"
+                  className={SELECT}
                   value={range?.to ?? currentRevision}
                   onChange={(e) =>
                     setRange({
-                      from: range?.from ?? Math.max(1, currentRevision - 1),
+                      from: range?.from ?? defaultFrom,
                       to: Number(e.currentTarget.value),
                     })
                   }
                 >
                   {revisions.data.map((rev) => (
                     <option key={rev.revision} value={rev.revision}>
-                      r{rev.revision}
+                      Revision {rev.revision}
                     </option>
                   ))}
                 </select>
-              </label>
-              {range === null ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 px-2"
-                  onClick={() => setRange({ from: Math.max(1, currentRevision - 1), to: currentRevision })}
-                >
-                  compare
-                </Button>
-              ) : (
-                <Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => setRange(null)}>
-                  clear
-                </Button>
-              )}
-            </div>
-          ) : null}
+                {range === null ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="max-sm:h-10"
+                    onClick={() => setRange({ from: defaultFrom, to: currentRevision })}
+                  >
+                    Show changes
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="ghost" className="max-sm:h-10" onClick={() => setRange(null)}>
+                    Close
+                  </Button>
+                )}
+              </div>
 
-          {from.error ? <ErrorState error={from.error} /> : null}
-          {to.error ? <ErrorState error={to.error} /> : null}
-          {range && diff ? (
-            <DocumentDiff diff={diff} fromLabel={`r${range.from}`} toLabel={`r${range.to}`} />
+              {from.error ? <ErrorState error={from.error} /> : null}
+              {to.error ? <ErrorState error={to.error} /> : null}
+              {range && diff ? (
+                <DocumentDiff diff={diff} fromLabel={`Revision ${range.from}`} toLabel={`Revision ${range.to}`} />
+              ) : null}
+            </section>
           ) : null}
 
           {revisions.data ? (
             revisions.data.length === 0 ? (
-              <EmptyState>no revisions</EmptyState>
+              <EmptyState icon={History}>No revisions yet.</EmptyState>
             ) : (
-              <ul>
-                {revisions.data.map((rev) => (
-                  <RevisionRow
-                    key={rev.revision}
-                    rev={rev}
-                    current={rev.revision === currentRevision}
-                    restoring={arming === rev.revision}
-                    onRead={() => {
-                      setReading(rev.revision === currentRevision ? null : rev.revision);
-                      setMode("read");
-                    }}
-                    onDiff={() => openDiff(rev.revision)}
-                    onRestore={() => void restore(rev.revision)}
-                  />
-                ))}
-              </ul>
+              <section aria-label="Revisions">
+                <SectionHeading>All revisions</SectionHeading>
+                <ul className="overflow-hidden rounded-xl border border-border bg-surface-raised">
+                  {revisions.data.map((rev) => (
+                    <RevisionRow
+                      key={rev.revision}
+                      rev={rev}
+                      current={rev.revision === currentRevision}
+                      restoring={arming === rev.revision}
+                      onRead={() => {
+                        setReading(rev.revision === currentRevision ? null : rev.revision);
+                        setMode("read");
+                      }}
+                      onDiff={() => openDiff(rev.revision)}
+                      onRestore={() => void restore(rev.revision)}
+                    />
+                  ))}
+                </ul>
+              </section>
             )
           ) : null}
         </>

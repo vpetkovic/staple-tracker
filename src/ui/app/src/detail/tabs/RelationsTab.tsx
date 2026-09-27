@@ -1,52 +1,38 @@
 /**
+ * Connections — where this task sits in the plan, as a list you can read, with the map one
+ * tap away.
+ *
+ * ── Why a list first ────────────────────────────────────────────────────────────────
+ *
+ * The tab used to open on a canvas and a strip of counters. On a phone the canvas was a
+ * mostly-empty grid, and the counters (`blocked by 0 direct (0 unresolved) · 0 upstream
+ * total`) were exact and unreadable. The questions a reader brings here are plain ones —
+ * what is this part of, what are its sub-tasks, what is it waiting on, what is waiting on
+ * it — and each is answered by a short list of tasks with their status. So the tab opens
+ * on those lists, every row a tappable task, and the summary above them is in sentences
+ * (../relation-stats.ts, pinned by a test). The canvas is still here, unchanged, behind
+ * "Show map".
+ *
+ * The lists come straight off `IssueDetail` (ancestors, children, blockedBy, blocks,
+ * crossBlockers), so they render with the detail and never wait on a second request. The
+ * graph is fetched for the map and for the one figure only the graph knows — how much
+ * more is waiting further up the chain.
+ *
+ * ── The map ──────────────────────────────────────────────────────────────────────────
+ *
  * The graph view, pointed at one ticket — O2b (STA-132), rebuilt by O2c (STA-155).
+ * `views/graph/graph-canvas.ts` is the canvas derivation both views call; this file is the
+ * other caller. Same `TaskNode`, same `EpicContainerNode`, same edge classes, same
+ * `MarkerType`, same emphasis rule, same dagre `rankdir: LR` — the only difference is which
+ * sub-graph goes in. Ancestors become nested containers, the focus becomes the innermost
+ * box when it has children, and the only edges dagre ever ranks are dependencies.
+ * Read-only: no dragging, no persisted positions, no toolbar; Background and zoom Controls
+ * only.
  *
- * ── What changed and why ─────────────────────────────────────────────────────────────
- *
- * O2b drew this tab with its own layout module, its own node wrapper and its own axis:
- * ancestors above, children below, dependencies down the page. Every piece of that was
- * defensible on its own and the whole was wrong, because the app's other canvas runs
- * dependencies ACROSS the page. Two diagrams that disagree about which direction means
- * "before" is worse than either of them alone. VP's review, in one sentence: *the same
- * view and look as the graph section, except it only shows the tree related to the task
- * in question*.
- *
- * So there is no second pipeline any more. `views/graph/graph-canvas.ts` is the canvas
- * derivation both views call; this file is the other caller. Same `TaskNode`, same
- * `EpicContainerNode`, same edge classes, same `MarkerType`, same emphasis rule, same
- * dagre `rankdir: LR` — the only difference is which sub-graph goes in.
- *
- * ── The two axes, resolved ───────────────────────────────────────────────────────────
- *
- * The old tab needed two axes because it fed BOTH relations to the layout as edges: a
- * parent edge and a blocks edge competing for one `rankdir`. The graph view never had
- * that problem, because it does not draw parenthood as an arrow — it draws it as a BOX.
- * Doing the same here dissolves the conflict rather than working around it: ancestors
- * become nested containers (`summarizeEpics` reads `GraphNode.parent`, `containerize`
- * turns each into a box), the focus becomes the innermost box when it has children, and
- * the only edges dagre ever ranks are dependencies. Predecessors left, successors right,
- * at every depth, by the same call the big canvas makes.
- *
- * ── What is NOT in this file ─────────────────────────────────────────────────────────
- *
- * Which boxes and arrows:   lib/relation-context.ts        (O2a, imported, not modified)
+ * Which boxes and arrows:   lib/relation-context.ts
  * How they become a canvas: views/graph/graph-canvas.ts    (shared with GraphView)
  * Where they go:            views/graph/graph-layout.ts    (compoundLayout, unchanged)
- * What the strip says:      detail/relation-stats.ts       (pure, tested)
- * What a box looks like:    views/graph/TaskNode.tsx, EpicContainerNode.tsx (read-only)
- * What an arrow means:      styles/app.css                 (read-only, reused verbatim)
- *
- * There are no component tests for logic in this repo, so logic inside a `.tsx` is logic
- * nothing checks. Everything a test would want to assert about was pushed out on purpose;
- * what is left here is wiring.
- *
- * ── Read-only, and why that is not a limitation ──────────────────────────────────────
- *
- * No dragging, no persisted positions, no toolbar, no picker, no export, no share link,
- * no minimap. The big canvas earns all of those because it is a workspace you arrange;
- * this is a diagram you read, and every one of them would be a second place a position
- * could be remembered and later disagree. The two the ticket does ask for — Background
- * and zoom Controls — are the two that cost nothing to be wrong about.
+ * What the summary says:    detail/relation-stats.ts       (pure, tested)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -57,12 +43,14 @@ import {
   useReactFlow,
   type NodeMouseHandler,
 } from "@xyflow/react";
+import { ChevronRight, CircleCheck, EyeOff, Map as MapIcon, Network, OctagonAlert } from "lucide-react";
+import { StatusIcon } from "@/components/task-list/StatusIcon";
 import { getGraph } from "@/lib/api";
 import { buildLineageIndex, lineageFrom, type Lineage } from "@/lib/graph-lineage";
 import { relationContext, type RelationContext } from "@/lib/relation-context";
 import { useSession } from "@/lib/session";
-import type { Graph } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { isResolvedStatus, statusLabel } from "@/lib/settings";
+import type { CrossBlocker, Graph, IssueDetail } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import {
   canvasDimmed,
@@ -75,32 +63,15 @@ import { compoundLayout } from "@/views/graph/graph-layout";
 import { emphasisFor, type Emphasis } from "@/views/graph/graph-planning";
 import { selectionTarget } from "@/views/graph/graph-folding";
 import { nodeTypes, type GraphFlowNode } from "@/views/graph/node-types";
-import { EmptyState, ErrorState, LoadingState } from "@/views/ViewChrome";
-import { relationStats } from "../relation-stats";
+import { ErrorState, LoadingState } from "@/views/ViewChrome";
+import { EmptyState, SectionHeading, cn } from "../parts";
+import { directCounts, relationStats, unreachableWords } from "../relation-stats";
 import type { TabProps } from "./registry";
+
+import "./tabs.css";
 
 /** Collapsing has no meaning on a canvas that exists to show one tree fully expanded. */
 const noop = () => {};
-
-/**
- * The strip. Numbers only — every one of them came off `RelationCounts`, so this cannot
- * drift from the canvas below it, and the sentences are pinned by a test next door.
- */
-function StatsStrip({ context }: { context: RelationContext }) {
-  const stats = useMemo(() => relationStats(context.counts), [context.counts]);
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-      {stats.map((stat, index) => (
-        <span key={stat.key} className="flex items-center gap-2">
-          {index > 0 ? <span aria-hidden>·</span> : null}
-          <span className={cn("tabular-nums", stat.blocked && "text-[var(--status-task-blocked)]")}>
-            {stat.text}
-          </span>
-        </span>
-      ))}
-    </div>
-  );
-}
 
 /**
  * Re-frame when the SHAPE changes, not when the data does.
@@ -295,37 +266,171 @@ function RelationCanvas({
   );
 }
 
-function RelationsBody({ graph, focus }: { graph: Graph; focus: string }) {
+/** One task, as a row you can tap: its status glyph, its title, and its status in words. */
+function TaskRow({
+  identifier,
+  title,
+  status,
+  onOpen,
+  note,
+}: {
+  identifier: string;
+  title: string;
+  status: string;
+  onOpen?: () => void;
+  /** Quiet words after the status, e.g. the workspace a cross-workspace task lives in. */
+  note?: string;
+}) {
+  const inner = (
+    <>
+      <StatusIcon status={status} className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-body text-foreground">{title}</span>
+        <span className="block truncate text-caption text-text-tertiary">
+          {statusLabel(status)}
+          {note ? ` · ${note}` : ""}
+        </span>
+      </span>
+      {onOpen ? <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" /> : null}
+    </>
+  );
+  const row = "flex min-h-11 w-full items-center gap-3 px-3 py-2 text-left";
+  return (
+    <li className="border-b border-border last:border-b-0">
+      {onOpen ? (
+        <button
+          type="button"
+          onClick={onOpen}
+          title={`${identifier} · ${title}`}
+          className={cn(row, "focus-ring-inset transition-colors duration-150 hover:bg-surface-hover")}
+        >
+          {inner}
+        </button>
+      ) : (
+        <div className={row} title={`${identifier} · ${title}`}>
+          {inner}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function Group({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section aria-label={title}>
+      <SectionHeading action={action}>{title}</SectionHeading>
+      <ul className="overflow-hidden rounded-xl border border-border bg-surface-raised">{children}</ul>
+    </section>
+  );
+}
+
+/** Sub-tasks finished, as a thin bar beside the words. */
+function Progress({ done, total }: { done: number; total: number }) {
+  const share = total === 0 ? 0 : done / total;
+  return (
+    <span className="flex items-center gap-2">
+      <span className="tabular-nums">
+        {done} of {total} finished
+      </span>
+      <span
+        role="progressbar"
+        aria-label="Sub-tasks finished"
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={done}
+        className="h-1.5 w-16 overflow-hidden rounded-full bg-surface-sunken"
+      >
+        <span
+          className="block h-full rounded-full bg-[var(--status-task-done)] transition-[width] duration-200 motion-reduce:transition-none"
+          style={{ width: `${Math.round(share * 100)}%` }}
+        />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A blocker in another workspace, as /api/issue sends it: the hub adds the title for the
+ * detail (additive, so an older server simply leaves it out and the row falls back to the id).
+ */
+type TitledCrossBlocker = CrossBlocker & { title?: string | null; missing?: "workspace" | "task" | null };
+
+/**
+ * A blocker this computer cannot read: no status glyph (there is no status to show), the
+ * agreed sentence, and what the person can do. Not a button: there is nothing to open.
+ */
+function UnreachableRow({ blocker, knownWorkspaces }: { blocker: TitledCrossBlocker; knownWorkspaces: readonly string[] }) {
+  const words = unreachableWords(blocker, knownWorkspaces)!;
+  return (
+    <li className="border-b border-border last:border-b-0" data-unreachable={words.kind}>
+      <div className="flex min-h-11 w-full items-start gap-3 px-3 py-2.5 text-left">
+        <EyeOff aria-hidden className="mt-0.5 size-4 shrink-0 text-text-tertiary" />
+        <span className="min-w-0 flex-1">
+          <span className="block text-body text-foreground [overflow-wrap:anywhere]">{words.headline}</span>
+          <span className="block text-caption text-text-secondary">{words.advice}</span>
+        </span>
+      </div>
+    </li>
+  );
+}
+
+function Summary({ detail, graph }: { detail: IssueDetail; graph: Graph | undefined }) {
+  const context = useMemo(
+    () => (graph ? relationContext(graph, detail.issue.identifier) : null),
+    [graph, detail.issue.identifier],
+  );
+  const stats = useMemo(() => {
+    const direct = directCounts({
+      ancestors: detail.ancestors.length,
+      children: detail.children,
+      blockedBy: detail.blockedBy,
+      blocks: detail.blocks.length,
+      crossBlockers: detail.crossBlockers,
+      isResolved: isResolvedStatus,
+    });
+    // Only the graph knows the transitive pile; it adds to the direct figure, never replaces it.
+    const further = context?.found ? Math.max(0, context.counts.blockedByTotal - context.counts.blockedByDirect) : 0;
+    return relationStats({ ...direct, blockedByTotal: direct.blockedByDirect + further });
+  }, [detail, context]);
+
+  // Sub-task progress is said once, beside the Sub-tasks list, not twice.
+  const [lead, ...rest] = stats.filter((stat) => stat.key !== "children");
+  if (!lead) return null;
+  const LeadIcon = lead.blocked ? OctagonAlert : CircleCheck;
+  return (
+    <div className="space-y-1" data-testid="relations-summary">
+      <p
+        className={cn(
+          "text-reading flex items-center gap-2 font-medium",
+          lead.blocked ? "text-[var(--status-task-blocked)]" : "text-foreground",
+        )}
+      >
+        <LeadIcon aria-hidden className={cn("size-4 shrink-0", !lead.blocked && "text-[var(--status-task-done)]")} />
+        {lead.text}
+      </p>
+      {rest.length > 0 ? (
+        <p className="pl-6 text-body text-text-secondary">{rest.map((stat) => stat.text).join(" · ")}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function RelationMap({ graph, focus }: { graph: Graph; focus: string }) {
   const session = useSession();
   const context = useMemo(() => relationContext(graph, focus), [graph, focus]);
-
-  /**
-   * A focus that is not in the payload has no honest numbers to print — it is the state
-   * during the first poll, and the state for a ticket whose workspace this graph does not
-   * cover. Showing a strip of zeroes there would assert "nothing blocks this", which is
-   * not something we know.
-   */
-  if (!context.found) return <EmptyState>no relations</EmptyState>;
-
+  if (!context.found || !context.hasRelations) {
+    return <p className="px-1 py-4 text-body text-text-secondary">There is nothing to draw on the map for this task.</p>;
+  }
   return (
-    <div className="flex flex-col gap-2">
-      <StatsStrip context={context} />
-      {context.hasRelations ? (
-        <div className="staple-relations-canvas bg-card w-full overflow-hidden rounded-lg border">
-          {/*
-            Keyed on the focus: a different ticket is a different picture, and remounting
-            resets React Flow's viewport and internal node store together rather than
-            leaving the previous shape's pan behind.
-          */}
-          <ReactFlowProvider key={focus}>
-            <RelationCanvas context={context} showWorkspace={session.mode === "hub"} />
-          </ReactFlowProvider>
-        </div>
-      ) : (
-        // Not "one lonely box". A canvas drawn for a ticket with nothing attached says
-        // less than the sentence does, and costs a scroll of empty grid to say it.
-        <EmptyState>no relations</EmptyState>
-      )}
+    <div className="staple-relations-canvas tab-fade-in w-full overflow-hidden rounded-xl border border-border bg-card">
+      {/*
+        Keyed on the focus: a different ticket is a different picture, and remounting
+        resets React Flow's viewport and internal node store together rather than
+        leaving the previous shape's pan behind.
+      */}
+      <ReactFlowProvider key={focus}>
+        <RelationCanvas context={context} showWorkspace={session.mode === "hub"} />
+      </ReactFlowProvider>
     </div>
   );
 }
@@ -339,14 +444,130 @@ function RelationsBody({ graph, focus }: { graph: Graph; focus: string }) {
  * Node ids in BOTH producers are identifiers (`hub.graph()` sets `id: issue.identifier`),
  * which is why hub mode needs no branch anywhere in this file.
  */
-export function RelationsTab({ detail, onAuthError }: TabProps) {
+export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
   const load = useCallback(() => getGraph(), []);
   const session = useSession();
   const resource = useResource(load, [session.version], onAuthError);
+  const [showMap, setShowMap] = useState(false);
 
-  if (resource.error) return <ErrorState error={resource.error} />;
-  if (resource.data === undefined) {
-    return resource.loading ? <LoadingState rows={2} /> : <EmptyState>no relations</EmptyState>;
+  const open = (identifier: string, ws: string = workspace) => session.open(ws, identifier);
+  const parent = detail.ancestors.at(-1);
+  const doneChildren = detail.children.filter((child) => isResolvedStatus(child.status)).length;
+  const waitingOn = [...detail.blockedBy].sort(
+    (a, b) => Number(isResolvedStatus(a.status)) - Number(isResolvedStatus(b.status)),
+  );
+  const nothing =
+    !parent &&
+    detail.children.length === 0 &&
+    detail.blockedBy.length === 0 &&
+    detail.blocks.length === 0 &&
+    detail.crossBlockers.length === 0;
+
+  if (nothing) {
+    return (
+      <div className="w-full max-w-readable">
+        <EmptyState icon={Network}>
+          This task stands on its own: it has no parent, no sub-tasks, and nothing it waits on or holds up.
+        </EmptyState>
+      </div>
+    );
   }
-  return <RelationsBody graph={resource.data} focus={detail.issue.identifier} />;
+
+  return (
+    <div className="w-full max-w-readable space-y-5">
+      <Summary detail={detail} graph={resource.data} />
+
+      {parent ? (
+        <Group title="Part of">
+          <TaskRow
+            identifier={parent.identifier}
+            title={parent.title}
+            status={parent.status}
+            onOpen={() => open(parent.identifier, detail.workspace)}
+          />
+        </Group>
+      ) : null}
+
+      {detail.children.length > 0 ? (
+        <Group title="Sub-tasks" action={<Progress done={doneChildren} total={detail.children.length} />}>
+          {detail.children.map((child) => (
+            <TaskRow
+              key={child.id}
+              identifier={child.identifier}
+              title={child.title}
+              status={child.status}
+              onOpen={() => open(child.identifier, detail.workspace)}
+            />
+          ))}
+        </Group>
+      ) : null}
+
+      {waitingOn.length > 0 || detail.crossBlockers.length > 0 ? (
+        <Group title="Waiting on">
+          {waitingOn.map((ref) => (
+            <TaskRow
+              key={ref.identifier}
+              identifier={ref.identifier}
+              title={ref.title}
+              status={ref.status}
+              onOpen={() => open(ref.identifier, detail.workspace)}
+            />
+          ))}
+          {(detail.crossBlockers as TitledCrossBlocker[]).map((blocker) =>
+            blocker.unresolvable ? (
+              <UnreachableRow
+                key={`${blocker.workspace}:${blocker.identifier}`}
+                blocker={blocker}
+                knownWorkspaces={session.workspaces.map((ws) => ws.slug)}
+              />
+            ) : (
+              <TaskRow
+                key={`${blocker.workspace}:${blocker.identifier}`}
+                identifier={blocker.identifier}
+                title={blocker.title?.trim() || blocker.identifier}
+                status={blocker.status ?? (blocker.resolved ? "done" : "todo")}
+                note={`in ${blocker.workspace}`}
+                onOpen={session.mode === "hub" ? () => open(blocker.identifier, blocker.workspace) : undefined}
+              />
+            ),
+          )}
+        </Group>
+      ) : null}
+
+      {detail.blocks.length > 0 ? (
+        <Group title="Holding up">
+          {detail.blocks.map((ref) => (
+            <TaskRow
+              key={ref.identifier}
+              identifier={ref.identifier}
+              title={ref.title}
+              status={ref.status}
+              onOpen={() => open(ref.identifier, detail.workspace)}
+            />
+          ))}
+        </Group>
+      ) : null}
+
+      <section aria-label="Map" className="space-y-3">
+        <button
+          type="button"
+          aria-expanded={showMap}
+          onClick={() => setShowMap((on) => !on)}
+          className="focus-ring inline-flex min-h-10 items-center gap-2 rounded-lg border border-border bg-surface-raised px-3 text-body text-foreground transition-colors duration-150 hover:bg-surface-hover"
+        >
+          <MapIcon aria-hidden className="size-4 text-text-secondary" />
+          {showMap ? "Hide map" : "Show map"}
+        </button>
+        {showMap ? (
+          resource.error ? (
+            <ErrorState error={resource.error} />
+          ) : resource.data === undefined ? (
+            <LoadingState rows={2} />
+          ) : (
+            <RelationMap graph={resource.data} focus={detail.issue.identifier} />
+          )
+        ) : null}
+      </section>
+    </div>
+  );
 }
