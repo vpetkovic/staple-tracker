@@ -250,10 +250,13 @@ describe("nothing moves when the actions appear", () => {
     expect(rule(".staple-row-quick")).toMatch(/pointer-events:\s*none/);
   });
 
-  it("lays the actions over the date's box instead of beside it", () => {
+  it("lays the actions over the end of the cue cluster, on the row's opaque ground, instead of beside it", () => {
     expect(rule(".staple-row-quick")).toMatch(/position:\s*absolute/);
-    expect(rule(".staple-row-quick")).toMatch(/inset:\s*0/);
-    expect(rule(".staple-row-trail")).toMatch(/width:\s*var\(--desk-trail-w\)/);
+    expect(rule(".staple-row-quick")).toMatch(/right:\s*0/);
+    expect(rule(".staple-row-quick")).toMatch(/background:\s*var\(--card\)/);
+    expect(rule(".staple-row[data-desk] .staple-row-meta")).toMatch(/position:\s*relative/);
+    // No box of their own on every row: the trailing slot is only as wide as the date.
+    expect(rule(".staple-row-trail")).toMatch(/min-width:\s*var\(--desk-trail-w\)/);
   });
 
   it("reveals them with opacity alone — no display, width or margin change", () => {

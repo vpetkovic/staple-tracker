@@ -50,7 +50,7 @@ import { LabelPills } from "./LabelPills";
 import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
-import { MilestoneCue, PickupCue, PickupPill } from "./RowCues";
+import { DeskPickupCue, MilestoneCue, PickupCue, PickupPill } from "./RowCues";
 import { StatusIcon } from "./StatusIcon";
 import { Avatar, RowClaimSlot } from "./WorkingPill";
 import { WorklogCue } from "./WorklogCue";
@@ -90,6 +90,14 @@ function ActionsDots() {
       <circle cx="11" cy="7" r="1.2" fill="currentColor" />
     </svg>
   );
+}
+
+/**
+ * The desktop row's labels: a label that only restates the priority the row already draws
+ * (`p1`, `priority:high`) is left off when the priority column is on. It stays on the task.
+ */
+export function deskLabels(labels: readonly string[], priorityShown: boolean): string[] {
+  return priorityShown ? labels.filter((label) => !/^(p[0-4]|priority[:=/-].+)$/i.test(label.trim())) : [...labels];
 }
 
 /** "Open this task" — the desktop row's second quick action. */
@@ -525,8 +533,10 @@ export function TaskRowLine({
             {deskKind}
           </span>
         ) : null}
-        {cues?.pickup && plan.cues === "marks" ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
-        {cues?.milestone && plan.milestoneMark ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
+        {/* The desktop row says where a task stands in the plan with the phone's plain pill
+            ("Next", "Queued"), after the title, never with the marks before it. */}
+        {cues?.pickup && plan.cues === "marks" && !desk ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
+        {cues?.milestone && plan.milestoneMark && !desk ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
             {row.workspace}
@@ -554,8 +564,21 @@ export function TaskRowLine({
         {/* A collapsed parent still declares what it is hiding. `+N` is DIRECT children in
             this bucket — literally the rows the fold removed — and it stays collapsed-only,
             because "+3" printed above three visible children would be a lie. */}
-        {cues?.pickup && plan.cues === "pill" ? <PickupPill cue={cues.pickup} /> : null}
-        {collapsedParent ? <span className="staple-row-childcount">+{childCount}</span> : null}
+        {cues?.pickup && desk ? <DeskPickupCue cue={cues.pickup} /> : null}
+        {cues?.pickup && plan.cues === "pill" && !desk ? <PickupPill cue={cues.pickup} /> : null}
+        {collapsedParent ? (
+          desk ? (
+            <span
+              className="staple-row-childcount"
+              data-testid="row-childcount"
+              title={`${childCount} ${childCount === 1 ? "task is" : "tasks are"} folded inside this one. Open the arrow to show ${childCount === 1 ? "it" : "them"}.`}
+            >
+              {childCount} inside
+            </span>
+          ) : (
+            <span className="staple-row-childcount">+{childCount}</span>
+          )
+        ) : null}
         {/*
           O3b (STA-127). Immediately after `+N` and inside the title cell, which is the slot
           the ticket names and the only one that can take it: the meta cluster is fixed
@@ -577,6 +600,7 @@ export function TaskRowLine({
             // R7c (STA-194): the rolled-up plan rides beside the bar only where density
             // permits — the comfortable preset. Compact rows keep the count and the bar.
             showPlan={config.density === "comfortable" && plan.rollupPlan}
+            plainPlan={desk}
             progress={plan.rollup}
           />
         ) : null}
@@ -597,9 +621,14 @@ export function TaskRowLine({
             widths, so who is on each task and when it last moved form columns down the list.
           */}
           <span className="staple-row-signals">
-            {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} /> : null}
+            {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} words /> : null}
             {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
-            {columns.labels && plan.labels !== "none" ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
+            {cues?.milestone && plan.milestoneMark ? (
+              <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} chip />
+            ) : null}
+            {columns.labels && plan.labels !== "none" ? (
+              <LabelPills labels={deskLabels(issue.labels, columns.priority)} max={labelMax} />
+            ) : null}
             {columns.worklog && plan.worklog ? (
               <WorklogCue worklog={row.worklog} claim={claim} checkoutAgent={issue.checkoutAgent} now={now} />
             ) : null}

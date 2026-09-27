@@ -129,6 +129,22 @@
   background: var(--surface-selected);
 }
 
+/* The blocked task's cue is the strong one, in the blocked status's red; "Blocks 3" is neutral. */
+.staple-row[data-desk] .staple-dep-badge[data-words][data-kind="blocked-by"] {
+  background: color-mix(in oklab, var(--status-task-blocked) 12%, transparent);
+  color: var(--plain-risk-fg);
+  font-weight: 500;
+}
+
+.staple-row[data-desk] .staple-dep-badge[data-words][data-kind="blocked-by"] svg {
+  color: var(--status-task-icon-blocked);
+}
+
+.staple-row[data-desk] .staple-dep-badge[data-words][data-kind="blocks"] {
+  padding: 0 8px;
+  color: var(--muted-foreground);
+}
+
 .staple-row[data-desk] .staple-pr-badge {
   padding: 0 8px;
   font-family: var(--font-sans);
@@ -461,4 +477,57 @@
 /* No date on this row (below 880px the ladder drops it): the slot takes no width. */
 .staple-row-trail:not(:has(.staple-row-date)) {
   min-width: 0;
+}
+
+/* The milestone a task is planned under, named, in the cue cluster. It opens the milestone. */
+.staple-row-milestone-chip {
+  display: inline-flex;
+  height: 20px;
+  max-width: 16ch;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--muted-foreground);
+  font-size: var(--text-caption, 11px);
+  cursor: pointer;
+}
+
+.staple-row-milestone-chip:hover {
+  background: var(--surface-selected);
+  color: var(--foreground);
+}
+
+.staple-row-milestone-chip svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.staple-row-milestone-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The desktop pickup cue: the phone's plain pill, after the title; otherwise only words for a
+   screen reader. Same look as `.staple-row-pickup-pill`. */
+.staple-row[data-desk] .staple-row-cue[data-desk-cue] {
+  font-family: var(--font-sans);
+}
+
+.staple-row[data-desk] .staple-row-cue[data-pickup-pill] {
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-size: var(--text-caption, 11px);
+  font-weight: 500;
+}
+
+.staple-row[data-desk] .staple-row-cue[data-pickup-pill="next"] {
+  border-color: color-mix(in oklab, var(--foreground) 30%, transparent);
+  color: var(--foreground);
 }

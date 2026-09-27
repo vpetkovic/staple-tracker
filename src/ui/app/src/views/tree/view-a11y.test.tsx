@@ -288,8 +288,10 @@ describe("every row cue word reaches a screen reader", () => {
 
     expect(row).toContain(`aria-label="${sentence}"`);
     expect(row).toContain(`title="${sentence}"`);
-    // The diamond itself says nothing out loud — it is the button's name that does.
-    expect(row).toContain(`<span aria-hidden="true">${MILESTONE_CUE_GLYPH}</span>`);
+    // The list draws the desktop row, which names the milestone in a chip instead of the
+    // diamond; the chip's text is decoration beside its accessible name.
+    expect(row).toContain(`<span class="staple-row-milestone-name">${MILESTONE.title}</span>`);
+    expect(row).not.toContain(`<span aria-hidden="true">${MILESTONE_CUE_GLYPH}</span>`);
     expect(row).toContain('data-milestone="M-1"');
   });
 
