@@ -95,6 +95,9 @@ describe("Activity", () => {
   it("names the web app's own actor as a person would", () => {
     const html = render(ActivityTab, detail({ comments: [comment("c1", "ui", "user", "from the page")] }));
     expect(html).toContain(">Someone in the web app<");
+    // And no "UI" initials beside that name: the device mark instead.
+    expect(html).toContain('data-person-disc="web-app"');
+    expect(html).not.toContain('data-initials="UI"');
   });
 
   it("keeps the composer at the bottom, labelled for a screen reader", () => {

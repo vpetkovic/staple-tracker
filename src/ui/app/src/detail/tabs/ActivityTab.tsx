@@ -36,6 +36,7 @@ import {
   Link2,
   ListChecks,
   MessageSquare,
+  MonitorSmartphone,
   Play,
   Sparkles,
   type LucideIcon,
@@ -49,7 +50,7 @@ import { statusLabel } from "@/lib/settings";
 import { WORKLOG_KEY, type DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { EmptyState, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, personActor, useNow } from "../parts";
+import { EmptyState, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, isWebAppActor, personActor, useNow } from "../parts";
 import { Dot } from "./Dot";
 import { commentWrite } from "./writes";
 import { isClear, shouldBringBack } from "./keep-in-view";
@@ -172,7 +173,7 @@ function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean;
         {note && !noteIsFallback ? (
           <p
             className={cn(
-              "mt-1 text-body text-pretty",
+              "mt-1 text-body text-pretty [overflow-wrap:anywhere]",
               entry.kind === "checkpoint"
                 ? "rounded-lg border-l-2 border-foreground/40 bg-surface-sunken px-3 py-1.5 text-foreground"
                 : "text-text-secondary",
@@ -192,7 +193,19 @@ function CommentRow({ entry, today, now }: { entry: TimelineEntry; today: boolea
   return (
     <li data-timeline-kind="comment" className="activity-item relative flex gap-3 py-2">
       <span className="activity-node activity-node--person">
-        <PersonDisc name={entry.actor ?? "?"} kind={kind} size="md" />
+        {isWebAppActor(entry.actor) ? (
+          // The web app's own actor is not a person with initials: the same device mark
+          // the person chip uses, not a "UI" disc beside "Someone in the web app".
+          <span
+            aria-hidden
+            data-person-disc="web-app"
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-border bg-surface-sunken text-text-secondary"
+          >
+            <MonitorSmartphone className="size-3.5" />
+          </span>
+        ) : (
+          <PersonDisc name={entry.actor ?? "?"} kind={kind} size="md" />
+        )}
       </span>
       <article className="min-w-0 flex-1 rounded-xl border border-border bg-surface-raised">
         <header className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 pt-2.5 text-body">
