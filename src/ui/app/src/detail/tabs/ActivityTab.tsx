@@ -49,8 +49,9 @@ import { statusLabel } from "@/lib/settings";
 import { WORKLOG_KEY, type DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { EmptyState, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, useNow } from "../parts";
+import { EmptyState, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, personActor, useNow } from "../parts";
 import { Dot } from "./Dot";
+import { commentWrite } from "./writes";
 import { isClear, shouldBringBack } from "./keep-in-view";
 import { buildTimeline, groupByDay, type TimelineEntry } from "../timeline";
 import type { TabProps } from "./registry";
@@ -332,7 +333,8 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
     setError("");
     try {
       // By id: the pane's issue, whatever number it holds now (`lib/write-ref.ts`).
-      await action({ ws: workspace, ref: detail.issue.id }, { type: "comment", body });
+      const write = commentWrite(workspace, detail.issue.id, body, personActor());
+      await action(write.target, write.payload);
       setDraft("");
       refresh();
       events.reload();

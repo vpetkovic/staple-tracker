@@ -25,8 +25,9 @@ import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { diffBodies } from "../diff";
 import { DocumentDiff } from "../DocumentDiff";
-import { EmptyState, PersonChip, RelativeTime, SectionHeading, cn } from "../parts";
+import { EmptyState, PersonChip, RelativeTime, SectionHeading, cn, personActor } from "../parts";
 import { Dot } from "./Dot";
+import { restoreWrite } from "./writes";
 import { takePendingDocumentKey, type TabProps } from "./registry";
 import "./tabs.css";
 
@@ -234,7 +235,8 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
     setBusy(true);
     setWriteError("");
     try {
-      await action({ ws: workspace, ref: detail.issue.id }, { type: "doc_restore", key, revision, baseRevision: currentRevision });
+      const write = restoreWrite(workspace, detail.issue.id, key, revision, currentRevision, personActor());
+      await action(write.target, write.payload);
       setArming(null);
       setReading(null);
       refresh();
