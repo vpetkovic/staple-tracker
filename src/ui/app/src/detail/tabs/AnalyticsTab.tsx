@@ -280,8 +280,11 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   // The work figure beside its state: the ratio's actual, from attempts, which the headline's
   // category time is not.
   const workState = qualityText(timing.quality?.work);
-  const workQuality = workState === null ? null : timing.workSeconds === null ? workState : `${spokenDuration(timing.workSeconds)}, ${workState}`;
-  const wallQuality = qualityText(timing.quality?.wall);
+  const workQuality = workState === null || workState === "not started" ? null : timing.workSeconds === null ? workState : `${spokenDuration(timing.workSeconds)}, ${workState}`;
+  // "not started" is what the headline's "No work recorded" already says; saying it again
+  // in the measurement rows is the same sentence twice.
+  const wallState = qualityText(timing.quality?.wall);
+  const wallQuality = wallState === "not started" ? null : wallState;
   const beneath = cohort.data ? cohortLine(cohort.data) : null;
 
   /**

@@ -591,6 +591,16 @@ describe("regression stand-ins for the five screenshot states", () => {
 // ------------------------------------------------------------------ measurement quality
 
 describe("each record says how far it can be trusted", () => {
+  it("does not repeat 'not started' under a headline that already says No work recorded", () => {
+    const notStarted = { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] };
+    const html = render(
+      detail({ identifier: "STA-21" }, timing({ quality: { work: notStarted, wall: { state: "missing", inputs: [], reasons: ["never_started"] } } } as never)),
+    );
+    expect(html).toContain(placeholder("No work recorded"));
+    expect(html).not.toContain("not started");
+    expect(html).not.toContain('aria-label="Measurement quality"');
+  });
+
   it("names the work state beside the work figure, and the elapsed state, after the per-child rows", () => {
     const html = render(
       detail(
@@ -613,7 +623,8 @@ describe("each record says how far it can be trusted", () => {
     const html = render(
       detail(
         { identifier: "STA-30", kind: "epic" },
-        timing({ childCount: 2 }),
+        // A measured parent, so the measurement section has something to say.
+        timing({ childCount: 2, quality: { work: { state: "exact", inputs: [], reasons: [], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
         [issue({ identifier: "STA-31" }), issue({ identifier: "STA-32" })],
         {
           "STA-31": timing({ activeSeconds: 1323, workSeconds: 30, quality: { work: { state: "timing-floor", inputs: [], reasons: ["timing_floor"], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } } }),
