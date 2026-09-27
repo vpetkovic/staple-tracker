@@ -8,3 +8,4 @@ export { PersonChip, PersonDisc, actorLabel, isWebAppActor, type PersonKind } fr
 export { DetailCard, EmptyState, SectionHeading } from "./layout";
 export { cn } from "./cn";
 export { PERSON_KEY, personActor, readPersonName, rememberPersonName } from "./person";
+export { SEEN_FILTER_KEY } from "./person";

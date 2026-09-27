@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fieldTarget } from "../InlineProperties";
-import { PERSON_KEY, personActor, readPersonName, rememberPersonName } from "./person";
+import { PERSON_KEY, SEEN_FILTER_KEY, personActor, readPersonName, rememberPersonName } from "./person";
 
 function fakeStore(initial: Record<string, string> = {}) {
   const data = new Map(Object.entries(initial));
@@ -19,8 +19,8 @@ function fakeStore(initial: Record<string, string> = {}) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("the person's own name", () => {
-  it("reads staple:me first, then the My tasks filter's staple:me:v1", () => {
-    expect(readPersonName(fakeStore({ [PERSON_KEY]: "VP", "staple:me:v1": "vp-filter" }))).toBe("VP");
+  it("uses the detail's name, or the My tasks filter's when the detail has none", () => {
+    expect(readPersonName(fakeStore({ [PERSON_KEY]: "VP" }))).toBe("VP");
     expect(readPersonName(fakeStore({ "staple:me:v1": "vp-filter" }))).toBe("vp-filter");
     expect(readPersonName(fakeStore())).toBeNull();
   });
@@ -30,12 +30,34 @@ describe("the person's own name", () => {
     expect(personActor(fakeStore({ "staple:actor": "codex-1" }))).toBeUndefined();
   });
 
-  it("is remembered in both places, trimmed, and an empty name changes nothing", () => {
+  it("never writes the My tasks filter's name (a free-text name would filter to nobody)", () => {
     const store = fakeStore();
-    rememberPersonName("  VP ", store);
-    expect([store.data.get(PERSON_KEY), store.data.get("staple:me:v1")]).toEqual(["VP", "VP"]);
+    rememberPersonName("  Vlad P ", store);
+    expect(store.data.get(PERSON_KEY)).toBe("Vlad P");
+    expect(store.data.has("staple:me:v1")).toBe(false);
     rememberPersonName("   ", store);
-    expect(store.data.get(PERSON_KEY)).toBe("VP");
+    expect(store.data.get(PERSON_KEY)).toBe("Vlad P");
+  });
+
+  it("uses whichever of the two was set most recently", () => {
+    const store = fakeStore({ "staple:me:v1": "vuk" });
+    // The detail is given a name after the filter's: the detail's is newer.
+    rememberPersonName("VP", store);
+    expect(readPersonName(store)).toBe("VP");
+    // The name is then corrected through the filter: the filter's is newer.
+    store.setItem("staple:me:v1", "vpetkovic");
+    expect(readPersonName(store)).toBe("vpetkovic");
+    // And given again in the detail: the detail's is newer again.
+    rememberPersonName("Vlad P", store);
+    expect(readPersonName(store)).toBe("Vlad P");
+  });
+
+  it("notices a filter name set for the first time after the detail's", () => {
+    const store = fakeStore();
+    rememberPersonName("Vlad P", store);
+    expect(store.data.has(SEEN_FILTER_KEY)).toBe(false);
+    store.setItem("staple:me:v1", "vpetkovic");
+    expect(readPersonName(store)).toBe("vpetkovic");
   });
 });
 
