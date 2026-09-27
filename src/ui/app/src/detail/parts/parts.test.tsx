@@ -101,7 +101,7 @@ describe("PersonChip", () => {
   it("shows the name in the normal font beside an initial disc", () => {
     const html = renderToStaticMarkup(<PersonChip name="dux-shell" kind="agent" />);
     expect(html).toContain(">dux-shell<");
-    expect(html).toContain(">DS<");
+    expect(html).toContain('data-initials="DS"');
     expect(html).not.toContain("font-mono");
     expect(html).not.toContain("@dux-shell");
   });
@@ -115,10 +115,19 @@ describe("PersonChip", () => {
 });
 
 describe("PersonChip — names said once, and never 'ui'", () => {
+  it("keeps the initials out of the text, so a copied line reads the name alone", () => {
+    const html = renderToStaticMarkup(<PersonChip name="claude" kind="agent" />);
+    const text = html.replace(/<[^>]+>/g, "");
+    expect(text).toBe("claude");
+    expect(html).toContain('data-initials="CL"');
+    expect(html).toMatch(/data-person-disc="agent"[^>]*aria-hidden="true"|aria-hidden="true"[^>]*data-person-disc="agent"/);
+  });
+
   it("drops the disc when the name is its own initials", () => {
     const html = renderToStaticMarkup(<PersonChip name="VP" />);
     expect(html).not.toContain("data-person-disc");
     expect((html.match(/>VP</g) ?? []).length).toBe(1);
+    expect(html).not.toContain("data-initials");
   });
 
   it("shows the web app's default actor as a place, not a person", () => {

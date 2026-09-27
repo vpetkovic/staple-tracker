@@ -27,20 +27,23 @@ export function actorLabel(name: string | null | undefined): string {
   return isWebAppActor(name) ? "Someone in the web app" : name!.trim();
 }
 
+/**
+ * The initials are drawn by CSS from `data-initials` (a `::before`), not written as text: a
+ * copied line then reads "claude", not "CLclaude", and a screen reader hears the name once.
+ */
 export function PersonDisc({ name, kind = "human", size = "sm", className }: { name: string; kind?: PersonKind; size?: "sm" | "md"; className?: string }) {
   return (
     <span
       aria-hidden
       data-person-disc={kind}
+      data-initials={initials(name)}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center border border-border bg-surface-sunken font-semibold text-text-secondary select-none",
+        "inline-flex shrink-0 items-center justify-center border border-border bg-surface-sunken font-semibold text-text-secondary select-none before:content-[attr(data-initials)]",
         size === "sm" ? "size-5 text-[9px]" : "size-6 text-[10px]",
         kind === "agent" ? "rounded-[5px]" : "rounded-full",
         className,
       )}
-    >
-      {initials(name)}
-    </span>
+    />
   );
 }
 
