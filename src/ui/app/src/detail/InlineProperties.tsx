@@ -32,6 +32,13 @@ import { configuredKindOrder, kindLabel } from "@/lib/settings";
 import { cn } from "./parts/cn";
 import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssueKind, type IssuePriority } from "@/lib/types";
 import { RefusalNotice } from "./IssueActions";
+import { personActor } from "./parts/person";
+
+/** Where a field edit goes, and whose it is: the person's name when set, else the server's "ui". */
+export function fieldTarget(ws: string, ref: string): { ws: string; ref: string; actor?: string } {
+  const actor = personActor();
+  return actor ? { ws, ref, actor } : { ws, ref };
+}
 import { PRIORITY_WORDS } from "./properties";
 
 /**
@@ -72,7 +79,8 @@ function useUpdate(issue: Issue, workspace: string, refresh: () => void) {
     setBusy(true);
     setRefusal(null);
     try {
-      await action({ ws: workspace, ref: issue.id }, patch);
+      // Signed like a status change: the person's name when they have given it, else "ui".
+      await action(fieldTarget(workspace, issue.id), patch);
       refresh();
       return true;
     } catch (caught) {
@@ -297,7 +305,10 @@ export function InlineProject({ issue, workspace, refresh, variant = "row", repo
     setBusy(true);
     setRefusal(null);
     try {
-      await assignProject({ ws: workspace, ref: issue.id, project });
+      // The project route takes the actor in its body; passed as a value, the name rides
+      // along without widening the declared shape in lib/.
+      const body = { ...fieldTarget(workspace, issue.id), project };
+      await assignProject(body);
       refresh();
     } catch (caught) {
       setRefusal(describeRefusal(caught));
