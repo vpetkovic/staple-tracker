@@ -150,17 +150,20 @@ function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean;
             name, instead of dropping to a line of its own. */}
         <p className="text-body text-text-secondary [overflow-wrap:anywhere]">
           {entry.actor ? (
-            <PersonChip name={entry.actor} kind={personKind(entry)} className="mr-1.5 max-w-full" />
+            <PersonChip name={entry.actor} kind={personKind(entry)} className="max-w-full" />
           ) : (
-            <span className="mr-1.5 font-medium text-foreground">Staple</span>
-          )}
+            <span className="font-medium text-foreground">Staple</span>
+          )}{" "}
+          {/* Real spaces between the parts, so the line is one sentence when copied or read
+              aloud ("vp moved to Backlog · just now"), not "vpmoved to Backlog". */}
           <Sentence entry={entry} />
           {entry.chips?.length && entry.kind === "blocker"
-            ? entry.chips.map((chip) => (
-                <span key={chip} className="ml-1.5 inline-block rounded-md bg-surface-sunken px-1.5 text-label text-text-secondary">
+            ? entry.chips.flatMap((chip) => [
+                " ",
+                <span key={chip} className="inline-block rounded-md bg-surface-sunken px-1.5 text-label text-text-secondary">
                   {chip}
-                </span>
-              ))
+                </span>,
+              ])
             : null}
           <Dot />
           <When iso={entry.at} today={today} now={now} />
@@ -192,9 +195,11 @@ function CommentRow({ entry, today, now }: { entry: TimelineEntry; today: boolea
       </span>
       <article className="min-w-0 flex-1 rounded-xl border border-border bg-surface-raised">
         <header className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 pt-2.5 text-body">
-          <span className="min-w-0 truncate font-medium text-foreground">{actorLabel(entry.actor)}</span>
+          <span className="min-w-0 truncate font-medium text-foreground">{actorLabel(entry.actor)}</span>{" "}
           {kind === "agent" ? (
-            <span className="rounded-md bg-surface-sunken px-1.5 text-caption text-text-secondary">agent</span>
+            <>
+              <span className="rounded-md bg-surface-sunken px-1.5 text-caption text-text-secondary">agent</span>{" "}
+            </>
           ) : null}
           <span className="text-text-tertiary">commented</span>
           <Dot />

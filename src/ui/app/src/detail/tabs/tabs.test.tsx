@@ -88,7 +88,7 @@ describe("Activity", () => {
     const html = render(ActivityTab, detail({ comments: [comment("c1", "VP", "user", "hi")] }));
     const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
     const text = header.replace(/<[^>]+>/g, "");
-    expect(text).toMatch(/commented · just now$/);
+    expect(text).toMatch(/^VP commented · just now$/);
     expect(text).not.toContain("Just now");
   });
 
