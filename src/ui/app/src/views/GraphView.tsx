@@ -185,10 +185,10 @@ function Legend() {
       </span>
       {/* Two sentences, one shown: a touch screen has no hover, and on a phone a tap opens the
           task full screen rather than tracing its chain beside it. */}
-      <span className="text-muted-foreground/70 pointer-coarse:hidden" data-graph-hint="pointer">
+      <span className="text-muted-foreground/80 pointer-coarse:hidden" data-graph-hint="pointer">
         Hover over a task or select it to trace what it waits on
       </span>
-      <span className="hidden text-muted-foreground/70 pointer-coarse:inline" data-graph-hint="touch">
+      <span className="hidden text-muted-foreground/80 pointer-coarse:inline" data-graph-hint="touch">
         Tap a task to open it. Pinch to zoom, drag to move around.
       </span>
     </div>
