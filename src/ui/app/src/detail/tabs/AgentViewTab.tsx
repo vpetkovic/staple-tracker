@@ -16,6 +16,7 @@
  * asks for them is working with a very different context window than one that does not.
  */
 import { useCallback, useMemo, useState } from "react";
+import { Check, ChevronDown, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getAgentContext } from "@/lib/api";
 import type { AgentContext } from "@/lib/types";
@@ -24,26 +25,9 @@ import { cn } from "@/lib/utils";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { breakdown, CHARS_PER_TOKEN, estimateTokens, thousands, wireJson } from "../agentPayload";
 import type { TabProps } from "./registry";
+import "./tabs.css";
 
-function Stat({
-  label,
-  value,
-  hint,
-  strong,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  strong?: boolean;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[10px] tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">{label}</div>
-      <div className={cn("font-mono tabular-nums", strong ? "text-2xl leading-tight" : "text-sm")}>{value}</div>
-      {hint ? <div className="text-[10px] text-muted-foreground">{hint}</div> : null}
-    </div>
-  );
-}
+const plural = (n: number, one: string, many: string) => `${thousands(n)} ${n === 1 ? one : many}`;
 
 export function AgentViewTab({ detail, workspace, onAuthError }: TabProps) {
   const ref = detail.issue.identifier;
@@ -100,80 +84,104 @@ export function AgentViewTab({ detail, workspace, onAuthError }: TabProps) {
   if (error) return <ErrorState error={error} />;
   if (!stats) return <LoadingState rows={3} />;
 
+  const relations = stats.payload.blockedBy.length + stats.payload.blocks.length;
+
   return (
-    <div className="space-y-3">
-      <p className="text-[13px] text-muted-foreground">
-        The exact payload the MCP <code className="rounded bg-muted px-1 font-mono text-[0.85em]">get_task</code>{" "}
-        tool returns for this issue — not a rendering of it.
+    <div className="mx-auto w-full max-w-readable space-y-4">
+      <div className="space-y-1">
+        <p className="text-reading text-foreground">This is exactly what an AI agent sees when it opens this task.</p>
+        <p className="text-body text-text-secondary">
+          It is the same data the agent tools return, word for word, so you can check the task says what you think it
+          says before you hand it over.
+        </p>
+      </div>
+
+      {/* The size, in a sentence. The estimate is labelled as one wherever it is shown:
+          chars ÷ 4 is close for prose and not exact for anything. */}
+      <p className="text-body text-text-secondary" title={`Estimate: ${thousands(stats.chars)} characters ÷ ${CHARS_PER_TOKEN}`}>
+        About <span className="font-medium text-foreground">{plural(stats.tokens, "token", "tokens")}</span> of context
+        {" · "}
+        {plural(stats.payload.comments.length, "comment", "comments")}
+        {" · "}
+        {relations === 0 ? "no connections" : plural(relations, "connection", "connections")}
       </p>
 
-      <div className="flex flex-wrap items-end gap-x-6 gap-y-3 rounded-md border bg-muted/40 px-4 py-3">
-        <Stat
-          strong
-          label="context size"
-          value={`≈ ${thousands(stats.tokens)} tokens`}
-          hint={`estimate · ${thousands(stats.chars)} chars ÷ ${CHARS_PER_TOKEN}`}
-        />
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={withDocuments}
+          onClick={() => setWithDocuments((on) => !on)}
+          className="focus-ring inline-flex min-h-10 items-center gap-2.5 rounded-lg text-body text-foreground"
+        >
+          <span
+            aria-hidden
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors duration-150",
+              withDocuments ? "bg-foreground" : "bg-surface-sunken shadow-[inset_0_0_0_1px_var(--border)]",
+            )}
+          >
+            <span
+              className={cn(
+                "absolute top-0.5 size-4 rounded-full bg-background shadow-sm transition-transform duration-150 motion-reduce:transition-none",
+                withDocuments ? "translate-x-[18px]" : "translate-x-0.5",
+              )}
+            />
+          </span>
+          Include document bodies
+        </button>
         {documentCost !== undefined ? (
-          <Stat
-            label="document bodies"
-            value={`${documentCost > 0 ? "+" : ""}${thousands(documentCost)}`}
-            hint={
-              documentCost === 0
-                ? "no document bodies to inline"
-                : `${thousands(leanTokens!)} without · ${thousands(fullTokens!)} with`
-            }
-          />
+          <span className="text-label text-text-secondary">
+            {documentCost === 0
+              ? "This task has no document text to add."
+              : `Adds about ${plural(documentCost, "token", "tokens")}. Agents get these only when they ask.`}
+          </span>
         ) : null}
-        <Stat label="comments" value={thousands(stats.payload.comments.length)} />
-        <Stat
-          label="relations"
-          value={thousands(stats.payload.blockedBy.length + stats.payload.blocks.length)}
-        />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant={withDocuments ? "secondary" : "outline"}
-          className="h-7"
-          onClick={() => setWithDocuments((on) => !on)}
-        >
-          include_documents: {withDocuments ? "true" : "false"}
-        </Button>
-        <span className="text-[11px] text-muted-foreground">
-          {withDocuments ? "document bodies inlined" : "get_task's default — metadata only"}
-        </span>
-        <Button size="sm" variant="ghost" className="ml-auto h-7" onClick={copy}>
-          {copied ? "copied" : "copy JSON"}
-        </Button>
-      </div>
+      <section aria-label="Agent payload" className="overflow-hidden rounded-xl border border-border bg-surface-sunken">
+        <header className="flex items-center gap-2 border-b border-border bg-surface-raised px-3.5 py-1.5">
+          <span className="min-w-0 flex-1 truncate text-label text-text-secondary">
+            {withDocuments ? "Task with document bodies" : "Task as agents receive it"}
+          </span>
+          <Button size="sm" variant="ghost" className="shrink-0 max-sm:h-10" onClick={copy} aria-live="polite">
+            {copied ? <Check aria-hidden className="size-3.5" /> : <Copy aria-hidden className="size-3.5" />}
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </header>
+        <pre className="tab-code max-h-[28rem] overflow-auto p-3.5 font-mono text-[12px] leading-relaxed text-foreground">
+          {stats.pretty}
+        </pre>
+      </section>
 
       {/* Where the tokens actually go. "This context is big" is a fact; "your comment
-          thread is 60% of it" is something you can act on. */}
-      <div className="space-y-1">
-        {stats.slices.map((slice) => (
-          <div key={slice.key} className="flex items-center gap-2 text-[11px]">
-            <span className="w-28 shrink-0 truncate font-mono">
-              {slice.key}
-              {slice.count !== null ? <span className="text-muted-foreground"> ({slice.count})</span> : null}
-            </span>
-            <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-              <span
-                className="block h-full rounded-full bg-foreground/40"
-                style={{ width: `${Math.max(slice.share * 100, slice.chars > 2 ? 1 : 0)}%` }}
-              />
-            </span>
-            <span className="w-24 shrink-0 text-right font-mono tabular-nums text-muted-foreground">
-              ≈{thousands(slice.tokens)} · {Math.round(slice.share * 100)}%
-            </span>
-          </div>
-        ))}
-      </div>
-
-      <pre className="max-h-[26rem] overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
-        {stats.pretty}
-      </pre>
+          thread is 60% of it" is something you can act on. Secondary, so it folds away. */}
+      <details className="group rounded-xl border border-border bg-surface-raised">
+        <summary className="focus-ring-inset flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3.5 text-body text-foreground select-none [&::-webkit-details-marker]:hidden">
+          <span className="flex-1">Where the size goes</span>
+          <ChevronDown
+            aria-hidden
+            className="size-4 text-text-tertiary transition-transform duration-150 group-open:rotate-180 motion-reduce:transition-none"
+          />
+        </summary>
+        <div className="space-y-2 border-t border-border px-3.5 py-3">
+          {stats.slices.map((slice) => (
+            <div key={slice.key} className="grid grid-cols-[minmax(0,8rem)_minmax(0,1fr)_auto] items-center gap-3 text-label">
+              <span className="truncate text-foreground">
+                {slice.key}
+                {slice.count !== null ? <span className="text-text-tertiary"> ({slice.count})</span> : null}
+              </span>
+              <span className="h-1.5 overflow-hidden rounded-full bg-surface-sunken">
+                <span
+                  className="block h-full rounded-full bg-foreground/40"
+                  style={{ width: `${Math.max(slice.share * 100, slice.chars > 2 ? 1 : 0)}%` }}
+                />
+              </span>
+              <span className="text-right text-text-secondary tabular-nums">{Math.round(slice.share * 100)}%</span>
+            </div>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }
