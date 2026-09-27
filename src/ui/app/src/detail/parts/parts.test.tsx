@@ -5,7 +5,7 @@
 import { Inbox } from "lucide-react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { DetailCard, EmptyState, PersonChip, RelativeTime, SectionHeading, formatDuration, formatExact, formatRelative } from "./index";
+import { DetailCard, EmptyState, PersonChip, RelativeTime, SectionHeading, actorLabel, formatDuration, formatExact, formatRelative, formatStamp } from "./index";
 
 const NOW = new Date("2026-09-27T15:00:00Z");
 const at = (iso: string) => formatRelative(iso, { now: NOW, timeZone: "UTC" });
@@ -39,6 +39,11 @@ describe("formatRelative", () => {
     expect(formatRelative("2026-09-27T01:00:00Z", { now: NOW, timeZone: "UTC" })).toBe("14 hr ago");
   });
 
+  it("reads a date a minute or so in the future as clock skew: just now", () => {
+    expect(at("2026-09-27T15:01:30Z")).toBe("Just now");
+    expect(at("2026-09-27T15:03:00Z")).toBe("in 3 min");
+  });
+
   it("speaks forwards for a future date", () => {
     expect(at("2026-09-27T15:05:00Z")).toBe("in 5 min");
     expect(at("2026-09-28T09:00:00Z")).toBe("Tomorrow");
@@ -62,7 +67,8 @@ describe("formatRelative", () => {
 
 describe("formatExact and formatDuration", () => {
   it("gives the full local time for the tooltip", () => {
-    expect(formatExact("2026-09-27T11:18:00Z", { timeZone: "UTC" })).toBe("Sun, Sep 27, 2026, 11:18 AM");
+    expect(formatExact("2026-09-27T11:18:00Z", { timeZone: "UTC" })).toBe("Sun, Sep 27, 2026, 11:18 AM UTC");
+    expect(formatStamp("2026-09-02T04:14:00Z", { timeZone: "America/New_York" })).toBe("Sep 2, 2026, 12:14 AM EDT");
     expect(formatExact("nope")).toBeNull();
   });
 
@@ -80,7 +86,7 @@ describe("RelativeTime", () => {
   it("renders a <time> with the machine value and the exact time in its title", () => {
     const html = renderToStaticMarkup(<RelativeTime iso="2026-09-27T14:48:00Z" now={NOW} timeZone="UTC" />);
     expect(html).toContain('<time dateTime="2026-09-27T14:48:00Z"');
-    expect(html).toContain('title="Sun, Sep 27, 2026, 2:48 PM"');
+    expect(html).toContain('title="Sun, Sep 27, 2026, 2:48 PM UTC"');
     expect(html).toContain(">12 min ago</time>");
   });
 
@@ -100,9 +106,26 @@ describe("PersonChip", () => {
 
   it("draws an agent as a rounded square and a person as a circle", () => {
     expect(renderToStaticMarkup(<PersonChip name="dux-shell" kind="agent" />)).toContain('data-person-disc="agent"');
-    const human = renderToStaticMarkup(<PersonChip name="VP" />);
+    const human = renderToStaticMarkup(<PersonChip name="Ada Lovelace" />);
     expect(human).toContain('data-person-disc="human"');
     expect(human).toContain("rounded-full");
+  });
+});
+
+describe("PersonChip — names said once, and never 'ui'", () => {
+  it("drops the disc when the name is its own initials", () => {
+    const html = renderToStaticMarkup(<PersonChip name="VP" />);
+    expect(html).not.toContain("data-person-disc");
+    expect((html.match(/>VP</g) ?? []).length).toBe(1);
+  });
+
+  it("shows the web app's default actor as a place, not a person", () => {
+    const html = renderToStaticMarkup(<PersonChip name="ui" kind="agent" />);
+    expect(html).toContain(">Someone in the web app<");
+    expect(html).not.toContain(">UI<");
+    expect(html).not.toContain(">ui<");
+    expect(actorLabel("")).toBe("Someone in the web app");
+    expect(actorLabel("VP")).toBe("VP");
   });
 });
 

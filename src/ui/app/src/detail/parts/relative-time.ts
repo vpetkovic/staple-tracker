@@ -67,7 +67,8 @@ function formatRelativeWords(iso: string | null | undefined, options: RelativeTi
   const future = seconds < 0;
   const age = Math.abs(seconds);
 
-  if (age < 45) return "Just now";
+  // A date a little in the future is clock skew between machines, not a plan: "just now".
+  if (age < 45 || (future && age < 120)) return "Just now";
   if (age < HOUR) {
     const minutes = Math.max(1, Math.floor(age / MINUTE));
     return future ? `in ${minutes} min` : `${minutes} min ago`;
@@ -85,7 +86,7 @@ function formatRelativeWords(iso: string | null | undefined, options: RelativeTi
   return year(at, timeZone) === year(now, timeZone) ? monthDay : `${monthDay}, ${year(at, timeZone)}`;
 }
 
-/** The exact time for the tooltip: `Sun, Sep 27, 2026, 11:18 AM`. Null when unreadable. */
+/** The exact time, with its zone, for the tooltip: `Sun, Sep 27, 2026, 11:18 AM EDT`. Null when unreadable. */
 export function formatExact(iso: string | null | undefined, options: Pick<RelativeTimeOptions, "timeZone"> = {}): string | null {
   const at = parse(iso);
   if (!at) return null;
@@ -97,6 +98,25 @@ export function formatExact(iso: string | null | undefined, options: Pick<Relati
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZoneName: "short",
+  }).format(at);
+}
+
+/**
+ * A raw timestamp for "More details": the same local time and zone the tooltips show,
+ * without the weekday, so a column of them reads evenly: `Sep 2, 2026, 12:14 AM EDT`.
+ */
+export function formatStamp(iso: string | null | undefined, options: Pick<RelativeTimeOptions, "timeZone"> = {}): string | null {
+  const at = parse(iso);
+  if (!at) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: options.timeZone,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
   }).format(at);
 }
 
