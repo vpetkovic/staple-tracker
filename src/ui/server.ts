@@ -832,7 +832,10 @@ export function startUiServer(options: UiOptions): UiHandle {
     try {
       const hub = Hub.open();
       try {
-        crossBlockers = hub.crossBlockersOf(context.issue.identifier);
+        // With titles: the detail's Connections tab names a blocker in another workspace
+        // the way it names every other row. /api/agent-context stays without them, because
+        // it is pinned byte for byte to MCP get_task.
+        crossBlockers = hub.crossBlockersWithTitles(context.issue.identifier);
       } finally {
         hub.close();
       }

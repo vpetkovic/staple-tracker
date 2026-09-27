@@ -135,6 +135,24 @@ describe("Connections", () => {
     expect(html).toContain('aria-valuenow="1"');
   });
 
+  it("names a blocker in another workspace by title and status, like any other row", () => {
+    const html = render(
+      RelationsTab,
+      detail({
+        crossBlockers: [
+          { identifier: "ALP-1", workspace: "alpha", status: "in_progress", resolved: false, unresolvable: false, title: "Publish the API contract" },
+          { identifier: "GAM-9", workspace: "gamma", status: null, resolved: false, unresolvable: true, title: null },
+        ] as unknown as IssueDetail["crossBlockers"],
+      }),
+    );
+    expect(html).toContain(">Publish the API contract<");
+    expect(html).toContain("In Progress · in alpha");
+    // No title to give (the file is on another computer): the id, and an honest status.
+    expect(html).toContain(">GAM-9<");
+    expect(html).toContain("Status unknown · in gamma, which is not on this computer");
+    expect(html).not.toContain(">ALP-1<");
+  });
+
   it("says a task with no connections stands on its own, instead of drawing an empty canvas", () => {
     const html = render(RelationsTab, detail());
     expect(html).toContain("data-empty-state");

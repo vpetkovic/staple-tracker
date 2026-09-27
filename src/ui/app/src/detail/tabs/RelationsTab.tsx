@@ -273,10 +273,13 @@ function TaskRow({
   status,
   onOpen,
   note,
+  statusText,
 }: {
   identifier: string;
   title: string;
   status: string;
+  /** Words in place of the status label, when the status itself is not known. */
+  statusText?: string;
   onOpen?: () => void;
   /** Quiet words after the status, e.g. the workspace a cross-workspace task lives in. */
   note?: string;
@@ -287,7 +290,7 @@ function TaskRow({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-body text-foreground">{title}</span>
         <span className="block truncate text-caption text-text-tertiary">
-          {statusLabel(status)}
+          {statusText ?? statusLabel(status)}
           {note ? ` · ${note}` : ""}
         </span>
       </span>
@@ -349,8 +352,14 @@ function Progress({ done, total }: { done: number; total: number }) {
   );
 }
 
+/**
+ * A blocker in another workspace, as /api/issue sends it: the hub adds the title for the
+ * detail (additive, so an older server simply leaves it out and the row falls back to the id).
+ */
+type TitledCrossBlocker = CrossBlocker & { title?: string | null };
+
 function crossNote(blocker: CrossBlocker): string {
-  return blocker.unresolvable ? `${blocker.workspace} · not on this computer` : blocker.workspace;
+  return blocker.unresolvable ? `in ${blocker.workspace}, which is not on this computer` : `in ${blocker.workspace}`;
 }
 
 function Summary({ detail, graph }: { detail: IssueDetail; graph: Graph | undefined }) {
@@ -492,13 +501,14 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
               onOpen={() => open(ref.identifier, detail.workspace)}
             />
           ))}
-          {detail.crossBlockers.map((blocker) => (
+          {(detail.crossBlockers as TitledCrossBlocker[]).map((blocker) => (
             <TaskRow
               key={`${blocker.workspace}:${blocker.identifier}`}
               identifier={blocker.identifier}
-              // The hub knows the id and the status of a task in another workspace, not its title.
-              title={blocker.identifier}
+              title={blocker.title?.trim() || blocker.identifier}
               status={blocker.status ?? (blocker.resolved ? "done" : "todo")}
+              // An unreadable workspace has no status to name; say so rather than guess "Todo".
+              statusText={blocker.status === null ? "Status unknown" : undefined}
               note={crossNote(blocker)}
               onOpen={session.mode === "hub" && !blocker.unresolvable ? () => open(blocker.identifier, blocker.workspace) : undefined}
             />
