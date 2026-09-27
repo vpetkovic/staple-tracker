@@ -28,6 +28,7 @@
 import { memo } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { cn } from "@/lib/utils";
+import { EpicProgress, EpicProgressEdge } from "./EpicProgress";
 import type { EpicSummary } from "./graph-clusters";
 import { NODE_H, NODE_W } from "./graph-layout";
 
@@ -44,7 +45,6 @@ export type ClusterFlowNode = Node<ClusterNodeData, "cluster">;
 
 export const ClusterNode = memo(function ClusterNode({ data }: NodeProps<ClusterFlowNode>) {
   const { epic, showWorkspace, dim, focused, onExpand } = data;
-  const complete = epic.total > 0 && epic.resolved === epic.total;
 
   return (
     <div
@@ -73,17 +73,7 @@ export const ClusterNode = memo(function ClusterNode({ data }: NodeProps<Cluster
           {showWorkspace ? `${epic.workspace} · ` : ""}
           {epic.id}
         </span>
-        <span
-          className={cn(
-            "ml-auto shrink-0 rounded-sm px-1 font-sans text-[10px] tabular-nums",
-            complete ? "text-muted-foreground" : "text-card-foreground",
-          )}
-          // The count is the reason to collapse; say what it counts out loud for anyone
-          // who cannot see the badge.
-          title={`${epic.resolved} of ${epic.total} tickets on this canvas are done`}
-        >
-          {epic.resolved}/{epic.total} done
-        </span>
+        <EpicProgress resolved={epic.resolved} total={epic.total} inlineBar={false} />
         <button
           type="button"
           // nodrag: a press here must not become a node drag. See the file header.
@@ -105,6 +95,7 @@ export const ClusterNode = memo(function ClusterNode({ data }: NodeProps<Cluster
       <div className="mt-0.5 line-clamp-2 text-[12px] leading-snug font-medium wrap-anywhere text-card-foreground">
         {epic.title}
       </div>
+      <EpicProgressEdge resolved={epic.resolved} total={epic.total} />
     </div>
   );
 });

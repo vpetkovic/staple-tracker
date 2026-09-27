@@ -24,7 +24,8 @@
  * prev/next arrows would keep paging a list that is no longer on the page.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { dequeueTask, enqueueTask, getInbox, getQueue, isRevisionConflict, type AuthError } from "@/lib/api";
+import { action, dequeueTask, enqueueTask, getInbox, getQueue, isRevisionConflict, type AuthError } from "@/lib/api";
+import { RowStatusMenu } from "@/components/task-list/RowStatusMenu";
 import {
   attachRowCues,
   buildRowCueIndex,
@@ -40,7 +41,7 @@ import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
 import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
 import { useSession } from "@/lib/session";
-import type { InboxRow, QueueView } from "@/lib/types";
+import type { InboxRow, IssueStatus, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
 import { rowQueueMenu, type RowQueue } from "./tree/row-queue";
@@ -241,6 +242,34 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   );
 
   /**
+   * THE ROW'S QUICK STATUS CHANGE — the desktop row's first hover action.
+   *
+   * The same `status` action the detail's status control sends, to the row's own workspace,
+   * and the same re-read afterwards. A refusal lands in the banner above the list, like a
+   * refused queue write: a menu item that appears to do nothing is worse than one that says
+   * it was refused.
+   */
+  const [statusBusy, setStatusBusy] = useState(false);
+  const rowStatusMenu = useCallback(
+    (row: TaskRow, trigger: ReactNode) => (
+      <RowStatusMenu
+        trigger={trigger}
+        identifier={row.issue.identifier}
+        status={row.issue.status}
+        disabled={statusBusy}
+        onPick={(status) => {
+          setStatusBusy(true);
+          action({ ws: row.workspace, ref: row.issue.id }, { type: "status", status: status as IssueStatus })
+            .then(() => session.refresh())
+            .catch((error: unknown) => setQueueRefusal(describeRefusal(error)))
+            .finally(() => setStatusBusy(false));
+        }}
+      />
+    ),
+    [statusBusy, session],
+  );
+
+  /**
    * Milestone TITLES, from the list App already fetches for the filter menu (`filterContext`).
    * No second request: the marker needs a name for its tooltip and `/api/milestones` is
    * already on the page once per poll.
@@ -419,6 +448,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
                * grid never has to know what a menu is — see `TaskRowLine.actionsMenu`.
                */
               rowActionsMenu={rowActionsMenu}
+              rowStatusMenu={rowStatusMenu}
               onCloseDrawer={session.close}
               onVisibleOrder={publishVisibleOrder}
             />

@@ -130,6 +130,8 @@ import {
   type PlanRow,
 } from "./queue-model";
 import { knownRows, queueTreeRows, type QueueTreeRow } from "./queue-tree";
+import { BUCKET_ORDER, BUCKET_WORDS, queueSummary, summarySentence, type QueueBucket } from "./queue-summary";
+import { ProgressStrip } from "@/views/ProgressStrip";
 import { idsOf, pinnedRef } from "@/lib/write-ref";
 
 /**
@@ -145,7 +147,8 @@ const QUEUE_ROW_COLUMNS = { select: false, disclosure: true, actions: true } as 
 /** The queue row at this width — the tree's own ladder (row-layout.ts), so the two agree. */
 function useQueueRowConfig() {
   const plan = useRowPlan();
-  return useMemo(() => resolveTaskListConfig("tree", { columns: QUEUE_ROW_COLUMNS, plan }), [plan]);
+  // `desk`: the tree's desktop row on a line plan, so the two lists read as one system.
+  return useMemo(() => resolveTaskListConfig("tree", { columns: QUEUE_ROW_COLUMNS, plan, desk: true }), [plan]);
 }
 
 /** What the view shows when a write went wrong, and how it went wrong. */
@@ -230,10 +233,50 @@ function Gutter({ children, dim = false }: { children?: ReactNode; dim?: boolean
 export function NextUpBand({
   next,
   onOpen,
+  desk = false,
 }: {
   next: EffectiveQueueRow | null;
   onOpen: (identifier: string) => void;
+  /** The desktop card: the same fact, with a sentence saying what it means. */
+  desk?: boolean;
 }) {
+  if (desk) {
+    return (
+      <section
+        data-queue-next-up
+        data-queue-next={next ? "eligible" : "none"}
+        className="staple-queue-next flex min-w-0 items-center gap-4 rounded-xl border bg-card px-4 py-3"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-medium text-muted-foreground">Next up</div>
+          {next ? (
+            <>
+              <div className="mt-0.5 flex min-w-0 items-baseline gap-2">
+                <span className="min-w-0 truncate text-[15px] font-medium" title={next.title}>
+                  {next.title}
+                </span>
+                <span data-queue-next-ref className="shrink-0 text-[12px] tabular-nums text-text-tertiary">
+                  {next.identifier}
+                </span>
+              </div>
+              <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+                An agent asking for work right now would get this task.
+              </p>
+            </>
+          ) : (
+            <p className="mt-0.5 text-[13px] text-muted-foreground">
+              Nothing can be picked up right now: every task in the plan is waiting on something.
+            </p>
+          )}
+        </div>
+        {next ? (
+          <Button variant="outline" size="sm" data-queue-next-open onClick={() => onOpen(next.identifier)}>
+            Open
+          </Button>
+        ) : null}
+      </section>
+    );
+  }
   return (
     <section
       data-queue-next-up
@@ -657,6 +700,7 @@ export function QueueBoard({
   onReload,
   onRetry,
   onDismissFailure,
+  desk = false,
 }: {
   view: QueueViewData;
   rows: readonly PlanRow[];
@@ -680,10 +724,60 @@ export function QueueBoard({
   onReload: () => void;
   onRetry: () => void;
   onDismissFailure: () => void;
+  /** The desktop page (720px and up): a centred column, plain words and a progress summary. */
+  desk?: boolean;
 }) {
   const resolved = view.entries.filter((entry) => entry.resolved).length;
+  const summary = useMemo(() => queueSummary(view.effective), [view.effective]);
   return (
-    <div data-queue-board className="flex h-full min-h-0 w-full flex-col gap-3 px-4 py-3">
+    <div
+      data-queue-board
+      data-desk={desk ? "" : undefined}
+      className={cn(
+        "flex h-full min-h-0 w-full flex-col",
+        desk ? "staple-queue-desk mx-auto max-w-[68rem] gap-4 px-6 pt-6 pb-3" : "gap-3 px-4 py-3",
+      )}
+    >
+      {desk ? (
+        <header className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[20px] font-semibold tracking-[var(--tracking-heading)]">Pickup order</h2>
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              The order your agents take work in. They start at the top and skip anything that is
+              waiting on something else.
+            </p>
+          </div>
+          {resolved > 0 ? (
+            <Button variant="outline" size="sm" disabled={busy} onClick={onPrune} title="Remove finished tasks from the plan">
+              Clear {resolved} finished
+            </Button>
+          ) : null}
+        </header>
+      ) : null}
+      {desk ? (
+        <section
+          data-queue-summary
+          aria-label="How the plan stands"
+          className="rounded-xl border bg-card px-4 py-3.5"
+        >
+          <p data-queue-summary-sentence className={cn("text-[13.5px]", summary.planned > 0 && "mb-3")}>
+            {summarySentence(summary)}
+          </p>
+          {summary.planned === 0 ? null : (
+          <ProgressStrip
+            testId="queue-progress"
+            label={summarySentence(summary)}
+            segments={BUCKET_ORDER.map((bucket) => ({
+              key: bucket,
+              count: summary.counts[bucket],
+              word: BUCKET_WORDS[bucket],
+              color: BUCKET_COLOR[bucket],
+            }))}
+          />
+          )}
+        </section>
+      ) : null}
+      {desk ? null : (
       <header className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <h2 className="text-[15px] font-semibold tracking-[var(--tracking-heading)]">Pickup order</h2>
@@ -700,14 +794,17 @@ export function QueueBoard({
           </Button>
         ) : null}
       </header>
+      )}
 
-      <NextUpBand next={preview.next} onOpen={(identifier) => onOpen(workspace, identifier)} />
+      <NextUpBand next={preview.next} onOpen={(identifier) => onOpen(workspace, identifier)} desk={desk} />
 
       {/* The one sentence that answers "so what happens to these" without a tour. */}
-      <p data-queue-legend className="text-[12px] text-muted-foreground">
-        Agents take work from the top down. Rows nested under an entry are what that entry
-        expands to — its own open descendants.
-      </p>
+      {desk ? null : (
+        <p data-queue-legend className="text-[12px] text-muted-foreground">
+          Agents take work from the top down. Rows nested under an entry are what that entry
+          expands to — its own open descendants.
+        </p>
+      )}
 
       {failure ? (
         failure.kind === "conflict" ? (
@@ -776,10 +873,26 @@ export function QueueBoard({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {desk && rows.length > 0 ? (
+          <p data-queue-legend className="mb-2 text-[12.5px] text-muted-foreground">
+            Drag a row, or use Alt and the arrow keys, to change the order. Rows nested under an
+            entry are the open tasks inside it.
+          </p>
+        ) : null}
         {rows.length === 0 ? (
-          <EmptyState>
-            nothing is queued — agents take work in presentation order until you put something here
-          </EmptyState>
+          desk ? (
+            <div data-queue-empty className="rounded-xl border border-dashed px-5 py-6 text-center">
+              <p className="text-[14px] font-medium">Nothing is in the plan yet</p>
+              <p className="mx-auto mt-1 max-w-[34rem] text-[13px] text-muted-foreground">
+                Until you add something above, agents take open work in list order. Add a task,
+                an epic or a milestone to put it first.
+              </p>
+            </div>
+          ) : (
+            <EmptyState>
+              nothing is queued — agents take work in presentation order until you put something here
+            </EmptyState>
+          )
         ) : (
           <ReorderList
             items={rows}
@@ -833,10 +946,31 @@ export function QueueBoard({
           onToggleOpen={onToggleUnqueued}
           onOpen={(identifier) => onOpen(workspace, identifier)}
         />
+        {desk ? (
+          <details className="mt-4 text-[12px] text-muted-foreground" data-technical-details="">
+            <summary className="cursor-pointer select-none py-1">Show details</summary>
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+              <dt>Plan entries</dt>
+              <dd className="tabular-nums">{view.entries.length}</dd>
+              <dt>Plan revision</dt>
+              <dd className="font-mono" data-queue-revision={view.revision}>
+                {view.revision}
+              </dd>
+            </dl>
+          </details>
+        ) : null}
       </div>
     </div>
   );
 }
+
+/** The four bucket colours: finished green, in progress blue, ready neutral, waiting amber. */
+const BUCKET_COLOR: Readonly<Record<QueueBucket, string>> = {
+  done: "var(--status-task-done)",
+  active: "var(--status-task-in_progress)",
+  ready: "color-mix(in oklab, var(--foreground) 38%, transparent)",
+  waiting: "var(--status-task-todo)",
+};
 
 // ---------- the view ----------
 
@@ -859,6 +993,8 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
 
 function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  // The desktop page from 720px up; the phone keeps the board exactly as it shipped.
+  const desk = useRowPlan().layout === "line";
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<QueueWriteFailure | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
@@ -1086,6 +1222,7 @@ function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthE
       onReload={onReload}
       onRetry={onRetry}
       onDismissFailure={() => setFailure(null)}
+      desk={desk}
     />
   );
 }

@@ -282,6 +282,7 @@ export function TreeGrid({
   onOpen,
   onOpenMilestone,
   rowActionsMenu,
+  rowStatusMenu,
   onCloseDrawer,
   onVisibleOrder,
 }: {
@@ -364,6 +365,8 @@ export function TreeGrid({
    * every static-markup test still want.
    */
   rowActionsMenu?: (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => ReactNode;
+  /** The desktop row's quick status menu, built per row — see `TaskRowLine.statusMenu`. */
+  rowStatusMenu?: (row: TaskRow, trigger: ReactNode) => ReactNode;
   onCloseDrawer: () => void;
   /** R6's contract (STA-106): the visible rows, in screen order. See lib/session.ts. */
   onVisibleOrder: (order: readonly Selection[]) => void;
@@ -382,7 +385,9 @@ export function TreeGrid({
    * The tree is the `tree` preset — the full row — with one live override: the row plan,
    * which is a measurement of the viewport and cannot be a constant.
    */
-  const config = useMemo(() => resolveTaskListConfig("tree", { plan }), [plan]);
+  const config = useMemo(() => resolveTaskListConfig("tree", { plan, desk: true }), [plan]);
+  /** The desktop row applies on a line plan only; the phone keeps its compact row. */
+  const desk = plan.layout === "line";
 
   // One clock reading per render rather than one per row, so twenty rows cannot disagree
   // about what "3h" means. The 1.5s poll re-renders and refreshes it.
@@ -756,6 +761,7 @@ export function TreeGrid({
       onOpenParent={(identifier) => onOpen(row.workspace, identifier)}
       onOpenMilestone={onOpenMilestone}
       actionsMenu={rowActionsMenu ? (trigger, control) => rowActionsMenu(row, trigger, control) : undefined}
+      statusMenu={rowStatusMenu ? (trigger) => rowStatusMenu(row, trigger) : undefined}
       onToggleExpand={() => expansion.toggleRow(row.issue, row.isExpanded)}
       onToggleSelect={() => toggleSelect(row.issue.id)}
       onFocus={() => focus.set(navKeyOf(row))}
@@ -813,6 +819,7 @@ export function TreeGrid({
       data-mode={mode}
       data-group-by={groupBy}
       data-density={config.density}
+      data-desk={desk ? "" : undefined}
     >
       {shape.kind === "flat" ? (
         // Still a treegrid: flat mode removes the STATUS axis, not the hierarchy. A parent

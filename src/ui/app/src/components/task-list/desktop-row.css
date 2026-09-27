@@ -1,0 +1,348 @@
+/*
+ * The desktop row — `TaskListConfig.desk`, on a `line` plan (720px and up).
+ *
+ * Everything here is scoped to `[data-desk]`, which the row only carries on a line plan in a
+ * container that asked for it. The compact (phone) row and the palette never match a rule in
+ * this file, so the shipped phone layout cannot move because of it.
+ *
+ * Token roles only, as in task-list.css. The grid tracks and the 8px column gap are the ones
+ * `guideX` (model.ts) positions the hierarchy rails from, so they are not restated here: the
+ * identifier track is the only width that changes, and it sits right of every rail.
+ */
+
+.staple-row[data-desk] {
+  --row-height: 40px;
+  --row-id-width: 60px;
+  --desk-who-w: 104px;
+  --desk-trail-w: 80px;
+}
+
+@media (pointer: coarse) {
+  .staple-row[data-desk] {
+    --row-height: 44px;
+  }
+}
+
+/* The identifier in the interface face with tabular figures: a reference, not code. */
+.staple-row[data-desk] .staple-row-id {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.staple-row[data-desk] .staple-row-title {
+  font-size: 13.5px;
+  line-height: 1.25;
+}
+
+/* The kind slot before the title: the same width on every row, empty for a plain task. */
+.staple-row[data-desk] .staple-row-kind-lead[data-kind-slot] {
+  width: 14px;
+  justify-content: center;
+}
+
+/* ── States: hover, keyboard focus, selected and open are four different looks ──────── */
+
+/* Mouse focus after a click is not a state worth painting; keyboard focus is. */
+.staple-row[data-desk]:focus-within {
+  background: transparent;
+  --staple-ring-tint: transparent;
+}
+
+.staple-row[data-desk]:hover,
+.staple-row[data-desk]:focus-visible {
+  background: var(--surface-hover);
+  --staple-ring-tint: var(--surface-hover);
+}
+
+/* Keyboard focus: the ring, inset so the neighbouring rows cannot cover it. */
+.staple-row[data-desk]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Selected (Space, Shift+Arrow): an accent wash, no edge. */
+.staple-row[data-desk][aria-selected="true"] {
+  background: color-mix(in oklab, var(--ring) 11%, transparent);
+  --staple-ring-tint: color-mix(in oklab, var(--ring) 11%, transparent);
+  box-shadow: none;
+}
+
+/* Open in the detail: the neutral selected surface and an accent edge. */
+.staple-row[data-desk][aria-current="true"] {
+  background: var(--surface-selected);
+  --staple-ring-tint: var(--surface-selected);
+  box-shadow: inset 3px 0 0 var(--ring);
+}
+
+/* ── The cue cluster ───────────────────────────────────────────────────────────────── */
+
+.staple-row[data-desk] .staple-row-meta {
+  gap: 12px;
+}
+
+.staple-row-signals {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.staple-row-signals > * {
+  flex-shrink: 0;
+}
+
+.staple-row-signals > .staple-label-cluster {
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+/* Calm chips: a soft fill and no outline, so a row of them reads as one quiet cluster. */
+.staple-row[data-desk] :is(.staple-label-pill, .staple-dep-badge, .staple-pr-badge) {
+  height: 22px;
+  border-color: transparent;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--muted-foreground);
+}
+
+.staple-row[data-desk] .staple-label-pill {
+  gap: 5px;
+  padding: 0 9px 0 7px;
+  font-size: 11.5px;
+}
+
+.staple-row[data-desk] .staple-label-overflow {
+  padding: 0 8px;
+}
+
+.staple-row[data-desk] .staple-dep-badge {
+  padding: 0 8px 0 6px;
+}
+
+.staple-row[data-desk] .staple-dep-badge:hover {
+  border-color: transparent;
+  background: var(--surface-selected);
+}
+
+.staple-row[data-desk] .staple-pr-badge {
+  padding: 0 8px;
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The handoff note is a glyph here; its sentence is the tooltip and the accessible name. */
+.staple-row[data-desk] .staple-worklog-text {
+  display: none;
+}
+
+.staple-row[data-desk] .staple-worklog-cue {
+  width: 22px;
+  justify-content: center;
+}
+
+/* ── Who ───────────────────────────────────────────────────────────────────────────── */
+
+.staple-row-who {
+  display: inline-flex;
+  width: var(--desk-who-w);
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.staple-row-who[data-word="off"] {
+  --desk-who-w: 48px;
+}
+
+.staple-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.staple-who-holder {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.staple-who-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 2px var(--card);
+}
+
+.staple-who-assignee + .staple-who-holder {
+  margin-left: -4px;
+}
+
+.staple-who[data-state="working"] .staple-who-word {
+  color: var(--foreground);
+}
+
+.staple-who[data-state="quiet"] .staple-who-word {
+  color: var(--plain-tight-fg);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── The trailing slot: the date, and the quick actions in the same box ──────────────── */
+
+.staple-row-trail {
+  position: relative;
+  display: inline-flex;
+  width: var(--desk-trail-w);
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.staple-row[data-desk] .staple-row-date {
+  width: auto;
+  transition: opacity var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+.staple-row-quick {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+.staple-row-quick-btn {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: background-color var(--motion-duration-instant) var(--motion-ease-standard);
+}
+
+.staple-row-quick-btn:hover,
+.staple-row-quick-btn[data-state="open"] {
+  background: var(--surface-selected);
+  color: var(--foreground);
+}
+
+.staple-row-quick-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+}
+
+/* Inside the quick slot the `⋯` fades with its siblings, not on its own. */
+.staple-row[data-desk] .staple-row-quick .staple-row-actions {
+  opacity: 1;
+}
+
+.staple-row[data-desk]:is(:hover, :focus-visible, [aria-current="true"], [aria-selected="true"]) .staple-row-quick,
+.staple-row[data-desk] .staple-row-quick:is(:focus-within, :has([data-state="open"])) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.staple-row[data-desk]:is(:hover, :focus-visible, [aria-current="true"], [aria-selected="true"]) .staple-row-date,
+.staple-row[data-desk] .staple-row-trail:has(.staple-row-quick:is(:focus-within, :has([data-state="open"]))) .staple-row-date {
+  opacity: 0;
+}
+
+/* A device that cannot hover gets the actions, always; the date is on the task. */
+@media (hover: none) {
+  .staple-row[data-desk] .staple-row-quick {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .staple-row[data-desk] .staple-row-date {
+    opacity: 0;
+  }
+}
+
+/* ── Group headers ─────────────────────────────────────────────────────────────────── */
+
+.staple-tree[data-desk] .staple-group-header {
+  height: 40px;
+  padding: 0 16px 0 12px;
+  background: color-mix(in oklab, var(--foreground) 3%, var(--card));
+  cursor: pointer;
+}
+
+.staple-tree[data-desk] .staple-group-header:hover {
+  background: color-mix(in oklab, var(--foreground) 5%, var(--card));
+}
+
+.staple-tree[data-desk] .staple-group-cell {
+  gap: 10px;
+}
+
+.staple-tree[data-desk] .staple-group-triangle {
+  width: 10px;
+  justify-content: center;
+}
+
+.staple-tree[data-desk] .staple-group-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.staple-tree[data-desk] .staple-group-count {
+  min-width: 22px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 20px;
+  text-align: center;
+}
+
+/* ── Wide screens: a reading width, centred ─────────────────────────────────────────── */
+
+/*
+ * Past 1600px a row that runs edge to edge puts the title at one end of the screen and who
+ * is on it at the other. The list keeps a deliberate width instead and sits centred, the way
+ * the Budget and Estimates pages hold their cards.
+ */
+@media (max-width: 1279.98px) {
+  .staple-row[data-desk] {
+    --desk-who-w: 92px;
+    --desk-trail-w: 76px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .staple-tree[data-desk] {
+    max-width: var(--desk-list-max, 1360px);
+    margin-inline: auto;
+    border-inline: 1px solid var(--border);
+  }
+  .staple-row[data-desk] {
+    --desk-who-w: 120px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .staple-row-quick,
+  .staple-row-quick-btn,
+  .staple-row[data-desk] .staple-row-date {
+    transition: none;
+  }
+}
