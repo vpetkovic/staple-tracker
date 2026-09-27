@@ -43,7 +43,7 @@ import {
   useReactFlow,
   type NodeMouseHandler,
 } from "@xyflow/react";
-import { ChevronRight, CircleCheck, Map as MapIcon, Network, OctagonAlert } from "lucide-react";
+import { ChevronRight, CircleCheck, EyeOff, Map as MapIcon, Network, OctagonAlert } from "lucide-react";
 import { StatusIcon } from "@/components/task-list/StatusIcon";
 import { getGraph } from "@/lib/api";
 import { buildLineageIndex, lineageFrom, type Lineage } from "@/lib/graph-lineage";
@@ -65,7 +65,7 @@ import { selectionTarget } from "@/views/graph/graph-folding";
 import { nodeTypes, type GraphFlowNode } from "@/views/graph/node-types";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { EmptyState, SectionHeading, cn } from "../parts";
-import { directCounts, relationStats } from "../relation-stats";
+import { directCounts, relationStats, unreachableWords } from "../relation-stats";
 import type { TabProps } from "./registry";
 
 import "./tabs.css";
@@ -273,13 +273,10 @@ function TaskRow({
   status,
   onOpen,
   note,
-  statusText,
 }: {
   identifier: string;
   title: string;
   status: string;
-  /** Words in place of the status label, when the status itself is not known. */
-  statusText?: string;
   onOpen?: () => void;
   /** Quiet words after the status, e.g. the workspace a cross-workspace task lives in. */
   note?: string;
@@ -290,7 +287,7 @@ function TaskRow({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-body text-foreground">{title}</span>
         <span className="block truncate text-caption text-text-tertiary">
-          {statusText ?? statusLabel(status)}
+          {statusLabel(status)}
           {note ? ` · ${note}` : ""}
         </span>
       </span>
@@ -356,10 +353,25 @@ function Progress({ done, total }: { done: number; total: number }) {
  * A blocker in another workspace, as /api/issue sends it: the hub adds the title for the
  * detail (additive, so an older server simply leaves it out and the row falls back to the id).
  */
-type TitledCrossBlocker = CrossBlocker & { title?: string | null };
+type TitledCrossBlocker = CrossBlocker & { title?: string | null; missing?: "workspace" | "task" | null };
 
-function crossNote(blocker: CrossBlocker): string {
-  return blocker.unresolvable ? `in ${blocker.workspace}, which is not on this computer` : `in ${blocker.workspace}`;
+/**
+ * A blocker this computer cannot read: no status glyph (there is no status to show), the
+ * agreed sentence, and what the person can do. Not a button: there is nothing to open.
+ */
+function UnreachableRow({ blocker, knownWorkspaces }: { blocker: TitledCrossBlocker; knownWorkspaces: readonly string[] }) {
+  const words = unreachableWords(blocker, knownWorkspaces)!;
+  return (
+    <li className="border-b border-border last:border-b-0" data-unreachable={words.kind}>
+      <div className="flex min-h-11 w-full items-start gap-3 px-3 py-2.5 text-left">
+        <EyeOff aria-hidden className="mt-0.5 size-4 shrink-0 text-text-tertiary" />
+        <span className="min-w-0 flex-1">
+          <span className="block text-body text-foreground [overflow-wrap:anywhere]">{words.headline}</span>
+          <span className="block text-caption text-text-secondary">{words.advice}</span>
+        </span>
+      </div>
+    </li>
+  );
 }
 
 function Summary({ detail, graph }: { detail: IssueDetail; graph: Graph | undefined }) {
@@ -501,18 +513,24 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
               onOpen={() => open(ref.identifier, detail.workspace)}
             />
           ))}
-          {(detail.crossBlockers as TitledCrossBlocker[]).map((blocker) => (
-            <TaskRow
-              key={`${blocker.workspace}:${blocker.identifier}`}
-              identifier={blocker.identifier}
-              title={blocker.title?.trim() || blocker.identifier}
-              status={blocker.status ?? (blocker.resolved ? "done" : "todo")}
-              // An unreadable workspace has no status to name; say so rather than guess "Todo".
-              statusText={blocker.status === null ? "Status unknown" : undefined}
-              note={crossNote(blocker)}
-              onOpen={session.mode === "hub" && !blocker.unresolvable ? () => open(blocker.identifier, blocker.workspace) : undefined}
-            />
-          ))}
+          {(detail.crossBlockers as TitledCrossBlocker[]).map((blocker) =>
+            blocker.unresolvable ? (
+              <UnreachableRow
+                key={`${blocker.workspace}:${blocker.identifier}`}
+                blocker={blocker}
+                knownWorkspaces={session.workspaces.map((ws) => ws.slug)}
+              />
+            ) : (
+              <TaskRow
+                key={`${blocker.workspace}:${blocker.identifier}`}
+                identifier={blocker.identifier}
+                title={blocker.title?.trim() || blocker.identifier}
+                status={blocker.status ?? (blocker.resolved ? "done" : "todo")}
+                note={`in ${blocker.workspace}`}
+                onOpen={session.mode === "hub" ? () => open(blocker.identifier, blocker.workspace) : undefined}
+              />
+            ),
+          )}
         </Group>
       ) : null}
 

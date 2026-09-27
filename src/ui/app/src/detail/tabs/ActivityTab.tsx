@@ -49,7 +49,9 @@ import { statusLabel } from "@/lib/settings";
 import { WORKLOG_KEY, type DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { EmptyState, PersonChip, PersonDisc, RelativeTime, cn, formatExact, useNow } from "../parts";
+import { EmptyState, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, useNow } from "../parts";
+import { Dot } from "./Dot";
+import { isClear, shouldBringBack } from "./keep-in-view";
 import { buildTimeline, groupByDay, type TimelineEntry } from "../timeline";
 import type { TabProps } from "./registry";
 import "./tabs.css";
@@ -65,7 +67,8 @@ const clock = (iso: string) =>
   new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(iso));
 
 function When({ iso, today, now }: { iso: string; today: boolean; now: Date }) {
-  if (today) return <RelativeTime iso={iso} now={now} className="text-text-tertiary" />;
+  // Mid-line, after "moved to Backlog ·": "just now", not "Just now".
+  if (today) return <RelativeTime iso={iso} now={now} inSentence className="text-text-tertiary" />;
   return (
     <time dateTime={iso} title={formatExact(iso) ?? undefined} className="whitespace-nowrap text-text-tertiary">
       {clock(iso)}
@@ -147,19 +150,22 @@ function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean;
             name, instead of dropping to a line of its own. */}
         <p className="text-body text-text-secondary [overflow-wrap:anywhere]">
           {entry.actor ? (
-            <PersonChip name={entry.actor} kind={personKind(entry)} className="mr-1.5 max-w-full" />
+            <PersonChip name={entry.actor} kind={personKind(entry)} className="max-w-full" />
           ) : (
-            <span className="mr-1.5 font-medium text-foreground">Staple</span>
-          )}
+            <span className="font-medium text-foreground">Staple</span>
+          )}{" "}
+          {/* Real spaces between the parts, so the line is one sentence when copied or read
+              aloud ("vp moved to Backlog · just now"), not "vpmoved to Backlog". */}
           <Sentence entry={entry} />
           {entry.chips?.length && entry.kind === "blocker"
-            ? entry.chips.map((chip) => (
-                <span key={chip} className="ml-1.5 inline-block rounded-md bg-surface-sunken px-1.5 text-label text-text-secondary">
+            ? entry.chips.flatMap((chip) => [
+                " ",
+                <span key={chip} className="inline-block rounded-md bg-surface-sunken px-1.5 text-label text-text-secondary">
                   {chip}
-                </span>
-              ))
+                </span>,
+              ])
             : null}
-          <span aria-hidden className="mx-1.5 text-text-tertiary">·</span>
+          <Dot />
           <When iso={entry.at} today={today} now={now} />
         </p>
         {note && !noteIsFallback ? (
@@ -189,12 +195,14 @@ function CommentRow({ entry, today, now }: { entry: TimelineEntry; today: boolea
       </span>
       <article className="min-w-0 flex-1 rounded-xl border border-border bg-surface-raised">
         <header className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 pt-2.5 text-body">
-          <span className="min-w-0 truncate font-medium text-foreground">{entry.actor ?? "Someone"}</span>
+          <span className="min-w-0 truncate font-medium text-foreground">{actorLabel(entry.actor)}</span>{" "}
           {kind === "agent" ? (
-            <span className="rounded-md bg-surface-sunken px-1.5 text-caption text-text-secondary">agent</span>
+            <>
+              <span className="rounded-md bg-surface-sunken px-1.5 text-caption text-text-secondary">agent</span>{" "}
+            </>
           ) : null}
           <span className="text-text-tertiary">commented</span>
-          <span aria-hidden className="text-text-tertiary">·</span>
+          <Dot />
           <When iso={entry.at} today={today} now={now} />
         </header>
         {entry.body ? (
@@ -214,22 +222,53 @@ export function ActivityTab({ detail, workspace, onAuthError, refresh }: TabProp
   const composer = useRef<HTMLDivElement>(null);
 
   /**
-   * Keep the comment box in sight while a phone keyboard is up. The keyboard shrinks the
-   * viewport AFTER the browser has scrolled the focused box into view, so the detail's
-   * scroller gets shorter and the box ends up under its bottom edge (just above the action
-   * bar). When the viewport resizes while the box has focus, bring it back into view.
+   * Keep the comment box in sight while a phone keyboard opens under it. The keyboard
+   * shrinks the viewport AFTER the browser has scrolled the focused box into view, so the
+   * detail's scroller gets shorter and the box can end up behind the action bar. The rule
+   * for when to move it is in ./keep-in-view.ts: only when the box is actually hidden, and
+   * only when the reader was looking at it (not after they scrolled up to read).
    */
   useEffect(() => {
-    const keepInView = () => {
+    let wasClear = false;
+    const measure = (): boolean | null => {
       const box = composer.current;
-      if (box && box.contains(document.activeElement)) box.scrollIntoView({ block: "nearest" });
+      if (!box || !box.contains(document.activeElement)) return null;
+      const viewport = window.visualViewport;
+      const view = viewport
+        ? { top: viewport.offsetTop, bottom: viewport.offsetTop + viewport.height }
+        : { top: 0, bottom: window.innerHeight };
+      const covers = [...document.querySelectorAll("[data-detail-actionbar], [data-detail-tabs]")].map((el) =>
+        el.getBoundingClientRect(),
+      );
+      return isClear(box.getBoundingClientRect(), view, covers);
+    };
+    // Scrolling (by the reader or by us) and focusing say where the box is NOW; a resize
+    // compares against that.
+    const remember = () => {
+      const clear = measure();
+      if (clear !== null) wasClear = clear;
+    };
+    const onResize = () => {
+      const clear = measure();
+      if (clear === null) return;
+      if (shouldBringBack(wasClear, clear)) {
+        composer.current!.scrollIntoView({ block: "nearest" });
+        wasClear = measure() ?? wasClear;
+      } else {
+        wasClear = clear;
+      }
     };
     const viewport = window.visualViewport;
-    viewport?.addEventListener("resize", keepInView);
-    window.addEventListener("resize", keepInView);
+    document.addEventListener("scroll", remember, { capture: true, passive: true });
+    document.addEventListener("focusin", remember);
+    viewport?.addEventListener("resize", onResize);
+    // One path only: visualViewport where the browser has it, the window otherwise.
+    if (!viewport) window.addEventListener("resize", onResize);
     return () => {
-      viewport?.removeEventListener("resize", keepInView);
-      window.removeEventListener("resize", keepInView);
+      document.removeEventListener("scroll", remember, { capture: true });
+      document.removeEventListener("focusin", remember);
+      viewport?.removeEventListener("resize", onResize);
+      if (!viewport) window.removeEventListener("resize", onResize);
     };
   }, []);
 

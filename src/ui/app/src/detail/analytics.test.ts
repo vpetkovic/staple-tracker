@@ -48,6 +48,7 @@ import {
   formatOptionalDuration,
   isAggregated,
   isStillRunning,
+  spokenSpent,
   plainDelta,
   shortDelta,
   spokenDuration,
@@ -741,7 +742,7 @@ describe("the breakdown names the source of every number", () => {
     const rows = buildBreakdown(timing({ childCount: 2, subtreePlan: plan({ totalCount: 2 }) }));
     expect(rows[1]).toMatchObject({ plannedSeconds: null, planSource: "No open tasks under it" });
     const cancelledOnly = timing({ childCount: 2, subtreePlan: plan({ totalCount: 2 }) });
-    expect(summarySentence(computeSummary(cancelledOnly), cancelledOnly.subtreePlan)).toContain("Estimates: no open tasks under it.");
+    expect(summarySentence(computeSummary(cancelledOnly), cancelledOnly.subtreePlan)).toContain("None of the tasks under it is still open.");
   });
 });
 
@@ -908,7 +909,7 @@ describe("the parent's headline is the sum of the child rows' plans", () => {
   });
 
   it("is the same arithmetic as the spoken sentence", () => {
-    expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toMatch(/^Planned: 11 hours\./);
+    expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toMatch(/^Planned 11 hours\./);
   });
 });
 
@@ -931,14 +932,14 @@ describe("the spoken headline says planned, actual, difference, coverage, source
 
   it("reads the STA-156 headline as one sentence", () => {
     expect(summarySentence(computeSummary(STA_156), STA_156.subtreePlan)).toBe(
-      "Planned: 11 hours. Time spent: 5 hours. Difference: 6 hours under the plan. Estimates: 3 of the 9 tasks under it have an estimate. The plan comes from the estimates of the tasks under it.",
+      "Planned 11 hours. 5 hours spent. 6 hours under the plan. 3 of the 9 tasks under it have an estimate. The plan comes from the estimates of the tasks under it.",
     );
   });
 
   it("names every absence in words, never as a dash", () => {
     const empty = timing();
     expect(summarySentence(computeSummary(empty), empty.subtreePlan)).toBe(
-      "Planned: No estimate. Time spent: No work recorded. Difference: nothing to compare. Estimates: no tasks under it. The plan comes from no estimate.",
+      "No estimate yet. No time spent yet.",
     );
   });
 
@@ -955,11 +956,10 @@ describe("the spoken headline says planned, actual, difference, coverage, source
       expect(index, word).toBeGreaterThanOrEqual(0);
       return index;
     };
-    expect(at("Planned: ")).toBeLessThan(at("Time spent: "));
-    expect(at("Time spent: ")).toBeLessThan(at("Difference: "));
-    expect(at("Difference: ")).toBeLessThan(at("Estimates: "));
-    expect(at("Estimates: ")).toBeLessThan(at("The plan comes from "));
-    expect(sentence).toMatch(/The plan comes from its own estimate\.$/);
+    expect(at("Planned ")).toBeLessThan(at(" spent."));
+    expect(at(" spent.")).toBeLessThan(at("under the plan."));
+    expect(at("under the plan.")).toBeLessThan(at("The plan is"));
+    expect(sentence).toMatch(/The plan is its own estimate\.$/);
   });
 
   it("rides a qualifying hint beside the figure it qualifies, not at the end", () => {
@@ -972,8 +972,8 @@ describe("the spoken headline says planned, actual, difference, coverage, source
       actual: "still being worked on",
       difference: "not finished, so this can still change",
     });
-    expect(sentence).toContain("Time spent: 30 minutes (still being worked on).");
-    expect(sentence).toContain("Difference: 1 hour 30 minutes under the plan (not finished, so this can still change).");
+    expect(sentence).toContain("30 minutes spent (still being worked on).");
+    expect(sentence).toContain("1 hour 30 minutes under the plan (not finished, so this can still change).");
   });
 });
 
@@ -1061,5 +1061,28 @@ describe("the difference as a sentence", () => {
     expect(shortDelta(computeDelta(10_800, 3600)!)).toBe("2 hours under the plan");
     expect(shortDelta(computeDelta(3600, 4800)!)).toBe("20 minutes over the plan");
     expect(shortDelta(computeDelta(3600, 3600)!)).toBe("right on the plan");
+  });
+});
+
+describe("the spoken summary at the edges", () => {
+  it("says an absent plan as a fact, never as a plan that comes from no estimate", () => {
+    const leaf = timing({ activeSeconds: 600 });
+    const sentence = summarySentence(computeSummary(leaf), leaf.subtreePlan);
+    expect(sentence).toBe("No estimate yet. 10 minutes spent.");
+    expect(sentence).not.toMatch(/comes from no estimate/);
+  });
+
+  it("says a few seconds as less than a minute, never as 0 seconds", () => {
+    const blink = timing({ estimatedSeconds: 3600, activeSeconds: 0, subtreePlan: plan({ estimatedSeconds: 3600, source: "own" }) });
+    const sentence = summarySentence(computeSummary(blink), blink.subtreePlan);
+    expect(sentence).toContain("Less than a minute spent.");
+    expect(sentence).not.toMatch(/\b0 seconds\b/);
+    expect(spokenSpent(0)).toBe("less than a minute");
+    expect(spokenSpent(59)).toBe("less than a minute");
+    expect(spokenSpent(60)).toBe("1 minute");
+  });
+
+  it("lets a timing-floor state speak for itself on a sub-task", () => {
+    expect(childQualityText({ workState: "timing-floor", workSeconds: 0, workReasons: ["timing_floor"] })).toBe("took under a minute");
   });
 });

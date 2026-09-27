@@ -118,3 +118,47 @@ export function directCounts(input: {
     crossNodes: input.crossBlockers.length,
   };
 }
+
+/**
+ * A blocker in another workspace that this computer cannot read, said honestly — the
+ * wording agreed with the detail frame, so the status line and this list read the same.
+ *
+ * Two different situations, and they must not share a sentence: a task that is simply gone
+ * from a workspace that IS here ("can't be found in staple") is not the same fact as a
+ * workspace that is not on this computer at all. `missing` comes from the hub, which knows
+ * availability; an older server leaves it out, and then a workspace this page knows about
+ * is read as "task missing" and anything else as "workspace missing".
+ */
+export interface UnreachableBlocker {
+  identifier: string;
+  workspace: string;
+  unresolvable: boolean;
+  missing?: "workspace" | "task" | null;
+}
+
+export interface UnreachableWords {
+  kind: "workspace" | "task";
+  /** One sentence naming what cannot be seen and why. */
+  headline: string;
+  /** What the person can do about it. */
+  advice: string;
+}
+
+export function unreachableWords(
+  blocker: UnreachableBlocker,
+  knownWorkspaces: readonly string[] = [],
+): UnreachableWords | null {
+  if (!blocker.unresolvable) return null;
+  const kind = blocker.missing ?? (knownWorkspaces.includes(blocker.workspace) ? "task" : "workspace");
+  return kind === "task"
+    ? {
+        kind,
+        headline: `${blocker.identifier} can't be found in ${blocker.workspace}.`,
+        advice: "It may have been deleted or renamed. Remove the link if it no longer applies.",
+      }
+    : {
+        kind,
+        headline: `${blocker.identifier} is in ${blocker.workspace}, which isn't on this computer.`,
+        advice: "Open that workspace on this computer, or remove the link if it no longer applies.",
+      };
+}

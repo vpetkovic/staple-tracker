@@ -10,6 +10,7 @@ import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
@@ -22,6 +23,7 @@ let origin: string;
 let gateRef: string;
 let consumerRef: string;
 let missingRef: string;
+let ghostRef: string;
 
 function get(path: string) {
   return fetch(`${origin}${path}`, { headers: { "x-staple-token": ui.token } });
@@ -47,6 +49,15 @@ beforeAll(async () => {
   hub.addCrossLink(gateRef, consumerRef);
   hub.addCrossLink(missingRef, consumerRef);
   hub.close();
+  // A link to a task that alpha (which IS here) does not have — deleted or mistyped. The
+  // hub's own command refuses to create one, so it is written the way sync or an older
+  // build could have left it.
+  ghostRef = "ALP-999";
+  const raw = new DatabaseSync(join(home, "hub.db"));
+  raw
+    .prepare("INSERT INTO cross_links (blocker_ws, blocker_identifier, blocked_ws, blocked_identifier, type, created_at) VALUES (?, ?, ?, ?, 'blocks', ?)")
+    .run("alpha", ghostRef, "beta", consumerRef, new Date().toISOString());
+  raw.close();
   alpha.store.db.close();
   beta.store.db.close();
   gamma.store.db.close();
@@ -79,15 +90,19 @@ describe("cross-workspace blocker titles", () => {
       resolved: false,
       unresolvable: false,
       title: "Publish the API contract",
+      missing: null,
     });
-    expect(byId.get(missingRef)).toMatchObject({ status: null, unresolvable: true, title: null });
+    // gamma's file is gone: the WORKSPACE is not on this computer.
+    expect(byId.get(missingRef)).toMatchObject({ status: null, unresolvable: true, title: null, missing: "workspace" });
+    // beta is here, but has no BETA-999: the TASK is missing, a different fact.
+    expect(byId.get(ghostRef)).toMatchObject({ workspace: "alpha", status: null, unresolvable: true, title: null, missing: "task" });
   });
 
   it("leaves the agent's payload exactly as it was: no title key", async () => {
     const res = await get(`/api/agent-context?ws=beta&ref=${consumerRef}`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { crossBlockers: Array<Record<string, unknown>> };
-    expect(body.crossBlockers).toHaveLength(2);
+    expect(body.crossBlockers).toHaveLength(3);
     for (const row of body.crossBlockers) {
       expect(Object.keys(row).sort()).toEqual(["identifier", "resolved", "status", "unresolvable", "workspace"]);
     }
@@ -99,7 +114,8 @@ describe("cross-workspace blocker titles", () => {
       const plain = hub.crossBlockersOf(consumerRef);
       const titled = hub.crossBlockersWithTitles(consumerRef);
       expect(plain.every((row) => !("title" in row))).toBe(true);
-      expect(titled.map(({ title: _title, ...rest }) => rest)).toEqual(plain);
+      expect(titled.map(({ title: _title, missing: _missing, ...rest }) => rest)).toEqual(plain);
+      expect(plain.every((row) => !("missing" in row))).toBe(true);
     } finally {
       hub.close();
     }

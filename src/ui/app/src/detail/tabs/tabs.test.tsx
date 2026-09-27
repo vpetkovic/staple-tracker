@@ -41,7 +41,12 @@ function detail(over: Partial<IssueDetail> = {}): IssueDetail {
   };
 }
 
-const session = { open: () => {}, mode: "workspace", version: 0 } as unknown as StapleSession;
+const session = {
+  open: () => {},
+  mode: "hub",
+  version: 0,
+  workspaces: [{ slug: "staple", prefix: "STA" }, { slug: "alpha", prefix: "ALP" }],
+} as unknown as StapleSession;
 
 function render(Tab: (props: TabProps) => React.ReactNode, d: IssueDetail): string {
   return renderToStaticMarkup(
@@ -77,6 +82,19 @@ describe("Activity", () => {
     expect(html).toContain(">agent<");
     expect(html).not.toContain("font-mono");
     expect(html).toContain("picked this up");
+  });
+
+  it("reads as one sentence with real spaces round the dot and a lowercase 'just now'", () => {
+    const html = render(ActivityTab, detail({ comments: [comment("c1", "VP", "user", "hi")] }));
+    const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+    const text = header.replace(/<[^>]+>/g, "");
+    expect(text).toMatch(/^VP commented · just now$/);
+    expect(text).not.toContain("Just now");
+  });
+
+  it("names the web app's own actor as a person would", () => {
+    const html = render(ActivityTab, detail({ comments: [comment("c1", "ui", "user", "from the page")] }));
+    expect(html).toContain(">Someone in the web app<");
   });
 
   it("keeps the composer at the bottom, labelled for a screen reader", () => {
@@ -141,16 +159,24 @@ describe("Connections", () => {
       detail({
         crossBlockers: [
           { identifier: "ALP-1", workspace: "alpha", status: "in_progress", resolved: false, unresolvable: false, title: "Publish the API contract" },
-          { identifier: "GAM-9", workspace: "gamma", status: null, resolved: false, unresolvable: true, title: null },
+          { identifier: "GAM-9", workspace: "gamma", status: null, resolved: false, unresolvable: true, title: null, missing: "workspace" },
+          { identifier: "STA-9999", workspace: "staple", status: null, resolved: false, unresolvable: true, title: null, missing: "task" },
         ] as unknown as IssueDetail["crossBlockers"],
       }),
     );
     expect(html).toContain(">Publish the API contract<");
     expect(html).toContain("In Progress · in alpha");
-    // No title to give (the file is on another computer): the id, and an honest status.
-    expect(html).toContain(">GAM-9<");
-    expect(html).toContain("Status unknown · in gamma, which is not on this computer");
     expect(html).not.toContain(">ALP-1<");
+    // A workspace that is not here, and a task that is not in a workspace that IS here, are
+    // two different facts with two different sentences (the wording the frame uses too).
+    expect(html).toContain("GAM-9 is in gamma, which isn&#x27;t on this computer.");
+    expect(html).toContain("Open that workspace on this computer, or remove the link if it no longer applies.");
+    expect(html).toContain("STA-9999 can&#x27;t be found in staple.");
+    expect(html).toContain("It may have been deleted or renamed. Remove the link if it no longer applies.");
+    expect(html).not.toContain("staple, which isn");
+    // Nothing to open, so not a button, and no guessed status.
+    expect(html).not.toMatch(/<button[^>]*title="STA-9999/);
+    expect(html).not.toContain("Status unknown");
   });
 
   it("says a task with no connections stands on its own, instead of drawing an empty canvas", () => {
@@ -182,6 +208,9 @@ describe("Documents", () => {
     expect(html).toContain(">Worklog</button>");
     expect(html).not.toContain("@r3");
     expect(html).toContain("revision 3");
+    // "Updated just now · revision 3": lowercase mid-sentence, real spaces round the dot.
+    const line = html.slice(html.indexOf("Updated"), html.indexOf("revision 3") + "revision 3".length).replace(/<[^>]+>/g, "");
+    expect(line).toBe("Updated just now · revision 3");
     expect(html).toContain('aria-label="Document view"');
   });
 });

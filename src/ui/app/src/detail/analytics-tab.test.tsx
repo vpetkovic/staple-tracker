@@ -224,7 +224,7 @@ describe("a leaf gets one summary and nothing else", () => {
     expect(html).toContain(figure("2 hours"));
     expect(html).toContain(figure("1 hour"));
     // The spoken summary says the same difference in the same words.
-    expect(html).toContain("Difference: 1 hour under the plan.");
+    expect(html).toContain("1 hour under the plan.");
     expect(html).not.toContain("(50%)");
     expect(html).toContain(
       '<p data-figure="difference" class="text-reading font-medium text-[var(--status-task-done)]">Finished 1 hour under the plan</p>',
@@ -495,17 +495,17 @@ describe("the headline is spoken as one sentence in a fixed order", () => {
     expect(start).toBeLessThan(html.indexOf(figure("11 hours")));
     const sentence = html.slice(start, html.indexOf("</p>", start));
     expect(sentence).toMatch(
-      /Planned: 11 hours\. Time spent: 5 hours[^.]*\. Difference: 6 hours under the plan\. Estimates: 3 of the 9 tasks under it have an estimate\. The plan comes from the estimates of the tasks under it\./,
+      /Planned 11 hours\. 5 hours spent[^.]*\. 6 hours under the plan\. 3 of the 9 tasks under it have an estimate\. The plan comes from the estimates of the tasks under it\./,
     );
     const at = (word: string) => {
       const index = sentence.indexOf(word);
       expect(index, word).toBeGreaterThanOrEqual(0);
       return index;
     };
-    expect(at("Planned: ")).toBeLessThan(at("Time spent: "));
-    expect(at("Time spent: ")).toBeLessThan(at("Difference: "));
-    expect(at("Difference: ")).toBeLessThan(at("Estimates: "));
-    expect(at("Estimates: ")).toBeLessThan(at("The plan comes from "));
+    expect(at("Planned ")).toBeLessThan(at(" spent"));
+    expect(at(" spent")).toBeLessThan(at("under the plan."));
+    expect(at("under the plan.")).toBeLessThan(at("have an estimate."));
+    expect(at("have an estimate.")).toBeLessThan(at("The plan comes from "));
   });
 
   it("hides the figure row from the accessibility tree, so the facts are heard once", () => {
@@ -517,7 +517,7 @@ describe("the headline is spoken as one sentence in a fixed order", () => {
   it("speaks the same absences the figures draw", () => {
     const html = render(detail({ identifier: "STA-1" }, timing()));
     expect(html).toContain(
-      "Planned: No estimate. Time spent: No work recorded. Difference: nothing to compare. Estimates: no tasks under it. The plan comes from no estimate.",
+      "No estimate yet. No time spent yet.",
     );
   });
 });
@@ -571,7 +571,7 @@ describe("regression stand-ins for the five screenshot states", () => {
     expect(childPlans(html)).toEqual(["1 hour", "—", "—"]);
     expect(html).toContain(figure("1 hour"));
     expect(html).toContain("2 of its 3 sub-tasks have no estimate");
-    expect(html).toContain("Estimates: 1 of the 3 tasks under it has an estimate.");
+    expect(html).toContain("1 of the 3 tasks under it has an estimate.");
   });
 
   it("narrow width: child lines truncate the title and pin the figures; the headline wraps", () => {
@@ -591,6 +591,27 @@ describe("regression stand-ins for the five screenshot states", () => {
 // ------------------------------------------------------------------ measurement quality
 
 describe("each record says how far it can be trusted", () => {
+  it("never says 0 seconds for work that took under a minute", () => {
+    const html = render(
+      detail(
+        { identifier: "STA-22" },
+        timing({
+          activeSeconds: 0,
+          workSeconds: 0,
+          quality: {
+            work: { state: "timing-floor", inputs: [], reasons: ["timing_floor"], coverage: null, missingInputs: [] },
+            wall: { state: "exact", inputs: [], reasons: [] },
+          },
+        }),
+      ),
+    );
+    expect(html).toContain('data-testid="quality-work">took under a minute<');
+    expect(html).toContain(figure("less than a minute"));
+    expect(html).toContain("No estimate yet. Less than a minute spent.");
+    expect(html).not.toMatch(/\b0 seconds\b/);
+    expect(html).not.toContain("comes from no estimate");
+  });
+
   it("does not repeat 'not started' under a headline that already says No work recorded", () => {
     const notStarted = { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] };
     const html = render(
@@ -633,7 +654,7 @@ describe("each record says how far it can be trusted", () => {
       ),
     );
     // The state qualifies the work figure, which sits beside it; the row's "ran" is category time.
-    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["30 seconds of agent work, took under a minute", "measured exactly"]);
+    expect([...html.matchAll(/data-testid="child-quality">([^<]+)</g)].map((match) => match[1])).toEqual(["took under a minute", "measured exactly"]);
     // The measurement section sits after the per-child rows: it qualifies them, it does not lead.
     expect(html.indexOf('aria-label="Per child"')).toBeLessThan(html.indexOf('aria-label="Measurement quality"'));
   });
