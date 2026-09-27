@@ -174,7 +174,7 @@ export function WorkspaceSwitcher({
         title={hub ? `${label} — switch workspace` : label}
         data-workspace-switcher="crumb"
         data-scope-name
-        className="-ml-1.5 flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring data-[state=open]:bg-surface-selected"
+        className="-ml-1.5 flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 pointer-coarse:h-11 text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring data-[state=open]:bg-surface-selected"
       >
         <span className="truncate">{label}</span>
         <ChevronsUpDown aria-hidden className="size-3.5 shrink-0 text-text-tertiary" />
@@ -186,7 +186,7 @@ export function WorkspaceSwitcher({
         aria-expanded={open}
         data-workspace-switcher="more"
         onClick={phone ? () => setOpen(true) : undefined}
-        className="flex h-8 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring-inset data-[state=open]:bg-surface-selected [&_svg]:size-4 [&_svg]:text-text-tertiary"
+        className="flex h-8 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 pointer-coarse:h-11 text-left text-body text-text-secondary transition-colors hover:bg-surface-hover hover:text-foreground focus-ring-inset data-[state=open]:bg-surface-selected [&_svg]:size-4 [&_svg]:text-text-tertiary"
       >
         <MoreHorizontal aria-hidden />
         <span className="truncate">More workspaces</span>

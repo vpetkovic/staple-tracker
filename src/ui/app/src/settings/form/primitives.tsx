@@ -83,10 +83,11 @@ export function ScopeTag({ scope, source }: { scope: SettingScope; source?: stri
     <span
       data-scope-tag={scope}
       title={source ? `${scopeLabel(scope)} scope · value from ${source}` : `${scopeLabel(scope)} scope`}
-      className="rounded-sm border px-1 py-px font-mono text-[10px] tracking-wide text-text-tertiary uppercase"
+      // A quiet caption in sentence case: where the value lives is worth a glance, not a shout.
+      className="rounded-full bg-surface-sunken px-2 py-px text-caption text-text-tertiary"
     >
       {scopeLabel(scope)}
-      {source ? <span className="normal-case"> · {source}</span> : null}
+      {source ? <span> · {source}</span> : null}
     </span>
   );
 }

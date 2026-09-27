@@ -165,7 +165,7 @@ function TopBar({
           title="Show navigation ([)"
           data-nav-show
           onClick={onShowRail}
-          className="-ml-2 rounded-lg text-text-tertiary hover:text-foreground"
+          className="-ml-2 rounded-lg text-text-tertiary hover:text-foreground pointer-coarse:size-11"
         >
           <PanelLeft className="size-4" />
         </Button>
@@ -191,19 +191,22 @@ function TopBar({
           aria-keyshortcuts="Meta+K Control+K"
           onClick={openCommandPalette}
           className={cn(
-            "flex h-control-md w-[clamp(14rem,20vw,20rem)] items-center gap-2 rounded-lg border bg-surface-sunken pr-1.5 pl-2.5",
+            "flex h-control-md items-center gap-2 rounded-lg border bg-surface-sunken pointer-coarse:h-11",
+            // Below 1024px the top bar has no room for a field: it is a square icon button,
+            // named the same, with the shortcut in its tooltip-free accessible name.
+            "w-control-md justify-center px-0 pointer-coarse:w-11 lg:w-[clamp(14rem,20vw,20rem)] lg:justify-start lg:pr-1.5 lg:pl-2.5",
             "text-body text-text-tertiary transition-colors hover:border-border-strong hover:text-text-secondary focus-ring",
           )}
         >
           <Search aria-hidden className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate text-left">Find a task or command</span>
-          <kbd className="shrink-0 rounded-md border bg-surface-raised px-1.5 font-sans text-caption leading-5 text-text-tertiary">
+          <span className="min-w-0 flex-1 truncate text-left max-lg:hidden">Find a task or command</span>
+          <kbd className="shrink-0 max-lg:hidden rounded-md border bg-surface-raised px-1.5 font-sans text-caption leading-5 text-text-tertiary">
             {paletteKeys()}
           </kbd>
         </button>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button data-top-new-task onClick={openCreateIssue} className="h-control-md gap-1.5 rounded-lg px-3 text-body">
+            <Button data-top-new-task onClick={openCreateIssue} className="h-control-md gap-1.5 rounded-lg px-3 text-body pointer-coarse:h-11">
               <Plus aria-hidden className="size-4" />
               New task
             </Button>

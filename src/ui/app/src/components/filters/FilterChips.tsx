@@ -57,7 +57,7 @@ import { useBackToClose } from "@/lib/back-to-close";
 const FOCUS = "focus-ring-inset";
 
 /** A chip's hit area: 28px on a desk, 44px under a thumb. The pill inside carries the look. */
-const HIT = "flex shrink-0 items-center max-md:h-11 md:h-7";
+const HIT = "flex shrink-0 items-center max-md:h-11 md:h-7 pointer-coarse:h-11";
 
 const PILL =
   "flex h-7 items-center gap-1.5 rounded-full border px-3 text-label whitespace-nowrap transition-colors max-md:h-9 max-md:px-3.5 max-md:text-[14px]";

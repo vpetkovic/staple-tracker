@@ -18,11 +18,13 @@ export const HEADER_BUTTON_CLASS = cn(
   "h-control-md gap-1.5 rounded-lg px-2.5 text-body font-normal focus-ring [&_svg:not([class*='size-'])]:size-4",
   // A phone: every control is a 44px target, and the icon grows to match.
   "max-md:h-11 max-md:min-w-11 max-md:[&_svg:not([class*='size-'])]:size-5",
+  // A desk-width tablet under a finger: the same 44px floor, the desk's drawing.
+  "pointer-coarse:h-11 pointer-coarse:min-w-11",
   "text-muted-foreground hover:text-foreground",
 );
 
 /** The compact form: a 32px square. */
-const HEADER_ICON_CLASS = "size-control-md px-0 max-md:size-11";
+const HEADER_ICON_CLASS = "size-control-md px-0 max-md:size-11 pointer-coarse:size-11";
 
 /**
  * Can this device hover? A tooltip is a hover affordance: on a touch screen it opens when

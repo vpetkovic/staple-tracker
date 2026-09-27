@@ -236,7 +236,7 @@ export function SettingsShell({
                         stacked
                           ? "min-h-12 gap-3 px-4 py-3 text-[16px] hover:bg-accent focus-ring-inset active:bg-accent"
                           : cn(
-                              "h-9 gap-2.5 rounded-lg px-2.5 text-body text-sidebar-foreground/85 transition-colors focus-ring-inset",
+                              "h-9 gap-2.5 rounded-lg px-2.5 pointer-coarse:h-11 text-body text-sidebar-foreground/85 transition-colors focus-ring-inset",
                               "hover:bg-surface-hover hover:text-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-text-tertiary",
                               "aria-[current]:bg-surface-selected aria-[current]:font-medium aria-[current]:text-foreground aria-[current]:[&_svg]:text-foreground",
                             ),

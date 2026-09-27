@@ -58,7 +58,8 @@ export function Toolbar() {
   return (
     <div
       data-toolbar
-      className="flex h-toolbar shrink-0 items-center gap-2 border-b bg-surface-raised px-page"
+      // Under a finger every control is 44px, so the row grows to hold them.
+      className="flex h-toolbar shrink-0 items-center gap-2 border-b bg-surface-raised px-page pointer-coarse:h-14"
     >
       {controls.filter ? (
         <>
@@ -137,7 +138,7 @@ export function Toolbar() {
               aria-label="Search tasks"
               data-filter-search
               className={cn(
-                "h-control-md w-44 rounded-lg border border-transparent bg-surface-sunken pr-7 pl-8 text-body text-foreground",
+                "h-control-md w-44 rounded-lg border pointer-coarse:h-11 border-transparent bg-surface-sunken pr-7 pl-8 text-body text-foreground",
                 "placeholder:text-text-tertiary hover:border-border focus-visible:border-ring focus-ring-inset xl:w-56",
               )}
             />

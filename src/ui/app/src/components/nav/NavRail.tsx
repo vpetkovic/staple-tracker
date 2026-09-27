@@ -68,8 +68,9 @@ const THEME_KEY = "staple:theme";
  */
 export const RAIL_ROW_CLASS = cn(
   "flex h-8 w-full min-w-0 items-center gap-2.5 rounded-lg px-2 text-left text-body font-normal focus-ring-inset",
-  // In the phone's drawer every row is a 44px target at a readable size.
-  "max-md:h-11 max-md:gap-3 max-md:text-[15px]",
+  // In the phone's drawer every row is a 44px target at a readable size; under a finger on a
+  // desk-width tablet it is a 44px target too.
+  "max-md:h-11 max-md:gap-3 max-md:text-[15px] pointer-coarse:h-11",
   "text-sidebar-foreground/85 transition-colors duration-(--duration-fast) hover:bg-surface-hover hover:text-foreground",
   "aria-[current]:bg-surface-selected aria-[current]:font-medium aria-[current]:text-foreground",
   "[&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-text-tertiary hover:[&_svg]:text-foreground aria-[current]:[&_svg]:text-foreground",
@@ -77,7 +78,7 @@ export const RAIL_ROW_CLASS = cn(
 
 /** A group's label: sentence case, tertiary, and a real disclosure button. */
 const GROUP_LABEL_CLASS =
-  "group flex h-7 w-full items-center gap-1 rounded-md px-2 text-label font-medium text-text-tertiary hover:text-foreground focus-ring-inset max-md:h-11 max-md:text-[13px]";
+  "group flex h-7 w-full items-center gap-1 rounded-md px-2 text-label font-medium text-text-tertiary hover:text-foreground focus-ring-inset max-md:h-11 max-md:text-[13px] pointer-coarse:h-11";
 
 /**
  * An icon button that sits on a row's right edge: invisible until the row is hovered or

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { AppShell } from "@/components/AppShell";
+import { NavRail } from "@/components/nav/NavRail";
 import { FilterChipStrip } from "@/components/filters/FilterChips";
 import { ProjectForm } from "@/components/projects/ProjectDialog";
 import { buildFilterContext } from "@/lib/filter-dimensions";
@@ -121,6 +122,27 @@ describe("on a phone", () => {
       const button = new RegExp(`<button[^>]*${hook}[^>]*>`).exec(markup)?.[0] ?? "";
       expect(button, hook).toContain("size-11");
     }
+  });
+});
+
+describe("the phone's menu drawer keeps its phone shape", () => {
+  const hub = { mode: "hub" as const, ws: "", workspaces: [{ slug: "aardvark", prefix: "AAR" }, { slug: "staple", prefix: "STA" }] };
+
+  it("has the switcher pill, no workspace list, and the views named for the scope", () => {
+    const drawer = at(390, <NavRail onHide={noop} />, hub);
+    expect(drawer).toContain('data-workspace-switcher="rail"');
+    expect(drawer).not.toContain("data-nav-workspace");
+    expect(drawer).not.toContain("data-nav-brand");
+    expect(drawer).toMatch(/data-nav-group-name="true" class="truncate">All workspaces</);
+    // The theme is a full row there, not the desk's icon switch.
+    expect(drawer).toMatch(/data-nav-theme[^>]*>[\s\S]*?Dark mode<\/button>/);
+  });
+
+  it("while the desk rail lists the workspaces and wears the mark instead", () => {
+    const desk = at(1440, <NavRail onHide={noop} />, hub);
+    expect(desk).toContain("data-nav-brand");
+    expect(desk.match(/data-nav-workspace=/g)).toHaveLength(3);
+    expect(desk).not.toContain('data-workspace-switcher="rail"');
   });
 });
 
