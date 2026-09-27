@@ -25,6 +25,7 @@
  * both the `title` and an `sr-only` span, so a pointer and a screen reader get the same
  * sentence rather than two different abridgements of it.
  */
+import { Milestone } from "lucide-react";
 import type { RowMilestoneCue, RowPickupCue } from "@/lib/types";
 import {
   MILESTONE_CUE_GLYPH,
@@ -81,6 +82,31 @@ export function PickupCue({ cue, compact = false }: { cue: RowPickupCue; compact
 /**
  * The phone's pickup cue: one word in a pill, or nothing. See `rowCuePill`.
  */
+/**
+ * The desktop row's pickup cue: the phone's plain pill ("Next", "Queued") after the title
+ * when there is one, and in every state the full sentence for a screen reader and the
+ * tooltip. Never the marks (`·`, `▸`, `#2`) the desktop row used to put before the title.
+ */
+export function DeskPickupCue({ cue }: { cue: RowPickupCue }) {
+  const pill = rowCuePill(cue);
+  const sentence = rowCueSentence(cue);
+  return (
+    <span
+      className="staple-row-cue"
+      data-testid="row-pickup-cue"
+      data-pickup-cue={cue.state}
+      data-pickup-pill={pill ? pill.toLowerCase() : undefined}
+      data-cue-position={cue.position ?? undefined}
+      data-cue-scope={cue.position === null ? undefined : cue.scope}
+      data-desk-cue=""
+      title={sentence}
+    >
+      {pill ? <span aria-hidden="true">{pill}</span> : null}
+      <span className="sr-only">{sentence}</span>
+    </span>
+  );
+}
+
 export function PickupPill({ cue }: { cue: RowPickupCue }) {
   const pill = rowCuePill(cue);
   if (!pill) return null;
@@ -101,11 +127,33 @@ export function PickupPill({ cue }: { cue: RowPickupCue }) {
 export function MilestoneCue({
   cue,
   onOpen,
+  chip = false,
 }: {
   cue: RowMilestoneCue;
   onOpen?: (identifier: string) => void;
+  /** The desktop row: a calm chip naming the milestone, in the cue cluster. */
+  chip?: boolean;
 }) {
   const sentence = milestoneCueSentence(cue.identifier, cue.title);
+  if (chip) {
+    return (
+      <button
+        type="button"
+        className="staple-row-milestone-chip"
+        data-testid="row-milestone-cue"
+        data-milestone={cue.identifier}
+        title={sentence}
+        aria-label={sentence}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpen?.(cue.identifier);
+        }}
+      >
+        <Milestone aria-hidden="true" focusable="false" />
+        <span className="staple-row-milestone-name">{cue.title ?? cue.identifier}</span>
+      </button>
+    );
+  }
 
   return (
     <button

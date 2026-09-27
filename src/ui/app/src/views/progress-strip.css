@@ -1,0 +1,60 @@
+/* The segmented progress bar and its legend (ProgressStrip.tsx). Token roles only. */
+
+.staple-progress {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.staple-progress-bar {
+  display: flex;
+  overflow: hidden;
+  height: 8px;
+  gap: 2px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+}
+
+.staple-progress[data-compact] .staple-progress-bar {
+  height: 6px;
+}
+
+.staple-progress-seg {
+  min-width: 4px;
+  flex-basis: 0;
+}
+
+.staple-progress-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-label, 12px);
+  list-style: none;
+}
+
+.staple-progress-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.staple-progress-legend li[data-empty] {
+  opacity: 0.55;
+}
+
+.staple-progress-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+
+.staple-progress-count {
+  color: var(--foreground);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

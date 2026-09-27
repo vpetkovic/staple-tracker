@@ -37,16 +37,21 @@
  * removal that raced a checkout is refused there, and `GuardRefusal` says so. This only
  * stops the UI from advertising an action it can see will fail.
  */
-import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpRight, ArrowUpToLine, ListPlus, ListX, SquareArrowUp } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpRight, ArrowUpToLine, CircleDot, ListPlus, ListX, SquareArrowUp } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { StatusChoiceItems } from "@/components/task-list/RowStatusMenu";
+import type { RowStatusChoice } from "@/components/task-list/row-status";
 import { useBackToClose } from "@/lib/back-to-close";
 import { statusCategory } from "@/lib/settings";
 import type { TaskRow } from "@/components/task-list";
@@ -105,6 +110,7 @@ export function QueueRowMenu({
   onMoveToBottom,
   onMoveUp,
   onMoveDown,
+  statusSubmenu,
 }: {
   /** The ready-made `⋯` button `TaskRowLine` hands us. */
   trigger: ReactNode;
@@ -148,6 +154,8 @@ export function QueueRowMenu({
    */
   onMoveUp?: () => void;
   onMoveDown?: () => void;
+  /** "Change status", on the desk: the keyboard's and a finger's way to the row's status. */
+  statusSubmenu?: ReactNode;
 }) {
   const held = state.heldBy;
   /**
@@ -180,6 +188,7 @@ export function QueueRowMenu({
           <ArrowUpRight aria-hidden />
           Open details
         </DropdownMenuItem>
+        {statusSubmenu}
         <DropdownMenuSeparator />
         {queueWorkspace ? (
           <DropdownMenuLabel data-menu-queue-workspace={queueWorkspace} className="normal-case tracking-normal">
@@ -239,5 +248,36 @@ export function QueueRowMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * The row's statuses as a submenu of its `⋯` menu. Mounted only while the menu is open, which
+ * is when the row's workspace vocabulary is asked for.
+ */
+export function StatusSubmenu({
+  choices,
+  disabled,
+  onOpen,
+  onPick,
+}: {
+  choices: readonly RowStatusChoice[] | null;
+  disabled: boolean;
+  onOpen: () => void;
+  onPick: (status: string, label: string) => void;
+}) {
+  // Ask once, when the menu opens.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => onOpen(), []);
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger data-menu-item="change-status">
+        <CircleDot aria-hidden />
+        Change status
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent aria-label="Change status" data-row-status-submenu="">
+        <StatusChoiceItems choices={choices} disabled={disabled} onPick={onPick} />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

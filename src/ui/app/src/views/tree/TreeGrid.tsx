@@ -37,7 +37,7 @@
  * that decision; the container lives in TreeView.tsx, one level up. R1's scroll-into-view
  * relies on the same fact.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { CircleDashed, Hourglass, Minus, PlayCircle, CheckCircle2, UserCheck } from "lucide-react";
 import {
@@ -282,6 +282,8 @@ export function TreeGrid({
   onOpen,
   onOpenMilestone,
   rowActionsMenu,
+  rowStatusMenu,
+  rowNotice,
   onCloseDrawer,
   onVisibleOrder,
 }: {
@@ -364,6 +366,13 @@ export function TreeGrid({
    * every static-markup test still want.
    */
   rowActionsMenu?: (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => ReactNode;
+  /** The desktop row's quick status menu, built per row — see `TaskRowLine.statusMenu`. */
+  rowStatusMenu?: (row: TaskRow, trigger: ReactNode, control: RowMenuControl) => ReactNode;
+  /**
+   * A notice that belongs to one row — today, a refused status change — drawn directly under
+   * that row, where the reader's eye already is. Null for every other row.
+   */
+  rowNotice?: (row: TaskRow) => ReactNode;
   onCloseDrawer: () => void;
   /** R6's contract (STA-106): the visible rows, in screen order. See lib/session.ts. */
   onVisibleOrder: (order: readonly Selection[]) => void;
@@ -382,7 +391,9 @@ export function TreeGrid({
    * The tree is the `tree` preset — the full row — with one live override: the row plan,
    * which is a measurement of the viewport and cannot be a constant.
    */
-  const config = useMemo(() => resolveTaskListConfig("tree", { plan }), [plan]);
+  const config = useMemo(() => resolveTaskListConfig("tree", { plan, desk: true }), [plan]);
+  /** The desktop row applies on a line plan only; the phone keeps its compact row. */
+  const desk = plan.layout === "line";
 
   // One clock reading per render rather than one per row, so twenty rows cannot disagree
   // about what "3h" means. The 1.5s poll re-renders and refreshes it.
@@ -739,7 +750,9 @@ export function TreeGrid({
    * no shape can be taught about one and not the other. Section beats row — see the
    * `captions` prop.
    */
-  const renderRow = (row: TaskRow, index: number, caption?: string) => (
+  const renderRow = (row: TaskRow, index: number, caption?: string) => {
+    const notice = rowNotice?.(row) ?? null;
+    const line = (
     <TaskRowLine
       key={row.issue.id}
       row={row}
@@ -756,13 +769,22 @@ export function TreeGrid({
       onOpenParent={(identifier) => onOpen(row.workspace, identifier)}
       onOpenMilestone={onOpenMilestone}
       actionsMenu={rowActionsMenu ? (trigger, control) => rowActionsMenu(row, trigger, control) : undefined}
+      statusMenu={rowStatusMenu ? (trigger, control) => rowStatusMenu(row, trigger, control) : undefined}
       onToggleExpand={() => expansion.toggleRow(row.issue, row.isExpanded)}
       onToggleSelect={() => toggleSelect(row.issue.id)}
       onFocus={() => focus.set(navKeyOf(row))}
       onKeyDown={(event) => handleKey(event, index)}
       registerRef={focus.register(navKeyOf(row))}
     />
-  );
+    );
+    if (!notice) return line;
+    return (
+      <Fragment key={row.issue.id}>
+        {line}
+        {notice}
+      </Fragment>
+    );
+  };
 
   /**
    * A GHOST PARENT CONTEXT ROW — O3c (STA-128), rewritten by O8c (STA-151).
@@ -813,6 +835,7 @@ export function TreeGrid({
       data-mode={mode}
       data-group-by={groupBy}
       data-density={config.density}
+      data-desk={desk ? "" : undefined}
     >
       {shape.kind === "flat" ? (
         // Still a treegrid: flat mode removes the STATUS axis, not the hierarchy. A parent

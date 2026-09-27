@@ -208,8 +208,9 @@ describe("the pickup order", () => {
    * confirmation and no context. The menu is closed in static markup, so what is asserted
    * here is the slot; the items themselves are `components/queue-row-menu.test.tsx`.
    */
-  it("hangs per-row actions off the shared ⋯ rather than a bin of its own", () => {
-    expect(html).toContain("staple-row-actions");
+  it("hangs per-row actions off the shared row slot rather than a bin of its own", () => {
+    // The desktop row's quick-action slot is the one place a row's actions live.
+    expect(html).toContain('data-testid="row-quick-actions"');
     expect(html).not.toContain('aria-label="Remove STA-31 from the plan"');
   });
 
@@ -267,8 +268,8 @@ describe("the pickup order", () => {
   });
 
   it("gives every row the one place its actions live", () => {
-    // The `⋯` column is ON here, and it is the same slot the tree hangs its menu on.
-    expect(html).toContain("staple-row-actions");
+    // The actions column is ON here, and it is the same slot the tree hangs its menu on.
+    expect(html).toContain('data-testid="row-quick-actions"');
   });
 });
 

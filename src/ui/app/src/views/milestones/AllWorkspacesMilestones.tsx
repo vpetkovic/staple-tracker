@@ -23,7 +23,7 @@ import { openSettings } from "@/lib/shell-events";
 import type { WorkspaceRef } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { MilestoneListPane } from "./MilestonesView";
+import { MilestoneListPane, useMilestonesDesk } from "./MilestonesView";
 import { groupAllMilestones, type WorkspaceMilestonesResult } from "./milestones-model";
 
 /** Read every workspace's list; one workspace failing never hides the others. */
@@ -65,6 +65,7 @@ export function AllWorkspacesMilestones({
   const all = useMemo(() => (resource.data ? groupAllMilestones(resource.data) : null), [resource.data]);
 
   const open = (workspace: string, ref: string) => openMilestoneIn(session, workspace, ref);
+  const desk = useMilestonesDesk();
 
   return (
     <div className="h-full overflow-y-auto" data-all-milestones="">
@@ -85,7 +86,12 @@ export function AllWorkspacesMilestones({
             {all.groups.map((group) => (
               <section key={group.workspace} aria-label={group.workspace} data-milestone-group={group.workspace}>
                 <h3 className="mb-2 border-b pb-1.5 text-[13px] font-semibold">{group.workspace}</h3>
-                <MilestoneListPane rows={group.rows} selectedRef={null} onSelect={(ref) => open(group.workspace, ref)} />
+                <MilestoneListPane
+                  rows={group.rows}
+                  selectedRef={null}
+                  onSelect={(ref) => open(group.workspace, ref)}
+                  desk={desk}
+                />
               </section>
             ))}
             {all.failed.map((failure) => (

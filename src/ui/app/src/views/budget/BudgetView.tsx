@@ -558,7 +558,7 @@ export function BudgetView({ onAuthError }: { onAuthError: (error: AuthError) =>
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-4 py-4">
+      <div className="mx-auto max-w-wide px-page py-4">
         {error && !held ? (
           <ErrorState error={error} />
         ) : held ? (

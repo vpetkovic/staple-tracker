@@ -269,6 +269,19 @@ export interface TaskListConfig extends PresetShape {
    * which is what every surface that does not measure (the palette, a fixture) wants.
    */
   plan?: RowPlan;
+  /**
+   * THE DESKTOP ROW — opt-in, per container.
+   *
+   * On a `line` plan (720px and up) the row draws its desktop anatomy: the identifier alone
+   * in its column, one cue cluster on the right with a fixed "who" slot, and a fixed trailing
+   * slot where the date gives way to quick actions on hover, focus and selection. A compact
+   * (phone) plan ignores it, so the phone row is exactly what shipped.
+   *
+   * Opt-in rather than on for every `line` row because the palette (a cmdk popup) and the
+   * detail's children list are narrow containers with their own rules; the list views ask
+   * for it.
+   */
+  desk?: boolean;
 }
 
 /**
@@ -280,7 +293,13 @@ export interface TaskListConfig extends PresetShape {
  */
 export function resolveTaskListConfig(
   preset: TaskListPreset,
-  over?: { density?: TaskListDensity; columns?: Partial<TaskListColumns>; labelMax?: number; plan?: RowPlan },
+  over?: {
+    density?: TaskListDensity;
+    columns?: Partial<TaskListColumns>;
+    labelMax?: number;
+    plan?: RowPlan;
+    desk?: boolean;
+  },
 ): TaskListConfig {
   const base = TASK_LIST_PRESETS[preset];
   const labelMax = over?.labelMax ?? base.labelMax;
@@ -291,5 +310,6 @@ export function resolveTaskListConfig(
     // does not start naming them on a wide screen.
     labelMax: over?.plan ? Math.min(labelMax, over.plan.labelMax) : labelMax,
     ...(over?.plan ? { plan: over.plan } : {}),
+    ...(over?.desk ? { desk: true } : {}),
   };
 }

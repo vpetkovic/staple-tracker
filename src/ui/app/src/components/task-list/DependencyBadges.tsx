@@ -54,6 +54,12 @@ export interface DependencyBadgesProps {
    * so a phone row keeps the fact on its line without paying for two boxes and a gap.
    */
   merged?: boolean;
+  /**
+   * The desktop row: each cue says what it means in words. The task that IS blocked gets the
+   * strong cue ("Blocked by 1", the blocked status's red); the task other work waits on gets
+   * a neutral one ("Blocks 3"). The phone keeps its glyph-and-count badges.
+   */
+  words?: boolean;
 }
 
 /** The merged cue's accessible name: both facts, in the order the badges read. */
@@ -65,7 +71,7 @@ export function mergedDependencySentence(blockedBy: number, blocks: number): str
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }
 
-export function DependencyBadges({ row, merged = false }: DependencyBadgesProps) {
+export function DependencyBadges({ row, merged = false, words = false }: DependencyBadgesProps) {
   const [open, setOpen] = useState(false);
 
   const blockedBy = row.deps?.blockedBy ?? [];
@@ -135,7 +141,38 @@ export function DependencyBadges({ row, merged = false }: DependencyBadgesProps)
         </button>
       ) : null}
 
-      {!merged && blockedBy.length > 0 ? (
+      {!merged && words && blockedBy.length > 0 ? (
+        <button
+          type="button"
+          className="staple-dep-badge"
+          data-kind="blocked-by"
+          data-words=""
+          data-testid="dep-badge-blocked-by"
+          aria-label={`Blocked by ${tasks(blockedBy.length)}: ${blockedBy.join(", ")}`}
+          title={`Waiting on ${blockedBy.join(", ")} to finish`}
+          onClick={openDialog}
+        >
+          <OctagonX aria-hidden="true" focusable="false" />
+          <span>Blocked by {blockedBy.length}</span>
+        </button>
+      ) : null}
+
+      {!merged && words && blocks.length > 0 ? (
+        <button
+          type="button"
+          className="staple-dep-badge"
+          data-kind="blocks"
+          data-words=""
+          data-testid="dep-badge-blocks"
+          aria-label={`Blocks ${tasks(blocks.length)}: ${blocks.join(", ")}`}
+          title={`${blocks.join(", ")} ${blocks.length === 1 ? "waits" : "wait"} for this to finish`}
+          onClick={openDialog}
+        >
+          <span>Blocks {blocks.length}</span>
+        </button>
+      ) : null}
+
+      {!merged && !words && blockedBy.length > 0 ? (
         <button
           type="button"
           className="staple-dep-badge"
@@ -152,7 +189,7 @@ export function DependencyBadges({ row, merged = false }: DependencyBadgesProps)
         </button>
       ) : null}
 
-      {!merged && blocks.length > 0 ? (
+      {!merged && !words && blocks.length > 0 ? (
         <button
           type="button"
           className="staple-dep-badge"
