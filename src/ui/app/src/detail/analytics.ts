@@ -58,6 +58,53 @@ export function formatDuration(seconds: number): string {
 }
 
 /**
+ * The same duration in words, for the Time tab: `45 seconds`, `20 minutes`,
+ * `3 hours 10 minutes`, `2 days 4 hours`.
+ *
+ * As precise as `formatDuration` above it — two units at most, largest first —
+ * because "2 hours" and "2 hours 55 minutes" are still the difference between
+ * hitting an estimate and blowing it. What changes is only the voice: a reader
+ * who is not an engineer should not have to decode `5h56m`. Minutes are rounded
+ * to the nearest one (`3m51s` reads "4 minutes"); seconds are said only under a
+ * minute.
+ */
+export function spokenDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "0 seconds";
+  const s = Math.max(0, Math.floor(seconds));
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (s < 60) return unit(s, "second");
+  const minutes = Math.round(s / 60);
+  if (minutes < 60) return unit(minutes, "minute");
+  if (minutes < 1440) {
+    const rest = minutes % 60;
+    return rest ? `${unit(Math.floor(minutes / 60), "hour")} ${unit(rest, "minute")}` : unit(minutes / 60, "hour");
+  }
+  const hours = Math.round(s / 3600);
+  const rest = hours % 24;
+  return rest ? `${unit(Math.floor(hours / 24), "day")} ${unit(rest, "hour")}` : unit(hours / 24, "day");
+}
+
+/**
+ * The difference between plan and actual as a sentence, never as `5h56m under (99%)`.
+ *
+ * `running` changes the tense, because an unfinished task has not come in under
+ * anything: 4 minutes into a 6-hour plan it has 5 hours 56 minutes LEFT, which is a
+ * different claim from "finished 5 hours 56 minutes under".
+ */
+export function plainDelta(delta: Delta, running: boolean): string {
+  const amount = spokenDuration(Math.abs(delta.differenceSeconds));
+  if (delta.direction === "on") return running ? "Right at the plan so far" : "Right on the plan";
+  if (delta.direction === "under") return running ? `${amount} left in the plan` : `Finished ${amount} under the plan`;
+  return running ? `${amount} over the plan so far` : `Took ${amount} longer than planned`;
+}
+
+/** The same difference, short, for a sub-task row: `2 hours under`, `20 minutes over`, `on plan`. */
+export function shortDelta(delta: Delta): string {
+  if (delta.direction === "on") return "on plan";
+  return `${spokenDuration(Math.abs(delta.differenceSeconds))} ${delta.direction}`;
+}
+
+/**
  * A duration slot that may legitimately hold nothing.
  *
  * `null` is rendered as a NAMED absence, never as `0s` or `—`. A dash in a

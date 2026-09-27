@@ -48,6 +48,9 @@ import {
   formatOptionalDuration,
   isAggregated,
   isStillRunning,
+  plainDelta,
+  shortDelta,
+  spokenDuration,
   qualityText,
   subtreePlanHint,
   summarySentence,
@@ -1015,5 +1018,48 @@ describe("quality states are named, never decided, here", () => {
     } as unknown as TimingQualityReport;
     expect(cohortLine(report)).toBe("8 done leaves beneath: 6 exact (75%) · 1 under a minute · 1 approximate");
     expect(cohortLine({ ...report, population: { ...report.population, eligible: 0 } })).toBeNull();
+  });
+});
+
+// ------------------------------------------------------------------ the Time tab's words
+
+describe("durations in words keep formatDuration's precision", () => {
+  it("says each unit in words, two at most, largest first", () => {
+    expect(spokenDuration(45)).toBe("45 seconds");
+    expect(spokenDuration(1)).toBe("1 second");
+    expect(spokenDuration(1200)).toBe("20 minutes");
+    expect(spokenDuration(231)).toBe("4 minutes");
+    expect(spokenDuration(3600)).toBe("1 hour");
+    expect(spokenDuration(21_600)).toBe("6 hours");
+    expect(spokenDuration(11_400)).toBe("3 hours 10 minutes");
+    expect(spokenDuration(21_360)).toBe("5 hours 56 minutes");
+    expect(spokenDuration(187_200)).toBe("2 days 4 hours");
+    expect(spokenDuration(86_400)).toBe("1 day");
+  });
+
+  it("carries a rounded minute into the hour rather than saying 60 minutes", () => {
+    expect(spokenDuration(3590)).toBe("1 hour");
+  });
+
+  it("never says NaN", () => {
+    expect(spokenDuration(Number.NaN)).toBe("0 seconds");
+  });
+});
+
+describe("the difference as a sentence", () => {
+  it("says what is left while the work is running, and the verdict once it is not", () => {
+    const under = computeDelta(21_600, 240)!;
+    expect(plainDelta(under, true)).toBe("5 hours 56 minutes left in the plan");
+    expect(plainDelta(under, false)).toBe("Finished 5 hours 56 minutes under the plan");
+    const over = computeDelta(3600, 4800)!;
+    expect(plainDelta(over, true)).toBe("20 minutes over the plan so far");
+    expect(plainDelta(over, false)).toBe("Took 20 minutes longer than planned");
+    expect(plainDelta(computeDelta(3600, 3600)!, false)).toBe("Right on the plan");
+  });
+
+  it("has a short form for a sub-task row, with no percentage", () => {
+    expect(shortDelta(computeDelta(10_800, 3600)!)).toBe("2 hours under");
+    expect(shortDelta(computeDelta(3600, 4800)!)).toBe("20 minutes over");
+    expect(shortDelta(computeDelta(3600, 3600)!)).toBe("on plan");
   });
 });

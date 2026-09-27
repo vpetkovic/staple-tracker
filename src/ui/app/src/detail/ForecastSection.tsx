@@ -80,7 +80,7 @@ import type { BudgetForecast, BudgetLimitForecast, CompletionForecast, ForecastR
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 
-const HEADING = "text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase";
+const HEADING = "text-label font-medium text-text-secondary";
 /** The placeholder a missing figure wears: the interface face, small, muted, italic. Never a figure. */
 const UNKNOWN = "text-[11px] text-muted-foreground italic";
 
