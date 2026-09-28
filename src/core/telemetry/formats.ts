@@ -15,7 +15,16 @@ import { StapleError } from "../types.js";
 export type HarnessName = "claude_code" | "codex" | "other";
 
 /** `source.kind` values an ingestion path in this build writes. */
-export type BudgetSourceKind = "claude_code_statusline" | "codex_rollout" | "operator_manual";
+export type BudgetSourceKind = "claude_code_statusline" | "codex_rollout" | "operator_manual" | "usage_poll";
+
+/**
+ * Sources whose reading is the provider's own account-wide figure at the instant it was
+ * asked, not a cached re-read (the status line) or one session's view (a rollout): live
+ * polling (`polling/`). Such readings govern the window they are in: they discount passive
+ * readings they contradict and, two in a row, close it (`BudgetStore`, docs
+ * "Window identity").
+ */
+export const AUTHORITATIVE_SOURCE_KINDS: ReadonlySet<string> = new Set(["usage_poll"]);
 
 /** The harness a sample's sessionRef belongs to, from its `source.kind` (Privacy). */
 export const HARNESS_OF_SOURCE: Readonly<Record<string, HarnessName>> = {

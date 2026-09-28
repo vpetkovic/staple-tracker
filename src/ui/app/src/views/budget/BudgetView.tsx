@@ -32,6 +32,14 @@
  * by the seconds the page has held the answer (`tickSeconds`); the forecast figures do not move,
  * and say "as of" the instant the server read them.
  *
+ * Refresh runs a real collection (`POST /api/budget/collection/refresh`: the passive scan and,
+ * when live checks are on, one check with each linked provider), shows that it is working, then
+ * says what happened per provider in plain words ("Updated just now", or the provider's reason).
+ * It is the one change the page may make from another device (the phone on the tailnet). With
+ * live checks on, each account says when it was last checked, and when that check failed it
+ * says why above the cards, so an old figure is never shown without its reason
+ * (`lib/live-usage.ts`).
+ *
  * ## Rendered, never recomputed
  *
  * Every figure is a field of `GET /api/budget`, formatted by lib/budget-text.ts. An unknown figure
@@ -42,8 +50,10 @@
  * e2e test renders it from the real server's answer; `BudgetView` is the fetch and the clock.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, CircleHelp, RefreshCw } from "lucide-react";
-import { AuthError, getBudget } from "@/lib/api";
+import { AlertTriangle, CheckCircle2, CircleHelp, Info, RefreshCw } from "lucide-react";
+import { AuthError, getBudget, getBudgetPolling, refreshBudget } from "@/lib/api";
+import { REFRESH_RESULT_MS, accountLiveLine, idleLimits, providerFor, refreshLines, visibleRefreshLines, type LiveLine } from "@/lib/live-usage";
+import type { PollingProviderStatus, PollingStatus } from "@/lib/telemetry-types";
 import {
   BUDGET_REFRESH_MS,
   PRESSURE_WARNING_TEXT,
@@ -373,12 +383,37 @@ function LimitCard({ limit, asOf, unsafeAt, heldSeconds }: { limit: BudgetLimitR
   );
 }
 
-function AccountSection({ account, view, heldSeconds }: { account: BudgetAccountView; view: BudgetPayload; heldSeconds: number }) {
+const LIVE_ICON = { ok: CheckCircle2, info: Info, warn: AlertTriangle } as const;
+
+/** One live-check sentence: a word and an icon, never a colour alone. */
+function LiveNote({ line, testId }: { line: LiveLine; testId: string }) {
+  const Icon = LIVE_ICON[line.tone];
+  return (
+    <p
+      data-testid={testId}
+      data-live-tone={line.tone}
+      className={cn(
+        "flex items-start gap-1.5 text-[13px] leading-relaxed",
+        line.tone === "warn" ? "rounded-lg border px-3 py-2" : "text-muted-foreground",
+      )}
+      style={line.tone === "warn" ? { borderColor: "var(--plain-risk-border)" } : undefined}
+    >
+      <Icon aria-hidden className="mt-0.5 size-3.5 shrink-0" style={line.tone === "warn" ? { color: "var(--plain-risk-fg)" } : undefined} />
+      <span className="min-w-0">{line.text}</span>
+    </p>
+  );
+}
+
+function AccountSection({ account, view, heldSeconds, live }: { account: BudgetAccountView; view: BudgetPayload; heldSeconds: number; live: PollingProviderStatus | null }) {
   const absent = account.limits.length === 0 ? accountAbsentText(account, view.budgetCapture) : null;
   const names = providerName(account.provider, account.accountRef);
   const readable = account.limits.filter((limit) => limit.status === "current" && limit.remainingPercent !== null);
-  const unreadable = account.limits.filter((limit) => !(limit.status === "current" && limit.remainingPercent !== null));
+  const idle = idleLimits(live);
+  const resting = account.limits.filter((limit) => !(limit.status === "current" && limit.remainingPercent !== null) && idle.has(limit.limitKey));
+  const unreadable = account.limits.filter((limit) => !(limit.status === "current" && limit.remainingPercent !== null) && !idle.has(limit.limitKey));
   const line = unreadableLine(unreadable, names.short, readable.length > 0);
+  // Aged on the page's own clock: the instant the server read, plus the seconds held since.
+  const liveLine = accountLiveLine(live, Date.parse(view.asOf) + heldSeconds * 1000);
   return (
     <section aria-label={`Account ${account.accountRef}`} data-account={account.accountRef} className="space-y-2">
       <h2 className="flex flex-wrap items-baseline gap-x-2 text-[14px] font-medium">
@@ -388,6 +423,7 @@ function AccountSection({ account, view, heldSeconds }: { account: BudgetAccount
           {boundText(account.bound)}
         </span>
       </h2>
+      {liveLine ? <LiveNote line={liveLine} testId="budget-live-line" /> : null}
       {absent ? (
         <p className="text-[14px]" data-testid="budget-account-plain">
           {budgetAbsentPlain(account.missing.limits, view.budgetCapture, account.bound)}
@@ -400,6 +436,12 @@ function AccountSection({ account, view, heldSeconds }: { account: BudgetAccount
           ))}
         </div>
       ) : null}
+      {resting.map((limit) => (
+        <p key={limit.limitKey} className="text-[13px] text-muted-foreground" data-testid="budget-idle" data-limit-idle={limit.limitKey}>
+          {limitName({ limitKey: limit.limitKey, windowSeconds: limit.window?.windowSeconds ?? null })}: nothing used since it last reset, so the full allowance is
+          there. It starts counting again with your next use.
+        </p>
+      ))}
       {line !== null ? (
         <p className="text-[13px] text-muted-foreground" data-testid="budget-unreadable">
           {line}
@@ -426,8 +468,27 @@ function AccountSection({ account, view, heldSeconds }: { account: BudgetAccount
   );
 }
 
+/** What Refresh is doing: working, or what it did last and when (`Date.now()`), shown for a minute. */
+export interface RefreshState {
+  readonly busy: boolean;
+  readonly lines: readonly LiveLine[] | null;
+  readonly finishedAt: number | null;
+}
+
 /** The whole view, from one payload and the seconds the page has held it. */
-export function BudgetReportView({ view, heldSeconds, onRefresh }: { view: BudgetPayload; heldSeconds: number; onRefresh?: () => void }) {
+export function BudgetReportView({
+  view,
+  heldSeconds,
+  onRefresh,
+  polling = null,
+  refresh = { busy: false, lines: null, finishedAt: null },
+}: {
+  view: BudgetPayload;
+  heldSeconds: number;
+  onRefresh?: () => void;
+  polling?: PollingStatus | null;
+  refresh?: RefreshState;
+}) {
   const absent = machineAbsentText(view);
   const unsafe = view.accounts.flatMap((account) => account.limits).filter((limit) => limit.pressure.state === "unsafe").length;
   return (
@@ -450,12 +511,20 @@ export function BudgetReportView({ view, heldSeconds, onRefresh }: { view: Budge
               // Drawn at 24px beside the timestamp; on touch a ::before carries a 46px target.
               className="ml-auto relative pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[11px] pointer-coarse:before:content-['']"
               onClick={onRefresh}
+              disabled={refresh.busy}
+              aria-busy={refresh.busy || undefined}
               data-testid="budget-refresh"
+              data-busy={refresh.busy ? "" : undefined}
             >
-              <RefreshCw aria-hidden />
-              Refresh
+              <RefreshCw aria-hidden className={cn(refresh.busy && "animate-spin")} />
+              {refresh.busy ? "Checking…" : "Refresh"}
             </Button>
           ) : null}
+        </div>
+        <div aria-live="polite" data-testid="budget-refresh-result" className="space-y-1 empty:hidden">
+          {visibleRefreshLines(refresh)?.map((line, index) => (
+            <LiveNote key={index} line={line} testId="budget-refresh-line" />
+          ))}
         </div>
         <ShowDetails label="Show rule details">
           <p className="text-[11px] text-muted-foreground" data-testid="budget-reserve">
@@ -466,7 +535,8 @@ export function BudgetReportView({ view, heldSeconds, onRefresh }: { view: Budge
             {pressureRatioText(view.pressureRule.unsafeAtRatio)} or over. Provisional until an admission policy defines it.
           </p>
           <p className="text-[11px] text-muted-foreground" data-testid="budget-as-of">
-            Read at {clockText(view.asOf)}, every {BUDGET_REFRESH_MS / 1000} s. Capture {view.budgetCapture ? "on" : "off"}.
+            Read at {clockText(view.asOf)}, every {BUDGET_REFRESH_MS / 1000} s. Capture {view.budgetCapture ? "on" : "off"}. Live checks{" "}
+            {polling === null ? "unknown" : polling.active ? "on" : polling.livePolling ? "on, but capture is off" : "off"}.
             {unsafe > 0 ? <span data-testid="budget-unsafe-count"> {unsafe} unsafe limit{unsafe === 1 ? "" : "s"}.</span> : null}
           </p>
         </ShowDetails>
@@ -486,7 +556,15 @@ export function BudgetReportView({ view, heldSeconds, onRefresh }: { view: Budge
           </ShowDetails>
         </div>
       ) : (
-        view.accounts.map((account) => <AccountSection key={`${account.provider}:${account.accountRef}`} account={account} view={view} heldSeconds={heldSeconds} />)
+        view.accounts.map((account) => (
+          <AccountSection
+            key={`${account.provider}:${account.accountRef}`}
+            account={account}
+            view={view}
+            heldSeconds={heldSeconds}
+            live={providerFor(polling, account.provider, account.accountRef)}
+          />
+        ))
       )}
     </div>
   );
@@ -507,6 +585,8 @@ function useHeldSeconds(since: number): number {
 interface Held {
   readonly view: BudgetPayload;
   readonly receivedAt: number;
+  /** Live polling's status, read beside the budget; null when that read failed (the page still works). */
+  readonly polling: PollingStatus | null;
 }
 
 /**
@@ -514,17 +594,17 @@ interface Held {
  * it becomes visible again. Budget readings live in the hub, not in a workspace, so the page's
  * workspace fingerprint says nothing about them and is not a reason to re-read.
  */
-function useLiveBudget(onAuthError: (error: AuthError) => void): { held: Held | null; error: Error | null; reload: () => void } {
+function useLiveBudget(onAuthError: (error: AuthError) => void): { held: Held | null; error: Error | null; reload: () => Promise<void> } {
   const [held, setHeld] = useState<Held | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const authRef = useRef(onAuthError);
   authRef.current = onAuthError;
   const alive = useRef(true);
   const reload = useCallback(() => {
-    getBudget()
-      .then((view) => {
+    return Promise.all([getBudget(), getBudgetPolling().catch(() => null)])
+      .then(([view, polling]) => {
         if (!alive.current) return;
-        setHeld({ view, receivedAt: Date.now() });
+        setHeld({ view, receivedAt: Date.now(), polling });
         setError(null);
       })
       .catch((caught: unknown) => {
@@ -535,12 +615,12 @@ function useLiveBudget(onAuthError: (error: AuthError) => void): { held: Held | 
   }, []);
   useEffect(() => {
     alive.current = true;
-    reload();
+    void reload();
     const timer = window.setInterval(() => {
-      if (!document.hidden) reload();
+      if (!document.hidden) void reload();
     }, BUDGET_REFRESH_MS);
     const onVisible = () => {
-      if (!document.hidden) reload();
+      if (!document.hidden) void reload();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -552,9 +632,45 @@ function useLiveBudget(onAuthError: (error: AuthError) => void): { held: Held | 
   return { held, error, reload };
 }
 
+/**
+ * Refresh: one collection now, then a re-read. Busy while it runs; afterwards the lines say what
+ * happened per provider. A failure of the request itself (the server gone, say) is said too, and
+ * the page re-reads what is stored either way.
+ */
+function useRefresh(reload: () => Promise<void>, onAuthError: (error: AuthError) => void): { state: RefreshState; run: () => void } {
+  const [state, setState] = useState<RefreshState>({ busy: false, lines: null, finishedAt: null });
+  const busy = useRef(false);
+  const authRef = useRef(onAuthError);
+  authRef.current = onAuthError;
+  const run = useCallback(() => {
+    if (busy.current) return;
+    busy.current = true;
+    setState((previous) => ({ ...previous, busy: true }));
+    refreshBudget()
+      .then((result) => refreshLines(result))
+      .catch((caught: unknown): LiveLine[] => {
+        if (caught instanceof AuthError) authRef.current(caught);
+        return [{ tone: "warn", text: `The check didn't run (${caught instanceof Error ? caught.message : String(caught)}). Showing what is stored.` }];
+      })
+      .then(async (lines) => {
+        await reload();
+        busy.current = false;
+        setState({ busy: false, lines, finishedAt: Date.now() });
+      });
+  }, [reload]);
+  // The lines say "just now": gone after a minute, when the account lines carry the age.
+  useEffect(() => {
+    if (state.finishedAt === null) return;
+    const timer = window.setTimeout(() => setState((previous) => (previous.finishedAt === state.finishedAt ? { ...previous, lines: null, finishedAt: null } : previous)), REFRESH_RESULT_MS);
+    return () => window.clearTimeout(timer);
+  }, [state.finishedAt]);
+  return { state, run };
+}
+
 export function BudgetView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const { held, error, reload } = useLiveBudget(onAuthError);
   const heldSeconds = useHeldSeconds(held?.receivedAt ?? 0);
+  const refresh = useRefresh(reload, onAuthError);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -564,7 +680,7 @@ export function BudgetView({ onAuthError }: { onAuthError: (error: AuthError) =>
         ) : held ? (
           <>
             {error ? <p className={cn(UNKNOWN, "mb-2")}>The last refresh failed ({error.message}); showing the previous read.</p> : null}
-            <BudgetReportView view={held.view} heldSeconds={heldSeconds} onRefresh={reload} />
+            <BudgetReportView view={held.view} heldSeconds={heldSeconds} onRefresh={refresh.run} polling={held.polling} refresh={refresh.state} />
           </>
         ) : (
           <LoadingState rows={3} />
