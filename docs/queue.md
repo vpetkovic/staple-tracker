@@ -147,6 +147,56 @@ is `claimed`, including the caller's own ongoing work. (Pinned by
 eligible row and lists what it skipped"*, *"has no eligible row, and no next,
 when everything is held"*.)
 
+**Scoped pickup.** `effectiveQueue({actor, scope})` — `staple queue next --scope
+<ref>`, `next_task {scope}`, `GET /api/queue/next?scope=` — answers the same
+question inside ONE container, for an agent that has been pointed at an epic or a
+milestone rather than at the whole queue. The whole order is computed first and
+then narrowed, so a scoped row carries exactly the eligibility, reason, `claim`
+and `position` the unscoped answer gives it: a scope changes which rows are
+considered, never what a row is, and `skipped` still names every stepped-over
+row — the ones inside the scope.
+
+- **What a scope is.** An epic or a milestone, whatever it holds today (an empty
+  one is an empty scope, not an error), or any other issue with children. A leaf
+  is refused with `validation` (exit 2) — there is nothing under it to pick up,
+  and "take this one" is `checkout`. A ref from another workspace is
+  `validation`, as it is for every plan write; an unknown one is `not_found`
+  (exit 3). `--scope` on anything but `queue next` is `validation`.
+- **What is inside.** Membership is STRUCTURAL, not "reached by the walk": a row
+  is inside when the scope is one of its ancestors, or — for a milestone — when
+  the row or one of its ancestors is a member (the progress rollup's "members
+  plus their descendants"), or it sits under the milestone's own children. An
+  open leaf under a resolved parent is therefore still inside its epic. The
+  scope is never a row of its own scope.
+- **Order.** The plan first, then the scope's own shape. Rows the plan reaches
+  — queued directly or through any queued container — keep their effective
+  order. The scope's UNQUEUED work follows in the order queueing the scope would
+  give it (a milestone's membership order, then the tree rule; an epic's tree
+  rule), not in presentation sort, because a milestone's member order is a
+  human's plan even when the milestone itself is not in the queue. That is the
+  one place a scoped answer is not a plain filter, and it is why `position` —
+  the row's place in the WHOLE effective order, the number `out_of_order`
+  speaks — need not rise through the unqueued part of a scoped answer. The
+  array order is the answer.
+- **Shape.** The answer echoes `scope: {issueId, identifier, title, kind,
+  status}`; an unscoped answer has no `scope` key at all. A null `next` with no
+  unresolved row in `skipped` means the scope has no open work left; a null
+  `next` with unresolved rows means everything inside is held, gated or blocked.
+- **Strict.** The order guard in `checkout` is not scoped: under `queue.policy =
+  strict` a scoped `next` from the unqueued band is refused `out_of_order`
+  while an eligible plan row exists anywhere. Advisory (the default) never
+  refuses it.
+
+(Pinned by `store-queue-resolver.test.ts` — *"limits next and skipped to rows
+inside the epic, in queue order"*, *"answers inside an unqueued milestone: its
+members plus their descendants, in membership order"*, *"puts the rows the plan
+reaches before the scope's unqueued work"*, *"reaches an open leaf under a
+resolved parent inside the scope"*, *"an empty container is an empty scope, and
+never offers itself"*, *"refuses an unknown scope as not_found and a leaf or
+foreign ref as validation"*; `queue-surfaces.test.ts` — *"scoped next is one
+shape on CLI, MCP and HTTP, limited to the scope"*, *"an unknown or leaf scope is
+refused the same way on every surface"*.)
+
 **READY takes its order from the resolver and keeps its membership.** The three
 inbox buckets partition open work exactly as today (`gated` and `queuedBy` →
 QUEUED; `blocked` and unresolved blockers → BLOCKED; the rest → READY); what
@@ -388,7 +438,7 @@ mutation carries the actor and the resulting revision"*.)
 | CLI | MCP | HTTP |
 |---|---|---|
 | `staple queue [--all] [--effective]` | `list_queue` | `GET /api/queue` |
-| `staple queue next [--actor A]` | `next_task` | `GET /api/queue/next` |
+| `staple queue next [--actor A] [--scope <ref>]` | `next_task {scope}` | `GET /api/queue/next?scope=` |
 | `staple queue add <ref> [--before R \| --after R \| --at N] [--base N] [-m note]` | `enqueue_task` | `POST /api/queue/enqueue` |
 | `staple queue rm <ref> [--base N]` | `dequeue_task` | `POST /api/queue/remove` |
 | `staple queue mv <ref> (--before R \| --after R \| --at N) [--base N]` | `move_queue_entry` | `POST /api/queue/move` |

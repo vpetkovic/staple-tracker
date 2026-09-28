@@ -635,6 +635,8 @@ export class QueueStore {
     const opts: EffectiveQueueOptions =
       typeof options === "string" || options === null ? { actor: options } : options;
     const nodes = this.nodes();
+    // Resolved before any of the work below, so a bad scope costs one lookup.
+    const scope = opts.scope === undefined || opts.scope === null ? null : this.scopeOf(opts.scope, nodes);
     /**
      * The milestone side, for the whole workspace, in two queries (R3d,
      * STA-174): what a queued milestone expands to, the date those rows inherit,
@@ -690,8 +692,15 @@ export class QueueStore {
       via: string | null,
       dueAt: string | null,
       depth: number,
+      seen: Set<string> = emitted,
+      emit: (node: IssueNode, planPosition: number | null, via: string | null, dueAt: string | null) => void = (
+        leaf,
+        position,
+        container,
+        due,
+      ) => raw.push({ node: leaf, planPosition: position, via: container, dueAt: due, unqueued: false }),
     ): void => {
-      if (emitted.has(node.id) || depth > MAX_TREE_DEPTH) return;
+      if (seen.has(node.id) || depth > MAX_TREE_DEPTH) return;
       /**
        * A milestone is a container over its MEMBERSHIP rather than over its
        * children — nothing is ever re-parented into one — so it expands in
@@ -710,20 +719,20 @@ export class QueueStore {
         const due = target === null ? null : milestoneDateBounds(target).endsAt;
         for (const memberId of seam.membersOf.get(node.id) ?? []) {
           const memberNode = nodes.get(memberId);
-          if (memberNode) expand(memberNode, planPosition, via ?? node.identifier, due, depth + 1);
+          if (memberNode) expand(memberNode, planPosition, via ?? node.identifier, due, depth + 1, seen, emit);
         }
         for (const child of openChildren.get(node.id) ?? []) {
-          expand(child, planPosition, via ?? node.identifier, due, depth + 1);
+          expand(child, planPosition, via ?? node.identifier, due, depth + 1, seen, emit);
         }
         return;
       }
       const children = openChildren.get(node.id) ?? [];
       if (children.length > 0) {
-        for (const child of children) expand(child, planPosition, via ?? node.identifier, dueAt, depth + 1);
+        for (const child of children) expand(child, planPosition, via ?? node.identifier, dueAt, depth + 1, seen, emit);
         return;
       }
-      emitted.add(node.id);
-      raw.push({ node, planPosition, via, dueAt, unqueued: false });
+      seen.add(node.id);
+      emit(node, planPosition, via, dueAt);
     };
 
     const planEntries = this.entries({ all: true });
@@ -860,13 +869,101 @@ export class QueueStore {
       };
     });
 
-    const nextIndex = rows.findIndex((row) => row.eligibility === "eligible");
+    /**
+     * STEP 4 — SCOPE, only when asked (`queue next --scope`). The whole order is
+     * computed first and then NARROWED, so a scoped row carries exactly the
+     * eligibility, reason and `position` the unscoped answer gives it — a scope
+     * changes which rows are considered, never what a row is.
+     *
+     * Membership is STRUCTURAL: a row is inside when the scope is one of its
+     * ancestors, or — for a milestone — when the row or an ancestor is one of its
+     * members (the rollup's "members plus their descendants"), or it sits under
+     * the milestone's own children. The scope itself is never a row of its own
+     * scope: an epic whose children are all resolved has nothing left inside it.
+     *
+     * ORDER inside a scope is the plan first, then the scope's own shape: the
+     * rows the plan reaches keep their effective order, and the scope's unqueued
+     * work follows in the order queueing the scope would give it — a milestone's
+     * membership order, then the tree rule — rather than in presentation sort.
+     * That is the one place a scoped answer is not a plain filter, and it is why
+     * `position` (the row's place in the WHOLE effective order, the number
+     * `out_of_order` speaks) need not rise monotonically through the unqueued
+     * part of a scoped answer: the array order is the answer.
+     */
+    let answer = rows;
+    if (scope !== null) {
+      const walked: string[] = [];
+      const seen = new Set<string>();
+      const walk = (leaf: IssueNode): void => {
+        walked.push(leaf.id);
+      };
+      // A milestone expands over its membership; any other container over its
+      // open children — never the scope node itself, which is not inside itself.
+      const starts = scope.kind === MILESTONE_KIND ? [scope] : (openChildren.get(scope.id) ?? []);
+      for (const start of starts) expand(start, null, null, null, 0, seen, walk);
+      const scopeRank = new Map(walked.map((id, index) => [id, index]));
+      const inside = (id: string): boolean =>
+        id !== scope.id &&
+        chainOf(id).some((link) => link === scope.id || seam.milestoneOf.get(link) === scope.id);
+      const scoped = rows.filter((row) => inside(row.issueId));
+      const unqueued = scoped
+        .filter((row) => row.unqueued)
+        .sort(
+          (a, b) =>
+            (scopeRank.get(a.issueId) ?? Number.MAX_SAFE_INTEGER) - (scopeRank.get(b.issueId) ?? Number.MAX_SAFE_INTEGER) ||
+            a.position - b.position,
+        );
+      answer = [...scoped.filter((row) => !row.unqueued), ...unqueued];
+    }
+
+    const nextIndex = answer.findIndex((row) => row.eligibility === "eligible");
     return {
       revision: this.revision(),
-      rows,
-      next: nextIndex < 0 ? null : rows[nextIndex]!,
-      skipped: nextIndex < 0 ? rows : rows.slice(0, nextIndex),
+      rows: answer,
+      next: nextIndex < 0 ? null : answer[nextIndex]!,
+      skipped: nextIndex < 0 ? answer : answer.slice(0, nextIndex),
+      ...(scope === null
+        ? {}
+        : {
+            scope: {
+              issueId: scope.id,
+              identifier: scope.identifier,
+              title: scope.title,
+              kind: scope.kind,
+              status: scope.status,
+            },
+          }),
     };
+  }
+
+  /**
+   * The container a scoped pickup is limited to. A foreign identifier is refused
+   * by name, as every plan write refuses one; an unknown one is `not_found`,
+   * exactly as `show` answers it. What is accepted is anything that can HOLD
+   * work: an epic or a milestone whatever it holds today (an empty one is an
+   * empty scope, not an error), or any other issue that has children. A leaf is
+   * refused with `validation` — there is nothing under it to pick up, and a
+   * caller that meant "take this one" wants `checkout`, not a scope.
+   */
+  private scopeOf(ref: string, nodes: ReadonlyMap<string, IssueNode>): IssueNode {
+    if (!ref.trim()) {
+      throw new StapleError("validation", "A scope needs an issue reference: an epic, a milestone, or any issue with children.");
+    }
+    this.assertLocalRef(ref);
+    const issue = this.store.getIssue(ref);
+    const node = nodes.get(issue.id)!;
+    const container =
+      node.kind === MILESTONE_KIND ||
+      node.kind === EPIC_KIND ||
+      [...nodes.values()].some((candidate) => candidate.parent_id === node.id);
+    if (!container) {
+      throw new StapleError(
+        "validation",
+        `${node.identifier} is a ${node.kind} with no children, so there is nothing inside it to pick up. A scope is an epic, a milestone, or any issue with children; to take ${node.identifier} itself, check it out.`,
+        { identifier: node.identifier, kind: node.kind },
+      );
+    }
+    return node;
   }
 
   /**
@@ -996,6 +1093,21 @@ export interface EffectiveQueue {
   next: EffectiveQueueRow | null;
   /** The rows before `next`, each carrying why it was passed over. */
   skipped: EffectiveQueueRow[];
+  /**
+   * Present only on a scoped answer: the container the rows were limited to.
+   * `rows`, `next` and `skipped` are then all inside it, and a null `next` with
+   * no non-resolved row in `skipped` means the scope has no open work left.
+   */
+  scope?: QueueScope;
+}
+
+/** The container a scoped answer was limited to, as `queue next --scope` echoes it. */
+export interface QueueScope {
+  issueId: string;
+  identifier: string;
+  title: string;
+  kind: string;
+  status: string;
 }
 
 /**
@@ -1041,6 +1153,11 @@ export interface EffectiveQueueOptions {
   actor?: string | null;
   /** Cross-workspace blockers by issue identifier; absent means none are known. */
   crossBlockers?: ReadonlyMap<string, readonly CrossBlockerLite[]>;
+  /**
+   * Limit the answer to one container's work: an epic, a milestone, or any issue
+   * with children (`queue next --scope`). Absent or null is the whole queue.
+   */
+  scope?: string | null;
 }
 
 interface IssueNode {

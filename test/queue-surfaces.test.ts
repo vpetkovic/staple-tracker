@@ -206,6 +206,44 @@ describe("every mutation has the same shape and refusal on every surface", () =>
     expect(fromHttp).toEqual(fromCli);
   });
 
+  it("scoped next is one shape on CLI, MCP and HTTP, limited to the scope", async () => {
+    // QUE-1 and QUE-4 are queued; QUE-5 is unqueued and outside the epic. The
+    // scope keeps only QUE-1's rows, with their unscoped positions.
+    const fromCli = normalize(await cliJson("queue", "next", "--scope", "QUE-1", "--actor", "agent-1", "--ws", WS), [home]);
+    const fromMcp = normalize(await mcpJson("next_task", { actor: "agent-1", scope: "QUE-1" }), [home]);
+    const fromHttp = normalize(await httpJson(`/api/queue/next?ws=${WS}&actor=agent-1&scope=QUE-1`), [home]);
+    expect(fromCli).toMatchObject({
+      scope: { identifier: "QUE-1", kind: "epic" },
+      next: { identifier: "QUE-2", position: 1 },
+      skipped: [],
+    });
+    expect(fromMcp).toEqual(fromCli);
+    expect(fromHttp).toEqual(fromCli);
+  });
+
+  it("an unknown or leaf scope is refused the same way on every surface", async () => {
+    const unknown = await cli("queue", "next", "--scope", "QUE-99", "--ws", WS, "--json");
+    expect(unknown.status).toBe(CLI_EXIT_CODES.not_found);
+    expect(tripleOf(cliEnvelope(unknown))).toEqual(ERROR_CONTRACT.notFound());
+    expect(tripleOf(mcpEnvelope(await mcp.call("next_task", { ws: WS, scope: "QUE-99" })))).toEqual(
+      ERROR_CONTRACT.notFound(),
+    );
+    const unknownHttp = await fetch(`${origin}/api/queue/next?ws=${WS}&scope=QUE-99`, { headers: { "x-staple-token": token } });
+    expect(unknownHttp.status).toBe(httpStatusFor("not_found"));
+
+    const expected = { code: "validation", retryable: false, detail: { identifier: "QUE-4", kind: "task" } };
+    const leaf = await cli("queue", "next", "--scope", "QUE-4", "--ws", WS, "--json");
+    expect(leaf.status).toBe(CLI_EXIT_CODES.validation);
+    expect(tripleOf(cliEnvelope(leaf))).toEqual(expected);
+    expect(tripleOf(mcpEnvelope(await mcp.call("next_task", { ws: WS, scope: "QUE-4" })))).toEqual(expected);
+    const leafHttp = await fetch(`${origin}/api/queue/next?ws=${WS}&scope=QUE-4`, { headers: { "x-staple-token": token } });
+    expect(leafHttp.status).toBe(httpStatusFor("validation"));
+    expect(tripleOf((await leafHttp.json()) as Record<string, unknown>)).toEqual(expected);
+
+    // Only the pickup answer is scoped: a listing that ignored it would lie.
+    expect((await cli("queue", "ls", "--scope", "QUE-1", "--ws", WS)).status).toBe(CLI_EXIT_CODES.validation);
+  });
+
   it("a stale base is the same revision_conflict triple on every surface", async () => {
     // Read the base rather than counting the mutations above: what is pinned is
     // that all three surfaces answer the SAME triple, not which number it holds.

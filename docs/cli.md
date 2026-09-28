@@ -44,7 +44,7 @@ staple milestone new <title> [--target D] [--from-epic R] [--preview]
 staple milestone add|rm <milestone> <ref> [--base N] | mv <ref> --to M | reorder M <r1,r2>
 
 staple queue [--all] [--effective]                  the plan, and the order agents receive
-staple queue next [--actor A]                       the one row to take, and what it skipped
+staple queue next [--actor A] [--scope <ref>]       the one row to take, and what it skipped
 staple queue add|rm <ref> [--at N] [--base N] | mv <ref> --at N | reorder <r1,r2> | prune
 staple checkout <ref> --override -m <why>           take a row out of turn, on the record
 
@@ -322,6 +322,7 @@ staple queue prune                           # drop the done and cancelled entri
 staple queue                                 # PLAN order, expansions indented
 staple queue --effective                     # EFFECTIVE order, with the eligibility column
 staple queue next --actor codex-1            # what to take, and what it stepped over
+staple queue next --scope STA-66             # the same, inside one epic or milestone only
 ```
 
 - **Two orders, both shown.** `queue` prints PLAN order — the rows a human put
@@ -375,7 +376,8 @@ staple queue next --actor codex-1            # what to take, and what it stepped
 two orders each subcommand shows or edits, the classification ladder, and the
 four refusal codes. `--json` on every subcommand prints the one shape MCP and
 the UI server return: `{revision, entries, effective}`, with `queue next`
-answering `{revision, next, skipped}` — see
+answering `{revision, next, skipped}` (`{revision, scope, next, skipped}` with
+`--scope`) — see
 [queue.md](queue.md#operations-by-surface).
 
 ## Estimates vs actuals
