@@ -3064,20 +3064,121 @@ export class WorkspaceStore {
     child: Pick<IssueRow, "id" | "identifier" | "parent_id">,
     actor: string | null,
   ): void {
+    this.deriveHolders([child.id], child.identifier, actor, new Set());
+  }
+
+  /**
+   * Re-derive the milestones named, and everything above them, after their membership
+   * changed. `MilestoneStore` calls this inside its own mutation, so the status moves in
+   * the same transaction as the membership that caused it.
+   *
+   * A membership edit may move a milestone between the open rungs, but never closes it:
+   * a milestone being built out would otherwise close the moment its first member is one
+   * that already landed, and drop out of `milestone ls` between two adds. It closes when
+   * a member LANDS, as a parent does, or when a person closes it.
+   */
+  rederiveMilestones(milestoneIds: readonly string[], trigger: string, actor: string | null): void {
+    this.deriveHolders(milestoneIds, trigger, actor, new Set(milestoneIds));
+  }
+
+  /**
+   * The walk: every issue whose status is derived from what moved, re-derived until the
+   * answers stop changing.
+   *
+   * An issue reports to two kinds of holder — its parent, and the milestone it is a
+   * member of — and those holders report to theirs. The walk first collects that whole
+   * upward closure (breadth-first, cycle-proof, bounded), then derives it nearest-first,
+   * PASS AFTER PASS until a pass writes nothing. One pass is not enough once milestones
+   * are in the graph: an epic can hold both a task's epic and a milestone that holds the
+   * task, so the epic is reached before the milestone it reads has moved. Repeating the
+   * pass is what makes the result independent of the order the closure was found in.
+   *
+   * `start` ids are derived themselves only when they are in `selfDerive` (the milestones
+   * a membership edit names); the issue that transitioned is the cause, never re-derived.
+   */
+  private deriveHolders(
+    start: readonly string[],
+    trigger: string,
+    actor: string | null,
+    selfDerive: ReadonlySet<string>,
+  ): void {
     const now = this.journal.mutationAt();
-    const seen = new Set<string>([child.id]);
-    let cursor = child.parent_id;
-    let hops = 0;
-    while (cursor && hops < MAX_TREE_DEPTH && !seen.has(cursor)) {
-      seen.add(cursor);
-      const ancestor = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(cursor) as unknown as
-        | IssueRow
-        | undefined;
-      if (!ancestor) break;
-      this.deriveOneAncestor(ancestor, child.identifier, actor, now);
-      cursor = ancestor.parent_id;
-      hops += 1;
+    const order: string[] = [];
+    const reached = new Set<string>(start);
+    const holdersOf = this.db.prepare(
+      `SELECT parent_id AS id FROM issues WHERE id = ? AND parent_id IS NOT NULL
+        UNION ALL
+       SELECT milestone_id AS id FROM milestone_members WHERE issue_id = ?`,
+    );
+    let frontier = [...start];
+    for (let depth = 0; frontier.length > 0 && depth < MAX_TREE_DEPTH; depth += 1) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        for (const { id: holder } of holdersOf.all(id, id) as Array<{ id: string }>) {
+          if (reached.has(holder)) continue;
+          reached.add(holder);
+          order.push(holder);
+          next.push(holder);
+        }
+      }
+      frontier = next;
     }
+    const derived = [...start.filter((id) => selfDerive.has(id)), ...order];
+    const read = this.db.prepare("SELECT * FROM issues WHERE id = ?");
+    for (let pass = 0; pass <= derived.length; pass += 1) {
+      let wrote = false;
+      for (const id of derived) {
+        const row = read.get(id) as unknown as IssueRow | undefined;
+        if (!row) continue;
+        const mayClose = !selfDerive.has(id);
+        if (this.deriveOneAncestor(row, trigger, actor, now, { mayClose })) wrote = true;
+      }
+      if (!wrote) break;
+    }
+  }
+
+  /**
+   * What a parent's status is derived from: its children, and for a milestone its
+   * members as well. A member is counted once even when it is also a child.
+   */
+  private derivationInputs(ancestor: Pick<IssueRow, "id" | "kind">): string[] {
+    return this.derivationInputRows(ancestor).map((row) => row.status);
+  }
+
+  private derivationInputRows(
+    ancestor: Pick<IssueRow, "id" | "kind">,
+  ): Array<{ id: string; identifier: string; status: string; title: string }> {
+    const rows =
+      ancestor.kind === MILESTONE_KIND
+        ? this.db
+            .prepare(
+              `SELECT id, identifier, status, title FROM issues
+                WHERE parent_id = ?
+                   OR id IN (SELECT issue_id FROM milestone_members WHERE milestone_id = ?)
+                ORDER BY created_at`,
+            )
+            .all(ancestor.id, ancestor.id)
+        : this.db
+            .prepare("SELECT id, identifier, status, title FROM issues WHERE parent_id = ?")
+            .all(ancestor.id);
+    const typed = rows as Array<{ id: string; identifier: string; status: string; title: string }>;
+    if (ancestor.kind !== MILESTONE_KIND) return typed;
+    /**
+     * A milestone filed under an issue it also holds does not read that issue. The
+     * ancestor already reads the milestone as its child, so reading it back would make
+     * the two a loop that keeps each other `active` after the work under them landed.
+     */
+    const above = new Set<string>();
+    let cursor = (this.db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(ancestor.id) as
+      | { parent_id: string | null }
+      | undefined)?.parent_id ?? null;
+    for (let depth = 0; cursor !== null && depth < MAX_TREE_DEPTH && !above.has(cursor); depth += 1) {
+      above.add(cursor);
+      cursor = (this.db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(cursor) as
+        | { parent_id: string | null }
+        | undefined)?.parent_id ?? null;
+    }
+    return above.size === 0 ? typed : typed.filter((row) => !above.has(row.id));
   }
 
   /** One rung of the walk: decide, check permission, CAS, and log. */
@@ -3086,7 +3187,8 @@ export class WorkspaceStore {
     trigger: string,
     actor: string | null,
     now: string,
-  ): void {
+    options: { mayClose?: boolean } = {},
+  ): boolean {
     /**
      * A PARKED parent is immune, in both directions (STA-143).
      *
@@ -3106,15 +3208,10 @@ export class WorkspaceStore {
      * log happens to hold, and a rule nobody can see is a rule that gets
      * refactored away.
      */
-    if (this.categoryOf(ancestor.status) === "gated") return;
+    if (this.categoryOf(ancestor.status) === "gated") return false;
 
-    const childStatuses = (
-      this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(ancestor.id) as Array<{
-        status: string;
-      }>
-    ).map((row) => row.status);
-    const target = this.deriveStatusFromChildren(childStatuses);
-    if (target === null) return; // rung 0: no children, so nothing to report
+    const target = this.deriveStatusFromChildren(this.derivationInputs(ancestor));
+    if (target === null) return false; // rung 0: no children, so nothing to report
 
     /**
      * AN OPEN GATE OUTRANKS THE CLOSING RUNGS (STA-143 x STA-153).
@@ -3138,7 +3235,9 @@ export class WorkspaceStore {
      * with changes requested still reports that work has restarted underneath —
      * that is a report, and reports are what derivation is for.
      */
-    if ((target === "done" || target === "cancelled") && isActiveGate(ancestor.gate_state)) return;
+    if ((target === "done" || target === "cancelled") && isActiveGate(ancestor.gate_state)) return false;
+    // A membership edit reports, it never closes: see `rederiveMilestones`.
+    if ((target === "done" || target === "cancelled") && options.mayClose === false) return false;
 
     /**
      * Everything below is stated in CATEGORIES (STA-140). The band, the
@@ -3152,7 +3251,7 @@ export class WorkspaceStore {
       ancestorCategory !== null && WORKABLE_CATEGORIES.includes(ancestorCategory);
 
     // The workable band is satisfied by either of its members.
-    if (target === "workable" && inPreWorkBand) return;
+    if (target === "workable" && inPreWorkBand) return false;
     /**
      * Entering the band writes the UNSTARTED status, never the READY one, and
      * that is the same decision as before under a different name: `ready` means
@@ -3161,10 +3260,10 @@ export class WorkspaceStore {
      * agent's queue with rows nobody should claim.
      */
     const next = this.primaryStatusFor(target === "workable" ? "unstarted" : target);
-    if (next === ancestor.status) return;
+    if (next === ancestor.status) return false;
 
     // Reversibility law: outside the pre-work band, only what derivation set.
-    if (!inPreWorkBand && !this.isDerivationOwned(ancestor)) return;
+    if (!inPreWorkBand && !this.isDerivationOwned(ancestor)) return false;
 
     /**
      * `started_at` is stamped once and never rewound, so an epic that lights up,
@@ -3230,7 +3329,7 @@ export class WorkspaceStore {
       .get(...(Object.values(columns) as never[]), ancestor.id, ancestor.status) as unknown as
       | IssueRow
       | undefined;
-    if (!written) return;
+    if (!written) return false;
 
     /**
      * Reuses `status_changed` rather than minting a kind, for a concrete reason:
@@ -3308,6 +3407,7 @@ export class WorkspaceStore {
      * `recomputeAncestorStatuses` is what climbs, and it is bounded.
      */
     if (this.isResolvedStatus(next)) this.afterResolution(written);
+    return true;
   }
 
   /**
@@ -3319,36 +3419,42 @@ export class WorkspaceStore {
     for (const dependent of this.dependentsOf(row.id)) {
       this.maybeEmitBlockersResolved(dependent);
     }
-    if (row.parent_id) {
-      const siblings = this.db
-        .prepare("SELECT id, identifier, status, title FROM issues WHERE parent_id = ?")
-        .all(row.parent_id) as Array<{ id: string; identifier: string; status: string; title: string }>;
-      const open = siblings.filter(
-        (s) => !this.isResolvedStatus(s.status),
-      );
-      if (open.length === 0 && siblings.length > 0) {
-        const parent = this.db
-          .prepare("SELECT * FROM issues WHERE id = ?")
-          .get(row.parent_id) as unknown as IssueRow | undefined;
-        if (parent && !this.isResolvedStatus(parent.status)) {
-          this.emitEvent({
-            kind: "children_complete",
-            issueId: parent.id,
-            payload: {
-              identifier: parent.identifier,
-              assignee: parent.assignee,
-              children: siblings.map((s) => ({
-                identifier: s.identifier,
-                title: s.title,
-                status: s.status,
-              })),
-            },
-            dedupKey: childrenCompleteDedupKey(
-              parent.id,
-              siblings.map((s) => s.id),
-            ),
-          });
-        }
+    /**
+     * The completion wake goes to every holder the row reports to: its parent, and the
+     * milestone it is a member of, whose inputs are its children and its members.
+     */
+    const holders = this.db
+      .prepare(
+        `SELECT id FROM issues WHERE id = ?
+          UNION
+         SELECT milestone_id AS id FROM milestone_members WHERE issue_id = ?`,
+      )
+      .all(row.parent_id ?? "", row.id) as Array<{ id: string }>;
+    for (const { id: holderId } of holders) {
+      const parent = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(holderId) as unknown as
+        | IssueRow
+        | undefined;
+      if (!parent) continue;
+      const siblings = this.derivationInputRows(parent);
+      const open = siblings.filter((s) => !this.isResolvedStatus(s.status));
+      if (open.length === 0 && siblings.length > 0 && !this.isResolvedStatus(parent.status)) {
+        this.emitEvent({
+          kind: "children_complete",
+          issueId: parent.id,
+          payload: {
+            identifier: parent.identifier,
+            assignee: parent.assignee,
+            children: siblings.map((s) => ({
+              identifier: s.identifier,
+              title: s.title,
+              status: s.status,
+            })),
+          },
+          dedupKey: childrenCompleteDedupKey(
+            parent.id,
+            siblings.map((s) => s.id),
+          ),
+        });
       }
     }
   }
@@ -3903,12 +4009,7 @@ export class WorkspaceStore {
           .run(now, ...(descendants as never[]));
       }
 
-      const childStatuses = (
-        this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(row.id) as Array<{
-          status: string;
-        }>
-      ).map((r) => r.status);
-      const derived = this.deriveStatusFromChildren(childStatuses);
+      const derived = this.deriveStatusFromChildren(this.derivationInputs(row));
       /**
        * WHERE AN APPROVED PARENT LANDS.
        *
