@@ -39,6 +39,12 @@ export const USAGE_RESET_TOLERANCE_PERCENT = 1;
  * it within ten minutes instead of hiding real usage until the window resets.
  */
 export const POLL_FRESH_SECONDS = 600;
+/**
+ * How far after a read's `now` a poll's `observedAt` may be and still govern: this machine's
+ * clock can step back (a sync correction), and a poll stamped in the future would otherwise
+ * contradict every status-line reading after it until the window ends.
+ */
+export const POLL_CLOCK_SKEW_SECONDS = 60;
 
 /**
  * What a read knows about live polling right now, which decides whether a passive reading
@@ -547,43 +553,64 @@ export class BudgetStore {
    * Every sample stays exactly as stored; a window with no authoritative reading counts
    * every sample.
    */
-  counting(windowId: string, upTo?: string, governance: PollGovernance = this.governance, incoming?: BudgetSample): Map<string, SampleCounting> {
-    const stored = this.listSamples({ windowId }).filter((sample) => upTo === undefined || sample.observedAt <= upTo);
+  counting(
+    windowId: string,
+    upTo?: string,
+    governance: PollGovernance = this.governance,
+    incoming?: BudgetSample,
+    listed: readonly BudgetSample[] = this.listSamples({ windowId }),
+  ): Map<string, SampleCounting> {
+    const stored = listed.filter((sample) => upTo === undefined || sample.observedAt <= upTo);
     const all = incoming === undefined ? stored : [...stored, incoming];
-    const polls = all.filter((sample) => AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) && sample.usedPercent !== null);
+    // A poll stamped after `now` (beyond a small skew) comes from a clock that has since
+    // stepped back: it governs nothing, or it would contradict every later reading for good.
+    const horizon = Date.parse(governance.now) + POLL_CLOCK_SKEW_SECONDS * 1000;
+    const polls = all
+      .filter((sample) => AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) && sample.usedPercent !== null && Date.parse(sample.observedAt) <= horizon)
+      .sort((a, b) => (a.observedAt < b.observedAt ? -1 : a.observedAt > b.observedAt ? 1 : 0));
     const verdicts = new Map<string, SampleCounting>();
     const counts: SampleCounting = { counted: true, contradictedBy: null };
     const latest = polls[polls.length - 1];
     const first = polls[0];
-    for (const sample of all) {
-      if (latest === undefined || first === undefined || AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) || sample.usedPercent === null) {
+    if (latest === undefined || first === undefined) {
+      for (const sample of all) verdicts.set(sample.id, counts);
+      return verdicts;
+    }
+    // One pass: the highest poll from each index on, and a cursor to the first poll after
+    // each sample (samples come in `observedAt` order), so the rule is linear in the window.
+    const suffixMax = new Array<number>(polls.length);
+    for (let i = polls.length - 1; i >= 0; i -= 1) suffixMax[i] = Math.max(polls[i]!.usedPercent!, i + 1 < polls.length ? suffixMax[i + 1]! : Number.NEGATIVE_INFINITY);
+    const fresh = governance.livePolling && Date.parse(governance.now) - Date.parse(latest.observedAt) <= POLL_FRESH_SECONDS * 1000;
+    const ordered = [...all].sort((a, b) => (a.observedAt < b.observedAt ? -1 : a.observedAt > b.observedAt ? 1 : 0));
+    let cursor = 0;
+    for (const sample of ordered) {
+      while (cursor < polls.length && polls[cursor]!.observedAt <= sample.observedAt) cursor += 1;
+      if (AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) || sample.usedPercent === null) {
         verdicts.set(sample.id, counts);
         continue;
       }
-      const floor = sample.usedPercent - USAGE_RESET_TOLERANCE_PERCENT;
-      const later = polls.filter((poll) => poll.observedAt > sample.observedAt);
-      if (later.length === 0) {
-        const fresh = governance.livePolling && Date.parse(governance.now) - Date.parse(latest.observedAt) <= POLL_FRESH_SECONDS * 1000;
+      const later = polls.length - cursor;
+      if (later === 0) {
         const above = sample.usedPercent > latest.usedPercent! + USAGE_RESET_TOLERANCE_PERCENT;
         verdicts.set(sample.id, above && fresh ? { counted: false, contradictedBy: null } : counts);
         continue;
       }
-      if (later.some((poll) => poll.usedPercent! >= floor)) {
+      if (suffixMax[cursor]! >= sample.usedPercent - USAGE_RESET_TOLERANCE_PERCENT) {
         verdicts.set(sample.id, counts);
         continue;
       }
       const needed = sample.observedAt < first.observedAt ? 2 : 1;
-      verdicts.set(sample.id, later.length >= needed ? { counted: false, contradictedBy: later[needed - 1]!.id } : counts);
+      verdicts.set(sample.id, later >= needed ? { counted: false, contradictedBy: polls[cursor + needed - 1]!.id } : counts);
     }
     return verdicts;
   }
 
   private countedSamples(windowId: string, upTo?: string, governance: PollGovernance = this.governance, incoming?: BudgetSample): BudgetSample[] {
-    const verdicts = this.counting(windowId, upTo, governance, incoming);
-    return this.listSamples({ windowId })
-      .filter((sample) => upTo === undefined || sample.observedAt <= upTo)
-      .filter((sample) => verdicts.get(sample.id)?.counted !== false);
+    const listed = this.listSamples({ windowId });
+    const verdicts = this.counting(windowId, upTo, governance, incoming, listed);
+    return listed.filter((sample) => (upTo === undefined || sample.observedAt <= upTo) && verdicts.get(sample.id)?.counted !== false);
   }
+
 
   /**
    * The window instance a reading joins: same provider, account and limit, with a reset
@@ -803,12 +830,12 @@ export class BudgetStore {
    * conservative reading for a budget, with the count of readings that fell below it.
    * Undefined for a sliding window (no reset, so no instance to take the maximum over).
    */
-  windowHighWater(windowId: string): WindowHighWater | null {
+  windowHighWater(windowId: string, counted?: readonly WindowSampleView[]): WindowHighWater | null {
     const window = this.db.prepare("SELECT resets_at FROM limit_windows WHERE id = ?").get(windowId) as
       | { resets_at: string | null }
       | undefined;
     if (window === undefined) return null;
-    const samples = this.samplesInWindow(windowId);
+    const samples = counted ?? this.samplesInWindow(windowId);
     const missing: Missing = {};
     if (window.resets_at === null) {
       missing.highWaterPercent = "sliding_window";

@@ -720,6 +720,12 @@ Otherwise:
     older than that (every poll failing, the agent unloaded), it counts at
     once, as it would with no poll at all, so a stopped poller never hides
     real usage.
+  - A poll stamped more than 60 s after the read's instant (this machine's
+    clock has since stepped back) governs nothing until its stamp is within a
+    minute of now: it neither contradicts nor holds back a reading.
+  - Every read and preview applies the same rule at its own instant: Usage,
+    `staple budget`, history, forecasts and the `forget` preview's before and
+    after.
   - A window with no poll counts every reading, as before. Every reading stays
     exactly as stored. `staple budget history` (and `list_budget_samples`)
     marks each with `counted` and, when a poll overruled it, `contradictedBy`
