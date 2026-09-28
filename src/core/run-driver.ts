@@ -29,6 +29,7 @@
  *   past --ticket-timeout    failed, `timed out after …`
  *   non-zero exit            failed, `session exited N`
  *   exit 0, still held       failed: the session ended without handing the ticket on
+ *   exit 0, no review        failed, `no_review`: the brief's review comment is missing
  *   exit 0, handed on        nothing stated: the tracker reads the ended attempt or the
  *                            status (review or done is done) and records it
  *
@@ -56,6 +57,8 @@ export interface DriveProvider {
   args: readonly string[];
   /** Appended when `--model` is given. */
   modelArgs: readonly string[];
+  /** Appended only with `--full-access`: the CLI's own "ask nobody, allow everything" switch. */
+  fullAccessArgs: readonly string[];
   /** Variables the session must not inherit. */
   unsetEnv: readonly string[];
   /** One line for `run drive --help`. */
@@ -63,27 +66,32 @@ export interface DriveProvider {
 }
 
 /**
- * The built-in providers. Each runs one prompt to completion without asking anybody
- * anything: a headless session has nobody to answer a permission prompt, so each row
- * grants the permissions its CLI needs up front. Use `--agent custom --command` for
- * anything tighter.
+ * The built-in providers. Each runs one prompt to completion headless, and by default
+ * with NO permission flag of its own: a session gets exactly what that CLI is configured
+ * to allow (Claude Code's settings files, Codex's config.toml), the same as any session
+ * you would open there yourself. The driver never widens that on its own. A session that
+ * needs a permission it does not have ends without handing its ticket on, which is
+ * recorded failed, and two in a row stop the run. `--full-access` appends each row's
+ * `fullAccessArgs` for one run, when a person asks for it.
  */
 export const DRIVE_PROVIDERS: Readonly<Record<string, DriveProvider>> = {
   claude: {
     file: "claude",
-    args: ["-p", "{brief}", "--output-format", "json", "--permission-mode", "bypassPermissions", "--no-session-persistence"],
+    args: ["-p", "{brief}", "--output-format", "json", "--no-session-persistence"],
     modelArgs: ["--model", "{model}"],
+    fullAccessArgs: ["--permission-mode", "bypassPermissions"],
     // Set inside a Claude Code session; a nested headless session must start as its own.
     unsetEnv: ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"],
-    summary: "claude -p <brief> --output-format json --permission-mode bypassPermissions",
+    summary: "claude -p <brief> --output-format json (permissions: your Claude Code settings)",
   },
   codex: {
     file: "codex",
-    // workspace-write keeps .git read-only, so a session could not branch or commit.
-    args: ["exec", "--dangerously-bypass-approvals-and-sandbox", "--color", "never", "-C", "{workspace}", "{brief}"],
+    args: ["exec", "--color", "never", "-C", "{workspace}", "{brief}"],
     modelArgs: ["-m", "{model}"],
+    // Codex's workspace-write sandbox keeps .git read-only, so only full access can branch.
+    fullAccessArgs: ["--dangerously-bypass-approvals-and-sandbox"],
     unsetEnv: [],
-    summary: "codex exec --dangerously-bypass-approvals-and-sandbox -C <workspace> <brief>",
+    summary: "codex exec -C <workspace> <brief> (permissions: your Codex config)",
   },
 };
 
@@ -115,10 +123,18 @@ function substitute(template: string, values: PlaceholderValues, quote: (value: 
  * The command for one session: a provider row with its placeholders filled, or a custom
  * template run by `/bin/sh -c` with every value shell-quoted.
  */
-export function sessionCommand(agent: string, template: string | null, values: PlaceholderValues): SessionCommand {
+export function sessionCommand(
+  agent: string,
+  template: string | null,
+  values: PlaceholderValues,
+  options: { fullAccess?: boolean } = {},
+): SessionCommand {
   const briefShown = { ...values, brief: `$(cat ${shellQuote(values.brief_file)})` };
   if (agent === "custom") {
     if (template === null || template.trim() === "") throw new StapleError("validation", "--agent custom needs --command \"<template>\".");
+    if (options.fullAccess === true) {
+      throw new StapleError("validation", "--full-access applies to the built-in providers; a --command template states its own permissions.");
+    }
     const line = substitute(template, values, shellQuote);
     const shown = substitute(template, briefShown, (value) => (value === briefShown.brief ? `"${value}"` : shellQuote(value)));
     return { file: "/bin/sh", args: ["-c", line], display: shown, unsetEnv: [] };
@@ -128,7 +144,11 @@ export function sessionCommand(agent: string, template: string | null, values: P
     throw new StapleError("validation", `Unknown --agent "${agent}". Use ${[...Object.keys(DRIVE_PROVIDERS), "custom"].join(", ")}.`);
   }
   if (template !== null) throw new StapleError("validation", `--command applies to --agent custom only, not "${agent}".`);
-  const raw = [...provider.args, ...(values.model === "" ? [] : provider.modelArgs)];
+  const raw = [
+    ...provider.args,
+    ...(options.fullAccess === true ? provider.fullAccessArgs : []),
+    ...(values.model === "" ? [] : provider.modelArgs),
+  ];
   const args = raw.map((arg) => substitute(arg, values, (value) => value));
   const shown = raw.map((arg) => (arg === "{brief}" ? `"${briefShown.brief}"` : shellQuote(substitute(arg, values, (value) => value))));
   return { file: provider.file, args, display: [provider.file, ...shown].join(" "), unsetEnv: provider.unsetEnv };
@@ -161,6 +181,8 @@ export interface DriveOptions {
   agent: string;
   command: string | null;
   model: string | null;
+  /** Append each provider's full-access switch (`--full-access`); off by default. */
+  fullAccess: boolean;
   finish: DriveFinish;
   cwd: string;
   instructions: string | null;
@@ -261,12 +283,13 @@ export async function drive(options: DriveOptions): Promise<DriveResult> {
         log_dir: logDir,
       };
       writeFileSync(values.brief_file, values.brief);
-      const command = sessionCommand(options.agent, options.command, values);
+      const command = sessionCommand(options.agent, options.command, values, { fullAccess: options.fullAccess });
       const env: NodeJS.ProcessEnv = { ...options.env, STAPLE_AGENT: answer.run.actor, STAPLE_DB: dbFile, STAPLE_RUN: runId, STAPLE_RUN_TICKET: answer.ref };
       for (const name of command.unsetEnv) delete env[name];
 
+      const sessionStartedAt = nowIso();
       const result = await runSession(options, command, env, { stdout: `${stem}.stdout.log`, stderr: `${stem}.stderr.log`, ref: answer.ref, brief: values.brief_file }, beat);
-      stated = outcomeOf(store, answer.run.actor, answer.ref, result, options.ticketTimeoutMs);
+      stated = outcomeOf(store, answer.run.actor, answer.ref, result, options.ticketTimeoutMs, sessionStartedAt);
       options.report({
         event: "session_ended",
         ref: answer.ref,
@@ -291,7 +314,14 @@ export async function drive(options: DriveOptions): Promise<DriveResult> {
  * exited cleanly and the ticket left its hands: the tracker reads that off the attempt or
  * the status.
  */
-function outcomeOf(store: WorkspaceStore, actor: string, ref: string, result: SessionResult, timeoutMs: number | null): { outcome?: RunTicketOutcome; reason?: string } {
+function outcomeOf(
+  store: WorkspaceStore,
+  actor: string,
+  ref: string,
+  result: SessionResult,
+  timeoutMs: number | null,
+  sessionStartedAt: string,
+): { outcome?: RunTicketOutcome; reason?: string } {
   if (result.ended === "stopped") return { outcome: "failed", reason: `${result.stopReason ?? "stopped_by_human"}: the driver ended the session after ${result.seconds}s` };
   if (result.ended === "interrupted") return {};
   if (result.ended === "timeout") return { outcome: "failed", reason: `timed out: the session ran past ${Math.round((timeoutMs ?? 0) / 1000)}s and was ended` };
@@ -301,6 +331,18 @@ function outcomeOf(store: WorkspaceStore, actor: string, ref: string, result: Se
   const issue = store.getIssue(ref);
   if (issue.checkoutAgent === actor && store.isActiveStatus(issue.status)) {
     return { outcome: "failed", reason: `session exited 0 but left ${ref} ${issue.status} and still held` };
+  }
+  /**
+   * The brief's review step is the one part of it the tracker can check: a session that
+   * handed its ticket on without recording its review (`review: ...`) did not finish the
+   * job it was given, whatever state it left the ticket in. Green gates are not evidence.
+   */
+  const reviewed = store
+    .listComments(ref, 1000)
+    // Anyone's: the brief lets the session hand the review to a separate reviewer.
+    .some((comment) => comment.createdAt >= sessionStartedAt && /^\s*review:/i.test(comment.body));
+  if (!reviewed) {
+    return { outcome: "failed", reason: `no_review: the session handed ${ref} on without a "review: ..." comment` };
   }
   return {};
 }

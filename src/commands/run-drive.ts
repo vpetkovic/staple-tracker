@@ -43,6 +43,11 @@ prints the reason and exits 0. Non-zero only for a driver error.
                       ${PLACEHOLDERS.map((name) => `{${name}}`).join(" ")}
                       substituted shell-quoted
   --model M           the provider's model flag (e.g. haiku); {model} in a template
+  --full-access       give sessions the provider's allow-everything switch for
+                      this run (claude: --permission-mode bypassPermissions;
+                      codex: --dangerously-bypass-approvals-and-sandbox). Off by
+                      default: sessions get what the provider is configured to
+                      allow, as any session you open there would
   --finish F          where the brief tells a session to move its ticket:
                       in_review (default; a person closes it) or done
   --ticket-timeout D  end a session after D (90m, 2h); the ticket fails
@@ -60,7 +65,8 @@ from anywhere ends the session within one poll: its ticket is recorded failed
 (stopped_by_human) and released, and the driver exits. A pause lets the
 session finish and then waits. Outcome: exit 0 with the ticket moved on is
 read by the tracker (review or done counts as done); a non-zero exit, a
-timeout, or exit 0 with the ticket still held is failed, with the reason.
+timeout, exit 0 with the ticket still held, or a ticket handed on without
+its "review: ..." comment (no_review) is failed, with the reason.
 
 The driver lands nothing on master and runs no version control itself; the
 brief tells each session to leave its work on a branch (autopilot/<ref>, each
@@ -107,6 +113,7 @@ export function runDriveCommand(rest: string[]): void {
       agent: { type: "string" },
       command: { type: "string" },
       model: { type: "string" },
+      "full-access": { type: "boolean" },
       finish: { type: "string" },
       "ticket-timeout": { type: "string" },
       "retry-after": { type: "string" },
@@ -135,7 +142,8 @@ export function runDriveCommand(rest: string[]): void {
   const command = values.command ?? null;
   // Refuse a bad provider or template before a run is started or a ticket claimed.
   const probe = Object.fromEntries(PLACEHOLDERS.map((name) => [name, `{${name}}`])) as Parameters<typeof sessionCommand>[2];
-  sessionCommand(values.agent, command, probe);
+  const fullAccess = values["full-access"] === true;
+  sessionCommand(values.agent, command, probe, { fullAccess });
 
   const actor = values.actor ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";
   const opened = resolveWorkspace({ db: values.db, ws: values.ws });
@@ -180,6 +188,7 @@ export function runDriveCommand(rest: string[]): void {
           agent: values.agent!,
           command,
           model: values.model ?? null,
+          fullAccess,
           finish,
           cwd,
           instructions,
@@ -235,7 +244,7 @@ export function runDriveCommand(rest: string[]): void {
       actor: existing?.actor ?? actor,
       model: values.model ?? "",
       log_dir: logDir,
-    });
+    }, { fullAccess });
     const env = { STAPLE_AGENT: existing?.actor ?? actor, STAPLE_DB: dbFile, STAPLE_RUN: runId, STAPLE_RUN_TICKET: ref };
     if (json) {
       console.log(JSON.stringify({ dryRun: true, run: runId, next, cwd, env, unsetEnv: shown.unsetEnv, file: shown.file, args: shown.args, command: shown.display, briefFile, brief }));

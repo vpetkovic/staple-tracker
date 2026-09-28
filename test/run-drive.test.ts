@@ -156,6 +156,16 @@ describe("run drive outcomes", () => {
     expect(events.at(-1)).toMatchObject({ event: "stop", reason: "failure_streak" });
   }, 60_000);
 
+  it("a ticket handed on without its review comment is failed as no_review", async () => {
+    const { dir } = await workspace(["skips review"]);
+    const drove = await cli(dir, ["run", "drive", "--scope", "queue", ...fake("unreviewed"), "--max-tickets", "1", "--retry-after", "0", "--poll", "0.2", "--json"]);
+    expect(drove.status, drove.stderr).toBe(0);
+    const events = lines(drove.stdout);
+    const ended = events.filter((e) => e.event === "session_ended");
+    expect(ended[0]).toMatchObject({ outcome: "failed" });
+    expect(String(ended[0]!.reason)).toMatch(/^no_review: /);
+  }, 60_000);
+
   it("a session past --ticket-timeout is ended and failed", async () => {
     const { dir, refs } = await workspace(["hangs"]);
     const drove = await cli(dir, ["run", "drive", "--scope", "queue", ...fake("sleep"), "--ticket-timeout", "1s", "--poll", "0.2", "--json"]);
@@ -304,9 +314,9 @@ describe("run drive options", () => {
     expect(dry.status, dry.stderr).toBe(0);
     const shown = JSON.parse(dry.stdout) as Record<string, any>;
     expect(shown).toMatchObject({ dryRun: true, next: { ref: refs[0] }, file: "codex", cwd: dir });
-    expect(shown.args.slice(0, 6)).toEqual(["exec", "--dangerously-bypass-approvals-and-sandbox", "--color", "never", "-C", dir]);
+    expect(shown.args.slice(0, 5)).toEqual(["exec", "--color", "never", "-C", dir]);
     expect(shown.args.slice(-2)).toEqual(["-m", "gpt-5-mini"]);
-    expect(shown.args[6]).toBe(shown.brief);
+    expect(shown.args[5]).toBe(shown.brief);
     expect(shown.command).toContain(`"$(cat `);
     const runs = await cli(dir, ["run", "status", "--all", "--json"]);
     expect(JSON.parse(runs.stdout)).toEqual({ runs: [] });
@@ -346,8 +356,16 @@ describe("provider rows", () => {
   it("claude runs headless with the brief, JSON output and the model", () => {
     const command = sessionCommand("claude", null, values);
     expect(command.file).toBe("claude");
-    expect(command.args).toEqual(["-p", "the brief's text", "--output-format", "json", "--permission-mode", "bypassPermissions", "--no-session-persistence", "--model", "haiku"]);
+    expect(command.args).toEqual(["-p", "the brief's text", "--output-format", "json", "--no-session-persistence", "--model", "haiku"]);
     expect(command.unsetEnv).toContain("CLAUDECODE");
+  });
+
+  it("adds no permission flag unless --full-access asks for one", () => {
+    expect(sessionCommand("claude", null, values).args).not.toContain("--permission-mode");
+    expect(sessionCommand("codex", null, values).args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(sessionCommand("claude", null, values, { fullAccess: true }).args).toContain("bypassPermissions");
+    expect(sessionCommand("codex", null, values, { fullAccess: true }).args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(() => sessionCommand("custom", "run {ref}", values, { fullAccess: true })).toThrow(/--full-access applies to the built-in providers/);
   });
 
   it("a model flag is left out when no model is given", () => {

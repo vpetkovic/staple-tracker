@@ -2,8 +2,9 @@
  * A fake headless agent for `staple run drive` tests: `--agent custom --command
  * "node fake-agent.mjs <mode> {ref} {brief_file}"`. Never an LLM.
  *
- *   review  write <ref>.txt, print what the session was given, move the ticket to in_review
- *   done    the same, then close the ticket
+ *   review      write <ref>.txt, record its review, move the ticket to in_review
+ *   done        the same, then close the ticket
+ *   unreviewed  write <ref>.txt and move the ticket to in_review with NO review comment
  *   fail    exit 3
  *   idle    exit 0 and touch nothing (the ticket stays held)
  *   sleep   start a grandchild that sleeps, record both pids in <ref>.pids, never finish
@@ -26,12 +27,19 @@ console.log(
   }),
 );
 
-if (mode === "review" || mode === "done") {
-  writeFileSync(`${ref}.txt`, `${ref}\n`);
-  const verb = mode === "done" ? ["done", ref] : ["status", ref, "in_review"];
-  const moved = spawnSync(process.execPath, [join(root, "node_modules/tsx/dist/cli.mjs"), join(root, "src/cli.ts"), ...verb, "--json"], {
+const staple = (...args) =>
+  spawnSync(process.execPath, [join(root, "node_modules/tsx/dist/cli.mjs"), join(root, "src/cli.ts"), ...args, "--json"], {
     encoding: "utf8",
   });
+
+if (mode === "review" || mode === "done" || mode === "unreviewed") {
+  writeFileSync(`${ref}.txt`, `${ref}\n`);
+  if (mode !== "unreviewed") {
+    const reviewed = staple("comment", ref, `review: reproduced ${ref}.txt; nothing found`);
+    if (reviewed.status !== 0) process.stderr.write(reviewed.stderr);
+  }
+  const verb = mode === "done" ? ["done", ref] : ["status", ref, "in_review"];
+  const moved = staple(...verb);
   process.stderr.write(moved.stderr);
   process.exit(moved.status ?? 1);
 } else if (mode === "fail") {

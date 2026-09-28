@@ -215,17 +215,25 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
 
   | `--agent` | Session |
   |---|---|
-  | `claude` | `claude -p <brief> --output-format json --permission-mode bypassPermissions --no-session-persistence [--model M]` |
-  | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox --color never -C <workspace> <brief> [-m M]` |
+  | `claude` | `claude -p <brief> --output-format json --no-session-persistence [--model M]` |
+  | `codex` | `codex exec --color never -C <workspace> <brief> [-m M]` |
   | `custom` | `--command "<template>"`, run by `/bin/sh -c` |
 
   A template's placeholders, each substituted shell-quoted: `{ref}` `{title}`
   `{brief}` (the text) `{brief_file}` `{workspace}` `{db}` `{run}` `{actor}`
-  `{model}` (empty without `--model`) `{log_dir}`. A headless session has
-  nobody to answer a permission prompt, so the built-in rows grant what their
-  CLI needs up front; use `custom` for anything tighter. (Codex's
-  `--sandbox workspace-write` keeps `.git` read-only: a session under it can
-  neither branch nor commit, so it is not the default.)
+  `{model}` (empty without `--model`) `{log_dir}`.
+- **Permissions are the provider's own.** The built-in rows pass no permission
+  flag: a session gets exactly what that CLI is configured to allow — Claude
+  Code's settings files, Codex's `config.toml` — the same as a session you
+  would open there yourself. The driver never widens that by itself. A session
+  that needs something it is not allowed ends without handing its ticket on,
+  which is recorded `failed`, and two in a row stop the run. `--full-access`
+  appends each CLI's allow-everything switch for one run (claude
+  `--permission-mode bypassPermissions`, codex
+  `--dangerously-bypass-approvals-and-sandbox`); it is refused with
+  `--agent custom`, whose template states its own. (Codex's
+  `workspace-write` sandbox keeps `.git` read-only, so a Codex session can only
+  branch and commit under a config that allows it, or `--full-access`.)
 - **The session's world.** It runs in the workspace's directory (`--cwd` to
   change it), in its own process group, with `STAPLE_AGENT` (the run's actor:
   the take already claimed the ticket for it), `STAPLE_DB` (this workspace's
@@ -249,6 +257,7 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   |---|---|
   | exit 0, ticket moved on (review, done, gated) | nothing stated: the tracker reads the attempt or status (`done`) |
   | exit 0, ticket still held in an active status | `failed`, `session exited 0 but left … and still held` |
+  | exit 0, ticket moved on, no `review: …` comment since the session began | `failed`, `no_review: …` — the brief's review step is the one part of it the tracker checks |
   | non-zero exit or a signal | `failed`, `session exited N` |
   | past `--ticket-timeout` | `failed`, `timed out: …`; the process group is ended |
   | the run ended while it worked | `failed`, `stopped_by_human: …` (or the reason the run ended) |
