@@ -76,6 +76,7 @@ import { MILESTONE_KIND } from "./milestones.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
+import { RunStore } from "./run-store.js";
 /**
  * `scope.js`, NOT `status.js`. See the header of `cloud/scope.ts`: `status.ts`
  * statically imports `client.ts`, which owns the only outbound `fetch` in the
@@ -7170,6 +7171,15 @@ export class WorkspaceStore {
   /** The queue service over this store: the ordered plan and its revision. Built on first use. */
   queue(): QueueStore {
     return (this.queueStore ??= new QueueStore(this));
+  }
+
+  // ---------- autopilot runs (migration 015) ----------
+
+  private runStore: RunStore | null = null;
+
+  /** The run service over this store: runs, their tickets and the stop rules. Built on first use. */
+  runs(): RunStore {
+    return (this.runStore ??= new RunStore(this));
   }
 
   // ---------- projects (migration 009) ----------

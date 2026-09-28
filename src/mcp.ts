@@ -47,6 +47,7 @@ import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
+import { RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES } from "./core/run-store.js";
 import {
   COMMENT_AUTHOR_TYPES,
   COMMENT_PAGE_LIMITS,
@@ -228,7 +229,7 @@ const autoSync = new SurfaceAutoSync({
  * as on a disconnected one. And a failed tool fires nothing: `run()` reports
  * failure as `isError` rather than by throwing, so the check is on the value.
  */
-const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample"]);
+const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "start_run", "stop_run"]);
 {
   type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown> };
   type ToolCallback = (...args: unknown[]) => unknown;
@@ -300,8 +301,9 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample"]);
     config: ToolConfig,
     cb: ToolCallback,
   ) =>
-    // A machine-local write (budget samples in hub.db) names no issue and changes no
-    // workspace, so it gets neither the renumber flag nor a post-write sync.
+    // A machine-local write (budget samples in hub.db, autopilot runs) changes nothing that
+    // synchronizes and writes through no issue number, so it gets neither the renumber flag
+    // nor a post-write sync.
     config.annotations?.readOnlyHint === true || MACHINE_LOCAL_WRITES.has(name)
       ? direct(name, config, withNotices(cb))
       : direct(
@@ -2742,6 +2744,155 @@ server.registerTool(
   },
   ({ base_revision, all, actor, ws }) =>
     run(() => storeFor(ws).queue().mutate("prune", { baseRevision: base_revision, all }, requireActor(actor))),
+);
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * Autopilot runs (`src/core/run-store.ts`). Three tools over one `RunStore`, answering
+ * the objects `staple run start|status|stop --json` print. Runs are machine-local and
+ * never synchronized, so the two writes are in `MACHINE_LOCAL_WRITES`.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+const runScopeShape = z
+  .object({
+    kind: z.enum(["queue", "issue", "milestone"]),
+    issueId: z.string().optional(),
+    identifier: z.string().nullable().optional(),
+  })
+  .describe("queue, or the epic/parent (`issue`) or milestone the run works; identifier is resolved on every read");
+
+const runShape = {
+  id: z.string(),
+  actor: z.string(),
+  scope: runScopeShape,
+  state: z.enum(RUN_STATES).describe("active and paused are live; stopped and completed are ended"),
+  budget: z.object({
+    maxTickets: z.number().nullable(),
+    until: z.string().nullable(),
+    ceilingPercent: z.number().nullable(),
+    ceilingAccount: z.string().nullable(),
+  }),
+  tickets: z.array(
+    z.object({
+      seq: z.number(),
+      issueId: z.string(),
+      identifier: z.string(),
+      takenAt: z.string(),
+      outcome: z.enum(RUN_TICKET_OUTCOMES).nullable().describe("null while the ticket is being worked"),
+      reason: z.string().nullable(),
+      attemptId: z.string().nullable(),
+      recordedAt: z.string().nullable(),
+    }),
+  ),
+  counts: z.object({ taken: z.number(), done: z.number(), failed: z.number(), open: z.number() }),
+  stop: z
+    .object({
+      reason: z.enum(RUN_STOP_REASONS),
+      detail: z.record(z.string(), z.unknown()),
+      by: z.string().nullable().describe("Who stopped it; null when a stop rule did"),
+      note: z.string().nullable(),
+      at: z.string(),
+    })
+    .nullable(),
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  endedAt: z.string().nullable(),
+};
+
+const stopDecisionShape = z
+  .object({
+    stop: z.boolean(),
+    reason: z.enum(RUN_STOP_REASONS).optional(),
+    state: z.enum(["stopped", "completed"]).optional(),
+    detail: z.record(z.string(), z.unknown()).optional(),
+    message: z.string().optional(),
+  })
+  .describe("What the stop rules answer now: {stop:false}, or the first reason that trips, the state it ends the run in, its detail and a sentence");
+
+const runFactsShape = z
+  .object({
+    now: z.string(),
+    workable: z.array(z.object({ issueId: z.string(), identifier: z.string() })),
+    pendingGates: z.array(z.object({ issueId: z.string(), identifier: z.string(), owner: z.string().nullable() })),
+    personBlocks: z.array(z.object({ issueId: z.string(), identifier: z.string(), owner: z.string(), action: z.string().nullable() })),
+    ceiling: z
+      .object({ usedPercent: z.number().nullable(), accountRef: z.string().nullable(), limitKey: z.string().nullable(), missing: z.string().nullable() })
+      .nullable(),
+  })
+  .nullable()
+  .describe("The facts the decision was read from; null once the run has ended");
+
+const runStatusShape = { run: z.object(runShape), decision: stopDecisionShape, facts: runFactsShape };
+
+const runWriteAnnotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
+
+server.registerTool(
+  "start_run",
+  {
+    description:
+      "Start an autopilot run: you (actor) work a scope ticket after ticket until the tracker's stop rules say stop. scope is `queue` (the whole pickup queue) or the ref of an epic, a parent or a milestone; a leaf or a resolved issue is refused with validation. Optional budget: max_tickets, until (ISO instant with a zone, or a duration from now: 90m, 2h, 1d), ceiling_percent (stop once a current rate-limit window on this machine reaches that % used; ceiling_account narrows it to one account). One live run per actor per scope: a second start is refused with `conflict` whose detail.runId names the existing run. Runs are machine-local and never synchronized. Same payload as `staple run start --json`.",
+    inputSchema: {
+      scope: z.string().describe("`queue`, or an epic / parent / milestone reference"),
+      max_tickets: z.number().optional(),
+      until: z.string().optional(),
+      ceiling_percent: z.number().optional(),
+      ceiling_account: z.string().optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: runShape,
+    annotations: { title: "Start run", ...runWriteAnnotations, idempotentHint: false },
+  },
+  ({ scope, max_tickets, until, ceiling_percent, ceiling_account, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .runs()
+        .start({ actor: requireActor(actor), scope, maxTickets: max_tickets, until, ceilingPercent: ceiling_percent, ceilingAccount: ceiling_account }),
+    ),
+);
+
+server.registerTool(
+  "run_status",
+  {
+    description:
+      "Autopilot runs and what the stop rules make of them now, without changing anything. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, budget (detail.budget tickets | time | ceiling), failure_streak (two failed tickets in a row), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue awaits approval, or nothing is workable and something in scope does), scope_empty (nothing left; the run ends completed). Same payload as `staple run status --json`.",
+    inputSchema: {
+      run_id: z.string().optional(),
+      all: z.boolean().optional().describe("Every run, any actor or state"),
+      actor: z.string().optional().describe("Whose live runs to list when run_id is absent; defaults to the server's STAPLE_AGENT"),
+      ws: wsSchema,
+    },
+    outputSchema: { runs: z.array(z.object(runStatusShape)) },
+    annotations: { title: "Run status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ run_id, all, actor, ws }) =>
+    run(() => {
+      const runs = storeFor(ws).runs();
+      if (run_id !== undefined) return { runs: [runs.status(run_id)] };
+      return { runs: runs.statuses({ actor: actor?.trim() || process.env.STAPLE_AGENT?.trim() || null, all: all === true }) };
+    }),
+);
+
+server.registerTool(
+  "stop_run",
+  {
+    description:
+      "Stop an autopilot run: it ends `stopped` with reason stopped_by_human, recording who (actor) and why (note). Without run_id, actor's one live run (refused naming them when there are several). Stopping a run that already ended changes nothing and returns it as it stands. Same payload as `staple run stop --json`.",
+    inputSchema: {
+      run_id: z.string().optional(),
+      note: z.string().optional().describe("Why the run was stopped"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: runShape,
+    annotations: { title: "Stop run", ...runWriteAnnotations, idempotentHint: true },
+  },
+  ({ run_id, note, actor, ws }) =>
+    run(() => {
+      const who = requireActor(actor);
+      const runs = storeFor(ws).runs();
+      return runs.stop(run_id ?? runs.liveRunOf(who).id, who, note ?? null);
+    }),
 );
 
 /**

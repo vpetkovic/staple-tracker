@@ -303,8 +303,9 @@ describe("tool inventory", () => {
   // write added set_estimate: 52 -> 53. The certified plan read added compare_plans: 53 -> 54.
   // The timing quality read added timing_quality: 54 -> 55. The calibration read added
   // calibration_cohorts: 55 -> 56. The forecast read added forecast: 56 -> 57. Removing
-  // wrong budget readings added forget_budget_samples: 57 -> 58.
-  it("exposes exactly these 58 tools with these annotations and output schemas", async () => {
+  // wrong budget readings added forget_budget_samples: 57 -> 58. Autopilot runs added
+  // start_run, run_status and stop_run: 58 -> 61.
+  it("exposes exactly these 61 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -811,6 +812,23 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      // Autopilot runs: start and stop write this machine's run record, status reads it.
+      // A second stop changes nothing, so stop is idempotent and start is not.
+      {
+        name: "start_run",
+        annotations: { title: "Start run", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "run_status",
+        annotations: { title: "Run status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "stop_run",
+        annotations: { title: "Stop run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
       /**
        * STA-71: the ONE cloud tool, and deliberately the only one.
        *
@@ -911,7 +929,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty-four read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-five read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -942,6 +960,8 @@ describe("tool inventory", () => {
       // nothing — `next_task` resolves the order, it does not claim anything.
       "list_queue",
       "next_task",
+      // Autopilot runs: reading a run and its stop decision ends nothing.
+      "run_status",
       // STA-71: reading whether this MACHINE has connected the repository is as
       // read-only as reading a task, and it makes no network request either.
       "cloud_status",
@@ -1732,6 +1752,11 @@ describe("tool response shapes (31/31)", () => {
       "move_queue_entry",
       "reorder_queue",
       "prune_queue",
+      // Autopilot runs: the three tools are pinned in test/run-surfaces.test.ts, against
+      // the CLI's `staple run ... --json` payloads from the same `RunStore`.
+      "start_run",
+      "run_status",
+      "stop_run",
       // STA-71: the cloud status projection is pinned in test/cloud-connect.test.ts
       // against the same `localCloudStatus` the CLI and HTTP surfaces render.
       //

@@ -205,6 +205,13 @@ const COMMANDS: ReadonlyArray<{
   },
   // `forecast <ref>`: the completion forecast and, apart, the budget forecast of the work.
   { name: "forecast", strings: ["db", "ws", "reserve", "account", "model"], booleans: ["json", "help"], shorts: ["h"] },
+  // `run start|status|stop`: autopilot runs. `-m` is the stop note.
+  {
+    name: "run",
+    strings: ["db", "ws", "actor", "scope", "max-tickets", "until", "ceiling", "ceiling-account", "message"],
+    booleans: ["json", "help", "all"],
+    shorts: ["h", "m"],
+  },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -218,7 +225,7 @@ describe("command inventory", () => {
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
       "queue", "budget", "attempt", "attempts", "compare", "timing", "calibrate",
-      "forecast",
+      "forecast", "run",
     ]);
     // 32 tokens, 29 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
@@ -236,8 +243,9 @@ describe("command inventory", () => {
     // since execution attempts, missing here until the read surfaces) and `attempts`.
     // 36 with `estimate`, the explicit estimate write. 37 with `compare`, the
     // certified plan of named issues. 38 with `timing`, the timing quality read.
-    // 39 with `calibrate`, the calibration cohorts read. 40 with `forecast`.
-    expect(COMMAND_NAMES).toHaveLength(40);
+    // 39 with `calibrate`, the calibration cohorts read. 40 with `forecast`. 41 with
+    // `run`, autopilot runs.
+    expect(COMMAND_NAMES).toHaveLength(41);
   });
 
   it.each(COMMANDS.map((c) => c.name))(
@@ -500,6 +508,8 @@ describe("help surface", () => {
       // records them: a reader who has just learned what a milestone is meets
       // the thing that decides what comes out of one next.
       "The pickup queue",
+      // Autopilot runs work the queue, so they follow it.
+      "Autopilot runs",
       "Documents & events",
       "UI",
       // Provider budget telemetry is machine-level, like the UI: it sits after it.

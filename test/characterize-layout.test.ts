@@ -164,11 +164,11 @@ describe("a fresh repo-local `staple init`", () => {
       // STA-124's 005, to "7" by STA-172 (007-milestones), to "8" by STA-167
       // (008-queue-entries), to "9" by 009-projects, to "10" by
       // 010-sync-metadata, to "11" by 011-sync-field-writes, to "12" by
-      // 012-host-binding, to "13" by 013-execution-attempts and to "14" by
-      // 014-attempt-role; the TEXT typing
+      // 012-host-binding, to "13" by 013-execution-attempts, to "14" by
+      // 014-attempt-role and to "15" by 015-autopilot-runs; the TEXT typing
       // is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "14" },
+      { key: "schema_version", value: "15" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -211,6 +211,9 @@ describe("a fresh repo-local `staple init`", () => {
       "index:milestone_members_milestone_idx",
       "index:relations_blocked_idx",
       "index:relations_blocker_idx",
+      // 015-autopilot-runs: the one-live-run-per-actor-per-scope rule, and the run list's order.
+      "index:runs_live_scope_uq",
+      "index:runs_started_idx",
       // 013-execution-attempts: the two tables' `id` primary keys.
       "index:sqlite_autoindex_attempt_transitions_1",
       "index:sqlite_autoindex_attempts_1",
@@ -231,6 +234,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_queue_entries_1",
       "index:sqlite_autoindex_queue_entries_2",
       "index:sqlite_autoindex_relations_1",
+      "index:sqlite_autoindex_run_tickets_1",
+      "index:sqlite_autoindex_runs_1",
       // 010-sync-metadata: the primary keys of the eight local sync tables, plus
       // `sync_outbox`'s `UNIQUE (client_seq)`. `sync_state` is absent from this
       // group deliberately — its `id INTEGER PRIMARY KEY` is a rowid alias and
@@ -270,6 +275,9 @@ describe("a fresh repo-local `staple init`", () => {
       "table:projects",
       "table:queue_entries",
       "table:relations",
+      // 015-autopilot-runs: machine-local, never synchronized.
+      "table:run_tickets",
+      "table:runs",
       "table:sqlite_sequence",
       // 010-sync-metadata: this device's record of its relationship to a shared
       // log. Created empty by every `init` and read by nothing until a
@@ -460,9 +468,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 14 since 014-attempt-role. The hub beside it
+      // WORKSPACE_SCHEMA_VERSION — 15 since 015-autopilot-runs. The hub beside it
       // is still 2; the two databases version independently.
-      { key: "schema_version", value: "14" },
+      { key: "schema_version", value: "15" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

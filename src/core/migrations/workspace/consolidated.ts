@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -337,4 +337,41 @@ CREATE TABLE attempt_transitions (
       );
 
 CREATE INDEX attempt_transitions_attempt_idx ON attempt_transitions (attempt_id, at, id);
+
+CREATE TABLE runs (
+        id              TEXT PRIMARY KEY,
+        actor           TEXT NOT NULL,
+        scope_kind      TEXT NOT NULL,
+        scope_key       TEXT NOT NULL,
+        scope_issue_id  TEXT,
+        state           TEXT NOT NULL,
+        max_tickets     INTEGER,
+        until_at        TEXT,
+        ceiling_percent REAL,
+        ceiling_account TEXT,
+        stop_reason     TEXT,
+        stop_detail     TEXT NOT NULL DEFAULT '{}',
+        stopped_by      TEXT,
+        stop_note       TEXT,
+        started_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        ended_at        TEXT
+      );
+
+CREATE UNIQUE INDEX runs_live_scope_uq ON runs (actor, scope_key) WHERE state IN ('active', 'paused');
+
+CREATE INDEX runs_started_idx ON runs (started_at, id);
+
+CREATE TABLE run_tickets (
+        run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        seq         INTEGER NOT NULL,
+        issue_id    TEXT NOT NULL,
+        identifier  TEXT NOT NULL,
+        taken_at    TEXT NOT NULL,
+        outcome     TEXT,
+        reason      TEXT,
+        attempt_id  TEXT,
+        recorded_at TEXT,
+        PRIMARY KEY (run_id, seq)
+      );
 `;

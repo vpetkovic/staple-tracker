@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 24 &&
+    readOnly.length === 25 &&
       [
         "inbox",
         "list_tasks",
@@ -139,6 +139,8 @@ try {
         // nothing — next_task resolves the order, it never claims anything.
         "list_queue",
         "next_task",
+        // Autopilot runs: reading a run and its stop decision ends nothing.
+        "run_status",
         // S5 (STA-71) and S7 (STA-73): reading whether THIS machine is connected,
         // and reading what two devices disagree about, are both local reads. The
         // cloud one is emphatically so — it makes no request and cannot be made to.
@@ -158,7 +160,7 @@ try {
         // Nor a forecast of completion and budget.
         "forecast",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 24 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 25 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   // Removing budget readings takes rows out of hub.db: destructive, and not idempotent
@@ -862,7 +864,8 @@ try {
   // record_budget_sample, read this machine's hub and take no ws. set_estimate, the
   // explicit estimate write, makes 44, compare_plans, the certified plan read, 45, and
   // timing_quality, the cohort quality read, 46, calibration_cohorts, 47, and forecast, 48.
-  assert(wsTargetable.length === 48, `48 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51.
+  assert(wsTargetable.length === 51, `51 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&
@@ -1036,8 +1039,9 @@ try {
    * are READS. It is not an attribution there but a POINT OF VIEW — whose claims
    * count as somebody else's — so they are excluded here rather than added to
    * the write list, and the assertion below keeps saying what it always said.
+   * `run_status` is the same: its actor is whose live runs to list.
    */
-  const QUEUE_POINT_OF_VIEW_READS = ["list_queue", "next_task"];
+  const QUEUE_POINT_OF_VIEW_READS = ["list_queue", "next_task", "run_status"];
   const actorTools = anonTools.tools
     .filter((t: any) => t.inputSchema?.properties?.actor && !QUEUE_POINT_OF_VIEW_READS.includes(t.name))
     .map((t: any) => t.name)
@@ -1081,6 +1085,9 @@ try {
         "set_estimate",
         // STA-179: a setting write is attributed like one too.
         "set_setting",
+        // Autopilot runs: starting and stopping one is attributed; stop records who.
+        "start_run",
+        "stop_run",
         // STA-140: a vocabulary edit is a write and is attributed like one.
         "update_kinds",
         "update_milestone",

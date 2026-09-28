@@ -18,6 +18,7 @@ import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
+import { runRunCommand } from "./commands/run.js";
 import { runBudgetCommand } from "./commands/budget.js";
 import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
 import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
@@ -1040,6 +1041,15 @@ The pickup queue
               (see "staple settings"), an agent claiming a later row is refused
               out_of_order (exit 10) naming what to take; a human may step over the
               plan with "checkout <ref> --override -m <why>", which is recorded
+
+Autopilot runs
+  run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
+              one agent working the queue, an epic or parent, or a milestone,
+              ticket after ticket; one live run per actor per scope
+  run status [<run-id>] [--all]         a run and whether a stop rule trips now:
+              stopped_by_human, budget, failure_streak, vp_blocked, gate_pending,
+              scope_empty (staple run --help)
+  run stop [<run-id>] [-m why]          stop a run, recorded as stopped_by_human
 
 Documents & events
   doc <ref> <key>                       read (latest)
@@ -2520,6 +2530,12 @@ function main() {
      */
     case "queue": {
       runQueueCommand(rest);
+      break;
+    }
+
+    /** `staple run` — autopilot runs over the queue, an epic or a milestone (src/commands/run.ts). */
+    case "run": {
+      runRunCommand(rest);
       break;
     }
 

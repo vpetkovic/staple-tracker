@@ -15,6 +15,7 @@ import { migration as m011 } from "./011-sync-field-writes.js";
 import { migration as m012 } from "./012-host-binding.js";
 import { migration as m013 } from "./013-execution-attempts.js";
 import { migration as m014 } from "./014-lifecycle-capture.js";
+import { migration as m015 } from "./015-autopilot-runs.js";
 
 /**
  * The workspace database — the per-repo (or global) task store.
@@ -45,13 +46,14 @@ import { migration as m014 } from "./014-lifecycle-capture.js";
  * column on `sync_state` that only a home-resident workspace ever writes. 013
  * (execution attempts) follows: two new tables that replicate as protocol-3 entities, and
  * two nullable `sync_state` columns recording where the last pull reached the head. 014
- * (the lifecycle work) follows: the attempt's lane, and the events' cross-device order.
+ * (the lifecycle work) follows: the attempt's lane, and the events' cross-device order. 015
+ * (autopilot runs) follows: two machine-local tables no operation ever names.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",
   // `issues` has existed since version 1, so its absence means an empty file.
   sentinelTable: "issues",
-  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014],
+  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015],
   consolidated: CONSOLIDATED_DDL,
 };
 

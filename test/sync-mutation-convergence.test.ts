@@ -79,6 +79,10 @@ const READS: Record<StoreName, readonly string[]> = {
     "orchestrationSummary",
     // The certified plan reads (`planSummary` on show/get_task, `staple compare`).
     "planSummary", "comparePlans", "timingQuality", "calibration", "forecast",
+    // The autopilot run service. Its writes touch only `runs` and `run_tickets`, which are
+    // machine-local and never journaled (`run-store.ts`); `test/run-store.test.ts` pins
+    // that a run leaves no outbox row on a device that journals.
+    "runs",
   ],
   MilestoneStore: ["queueSeam", "get", "list", "milestoneOf", "effectiveMilestone"],
   QueueStore: ["revision", "entries", "effectiveQueue", "view"],
