@@ -32,6 +32,7 @@ import {
   getBudgetCollection,
   planBudgetCollection,
   setBudgetCapture,
+  setLivePolling,
   unbindBudgetSource,
 } from "@/lib/api";
 import type { BindingSourceFlag, KnownBinding, PlanStep } from "@/lib/telemetry-types";
@@ -52,6 +53,9 @@ import type { ShownPlan } from "./telemetry-flow";
 import {
   AUTOMATIC_COLLECTION_HELP,
   GLANCE_PILL,
+  LIVE_CHECKS_HELP,
+  LIVE_CHECKS_NOTE,
+  LIVE_PRIVACY_NOTE,
   PRIVACY_NOTE,
   SOURCE_WORDS,
   WHAT_THIS_MEANS,
@@ -117,6 +121,82 @@ function Account({ label }: { label: string }) {
   return <span className="whitespace-nowrap">“{label}”</span>;
 }
 
+// ---------------------------------------------------------------- live checks
+
+/**
+ * Live checks: on or off, what that means (a network consent, said before it is pressed), and
+ * per linked account its last check and, when it failed, why.
+ */
+function LiveChecksCard({ view, on, writeLocked, why }: { view: TelemetryView; on: TelemetryHandlers; writeLocked: boolean; why: string | undefined }) {
+  const { polling } = view.status;
+  const state = polling.active ? "on" : polling.livePolling ? "waiting" : "off";
+  return (
+    <PlainCard
+      title="Live checks"
+      data-testid="telemetry-live"
+      pill={<StatusPill status={state === "on" ? "on_track" : state === "waiting" ? "tight" : "unknown"} label={state === "on" ? "On" : state === "waiting" ? "Waiting" : "Off"} />}
+      headline={
+        state === "on"
+          ? "Every 5 minutes staple asks Claude and Codex how much of your plan is left."
+          : state === "waiting"
+            ? "Live checks are on, but usage tracking is off, so nothing is asked yet."
+            : "Off. New readings arrive only while Claude Code or Codex is running."
+      }
+      headlineTestId="telemetry-live-headline"
+      help={LIVE_CHECKS_HELP}
+    >
+      {polling.providers.length > 0 ? (
+        <ul className="divide-y" data-testid="telemetry-live-providers">
+          {polling.providers.map((provider) => (
+            <li key={`${provider.poller}:${provider.dir}`} data-live-provider={provider.poller} className="space-y-0.5 py-2 first:pt-0 last:pb-0">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className="text-[13px] font-medium">{provider.name}</span>
+                <span className="text-[12px] text-muted-foreground">
+                  account <Account label={provider.accountRef} /> · asks {provider.host}
+                </span>
+                <span className="ml-auto text-[12px] text-muted-foreground">
+                  {provider.lastAttemptAt === null ? "not checked yet" : `checked ${new Date(provider.lastAttemptAt).toLocaleString()}`}
+                </span>
+              </div>
+              {provider.failure !== null ? (
+                <p data-live-failure={provider.failure.code} className="flex items-start gap-1.5 text-[12px] leading-relaxed" style={{ color: "var(--plain-tight-fg)" }}>
+                  <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+                  {provider.failure.message}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[13px] text-muted-foreground">No Claude or Codex folder is linked yet, so there is nothing to check.</p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" variant="outline" disabled={writeLocked} title={why} onClick={on.onLiveAsk} data-action={polling.livePolling ? "live-off" : "live-on"}>
+          {polling.livePolling ? "Turn live checks off" : "Turn live checks on"}
+        </Button>
+      </div>
+      {view.liveConfirm ? (
+        <div role="group" aria-label="Confirm live checks" data-live-confirm className="space-y-2 rounded-lg border border-dashed px-3 py-2 text-[13px] leading-relaxed">
+          {polling.livePolling ? (
+            <p>Turn live checks off? staple stops asking Claude and Codex. Readings already saved are kept.</p>
+          ) : (
+            <p>Turn live checks on? {LIVE_CHECKS_NOTE}</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" disabled={writeLocked} onClick={() => void on.onLiveConfirm()} data-action="live-confirm">
+              <Spinner on={view.busy === "live"} />
+              {polling.livePolling ? "Yes, turn them off" : "Yes, turn them on"}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" disabled={view.busy !== null} onClick={on.onLiveCancel}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </PlainCard>
+  );
+}
+
 // ---------------------------------------------------------------- the panel
 
 export function TelemetryPanel({ view, on }: { view: TelemetryView; on: TelemetryHandlers }) {
@@ -149,7 +229,7 @@ export function TelemetryPanel({ view, on }: { view: TelemetryView; on: Telemetr
         help={WHAT_THIS_MEANS}
       >
         <p className="text-[12px] leading-relaxed text-muted-foreground" data-testid="telemetry-privacy">
-          {PRIVACY_NOTE}
+          {status.polling.active ? LIVE_PRIVACY_NOTE : PRIVACY_NOTE}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="outline" disabled={writeLocked} title={why} onClick={on.onCaptureAsk} data-action={status.budgetCapture ? "capture-off" : "capture-on"}>
@@ -198,6 +278,8 @@ export function TelemetryPanel({ view, on }: { view: TelemetryView; on: Telemetr
           </div>
         ) : null}
       </PlainCard>
+
+      <LiveChecksCard view={view} on={on} writeLocked={writeLocked} why={why} />
 
       <PlainCard
         title="Where readings come from"
@@ -586,6 +668,7 @@ export const PAGE_TELEMETRY_API: TelemetryApi = {
   apply: applyBudgetCollection,
   collect: collectBudgetNow,
   capture: setBudgetCapture,
+  live: setLivePolling,
   bind: bindBudgetSource,
   unbind: unbindBudgetSource,
   writeOrigins: async () => (await getBootstrap()).writeOrigins,
