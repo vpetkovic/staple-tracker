@@ -60,6 +60,7 @@ import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout
 import { PersonChip, RelativeTime } from "./parts";
 import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
 import { detailFacts } from "./properties";
+import { scrollAfterTabSwitch, tabPanelReserve } from "./tab-scroll";
 import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
 
 export function IssueDetailPanel({
@@ -664,6 +665,10 @@ function SummaryChips({
  * a desk it is an underlined strip; on the phone a scrollable segmented control that never
  * clips a label mid-word: the edges fade while there is more to scroll, and the active tab
  * is scrolled into view.
+ *
+ * Switching tabs never moves the strip (tab-scroll.ts): the panels reserve the scroller's
+ * height under it, so a loading or short tab cannot clamp the scroll to the top, and a strip
+ * that was stuck stays stuck with the new tab starting right under it.
  */
 function DetailTabs({
   detail,
@@ -677,18 +682,36 @@ function DetailTabs({
   onAuthError: (error: AuthError) => void;
 }) {
   const [tab, setTab] = useState("overview");
+  const stripRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const stickyRef = useRef<HTMLDivElement>(null);
+  const reserve = usePanelReserve(sentinelRef, stickyRef);
+  /** Where the scroll goes once the new tab has rendered, decided when it was chosen. */
+  const pendingScroll = useRef<number | null>(null);
+  const selectTab = useCallback((next: string) => {
+    const sentinel = sentinelRef.current;
+    const scroller = sentinel ? scrollerOf(sentinel) : null;
+    pendingScroll.current = sentinel && scroller ? scrollAfterTabSwitch(scroller.scrollTop, stickOffset(sentinel, scroller)) : null;
+    setTab(next);
+  }, []);
   /**
    * A tab asking to hand the reader to another tab (Details' worklog "Show all" lands on
    * Documents). This file subscribes to a verb and sets its own state; see
    * `onOpenDetailTab` in tabs/registry.ts for why it is an event and not a prop.
    */
-  useEffect(() => onOpenDetailTab(setTab), []);
+  useEffect(() => onOpenDetailTab(selectTab), [selectTab]);
   const tabs = visibleTabs(detail);
   const active = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "overview");
-  const stripRef = useRef<HTMLDivElement>(null);
   const edges = useScrollEdges(stripRef, tabs.length);
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const stuck = useStuck(sentinelRef);
+
+  // Before paint: a stuck strip stays stuck, and the new tab starts right under it.
+  useLayoutEffect(() => {
+    const target = pendingScroll.current;
+    pendingScroll.current = null;
+    const scroller = sentinelRef.current ? scrollerOf(sentinelRef.current) : null;
+    if (target !== null && scroller) scroller.scrollTop = target;
+  }, [active]);
 
   // Bring the active tab into view inside the strip, horizontally only: scrollIntoView
   // would also scroll the panel to the strip, which is not what choosing a tab means.
@@ -701,11 +724,12 @@ function DetailTabs({
   }, [active]);
 
   return (
-    <Tabs value={active} onValueChange={setTab} className={cn("gap-0", sheet ? "mt-5" : "mt-8")}>
+    <Tabs value={active} onValueChange={selectTab} className={cn("gap-0", sheet ? "mt-5" : "mt-8")}>
       {/* Zero-height marker just above the strip: once it scrolls out, the strip is stuck
           and content runs under it, so the strip grows a hairline to separate the two. */}
       <div ref={sentinelRef} aria-hidden className="h-0" />
       <div
+        ref={stickyRef}
         className={cn("sticky top-0 z-10 bg-card transition-[border-color,box-shadow] duration-150", sheet ? "-mx-4 border-b border-transparent px-4 py-2" : "border-b")}
         data-detail-tabs=""
         data-stuck={stuck ? "" : undefined}
@@ -724,16 +748,49 @@ function DetailTabs({
           </TabsList>
         </div>
       </div>
-      {tabs.map((definition) => {
-        const Tab = definition.component;
-        return (
-          <TabsContent key={definition.id} value={definition.id} className="pt-5">
-            <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} />
-          </TabsContent>
-        );
-      })}
+      <div data-detail-tabpanels="" style={reserve > 0 ? { minHeight: reserve } : undefined}>
+        {tabs.map((definition) => {
+          const Tab = definition.component;
+          return (
+            <TabsContent key={definition.id} value={definition.id} className="pt-5">
+              <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} />
+            </TabsContent>
+          );
+        })}
+      </div>
     </Tabs>
   );
+}
+
+/** The panel's one scroll container (see IssueDetailPanel). */
+function scrollerOf(element: HTMLElement): HTMLElement | null {
+  return element.closest<HTMLElement>(".staple-detail-scroll");
+}
+
+/** The scroller's scrollTop at which the strip just sticks: where its sentinel sits in the content. */
+function stickOffset(sentinel: HTMLElement, scroller: HTMLElement): number {
+  return scroller.scrollTop + sentinel.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+}
+
+/**
+ * The tab panels' minimum height: the scroller's height less the strip's, kept current as
+ * either resizes (a rotated phone, a resized window, the strip's padding on the sheet).
+ */
+function usePanelReserve(sentinel: RefObject<HTMLElement | null>, strip: RefObject<HTMLElement | null>): number {
+  const [reserve, setReserve] = useState(0);
+  useLayoutEffect(() => {
+    const scroller = sentinel.current ? scrollerOf(sentinel.current) : null;
+    const bar = strip.current;
+    if (!scroller || !bar) return;
+    const measure = () => setReserve(tabPanelReserve(scroller.clientHeight, bar.offsetHeight));
+    measure();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [sentinel, strip]);
+  return reserve;
 }
 
 /** Whether a horizontal scroller has more content before or after what is showing. */
