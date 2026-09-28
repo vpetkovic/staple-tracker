@@ -20,8 +20,9 @@ export type BudgetSourceKind = "claude_code_statusline" | "codex_rollout" | "ope
 /**
  * Sources whose reading is the provider's own account-wide figure at the instant it was
  * asked, not a cached re-read (the status line) or one session's view (a rollout): live
- * polling (`polling/`). Such a reading may correct a window's high-water mark
- * (`BudgetStore.record`, "An authoritative reading can correct the window").
+ * polling (`polling/`). Such readings govern the window they are in: they discount passive
+ * readings they contradict and, two in a row, close it (`BudgetStore`, docs
+ * "Window identity").
  */
 export const AUTHORITATIVE_SOURCE_KINDS: ReadonlySet<string> = new Set(["usage_poll"]);
 

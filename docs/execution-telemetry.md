@@ -703,19 +703,27 @@ Otherwise:
   current (a provider-side reset, a changed plan) opens a new instance and sets
   the old one's `supersededBy`, with reason `reset_moved`. Staple does not decide
   which reading was right. It keeps both.
-- A sample from an **authoritative source** (`usage_poll`: the provider's own
-  account-wide figure, asked for just now) that is **more than one point below
-  the window's high-water mark** (the highest `usedPercent` recorded in it up to
-  the sample's `observedAt`) does not join the window even though its reset
-  matches. The provider reset or refunded usage in place, so the sample opens a
-  new instance and the old one's `supersededBy` points at it, with reason
-  `usage_reset`, and high-water restarts from what the provider says. One point
-  absorbs rounding between sources (the status line reports tenths). A passive
-  reading never does this: a lower status-line or rollout figure is most often
-  an older cache ([Regressions within a window](#regressions-within-a-window)).
-  A stale status-line cache arriving after the correction joins the new
-  instance and can raise it again; the next poll, at most 5 minutes later,
-  corrects it again.
+- **While a window holds authoritative readings** (`usage_poll`: the
+  provider's own account-wide figure, asked for at `observedAt`), the provider
+  governs it:
+  - A **passive** reading (status line, rollout, typed) counts toward the
+    window's high-water mark, its pace and its burn only once a poll taken
+    after it confirms it (is no more than one point below it), or, taken after
+    the latest poll, while it is no more than one point above that poll. A
+    status line re-rendering an old cache after a reset, or a rollout line the
+    provider has since contradicted, is kept exactly as stored (history lists
+    it) and simply does not count. A window with no poll counts every reading,
+    as before. One point absorbs the rounding between sources.
+  - A poll **closes the window** (`usage_reset`: the provider reset or refunded
+    usage without moving `resetsAt`) only when it AND the window's previous
+    poll are both more than one point below the counted high-water mark. One
+    outlier answer (a transient 0, two backends a couple of points apart)
+    never closes a window. The reading opens the successor instance, which
+    the closed one's `supersededBy` points at. A reset that moves `resetsAt`
+    is `reset_moved`, above.
+  - A reading **taken before** the poll that opened a `usage_reset` successor
+    (a rollout scanned late, a status line observed before the reset) goes to
+    the closed instance, never to the successor.
 - A sample with **no `resetsAt`** (older Codex builds, below) joins no window. It
   is stored with `windowId: null` and reason `reset_not_reported`, is usable as
   historical evidence of usage and window length, and never feeds a current
@@ -980,9 +988,10 @@ pick the right one:
   visible.
 - High-water errs in one direction only. If a provider resets or refunds usage
   **without moving `resetsAt`**, high-water keeps reporting the old, higher
-  figure until the window ends, unless [live polling](#live-polling) is on: its
-  authoritative reading supersedes the window (`usage_reset`, [Window
-  identity](#window-identity)). The scheduler then under-admits, which is the
+  figure until the window ends, unless [live polling](#live-polling) is on: the
+  provider's own readings then govern the window, discount passive readings
+  they contradict, and close it (`usage_reset`) after two lower answers in a
+  row ([Window identity](#window-identity)). The scheduler then under-admits, which is the
   safe failure, and `regressionCount` makes it visible. A window instance that
   closes with a large regression is evidence for that case, and staple does not
   act on it silently.
@@ -1180,8 +1189,8 @@ usage instead, the same way Claude Code's `/usage` and Codex's `/status` do.
   every source, so Usage, forecasts and pressure read them unchanged. A window
   with nothing running (Claude: no `resets_at`; Codex: not started) stores
   nothing, like a passive source with no window, and the page says the
-  allowance is full rather than unknown. The authoritative reading can correct
-  a window's high-water mark ([Window identity](#window-identity)).
+  allowance is full rather than unknown. The provider's readings govern the
+  window they are in ([Window identity](#window-identity)).
 - **Honest failure.** A failed poll stores nothing, keeps its plain reason
   (`signed_out`, `expired`, `unsupported_login`, `rejected`, `rate_limited`,
   `timeout`, `network`, `provider_error`, `unexpected_response`, each with a

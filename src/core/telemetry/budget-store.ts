@@ -25,10 +25,11 @@ export const MIN_ID_PREFIX = 8;
 /** An unchanged reading is stored again, as a heartbeat, once the last one is this old. */
 export const HEARTBEAT_SECONDS = 300;
 /**
- * How far below a window's high-water mark an authoritative reading must be before it is
- * taken as the provider having reset the usage in place (`usage_reset`). One point absorbs
- * the rounding between sources (the status line reports tenths, the usage endpoint whole
- * or near-whole percents); anything more is not rounding.
+ * How far an authoritative reading may differ from another reading before it contradicts
+ * it: below a window's high-water mark (towards `usage_reset`), or below a passive reading
+ * (which then does not count). One point absorbs the rounding between sources (the status
+ * line reports tenths, the usage endpoint whole or near-whole percents); anything more is
+ * not rounding.
  */
 export const USAGE_RESET_TOLERANCE_PERCENT = 1;
 
@@ -346,12 +347,12 @@ export class BudgetStore {
     const skipped = (reason: SkipReason): SampleOutcome => ({ stored: false, reason, limitKey: reading.limitKey, observedAt: reading.observedAt });
 
     let joined = reading.resetsAt === null ? null : this.matchingWindow(provider, accountRef, reading.limitKey, reading.resetsAt);
-    // An authoritative reading can correct the window: the provider's own figure, asked for
-    // just now, below what the window already recorded means the usage was reset or refunded
-    // in place (the reset instant did not move). The window is closed as superseded
-    // (`usage_reset`) and the reading opens its successor, so the high-water mark restarts
-    // from what the provider says. A passive reading never does this: a lower status-line
-    // or rollout figure is most often an older cache, and high-water stays the safe answer.
+    // A reading taken before a window was closed for a usage reset belongs to the window it
+    // was taken in, not to the one that replaced it: a rollout scanned late, or a status line
+    // observed before the reset poll, never lands in (and never raises) the corrected window.
+    joined = joined === null ? null : this.windowAt(joined, reading.observedAt);
+    // Two authoritative readings in a row below the window's counted high-water mark close
+    // it (docs/execution-telemetry.md, "Window identity"): see {@link isUsageReset}.
     const corrected = joined !== null && this.isUsageReset(joined.id, reading) ? joined : null;
     if (corrected !== null) joined = null;
     const needsWindow = reading.resetsAt !== null && joined === null;
@@ -458,17 +459,66 @@ export class BudgetStore {
   }
 
   /**
-   * Whether an authoritative reading shows the window's usage was reset in place: its
-   * value is more than {@link USAGE_RESET_TOLERANCE_PERCENT} below the highest value the
-   * window recorded up to the reading's own instant.
+   * Whether an authoritative reading shows the window's usage was reset in place, and the
+   * window must be closed (`usage_reset`): this reading AND the previous authoritative
+   * reading of the window are both more than {@link USAGE_RESET_TOLERANCE_PERCENT} below the
+   * window's counted high-water mark up to this reading's instant. Two in a row, so one
+   * outlier answer (a transient 0, two backends a couple of points apart) never closes a
+   * window; a reset that moves the reset instant is the `reset_moved` rule's.
    */
   private isUsageReset(windowId: string, reading: BudgetReading): boolean {
     if (!AUTHORITATIVE_SOURCE_KINDS.has(reading.source.kind)) return false;
-    const row = this.db
-      .prepare("SELECT MAX(used_percent) AS high FROM budget_samples WHERE window_id = ? AND observed_at <= ?")
-      .get(windowId, reading.observedAt) as { high: number | null } | undefined;
-    const high = row?.high ?? null;
-    return high !== null && reading.usedPercent < high - USAGE_RESET_TOLERANCE_PERCENT;
+    const before = this.countedSamples(windowId, reading.observedAt).filter((sample) => sample.observedAt < reading.observedAt);
+    const known = before.flatMap((sample) => (sample.usedPercent === null ? [] : [sample.usedPercent]));
+    if (known.length === 0) return false;
+    const floor = Math.max(...known) - USAGE_RESET_TOLERANCE_PERCENT;
+    if (!(reading.usedPercent < floor)) return false;
+    const previous = this.listSamples({ windowId })
+      .filter((sample) => AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) && sample.observedAt < reading.observedAt && sample.usedPercent !== null)
+      .at(-1);
+    return previous !== undefined && previous.usedPercent! < floor;
+  }
+
+  /**
+   * The window a reading taken at `observedAt` belongs to: `window`, or, when `window`
+   * replaced a window closed for a usage reset after that instant, the closed one (and so
+   * on back through consecutive resets).
+   */
+  private windowAt(window: WindowRow, observedAt: string): WindowRow {
+    let current = window;
+    for (let depth = 0; depth < 64; depth += 1) {
+      if (current.first_sample_at === null || observedAt >= current.first_sample_at) return current;
+      const earlier = this.db.prepare(`${WINDOW_SELECT} WHERE w.superseded_by = ? AND w.superseded_reason = 'usage_reset'`).get(current.id) as unknown as
+        | WindowRow
+        | undefined;
+      if (earlier === undefined) return current;
+      current = earlier;
+    }
+    return current;
+  }
+
+  /**
+   * The samples of a window that COUNT, by `observedAt` (up to `upTo` when given). While a
+   * window holds authoritative readings (live polling), the provider's own figure governs:
+   * a passive reading (status line, rollout, typed) counts only once an authoritative
+   * reading taken after it confirms it (is no more than {@link USAGE_RESET_TOLERANCE_PERCENT}
+   * below it), or, taken after the latest authoritative reading, while it is no more than
+   * that above it. An older status-line cache re-rendered after a reset, or a rollout line
+   * the provider has since contradicted, is kept as stored and read as not counting: it can
+   * neither raise the high-water mark nor feed a pace. A window with no authoritative
+   * reading counts every sample, as before live polling.
+   */
+  private countedSamples(windowId: string, upTo?: string): BudgetSample[] {
+    const all = this.listSamples({ windowId }).filter((sample) => upTo === undefined || sample.observedAt <= upTo);
+    const polls = all.filter((sample) => AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) && sample.usedPercent !== null);
+    if (polls.length === 0) return all;
+    const latest = polls[polls.length - 1]!;
+    return all.filter((sample) => {
+      if (AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) || sample.usedPercent === null) return true;
+      const later = polls.filter((poll) => poll.observedAt > sample.observedAt);
+      if (later.length === 0) return sample.usedPercent <= latest.usedPercent! + USAGE_RESET_TOLERANCE_PERCENT;
+      return Math.max(...later.map((poll) => poll.usedPercent!)) >= sample.usedPercent - USAGE_RESET_TOLERANCE_PERCENT;
+    });
   }
 
   /**
@@ -680,13 +730,14 @@ export class BudgetStore {
   }
 
   /**
-   * A window's samples by `observedAt`, each marked `regression: true` when it reads
-   * below the highest earlier reading in the same window (Regressions within a window).
-   * Derived here and never stored: every sample stays exactly as reported.
+   * A window's samples that count ({@link countedSamples}) by `observedAt`, each marked
+   * `regression: true` when it reads below the highest earlier reading in the same window
+   * (Regressions within a window). Derived here and never stored: every sample stays
+   * exactly as reported, and one that does not count is still listed by `listSamples`.
    */
   samplesInWindow(windowId: string): WindowSampleView[] {
     let highWater = Number.NEGATIVE_INFINITY;
-    return this.listSamples({ windowId }).map((sample) => {
+    return this.countedSamples(windowId).map((sample) => {
       const used = sample.usedPercent;
       const regression = used !== null && used < highWater;
       if (used !== null && used > highWater) highWater = used;

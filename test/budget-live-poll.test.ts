@@ -515,7 +515,8 @@ describe("a poll run", () => {
 
 describe("an authoritative reading can correct the window", () => {
   const RESET = "2026-01-14T04:00:00.000Z";
-  const reading = (usedPercent: number, observedAt: string, kind: "usage_poll" | "claude_code_statusline", sessionRef: string | null = null): BudgetReading => ({
+  type Kind = "usage_poll" | "claude_code_statusline" | "codex_rollout";
+  const reading = (usedPercent: number, observedAt: string, kind: Kind, sessionRef: string | null = null): BudgetReading => ({
     limitKey: "seven_day",
     unit: "percent_of_limit",
     usedPercent,
@@ -528,60 +529,100 @@ describe("an authoritative reading can correct the window", () => {
     confidence: kind === "usage_poll" ? "medium" : "high",
     source: { kind, harnessVersion: null, field: "seven_day" },
     observedAt,
-    observedAtSource: kind === "usage_poll" ? "provider" : "capture",
-    sessionRef,
+    observedAtSource: "capture",
+    sessionRef: kind === "usage_poll" ? null : (sessionRef ?? "a1b2c3d4e5f60718"),
     missing: {},
   });
 
-  function record(r: BudgetReading) {
+  function withStore<T>(fn: (store: BudgetStore) => T): T {
     const hub = Hub.openAt(home);
     try {
-      return new BudgetStore(hub.db).record({ reading: r, provider: "anthropic", accountRef: "poll-claude", recordedAt: r.observedAt, attempt: { reason: "no_matching_attempt" } });
+      return fn(new BudgetStore(hub.db));
     } finally {
       hub.close();
     }
   }
 
-  function windows(): Array<{ id: string; supersededBy: string | null; supersededReason: string | null }> {
-    const hub = Hub.openAt(home);
-    try {
-      return new BudgetStore(hub.db).listWindows({ accountRef: "poll-claude", limitKey: "seven_day" }, at(3600)).map((w) => ({ id: w.id, supersededBy: w.supersededBy, supersededReason: w.supersededReason }));
-    } finally {
-      hub.close();
-    }
+  /** Record each step in the given order; answer the windows and the current window's high-water after each. */
+  function replay(steps: Array<[number, Kind, number, string?]>): Array<{ windows: number; resets: number; high: number | null }> {
+    return steps.map(([seconds, kind, used, session]) =>
+      withStore((store) => {
+        const r = reading(used, at(seconds), kind, session ?? null);
+        store.record({ reading: r, provider: "anthropic", accountRef: "poll-claude", recordedAt: r.observedAt, attempt: { reason: "no_matching_attempt" } });
+        const windows = store.listWindows({ accountRef: "poll-claude", limitKey: "seven_day" }, at(seconds));
+        const current = windows.find((w) => w.status === "current");
+        return {
+          windows: windows.length,
+          resets: windows.filter((w) => w.supersededReason === "usage_reset").length,
+          high: current === undefined ? null : store.windowHighWater(current.id)!.highWaterPercent,
+        };
+      }),
+    );
   }
 
-  const remaining = () => {
-    const hub = Hub.openAt(home);
-    try {
-      const store = new BudgetStore(hub.db);
-      const current = store.listWindows({ accountRef: "poll-claude", limitKey: "seven_day" }, at(3600)).find((w) => w.status === "current")!;
-      return store.windowHighWater(current.id)!.remainingPercent;
-    } finally {
-      hub.close();
-    }
-  };
-
-  it("supersedes the window (usage_reset) when a poll reads more than a point below its high-water mark, so the figure follows the provider", () => {
-    record(reading(35, T0, "claude_code_statusline", "a1b2c3d4e5f60718"));
-    expect(remaining()).toBe(65);
-    record(reading(2, at(3000), "usage_poll"));
-    const [first, second] = windows();
-    expect(first).toMatchObject({ supersededBy: second!.id, supersededReason: "usage_reset" });
-    expect(second).toMatchObject({ supersededBy: null });
-    expect(remaining()).toBe(98);
+  it("VP's case: an old 35% status line, then polls at 2%: one window, 98% left at the first poll, and it stays so across stray re-renders", () => {
+    const states = replay([
+      [0, "claude_code_statusline", 35],
+      [86_400, "usage_poll", 2],
+      [86_700, "usage_poll", 2],
+      [86_880, "claude_code_statusline", 35],
+      [87_000, "usage_poll", 2],
+      [87_480, "claude_code_statusline", 35],
+      [87_600, "usage_poll", 2],
+    ]);
+    expect(states[0]).toEqual({ windows: 1, resets: 0, high: 35 });
+    expect(states.slice(1)).toEqual(Array.from({ length: 6 }, () => ({ windows: 1, resets: 0, high: 2 })));
   });
 
-  it("joins the window when a poll is within a point of the high-water mark (rounding between sources)", () => {
-    record(reading(35.4, T0, "claude_code_statusline", "a1b2c3d4e5f60718"));
-    record(reading(35, at(600), "usage_poll"));
-    expect(windows()).toHaveLength(1);
+  it("a stale status line re-rendering its old cache after a real reset closes the window once, not over and over (case A)", () => {
+    const steps: Array<[number, Kind, number]> = [
+      [0, "claude_code_statusline", 80],
+      [60, "usage_poll", 80],
+      [300, "usage_poll", 5],
+    ];
+    for (let k = 1; k <= 4; k += 1) steps.push([300 + k * 600 - 290, "claude_code_statusline", 80], [300 + k * 600, "usage_poll", 5]);
+    const states = replay(steps);
+    // The first lower poll waits for a second (hysteresis); the second closes the window.
+    expect(states[2]).toEqual({ windows: 1, resets: 0, high: 80 });
+    expect(states[4]).toEqual({ windows: 2, resets: 1, high: 5 });
+    expect(states.at(-1)).toEqual({ windows: 2, resets: 1, high: 5 });
+    expect(states.slice(4).every((state) => state.high === 5 && state.resets === 1)).toBe(true);
   });
 
-  it("keeps the high-water mark for a lower PASSIVE reading: an older status-line cache is not evidence of a reset", () => {
-    record(reading(35, T0, "claude_code_statusline", "a1b2c3d4e5f60718"));
-    record(reading(2, at(600), "claude_code_statusline", "b1b2c3d4e5f60718"));
-    expect(windows()).toHaveLength(1);
-    expect(remaining()).toBe(65);
+  it("one outlier poll never closes a window: a transient 0 (case B) or two backends two points apart (case C)", () => {
+    expect(replay([[0, "usage_poll", 45], [300, "usage_poll", 0], [600, "usage_poll", 45], [900, "usage_poll", 46]]).at(-1)).toEqual({ windows: 1, resets: 0, high: 46 });
+  });
+
+  it("alternating 46/44 answers keep one window at 46", () => {
+    const states = replay([0, 300, 600, 900, 1200, 1500].map((seconds, i): [number, Kind, number] => [seconds, "usage_poll", i % 2 === 0 ? 46 : 44]));
+    expect(states.every((state) => state.windows === 1 && state.resets === 0 && state.high === 46)).toBe(true);
+  });
+
+  it("a passive reading taken before the reset poll but ingested after it never joins or raises the corrected window (case D)", () => {
+    const states = replay([
+      [0, "usage_poll", 50],
+      [600, "usage_poll", 10],
+      [300, "codex_rollout", 55],
+      [900, "usage_poll", 11],
+      [700, "codex_rollout", 56],
+      [1260, "usage_poll", 11],
+    ]);
+    expect(states.at(-1)).toEqual({ windows: 2, resets: 1, high: 11 });
+    const [closed, corrected] = withStore((store) => store.listWindows({ accountRef: "poll-claude", limitKey: "seven_day" }, at(1260)));
+    expect(withStore((store) => store.listSamples({ windowId: corrected!.id }).map((sample) => sample.usedPercent))).toEqual([11, 11]);
+    expect(withStore((store) => store.listSamples({ windowId: closed!.id }).map((sample) => sample.usedPercent))).toEqual([50, 55, 10, 56]);
+  });
+
+  it("a passive reading above the latest poll counts only once a later poll confirms it; genuine growth does", () => {
+    const states = replay([
+      [0, "usage_poll", 10],
+      [120, "claude_code_statusline", 15],
+      [300, "usage_poll", 15],
+    ]);
+    expect(states.map((state) => state.high)).toEqual([10, 10, 15]);
+  });
+
+  it("keeps the high-water mark for a lower PASSIVE reading in a window with no poll: an older cache is not evidence of a reset", () => {
+    expect(replay([[0, "claude_code_statusline", 35], [600, "claude_code_statusline", 2, "b1b2c3d4e5f60718"]]).at(-1)).toEqual({ windows: 1, resets: 0, high: 35 });
   });
 });
