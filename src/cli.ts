@@ -1647,6 +1647,7 @@ function main() {
           ...ATTEMPT_END_OPTIONS,
         },
       });
+      if (positionals.length < 2) throw new StapleError("validation", "usage: staple status <ref> <status>");
       const { store } = getStore(values);
       const target = positionals[1]! as IssueStatus;
       /**

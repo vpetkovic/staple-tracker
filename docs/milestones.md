@@ -169,6 +169,44 @@ depth"*.) (Pinned by
 and a member reopening reopens it"* and *"lands where its members say when a
 gate on it is approved"*.)
 
+A workspace upgraded from a build that did not derive milestones gets them
+re-derived once. On a workspace that has never synchronized and is not
+connected, the first mutating command the new build runs does it; a read never
+does. On any other workspace — connected, or one that has synchronized before,
+whose queued writes will go out on a later sync — the first sync whose pull
+reaches the head of the log does it, in that sync and after any reconcile a
+restore left owed, so it derives from the members every other device already
+holds and not from whatever this device last pulled. The rule is the journal's
+own test for a queue that will be sent: a write-time repair there would go out
+too, derived from members that may be stale by then.
+
+A known limitation follows: a workspace that synchronized and was then
+disconnected for good (or a copy of one) never runs the repair. Its milestones
+keep the status the older build left until a member moves, which re-derives
+them as usual; reconnecting and syncing runs the repair. A device that pulls another's repair
+first finds nothing left to move. The `meta` key `milestone_status_rederived`
+records that the repair has run. A repair that fails is logged and skipped for
+the rest of the process, and the command that ran it goes ahead.
+
+Every move is an ordinary derived `status_changed`, with the actor and the
+member of the input that moved last, and a journaled operation, so it syncs
+like any other derived move. The parent rules decide what it may write:
+
+- the pre-work band (`backlog`, `todo`) belongs to derivation, as on any
+  parent, so a milestone set there by hand is re-derived;
+- a status set by hand outside that band stays, and so does a gate, pending or
+  sent back;
+- a milestone whose members have all landed closes as `done`;
+- the repair never writes `cancelled`: a milestone whose members were all
+  cancelled keeps its status until a member moves.
+
+(Pinned by `store-milestones.test.ts` — *"an upgraded workspace re-derives
+every milestone once, at its first mutation"*, *"an upgrade's repair leaves a
+gate on the milestone as it stands, pending or sent back"*, *"an upgrade's
+repair never cancels a milestone whose members were all cancelled"* and *"an
+upgrade's repair that throws is logged and skipped, and the write that ran it
+lands"*; and by `cloud-milestone-rederive.test.ts`.)
+
 ## Dates: calendar days, UTC, inclusive
 
 A milestone date is a **calendar day**, written and stored as `YYYY-MM-DD`,

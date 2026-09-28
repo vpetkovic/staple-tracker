@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { EVENT_ORDER, insertEvent } from "./event-log.js";
 import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
+import { connectionPath } from "./cloud/connection.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
 import { type Journal, journalFor, resolveDeviceId } from "./journal.js";
@@ -307,6 +309,8 @@ interface IssueRow {
   cancelled_at: string | null;
   created_at: string;
   updated_at: string;
+  /** The status derivation last wrote here; NULL once anything else moved the row (migration 017). */
+  derived_status?: string | null;
 }
 
 function rowToIssue(row: IssueRow): Issue {
@@ -575,6 +579,66 @@ const DERIVED_MARKERS = {
   cancelled: "children_cancelled",
 } as const satisfies Record<DerivedRung, string>;
 
+/** The `meta` stamp that says every milestone has been re-derived from its members once. */
+const MILESTONE_REDERIVE_KEY = "milestone_status_rederived";
+
+/** Connections whose milestone repair threw in this process: not tried again until a restart. */
+const milestoneRepairFailed = new WeakSet<DatabaseSync>();
+
+/**
+ * The milestone repair a synchronized workspace owes, run by a sync once its pull has reached
+ * the head of the log (`sync.ts`): see `WorkspaceStore.rederiveEveryMilestone`.
+ */
+export function rederiveMilestonesAfterPull(db: DatabaseSync): number {
+  return new WorkspaceStore(db, "", "").rederiveEveryMilestone();
+}
+
+/** Set by migration 017 on a database it backfilled `derived_status` on. */
+const DERIVED_STATUS_PUBLISH_KEY = "derived_status_publish_owed";
+
+/**
+ * Send the service the `derived_status` migration 017 backfilled from this device's event log,
+ * once, after a pull reached the head (`sync.ts`). Written before the column existed, nothing
+ * in the log carries it, so without this a device that hydrates reads every derived parent as
+ * set by hand. After the pull, so a row another device has since moved by hand has already
+ * been cleared here and is not sent. Each is an ordinary `issue` update of that one field. One
+ * that lands after a person moved the row elsewhere is dropped by the applier, which takes a
+ * `derivedStatus` only when it is the status the row holds, and the schema's triggers would
+ * clear it besides: bookkeeping nobody made is never made a conflict for a person to settle.
+ * Two devices that backfilled the same row send the same value, which is no conflict.
+ * A failure is logged and left owed, never thrown: the sync that ran it is the user's.
+ */
+export function publishDerivedStatuses(db: DatabaseSync): number {
+  if (!db.prepare("SELECT 1 AS hit FROM meta WHERE key = ?").get(DERIVED_STATUS_PUBLISH_KEY)) return 0;
+  const journal = new WorkspaceStore(db, "", "").journal;
+  try {
+    return journal.run(() => {
+      const rows = db.prepare("SELECT id, status, derived_status FROM issues WHERE derived_status IS NOT NULL ORDER BY id").all() as Array<{
+        id: string;
+        status: string;
+        derived_status: string;
+      }>;
+      for (const row of rows) {
+        journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { derivedStatus: row.derived_status }, actor: null });
+      }
+      db.prepare("DELETE FROM meta WHERE key = ?").run(DERIVED_STATUS_PUBLISH_KEY);
+      return rows.length;
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`staple: could not send the derived statuses this upgrade backfilled (${detail}); the next sync tries again.`);
+    return 0;
+  }
+}
+
+/**
+ * Owe the milestone repair again. A join does this: a workspace that never synchronized repairs
+ * at its first write, and the milestones it then joins came from devices that may not have.
+ */
+export function owedMilestoneRederive(db: DatabaseSync): void {
+  db.prepare("DELETE FROM meta WHERE key = ?").run(MILESTONE_REDERIVE_KEY);
+}
+
 /**
  * What the ladder decided, as a CATEGORY-shaped verdict rather than a status id
  * (STA-140). `workable` is the two-member band {unstarted, ready}; the others
@@ -799,6 +863,12 @@ export class WorkspaceStore {
      * a read never writes to the journal and a refused mutation does not take it back.
      */
     if (this.attempts().mayOweOrphanEnds()) this.journal.run(() => this.attempts().writeOrphanEnds());
+    /**
+     * Likewise the one-shot milestone re-derivation an upgrade owes — on a workspace that does
+     * not synchronize. One that does runs it after a pull reaches the head (`sync.ts`): its own
+     * members may be stale until then, however recently it last reached the head.
+     */
+    if (!this.synchronizes()) this.rederiveEveryMilestone();
     this.attempts().forgetResult();
     try {
       return this.journal.run(fn);
@@ -2878,43 +2948,22 @@ export class WorkspaceStore {
    * Is this row's CURRENT status something derivation wrote, rather than
    * something a human or an agent asserted?
    *
-   * Read from the event log, not from a column — no schema change, and the
-   * answer stays correct for every row already in every database, because the
-   * log has carried `payload.derived` since STA-79.
+   * Read from the row: `derived_status` is the status derivation last wrote, and
+   * the schema clears it the moment anything else moves the status or the claim
+   * (migration 017). So it answers as the event log used to — a manual
+   * `status_changed`, a checkout, a release, a steal all make the row manual, and
+   * an agent checking an epic out makes it immune — but it replicates, where
+   * events do not: a device that hydrated from a snapshot or a join seed holds no
+   * events for what it pulled, and read every derived parent as set by hand.
    *
-   * Two conditions, both load-bearing:
-   *
-   *  - the NEWEST status-moving event is a `status_changed` carrying a `derived`
-   *    marker. Any other newest kind — a `checkout`, a `release`, a plain manual
-   *    `status_changed` — means somebody acted on this issue last, and their
-   *    statement outranks the derivation that preceded it. This is also what
-   *    makes a claim and a derivation structurally unable to fight: the instant
-   *    an agent checks an epic out, the epic becomes immune.
-   *  - that event's `to` must equal the row's actual status. If the log cannot
-   *    explain the row — a hand-edit, an import, a history written by another
-   *    tool — this returns false and the row is treated as MANUAL, so derivation
-   *    keeps its hands off. Declining beats guessing, the same instinct as
-   *    `reconstructIntervals`.
+   * The row as the caller read it must still be the row as it stands: a status
+   * the caller decided from that has moved since is not derivation's to change.
    */
   private isDerivationOwned(row: Pick<IssueRow, "id" | "status">): boolean {
-    const event = this.db
-      .prepare(
-        `SELECT kind, payload FROM events
-          WHERE issue_id = ?
-            AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")})
-          ORDER BY seq DESC LIMIT 1`,
-      )
-      .get(row.id, ...(STATUS_MOVING_EVENT_KINDS as readonly string[])) as
-      | { kind: string; payload: string }
+    const held = this.db.prepare("SELECT status, derived_status FROM issues WHERE id = ?").get(row.id) as
+      | { status: string; derived_status: string | null }
       | undefined;
-    if (!event || event.kind !== "status_changed") return false;
-    let payload: Record<string, unknown>;
-    try {
-      payload = JSON.parse(event.payload) as Record<string, unknown>;
-    } catch {
-      return false;
-    }
-    return typeof payload.derived === "string" && payload.to === row.status;
+    return held !== undefined && held.derived_status !== null && held.derived_status === row.status && held.status === row.status;
   }
 
   /**
@@ -3084,6 +3133,130 @@ export class WorkspaceStore {
   }
 
   /**
+   * True until this workspace has had its milestones brought up to the derivation that
+   * reads their members, and false for the rest of a process in which the repair failed.
+   *
+   * A build before it left every milestone at whatever status it was given by hand, and
+   * derivation only runs when something moves: a milestone whose members had all gone to
+   * review before the upgrade would keep reading `backlog` until one of them moved again.
+   * So the upgraded build re-derives every milestone once and stamps `meta` so it never runs
+   * again: at the first mutating command on a workspace that does not synchronize
+   * (`journaled`), and after the first pull that reaches the head on one that does
+   * (`sync.ts`), so it derives from what every other device already holds.
+   */
+  private owesMilestoneRederive(): boolean {
+    if (milestoneRepairFailed.has(this.db)) return false;
+    const done = this.db.prepare("SELECT 1 AS hit FROM meta WHERE key = ?").get(MILESTONE_REDERIVE_KEY);
+    if (done) return false;
+    // A database a store was opened on before its migrations ran (a test, a repair path).
+    const members = this.db
+      .prepare("SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = 'milestone_members'")
+      .get();
+    return members !== undefined;
+  }
+
+  /**
+   * This workspace's journal is bound for the service: it has synchronized (a cursor, or an
+   * epoch past the first), or this machine holds a connection to its repository. The same
+   * rule the journal uses to decide that its queue will be sent (`boundForService`), and for
+   * the same reason: whatever it writes goes out, on the next sync of this device or of a
+   * re-connected one, whenever that is. So such a workspace repairs only in a sync, after its
+   * pull reached the head. A workspace disconnected for good never does: its milestones keep
+   * what the old build left until a member moves (`docs/milestones.md`).
+   */
+  private synchronizes(): boolean {
+    // A database a store was opened on before its migrations ran has no sync state at all.
+    if (!this.db.prepare("SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = 'sync_state'").get()) return false;
+    const state = this.db.prepare("SELECT repository_id, epoch, cursor FROM sync_state WHERE id = 1").get() as
+      | { repository_id: string | null; epoch: number; cursor: string | null }
+      | undefined;
+    if (!state) return false;
+    if (state.epoch > 0 || state.cursor !== null) return true;
+    if (!state.repository_id) return false;
+    try {
+      return existsSync(connectionPath(stapleHome(), state.repository_id));
+    } catch {
+      // `stapleHome` refuses a home it cannot resolve (see `resolveDeviceId`); `existsSync`
+      // never throws. A home that cannot be resolved cannot say the workspace is not
+      // connected, so the repair is left to a sync.
+      return true;
+    }
+  }
+
+  /**
+   * The one-shot repair `owesMilestoneRederive` asks for, when it is owed: every milestone
+   * re-derived by the same walk a member's transition runs, so each write is an ordinary
+   * derived `status_changed` event and journaled operation, and travels like one. Returns how
+   * many milestones moved. Idempotent: a second run finds nothing owed, and a run with the
+   * stamp taken away finds every status already where derivation puts it.
+   *
+   * It may close a milestone whose members have all landed, `done` as a parent would have
+   * closed then, but never writes `cancelled`: a milestone whose members were all cancelled
+   * keeps its status until a member moves. The pre-work band is derivation's, as on any
+   * parent, so a hand-set `todo` or `backlog` is re-derived; a status set by hand outside it,
+   * or a gate, is left alone.
+   *
+   * A repair that throws is logged and skipped for the rest of the process, never rethrown:
+   * the command that ran it is somebody's own write, and must not fail for a repair it did
+   * not ask for. Its own mutation, so the throw takes back whatever it wrote.
+   */
+  rederiveEveryMilestone(): number {
+    if (!this.owesMilestoneRederive()) return 0;
+    try {
+      return this.journal.run(() => this.rederiveEveryMilestoneInScope());
+    } catch (error) {
+      milestoneRepairFailed.add(this.db);
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`staple: could not re-derive milestone statuses (${detail}); skipped until staple runs again.`);
+      return 0;
+    }
+  }
+
+  private rederiveEveryMilestoneInScope(): number {
+    const milestones = this.db
+      .prepare("SELECT id, status FROM issues WHERE kind = ? ORDER BY created_at")
+      .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
+    let moved = 0;
+    for (const milestone of milestones) {
+      const row = this.db.prepare("SELECT id, kind FROM issues WHERE id = ?").get(milestone.id) as Pick<IssueRow, "id" | "kind">;
+      const cause = this.latestInputMove(row);
+      this.deriveHolders([milestone.id], cause.trigger, cause.actor, new Set([milestone.id]), {
+        mayCloseStart: true,
+        mayCancel: false,
+      });
+      const now = this.db.prepare("SELECT status FROM issues WHERE id = ?").get(milestone.id) as { status: string };
+      if (now.status !== milestone.status) moved += 1;
+    }
+    this.db
+      .prepare("INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(MILESTONE_REDERIVE_KEY);
+    return moved;
+  }
+
+  /**
+   * What a repaired milestone names as the cause of its move, as a member's transition would:
+   * the input whose status moved last, and the actor who moved it. The first input, and no
+   * actor, when none of them has moved.
+   */
+  private latestInputMove(milestone: Pick<IssueRow, "id" | "kind">): { trigger: string; actor: string | null } {
+    const inputs = this.derivationInputRows(milestone);
+    if (inputs.length === 0) return { trigger: "", actor: null };
+    const byId = new Map(inputs.map((row) => [row.id, row.identifier]));
+    const latest = this.db
+      .prepare(
+        `SELECT issue_id, actor FROM events
+          WHERE kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")})
+            AND issue_id IN (${inputs.map(() => "?").join(",")})
+          ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(...(STATUS_MOVING_EVENT_KINDS as readonly string[]), ...inputs.map((row) => row.id)) as
+      | { issue_id: string; actor: string | null }
+      | undefined;
+    if (!latest) return { trigger: inputs[0]!.identifier, actor: null };
+    return { trigger: byId.get(latest.issue_id)!, actor: latest.actor };
+  }
+
+  /**
    * The walk: every issue whose status is derived from what moved, re-derived until the
    * answers stop changing.
    *
@@ -3103,6 +3276,7 @@ export class WorkspaceStore {
     trigger: string,
     actor: string | null,
     selfDerive: ReadonlySet<string>,
+    options: { mayCloseStart?: boolean; mayCancel?: boolean } = {},
   ): void {
     const now = this.journal.mutationAt();
     const order: string[] = [];
@@ -3132,8 +3306,8 @@ export class WorkspaceStore {
       for (const id of derived) {
         const row = read.get(id) as unknown as IssueRow | undefined;
         if (!row) continue;
-        const mayClose = !selfDerive.has(id);
-        if (this.deriveOneAncestor(row, trigger, actor, now, { mayClose })) wrote = true;
+        const mayClose = !selfDerive.has(id) || options.mayCloseStart === true;
+        if (this.deriveOneAncestor(row, trigger, actor, now, { mayClose, mayCancel: options.mayCancel })) wrote = true;
       }
       if (!wrote) break;
     }
@@ -3189,7 +3363,7 @@ export class WorkspaceStore {
     trigger: string,
     actor: string | null,
     now: string,
-    options: { mayClose?: boolean } = {},
+    options: { mayClose?: boolean; mayCancel?: boolean } = {},
   ): boolean {
     /**
      * A PARKED parent is immune, in both directions (STA-143).
@@ -3240,6 +3414,8 @@ export class WorkspaceStore {
     if ((target === "done" || target === "cancelled") && isActiveGate(ancestor.gate_state)) return false;
     // A membership edit reports, it never closes: see `rederiveMilestones`.
     if ((target === "done" || target === "cancelled") && options.mayClose === false) return false;
+    // The upgrade's repair closes as `done` only: see `rederiveEveryMilestone`.
+    if (target === "cancelled" && options.mayCancel === false) return false;
 
     /**
      * Everything below is stated in CATEGORIES (STA-140). The band, the
@@ -3292,6 +3468,8 @@ export class WorkspaceStore {
      */
     const columns: Record<string, unknown> = {
       status: next,
+      // Written with the status, so the row says derivation owns it (migration 017).
+      derived_status: next,
       updated_at: now,
     };
     if (target === "active") columns.started_at = ancestor.started_at ?? now;
@@ -3322,16 +3500,17 @@ export class WorkspaceStore {
     // `expectedStatusVersion` for this epic must be forced to re-read.
     // `RETURNING *` because a close has to hand the FRESH row to
     // `afterResolution` below — the row as it now is, not as it was decided from.
+    // `RETURNING` reports the row before any trigger ran on it (migration 017's), so the row
+    // handed on is read again once the statement is done.
     const assignments = Object.keys(columns).map((c) => `${c} = ?`).join(", ");
-    const written = this.db
+    const landed = this.db
       .prepare(
         `UPDATE issues SET ${assignments}, status_version = status_version + 1
-          WHERE id = ? AND status = ? RETURNING *`,
+          WHERE id = ? AND status = ? RETURNING id`,
       )
-      .get(...(Object.values(columns) as never[]), ancestor.id, ancestor.status) as unknown as
-      | IssueRow
-      | undefined;
-    if (!written) return false;
+      .get(...(Object.values(columns) as never[]), ancestor.id, ancestor.status) as { id: string } | undefined;
+    if (!landed) return false;
+    const written = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(landed.id) as unknown as IssueRow;
 
     /**
      * Reuses `status_changed` rather than minting a kind, for a concrete reason:
