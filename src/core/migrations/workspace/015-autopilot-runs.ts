@@ -20,6 +20,11 @@ import type { Migration } from "../types.js";
  * `scope_issue_id` has no foreign key: a run is a record of what happened, and it
  * outlives a scope issue somebody deletes. `run_tickets` does cascade from its run.
  *
+ * `override_reason` is the reason a person gave for letting the run step over the pickup
+ * plan (`run start --override -m`): under `queue.policy = strict` each out-of-order take
+ * is a checkout with that override, recorded as `queue_overridden`. Null for a run that
+ * follows the plan.
+ *
  * ## Never replicated
  *
  * A run is a machine-local driver: which agent on which machine is looping over the
@@ -50,6 +55,7 @@ export const migration: Migration = {
         until_at        TEXT,
         ceiling_percent REAL,
         ceiling_account TEXT,
+        override_reason TEXT,
         stop_reason     TEXT,
         stop_detail     TEXT NOT NULL DEFAULT '{}',
         stopped_by      TEXT,

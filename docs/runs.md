@@ -15,7 +15,7 @@ always did. Code: `src/core/run-store.ts`; CLI: `staple run`; MCP: `start_run`,
 ## Commands
 
 ```
-staple run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
+staple run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]] [--override -m why]
 staple run status [<run-id>] [--all]
 staple run stop [<run-id>] [-m why]
 staple run pause [<run-id>]
@@ -27,6 +27,15 @@ staple run continue [--run <run-id>] [--outcome done|failed] [--reason R]
 id, a command means the actor's one live (active or paused) run. Actors are
 compared exactly, as claims are: `Bot` and `bot` are two actors with two runs.
 
+`--max-tickets` counts distinct tickets: a ticket retried after a failure is
+still one ticket. `--override -m why` is for `queue.policy = strict` (below).
+
+`run continue` is the only write path for tickets: it takes, claims, and
+records outcomes. The store's `recordTicketTaken` and `recordTicketOutcome` are
+a low-level record for tests and hand repair, exposed by no CLI verb or MCP
+tool; an adapter must not call them, or it bypasses the claim and the stop
+rules.
+
 ## `run continue`: the contract
 
 One call, one transaction, one of three actions. The CLI exits 0 for all
@@ -36,9 +45,12 @@ outcome) and is printed as the usual error envelope on stderr.
 
 ### What it does, in order
 
-1. **Find the run.** `--run`, else the actor's one live run. None at all is
-   `stop` with reason `no_run` and `run: null`, not an error: the loop has one
-   exit, the stop answer. Several live runs and no `--run` is refused
+1. **Find the run.** `--run`, else the actor's one live run. With none live,
+   the actor's most recently ended run that still has an unsettled ticket (a
+   run stopped by a person or a budget mid-ticket): its ticket is settled in
+   step 2 and its stop reason answered, so the claim does not leak and the
+   driver hears why the run ended. With neither, `stop` with reason `no_run`
+   and `run: null`, not an error: the loop has one exit, the stop answer. Several live runs and no `--run` is refused
    (`validation`, exit 2); name one. With `--run`, an `--actor` that is not the
    run's actor is refused: only a run's actor continues it.
 2. **Settle the current ticket** (the run's last ticket with no outcome), in
@@ -59,14 +71,19 @@ outcome) and is printed as the usual error envelope on stderr.
      work was handed on (`done`); anything else means it left the actor's hands
      unfinished (`failed`, with a reason naming the status, any new holder and
      how the attempt ended). Counting that as a failure is the safe direction:
-     two in a row stop the run for a person to look.
+     two in a row stop the run for a person to look. This includes a ticket a
+     person cancelled, and one another agent took over: two of those in a row
+     stop the run too.
    - No current ticket (the run has taken nothing yet, or recorded everything
      it took): nothing is recorded, and `--outcome` is ignored (`recorded: null`).
 3. **Ended or paused.** An ended run answers `stop` with the reason it ended
    with. A paused run answers `wait` with reason `paused` and changes nothing
    else: pausing is not stopping, and the run picks up where it was on
    `run resume`. A finished ticket is still recorded on a paused or ended run.
-4. **Stop rules** (below). A trip ends the run and answers `stop`. When
+4. **Stop rules** (below). First, a ticket the actor is still working that is
+   no longer inside the scope (the scope is gone, or the ticket left it) is
+   recorded `failed` and released rather than resumed. A trip ends the run and
+   answers `stop`. When
    nothing is workable but the scope still holds unresolved work, the answer is
    `wait` with reason `waiting_on_others`, and the run stays live.
 5. **Take.** In this order: the current ticket if it is being resumed; another
@@ -76,6 +93,8 @@ outcome) and is printed as the usual error envelope on stderr.
    already held by the actor, and two drivers asking at once never get the same
    row (the loser's read sees it claimed and is handed the next). Do not check
    it out again. The ticket is recorded on the run (`run_ticket_taken`).
+   Under `queue.policy = strict` the checkout can refuse the row (below); the
+   answer is then `wait` with reason `out_of_order`.
 
 On a resume the ticket budget is not read: `--max-tickets` caps what a run
 takes, and handing back the ticket it is still working takes nothing. Every
@@ -84,14 +103,22 @@ the ticket stays claimed and shows as open on the run.
 
 ### Strict queue policy
 
-Under `queue.policy = strict`, a plain checkout of unqueued work is refused
-`out_of_order` while any queued row elsewhere is eligible. A run's take reads
-that guard **inside the run's scope**: the person who scoped the run to an
-epic or a milestone ordered that work ahead of the rest of the queue. Queued
-rows inside the scope still come first, and the take is always the scoped
-queue's own `next`, so the guard never refuses it. No override is used and no
-`queue_overridden` event is written. A run over the whole queue reads the
-guard exactly as a plain checkout does.
+Under `queue.policy = strict`, a checkout later in the plan than an eligible
+queued row is refused `out_of_order`. A run is held to the **whole plan**,
+exactly like any agent: scoping a run is not a way to jump the queue. When the
+scoped queue's next row is refused, `continue` answers `wait` with reason
+`out_of_order` and the refusal's detail (`expected`, `position`,
+`expectedPosition`); nothing is claimed or recorded. It clears when the plan's
+earlier rows are taken, or when a person queues the scope ahead of them.
+
+A person who wants the run to work its scope first says so when starting it:
+`run start --scope <ref> --override -m "<why>"` (MCP `start_run`
+`override_reason`). The reason is mandatory, as for `checkout --override`, and
+is on the run (`run.override`). Each take the plan would refuse is then an
+override checkout with that reason, which writes `queue_overridden` with the
+same payload a human's `checkout --override` writes (the actor is the run's).
+A take the plan allows, and a resume, write no override. Under `advisory`
+nothing is refused and the override is never used.
 
 ### JSON shapes
 
@@ -109,7 +136,7 @@ ticket, or null.
   "resumed": false, "recorded": {…} | null, "run": {…} }
 
 // wait: take nothing now; ask again after retryAfterSeconds, or end the session
-{ "action": "wait", "reason": "paused" | "waiting_on_others",
+{ "action": "wait", "reason": "paused" | "waiting_on_others" | "out_of_order",
   "detail": {…}, "message": "…", "retryAfterSeconds": 60,
   "recorded": {…} | null, "run": {…} }
 
@@ -128,14 +155,19 @@ Stable: never renamed. Stop reasons, first match wins:
 | Reason | When | Run ends |
 |---|---|---|
 | `stopped_by_human` | somebody ran `run stop` (`run.stop.by`, `run.stop.note`) | `stopped` |
-| `budget` | `detail.budget` is `tickets` (the run took `--max-tickets`), `time` (`--until` passed) or `ceiling` (a current rate-limit window's high-water use reached `--ceiling`) | `stopped` |
+| `budget` | `detail.budget` is `tickets` (the run took `--max-tickets` distinct tickets), `time` (`--until` passed) or `ceiling` (a current rate-limit window's high-water use reached `--ceiling`) | `stopped` |
 | `failure_streak` | the last two recorded outcomes are both `failed` | `stopped` |
+| `scope_gone` | the scope no longer resolves: its issue was deleted (a restore can remove it) or it holds nothing any more (a parent left with no children). `detail.why` says which | `stopped` |
 | `vp_blocked` | a ticket the run took is blocked on a named person, or nothing is workable and something in scope is | `stopped` |
 | `gate_pending` | the scope issue awaits approval, or nothing is workable and something in scope does | `stopped` |
 | `scope_empty` | nothing unresolved is left in scope | `completed` |
 | `no_run` | the actor has no live run (`continue` only; `run` is null) | — |
 
-Wait reasons: `paused` (`detail` is empty) and `waiting_on_others`
+`run status` never fails because of one run's scope: a gone scope reads as
+decision `scope_gone`.
+
+Wait reasons: `paused` (`detail` is empty), `out_of_order` (strict policy,
+above) and `waiting_on_others`
 (`detail.rows`: each unresolved row in scope the run cannot take, with the
 queue's `eligibility` (`claimed`, `blocked`, `gated`, `unavailable`) and
 `reason`). Work that only others can move (another agent's claim, a dependency,
