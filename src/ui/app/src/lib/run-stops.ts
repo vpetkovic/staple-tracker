@@ -84,6 +84,8 @@ export interface StopNotice {
   short: string;
   /** Why, in the run history's words (`endedStateText`). */
   reason: string;
+  /** What the person who stopped it said (`run stop -m`), or null. */
+  note: string | null;
   tone: RunTone;
   attention: StopAttention | null;
   endedAt: string;
@@ -105,10 +107,19 @@ export function stopNotice(entry: Pick<RunEntry, "workspace" | "run">): StopNoti
     title: `Autopilot ${run.state === "completed" ? "finished" : "stopped"} · ${scope}`,
     short: `Autopilot · ${scope}`,
     reason: state.text,
+    note: run.stop.note?.trim() ? run.stop.note.trim() : null,
     tone: state.tone,
     attention: stopAttention(run),
     endedAt: run.endedAt ?? run.stop.at,
   };
+}
+
+/**
+ * Whether the notice's reference is the issue already open (in the same workspace): its link
+ * would open what the reader is looking at, so it is not offered.
+ */
+export function attentionIsOpen(notice: Pick<StopNotice, "workspace" | "attention">, open: { workspace: string; ref: string } | null): boolean {
+  return notice.attention !== null && open !== null && open.workspace === notice.workspace && open.ref.toUpperCase() === notice.attention.ref.toUpperCase();
 }
 
 /**

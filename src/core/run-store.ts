@@ -745,15 +745,15 @@ export class RunStore {
   }
 
   /**
-   * The goal a run started with these options would carry, for a preview (`run drive --dry-run
-   * --scope`): the scope and the goal options are read and refused exactly as `start` reads
-   * them, and nothing is written. Null when the scope is not a milestone.
+   * What `start` would do with these options, for a preview (`run drive --dry-run --scope`):
+   * every option is read and refused exactly as `start` reads it (the budget, the override's
+   * reason, the scope, a live run of the actor's over it, the goal options), and nothing is
+   * written. `goal` is the goal the run would carry; null when the scope is not a milestone.
    */
-  previewGoal(input: Pick<StartRunInput, "scope" | "gateOwner" | "goalChildCap">): RunGoalReport | null {
-    const scope = this.resolveScope(input.scope);
-    const goal = this.parseGoal(input, scope);
-    if (goal === null) return null;
-    return this.goalReport({ scope, goal: { gateOwner: goal.gateOwner, childCap: goal.childCap, children: [], gatedAt: null } });
+  previewStart(input: StartRunInput): { goal: RunGoalReport | null } {
+    const { scope, goal } = this.checkStart(input, nowIso());
+    if (goal === null) return { goal: null };
+    return { goal: this.goalReport({ scope, goal: { gateOwner: goal.gateOwner, childCap: goal.childCap, children: [], gatedAt: null } }) };
   }
 
   /** The goal as every answer carries it; null on a run that is not a goal run, or whose milestone is gone. */
@@ -951,29 +951,9 @@ export class RunStore {
    * makes that hold under two racing starts.
    */
   start(input: StartRunInput): Run {
-    const actor = input.actor.trim();
-    if (actor === "") throw new StapleError("validation", "A run needs an actor: pass --actor or set STAPLE_AGENT.");
     const now = nowIso();
-    const budget = this.parseBudget(input, now);
-    // As on checkout: an override is a person's decision, so it always carries a reason.
-    const override = input.override === undefined ? null : input.override.trim();
-    if (override === "") {
-      throw new StapleError("validation", "An override needs a reason. Pass a non-empty reason (CLI `run start --override -m \"<why>\"`, MCP `override_reason`).");
-    }
     return this.store.journaled(() => {
-      const scope = this.resolveScope(input.scope);
-      const key = scope.kind === "queue" ? "queue" : scope.issueId;
-      const live = this.db
-        .prepare(`SELECT * FROM runs WHERE actor = ? AND scope_key = ? AND state IN (${LIVE_RUN_STATES.map(() => "?").join(", ")})`)
-        .get(actor, key, ...LIVE_RUN_STATES) as unknown as RunRow | undefined;
-      if (live) {
-        throw new StapleError(
-          "conflict",
-          `${actor} already has a live run over ${scopeLabel(scope)}: ${live.id} (${live.state}, started ${live.started_at}). Stop it first (staple run stop ${live.id}).`,
-          { runId: live.id, state: live.state, actor, scope: scopeJson(scope) },
-        );
-      }
-      const goal = this.parseGoal(input, scope);
+      const { actor, budget, override, scope, key, goal } = this.checkStart(input, now);
       const id = newId();
       this.db
         .prepare(
@@ -1458,6 +1438,35 @@ export class RunStore {
    * {@link DEFAULT_GATE_OWNER}, whatever the milestone's assignee) and the cap. Goal settings
    * on any other scope are refused rather than ignored.
    */
+  /**
+   * Every check `start` makes before it writes, in its order: the actor, the budget, the
+   * override's reason, the scope, no live run of the actor's over it, the goal options.
+   */
+  private checkStart(input: StartRunInput, now: string) {
+    const actor = input.actor.trim();
+    if (actor === "") throw new StapleError("validation", "A run needs an actor: pass --actor or set STAPLE_AGENT.");
+    const budget = this.parseBudget(input, now);
+    // As on checkout: an override is a person's decision, so it always carries a reason.
+    const override = input.override === undefined ? null : input.override.trim();
+    if (override === "") {
+      throw new StapleError("validation", "An override needs a reason. Pass a non-empty reason (CLI `run start --override -m \"<why>\"`, MCP `override_reason`).");
+    }
+    const scope = this.resolveScope(input.scope);
+    const key = scope.kind === "queue" ? "queue" : scope.issueId;
+    const live = this.db
+      .prepare(`SELECT * FROM runs WHERE actor = ? AND scope_key = ? AND state IN (${LIVE_RUN_STATES.map(() => "?").join(", ")})`)
+      .get(actor, key, ...LIVE_RUN_STATES) as unknown as RunRow | undefined;
+    if (live) {
+      throw new StapleError(
+        "conflict",
+        `${actor} already has a live run over ${scopeLabel(scope)}: ${live.id} (${live.state}, started ${live.started_at}). Stop it first (staple run stop ${live.id}).`,
+        { runId: live.id, state: live.state, actor, scope: scopeJson(scope) },
+      );
+    }
+    const goal = this.parseGoal(input, scope);
+    return { actor, budget, override, scope, key, goal };
+  }
+
   private parseGoal(input: Pick<StartRunInput, "gateOwner" | "goalChildCap">, scope: RunScope): { gateOwner: string; childCap: number } | null {
     const owner = input.gateOwner?.trim() ? input.gateOwner.trim() : null;
     if (scope.kind !== "milestone") {

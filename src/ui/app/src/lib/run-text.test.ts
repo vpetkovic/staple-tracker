@@ -17,6 +17,7 @@ import {
   liveStateText,
   nextText,
   progress,
+  progressText,
   stopReasonText,
   stopRuleText,
   stoppedByText,
@@ -145,10 +146,15 @@ describe("a ticket's outcome", () => {
 });
 
 describe("the banner", () => {
-  it("counts done over done plus what is left, a done ticket still in review once", () => {
+  it("counts what the run did and what is left, two numbers, never one fraction", () => {
     const r = run({ tickets: [ticket({ issueId: "a", outcome: "done" }), ticket({ seq: 2, issueId: "b" })] });
-    // `a` is done but in review (waiting); `b` is held (workable); `c` is left.
-    expect(progress(r, facts(["b", "c"], ["a"]))).toEqual({ done: 1, total: 3 });
+    // `a` the run handed on, and it is in review (waiting): done by the run, and still left.
+    // `b` is held (workable); `c` is left.
+    expect(progress(r, facts(["b", "c"], ["a"]))).toEqual({ done: 1, left: 3 });
+    expect(progressText({ done: 1, left: 3 })).toBe("1 done this run · 3 left");
+    // A ticket the run finished and a person reopened: still one the run did, and left again.
+    const reopened = run({ tickets: [ticket({ issueId: "a", outcome: "done" })] });
+    expect(progress(reopened, facts(["a"], []))).toEqual({ done: 1, left: 1 });
     expect(progress(r, null)).toBeNull();
   });
 
@@ -175,10 +181,10 @@ describe("the banner", () => {
     expect(stopRuleText(run({ goal: { gateOwner: "VP", childCap: 5, children: [], gatedAt: null } }), { stop: false }, NOW)).toBe("stops when its goal is met");
   });
 
-  it("is one line: Autopilot · scope · n/m done · next · stop rule", () => {
+  it("is one line: Autopilot · scope · done this run · left · next · stop rule", () => {
     const entry = { run: run({ budget: { maxTickets: 3, until: null, ceilingPercent: null, ceilingAccount: null } }), decision: { stop: false as const }, facts: facts(["abc-2", "abc-3"]) };
-    expect(bannerLine(entry, NOW)).toBe("Autopilot · ABC-10 · 0/2 done · next ABC-2 · stops after 3 tickets (0 taken)");
-    expect(bannerLine({ ...entry, run: run({ scope: { kind: "queue" } }) }, NOW)).toBe("Autopilot · Queue · 0/2 done · next ABC-2 · stops when nothing is left");
+    expect(bannerLine(entry, NOW)).toBe("Autopilot · ABC-10 · 0 done this run · 2 left · next ABC-2 · stops after 3 tickets (0 taken)");
+    expect(bannerLine({ ...entry, run: run({ scope: { kind: "queue" } }) }, NOW)).toBe("Autopilot · Queue · 0 done this run · 2 left · next ABC-2 · stops when nothing is left");
   });
 });
 

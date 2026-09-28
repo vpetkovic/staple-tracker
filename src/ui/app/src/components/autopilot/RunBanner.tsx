@@ -3,7 +3,7 @@
  *
  * One line says the whole run, in the order a person asks about it:
  *
- *   Autopilot · ABC-40 · 2/5 done · next ABC-43 · stops after 5 tickets (2 taken)
+ *   Autopilot · ABC-40 · 2 done this run · 3 left · next ABC-43 · stops after 5 tickets (2 taken)
  *
  * which scope, how far along, what it is on now, and what would stop it. Under it, the run's
  * state (working, paused, or what it waits on) and whether a driver process is attached,
@@ -21,7 +21,7 @@
  * started, stopped or paused anywhere shows here within one refresh.
  */
 import { Bot, ChevronRight } from "lucide-react";
-import { bannerLine, driverText, liveStateText, nextText, progress, scopeText, stopRuleText } from "@/lib/run-text";
+import { bannerLine, driverText, liveStateText, nextText, progress, progressText, scopeText, stopRuleText } from "@/lib/run-text";
 import { useRuns } from "@/lib/runs";
 import { openRunHistory } from "@/lib/shell-events";
 import type { RunEntry } from "@/lib/types";
@@ -50,7 +50,7 @@ export function RunCard({ entry, showWorkspace = false, onNavigate }: { entry: R
         </span>
       </p>
       <p className="m-0 truncate text-label text-text-secondary" data-run-progress="">
-        {[counted ? `${counted.done}/${counted.total} done` : null, next].filter(Boolean).join(" · ") || "nothing taken yet"}
+        {[counted ? progressText(counted) : null, next].filter(Boolean).join(" · ") || "nothing taken yet"}
       </p>
       <p className="m-0 text-label text-text-tertiary" data-run-stop-rule="">
         {stopRuleText(run, decision)}
@@ -92,7 +92,7 @@ export function RunStrip() {
   const line = bannerLine(entry);
   const more = live.length - 1;
   const counted = progress(entry.run, entry.facts);
-  const head = ["Autopilot", scopeText(entry.run), counted ? `${counted.done}/${counted.total} done` : null].filter(Boolean).join(" · ");
+  const head = ["Autopilot", scopeText(entry.run), counted ? progressText(counted) : null].filter(Boolean).join(" · ");
   const next = nextText(entry.run, entry.facts);
   return (
     <div data-run-strip={entry.run.id} className="flex shrink-0 flex-wrap items-center gap-2 border-t bg-card py-1 pr-2 pl-1.5">

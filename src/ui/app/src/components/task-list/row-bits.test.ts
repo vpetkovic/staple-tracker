@@ -190,20 +190,22 @@ describe("parentRollups", () => {
   const epic = (identifier: string, status: IssueStatus = "in_progress") =>
     row({ identifier, status });
 
-  it("counts every DESCENDANT, not only direct children", () => {
+  it("counts every descendant LEAF at every depth, and never a parent in between", () => {
     const rows = [
       epic("STA-1"),
-      kid("STA-2", "id-1", "in_progress"),
-      kid("STA-3", "id-2", "done"), // grandchild of STA-1
-      kid("STA-4", "id-3", "done"), // great-grandchild
+      kid("STA-2", "id-1", "in_progress"), // a parent: its children stand for it
+      kid("STA-3", "id-2", "done"), // grandchild of STA-1, and a parent too
+      kid("STA-4", "id-3", "done"), // great-grandchild: a leaf
+      kid("STA-5", "id-2", "todo"), // grandchild: a leaf
     ];
     const rollups = parentRollups(rows);
 
-    // An epic's progress is the progress of everything under it. A task is not less
-    // finished for being one level further down.
-    expect(rollups.get("id-1")).toMatchObject({ total: 3, resolved: 2 });
+    // An epic's progress is the progress of the work under it, a leaf at any depth counting
+    // once. A parent's status is derived from its children, so counting it as well would count
+    // the same work twice (milestoneProgress's rule).
+    expect(rollups.get("id-1")).toMatchObject({ total: 2, resolved: 1 });
     // And the intermediate parents are rolled up on the SAME pass, not on a second walk.
-    expect(rollups.get("id-2")).toMatchObject({ total: 2, resolved: 2 });
+    expect(rollups.get("id-2")).toMatchObject({ total: 2, resolved: 1 });
     expect(rollups.get("id-3")).toMatchObject({ total: 1, resolved: 1 });
   });
 
@@ -319,10 +321,10 @@ describe("parentRollups", () => {
     const rollups = parentRollups(rows);
 
     // The claim is TERMINATION and a BOUNDED count, not a meaningful one: in a cycle every
-    // row is its own ancestor, so both rows land under both ids and each reads 2 of 2. A
-    // hang, by contrast, renders nothing at all — strictly worse than two odd rows.
-    expect(rollups.get("id-1")!.total).toBe(2);
-    expect(rollups.get("id-2")!.total).toBe(2);
+    // row is a parent, so no row is a leaf and each reads 0 of 0. A hang, by contrast,
+    // renders nothing at all — strictly worse than two odd rows.
+    expect(rollups.get("id-1")!.total).toBe(0);
+    expect(rollups.get("id-2")!.total).toBe(0);
     expect(rollups.get("id-1")!.resolved).toBe(0);
   });
 

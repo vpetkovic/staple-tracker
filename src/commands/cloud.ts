@@ -359,7 +359,9 @@ function renderStatus(status: CloudStatus, report: CloudSurfaceReport): string {
 }
 
 export function runCloudCommand(argv: string[]): void {
-  if (argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
+  // `--help` or `-h` anywhere before a `--` (`cloud connect --help` too), or a bare `help`.
+  const flags = argv.includes("--") ? argv.slice(0, argv.indexOf("--")) : argv;
+  if (argv[0] === "help" || flags.includes("--help") || flags.includes("-h")) {
     console.log(HELP);
     return;
   }

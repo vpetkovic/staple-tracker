@@ -240,10 +240,12 @@ headless CLI can drive. Code: `src/core/run-driver.ts` (loop, provider table),
 file); CLI: `src/commands/run-drive.ts`.
 
 ```
-staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P]]
-                 --agent <claude|codex|custom> [--command "<template>"] [--model M]
+staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
+                 [--gate-owner W] [--goal-cap N]]
+                 --agent <claude|codex|custom> [--command "<template>"] [--model M] [--full-access]
                  [--finish in_review|done] [--ticket-timeout D] [--retry-after S]
-                 [--poll S] [--instructions <file>] [--cwd <dir>] [--dry-run] [--json]
+                 [--poll S] [--instructions <file>] [--cwd <dir>] [--forget-stale-session]
+                 [--dry-run] [--json]
 ```
 
 - **Which run.** `--run`, else `--scope` starts one (with `run start`'s budget
@@ -708,7 +710,7 @@ the ticket, and a stated failure on a held ticket its `release`.
 The page watches and stops runs; it never starts or continues one.
 
 - **Banner.** Each live run is a card in the rail's **Autopilot** section:
-  `Autopilot · <scope> · n/m done · working|next <ref> · <what would stop it>`, the run's
+  `Autopilot · <scope> · <n> done this run · <m> left · working|next <ref> · <what would stop it>` (n: tickets this run handed on; m: unresolved work in scope, whoever works it; a milestone's own progress is its detail's), the run's
   state (working, paused, or what it waits on), whether a driver is attached, **Stop** and
   **Details**. On a phone (below 768px) the first live run is also one line above the tab
   bar with a 44px Stop. The section is absent until the workspace has had a run.

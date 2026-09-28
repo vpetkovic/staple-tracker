@@ -2,9 +2,9 @@
  * `staple run drive`: the headless driver (`src/core/run-driver.ts`, docs/runs.md).
  *
  *   run drive [--run <id> | --scope <queue|ref> [start options]] --agent <claude|codex|custom>
- *             [--command "<template>"] [--model M] [--finish in_review|done]
+ *             [--command "<template>"] [--model M] [--full-access] [--finish in_review|done]
  *             [--ticket-timeout D] [--retry-after S] [--poll S] [--instructions <file>]
- *             [--cwd <dir>] [--dry-run]
+ *             [--cwd <dir>] [--forget-stale-session] [--dry-run]
  *
  * The one async verb of `staple run`: it lives for as long as the run, so its failures are
  * reported by `settle()` rather than the synchronous top-level catch. It has no MCP twin:
@@ -26,8 +26,10 @@ import { percentOption, positiveInteger } from "./run.js";
 
 export const DRIVE_HELP = `staple run drive — work a run headless: a FRESH agent session per ticket.
 
-  run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P]
+  run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
             [--gate-owner W] [--goal-cap N]] --agent <${[...Object.keys(DRIVE_PROVIDERS), "custom"].join("|")}> [--command "<template>"] [--model M]
+            [--full-access] [--finish in_review|done] [--ticket-timeout D] [--retry-after S] [--poll S]
+            [--instructions F] [--cwd DIR] [--forget-stale-session] [--dry-run] [--json]
 
 Loops "run continue" in this process. On take, it writes a brief for the ticket
 and launches one headless session with it, waits for the session, and states
@@ -162,20 +164,26 @@ export function runDriveCommand(rest: string[]): void {
   const runs = store.runs();
   const cwd = resolve(values.cwd ?? workspaceDirectory(dbFile));
 
+  // What --scope starts, read once: the dry run previews exactly this and refuses what start refuses.
+  const startInput =
+    values.scope === undefined
+      ? null
+      : {
+          actor,
+          scope: values.scope,
+          maxTickets: positiveInteger(values["max-tickets"], "--max-tickets"),
+          until: values.until,
+          ceilingPercent: percentOption(values.ceiling, "--ceiling"),
+          ceilingAccount: values["ceiling-account"],
+          gateOwner: values["gate-owner"],
+          goalChildCap: positiveInteger(values["goal-cap"], "--goal-cap"),
+        };
+
   if (values["dry-run"] === true) return dryRun();
 
   let run: Run;
-  if (values.scope !== undefined) {
-    run = runs.start({
-      actor,
-      scope: values.scope,
-      maxTickets: positiveInteger(values["max-tickets"], "--max-tickets"),
-      until: values.until,
-      ceilingPercent: percentOption(values.ceiling, "--ceiling"),
-      ceilingAccount: values["ceiling-account"],
-      gateOwner: values["gate-owner"],
-      goalChildCap: positiveInteger(values["goal-cap"], "--goal-cap"),
-    });
+  if (startInput !== null) {
+    run = runs.start(startInput);
   } else {
     run = values.run !== undefined ? runs.get(values.run) : runs.liveRunOf(actor);
     if (values.actor !== undefined && values.actor !== run.actor) {
@@ -239,6 +247,8 @@ export function runDriveCommand(rest: string[]): void {
   );
 
   function dryRun(): void {
+    // First, as start would: a bad option, or a live run of the actor's over the scope, is refused.
+    const preview = startInput === null ? null : runs.previewStart(startInput);
     const existing = values.scope === undefined ? (values.run !== undefined ? runs.get(values.run) : runs.liveRunOf(actor)) : null;
     let next: { ref: string; title: string } | null = null;
     if (existing !== null) {
@@ -252,11 +262,7 @@ export function runDriveCommand(rest: string[]): void {
     const runId = existing?.id ?? "<new run>";
     const logDir = runDirectory(dbFile, runId);
     const ref = next?.ref ?? "<ref>";
-    const brief = buildBrief({ ref, title: next?.title ?? "<title>", workspace: cwd, db: dbFile, runId, actor: existing?.actor ?? actor, finish, instructions, goal: existing
-        ? runs.goalReport(existing)
-        : values.scope === undefined
-          ? null
-          : runs.previewGoal({ scope: values.scope, gateOwner: values["gate-owner"], goalChildCap: positiveInteger(values["goal-cap"], "--goal-cap") }) });
+    const brief = buildBrief({ ref, title: next?.title ?? "<title>", workspace: cwd, db: dbFile, runId, actor: existing?.actor ?? actor, finish, instructions, goal: existing ? runs.goalReport(existing) : (preview?.goal ?? null) });
     const briefFile = `${logDir}/001-${ref}.brief.md`;
     const shown = sessionCommand(values.agent!, command, {
       ref,

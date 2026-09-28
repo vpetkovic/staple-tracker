@@ -25,7 +25,7 @@
  */
 import { Bot, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { attentionLabel, pendingStopNotices, type StopNotice } from "@/lib/run-stops";
+import { attentionIsOpen, attentionLabel, pendingStopNotices, type StopNotice } from "@/lib/run-stops";
 import { markStopsSeen, reconcileStopSeen, useStopSeen } from "@/lib/stop-seen-store";
 import { useRuns } from "@/lib/runs";
 import { isAllWorkspaces, useSession } from "@/lib/session";
@@ -45,11 +45,14 @@ export function RunStopNoticeCard({
   showWorkspace = false,
   more = 0,
   onMore,
+  openRef = null,
   onOpenRef,
   onDetails,
   onDismiss,
 }: {
   notice: StopNotice;
+  /** The issue open in the detail, if any: a link to it is not offered (it is on screen). */
+  openRef?: { workspace: string; ref: string } | null;
   /** Over the page (the desk's corner): a shadow separates it from what is under it. */
   raised?: boolean;
   showWorkspace?: boolean;
@@ -60,7 +63,8 @@ export function RunStopNoticeCard({
   onDetails: (notice: StopNotice) => void;
   onDismiss: (notice: StopNotice) => void;
 }) {
-  const label = `${notice.title}: ${notice.reason}`;
+  const label = `${notice.title}: ${notice.reason}${notice.note ? ` ("${notice.note}")` : ""}`;
+  const link = notice.attention && !attentionIsOpen(notice, openRef) ? notice.attention : null;
   return (
     <article
       data-run-stop-notice={notice.runId}
@@ -93,15 +97,20 @@ export function RunStopNoticeCard({
             </button>
           ) : null}
         </div>
+        {notice.note ? (
+          <p data-run-stop-note="" className="m-0 line-clamp-2 max-w-full text-label text-text-secondary wrap-anywhere">
+            &ldquo;{notice.note}&rdquo;
+          </p>
+        ) : null}
       </div>
-      {notice.attention ? (
+      {link ? (
         <button
           type="button"
-          data-run-stop-open={notice.attention.ref}
+          data-run-stop-open={link.ref}
           onClick={() => onOpenRef(notice)}
           className="mt-0.5 inline-flex h-8 shrink-0 items-center rounded-md bg-primary px-2.5 text-label font-medium text-primary-foreground hover:bg-primary/90 focus-ring pointer-coarse:h-11"
         >
-          {attentionLabel(notice.attention)}
+          {attentionLabel(link)}
         </button>
       ) : null}
       <button
@@ -136,6 +145,7 @@ export function RunStopNoticeList({
   placement,
   showWorkspace = false,
   initiallyExpanded = false,
+  openRef = null,
   onOpenRef,
   onDetails,
   onDismiss,
@@ -143,6 +153,7 @@ export function RunStopNoticeList({
 }: {
   notices: readonly StopNotice[];
   placement: NoticePlacement;
+  openRef?: { workspace: string; ref: string } | null;
   showWorkspace?: boolean;
   initiallyExpanded?: boolean;
   onOpenRef: (notice: StopNotice) => void;
@@ -162,6 +173,7 @@ export function RunStopNoticeList({
       showWorkspace={showWorkspace}
       more={!open && index === 0 ? behind : 0}
       onMore={() => setExpanded(true)}
+      openRef={openRef}
       onOpenRef={onOpenRef}
       onDetails={onDetails}
       onDismiss={onDismiss}
@@ -233,6 +245,7 @@ export function RunStopNotices({ placement }: { placement: NoticePlacement }) {
       notices={notices}
       placement={placement}
       showWorkspace={isAllWorkspaces(session)}
+      openRef={session.selection}
       onOpenRef={(notice) => {
         markStopsSeen([notice.key]);
         if (notice.attention) session.open(notice.workspace, notice.attention.ref);

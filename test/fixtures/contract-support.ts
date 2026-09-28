@@ -448,6 +448,14 @@ export async function startMcpClient(options: {
   });
   const client = new Client({ name: "staple-contract", version: "0.0.0" });
   await client.connect(transport);
+  /**
+   * The SDK validates a result's structuredContent against the tool's outputSchema only
+   * for tools it has LISTED: it caches the schemas `tools/list` returns. Real clients
+   * (Claude Code, the SDK Client) list first, so an unlisted harness would let a schema
+   * that rejects every real result pass here. List once, up front, so every call through
+   * this harness is validated exactly as a real client validates it.
+   */
+  await client.listTools();
   return {
     client,
     async call(name, args) {

@@ -1191,7 +1191,7 @@ function asksForHelp(args: readonly string[]): boolean {
 
 function main() {
   const [command, ...rest] = process.argv.slice(2);
-  if (command === "help" || command === "--help") {
+  if (command === "help" || command === "--help" || command === "-h") {
     console.log(HELP);
     return;
   }

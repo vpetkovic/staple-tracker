@@ -599,6 +599,37 @@ describe("run drive options", () => {
     expect(epicless.status).toBe(2);
   }, 90_000);
 
+  it("the help and docs/runs.md name every option run drive parses", () => {
+    const source = readFileSync(join(REPO_ROOT, "src/commands/run-drive.ts"), "utf8");
+    const block = source.slice(source.indexOf("options: {"), source.indexOf("},\n  });"));
+    const flags = [...block.matchAll(/^\s+"?([a-z-]+)"?: \{ type:/gm)].map((match) => match[1]!).filter((flag) => !["db", "ws", "help", "actor"].includes(flag));
+    expect(flags.length).toBeGreaterThan(15);
+    const help = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, "run", "drive", "--help"], { cwd: REPO_ROOT, encoding: "utf8", env: bareEnv(env()) }).stdout;
+    const docs = readFileSync(join(REPO_ROOT, "docs/runs.md"), "utf8");
+    const synopsis = docs.slice(docs.indexOf("staple run drive [--run <id>"), docs.indexOf("```", docs.indexOf("staple run drive [--run <id>")));
+    expect(flags.filter((flag) => !help.includes(`--${flag}`))).toEqual([]);
+    expect(flags.filter((flag) => !synopsis.includes(`--${flag}`))).toEqual([]);
+  });
+
+  it("--dry-run --scope refuses what run start refuses: a bad budget, and a live run over the scope", async () => {
+    const { dir } = await workspace(["x"]);
+    for (const [flags, message] of [
+      [["--max-tickets", "0"], "--max-tickets is a whole number of at least 1"],
+      [["--until", "garbage"], "--until takes an ISO-8601 instant"],
+      [["--ceiling", "500"], "--ceiling is a used percentage"],
+    ] as const) {
+      const dry = await cli(dir, ["run", "drive", "--scope", "queue", "--agent", "codex", ...flags, "--dry-run", "--json"]);
+      expect(dry.status, `${flags.join(" ")}: ${dry.stdout}`).toBe(2);
+      expect(dry.stderr).toContain(message);
+    }
+    expect(JSON.parse((await cli(dir, ["run", "status", "--all", "--json"])).stdout)).toEqual({ runs: [] });
+    const started = await cli(dir, ["run", "start", "--scope", "queue", "--json"]);
+    expect(started.status, started.stderr).toBe(0);
+    const live = await cli(dir, ["run", "drive", "--scope", "queue", "--agent", "codex", "--dry-run", "--json"]);
+    expect(live.status).toBe(4);
+    expect(live.stderr).toContain("already has a live run");
+  }, 90_000);
+
   it("refuses an unknown agent, a custom agent without a template, --run with --scope, a zero poll and a zero retry, before starting a run", async () => {
     const { dir } = await workspace(["x"]);
     const unknown = await cli(dir, ["run", "drive", "--scope", "queue", "--agent", "nope", "--json"]);

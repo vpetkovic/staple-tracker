@@ -152,15 +152,23 @@ export function scopeText(run: Pick<Run, "scope">): string {
 }
 
 /**
- * Done out of how many: the run's done tickets, over those plus every unresolved row still in
- * scope that is not one of them (a ticket done by this run but still in review is counted
- * once). Null without facts (an ended run): the history shows its tickets instead.
+ * What the run has done and what is left, as two numbers that measure different things and
+ * never pretend to be one fraction: `done` is the distinct tickets THIS RUN handed on (a
+ * fact about the run: a ticket reopened since stays one it did), `left` the unresolved rows
+ * still in scope, whoever works them (a ticket in review, or reopened, is left). A milestone's
+ * progress is its detail's to say (leaves done over countable leaves); a run is not the
+ * milestone. Null without facts (an ended run): the history shows its tickets instead.
  */
-export function progress(run: Pick<Run, "tickets" | "counts">, facts: Pick<RunFacts, "workable" | "waiting"> | null): { done: number; total: number } | null {
+export function progress(run: Pick<Run, "tickets" | "counts">, facts: Pick<RunFacts, "workable" | "waiting"> | null): { done: number; left: number } | null {
   if (facts === null) return null;
   const done = new Set(run.tickets.filter((ticket) => ticket.outcome === "done").map((ticket) => ticket.issueId));
-  const open = new Set([...facts.workable, ...facts.waiting].map((row) => row.issueId).filter((id) => !done.has(id)));
-  return { done: done.size, total: done.size + open.size };
+  const left = new Set([...facts.workable, ...facts.waiting].map((row) => row.issueId));
+  return { done: done.size, left: left.size };
+}
+
+/** "2 done this run · 9 left": the banner's words for {@link progress}. */
+export function progressText(counted: { done: number; left: number }): string {
+  return `${counted.done} done this run · ${counted.left} left`;
 }
 
 /**
@@ -195,12 +203,12 @@ function lowerFirst(text: string): string {
   return /^[A-Z][a-z]/.test(text) ? text[0]!.toLowerCase() + text.slice(1) : text;
 }
 
-/** THE banner line: "Autopilot · ABC-40 · 2/5 done · next ABC-43 · stops after 5 tickets (2 taken)". */
+/** THE banner line: "Autopilot · ABC-40 · 2 done this run · 3 left · next ABC-43 · stops after 5 tickets (2 taken)". */
 export function bannerLine(entry: Pick<RunEntry, "run" | "decision" | "facts">, now: Date = new Date()): string {
   const { run, decision, facts } = entry;
   const parts = ["Autopilot", scopeText(run)];
   const counted = progress(run, facts);
-  if (counted) parts.push(`${counted.done}/${counted.total} done`);
+  if (counted) parts.push(progressText(counted));
   const next = nextText(run, facts);
   if (next) parts.push(next);
   parts.push(stopRuleText(run, decision, now));

@@ -30,6 +30,22 @@ describe("placeUnderMilestones", () => {
     expect(flat[0]!.hasChildren).toBe(true);
   });
 
+  it("the milestone row counts leaves, as its detail does: a member epic is its children, never itself too", () => {
+    const rows = [
+      milestone(),
+      member({ id: "e", identifier: "STA-11", kind: "epic", status: "in_progress" }, "m"),
+      row({ id: "t1", identifier: "STA-12", parentId: "e", status: "done" }),
+      row({ id: "t2", identifier: "STA-13", parentId: "e", status: "todo" }),
+      member({ id: "s", identifier: "STA-14", status: "todo" }, "m"),
+    ];
+
+    const flat = flattenFlat(placeUnderMilestones(rows), { isExpanded: () => false, showResolved: true });
+
+    // milestoneProgress reads {t1, t2, s}: 1 of 3. Counting the epic as well read 1 of 4.
+    expect(flat[0]!.issue.identifier).toBe("STA-10");
+    expect(flat[0]!.rollup).toMatchObject({ total: 3, resolved: 1 });
+  });
+
   it("keeps a member that has a real parent under that parent", () => {
     const rows = [
       milestone(),

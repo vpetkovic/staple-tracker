@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   STOP_SEEN_KEY,
+  attentionIsOpen,
   attentionLabel,
   loadStopSeen,
   pendingStopNotices,
@@ -73,6 +74,23 @@ describe("the reference a stop hands to a person", () => {
 });
 
 describe("a notice", () => {
+  it("carries what the person who stopped it said, and says nothing when they said nothing", () => {
+    const withNote = { workspace: "w", run: stopped("stopped_by_human", {}, { by: "vp", note: "  wrong thing  " }) };
+    expect(stopNotice(withNote)).toMatchObject({ reason: "Stopped by vp", note: "wrong thing" });
+    expect(stopNotice({ workspace: "w", run: stopped("stopped_by_human", {}, { by: "vp", note: null }) })!.note).toBeNull();
+    expect(stopNotice({ workspace: "w", run: stopped("stopped_by_human", {}, { by: "vp", note: "   " }) })!.note).toBeNull();
+  });
+
+  it("does not offer a link to the issue already open in the same workspace", () => {
+    const notice = stopNotice({ workspace: "w", run: stopped("stopped_by_human", {}, { by: "vp" }) })!;
+    expect(notice.attention).toEqual({ ref: "ABC-332", action: "open" });
+    expect(attentionIsOpen(notice, { workspace: "w", ref: "ABC-332" })).toBe(true);
+    expect(attentionIsOpen(notice, { workspace: "w", ref: "abc-332" })).toBe(true);
+    expect(attentionIsOpen(notice, { workspace: "other", ref: "ABC-332" })).toBe(false);
+    expect(attentionIsOpen(notice, { workspace: "w", ref: "ABC-1" })).toBe(false);
+    expect(attentionIsOpen(notice, null)).toBe(false);
+  });
+
   it("is the run's end in the history's words, finished or stopped", () => {
     expect(stopNotice({ workspace: "staple", run: stopped("goal_met", { milestone: "ABC-332" }) })).toMatchObject({
       key: "staple/run-1",

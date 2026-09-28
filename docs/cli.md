@@ -69,8 +69,8 @@ staple checkout|status|done ... [--harness H --harness-session ID] [--model M] [
 staple release|status|done ... --outcome failed --reason R   only the agent says it failed
 ```
 
-`staple help` has the full option list. `staple <command> --help` (or `-h`) prints one
-command's part of it, or the command's own page where it has one (`run`, `queue`,
+`staple help` (or `staple --help`, `staple -h`) has the full option list. `staple <command>
+[<subcommand>] --help` (or `-h`) prints one command's part of it, or the command's own page where it has one (`run`, `queue`,
 `cloud`, `budget`, ...), and does nothing else: no workspace is opened and nothing runs.
 `checkout` is an alias for `start`, and
 `staple ui` is a compatibility alias for `staple open`.

@@ -234,7 +234,7 @@ const autoSync = new SurfaceAutoSync({
 // `start_run` is not here: a goal run gates its milestone at start, a write that replicates.
 const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
-  type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown> };
+  type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown>; outputSchema?: unknown };
   type ToolCallback = (...args: unknown[]) => unknown;
   const direct = server.registerTool.bind(server) as unknown as (
     name: string,
@@ -299,15 +299,47 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
       "Write through an issue number even if it was renumbered on this device and the issue that moved off it may be the one you mean. Prefer naming the issue by its id.",
     );
 
+  /**
+   * `withNotices` adds `renumbered` to an object answer, so every output schema declares it
+   * (optional): a client that validates structured results against the listed schema (the
+   * SDK Client, Claude Code) would otherwise reject any answer that carries a notice. A tool
+   * whose answer already has its own `renumbered` keeps its declaration.
+   */
+  const RENUMBERED = z
+    .array(
+      z.object({
+        identifier: z.string(),
+        renumberedAt: z.string(),
+        issueId: z.string(),
+        nowIdentifier: z.string().nullable(),
+        removedByRestore: z.object({ title: z.string() }).optional(),
+        nowNames: z.object({ id: z.string(), identifier: z.string(), title: z.string() }).optional(),
+        nowNamesAnother: z.boolean(),
+        message: z.string(),
+      }),
+    )
+    .optional()
+    .describe("Identifiers this call used that were renumbered on this device, and what each names now");
+  const declaringNotices = (config: ToolConfig): ToolConfig => {
+    const output = config.outputSchema;
+    if (output === undefined || output === null) return config;
+    if (output instanceof z.ZodObject) {
+      return "renumbered" in output.shape ? config : { ...config, outputSchema: output.extend({ renumbered: RENUMBERED }) };
+    }
+    if (output instanceof z.ZodType) return config;
+    return "renumbered" in (output as Record<string, unknown>) ? config : { ...config, outputSchema: { ...(output as Record<string, unknown>), renumbered: RENUMBERED } };
+  };
+
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
-    config: ToolConfig,
+    rawConfig: ToolConfig,
     cb: ToolCallback,
-  ) =>
+  ) => {
+    const config = declaringNotices(rawConfig);
     // A machine-local write (budget samples in hub.db, autopilot runs) changes nothing that
     // synchronizes and writes through no issue number, so it gets neither the renumber flag
     // nor a post-write sync.
-    config.annotations?.readOnlyHint === true || MACHINE_LOCAL_WRITES.has(name)
+    return config.annotations?.readOnlyHint === true || MACHINE_LOCAL_WRITES.has(name)
       ? direct(name, config, withNotices(cb))
       : direct(
           name,
@@ -315,6 +347,7 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
           config.inputSchema === undefined ? config : { ...config, inputSchema: { ...config.inputSchema, acknowledgeRenumber: ACKNOWLEDGE } },
           withNotices(afterWrite(acknowledging(cb))),
         );
+  };
 }
 
 /**
@@ -2895,7 +2928,13 @@ const runShape = {
       recordedAt: z.string().nullable(),
     }),
   ),
-  counts: z.object({ taken: z.number(), done: z.number(), failed: z.number(), open: z.number() }),
+  counts: z.object({
+    tickets: z.number().describe("Distinct tickets taken: what max_tickets caps (a retry is not another)"),
+    taken: z.number().describe("Every take, retries included"),
+    done: z.number(),
+    failed: z.number(),
+    open: z.number(),
+  }),
   goal: z
     .object({
       gateOwner: z.string(),
@@ -2975,6 +3014,7 @@ const runDriverShape = z
     heartbeatAt: z.string(),
     ticket: z.string().nullable(),
     sessionPid: z.number().nullable(),
+    sessionStartedAt: z.string().nullable().optional().describe("When the session working the ticket started; null between sessions"),
     logDir: z.string(),
     alive: z.boolean().nullable(),
   })

@@ -85,6 +85,8 @@ Stop): the next stop hook then lets the session stop and says why.
 
 export function runHookCommand(rest: string[]): void {
   const verb = rest[0];
+  // Help first: a person typing `run hook claude-stop --help` wants the page, not a hook answer.
+  if (rest.includes("--help") || rest.includes("-h")) return console.log(HOOK_HELP);
   if (verb !== undefined && providerByCommand(verb) !== null) return runStopHook(providerByCommand(verb)!, rest.slice(1));
   const { values, positionals } = parseArgs({
     args: rest,

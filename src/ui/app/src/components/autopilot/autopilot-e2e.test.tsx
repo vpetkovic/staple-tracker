@@ -37,6 +37,8 @@ import { startUiServer } from "../../../../server.ts";
 import { AutopilotBadge, AutopilotNotice } from "./AutopilotBadge";
 import { RunCard, RunStrip } from "./RunBanner";
 import { RunHistoryList } from "./RunHistoryDialog";
+import { RunStopNoticeCard } from "./RunStopNotices";
+import { stopNotice } from "@/lib/run-stops";
 
 const noop = () => {};
 const NOW = new Date("2026-09-28T12:00:00.000Z");
@@ -248,12 +250,12 @@ afterAll(() => {
 });
 
 describe("the rail banner", () => {
-  it("says the run in one line: scope, n/m done, what it is on, what would stop it", () => {
+  it("says the run in one line: scope, done this run and left, what it is on, what would stop it", () => {
     const markup = render(<RunCard entry={entryOf("live")} />);
-    const line = `Autopilot · ${refs.liveEpic} · 0/3 done · working ${refs.working} · stops after 5 tickets (1 taken)`;
+    const line = `Autopilot · ${refs.liveEpic} · 0 done this run · 3 left · working ${refs.working} · stops after 5 tickets (1 taken)`;
     expect(markup).toContain(`aria-label="${line}"`);
     expect(markup).toContain(`Autopilot · ${refs.liveEpic}`);
-    expect(markup).toContain(`0/3 done · working ${refs.working}`);
+    expect(markup).toContain(`0 done this run · 3 left · working ${refs.working}`);
     expect(markup).toContain("stops after 5 tickets (1 taken)");
     expect(markup).toContain('data-run-state="ok"');
     expect(markup).toContain(">Working<");
@@ -419,6 +421,25 @@ describe("the run history", () => {
 
   it("says so when there are none", () => {
     expect(render(<RunHistoryList entries={[]} showWorkspace={false} />)).toContain("data-run-history-empty");
+  });
+});
+
+describe("the run-stopped notice", () => {
+  it("shows what the person who stopped it said, and offers no link to the issue already open", () => {
+    const entry = entryOf("stopped");
+    const notice = stopNotice(entry)!;
+    expect(notice.attention).not.toBeNull();
+    const card = (openRef: { workspace: string; ref: string } | null) =>
+      render(<RunStopNoticeCard notice={notice} openRef={openRef} onOpenRef={noop} onDetails={noop} onDismiss={noop} />);
+    const closed = card(null);
+    expect(closed).toContain("data-run-stop-note");
+    expect(closed).toContain("wrong thing");
+    expect(closed).toContain(`data-run-stop-open="${notice.attention!.ref}"`);
+    const onIt = card({ workspace: entry.workspace, ref: notice.attention!.ref });
+    expect(onIt).not.toContain("data-run-stop-open=");
+    expect(onIt).toContain("wrong thing");
+    // Another issue open: the link is still offered.
+    expect(card({ workspace: entry.workspace, ref: "ZZZ-1" })).toContain(`data-run-stop-open="${notice.attention!.ref}"`);
   });
 });
 

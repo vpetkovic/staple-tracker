@@ -264,7 +264,9 @@ describe("command inventory", () => {
 
   // MOVED BY A6 then A7: `open` and `doctor` each left this list when they
   // became real commands.
-  it.each(["bogus", "Init", "INIT", "ini", "--version", "-h", "task", "list", "diagnose"])(
+  // MOVED: `-h` left this list when every command learned `--help` and `-h`
+  // (test/command-help.test.ts): `staple -h` is `staple --help`, pinned below.
+  it.each(["bogus", "Init", "INIT", "ini", "--version", "task", "list", "diagnose"])(
     "`%s` is NOT a command and is rejected as validation",
     (token) => {
       const result = cli(token);
@@ -465,14 +467,16 @@ describe("help surface", () => {
    * runner is the plan's refusal — validation exit 2, no mutation. The full
    * behaviour lives in `init-lifecycle.test.ts`.
    */
-  it("prints the same help for `help` and `--help`, both exit 0", () => {
+  it("prints the same help for `help`, `--help` and `-h`, all exit 0", () => {
     const word = cli("help");
     const flag = cli("--help");
-    for (const result of [word, flag]) {
+    const short = cli("-h");
+    for (const result of [word, flag, short]) {
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
     }
     expect(flag.stdout).toBe(word.stdout);
+    expect(short.stdout).toBe(word.stdout);
     expect(word.stdout.startsWith("staple — local-first task tracker for coding agents")).toBe(true);
   }, 30_000);
 

@@ -174,7 +174,7 @@ staple milestone criterion STA-40 2 --unmet --evidence "no end-to-end run yet" \
 ### Watching from the web UI
 
 The web UI watches and stops runs; it never starts one. Each live run is a
-banner in the workspace rail — scope, tickets done, what it is working on, what
+banner in the workspace rail — scope, tickets it has done and work left, what it is on, what
 would stop it — with a **Stop** button. Tasks a run holds wear an
 **Autopilot** badge, **Run history** lists every run with its tickets and why
 it ended, and every open page shows a notice when a run stops, linking what
