@@ -4780,10 +4780,11 @@ export function startUiServer(options: UiOptions): UiHandle {
 
       if (url.pathname === "/api/queue/next") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
-        const { revision, next, skipped } = handle.store
-          .queue()
-          .effectiveQueue({ actor: url.searchParams.get("actor") ?? undefined });
-        json(res, 200, { revision, next, skipped });
+        const { revision, scope, next, skipped } = handle.store.queue().effectiveQueue({
+          actor: url.searchParams.get("actor") ?? undefined,
+          scope: url.searchParams.get("scope") ?? undefined,
+        });
+        json(res, 200, scope ? { revision, scope, next, skipped } : { revision, next, skipped });
         return;
       }
 

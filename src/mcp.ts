@@ -2636,19 +2636,29 @@ server.registerTool(
   "next_task",
   {
     description:
-      "The ONE fresh leaf you should take next and everything it stepped over. `next` is the first eligible row in effective order; `skipped` lists what came before it with why (resolved, gated, blocked, claimed, unavailable). Each row carries full claim metadata or null. Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order.",
-    inputSchema: { actor: z.string().optional().describe("Whose view (defaults to unattributed)"), ws: wsSchema },
+      "The ONE fresh leaf you should take next and everything it stepped over. `next` is the first eligible row in effective order; `skipped` lists what came before it with why (resolved, gated, blocked, claimed, unavailable). Each row carries full claim metadata or null. Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order. With `scope` the answer is limited to the work inside one container (an epic, a milestone, or any issue with children; a milestone means its members plus their descendants), queued or not: rows the plan reaches keep their effective order, then the scope's unqueued work in the order queueing the scope would give it, and the answer echoes `scope`. A null `next` with nothing unresolved in `skipped` means the scope has no open work left. An unknown scope is not_found; a leaf is validation. Under queue.policy = strict a scoped `next` from outside the plan can still be refused out_of_order while an eligible plan row exists elsewhere.",
+    inputSchema: {
+      actor: z.string().optional().describe("Whose view (defaults to unattributed)"),
+      scope: z
+        .string()
+        .optional()
+        .describe("Limit the answer to one container: an epic, a milestone, or any issue with children (identifier, bare number, or uuid)"),
+      ws: wsSchema,
+    },
     outputSchema: {
       revision: z.number(),
+      scope: z
+        .object({ issueId: z.string(), identifier: z.string(), title: z.string(), kind: kindSchema, status: statusEnum })
+        .optional(),
       next: z.object(effectiveRowShape).nullable(),
       skipped: z.array(z.object(effectiveRowShape)),
     },
     annotations: { title: "Next task", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ actor, ws }) =>
+  ({ actor, scope: scopeRef, ws }) =>
     run(() => {
-      const { revision, next, skipped } = storeFor(ws).queue().effectiveQueue({ actor });
-      return { revision, next, skipped };
+      const { revision, scope, next, skipped } = storeFor(ws).queue().effectiveQueue({ actor, scope: scopeRef });
+      return scope ? { revision, scope, next, skipped } : { revision, next, skipped };
     }),
 );
 

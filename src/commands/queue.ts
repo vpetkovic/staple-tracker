@@ -2,7 +2,7 @@
  * `staple queue` — the CLI half of docs/queue.md (STA-168, R2c).
  *
  *   queue [ls] [--all] [--effective] [--actor A]
- *   queue next [--actor A]
+ *   queue next [--actor A] [--scope <ref>]
  *   queue add <ref> [--before R | --after R | --at N] [--base N] [-m note]
  *   queue rm <ref> [--base N]
  *   queue mv <ref> (--before R | --after R | --at N) [--base N]
@@ -44,7 +44,7 @@ const HELP = `staple queue — the pickup plan: an explicit, human-ordered seque
 agents take next, independent of status, priority and display grouping.
 
   queue [ls] [--all] [--effective] [--actor A]
-  queue next [--actor A]
+  queue next [--actor A] [--scope <ref>]
   queue add <ref> [--before R | --after R | --at N] [--base N] [-m note]
   queue rm <ref> [--base N]
   queue mv <ref> (--before R | --after R | --at N) [--base N]
@@ -69,6 +69,18 @@ Every row is classified resolved | gated | blocked | claimed | unavailable | eli
 match wins, and none is ever dropped: rank orders work, it never lifts a
 blocker, a gate, a live claim or a resolved status.
 
+SCOPED PICKUP. "queue next --scope <ref>" answers the same question inside one
+container: an epic, a milestone, or any issue with children. A row is inside
+when the scope is one of its ancestors or, for a milestone, when the row or an
+ancestor is a member (members plus their descendants). The container does not
+have to be queued: rows the plan reaches keep their effective order, and the
+scope's unqueued work follows in the order queueing the scope would give it
+(a milestone's membership order, then the tree). Eligibility, reasons and each
+row's position in the whole effective order are unchanged; "skipped" lists only
+rows inside the scope. An unknown ref is not_found (exit 3); a leaf, or a ref
+from another workspace, is validation (exit 2). A null next with nothing
+unresolved in skipped means the scope has no open work left.
+
 REFUSALS. --base N is the revision a listing printed; a stale one is refused
 with revision_conflict (exit 7), the one retryable code a tracker write
 returns, and the server order stands. With queue.policy = strict (staple
@@ -80,8 +92,8 @@ retrying clears none of the three. A human steps over the plan on the record
 with "staple checkout <ref> --override -m <why>".
 
 --json prints {revision, entries, effective} on every subcommand, and
-{revision, next, skipped} for "queue next" — the same shape MCP and the UI
-server answer. Full contract: docs/queue.md.`;
+{revision, next, skipped} for "queue next" ({revision, scope, next, skipped}
+with --scope) — the same shape MCP and the UI server answer. Full contract: docs/queue.md.`;
 
 function integerOption(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;
@@ -162,6 +174,7 @@ export function runQueueCommand(rest: string[]): void {
       all: { type: "boolean" },
       effective: { type: "boolean" },
       actor: { type: "string" },
+      scope: { type: "string" },
       before: { type: "string" },
       after: { type: "string" },
       at: { type: "string" },
@@ -174,6 +187,11 @@ export function runQueueCommand(rest: string[]): void {
   // directory that has no workspace yet, like every other help does.
   if (values.help === true || sub === "help") return console.log(HELP);
   const actor = values.actor ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";
+  // Only the pickup answer is scoped; a listing or a plan write that silently
+  // ignored it would read as though it had been honoured.
+  if (values.scope !== undefined && sub !== "next") {
+    throw new StapleError("validation", `--scope applies to "queue next" only, not "queue ${sub}".`);
+  }
   const queue = resolveWorkspace({ db: values.db, ws: values.ws }).store.queue();
   const input = {
     ref: first,
@@ -193,14 +211,14 @@ export function runQueueCommand(rest: string[]): void {
   }
 
   if (sub === "next") {
-    const result = queue.effectiveQueue({ actor });
+    const result = queue.effectiveQueue({ actor, scope: values.scope });
     if (values.json) {
-      return console.log(
-        JSON.stringify({ revision: result.revision, next: result.next, skipped: result.skipped }),
-      );
+      const { revision, scope, next, skipped } = result;
+      return console.log(JSON.stringify(scope ? { revision, scope, next, skipped } : { revision, next, skipped }));
     }
+    if (result.scope) console.log(`scope    ${result.scope.identifier} (${result.scope.kind}) ${result.scope.title}`);
     for (const row of result.skipped) console.log(`skipped  ${row.identifier.padEnd(9)} ${row.eligibility.padEnd(9)} ${row.reason ?? ""}`);
-    if (!result.next) return console.log("next     (nothing eligible)");
+    if (!result.next) return console.log(`next     (nothing eligible${result.scope ? " in scope" : ""})`);
     return console.log(`next     ${result.next.identifier} (position ${result.next.position}) ${result.next.title}`);
   }
 

@@ -1027,8 +1027,10 @@ The pickup queue
               queued container's expansion indented under it and a "-> n" cue giving
               each leaf's EFFECTIVE position; --effective prints effective order with
               its eligibility column; --all keeps resolved entries visible
-  queue next [--actor A]                the one row an agent should take, and every
-              row it stepped over with why (resolved, gated, blocked, claimed)
+  queue next [--actor A] [--scope <ref>]
+              the one row an agent should take, and every row it stepped over
+              with why (resolved, gated, blocked, claimed); --scope limits both to
+              the work inside an epic, a milestone or any parent, queued or not
   queue add <ref> [--before R|--after R|--at N] [--base N] [-m note]
               queue a task, an epic or a milestone; a container is never picked up
               itself, it expands to its open leaf work
