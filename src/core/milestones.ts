@@ -187,6 +187,24 @@ export function assertMembershipAllowed(
   }
 }
 
+/**
+ * How a goal run's gate on its milestone is told apart from a person's, on every device: its
+ * `gate_requested_by` is `goal-run:<actor>`. That column replicates with the gate, so any run
+ * on any machine recognises the gate as a run's, where a machine-local run id would not. A
+ * goal-run gate holds the milestone's CLOSE for its owner's review and nothing else: it
+ * queues no work beneath it (`WorkspaceStore.queuedByIn`), is not a `gate_pending` stop for a
+ * goal run, and may stand on a milestone that holds nothing yet. A person's gate is unchanged.
+ */
+export const GOAL_RUN_GATE_PREFIX = "goal-run:";
+
+export function goalRunGateRequester(actor: string): string {
+  return `${GOAL_RUN_GATE_PREFIX}${actor}`;
+}
+
+export function isGoalRunGate(requestedBy: string | null | undefined): boolean {
+  return typeof requestedBy === "string" && requestedBy.startsWith(GOAL_RUN_GATE_PREFIX);
+}
+
 /** The command that turns the feature on; every surface names it the same way. */
 export const MILESTONE_KIND_MISSING_MESSAGE =
   "No `milestone` kind is configured in this workspace. Run `staple kinds add milestone --label Milestone` to enable milestones.";

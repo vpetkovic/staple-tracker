@@ -167,7 +167,7 @@ function printStatus(status: RunStatus): void {
 }
 
 function printGoal(goal: RunGoalReport): void {
-  const gate = goal.gate === null ? "no gate" : `gate ${goal.gate.state} (${goal.gate.owner}${goal.gate.ownedByRun ? ", the run's" : ""})`;
+  const gate = goal.gate === null ? "no gate" : `gate ${goal.gate.state} (${goal.gate.owner}${goal.gate.ownedByRun ? ", this run's" : goal.gate.byGoalRun ? ", a goal run's" : ""})`;
   console.log(`  goal ${goal.milestone.identifier}: ${goal.counts.met}/${goal.counts.total} criteria met · ${gate} · pace ${goal.pace.verdict}: ${goal.pace.message}`);
   for (const criterion of goal.criteria) {
     const evidence = criterion.evidence.length === 0 ? "" : ` [${criterion.evidence.map((item) => item.value).join(", ")}]`;

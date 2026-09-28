@@ -100,7 +100,7 @@ describe("goal mode on the CLI and over MCP", () => {
     const answer = await cli("run", "continue");
     expect(answer.json).toMatchObject({ action: "take", ref: task, goal: { milestone: { identifier: m }, counts: { total: 1 }, gate: { state: "pending", ownedByRun: true } } });
     const viaMcp = await tool("continue_run", { actor: "agent-mcp" });
-    // Not the MCP run's gate: a gate someone else holds is a gate_pending stop for it.
-    expect(viaMcp).toMatchObject({ action: "stop", reason: "gate_pending", goal: { gate: { ownedByRun: false } } });
+    // The CLI run's gate is a goal-run gate: no stop for the MCP run, which waits on the held task.
+    expect(viaMcp).toMatchObject({ action: "wait", reason: "waiting_on_others", goal: { gate: { byGoalRun: true, ownedByRun: false } } });
   });
 });

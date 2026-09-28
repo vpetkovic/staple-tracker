@@ -37,12 +37,14 @@
  * works toward (`milestone-goal.ts`). Two rules follow from the milestone closing itself
  * when its last member lands:
  *
- *  - The run GATES the milestone to its owner (`goal.gateOwner`) when it starts, and again
- *    before it adds a member, whenever no gate is open on it. An open gate is the one thing
- *    that stops the derived close, and it replicates, so the milestone cannot close
- *    unreviewed while the run works, whoever lands its last member. The run's own gate
- *    (`gate_requested_at` equal to `goal.gatedAt`) is not a `gate_pending` stop; a gate a
- *    person opened still is.
+ *  - The run GATES the milestone to its owner (`goal.gateOwner`) when it starts, on every
+ *    `continue`, before it adds a member, and at `goal_met`, whenever no gate is open on it
+ *    (an empty milestone included). An open gate is the one thing that stops the derived
+ *    close, and it replicates, so the milestone cannot close unreviewed while the run works,
+ *    whoever lands its last member. The gate is a GOAL-RUN gate (`gate_requested_by`
+ *    `goal-run:<actor>`, `isGoalRunGate`), recognised by every run on every device: it holds
+ *    the close only, never the milestone's children, and it is no `gate_pending` stop for a
+ *    goal run over that milestone, whichever run opened it. A gate a person opened still is.
  *  - When the scope empties, the GOAL CHECK replaces `scope_empty`: every criterion met is
  *    `goal_met` (the gate is reopened if a person answered it meanwhile); otherwise, with
  *    room under the run's cap, the run creates a goal-check ticket, makes it a member and
@@ -95,7 +97,7 @@ import { insertEvent } from "./event-log.js";
 import { newId } from "./ids.js";
 import type { MilestoneGoal } from "./milestone-store.js";
 import { GOAL_CHILD_CAP_DEFAULT, type GoalCounts, RUN_ORIGIN_KIND } from "./milestone-goal.js";
-import { MILESTONE_KIND } from "./milestones.js";
+import { MILESTONE_KIND, goalRunGateRequester, isGoalRunGate } from "./milestones.js";
 import { databaseFile, type DriverAttachment, readDriver } from "./run-attachment.js";
 import type { WorkspaceStore } from "./store.js";
 import { normalizeInstant, parseRelativeSeconds } from "./telemetry/formats.js";
@@ -307,7 +309,11 @@ export interface RunStatus {
 export interface RunGoalReport extends MilestoneGoal {
   milestone: { identifier: string; title: string; status: string };
   children: { cap: number; created: number; left: number; refs: string[] };
-  gate: { state: string; owner: string; requestedAt: string; ownedByRun: boolean } | null;
+  /**
+   * The gate on the milestone. `byGoalRun`: a goal run's gate (any run's, on any device), which
+   * holds the close and nothing else; `ownedByRun`: this run opened it.
+   */
+  gate: { state: string; owner: string; requestedAt: string; requestedBy: string | null; byGoalRun: boolean; ownedByRun: boolean } | null;
 }
 
 /** What `evaluateStopRules` reads of a run. */
@@ -668,12 +674,11 @@ export class RunStore {
     }
 
     const unresolved = (this.db
-      .prepare("SELECT id, identifier, status, gate_state, gate_owner, gate_requested_at, unblock_owner, unblock_action FROM issues ORDER BY identifier")
-      .all() as Array<{ id: string; identifier: string; status: string; gate_state: string | null; gate_owner: string | null; gate_requested_at: string | null; unblock_owner: string | null; unblock_action: string | null }>)
+      .prepare("SELECT id, identifier, status, gate_state, gate_owner, gate_requested_by, unblock_owner, unblock_action FROM issues ORDER BY identifier")
+      .all() as Array<{ id: string; identifier: string; status: string; gate_state: string | null; gate_owner: string | null; gate_requested_by: string | null; unblock_owner: string | null; unblock_action: string | null }>)
       .filter((row) => inScope(row.id) && !this.store.isResolvedStatus(row.status));
-    // The gate a goal run opened on its own milestone holds the close for review; it is not a stop.
-    const ownGoalGate = (row: (typeof unresolved)[number]): boolean =>
-      row.id === rootId && run.goal !== null && run.goal.gatedAt !== null && row.gate_requested_at === run.goal.gatedAt;
+    // A goal run's gate on this goal run's milestone holds the close for review; it is not a stop.
+    const ownGoalGate = (row: (typeof unresolved)[number]): boolean => row.id === rootId && run.goal !== null && isGoalRunGate(row.gate_requested_by);
     const pendingGates = unresolved
       .filter((row) => row.gate_state === "pending" && !ownGoalGate(row))
       .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.gate_owner }));
@@ -712,9 +717,9 @@ export class RunStore {
   goalReport(run: Run): RunGoalReport | null {
     if (run.goal === null || run.scope.kind !== "milestone") return null;
     const row = this.db
-      .prepare("SELECT identifier, title, status, gate_state, gate_owner, gate_requested_at FROM issues WHERE id = ?")
+      .prepare("SELECT identifier, title, status, gate_state, gate_owner, gate_requested_at, gate_requested_by FROM issues WHERE id = ?")
       .get(run.scope.issueId) as
-      | { identifier: string; title: string; status: string; gate_state: string | null; gate_owner: string | null; gate_requested_at: string | null }
+      | { identifier: string; title: string; status: string; gate_state: string | null; gate_owner: string | null; gate_requested_at: string | null; gate_requested_by: string | null }
       | undefined;
     if (!row) return null;
     const scopeId = run.scope.issueId;
@@ -732,7 +737,9 @@ export class RunStore {
               state: row.gate_state,
               owner: row.gate_owner ?? "?",
               requestedAt: row.gate_requested_at ?? "",
-              ownedByRun: run.goal.gatedAt !== null && row.gate_requested_at === run.goal.gatedAt,
+              requestedBy: row.gate_requested_by,
+              byGoalRun: isGoalRunGate(row.gate_requested_by),
+              ownedByRun: isGoalRunGate(row.gate_requested_by) && run.goal.gatedAt !== null && row.gate_requested_at === run.goal.gatedAt,
             },
     };
   }
@@ -777,11 +784,8 @@ export class RunStore {
     if (!milestone || this.store.isResolvedStatus(milestone.status)) return;
     if (milestone.gate_state === "pending") return;
     if (milestone.gate_state === "changes_requested" && !final) return;
-    const holds = this.db
-      .prepare("SELECT 1 AS hit FROM milestone_members WHERE milestone_id = ? UNION ALL SELECT 1 FROM issues WHERE parent_id = ? LIMIT 1")
-      .get(milestone.id, milestone.id);
-    if (!holds) return;
-    this.store.gateIssue(milestone.id, { owner: row.goal_gate_owner, comment: reason }, row.actor);
+    // A goal-run gate, even on an empty milestone: a member added later cannot close it unreviewed.
+    this.store.gateIssue(milestone.id, { owner: row.goal_gate_owner, comment: reason, requestedBy: goalRunGateRequester(row.actor) }, row.actor);
     const gatedAt = (this.db.prepare("SELECT gate_requested_at FROM issues WHERE id = ?").get(milestone.id) as { gate_requested_at: string }).gate_requested_at;
     this.db.prepare("UPDATE runs SET goal_gated_at = ?, updated_at = ? WHERE id = ?").run(gatedAt, nowIso(), row.id);
     this.emit("run_goal_gated", row.actor, { runId: row.id, actor: row.actor, milestone: milestone.identifier, owner: row.goal_gate_owner, final });
@@ -1061,6 +1065,17 @@ export class RunStore {
       }
 
       let { recorded, resume } = this.settleCurrent(row, input.outcome, input.reason ?? null);
+      /**
+       * Every continue of a live goal run makes sure its gate stands (idempotent): one missing
+       * since the start (a person approved it) would let a member landing now close the
+       * milestone unreviewed.
+       */
+      if (isLive(row.state)) {
+        this.ensureGoalGate(
+          row,
+          `Goal run ${row.id} (${row.actor}) holds this milestone for ${row.goal_gate_owner ?? "its owner"}'s review while it works, so it cannot close unreviewed.`,
+        );
+      }
       let run = this.get(row.id);
 
       if (!isLive(run.state)) {

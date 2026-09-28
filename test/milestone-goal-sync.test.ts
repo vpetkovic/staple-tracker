@@ -146,4 +146,37 @@ describe("criterion marks replicate", () => {
     expect(b.store.milestones().get(created.milestone.id).goal.criteria[0]).toMatchObject({ verdict: "met", markedBy: "alice" });
     expect(differences("b", stateOf(a.db), stateOf(b.db))).toEqual([]);
   });
+
+  it("a mark or a new member on an undated milestone says nothing about its dates, so a concurrent date edit stands", async () => {
+    const { a, b, milestone } = await world();
+    const member = a.store.createIssue({ title: "Member" }).id;
+    await settle(a, b);
+    await tick();
+    b.use();
+    b.store.milestones().update(milestone, { targetDate: "2026-12-01" }, "bob");
+    await tick();
+    a.use();
+    a.store.milestones().markCriterion(milestone, 1, { verdict: "met", evidence: ["docs"] }, "alice");
+    a.store.milestones().addMember(milestone, member, {}, "alice");
+    await settle(a, b);
+    expect(listConflicts(a.db).filter((conflict) => conflict.entity === "milestone")).toEqual([]);
+    expect(listConflicts(b.db).filter((conflict) => conflict.entity === "milestone")).toEqual([]);
+    for (const device of [a, b]) {
+      device.use();
+      expect(device.store.milestones().get(milestone).milestone.targetDate).toBe("2026-12-01");
+    }
+    expect(differences("tail", stateOf(a.db), stateOf(b.db))).toEqual([]);
+  });
+
+  it("a goal run on another device recognises the first device's run gate by what replicated with it", async () => {
+    const { a, b, milestone } = await world();
+    const member = a.store.createIssue({ title: "Member" }).id;
+    a.store.milestones().addMember(milestone, member, {}, "alice");
+    a.store.runs().start({ actor: "bot-a", scope: milestone });
+    await settle(a, b);
+    b.use();
+    expect(b.store.gate(milestone)).toMatchObject({ state: "pending", requestedBy: "goal-run:bot-a" });
+    const run = b.store.runs().start({ actor: "bot-b", scope: milestone });
+    expect(b.store.runs().continue({ actor: "bot-b", run: run.id })).toMatchObject({ action: "take", goal: { gate: { byGoalRun: true, ownedByRun: false } } });
+  });
 });

@@ -438,9 +438,13 @@ on the day. The verdict, first match wins: `done` (every countable leaf
 landed), `no_target`, `overdue`, `no_estimate`, `behind` (the remaining
 estimate exceeds the time to the end of the target day even worked around the
 clock: a certain miss, not a forecast) and `on_track` (it fits; that says
-nothing about whether anyone will work it). Every field is a function of the
-UTC day, so two reads a moment apart agree. `show` prints it as the `pace`
-line.
+nothing about whether anyone will work it). Every field but the verdict is a
+function of the UTC day and the plan, and the payload carries no seconds-left
+figure, so two reads a moment apart agree on them; the `behind`/`on_track`
+verdict alone compares the remaining estimate with the seconds left to the end
+of the target day at the moment of the read, so it can flip from `on_track` to
+`behind` during that day with nothing else changed. `show` prints it as the
+`pace` line.
 
 ### Gating a milestone
 
@@ -451,9 +455,14 @@ member lands (the gate immunity above). It **queues nothing through
 membership**: a gate holds the tree beneath its issue by `parent_id`, as every
 gate does, and members are planned, not parented. So a gated milestone's
 members stay eligible, and only issues somebody parented under the milestone
-itself are held. That is what lets a goal run gate its milestone as it starts
-and keep working the members; approving the gate lands the milestone where its
-members say (done when they all landed).
+itself are held. Approving the gate lands the milestone where its members say
+(done when they all landed).
+
+A **goal run's gate** (`gate_requested_by` `goal-run:<actor>`, docs/runs.md
+"Goal mode") differs in exactly two ways: it holds nothing beneath the milestone,
+parented children included, so the run can work all of it; and it may stand on a
+milestone that holds nothing yet. It still holds the close, which is its whole
+purpose.
 
 ## Lifecycle
 

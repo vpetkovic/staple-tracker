@@ -368,26 +368,39 @@ may create itself. Both are refused on any other scope.
 member lands, as a parent does, unless a gate is open on it. So the run gates the
 milestone to its owner as it starts, with a comment saying why. That is the only
 design that holds whoever lands the last member: another agent, a person, or a
-device that syncs the landing in. The gate is an ordinary gate and replicates; a
-run-local rule would not. A milestone's gate queues nothing through membership
-(docs/milestones.md, "Gating a milestone"), so the members stay workable and the
-run keeps taking them. The run records the gate's `gate_requested_at` as
-`run.goal.gatedAt`; that gate is **not** a `gate_pending` stop. A gate a person
-opened (before the run, or after answering the run's) still is.
+device that syncs the landing in. The gate replicates; a run-local rule would not.
 
-The run keeps a gate open from then on:
+It is a **goal-run gate**: its `gate_requested_by` is `goal-run:<actor>`
+(`isGoalRunGate`, `milestones.ts`). That column travels with the gate, so every
+run on every device recognises it, and it changes three things, only for such a
+gate:
 
-- before it adds a member (a goal check or a follow-up), it gates again if the
-  gate was approved: approved is history, and the new work is unreviewed;
+- it holds the milestone's **close** and nothing else: it queues none of the
+  milestone's work, members (which no gate holds) or issues parented under it
+  (which a person's gate holds), so the run keeps taking them;
+- it is **not a `gate_pending` stop** for a goal run over that milestone, whichever
+  run opened it: two goal runs over one milestone, on one machine or two, share
+  it. `goal.gate.byGoalRun` says it is a run's, `ownedByRun` that this run opened
+  it;
+- it may stand on a milestone that holds **nothing yet**, so a member a person adds
+  later cannot land and close it unreviewed.
+
+A gate a person opened (before the run, or after answering the run's) is an
+ordinary gate: it holds the milestone's parented children and it stops the run
+`gate_pending`.
+
+The run keeps a gate open from then on, on **every `continue`** (idempotent), before
+it adds a member, and at `goal_met`:
+
+- a pending gate, the run's or anybody's, is left alone;
+- an approved gate is history: the run gates again, since whatever lands next
+  was not in the review;
 - a person's `changes_requested` also holds the close, so it is left standing
-  while the run works;
-- at `goal_met` it gates again unless its own gate is still pending, which
-  answers a `changes_requested` the way re-gating always does: the work goes back
-  for a second read.
+  while the run works; at `goal_met` the run gates again, which answers it the
+  way re-gating always does: the work goes back for a second read.
 
-A milestone with nothing in it yet cannot be gated; the run gates it before the
-first member it adds itself. A milestone a person resolved while the run worked
-is their decision: the run ends `scope_empty`.
+A milestone a person resolved while the run worked is their decision: the run
+ends `scope_empty`.
 
 **The goal check.** When the scope empties (where a run over an epic would end
 `scope_empty`):
@@ -442,7 +455,8 @@ and the run's next empty scope stops `budget`. `run.goal.children` lists them.
   "met": false,
   "pace": { … },                                   // docs/milestones.md, "Goal"
   "children": { "cap": 5, "created": 1, "left": 4, "refs": ["ABC-44"] },
-  "gate": { "state": "pending", "owner": "VP", "requestedAt": "…", "ownedByRun": true } }
+  "gate": { "state": "pending", "owner": "VP", "requestedAt": "…", "requestedBy": "goal-run:bot",
+            "byGoalRun": true, "ownedByRun": true } }
 ```
 
 `run.goal` is `{gateOwner, childCap, children: [{identifier, title, status,

@@ -72,7 +72,7 @@ import {
   type KindAppearanceMap,
   type KindWithAppearance,
 } from "./kind-appearance.js";
-import { MILESTONE_KIND } from "./milestones.js";
+import { MILESTONE_KIND, isGoalRunGate } from "./milestones.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
@@ -488,6 +488,8 @@ interface GateWalkNode {
   status: IssueStatus;
   gateState: string | null;
   gateOwner: string;
+  /** A goal run's gate (`isGoalRunGate`): it holds its milestone's close, never the work beneath. */
+  runGate: boolean;
   released: boolean;
   hasChildren: boolean;
   /** Is any descendant of this row still open? False for a leaf. */
@@ -3520,7 +3522,7 @@ export class WorkspaceStore {
   private gateWalkIndex(): GateWalkIndex {
     const rows = this.db
       .prepare(
-        "SELECT id, parent_id, identifier, title, status, gate_state, gate_owner, gate_released FROM issues",
+        "SELECT id, parent_id, identifier, title, status, gate_state, gate_owner, gate_requested_by, gate_released FROM issues",
       )
       .all() as Array<{
       id: string;
@@ -3530,6 +3532,7 @@ export class WorkspaceStore {
       status: string;
       gate_state: string | null;
       gate_owner: string | null;
+      gate_requested_by: string | null;
       gate_released: number;
     }>;
     const nodes = new Map<string, GateWalkNode>(
@@ -3543,6 +3546,7 @@ export class WorkspaceStore {
           status: row.status as IssueStatus,
           gateState: row.gate_state,
           gateOwner: row.gate_owner ?? "?",
+          runGate: isGoalRunGate(row.gate_requested_by),
           released: row.gate_released === 1,
           hasChildren: false,
           hasOpenDescendant: false,
@@ -3671,7 +3675,8 @@ export class WorkspaceStore {
       seen.add(cursor);
       const node = index.nodes.get(cursor);
       if (!node) break;
-      if (isActiveGate(node.gateState)) {
+      // A goal run's gate holds its milestone's close for review, not the milestone's children.
+      if (isActiveGate(node.gateState) && !node.runGate) {
         if (!released) return { identifier: node.identifier, owner: node.gateOwner };
         // Released from THIS gate only; keep climbing for an outer one.
         released = false;
@@ -3806,10 +3811,12 @@ export class WorkspaceStore {
    */
   gateIssue(
     ref: string,
-    opts: { owner: string; comment?: string },
+    opts: { owner: string; comment?: string; requestedBy?: string },
     actor?: string | null,
   ): Issue {
     const owner = opts.owner?.trim();
+    // Who asked, when it is not the actor: a goal run's marker (`goalRunGateRequester`).
+    const requestedBy = opts.requestedBy ?? actor ?? null;
     if (!owner) {
       throw new StapleError("validation", "gate requires --owner: name the human who must approve");
     }
@@ -3841,7 +3848,8 @@ export class WorkspaceStore {
         row.kind === MILESTONE_KIND
           ? (this.db.prepare("SELECT COUNT(*) AS n FROM milestone_members WHERE milestone_id = ?").get(row.id) as { n: number }).n
           : 0;
-      if (children === 0 && members === 0) {
+      // A goal run's gate may stand on an empty milestone: it exists to hold the close.
+      if (children === 0 && members === 0 && !(row.kind === MILESTONE_KIND && isGoalRunGate(requestedBy))) {
         throw new StapleError(
           "validation",
           row.kind === MILESTONE_KIND
@@ -3874,7 +3882,7 @@ export class WorkspaceStore {
              updated_at = ?
            WHERE id = ? RETURNING *`,
         )
-        .get(parkedStatus, owner, actor ?? null, now, now, row.id) as unknown as IssueRow;
+        .get(parkedStatus, owner, requestedBy, now, now, row.id) as unknown as IssueRow;
 
       /**
        * TWO events, and the pairing is load-bearing.

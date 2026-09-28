@@ -46,6 +46,14 @@ export interface CapturedTable {
   readonly key: string;
   /** Payload field to column, for every synchronized column that is not derived. */
   readonly fields: Readonly<Record<string, Column>>;
+  /**
+   * A row inserted as a side effect, whose nulls are defaults nobody chose: its null columns
+   * are left out of the change rather than sent as a clear. `milestone_meta` is created
+   * lazily by any milestone write (a member, a mark), and its two nullable dates reported as
+   * set to null contested a date another device set meanwhile, over a date nobody touched.
+   * A write that does clear a date declares it in its own payload (`MilestoneStore.update`).
+   */
+  readonly insertNullsAreDefaults?: boolean;
 }
 
 const withoutDerived = (fields: Record<string, Column>): Record<string, Column> =>
@@ -55,7 +63,7 @@ export const CAPTURED_TABLES: readonly CapturedTable[] = [
   { table: "issues", entity: "issue", key: "id", fields: withoutDerived(ISSUE_FIELDS) },
   { table: "comments", entity: "comment", key: "id", fields: COMMENT_FIELDS },
   { table: "projects", entity: "project", key: "id", fields: PROJECT_FIELDS },
-  { table: "milestone_meta", entity: "milestone", key: "issue_id", fields: MILESTONE_FIELDS },
+  { table: "milestone_meta", entity: "milestone", key: "issue_id", fields: MILESTONE_FIELDS, insertNullsAreDefaults: true },
 ];
 
 const prepared = new WeakSet<DatabaseSync>();
@@ -154,6 +162,7 @@ export function takeRowChanges(db: DatabaseSync): RowChange[] {
       if (!(column.column in row)) continue;
       const after = row[column.column];
       if (before !== null && (!(column.column in before) || sameValue(before[column.column], after))) continue;
+      if (before === null && spec.insertNullsAreDefaults === true && (after === null || after === undefined)) continue;
       fields[field] = decodeColumn(after, column.encoding);
     }
     if (Object.keys(fields).length === 0) continue;

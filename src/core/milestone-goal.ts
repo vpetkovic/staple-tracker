@@ -231,7 +231,11 @@ export function goalPace(input: {
     verdict = "on_track";
     message = `${doneText}; ${hours(remainingSeconds)}${partial ? "+" : ""} of estimated work remains, ${daysToTarget} day(s) to ${target}.`;
   }
-  // Every field is a function of the UTC day, not the second, so two reads a moment apart agree.
+  /**
+   * No seconds-left field, so every field but `verdict` is a function of the UTC day and the
+   * plan. The verdict is not: `behind` against `on_track` compares with the seconds left to the
+   * end of the target day as of `now`, so it can flip within a day with nothing else changed.
+   */
   return { targetDate: target, daysToTarget, leaves, laborSeconds, remainingSeconds, partial, unplannedRefs, verdict, message };
 }
 

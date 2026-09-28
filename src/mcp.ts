@@ -2983,7 +2983,16 @@ const runGoalReportShape = milestoneGoalShape
   .extend({
     milestone: z.object({ identifier: z.string(), title: z.string(), status: z.string() }),
     children: z.object({ cap: z.number(), created: z.number(), left: z.number(), refs: z.array(z.string()) }),
-    gate: z.object({ state: z.string(), owner: z.string(), requestedAt: z.string(), ownedByRun: z.boolean() }).nullable(),
+    gate: z
+      .object({
+        state: z.string(),
+        owner: z.string(),
+        requestedAt: z.string(),
+        requestedBy: z.string().nullable(),
+        byGoalRun: z.boolean().describe("A goal run's gate (requestedBy goal-run:<actor>): it holds the milestone's close, never its children"),
+        ownedByRun: z.boolean().describe("This run opened it"),
+      })
+      .nullable(),
   })
   .nullable()
   .describe("A goal run's goal check now; null on any other run");

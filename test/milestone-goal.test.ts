@@ -283,7 +283,7 @@ describe("a run over a milestone is a goal run", () => {
   it("gates the milestone at start, and its own gate is not a gate_pending stop", () => {
     const { m, a } = goalMilestone();
     const run = runs.start({ actor: BOT, scope: m, gateOwner: "VP" });
-    expect(gateOf(m)).toMatchObject({ state: "pending", owner: "VP", requestedBy: BOT });
+    expect(gateOf(m)).toMatchObject({ state: "pending", owner: "VP", requestedBy: `goal-run:${BOT}` });
     expect(run.goal!.gatedAt).toBe(gateOf(m)!.requestedAt);
     expect(runs.status(run.id).facts!.pendingGates).toEqual([]);
     const take = cont();
@@ -380,7 +380,7 @@ describe("a run over a milestone is a goal run", () => {
     expect(store.isResolvedStatus(status(m))).toBe(false);
     store.milestones().markCriterion(m, 1, { verdict: "met", evidence: [a] }, BOT);
     expect(cont()).toMatchObject({ action: "stop", reason: "goal_met", goal: { gate: { state: "pending", ownedByRun: true } } });
-    expect(gateOf(m)).toMatchObject({ state: "pending", requestedBy: BOT });
+    expect(gateOf(m)).toMatchObject({ state: "pending", requestedBy: `goal-run:${BOT}` });
   });
 
   it("an approved gate is history: the run gates again before it adds a member", () => {
@@ -448,5 +448,59 @@ describe("a run over a milestone is a goal run", () => {
     const withGoal = buildBrief({ ref: "TST-9", title: "Goal check: October", workspace: "/w", db: "/w/db", runId: "r", actor: BOT, finish: "in_review", instructions: null, goal, goalCheck: true });
     expect(withGoal).toContain('staple comment TST-9 "review: ..."');
     expect(withGoal).toContain("a goal check included");
+  });
+
+  it("the run's gate holds the milestone's close, not its parented children: the run works them", () => {
+    const created = store.milestones().create({ title: "Parent milestone", acceptanceCriteria: ["Done"] }, "vp");
+    if (created.preview) throw new Error("unreachable");
+    const m = created.milestone.identifier;
+    const child = issue("Filed under the milestone", { parent: m });
+    const run = runs.start({ actor: BOT, scope: m });
+    expect(gateOf(m)).toMatchObject({ state: "pending", requestedBy: `goal-run:${BOT}` });
+    expect(store.queuedBy(child)).toBeNull();
+    expect(cont()).toMatchObject({ action: "take", ref: child });
+    store.updateIssue(child, { status: "done" }, BOT);
+    // Its last work landed: the run's gate still holds the close.
+    expect(store.categoryOf(status(m))).toBe("gated");
+    runs.stop(run.id, "vp");
+    // A person's gate is unchanged: it holds the children beneath it.
+    const other = store.milestones().create({ title: "Person-gated" }, "vp");
+    if (other.preview) throw new Error("unreachable");
+    const held = issue("Held", { parent: other.milestone.identifier });
+    store.gateIssue(other.milestone.identifier, { owner: "VP" }, "vp");
+    expect(store.queuedBy(held)).toMatchObject({ identifier: other.milestone.identifier, owner: "VP" });
+  });
+
+  it("an empty milestone is gated at start, so a member added later cannot land it unreviewed", () => {
+    const created = store.milestones().create({ title: "Empty at start", acceptanceCriteria: ["Done"] }, "vp");
+    if (created.preview) throw new Error("unreachable");
+    const m = created.milestone.identifier;
+    runs.start({ actor: BOT, scope: m });
+    expect(gateOf(m)).toMatchObject({ state: "pending", owner: "VP" });
+    const added = issue("Added by a person");
+    store.milestones().addMember(m, added, {}, "vp");
+    expect(cont()).toMatchObject({ action: "take", ref: added });
+    store.updateIssue(added, { status: "done" }, BOT);
+    expect(store.categoryOf(status(m))).toBe("gated");
+    // The goal is checked, not skipped.
+    expect(cont()).toMatchObject({ action: "take", goal: { counts: { total: 1 } } });
+  });
+
+  it("every continue puts the gate back: approved mid-run, it is reopened before the next take", () => {
+    const { m, a } = goalMilestone();
+    runs.start({ actor: BOT, scope: m });
+    store.approveGate(m, {}, "VP");
+    expect(gateOf(m)).toMatchObject({ state: "approved" });
+    expect(cont()).toMatchObject({ action: "take", ref: a, goal: { gate: { state: "pending", byGoalRun: true, ownedByRun: true } } });
+  });
+
+  it("two goal runs over one milestone share the run gate: neither stops gate_pending on the other's", () => {
+    const { m, a, b } = goalMilestone();
+    const first = runs.start({ actor: BOT, scope: m });
+    const second = runs.start({ actor: "other-bot", scope: m });
+    expect(second.goal!.gatedAt).toBeNull();
+    expect(runs.status(second.id).decision).toEqual({ stop: false });
+    expect(runs.continue({ actor: BOT, run: first.id })).toMatchObject({ action: "take", ref: a });
+    expect(runs.continue({ actor: "other-bot", run: second.id })).toMatchObject({ action: "take", ref: b, goal: { gate: { byGoalRun: true, ownedByRun: false } } });
   });
 });
