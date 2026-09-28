@@ -22,15 +22,20 @@ function agoText(iso: string | null, nowMs: number): string {
   return nowMs - Date.parse(iso) < 60_000 ? "just now" : `${ago(iso, nowMs)} ago`;
 }
 
+/** "Codex: <reason>", unless the reason already starts with the name ("Codex isn't signed in…"). */
+function named(name: string, message: string): string {
+  return message.startsWith(name) ? message : `${name}: ${message}`;
+}
+
 function outcomeLine(outcome: PollOutcome, nowMs: number): LiveLine {
   switch (outcome.outcome) {
     case "stored":
       return { tone: "ok", text: `${outcome.name}: updated just now.` };
     case "failed":
-      return { tone: "warn", text: `${outcome.name}: ${outcome.failure?.message ?? "the check failed, so no reading was stored."}` };
+      return { tone: "warn", text: named(outcome.name, outcome.failure?.message ?? "the check failed, so no reading was stored.") };
     case "fresh":
       return outcome.failure !== null
-        ? { tone: "warn", text: `${outcome.name}: ${outcome.failure.message}` }
+        ? { tone: "warn", text: named(outcome.name, outcome.failure.message) }
         : { tone: "ok", text: `${outcome.name}: already checked ${agoText(outcome.lastAttemptAt, nowMs)}, so it wasn't asked again yet.` };
     case "deferred":
       return { tone: "warn", text: `${outcome.name} asked us to check less often, so we're waiting before asking again.` };

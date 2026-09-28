@@ -150,7 +150,7 @@ describe("the Usage page with live checks on", () => {
     expect(text(busy)).toContain("Checking…");
     const lines = refreshLines(refreshed, READ_AT);
     expect(lines).toEqual([
-      { tone: "warn", text: expect.stringContaining("Claude: Claude turned down the sign-in on this computer. Sign in to Claude Code again") },
+      { tone: "warn", text: expect.stringMatching(/^Claude turned down the sign-in on this computer\. Sign in to Claude Code again/) },
       { tone: "ok", text: "Codex: updated just now." },
     ]);
     const done = text(render({ busy: false, lines }));

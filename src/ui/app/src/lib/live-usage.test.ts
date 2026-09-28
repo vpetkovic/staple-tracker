@@ -62,7 +62,12 @@ describe("what Refresh says", () => {
 
   it("a recent check that FAILED is not called fine: its reason is repeated", () => {
     const failure = { code: "expired" as const, message: "Claude Code's sign-in on this computer has expired.", at: at(20) };
-    expect(refreshLines(result([outcome({ outcome: "fresh", failure })]), NOW)).toEqual([{ tone: "warn", text: `Claude: ${failure.message}` }]);
+    expect(refreshLines(result([outcome({ outcome: "fresh", failure })]), NOW)).toEqual([{ tone: "warn", text: failure.message }]);
+  });
+
+  it("does not repeat the provider's name when its reason already starts with it", () => {
+    const failure = { code: "signed_out" as const, message: "Codex isn't signed in for /home/.codex on this computer.", at: at(0) };
+    expect(refreshLines(result([outcome({ poller: "codex", name: "Codex", outcome: "failed", failure })]), NOW)).toEqual([{ tone: "warn", text: failure.message }]);
   });
 
   it("with capture off, says nothing was checked", () => {
