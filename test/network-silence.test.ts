@@ -1068,6 +1068,16 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
       const port = (ui.server.address() as AddressInfo).port;
       const origin = `http://127.0.0.1:${port}`;
       const token = ui.token;
+      /**
+       * A Codex home that is SIGNED IN (a fake auth.json with an unexpired token), bound
+       * below for the Refresh step: were live polling's gate not there, that Refresh would
+       * ask chatgpt.com and this test would see it. Signed out, the step would pass with
+       * the gate removed and prove nothing.
+       */
+      const signedInCodex = join(uiHome, "codex-signed-in");
+      mkdirSync(signedInCodex, { recursive: true });
+      const fakeToken = `x.${Buffer.from(JSON.stringify({ exp: 4_102_444_800 })).toString("base64url")}.y`;
+      writeFileSync(join(signedInCodex, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: fakeToken, account_id: "acct" } }), { mode: 0o600 });
 
       /**
        * Everything a freshly opened tab asks for, in the order it asks. The poll
@@ -1088,6 +1098,8 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         "/api/budget/collection",
         // Budget capture and bindings (config.json).
         "/api/budget/bindings",
+        // Live polling's switch and each account's last check (config.json and a state file).
+        "/api/budget/polling",
       ];
 
       for (let round = 0; round < 3; round += 1) {
@@ -1192,8 +1204,16 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
          * writes, excluded from the post-write sync trigger like the collection routes.
          */
         ["/api/budget/capture", { enabled: true }, 200],
-        ["/api/budget/bindings/bind", { source: "codex-rollout", account: "codex-plus" }, 200],
-        ["/api/budget/bindings/unbind", { source: "codex-rollout" }, 200],
+        ["/api/budget/bindings/bind", { source: "codex-rollout", account: "codex-plus", codexHome: signedInCodex }, 200],
+        /*
+         * The Usage page's Refresh with capture on and a home bound but live polling off,
+         * which is how every install starts: the passive scan runs and nobody is asked.
+         * Live polling is the one budget switch that may call out, and only when on;
+         * `budget collect` with it on is the scenario at the end of this file.
+         */
+        ["/api/budget/live", { enabled: false }, 200],
+        ["/api/budget/collection/refresh", {}, 200],
+        ["/api/budget/bindings/unbind", { source: "codex-rollout", codexHome: signedInCodex }, 200],
         ["/api/budget/capture", { enabled: false }, 200],
         /*
          * Removing budget readings: hub.db only, excluded from the post-write sync
@@ -1622,4 +1642,44 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
       rmSync(uiRepo, { recursive: true, force: true });
     }
   });
+});
+
+// ------------------------------------------------------- live usage polling
+
+/**
+ * Live polling is the one budget feature that makes a network call, behind its own
+ * consent (`telemetry.livePolling`, off by default; docs/execution-telemetry.md, "Live
+ * polling"). Off, `budget collect` stays silent (the scenario above and the UI routes);
+ * on, it may ask the bound providers and NOBODY ELSE: each call's destination is the
+ * usage host of a bound account's provider. The spy throws at the call, which the poller
+ * reports as a plain network failure, so nothing is stored and nothing else is asked.
+ */
+describe("budget collect with live polling on", () => {
+  it("asks only the bound provider's usage host, and with live polling off asks nobody", async () => {
+    const { bindBudgetSource, setBudgetCapture, setLivePolling } = await import("../src/core/telemetry/budget-config.js");
+    const pollHome = mkdtempSync(join(tmpdir(), "staple-netsilence-poll-"));
+    try {
+      const codexHome = join(pollHome, "codex");
+      mkdirSync(codexHome, { recursive: true });
+      const token = `x.${Buffer.from(JSON.stringify({ exp: 4_102_444_800 })).toString("base64url")}.y`;
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: token, account_id: "acct" } }), { mode: 0o600 });
+      setBudgetCapture(pollHome, true);
+      bindBudgetSource(pollHome, { source: "codex_rollout", account: "netsilence-codex", codexHome });
+      const env = { STAPLE_HOME: pollHome, CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: join(pollHome, "claude-unbound") };
+
+      const off = await staple(["budget", "collect", "--json"], env);
+      expect(off.status, off.stderr).toBe(0);
+      expect(JSON.parse(off.stdout).poll).toMatchObject({ enabled: false, skippedReason: "live_polling_off" });
+      expect(off.violations, describeViolations(off.violations as never)).toHaveLength(0);
+
+      setLivePolling(pollHome, true);
+      const on = await staple(["budget", "collect", "--json"], env);
+      expect(on.status, on.stderr).toBe(0);
+      expect(JSON.parse(on.stdout).poll.outcomes).toEqual([expect.objectContaining({ poller: "codex", outcome: "failed", failure: expect.objectContaining({ code: "network" }) })]);
+      expect(on.violations.length).toBeGreaterThan(0);
+      expect(new Set(on.violations.map((v) => v.destination))).toEqual(new Set(["chatgpt.com"]));
+    } finally {
+      rmSync(pollHome, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
