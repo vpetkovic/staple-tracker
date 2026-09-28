@@ -61,7 +61,7 @@ import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
-import { rederiveMilestonesAfterPull } from "../store.js";
+import { owedMilestoneRederive, rederiveMilestonesAfterPull } from "../store.js";
 import { blockerSets, narrateRewoundSets, reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
@@ -621,6 +621,8 @@ export async function syncRepository(
     clearTailSurvey(db);
     if (seed?.prefix) restampHubPrefix(options.home, db, seed.prefix.to);
     if (seed?.mode === "join") {
+      // What it repaired at a write was its own; what it joins has not been, here.
+      owedMilestoneRederive(db);
       joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) };
     }
   }

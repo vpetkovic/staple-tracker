@@ -592,6 +592,14 @@ export function rederiveMilestonesAfterPull(db: DatabaseSync): number {
 }
 
 /**
+ * Owe the milestone repair again. A join does this: a workspace that never synchronized repairs
+ * at its first write, and the milestones it then joins came from devices that may not have.
+ */
+export function owedMilestoneRederive(db: DatabaseSync): void {
+  db.prepare("DELETE FROM meta WHERE key = ?").run(MILESTONE_REDERIVE_KEY);
+}
+
+/**
  * What the ladder decided, as a CATEGORY-shaped verdict rather than a status id
  * (STA-140). `workable` is the two-member band {unstarted, ready}; the others
  * name the category the parent should be moved into. Which concrete status that
@@ -3149,7 +3157,9 @@ export class WorkspaceStore {
     try {
       return existsSync(connectionPath(stapleHome(), state.repository_id));
     } catch {
-      // A home that cannot be read cannot say it is not connected: leave it to a sync.
+      // `stapleHome` refuses a home it cannot resolve (see `resolveDeviceId`); `existsSync`
+      // never throws. A home that cannot be resolved cannot say the workspace is not
+      // connected, so the repair is left to a sync.
       return true;
     }
   }

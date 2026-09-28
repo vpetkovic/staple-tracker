@@ -19,6 +19,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ENDPOINT } from "./fixtures/sync-machines.js";
+import { openWorkspace } from "../src/core/open.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
@@ -59,12 +60,13 @@ async function staleFleet(): Promise<{ a: Machine; b: Machine; m: string; t: str
   a.store.milestones().addMember(m, t, {}, "a");
   a.store.updateIssue(t, { assignee: "a" }, "a");
   a.store.updateIssue(t, { status: "in_progress" }, "a");
-  a.store.updateIssue(m, { status: "backlog" }, "a");
   await a.sync();
-  // b joins on the build before the repair: nothing re-derives M on its way in.
   const b = fleet.machine("b");
-  b.db.prepare("INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT(key) DO NOTHING").run(STAMP);
   await sync(b);
+  // Then M is left where an older build would have left it, and both pull that, stamped.
+  a.use();
+  a.store.updateIssue(m, { status: "backlog" }, "a");
+  await sync(a, b);
   expect([status(a, m), status(b, m)]).toEqual(["backlog", "backlog"]);
   return { a, b, m, t };
 }
@@ -221,5 +223,18 @@ describe("the milestone repair on a synchronized workspace", () => {
     expect([status(a, m), status(b, m), status(fresh, m)]).toEqual(["in_review", "in_review", "in_review"]);
     const want = stateOf(fresh.db);
     expect([...differences("a", want, stateOf(a.db)), ...differences("b", want, stateOf(b.db))]).toEqual([]);
+  });
+
+  it("repairs what a workspace joins, though it repaired its own at a write before joining", async () => {
+    const { a, m } = await staleFleet();
+    // j has never synchronized nor connected: its first write repairs its own and stamps.
+    const prepared = fleet!.prepare("j");
+    const before = openWorkspace(join(prepared.dir, ".staple", "staple.db"));
+    before.store.createIssue({ title: "j's own, before joining" });
+    expect(before.store.db.prepare("SELECT value FROM meta WHERE key = ?").get(STAMP)).toBeDefined();
+    before.store.db.close();
+    const j = fleet!.connect("j", prepared);
+    await sync(j, a);
+    expect([status(j, m), status(a, m)]).toEqual(["in_progress", "in_progress"]);
   });
 });
