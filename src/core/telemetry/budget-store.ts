@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
 import { StapleError } from "../types.js";
-import { budgetDedupKey, type BudgetSourceKind, windowLabel } from "./formats.js";
+import { AUTHORITATIVE_SOURCE_KINDS, budgetDedupKey, type BudgetSourceKind, windowLabel } from "./formats.js";
 import { sampleQuality, type BudgetState, type Quality } from "./quality.js";
 
 /** Samples join a window when their resets are this close (Window identity). */
@@ -24,6 +24,13 @@ export const WINDOW_TOLERANCE_SECONDS = 120;
 export const MIN_ID_PREFIX = 8;
 /** An unchanged reading is stored again, as a heartbeat, once the last one is this old. */
 export const HEARTBEAT_SECONDS = 300;
+/**
+ * How far below a window's high-water mark an authoritative reading must be before it is
+ * taken as the provider having reset the usage in place (`usage_reset`). One point absorbs
+ * the rounding between sources (the status line reports tenths, the usage endpoint whole
+ * or near-whole percents); anything more is not rounding.
+ */
+export const USAGE_RESET_TOLERANCE_PERCENT = 1;
 
 export type BudgetUnit = "percent_of_limit" | "tokens" | "usd" | "requests";
 export type Confidence = "high" | "medium" | "low";
@@ -338,7 +345,15 @@ export class BudgetStore {
     const { reading, provider, accountRef } = input;
     const skipped = (reason: SkipReason): SampleOutcome => ({ stored: false, reason, limitKey: reading.limitKey, observedAt: reading.observedAt });
 
-    const joined = reading.resetsAt === null ? null : this.matchingWindow(provider, accountRef, reading.limitKey, reading.resetsAt);
+    let joined = reading.resetsAt === null ? null : this.matchingWindow(provider, accountRef, reading.limitKey, reading.resetsAt);
+    // An authoritative reading can correct the window: the provider's own figure, asked for
+    // just now, below what the window already recorded means the usage was reset or refunded
+    // in place (the reset instant did not move). The window is closed as superseded
+    // (`usage_reset`) and the reading opens its successor, so the high-water mark restarts
+    // from what the provider says. A passive reading never does this: a lower status-line
+    // or rollout figure is most often an older cache, and high-water stays the safe answer.
+    const corrected = joined !== null && this.isUsageReset(joined.id, reading) ? joined : null;
+    if (corrected !== null) joined = null;
     const needsWindow = reading.resetsAt !== null && joined === null;
 
     let heartbeat = false;
@@ -387,6 +402,9 @@ export class BudgetStore {
     }
 
     const windowId = needsWindow ? this.openWindow(input) : (joined?.id ?? null);
+    if (corrected !== null && windowId !== null) {
+      this.db.prepare("UPDATE limit_windows SET superseded_by = ?, superseded_reason = 'usage_reset' WHERE id = ?").run(windowId, corrected.id);
+    }
     const missing: Missing = { ...reading.missing };
     if (windowId === null) missing.windowId = "reset_not_reported";
     if (reading.resetsAt === null && missing.resetsAt === undefined) missing.resetsAt = "reset_not_reported";
@@ -437,6 +455,20 @@ export class BudgetStore {
       );
     const sample = this.getSample(id)!;
     return { stored: true, sample: { ...sample, quality: sampleQuality(sample) } };
+  }
+
+  /**
+   * Whether an authoritative reading shows the window's usage was reset in place: its
+   * value is more than {@link USAGE_RESET_TOLERANCE_PERCENT} below the highest value the
+   * window recorded up to the reading's own instant.
+   */
+  private isUsageReset(windowId: string, reading: BudgetReading): boolean {
+    if (!AUTHORITATIVE_SOURCE_KINDS.has(reading.source.kind)) return false;
+    const row = this.db
+      .prepare("SELECT MAX(used_percent) AS high FROM budget_samples WHERE window_id = ? AND observed_at <= ?")
+      .get(windowId, reading.observedAt) as { high: number | null } | undefined;
+    const high = row?.high ?? null;
+    return high !== null && reading.usedPercent < high - USAGE_RESET_TOLERANCE_PERCENT;
   }
 
   /**
