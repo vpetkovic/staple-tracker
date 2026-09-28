@@ -777,6 +777,57 @@ describe("scoped pickup", () => {
     expect(error.message).toContain(`Take ${outside}`);
   });
 
+  it("two overlapping membership cycles resolve at once, scoped and queued", () => {
+    milestoneKind();
+    // P > E > t, with milestones M1 and M2 parented under E; E is a member of M1
+    // and P of M2. Two cycles overlap at E, so a walk that re-enters containers
+    // forks at every level up to the depth guard — exponential, from a read.
+    const p = issue("P", { kind: "epic" });
+    const e = issue("E", { kind: "epic", parent: p });
+    const t = issue("t", { parent: e });
+    const m1 = store.createIssue({ title: "M1", kind: MILESTONE_KIND, parent: e }).identifier;
+    const m2 = store.createIssue({ title: "M2", kind: MILESTONE_KIND, parent: e }).identifier;
+    store.milestones().addMember(m1, e, {}, "vp");
+    store.milestones().addMember(m2, p, {}, "vp");
+
+    const started = performance.now();
+    for (const scope of [p, e, m1, m2]) expect(scoped(scope)).toEqual([`${t}:eligible`]);
+    queue.enqueue(p, {}, "vp");
+    expect(effective()).toEqual([`${t}:eligible`]);
+    expect(queue.effectiveQueue().rows[0]!.via).toBe(p);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it("a scope holds exactly what queueing it alone would reach", () => {
+    milestoneKind();
+    // A shared member, a nested milestone and a cycle, all at once: for every
+    // container, the scoped rows are the queue's expansion of that container.
+    const p = issue("P", { kind: "epic" });
+    const e = issue("E", { kind: "epic", parent: p });
+    issue("e1", { parent: e });
+    issue("e2", { parent: e });
+    const m = store.createIssue({ title: "M", kind: MILESTONE_KIND, parent: p }).identifier;
+    const n = store.createIssue({ title: "N", kind: MILESTONE_KIND }).identifier;
+    const loose = issue("loose");
+    const shared = issue("shared");
+    store.milestones().addMember(m, shared, {}, "vp");
+    store.milestones().addMember(m, e, {}, "vp");
+    store.milestones().addMember(n, loose, {}, "vp");
+    store.milestones().addMember(n, p, {}, "vp");
+    const containers = [p, e, m, n];
+
+    const scopedAnswers = containers.map((scope) => scoped(scope));
+    containers.forEach((container, index) => {
+      queue.enqueue(container, {}, "vp");
+      const reached = queue
+        .effectiveQueue()
+        .rows.filter((row) => !row.unqueued)
+        .map((row) => `${row.identifier}:${row.eligibility}`);
+      expect(scopedAnswers[index], container).toEqual(reached);
+      queue.dequeue(container, {}, "vp");
+    });
+  });
+
   it("an empty container is an empty scope, and never offers itself", () => {
     const empty = issue("Empty", { kind: "epic" });
     const finished = issue("Finished");
