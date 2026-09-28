@@ -58,6 +58,7 @@
 import { ChevronRight, Menu, Monitor, PanelLeft, Plus, Search, SquarePen } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CloudStrip } from "@/components/CloudStrip";
+import { RunStrip } from "@/components/autopilot/RunBanner";
 import { getCloudStatus, getCloudWorkspaces } from "@/lib/api";
 import type { CloudSurfaceReport, HubCloudReport } from "@/lib/types";
 import { FilterBar } from "@/components/filters/FilterBar";
@@ -394,6 +395,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         */}
         <main className="relative min-h-0 flex-1 overflow-hidden">{children}</main>
 
+        {/*
+          The phone's run banner: the rail is a closed drawer here, so a live autopilot run is
+          one line and a Stop above the tab bar, on every view (components/autopilot).
+        */}
+        {wide ? null : <RunStrip />}
         {wide ? null : <ViewTabBar />}
       </div>
     </div>

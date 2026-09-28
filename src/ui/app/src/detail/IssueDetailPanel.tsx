@@ -30,6 +30,7 @@
  *            under the status line, and the primary action in a sticky bottom bar within
  *            thumb reach, above the home indicator.
  */
+import { AutopilotNotice } from "@/components/autopilot/AutopilotBadge";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
@@ -458,6 +459,9 @@ export function DetailContent({
         </StatusLine>
 
         {sheet ? <SummaryChips detail={detail} controller={controller} refresh={refresh} onRequestApproval={onRequestApproval} className="mt-4" /> : null}
+
+        {/* A live autopilot run is working on this task: which one, and the way to it. */}
+        <AutopilotNotice workspace={detail.workspace} issueId={issue.id} className="mt-3" />
 
         {/* On a desk the refusal sits right under the controls that caused it. */}
         {sheet ? null : <ActionRefusal controller={controller} className="mt-4" />}

@@ -40,6 +40,7 @@ import {
   ChevronDown,
   Cog,
   FolderKanban,
+  History,
   LayoutGrid,
   Moon,
   PanelLeftClose,
@@ -55,7 +56,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { projectsForWorkspace } from "@/lib/projects";
 import { isResolvedStatus } from "@/lib/settings";
 import { openProjectDialog, openSettings } from "@/lib/shell-events";
-import { scopeName, useSession, type ViewName } from "@/lib/session";
+import { isAllWorkspaces, scopeName, useSession, type ViewName } from "@/lib/session";
+import { useRuns } from "@/lib/runs";
+import { openRunHistory } from "@/lib/shell-events";
+import { RunCard } from "@/components/autopilot/RunBanner";
 import { cn } from "@/lib/utils";
 import { NAV_GROUPS, chooseRailWorkspace, projectCaption, railWorkspaces, type NavGroup, type NavItem } from "./nav-model";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -375,6 +379,42 @@ function WorkspaceRows() {
   );
 }
 
+/**
+ * AUTOPILOT — the live runs as banners (components/autopilot/RunBanner.tsx), then the way to
+ * every run's history. Under the views, because a run works the workspace the rail is on
+ * (All workspaces shows every workspace's, each card naming its own); absent altogether until
+ * the workspace has had a run, so a tracker nobody runs agents on keeps its rail unchanged.
+ */
+function AutopilotSection({ onNavigate }: { onNavigate?: () => void }) {
+  const session = useSession();
+  const { entries, live } = useRuns();
+  if (entries.length === 0) return null;
+  const all = isAllWorkspaces(session);
+  return (
+    <RailSection id="autopilot" label="Autopilot">
+      {live.map((entry) => (
+        <li key={`${entry.workspace}/${entry.run.id}`} className="pb-1.5">
+          <RunCard entry={entry} showWorkspace={all} onNavigate={onNavigate} />
+        </li>
+      ))}
+      <li>
+        <button
+          type="button"
+          data-nav-run-history
+          onClick={() => {
+            onNavigate?.();
+            openRunHistory();
+          }}
+          className={RAIL_ROW_CLASS}
+        >
+          <History aria-hidden />
+          <span className="truncate">Run history</span>
+        </button>
+      </li>
+    </RailSection>
+  );
+}
+
 /** The theme, as a switch: a row on the phone, an icon beside Settings on a desk. */
 function ThemeToggle({ asRow }: { asRow: boolean }) {
   const [dark, setDark] = useState(
@@ -491,6 +531,7 @@ export function NavRail({
           onSelect={select}
           onNavigate={onNavigate}
         />
+        <AutopilotSection onNavigate={onNavigate} />
         <NavGroupSection
           group={machine!}
           label={machine!.label}

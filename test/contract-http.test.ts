@@ -785,6 +785,16 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/queue/remove",
       "/api/queue/reorder",
       "/api/revisions",
+      /**
+       * Autopilot runs (docs/runs.md): the page watches and stops, nothing more. One read
+       * (plural, GET-only) and three verbs under the singular prefix, the milestone
+       * family's shape; no start and no continue, which only an agent does.
+       * `test/ui-runs.test.ts` pins them.
+       */
+      "/api/run/pause",
+      "/api/run/resume",
+      "/api/run/stop",
+      "/api/runs",
       "/api/settings",
       "/api/timing/quality",
     ]);

@@ -54,6 +54,7 @@ import type {
   ProjectRow,
   QueueView,
   RemoteBackup,
+  RunEntry,
   RemoteDevice,
   StapleEvent,
   VocabularyOp,
@@ -1005,6 +1006,31 @@ export const deleteProject = (target: { ws?: string; ref: string }) =>
  */
 export const assignProject = (target: { ws?: string; ref: string; project: string | null }) =>
   projectWrite<IssueDetail>("assign", target);
+
+// ---------- autopilot runs (docs/runs.md) ----------
+
+/**
+ * Every live run and the recent ended ones, each the object `staple run status --json`
+ * prints plus its workspace. With no `ws` in hub mode, every workspace's.
+ */
+export const getRuns = (params: { ws?: string; limit?: number } = {}) =>
+  request<{ runs: RunEntry[] }>(`/api/runs${qs(params)}`);
+
+/**
+ * The page's run verbs. It watches and stops runs and never starts or continues one: only
+ * an agent does that. `actor` is the person using this page (`personActor()`), recorded as
+ * who stopped the run; without one the server records "ui".
+ */
+const runWrite = (route: "stop" | "pause" | "resume", body: { ws?: string; id: string; actor?: string; note?: string }) =>
+  request<RunEntry>(`/api/run/${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+export const stopRun = (target: { ws?: string; id: string; actor?: string; note?: string }) => runWrite("stop", target);
+export const pauseRun = (target: { ws?: string; id: string; actor?: string }) => runWrite("pause", target);
+export const resumeRun = (target: { ws?: string; id: string; actor?: string }) => runWrite("resume", target);
 
 // ---------- budget collection, capture and bindings (machine-local) ----------
 

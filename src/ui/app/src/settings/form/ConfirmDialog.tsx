@@ -11,7 +11,7 @@
  * The buttons say what they DO, never "OK": "Discard changes" / "Keep editing",
  * "Remove" / "Cancel". The safe action is the one focus starts on.
  */
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import { useBackToClose } from "@/lib/back-to-close";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { Button } from "@/components/ui/button";
@@ -25,8 +25,12 @@ export interface ConfirmDialogProps {
   confirmLabel: string;
   cancelLabel?: string;
   destructive?: boolean;
+  /** Disables the confirm button while the thing it does is under way. */
+  busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Anything the choice needs besides the sentence (a note field), between it and the buttons. */
+  children?: ReactNode;
 }
 
 export function ConfirmDialog({
@@ -36,8 +40,10 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel = "Cancel",
   destructive = false,
+  busy = false,
   onConfirm,
   onCancel,
+  children,
 }: ConfirmDialogProps) {
   const safe = useRef<HTMLButtonElement>(null);
   // Phone Back is the safe answer — Keep editing, Cancel — and never reaches what is beneath.
@@ -59,11 +65,12 @@ export function ConfirmDialog({
           <DialogDescription className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
             {description}
           </DialogDescription>
+          {children}
           <div className="mt-4 flex items-center justify-end gap-2">
             <Button ref={safe} type="button" variant="outline" size="sm" onClick={onCancel}>
               {cancelLabel}
             </Button>
-            <Button type="button" variant={destructive ? "destructive" : "default"} size="sm" onClick={onConfirm}>
+            <Button type="button" variant={destructive ? "destructive" : "default"} size="sm" disabled={busy} onClick={onConfirm}>
               {confirmLabel}
             </Button>
           </div>
