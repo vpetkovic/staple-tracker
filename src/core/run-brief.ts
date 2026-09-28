@@ -62,7 +62,7 @@ For every criterion you judge unmet, file the work that would meet it with --fol
 The criteria now:
 ${criteria}
 
-Steps 1, 5 and 6 below do not apply (no branch, no review, no commit). Comment your verdicts on ${input.ref}, then close it: \`staple done ${input.ref} --json\`.
+Steps 1 and 6 below do not apply (no branch, no commit). Step 5 does, on your verdicts: review them as a skeptic whose job is to find a criterion marked met that the evidence does not show, or an unmet one whose follow-up would not meet it; re-read the evidence rather than the tickets' claims, and correct any mark it overturns. Record it as \`staple comment ${input.ref} "review: ..."\` (the driver fails a ticket handed on without one, a goal check included). Then comment your verdicts and close it: \`staple done ${input.ref} --json\`.
 `;
   }
   return `

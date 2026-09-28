@@ -349,6 +349,7 @@ CREATE TABLE runs (
         until_at        TEXT,
         ceiling_percent REAL,
         ceiling_account TEXT,
+        override_reason TEXT,
         stop_reason     TEXT,
         stop_detail     TEXT NOT NULL DEFAULT '{}',
         stopped_by      TEXT,

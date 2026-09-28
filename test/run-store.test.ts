@@ -457,19 +457,136 @@ describe("run continue", () => {
     expect(runs.continue({ run: run.id })).toMatchObject({ action: "take" });
   });
 
-  it("under queue.policy strict, takes unqueued work inside its scope while a queued row elsewhere is ready", () => {
+  it("under queue.policy strict, follows the whole plan: a scope alone waits out_of_order, it never jumps the queue", () => {
     const { epic, a } = epicWithTwo();
     const queued = issue("Queued elsewhere");
     store.queue().mutate("add", { ref: queued }, "vp");
     store.setSetting("queue.policy", "strict", "vp");
-    // A plain checkout is refused: the guard is real.
+    // A plain checkout is refused, and so is a run's take: the scope is no licence.
     expect(refused(() => store.checkoutIssue(a, "someone"), "out_of_order").detail).toMatchObject({ expected: [queued] });
-    runs.start({ actor: BOT, scope: epic });
-    expect(cont()).toMatchObject({ action: "take", ref: a });
+    const run = runs.start({ actor: BOT, scope: epic });
+    const answer = cont();
+    expect(answer).toMatchObject({ action: "wait", reason: "out_of_order", detail: { policy: "strict", expected: [queued] }, retryAfterSeconds: 60, run: { state: "active", counts: { taken: 0 } } });
+    expect(holder(a)).toBeNull();
     expect(events("queue_overridden")).toEqual([]);
-    // A queue run still takes the plan's head first.
-    const other = runs.start({ actor: "bot-2", scope: "queue" });
-    expect(runs.continue({ actor: "bot-2" })).toMatchObject({ action: "take", ref: queued, run: { id: other.id } });
+    // Once the plan's head is taken, the run's next row is in order again.
+    store.checkoutIssue(queued, "someone");
+    expect(cont()).toMatchObject({ action: "take", ref: a, run: { id: run.id } });
+    expect(events("queue_overridden")).toEqual([]);
+  });
+
+  it("under queue.policy strict, a run started with an override takes out of order, recording queue_overridden as checkout --override does", () => {
+    const { epic, a } = epicWithTwo();
+    const queued = issue("Queued elsewhere");
+    store.queue().mutate("add", { ref: queued }, "vp");
+    store.setSetting("queue.policy", "strict", "vp");
+    refused(() => runs.start({ actor: BOT, scope: epic, override: "  " }), "validation");
+    const run = runs.start({ actor: BOT, scope: epic, override: "VP wants the epic first" });
+    expect(run.override).toBe("VP wants the epic first");
+    const answer = cont();
+    expect(answer).toMatchObject({ action: "take", ref: a, why: expect.stringContaining("VP wants the epic first") });
+    expect(holder(a)).toBe(BOT);
+    // The same event shape a human's checkout --override writes.
+    const [overridden] = events("queue_overridden");
+    const b = issue("Plain override target");
+    store.checkoutIssue(b, "human", undefined, { overrideReason: "because" });
+    const human = events("queue_overridden")[1]!;
+    expect(Object.keys(overridden!).sort()).toEqual(Object.keys(human).sort());
+    expect(overridden).toMatchObject({ identifier: a, reason: "VP wants the epic first", policy: "strict", expected: [queued], actor: BOT });
+    // A resume is mid-flight work, not a pickup: no second override.
+    expect(cont()).toMatchObject({ action: "take", ref: a, resumed: true });
+    expect(events("queue_overridden")).toHaveLength(2);
+  });
+
+  it("with no live run, settles the ticket of the actor's last ended run and answers why it ended", () => {
+    const { epic, a } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    cont();
+    runs.stop(run.id, "vp", "enough");
+    // Still held and nothing stated: nothing to record, but the driver hears the real stop.
+    expect(cont()).toMatchObject({ action: "stop", reason: "stopped_by_human", recorded: null, run: { id: run.id } });
+    const answer = cont({ outcome: "failed", reason: "stopped mid-ticket" });
+    expect(answer).toMatchObject({ action: "stop", reason: "stopped_by_human", recorded: { ref: a, outcome: "failed", reason: "stopped mid-ticket", source: "stated" } });
+    expect(holder(a)).toBeNull();
+    // Settled, there is nothing left to continue.
+    expect(cont()).toMatchObject({ action: "stop", reason: "no_run" });
+  });
+
+  it("scope_gone: a scope that lost every child stops the run, releases its held ticket, and never breaks status", () => {
+    const parent = issue("Plain parent");
+    const kid = issue("Only child", { parent });
+    const run = runs.start({ actor: BOT, scope: parent });
+    const other = runs.start({ actor: BOT, scope: "queue" });
+    expect(runs.continue({ actor: BOT, run: run.id })).toMatchObject({ action: "take", ref: kid });
+    // No verb re-parents; a restore (cloud rewind) or an applied sync is how a parent loses
+    // its children or disappears, so the row is moved the way those write it.
+    const kidId = store.getIssue(kid).id;
+    store.db.prepare("UPDATE issues SET parent_id = NULL WHERE id = ?").run(kidId);
+    // Reading never throws, for this run or for a listing of every run.
+    expect(runs.status(run.id).decision).toMatchObject({ stop: true, reason: "scope_gone", state: "stopped" });
+    expect(runs.statuses({ all: true })).toHaveLength(2);
+    const answer = runs.continue({ actor: BOT, run: run.id });
+    expect(answer).toMatchObject({ action: "stop", reason: "scope_gone", recorded: { ref: kid, outcome: "failed", source: "stated" }, run: { state: "stopped" } });
+    expect(holder(kid)).toBeNull();
+    expect(other.state).toBe("active");
+  });
+
+  it("scope_gone: a deleted scope issue, and a stated failure on its ticket still lands", () => {
+    const epic = issue("Doomed epic", { kind: "epic" });
+    const kid = issue("Doomed child", { parent: epic });
+    const run = runs.start({ actor: BOT, scope: epic });
+    cont();
+    // As a restore removes a row: the child is detached, the epic is gone.
+    const epicId = store.getIssue(epic).id;
+    store.db.prepare("UPDATE issues SET parent_id = NULL WHERE parent_id = ?").run(epicId);
+    store.db.prepare("DELETE FROM issues WHERE id = ?").run(epicId);
+    const answer = cont({ outcome: "failed", reason: "epic deleted" });
+    expect(answer).toMatchObject({ action: "stop", reason: "scope_gone", recorded: { ref: kid, outcome: "failed", reason: "epic deleted" }, run: { id: run.id, state: "stopped" } });
+    expect(holder(kid)).toBeNull();
+  });
+
+  it("an epic that emptied under a held ticket: the ticket is failed and released, not resumed out of scope", () => {
+    const epic = issue("Emptied epic", { kind: "epic" });
+    const kid = issue("Moved-out child", { parent: epic });
+    runs.start({ actor: BOT, scope: epic });
+    expect(cont()).toMatchObject({ action: "take", ref: kid });
+    store.db.prepare("UPDATE issues SET parent_id = NULL WHERE id = ?").run(store.getIssue(kid).id);
+    // An epic is a scope whatever it holds: empty, not gone.
+    const answer = cont();
+    expect(answer).toMatchObject({
+      action: "stop",
+      reason: "scope_empty",
+      recorded: { ref: kid, outcome: "failed", source: "stated", reason: expect.stringContaining("no longer inside") },
+      run: { state: "completed" },
+    });
+    expect(holder(kid)).toBeNull();
+  });
+
+  it("one actor's two live runs never both take the same held ticket", () => {
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+    const milestone = issue("Shared milestone", { kind: MILESTONE_KIND });
+    const { epic, a, b } = epicWithTwo();
+    store.milestones().addMember(milestone, epic, {}, "vp");
+    const byEpic = runs.start({ actor: BOT, scope: epic });
+    // A milestone run is a goal run and names who the milestone is gated to.
+    const byMilestone = runs.start({ actor: BOT, scope: milestone, gateOwner: "VP" });
+    expect(runs.continue({ actor: BOT, run: byEpic.id })).toMatchObject({ action: "take", ref: a });
+    // a is the epic run's open ticket: the milestone run takes b, not a again.
+    expect(runs.continue({ actor: BOT, run: byMilestone.id })).toMatchObject({ action: "take", ref: b });
+    expect(runs.get(byMilestone.id).tickets.map((ticket) => ticket.identifier)).toEqual([b]);
+  });
+
+  it("a retried ticket is one ticket against --max-tickets", () => {
+    const { epic, a, b } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic, maxTickets: 2 });
+    cont();
+    // Failed and retaken: two rows, one ticket.
+    expect(cont({ outcome: "failed", reason: "first try" })).toMatchObject({ action: "take", ref: a });
+    store.updateIssue(a, { status: "in_review" }, BOT);
+    const second = cont();
+    expect(second).toMatchObject({ action: "take", ref: b });
+    store.updateIssue(b, { status: "in_review" }, BOT);
+    expect(cont()).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", maxTickets: 2, taken: 2 }, run: { counts: { taken: 3 } } });
   });
 });
 
@@ -806,6 +923,7 @@ describe("evaluateStopRules", () => {
       pendingGates: [{ issueId: "root", identifier: "TST-1", owner: "VP" }],
       personBlocks: [{ issueId: "b", identifier: "B", owner: "VP", action: null }],
       ceiling: { usedPercent: 60, accountRef: "a", limitKey: "k", missing: null },
+      scopeGone: "TST-1 was deleted",
     });
     const order: string[] = [];
     let run = everything;
@@ -820,11 +938,12 @@ describe("evaluateStopRules", () => {
       else if (key === "budget:time") run = { ...run, budget: { ...run.budget, until: null } };
       else if (key === "budget:ceiling") run = { ...run, budget: { ...run.budget, ceilingPercent: null } };
       else if (key === "failure_streak") run = { ...run, tickets: [ticket("a", "done"), ticket("b", "failed")] };
+      else if (key === "scope_gone") current = { ...current, scopeGone: null };
       else if (key === "vp_blocked" && current.personBlocks.length > 0) current = { ...current, personBlocks: [] };
       else if (key === "gate_pending") current = { ...current, pendingGates: [] };
       else break;
     }
-    expect(order).toEqual(["budget:tickets", "budget:time", "budget:ceiling", "failure_streak", "vp_blocked", "gate_pending", "scope_empty"]);
+    expect(order).toEqual(["budget:tickets", "budget:time", "budget:ceiling", "failure_streak", "scope_gone", "vp_blocked", "gate_pending", "scope_empty"]);
   });
 
   it("when nothing is workable, a gate is named before a person-owned block", () => {

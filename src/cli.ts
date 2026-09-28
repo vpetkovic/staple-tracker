@@ -1057,19 +1057,21 @@ The pickup queue
               plan with "checkout <ref> --override -m <why>", which is recorded
 
 Autopilot runs
-  run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
+  run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]] [--override -m why]
               [--gate-owner W] [--goal-cap N]
               one agent working the queue, an epic or parent, or a milestone,
-              ticket after ticket; one live run per actor per scope. A milestone
-              run is a goal run: it gates the milestone to W and ends goal_met
+              ticket after ticket; one live run per actor per scope. Under strict
+              queue.policy it follows the whole plan unless started with --override.
+              A milestone run is a goal run: it gates the milestone to W and ends goal_met
   run status [<run-id>] [--all]         a run and whether a stop rule trips now:
-              stopped_by_human, budget, failure_streak, vp_blocked, gate_pending,
-              goal_met, scope_empty (staple run --help)
+              stopped_by_human, budget, failure_streak, scope_gone, vp_blocked,
+              gate_pending, goal_met, scope_empty (staple run --help)
   run stop [<run-id>] [-m why]          stop a run, recorded as stopped_by_human
   run pause|resume [<run-id>]           hold a run without ending it, and let it go on
   run continue [--run <id>] [--outcome done|failed] [--reason R]
               after each ticket: record how it ended, then take (already claimed),
-              wait (paused, waiting_on_others) or stop (a stop reason, or no_run)
+              wait (paused, waiting_on_others, out_of_order) or stop (a stop
+              reason, or no_run)
   run drive [--run <id> | --scope <ref> ...] --agent <claude|codex|custom>
               loop continue with a fresh headless agent session per ticket
               (staple run drive --help)

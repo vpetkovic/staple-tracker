@@ -2880,6 +2880,7 @@ const runShape = {
     ceilingPercent: z.number().nullable(),
     ceilingAccount: z.string().nullable(),
   }),
+  override: z.string().nullable().describe("Why a person let this run step over the pickup plan, or null"),
   tickets: z.array(
     z.object({
       seq: z.number(),
@@ -2947,6 +2948,7 @@ const runFactsShape = z
     ceiling: z
       .object({ usedPercent: z.number().nullable(), accountRef: z.string().nullable(), limitKey: z.string().nullable(), missing: z.string().nullable() })
       .nullable(),
+    scopeGone: z.string().nullable().optional().describe("Why the scope no longer resolves (the run stops scope_gone), or null"),
     goal: z
       .object({
         milestone: z.string(),
@@ -2955,7 +2957,8 @@ const runFactsShape = z
         childCap: z.number(),
         childrenCreated: z.number(),
       })
-      .nullable(),
+      .nullable()
+      .optional(),
   })
   .nullable()
   .describe("The facts the decision was read from; null once the run has ended");
@@ -3002,13 +3005,17 @@ server.registerTool(
       ceiling_account: z.string().optional(),
       gate_owner: z.string().optional().describe("A milestone run: the person the milestone is gated to"),
       goal_cap: z.number().int().min(0).optional().describe("A milestone run: how many tickets it may create itself (default 5)"),
+      override_reason: z
+        .string()
+        .optional()
+        .describe("Under queue.policy strict, let the run step over the pickup plan for this reason; each such take is recorded as queue_overridden. Without it the run follows the whole plan and waits (out_of_order) when its next row is later than an eligible plan row elsewhere"),
       actor: actorSchema,
       ws: wsSchema,
     },
     outputSchema: runShape,
     annotations: { title: "Start run", ...runWriteAnnotations, idempotentHint: false },
   },
-  ({ scope, max_tickets, until, ceiling_percent, ceiling_account, gate_owner, goal_cap, actor, ws }) =>
+  ({ scope, max_tickets, until, ceiling_percent, ceiling_account, override_reason, gate_owner, goal_cap, actor, ws }) =>
     run(() =>
       storeFor(ws)
         .runs()
@@ -3021,6 +3028,7 @@ server.registerTool(
           ceilingAccount: ceiling_account,
           gateOwner: gate_owner,
           goalChildCap: goal_cap,
+          override: override_reason,
         }),
     ),
 );
@@ -3029,7 +3037,7 @@ server.registerTool(
   "run_status",
   {
     description:
-      "Autopilot runs and what the stop rules make of them now, without changing anything. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, budget (detail.budget tickets | time | ceiling), failure_streak (two failed tickets in a row), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue awaits approval, or nothing is workable and something in scope does; a goal run's own gate on its milestone is not one), goal_met (a goal run: nothing left and every criterion met; ends completed, the milestone left gated), scope_empty (nothing left; the run ends completed). A goal run with its scope empty short of its goal answers {stop:false, goalCheck}: the next continue_run creates and takes a goal-check ticket; past its cap it stops budget (detail.budget goal_children). goal is the goal run's goal check (criteria with verdicts and evidence, pace, the run's tickets against its cap, the gate), null on any other run. driver is the `staple run drive` process working the run ({pid, host, agent, heartbeatAt, ticket, sessionPid, logDir, alive}), or null when none is attached; stop_run stops it mid-ticket. Same payload as `staple run status --json`.",
+      "Autopilot runs and what the stop rules make of them now, without changing anything. A run whose scope no longer resolves reads decision scope_gone rather than failing. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, budget (detail.budget tickets | time | ceiling | goal_children), failure_streak (two failed tickets in a row), scope_gone (the scope issue was deleted or holds nothing any more), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue awaits approval, or nothing is workable and something in scope does; a goal run's own gate on its milestone is not one), goal_met (a goal run: nothing left and every criterion met; ends completed, the milestone left gated), scope_empty (nothing left; the run ends completed). A goal run with its scope empty short of its goal answers {stop:false, goalCheck}: the next continue_run creates and takes a goal-check ticket; past its cap it stops budget (detail.budget goal_children). goal is the goal run's goal check (criteria with verdicts and evidence, pace, the run's tickets against its cap, the gate), null on any other run. driver is the `staple run drive` process working the run ({pid, host, agent, heartbeatAt, ticket, sessionPid, logDir, alive}), or null when none is attached; stop_run stops it mid-ticket. Same payload as `staple run status --json`.",
     inputSchema: {
       run_id: z.string().optional(),
       all: z.boolean().optional().describe("Every run, any actor or state"),
@@ -3107,7 +3115,7 @@ server.registerTool(
   "continue_run",
   {
     description:
-      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it, then call continue_run again. wait: {reason: paused | waiting_on_others, message, retryAfterSeconds}; take nothing, ask again later or end your session. stop: {reason, detail, message}; the run has ended (stopped_by_human, budget, failure_streak, vp_blocked, gate_pending, goal_met, scope_empty) or you have no live run (no_run, run null); end your loop. Every answer carries `recorded` (the outcome this call recorded, or null), `run`, and `goal`: on a goal run (a run over a milestone) the goal check (each criterion met/unmet/unknown with its evidence, the pace, the run's tickets against its cap, the gate), else null. On a goal run whose scope empties short of its goal, the take is a goal-check ticket the run created: judge each criterion with mark_milestone_criterion (follow_up for unmet ones), then close it. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
+      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it, then call continue_run again. wait: {reason: paused | waiting_on_others | out_of_order, message, retryAfterSeconds}; take nothing, ask again later or end your session (out_of_order: under queue.policy strict the run's next row is later than an eligible plan row elsewhere and the run has no override). stop: {reason, detail, message}; the run has ended (stopped_by_human, budget, failure_streak, scope_gone, vp_blocked, gate_pending, goal_met, scope_empty) or you have no live run (no_run, run null); end your loop. With no live run, your most recently ended run that still has an unsettled ticket is the one continued: the ticket is settled and that run's stop reason answered. Every answer carries `recorded` (the outcome this call recorded, or null), `run`, and `goal`: on a goal run (a run over a milestone) the goal check (each criterion met/unmet/unknown with its evidence, the pace, the run's tickets against its cap, the gate), else null. On a goal run whose scope empties short of its goal, the take is a goal-check ticket the run created: judge each criterion with mark_milestone_criterion (follow_up for unmet ones), comment `review: …`, then close it. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
     inputSchema: {
       run_id: z.string().optional().describe("The run; without it, actor's one live run"),
       outcome: z.enum(RUN_TICKET_OUTCOMES).optional().describe("How the current ticket ended, when you know"),

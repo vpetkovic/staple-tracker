@@ -405,4 +405,45 @@ describe("a run over a milestone is a goal run", () => {
     expect(take).toMatchObject({ action: "take", goal: { gate: { state: "pending", ownedByRun: true } } });
     expect(runs.get(run.id).goal!.gatedAt).toBe(gateOf(m)!.requestedAt);
   });
+
+  it("with the run's other rules: a goal check the strict plan refuses waits out_of_order and is created once", () => {
+    const { m, a, b } = goalMilestone();
+    const run = runs.start({ actor: BOT, scope: m, gateOwner: "VP" });
+    store.updateIssue(a, { status: "done" }, "vp");
+    store.updateIssue(b, { status: "done" }, "vp");
+    const queued = issue("Queued elsewhere");
+    store.queue().mutate("add", { ref: queued }, "vp");
+    store.setSetting("queue.policy", "strict", "vp");
+    const first = cont();
+    expect(first).toMatchObject({ action: "wait", reason: "out_of_order", goal: { children: { created: 1, left: 4 } } });
+    expect(first.run!.goal!.children).toHaveLength(1);
+    // Asked again: the same ticket is offered, as ordinary work, and no second one is made.
+    expect(cont()).toMatchObject({ action: "wait", reason: "out_of_order" });
+    expect(runs.get(run.id).goal!.children).toHaveLength(1);
+    store.setSetting("queue.policy", "advisory", "vp");
+    expect(cont()).toMatchObject({ action: "take", ref: first.run!.goal!.children[0]!.identifier });
+  });
+
+  it("with the run's other rules: a milestone that is no longer one reads scope_gone with no goal, and never throws", () => {
+    const { m, a, b } = goalMilestone();
+    const run = runs.start({ actor: BOT, scope: m, gateOwner: "VP" });
+    for (const member of [a, b]) store.milestones().removeMember(m, member, {}, "vp");
+    store.updateIssue(m, { kind: "task" }, "vp");
+    expect(runs.status(run.id)).toMatchObject({ decision: { stop: true, reason: "scope_gone" } });
+    expect(cont()).toMatchObject({ action: "stop", reason: "scope_gone", run: { state: "stopped" } });
+    // The scope is a task now: there is no goal to read, and reading it does not throw.
+    expect(runs.status(run.id).goal).toBeNull();
+  });
+
+  it("the goal check's brief asks for the review the driver checks", () => {
+    const brief = buildBrief({ ref: "TST-9", title: "Goal check: October", workspace: "/w", db: "/w/db", runId: "r", actor: BOT, finish: "in_review", instructions: null, goal: null, goalCheck: true });
+    // No goal section without a goal, but the finish still closes it.
+    expect(brief).toContain("staple done TST-9 --json");
+    const { m } = goalMilestone();
+    runs.start({ actor: BOT, scope: m, gateOwner: "VP" });
+    const goal = runs.goalReport(runs.liveRunOf(BOT));
+    const withGoal = buildBrief({ ref: "TST-9", title: "Goal check: October", workspace: "/w", db: "/w/db", runId: "r", actor: BOT, finish: "in_review", instructions: null, goal, goalCheck: true });
+    expect(withGoal).toContain('staple comment TST-9 "review: ..."');
+    expect(withGoal).toContain("a goal check included");
+  });
 });
