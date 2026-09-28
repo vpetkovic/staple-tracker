@@ -746,7 +746,9 @@ The page watches and stops runs; it never starts or continues one.
   (`originKind` `run`) says "Created by autopilot" in the member list
   (`src/ui/app/src/lib/goal-text.ts`).
 - **Stop** asks first and takes an optional note; the run records `stopped_by_human` with
-  the page's person (`staple:me`, else `ui`) as `by`. Pause and Resume are in the history.
+  the page's person as `by`: the name the task detail remembers (`staple:me`), or the
+  one *My tasks* remembers (`staple:me:v1`) when the detail has none or *My tasks* has
+  changed since the detail saved its name; with neither, `ui`. Pause and Resume are in the history.
 
 HTTP: `GET /api/runs[?ws=&limit=N]` answers `{runs: [{workspace, run, decision, facts,
 driver, goal}], now}` (`now`: the server's clock) (every live run and the `limit` (50) most recent ended ones per workspace, each
