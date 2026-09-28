@@ -13,6 +13,12 @@ import { listConflicts } from "../src/core/cloud/conflicts.js";
 import { performDisconnect } from "../src/core/cloud/connect.js";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { beginBootstrap } from "../src/core/cloud/sync-state.js";
+import { writeConnection } from "../src/core/cloud/connection.js";
+import { credentialStoreFor } from "../src/core/cloud/credential-store.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ENDPOINT } from "./fixtures/sync-machines.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
@@ -106,16 +112,70 @@ describe("the milestone repair on a synchronized workspace", () => {
     expect([statusChanges(a, m) - before[0]!, statusChanges(b, m) - before[1]!]).toEqual([1, 1]);
   });
 
-  it("repairs at a write once the workspace is disconnected, though it keeps its cursor", async () => {
+  it("does not repair at a write once disconnected: a workspace that has synchronized repairs only in a sync", async () => {
     const { b, m } = await staleFleet();
     upgrade(b);
     b.use();
     expect(performDisconnect(b.home, REPO)).toMatchObject({ wasConnected: true, recordRemoved: true });
-    expect(b.db.prepare("SELECT cursor FROM sync_state WHERE id = 1").get()).not.toEqual({ cursor: null });
-    // No sync will run here again: the write is the repair's only door.
     b.store.addComment(m, "after disconnecting", "b");
-    expect(status(b, m)).toBe("in_progress");
-    expect(b.db.prepare("SELECT value FROM meta WHERE key = ?").get(STAMP)).toBeDefined();
+    // The known limitation: a workspace disconnected for good keeps what the old build left.
+    expect(status(b, m)).toBe("backlog");
+    expect(b.db.prepare("SELECT value FROM meta WHERE key = ?").get(STAMP)).toBeUndefined();
+  });
+
+  /** After a, the device that moved T, and b, the one that did not pull it: one answer, no record. */
+  async function expectConverged(a: Machine, b: Machine, m: string): Promise<void> {
+    await sync(b, a, b);
+    const fresh = fleet!.machine("fresh");
+    await sync(fresh);
+    expect([status(a, m), status(b, m), status(fresh, m)]).toEqual(["done", "done", "done"]);
+    expect(listConflicts(a.db)).toEqual([]);
+    expect(listConflicts(b.db)).toEqual([]);
+    const want = stateOf(a.db);
+    expect([...differences("fresh", want, stateOf(fresh.db)), ...differences("b", want, stateOf(b.db))]).toEqual([]);
+  }
+
+  it("does not repair at a write on a connected device whose home the write cannot see", async () => {
+    const { a, b, m, t } = await staleFleet();
+    upgrade(a);
+    a.use();
+    a.store.updateIssue(t, { status: "done" }, "a");
+    await sync(a);
+    upgrade(b);
+    // b is still connected, under a home this process is not pointed at.
+    process.env.STAPLE_HOME = mkdtempSync(join(tmpdir(), "staple-other-home-"));
+    b.store.addComment(t, "written under another home", "b");
+    expect(status(b, m)).toBe("backlog");
+    await expectConverged(a, b, m);
+  });
+
+  it("does not repair at a write while disconnected, and repairs from the head once reconnected", async () => {
+    const { a, b, m, t } = await staleFleet();
+    upgrade(b);
+    b.use();
+    performDisconnect(b.home, REPO);
+    b.store.addComment(t, "written while disconnected", "b");
+    expect(status(b, m)).toBe("backlog");
+    upgrade(a);
+    a.use();
+    a.store.updateIssue(t, { status: "done" }, "a");
+    await sync(a);
+
+    // b reconnects, as `staple cloud connect` leaves it.
+    credentialStoreFor(b.home, "file").write(REPO, `token-${b.deviceId}`);
+    writeConnection(b.home, {
+      schemaVersion: 1,
+      repositoryId: REPO,
+      endpoint: ENDPOINT,
+      deviceId: b.deviceId,
+      label: b.label,
+      credentialMechanism: "file",
+      connectedAt: "2026-09-10T00:00:00.000Z",
+      auto: false,
+      backup: false,
+      protocol: 1,
+    });
+    await expectConverged(a, b, m);
   });
 
   it("repairs after a reconcile, from the members the reconcile leaves", async () => {

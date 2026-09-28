@@ -3129,23 +3129,28 @@ export class WorkspaceStore {
   }
 
   /**
-   * A sync will run here: this machine holds a connection to the repository the workspace
-   * names — the record `staple cloud connect` writes and `disconnect` removes, which is what
-   * a sync itself needs. Not `sync_state`: a disconnect keeps the cursor for a later
-   * re-connect, and a copy of a synchronized database keeps it too, and neither syncs again.
+   * This workspace's journal is bound for the service: it has synchronized (a cursor, or an
+   * epoch past the first), or this machine holds a connection to its repository. The same
+   * rule the journal uses to decide that its queue will be sent (`boundForService`), and for
+   * the same reason: whatever it writes goes out, on the next sync of this device or of a
+   * re-connected one, whenever that is. So such a workspace repairs only in a sync, after its
+   * pull reached the head. A workspace disconnected for good never does: its milestones keep
+   * what the old build left until a member moves (`docs/milestones.md`).
    */
   private synchronizes(): boolean {
     // A database a store was opened on before its migrations ran has no sync state at all.
     if (!this.db.prepare("SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = 'sync_state'").get()) return false;
-    const state = this.db.prepare("SELECT repository_id FROM sync_state WHERE id = 1").get() as
-      | { repository_id: string | null }
+    const state = this.db.prepare("SELECT repository_id, epoch, cursor FROM sync_state WHERE id = 1").get() as
+      | { repository_id: string | null; epoch: number; cursor: string | null }
       | undefined;
-    if (!state?.repository_id) return false;
+    if (!state) return false;
+    if (state.epoch > 0 || state.cursor !== null) return true;
+    if (!state.repository_id) return false;
     try {
       return existsSync(connectionPath(stapleHome(), state.repository_id));
     } catch {
-      // A home that cannot be read cannot sync either.
-      return false;
+      // A home that cannot be read cannot say it is not connected: leave it to a sync.
+      return true;
     }
   }
 

@@ -170,13 +170,20 @@ and a member reopening reopens it"* and *"lands where its members say when a
 gate on it is approved"*.)
 
 A workspace upgraded from a build that did not derive milestones gets them
-re-derived once. On a workspace this machine has no cloud connection for
-(never connected, disconnected, or a copy of a synchronized database), the
-first mutating command the new build runs does it; a read never does. On a
-connected workspace, the first sync whose pull reaches the head of the log does
-it, in that sync and after any reconcile a restore left owed, so it derives
-from the members every other device already holds and not from whatever this
-device last pulled. A device that pulls another's repair
+re-derived once. On a workspace that has never synchronized and is not
+connected, the first mutating command the new build runs does it; a read never
+does. On any other workspace — connected, or one that has synchronized before,
+whose queued writes will go out on a later sync — the first sync whose pull
+reaches the head of the log does it, in that sync and after any reconcile a
+restore left owed, so it derives from the members every other device already
+holds and not from whatever this device last pulled. The rule is the journal's
+own test for a queue that will be sent: a write-time repair there would go out
+too, derived from members that may be stale by then.
+
+A known limitation follows: a workspace that synchronized and was then
+disconnected for good (or a copy of one) never runs the repair. Its milestones
+keep the status the older build left until a member moves, which re-derives
+them as usual; reconnecting and syncing runs the repair. A device that pulls another's repair
 first finds nothing left to move. The `meta` key `milestone_status_rederived`
 records that the repair has run. A repair that fails is logged and skipped for
 the rest of the process, and the command that ran it goes ahead.
