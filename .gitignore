@@ -171,8 +171,9 @@ __scratch-*
 # The web UI bundle. Not committed: it is generated and large.
 # `npm run build:ui` regenerates it; `staple ui` says so if it is missing.
 src/ui/app/dist/
-# The landing/docs site bundle (vite.site.config.ts), same reasoning.
-dist-site/
+# The website build (site/, its own npm package), same reasoning. site/.docusaurus
+# and site/node_modules are covered by the rules above.
+site/build/
 # The publishable staple-cli payload and its packed tarballs (scripts/build-package.ts).
 # Generated from src/ on demand; `npm run build:package` regenerates it.
 dist-package/

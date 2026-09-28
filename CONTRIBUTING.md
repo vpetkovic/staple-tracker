@@ -135,12 +135,19 @@ node dist-package/staple.mjs --help
 
 ## The website
 
-`site/` is a small static site (plain HTML + one stylesheet), served and built
-with Vite:
+`site/` is a Docusaurus site and its own npm package, with its own
+`package-lock.json`, so the published `staple-cli` package and its dependency
+tree never see it. The root scripts delegate to it:
 
 ```bash
-npm run site         # dev server
-npm run site:build   # static build
+npm run site:install  # npm ci inside site/ (once, and after its lockfile changes)
+npm run site          # dev server with live reload
+npm run site:build    # static build into site/build
 ```
 
-Edit the HTML in place — there is deliberately no site framework.
+The docs pages are `docs/*.md`, rendered in place (the docs plugin reads
+`../docs`); never copy them into `site/`. The build fails on a broken link or a
+broken Markdown link. A link from `docs/` to a repository file outside it, such
+as `../CONTRIBUTING.md`, becomes a link to that file on GitHub. The site URL and
+base path are the `url` and `baseUrl` constants at the top of
+`site/docusaurus.config.ts`.
