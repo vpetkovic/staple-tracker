@@ -622,8 +622,8 @@ export function TaskRowLine({
             widths, so who is on each task and when it last moved form columns down the list.
           */}
           <span className="staple-row-signals">
-            {/* A live autopilot run holds this row (lib/runs.ts); a ghost row shows no claim. */}
-            {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} /> : null}
+            {/* A live autopilot run holds this row, works through it, or (folded) works inside it (lib/runs.ts); a ghost row shows no claim. */}
+            {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} folded={collapsedParent} /> : null}
             {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} words /> : null}
             {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
             {cues?.milestone && plan.milestoneMark ? (
@@ -742,7 +742,7 @@ export function TaskRowLine({
           />
         ) : null}
         {/* Beside the claim it qualifies: the holder is a run. The glyph alone on a phone row. */}
-        {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} compact={plan.claim === "avatar"} /> : null}
+        {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} folded={collapsedParent} compact={plan.claim === "avatar"} /> : null}
         {columns.claim ? (
           <RowClaimSlot
             claim={claim}

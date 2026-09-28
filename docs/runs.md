@@ -398,7 +398,7 @@ HTTP: `GET /api/runs[?ws=&limit=N]` answers `{runs: [{workspace, run, decision, 
 driver}]}` (every live run and the `limit` (50) most recent ended ones per workspace, each
 the `run status --json` object); `POST /api/run/stop {ws, id, actor?, note?}`,
 `POST /api/run/pause|resume {ws, id, actor?}` answer the run's fresh entry. They are
-writes like every other: POST only, token, and the Origin check, so a page opened through
-a forwarder that passes its own Origin (a phone on the tailnet) can read runs and not stop
-them. The change fingerprint (`/api/poll`) carries which live runs have a driver attached
+writes like every other (POST only, token, the write rule in docs/web-ui.md "Auth"), so
+the app on a phone through the tailnet forwarder stops a run: its page sends the token
+header. The change fingerprint (`/api/poll`) carries which live runs have a driver attached
 and whether it is running, so the banner follows a driver starting or dying.

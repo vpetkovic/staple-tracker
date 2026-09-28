@@ -17,6 +17,7 @@ import { initWorkspace } from "../src/core/workspace.js";
 import { budgetConfig } from "../src/core/telemetry/budget-config.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 let root: string;
 let home: string;
@@ -31,7 +32,7 @@ const ORIGINAL = `{\n  "statusLine": { "type": "command", "command": "~/bin/line
 async function call(path: string, init: { method?: string; body?: unknown; origin?: string } = {}): Promise<{ status: number; body: Record<string, any> }> {
   const res = await fetch(`${origin}${path}`, {
     method: init.method ?? (init.body === undefined ? "GET" : "POST"),
-    headers: { "x-staple-token": ui.token, "content-type": "application/json", ...(init.origin ? { origin: init.origin } : {}) },
+    headers: asForeignPage({ "x-staple-token": ui.token, "content-type": "application/json", ...(init.origin ? { origin: init.origin } : {}) }, origin),
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   return { status: res.status, body: (await res.json()) as Record<string, any> };

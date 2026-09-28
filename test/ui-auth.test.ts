@@ -1,11 +1,14 @@
 import { once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 let home: string;
 let dbPath: string;
@@ -108,17 +111,80 @@ describe("token gate on /api/*", () => {
 });
 
 describe("Origin check on /api/action", () => {
-  it("rejects a cross-site Origin even with a valid token, and the write does not land", async () => {
+  /**
+   * THE WRITE RULE (server.ts `writeAllowed`): the server's own loopback Origin, no Origin,
+   * or the token in the X-Staple-Token HEADER. A cross-site page cannot set that header
+   * without a CORS preflight, which is never granted (below), so the realistic attacker is a
+   * foreign Origin WITHOUT the header, and the token in a form's query string or a Bearer
+   * does not stand in for it: a query string rides a plain cross-site form POST.
+   */
+  it("rejects a cross-site Origin without the header, even with a valid token in the query or a Bearer, and the write does not land", async () => {
+    const before = await commentCount();
+    for (const res of [
+      await fetch(`${origin}/api/action?token=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://evil.example" },
+        body: JSON.stringify({ ref, type: "comment", body: "from evil.example", actor: "attacker" }),
+      }),
+      await action({ ref, type: "comment", body: "from evil.example", actor: "attacker" }, { authorization: `Bearer ${token}`, origin: "http://evil.example" }),
+    ]) {
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.code).toBe("forbidden");
+      expect(body.detail).toEqual({ reason: "cross_origin" });
+      expect(body.retryable).toBe(false);
+    }
+    expect(await commentCount()).toBe(before);
+  });
+
+  it("accepts a foreign Origin that carries the token in X-Staple-Token: the app's page through a forwarder (a phone on the tailnet)", async () => {
     const before = await commentCount();
     const res = await action(
-      { ref, type: "comment", body: "from evil.example", actor: "attacker" },
-      { "x-staple-token": token, origin: "http://evil.example" },
+      { ref, type: "comment", body: "from the phone", actor: "vp" },
+      { "x-staple-token": token, origin: "http://100.90.235.4:4440" },
     );
-    expect(res.status).toBe(403);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body.code).toBe("forbidden");
-    expect(body.retryable).toBe(false);
+    expect(res.status).toBe(200);
+    expect(await commentCount()).toBe(before + 1);
+  });
+
+  it("refuses a foreign Origin whose header is wrong, even when the query token opens the read gate", async () => {
+    const before = await commentCount();
+    for (const wrong of [token.slice(0, -1) + (token.endsWith("A") ? "B" : "A"), token.slice(1), `${token}x`, "", "short"]) {
+      const res = await fetch(`${origin}/api/action?token=${encodeURIComponent(token)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://evil.example", "x-staple-token": wrong },
+        body: JSON.stringify({ ref, type: "comment", body: "wrong header" }),
+      });
+      // A wrong header is presented first and fails the read gate (401); an empty one falls
+      // through to the query token and then fails the write rule (403). Neither writes.
+      expect([401, 403], JSON.stringify(wrong)).toContain(res.status);
+    }
     expect(await commentCount()).toBe(before);
+  });
+
+  it("compares the header in constant time, through the one compare the read gate uses", () => {
+    const source = readFileSync(join(REPO_ROOT, "src/ui/server.ts"), "utf8");
+    const rule = /function writeAllowed[\s\S]*?\n  \}/.exec(source)?.[0] ?? "";
+    expect(rule).toContain("tokenMatches(header)");
+    expect(rule).not.toMatch(/===\s*token|token\s*===/);
+    const compare = /function tokenMatches[\s\S]*?\n  \}/.exec(source)?.[0] ?? "";
+    expect(compare).toContain("timingSafeEqual(bytes, tokenBytes)");
+    expect(compare).toContain("bytes.length === tokenBytes.length");
+  });
+
+  it("grants no CORS preflight: an OPTIONS is refused, with no Access-Control-Allow-* header", async () => {
+    const preflight = {
+      origin: "http://evil.example",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "x-staple-token, content-type",
+    };
+    for (const url of [`${origin}/api/action`, `${origin}/api/action?token=${encodeURIComponent(token)}`, `${origin}/api/run/stop`, `${origin}/`]) {
+      const res = await fetch(url, { method: "OPTIONS", headers: preflight });
+      expect(res.status, url).toBeGreaterThanOrEqual(400);
+      for (const name of res.headers.keys()) expect(name, url).not.toMatch(/^access-control-/);
+    }
+    // And nowhere else either: the server never writes a CORS header.
+    expect(readFileSync(join(REPO_ROOT, "src/ui/server.ts"), "utf8")).not.toMatch(/["'`]access-control-/i);
   });
 
   it("accepts the server's own Origin, and the write lands", async () => {

@@ -189,12 +189,21 @@ describe("POST /api/run/stop", () => {
   it("is gated like every write: POST only, same Origin, token", async () => {
     const { runId } = liveRun("gated");
     expect((await post("/api/run/stop", { id: runId }, { method: "GET" })).status).toBe(405);
-    const foreign = await post("/api/run/stop", { id: runId }, { origin: "http://100.90.235.4:4440" });
-    expect(foreign.status).toBe(403);
-    expect(foreign.body.detail).toEqual({ reason: "cross_origin" });
+    // A foreign Origin without the X-Staple-Token header (the token as Bearer opens reads only).
+    const res = await fetch(`${origin}/api/run/stop`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`, origin: "http://evil.example" },
+      body: JSON.stringify({ id: runId }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { detail: unknown }).detail).toEqual({ reason: "cross_origin" });
     expect((await post("/api/run/stop", { id: runId }, { token: false })).status).toBe(401);
     // None of the refusals touched it.
     expect((await runs()).find((candidate) => candidate.run.id === runId)!.run.state).toBe("active");
+    // The app's own page through a forwarder (a phone on the tailnet) sends the header: it stops.
+    const phone = await post("/api/run/stop", { id: runId, actor: "vp" }, { origin: "http://100.90.235.4:4440" });
+    expect(phone.status).toBe(200);
+    expect((phone.body as unknown as Entry).run.stop).toMatchObject({ reason: "stopped_by_human", by: "vp" });
   });
 });
 

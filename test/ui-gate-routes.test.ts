@@ -33,6 +33,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initWorkspace, openWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 let home: string;
 let ui: UiHandle;
@@ -61,7 +62,7 @@ async function gate(
   if (sendOrigin) headers.origin = sendOrigin;
   const res = await fetch(`${origin}/api/gate/${route}`, {
     method: init.method ?? "POST",
-    headers,
+    headers: asForeignPage(headers, origin),
     body: JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };

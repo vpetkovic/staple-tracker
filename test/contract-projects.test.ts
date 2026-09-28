@@ -28,6 +28,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initWorkspace, openWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { httpStatusFor } from "./fixtures/error-contract.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 let home: string;
 let ui: UiHandle;
@@ -51,7 +52,7 @@ async function post(
   const headers: Record<string, string> = { "x-staple-token": token, "content-type": "application/json" };
   const sendOrigin = init.origin === undefined ? origin : init.origin;
   if (sendOrigin) headers.origin = sendOrigin;
-  const res = await fetch(`${origin}${path}`, { method: init.method ?? "POST", headers, body: JSON.stringify(body) });
+  const res = await fetch(`${origin}${path}`, { method: init.method ?? "POST", headers: asForeignPage(headers, origin), body: JSON.stringify(body) });
   return { status: res.status, body: (await res.json()) as Body };
 }
 

@@ -36,6 +36,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isCanonicalSvg, sanitizeSvg, SVG_MAX_BYTES } from "../src/core/svg-sanitize.js";
 import { initWorkspace, openWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 let home: string;
 let ui: UiHandle;
@@ -60,7 +61,7 @@ async function post(
   if (sendOrigin) headers.origin = sendOrigin;
   const res = await fetch(`${origin}/api/glyph/sanitize`, {
     method: init.method ?? "POST",
-    headers,
+    headers: asForeignPage(headers, origin),
     body: JSON.stringify(body),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };

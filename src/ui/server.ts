@@ -5,8 +5,9 @@
  *
  * Loopback is not a security boundary. Any page the user visits can reach
  * 127.0.0.1 on a guessable port, so every /api/* route is gated by a
- * per-process bearer token, the write route additionally checks Origin, and
- * both read and write routes pin their HTTP method.
+ * per-process bearer token; a write must also come from this server's own
+ * loopback Origin or carry the token in the `X-Staple-Token` header (`writeAllowed`),
+ * and both read and write routes pin their HTTP method.
  */
 import { EVENT_ORDER, EVENT_ORDER_DESC } from "../core/event-row.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -742,11 +743,15 @@ export function startUiServer(options: UiOptions): UiHandle {
     return url.searchParams.get("token");
   }
 
-  function authorized(req: IncomingMessage, url: URL): boolean {
-    const presented = presentedToken(req, url);
+  /** THE token comparison, constant-time, for every place a request presents one. */
+  function tokenMatches(presented: string | null | undefined): boolean {
     if (!presented) return false;
     const bytes = Buffer.from(presented);
     return bytes.length === tokenBytes.length && timingSafeEqual(bytes, tokenBytes);
+  }
+
+  function authorized(req: IncomingMessage, url: URL): boolean {
+    return tokenMatches(presentedToken(req, url));
   }
 
   /** Read from the live socket so --port 0 (tests) reports the port it actually got. */
@@ -768,10 +773,31 @@ export function startUiServer(options: UiOptions): UiHandle {
     return [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
   }
 
-  function originAllowed(req: IncomingMessage): boolean {
+  /**
+   * THE WRITE RULE. A write is accepted when EITHER holds:
+   *
+   *   1. its Origin is absent (curl, the CLI) or this server's own loopback page; or
+   *   2. it carries the UI token in the `X-Staple-Token` HEADER.
+   *
+   * (2) is what lets the page write when it is opened through a forwarder that keeps the
+   * browser's own Origin: a phone on the tailnet, whose page holds the token because the
+   * forwarder rewrites Host to loopback and the page is seeded (or because it was opened
+   * with `?token=`). It is safe for the reason the header is load-bearing on reads: a
+   * cross-site page cannot set a custom header without a CORS preflight, and this server
+   * answers no preflight with a grant (it sets no CORS header anywhere; an
+   * OPTIONS is refused by the token gate or the method gate like any other method), so a
+   * forged form or `fetch` from another site arrives without it and is still refused.
+   *
+   * Only the header counts here. `?token=` and `Authorization: Bearer` open the READ gate
+   * for curl and agents, but a query string can ride a plain cross-site form POST with no
+   * preflight, so it must never stand in for the header on a write. The compare is the
+   * same constant-time one the read gate uses.
+   */
+  function writeAllowed(req: IncomingMessage): boolean {
     const origin = req.headers.origin;
-    if (!origin) return true;
-    return writeOrigins().includes(origin);
+    if (!origin || writeOrigins().includes(origin)) return true;
+    const header = req.headers["x-staple-token"];
+    return typeof header === "string" && tokenMatches(header);
   }
 
   /**
@@ -1534,15 +1560,16 @@ export function startUiServer(options: UiOptions): UiHandle {
          * wherever it lands, and a GET on a read/write path is not — same guard,
          * same sentence, now stated about the request instead of about the route.
          */
-        if (req.method === "POST" && !originAllowed(req)) {
+        if (req.method === "POST" && !writeAllowed(req)) {
           /**
            * `detail.reason` names WHY, so the page can tell this refusal from a dead token:
-           * a phone reaching this server through a forwarder (the tailnet) sends its own
-           * Origin, so it can read everything and write nothing, by design. The page says
-           * so ("changes can only be made from this computer's browser") instead of
-           * treating the refusal as a credential failure.
+           * a foreign Origin without the token header (`writeAllowed`). The app's own page
+           * always sends the header, so from a phone on the tailnet it writes; what lands
+           * here is a page that does not hold the token. The page words it
+           * ("changes can only be made from this computer's browser") instead of treating
+           * it as a credential failure.
            */
-          const message = `Cross-origin request rejected (Origin: ${req.headers.origin})`;
+          const message = `Cross-origin request rejected (Origin: ${req.headers.origin}); send the UI token in X-Staple-Token to write from another origin`;
           json(res, 403, { error: message, message, code: "forbidden", detail: { reason: "cross_origin" }, retryable: false });
           return;
         }

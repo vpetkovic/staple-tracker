@@ -43,6 +43,7 @@ import { REGISTRY_PROTOCOL } from "../src/core/cloud/hub-registry-ops.js";
 import { HUB_NOT_PROVISIONED, publishRegistry } from "../src/core/cloud/hub-registry-service.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { spawnAsync } from "./fixtures/spawn-async.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 const ENROLLMENT = "hub-enrollment-secret";
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
@@ -77,7 +78,7 @@ let otherMachines = 0;
 function post(path: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
   return fetch(`${origin}${path}`, {
     method: "POST",
-    headers: { "x-staple-token": token, "content-type": "application/json", ...headers },
+    headers: asForeignPage({ "x-staple-token": token, "content-type": "application/json", ...headers }, origin),
     body: JSON.stringify(body),
   });
 }

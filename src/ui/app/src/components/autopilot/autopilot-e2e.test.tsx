@@ -9,6 +9,8 @@
  * hand-built run: every state, reason and ticket in the assertions is the tracker's own.
  */
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -24,11 +26,12 @@ import { resolveTaskListConfig } from "@/components/task-list/config";
 import { rowPlan } from "@/components/task-list/row-layout";
 import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters } from "@/lib/filters";
-import { buildRunsState, RunsContext } from "@/lib/runs";
+import { AutopilotTreeContext, autopilotAncestors, buildRunsState, RunsContext } from "@/lib/runs";
+import { placeUnderMilestones } from "@/views/tree/milestone-placement";
 import { SessionContext, type StapleSession } from "@/lib/session";
 import { DEFAULT_SORT } from "@/lib/sort-modes";
 import type { IssueRow, RunEntry } from "@/lib/types";
-import { buildGroups } from "@/views/tree/tree-model";
+import { buildGroups, flattenFlat } from "@/views/tree/tree-model";
 import { initWorkspace, openWorkspace } from "../../../../../core/workspace.ts";
 import { startUiServer } from "../../../../server.ts";
 import { AutopilotBadge, AutopilotNotice } from "./AutopilotBadge";
@@ -118,16 +121,28 @@ function render(node: ReactElement, width?: number): string {
   );
 }
 
-/** One task row through the real model, the desk's or the phone's. */
-function renderRow(ref: string, width: number): string {
-  const source = issues.find((row) => row.issue.identifier === ref)!;
-  const built = buildGroups([source], { isExpanded: () => true, showResolved: true })[0]!.rows[0]!;
+/**
+ * One task row through the real model, the desk's or the phone's: built from the whole list
+ * (so a parent has its children and its fold), placed under milestones as the Tasks list
+ * places them, inside the fold map the list provides.
+ */
+function renderRow(ref: string, width: number, expanded = true, grouped = false): string {
+  const placed = placeUnderMilestones(issues);
+  // Every other row open, so the target is on screen; the target folded or not. Its own row,
+  // never a ghost copy drawn as context in another status bucket.
+  const options = { isExpanded: (issue: { identifier: string }) => (issue.identifier === ref ? expanded : true), showResolved: true };
+  const lines = grouped ? buildGroups(placed, options).flatMap((group) => group.rows) : flattenFlat(placed, options);
+  const built = lines.find((row) => row.issue.identifier === ref && row.ghost !== true)!;
+  expect(built, ref).toBeDefined();
   const plan = rowPlan(width);
+  const state = buildRunsState(entries);
   return render(
+    <AutopilotTreeContext value={autopilotAncestors(placed, state.claimed)}>
     <TaskRowLine
       row={built}
       config={resolveTaskListConfig("tree", { labelMax: plan.labelMax, plan, desk: width >= 768 })}
       semantics="grid"
+      isExpanded={expanded}
       now={NOW}
       onOpen={noop}
       onOpenParent={noop}
@@ -136,7 +151,8 @@ function renderRow(ref: string, width: number): string {
       onFocus={noop}
       onKeyDown={noop}
       registerRef={noop}
-    />,
+    />
+    </AutopilotTreeContext>,
   );
 }
 
@@ -188,6 +204,30 @@ beforeAll(async () => {
   const empty = runs.continue({ actor: "opus-done" });
   if (empty.action !== "stop" || empty.reason !== "scope_empty") throw new Error(`expected scope_empty, got ${JSON.stringify(empty)}`);
 
+  // A run over an epic whose ticket sits two levels down: Outer > Inner > Leaf.
+  const outer = store.createIssue({ title: "Outer epic" });
+  const inner = store.createIssue({ title: "Inner parent", parent: outer.identifier });
+  const leaf = store.createIssue({ title: "Deep leaf", parent: inner.identifier, status: "todo" });
+  refs.outer = outer.identifier;
+  refs.inner = inner.identifier;
+  refs.leaf = leaf.identifier;
+  runIds.deep = runs.start({ actor: "opus-deep", scope: outer.identifier }).id;
+  const deepTake = runs.continue({ actor: "opus-deep" });
+  if (deepTake.action !== "take" || deepTake.ref !== leaf.identifier) throw new Error(`expected ${leaf.identifier}, got ${JSON.stringify(deepTake)}`);
+
+  // A milestone whose parentless member epic a run works: the list nests the member under it.
+  store.addKind({ id: "milestone", label: "Milestone" });
+  const milestone = store.milestones().create({ title: "The milestone" }, "vp") as { milestone: { id: string; identifier: string } };
+  const member = store.createIssue({ title: "Member epic" });
+  const memberLeaf = store.createIssue({ title: "Member leaf", parent: member.identifier, status: "todo" });
+  store.milestones().addMember(milestone.milestone.id, member.identifier, {}, "vp");
+  refs.milestone = milestone.milestone.identifier;
+  refs.member = member.identifier;
+  refs.memberLeaf = memberLeaf.identifier;
+  runIds.member = runs.start({ actor: "opus-member", scope: member.identifier }).id;
+  const memberTake = runs.continue({ actor: "opus-member" });
+  if (memberTake.action !== "take") throw new Error("expected a take");
+
   // A run a person stops from the page, over HTTP, below.
   const stopped = epic("Stopped epic", 2);
   runIds.stopped = runs.start({ actor: "opus-stop", scope: stopped.parent }).id;
@@ -226,8 +266,8 @@ describe("the rail banner", () => {
     const section = markup.indexOf('data-nav-group="autopilot"');
     expect(section).toBeGreaterThan(markup.indexOf('data-nav-group="views"'));
     expect(section).toBeLessThan(markup.indexOf('data-nav-group="machine"'));
-    // One banner: only the live run; the ended ones are in the history.
-    expect(markup.match(/data-run-banner=/g)).toHaveLength(1);
+    // One banner per live run; the ended ones are in the history.
+    expect(markup.match(/data-run-banner=/g)).toHaveLength(buildRunsState(entries).live.length);
     expect(markup).toContain("data-nav-run-history");
     const bare = renderToStaticMarkup(
       <SessionContext.Provider value={session()}>
@@ -244,7 +284,9 @@ describe("the rail banner", () => {
       </AppShell>,
       390,
     );
-    const strip = phone.indexOf(`data-run-strip="${runIds.live}"`);
+    // The strip is the newest live run.
+    const newest = buildRunsState(entries).live[0]!;
+    const strip = phone.indexOf(`data-run-strip="${newest.run.id}"`);
     expect(strip).toBeGreaterThan(phone.indexOf("data-the-view"));
     expect(strip).toBeLessThan(phone.indexOf("data-view-tabs"));
     const stop = /<button[^>]*data-run-stop="[^"]+"[^>]*>/.exec(phone.slice(strip))?.[0] ?? "";
@@ -257,7 +299,7 @@ describe("the rail banner", () => {
       1440,
     );
     expect(desk).not.toContain("data-run-strip");
-    expect(render(<RunStrip />)).toContain(`working ${refs.working}`);
+    expect(render(<RunStrip />)).toContain(`working ${newest.run.tickets.at(-1)!.identifier}`);
   });
 });
 
@@ -286,6 +328,56 @@ describe("the autopilot badge", () => {
     const markup = render(<AutopilotNotice workspace="auto" issueId={working.issue.id} />);
     expect(markup).toContain(`data-autopilot-notice="${runIds.live}"`);
     expect(markup).toContain("See the run");
+  });
+});
+
+describe("a folded parent", () => {
+  it("shows the badge while folded over a ticket being worked, naming it; expanded it shows nothing", () => {
+    for (const width of [1440, 390]) {
+      const folded = renderRow(refs.inner!, width, false);
+      expect(folded, `${width}`).toContain(`data-autopilot-badge="${runIds.deep}"`);
+      expect(folded).toContain('data-autopilot-kind="inside"');
+      expect(folded).toContain(`Autopilot working ${refs.leaf} inside`);
+      expect(renderRow(refs.inner!, width, true), `${width}`).not.toContain("data-autopilot-badge");
+    }
+    // Grouped by status too: the folded parent in its bucket.
+    expect(renderRow(refs.inner!, 1440, false, true)).toContain('data-autopilot-kind="inside"');
+    expect(renderRow(refs.inner!, 1440, true, true)).not.toContain("data-autopilot-badge");
+    // The ticket itself wears its own badge whatever its parents do.
+    expect(renderRow(refs.leaf!, 1440)).toContain('data-autopilot-kind="ticket"');
+  });
+
+  it("marks the run's scope row folded or not: that container is what is on autopilot", () => {
+    for (const expanded of [true, false]) {
+      const scope = renderRow(refs.outer!, 1440, expanded);
+      expect(scope).toContain(`data-autopilot-badge="${runIds.deep}"`);
+      expect(scope).toContain('data-autopilot-kind="scope"');
+      expect(scope).toContain("opus-deep&#x27;s run is working through this");
+    }
+  });
+
+  it("lights a folded milestone the list nests the run's work under", () => {
+    const folded = renderRow(refs.milestone!, 1440, false);
+    expect(folded).toContain(`data-autopilot-badge="${runIds.member}"`);
+    expect(folded).toContain(`Autopilot working ${refs.memberLeaf} inside`);
+    expect(renderRow(refs.milestone!, 1440, true)).not.toContain("data-autopilot-badge");
+  });
+
+  it("the Tasks list provides the fold map over the rows it nests, milestone placement included", () => {
+    // TreeView needs a DOM to render whole, so its wiring is pinned at the source: the map is
+    // built from `all` (the placed, unfiltered list) and wraps the grid that draws the rows.
+    const source = readFileSync(fileURLToPath(new URL("../../views/TreeView.tsx", import.meta.url)), "utf8");
+    expect(source).toMatch(/autopilotAncestors\(all, claimed\)/);
+    expect(source).toMatch(/return groupBy === "parent" \? cued : placeUnderMilestones\(cued\);/);
+    const wrapped = /<AutopilotTreeContext value=\{autopilotTree\}>[\s\S]*?<\/AutopilotTreeContext>/.exec(source)?.[0] ?? "";
+    expect(wrapped).toContain("<TreeGrid");
+  });
+
+  it("an ended run lights nothing", () => {
+    const stopped = entryOf("stopped");
+    const parentOf = issues.find((row) => row.issue.id === stopped.run.tickets[0]!.issueId)!.issue.parentId;
+    const parent = issues.find((row) => row.issue.id === parentOf)!;
+    expect(renderRow(parent.issue.identifier, 1440, false)).not.toContain("data-autopilot-badge");
   });
 });
 

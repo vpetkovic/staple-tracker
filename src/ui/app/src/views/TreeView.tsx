@@ -53,6 +53,7 @@ import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
 import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
 import { placeUnderMilestones } from "./tree/milestone-placement";
+import { AutopilotTreeContext, autopilotAncestors, useRuns } from "@/lib/runs";
 import { useSession } from "@/lib/session";
 import type { InboxRow, IssueStatus, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
@@ -424,6 +425,13 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
    * runs the V4 predicate first and narrows what survived, so nothing V4 argued changes and
    * the two registries never have to know about each other.
    */
+  /**
+   * Which folded rows hide a ticket a live autopilot run is working, over `all`: the parent
+   * links as this list nests them, milestone placement included (lib/runs.ts).
+   */
+  const { claimed } = useRuns();
+  const autopilotTree = useMemo(() => autopilotAncestors(all, claimed), [all, claimed]);
+
   const rows = useMemo(
     () => applyFilterDimensions(all, filters, filterContext),
     [all, filters, filterContext],
@@ -521,60 +529,63 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
             return <FilterEmptyState rows={all} state={filters} context={filterContext} />;
           }
           return (
-            <TreeGrid
-              rows={rows}
-              /*
-               * O3b (STA-127). The UNFILTERED list, for the collapsed-parent rollup's counts
-               * and nothing else — `rows` above still decides membership, order and
-               * everything the keyboard walks.
-               *
-               * It has to be this array rather than `rows`, because `done` is hidden by the
-               * default filter: a rollup computed from what is on screen would tell an epic
-               * with three finished children and two open ones that it is `0/2`, which is
-               * not a partial answer but the wrong one. No new fetch — `/api/issues` is
-               * unpaged and `session.issues.data` IS the whole list.
-               */
-              allRows={all}
-              mode={mode}
-              groupBy={groupBy}
-              /*
-               * R4a (STA-186). The active sort for THIS workspace and view, resolved by App
-               * from `staple:view:v1`. It reaches the model as `BuildOptions.sort` and does
-               * nothing else — it cannot reach the queue, the inbox, or a write. See
-               * `lib/sort-modes.ts` and docs/queue.md's "Presentation sort is not the queue".
-               */
-              sort={sort}
-              pickup={pickup}
-              captions={captions}
-              currentRef={selection?.ref ?? null}
-              /*
-               * TRUE, and this is the rewiring the spec asked for rather than a
-               * disabled gate. `lib/filters.ts` is now the single authority on whether
-               * resolved work is on the page, and its rule is subtler than a boolean:
-               * selecting the "Done" status is itself the opt-in. Re-applying a
-               * hide-resolved default here would throw those rows away again and show
-               * an empty list to someone who explicitly asked for done tasks.
-               */
-              showResolved
-              hiddenParents={orphanedBy}
-              onOpen={session.open}
-              /*
-               * R4c (STA-188). The milestone marker's destination — the Milestones view,
-               * with that milestone focused. The routing is the session's, the same one the
-               * header tabs and the palette's "Go to …" commands use; the row knows only
-               * that it has somewhere to send a click.
-               */
-              onOpenMilestone={session.focusMilestone}
-              /*
-               * The `⋯` menu, built per row. Passed as a BUILDER rather than as data so the
-               * grid never has to know what a menu is — see `TaskRowLine.actionsMenu`.
-               */
-              rowActionsMenu={rowActionsMenu}
-              rowStatusMenu={rowStatusMenu}
-              rowNotice={rowNotice}
-              onCloseDrawer={session.close}
-              onVisibleOrder={publishVisibleOrder}
-            />
+            // The fold's autopilot map, over `all`: the parent links as this list nests them.
+            <AutopilotTreeContext value={autopilotTree}>
+              <TreeGrid
+                rows={rows}
+                /*
+                 * O3b (STA-127). The UNFILTERED list, for the collapsed-parent rollup's counts
+                 * and nothing else — `rows` above still decides membership, order and
+                 * everything the keyboard walks.
+                 *
+                 * It has to be this array rather than `rows`, because `done` is hidden by the
+                 * default filter: a rollup computed from what is on screen would tell an epic
+                 * with three finished children and two open ones that it is `0/2`, which is
+                 * not a partial answer but the wrong one. No new fetch — `/api/issues` is
+                 * unpaged and `session.issues.data` IS the whole list.
+                 */
+                allRows={all}
+                mode={mode}
+                groupBy={groupBy}
+                /*
+                 * R4a (STA-186). The active sort for THIS workspace and view, resolved by App
+                 * from `staple:view:v1`. It reaches the model as `BuildOptions.sort` and does
+                 * nothing else — it cannot reach the queue, the inbox, or a write. See
+                 * `lib/sort-modes.ts` and docs/queue.md's "Presentation sort is not the queue".
+                 */
+                sort={sort}
+                pickup={pickup}
+                captions={captions}
+                currentRef={selection?.ref ?? null}
+                /*
+                 * TRUE, and this is the rewiring the spec asked for rather than a
+                 * disabled gate. `lib/filters.ts` is now the single authority on whether
+                 * resolved work is on the page, and its rule is subtler than a boolean:
+                 * selecting the "Done" status is itself the opt-in. Re-applying a
+                 * hide-resolved default here would throw those rows away again and show
+                 * an empty list to someone who explicitly asked for done tasks.
+                 */
+                showResolved
+                hiddenParents={orphanedBy}
+                onOpen={session.open}
+                /*
+                 * R4c (STA-188). The milestone marker's destination — the Milestones view,
+                 * with that milestone focused. The routing is the session's, the same one the
+                 * header tabs and the palette's "Go to …" commands use; the row knows only
+                 * that it has somewhere to send a click.
+                 */
+                onOpenMilestone={session.focusMilestone}
+                /*
+                 * The `⋯` menu, built per row. Passed as a BUILDER rather than as data so the
+                 * grid never has to know what a menu is — see `TaskRowLine.actionsMenu`.
+                 */
+                rowActionsMenu={rowActionsMenu}
+                rowStatusMenu={rowStatusMenu}
+                rowNotice={rowNotice}
+                onCloseDrawer={session.close}
+                onVisibleOrder={publishVisibleOrder}
+              />
+            </AutopilotTreeContext>
           );
         }}
       </ViewState>

@@ -12,40 +12,51 @@
  */
 import { Bot } from "lucide-react";
 import { scopeText } from "@/lib/run-text";
-import { useRunClaim } from "@/lib/runs";
+import { useAutopilotMark, type AutopilotMark } from "@/lib/runs";
 import { openRunHistory } from "@/lib/shell-events";
-import type { RunEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** The sentence the badge stands for: its tooltip and its accessible name. */
-export function autopilotSentence(entry: Pick<RunEntry, "run">): string {
+export function autopilotSentence(mark: AutopilotMark): string {
+  const { entry } = mark;
   const scope = scopeText(entry.run);
   const over = scope === "Queue" ? "the queue" : scope;
   const paused = entry.run.state === "paused" ? " (paused)" : "";
+  if (mark.kind === "scope") return `Autopilot: ${entry.run.actor}'s run is working through this${paused}`;
+  if (mark.kind === "inside") return `Autopilot working ${mark.refs.join(", ")} inside: ${entry.run.actor}'s run over ${over}${paused}`;
   return `Autopilot: ${entry.run.actor}'s run over ${over} is working on this${paused}`;
 }
 
+/**
+ * The badge. `folded` is the row's fold: a folded parent hiding a ticket a live run works
+ * wears it too ("working ABC-3 inside"), so a subtree on autopilot shows without opening it;
+ * the run's scope row wears it folded or not. See `useAutopilotMark` for the order.
+ */
 export function AutopilotBadge({
   workspace,
   issueId,
+  folded = false,
   compact = false,
   decorative = false,
   className,
 }: {
   workspace: string;
   issueId: string;
+  /** The row is a folded parent. */
+  folded?: boolean;
   /** The glyph alone (a phone row); the word stays in the accessible name. */
   compact?: boolean;
   /** Beside a sentence that already says it (the detail's notice): hidden from a screen reader. */
   decorative?: boolean;
   className?: string;
 }) {
-  const entry = useRunClaim(workspace, issueId);
-  if (!entry) return null;
-  const sentence = autopilotSentence(entry);
+  const mark = useAutopilotMark(workspace, issueId, folded);
+  if (!mark) return null;
+  const sentence = autopilotSentence(mark);
   return (
     <span
-      data-autopilot-badge={entry.run.id}
+      data-autopilot-badge={mark.entry.run.id}
+      data-autopilot-kind={mark.kind}
       title={sentence}
       aria-hidden={decorative || undefined}
       className={cn(
@@ -62,22 +73,24 @@ export function AutopilotBadge({
 }
 
 /**
- * The detail's line: the badge, what the run is, and the way to its details. Nothing when no
- * live run holds the task.
+ * The detail's line: the badge, what the run is doing here, and the way to its details.
+ * Nothing when no live run holds the task or works through it.
  */
 export function AutopilotNotice({ workspace, issueId, className }: { workspace: string; issueId: string; className?: string }) {
-  const entry = useRunClaim(workspace, issueId);
-  if (!entry) return null;
+  const mark = useAutopilotMark(workspace, issueId);
+  if (!mark) return null;
+  const { run } = mark.entry;
+  const scope = scopeText(run) === "Queue" ? "the queue" : scopeText(run);
   return (
-    <p data-autopilot-notice={entry.run.id} className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-body text-text-secondary", className)}>
+    <p data-autopilot-notice={run.id} className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-body text-text-secondary", className)}>
       <AutopilotBadge workspace={workspace} issueId={issueId} decorative />
       <span className="min-w-0">
-        {entry.run.actor}'s run over {scopeText(entry.run) === "Queue" ? "the queue" : scopeText(entry.run)} is working on this
-        {entry.run.state === "paused" ? ", paused" : ""}.
+        {mark.kind === "scope" ? `${run.actor}'s run is working through this` : `${run.actor}'s run over ${scope} is working on this`}
+        {run.state === "paused" ? ", paused" : ""}.
       </span>
       <button
         type="button"
-        onClick={() => openRunHistory({ runId: entry.run.id })}
+        onClick={() => openRunHistory({ runId: run.id })}
         className="rounded-sm text-body font-medium text-foreground underline underline-offset-2 hover:no-underline focus-ring pointer-coarse:min-h-11"
       >
         See the run
