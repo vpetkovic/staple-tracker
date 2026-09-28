@@ -37,6 +37,7 @@ import {
   assertMembershipAllowed,
   assertMilestoneDates,
   assertMilestoneKindConfigured,
+  milestoneLeaves,
   milestoneProgress,
   milestoneState,
   parseMilestoneDate,
@@ -84,6 +85,8 @@ export interface MilestoneSummary {
   state: MilestoneState;
   /** The milestone's own row in the pickup plan; null when it is not queued. */
   planPosition: number | null;
+  /** When it was closed: its `completedAt` when done, its `cancelledAt` when cancelled; else null. */
+  closedAt: string | null;
 }
 
 /** One ordered member, as every surface prints it. */
@@ -121,6 +124,34 @@ export interface MilestoneView {
   next: { identifier: string; position: number } | null;
   /** The goal check: each criterion's verdict with its evidence, and the pace against the target date. */
   goal: MilestoneGoal;
+  /** The work still open in it, from its estimates: what a projected finish date reads. */
+  remaining: MilestoneRemaining;
+}
+
+/**
+ * The work still open in a milestone, from the estimates of its open LEAVES (not done, not
+ * cancelled; the tasks `progress` counts). Derived on every read, never stored. Distinct from
+ * `goal.pace.remainingSeconds`, which is the remaining critical path of each member's plan: this
+ * is the plain sum, the work that is left whatever order it is done in.
+ */
+export interface MilestoneRemaining {
+  /** Open leaves with an estimate, and open leaves without one. */
+  estimated: number;
+  unestimated: number;
+  /**
+   * Open leaves whose remaining work `forecast` cannot weigh (no estimate, no samples for its
+   * class, or beyond its class's range): not in `forecastSeconds`, which is then a lower bound.
+   */
+  unknown: number;
+  /** Their own estimates, summed; null when none has one. */
+  estimateSeconds: number | null;
+  /**
+   * Their remaining work exactly as `staple forecast` adds its units into the labor
+   * (`Store.remainingForecasts`, `unitRemaining`): the estimate scaled by its class's calibrated
+   * ratio, the conditional remainder once started, 0 while waiting for review. Null when no open
+   * leaf can be weighed.
+   */
+  forecastSeconds: number | null;
 }
 
 /** The milestone's goal as a check reads it now (`milestone-goal.ts`). */
@@ -272,6 +303,16 @@ const MEMBER_SELECT = `SELECT m.issue_id, m.milestone_id, m.rank, m.added_by, m.
 
 function article(word: string): string {
   return /^[aeiou]/i.test(word) ? "an" : "a";
+}
+
+/** When a milestone was closed: its `completedAt` when done, its `cancelledAt` when cancelled, else null. */
+export function closedAtOf(
+  category: string,
+  issue: { completedAt: string | null; cancelledAt: string | null },
+): string | null {
+  if (category === "done") return issue.completedAt;
+  if (category === "cancelled") return issue.cancelledAt;
+  return null;
 }
 
 /** Criteria as `staple new --criteria` leaves them: trimmed, blanks dropped. */
@@ -641,12 +682,44 @@ export class MilestoneStore {
   }
 
   private view(id: string, facts: QueueFacts = this.queueFacts()): MilestoneView {
-    const base = this.baseView(id, facts);
-    return { ...base, goal: this.goalOf(id, base) };
+    const { base, openIds } = this.baseView(id, facts);
+    const view = { ...base, remaining: this.remainingOf(openIds, this.store.remainingForecasts(openIds)) };
+    return { ...view, goal: this.goalOf(id, view) };
+  }
+
+  /** `remaining` from the open leaves and each one's remaining work as `forecast` weighs it. */
+  private remainingOf(
+    openIds: readonly string[],
+    forecasts: ReadonlyMap<string, { estimateSeconds: number | null; seconds: number | null }>,
+  ): MilestoneRemaining {
+    let estimated = 0;
+    let unknown = 0;
+    let known = 0;
+    let estimateSeconds = 0;
+    let forecastSeconds = 0;
+    for (const id of openIds) {
+      const forecast = forecasts.get(id);
+      if (forecast?.estimateSeconds != null) {
+        estimated += 1;
+        estimateSeconds += forecast.estimateSeconds;
+      }
+      if (forecast?.seconds == null) unknown += 1;
+      else {
+        known += 1;
+        forecastSeconds += forecast.seconds;
+      }
+    }
+    return {
+      estimated,
+      unestimated: openIds.length - estimated,
+      unknown,
+      estimateSeconds: estimated === 0 ? null : estimateSeconds,
+      forecastSeconds: known === 0 ? null : forecastSeconds,
+    };
   }
 
   /** The view without its goal: what `list` returns per row, and what the goal's pace reads. */
-  private baseView(id: string, facts: QueueFacts): Omit<MilestoneView, "goal"> {
+  private baseView(id: string, facts: QueueFacts): { base: Omit<MilestoneView, "goal" | "remaining">; openIds: string[] } {
     const issue = this.store.getIssue(id);
     const meta = this.meta(id);
     const rows = this.memberRows(id);
@@ -684,10 +757,13 @@ export class MilestoneStore {
     }));
     const descendantsByMember = new Map(rows.map((row) => [row.issue_id, this.descendants(row.issue_id)]));
     const progress = milestoneProgress(nodes, descendantsByMember);
+    const openIds = milestoneLeaves(nodes, descendantsByMember)
+      .filter((node) => node.category !== "done" && node.category !== "cancelled")
+      .map((node) => node.id);
 
     const targetDate = meta?.target_date ?? null;
     const startDate = meta?.start_date ?? null;
-    return {
+    const base = {
       milestone: {
         id: issue.id,
         identifier: issue.identifier,
@@ -701,12 +777,16 @@ export class MilestoneStore {
         startDate,
         state: milestoneState({ category: this.category(issue.status), targetDate, startDate }, progress, nowIso()),
         planPosition: facts.planPositionOf.get(id) ?? null,
+        // From the status's category, not from whichever stamp is set: a reopened milestone
+        // keeps its old `cancelledAt`, and is not closed.
+        closedAt: closedAtOf(this.category(issue.status), issue),
       },
       progress,
       revision: meta?.members_revision ?? 0,
       members,
       next: facts.nextOf.get(issue.identifier) ?? null,
     };
+    return { base, openIds };
   }
 
   /** One milestone, one shape. `validation` for a non-milestone, `not_found` for nothing. */
@@ -727,10 +807,13 @@ export class MilestoneStore {
       .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
     // One resolver read for the whole list, not one per milestone.
     const facts = this.queueFacts();
-    const views = rows
-      .filter((row) => options.all === true || !this.store.isResolvedStatus(row.status))
-      .map((row) => {
-        const { members, ...rest } = this.baseView(row.id, facts);
+    const listed = rows.filter((row) => options.all === true || !this.store.isResolvedStatus(row.status));
+    // Each milestone's walk once, then one forecast read for every open leaf of every one.
+    const bases = listed.map((row) => this.baseView(row.id, facts));
+    const forecasts = this.store.remainingForecasts([...new Set(bases.flatMap((b) => b.openIds))]);
+    const views = bases
+      .map(({ base, openIds }) => {
+        const { members, ...rest } = { ...base, remaining: this.remainingOf(openIds, forecasts) };
         return { ...rest, memberCount: members.length };
       });
     const nullsLast = (a: number | string | null, b: number | string | null): number => {
@@ -892,7 +975,7 @@ export class MilestoneStore {
    * Pace against the target date, from the certified plans `compare` reads: one per member
    * that is not nested under another member (a nested one is inside that member's plan).
    */
-  private paceOf(view: Omit<MilestoneView, "goal">): GoalPace {
+  private paceOf(view: Omit<MilestoneView, "goal" | "remaining">): GoalPace {
     const top = view.members.filter((member) => member.nestedUnder === null);
     const plans: MemberPlan[] = [];
     for (let index = 0; index < top.length; index += COMPARE_MAX_REFS) {
@@ -911,7 +994,7 @@ export class MilestoneStore {
     return goalPace({ targetDate: view.milestone.targetDate, now: nowIso(), progress: view.progress, plans });
   }
 
-  private goalOf(id: string, view: Omit<MilestoneView, "goal">): MilestoneGoal {
+  private goalOf(id: string, view: Omit<MilestoneView, "goal" | "remaining">): MilestoneGoal {
     return { ...this.criteriaCheck(id), pace: this.paceOf(view) };
   }
 

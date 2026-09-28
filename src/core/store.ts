@@ -118,6 +118,7 @@ import {
   labelDimension,
   modelDimension,
   type CalibrationMember,
+  type DurationForecast,
   type CohortKey,
   type CalibrationReport,
   type EstimateAtStartMissing,
@@ -126,7 +127,7 @@ import {
 import { readStoredRepositoryId } from "./repo-identity.js";
 import { resumeGapsOf, viewsOfIssue } from "./telemetry/attempt-derive.js";
 import { attemptDetail, attemptSummary, inWorkerLane, listAttempts, type AttemptDetail, type AttemptSummary } from "./telemetry/read-attempts.js";
-import { FORECAST_ALGORITHM, FORECAST_DRAWS, FORECAST_SEED, completionForecast, completionSnapshotId, type ForecastUnitInput } from "./telemetry/forecast.js";
+import { FORECAST_ALGORITHM, FORECAST_DRAWS, FORECAST_SEED, completionForecast, completionSnapshotId, unitRemaining, type ForecastUnitInput } from "./telemetry/forecast.js";
 import { RATE_ATTEMPT_LIMIT, budgetForecast, budgetSnapshotId, parseReserve, type AttemptSpanInput, type BudgetAccountInput } from "./telemetry/forecast-budget.js";
 import { FORECAST_METHOD, type ForecastReport } from "./telemetry/forecast-report.js";
 import { readBudget, windowReadings } from "./telemetry/read-budget.js";
@@ -529,6 +530,18 @@ function rowToGate(row: Pick<IssueRow, "gate_state" | "gate_owner" | "gate_reque
 }
 
 /** Whole seconds between two ISO-8601 instants, floored at 0 (clocks can skew). */
+/** A calibration key, by one rule for a sample and for an issue being forecast (`calibrate`'s). */
+function cohortDimensions(row: { kind: string; priority: string; labels: string }, contributing: readonly AttemptRecord[]): CohortKey {
+  const labels = JSON.parse(row.labels) as string[];
+  return {
+    kind: row.kind,
+    priority: row.priority,
+    workType: labelDimension(labels, LABEL_PREFIX.workType),
+    area: labelDimension(labels, LABEL_PREFIX.area),
+    model: modelDimension(contributing.map((attempt) => attempt.harness?.model ?? null)),
+  };
+}
+
 function secondsBetween(from: string, to: string): number {
   const delta = (Date.parse(to) - Date.parse(from)) / 1000;
   return Number.isFinite(delta) ? Math.max(0, Math.floor(delta)) : 0;
@@ -4751,23 +4764,28 @@ export class WorkspaceStore {
     const placeholders = issueIds.map(() => "?").join(",");
     const rows = this.db
       .prepare(
+        /*
+         * The holder's latest act on the issue: an event, a comment or a document revision by
+         * them. One correlated MAX per source rather than a join onto their union, so each is
+         * an index lookup on `issue_id` instead of a scan of all three tables per call (the
+         * union defeats the indexes; it was most of a timing read's cost).
+         */
         `SELECT i.id AS id, i.checkout_agent AS holder, i.checkout_at AS checkout_at,
-                MAX(COALESCE(a.t, i.checkout_at)) AS last_activity_at
+                COALESCE(
+                  (SELECT MAX(t) FROM (
+                     SELECT MAX(e.created_at) AS t FROM events e WHERE e.issue_id = i.id AND e.actor = i.checkout_agent
+                     UNION ALL
+                     SELECT MAX(c.created_at) FROM comments c WHERE c.issue_id = i.id AND c.author = i.checkout_agent
+                     UNION ALL
+                     SELECT MAX(r.created_at) FROM document_revisions r WHERE r.issue_id = i.id AND r.author = i.checkout_agent
+                  )),
+                  i.checkout_at
+                ) AS last_activity_at
            FROM issues i
-           LEFT JOIN (
-             SELECT e.issue_id AS issue_id, e.actor AS who, e.created_at AS t FROM events e
-             UNION ALL
-             SELECT c.issue_id AS issue_id, c.author AS who, c.created_at AS t
-               FROM comments c
-             UNION ALL
-             SELECT r.issue_id AS issue_id, r.author AS who, r.created_at AS t
-               FROM document_revisions r
-           ) a ON a.issue_id = i.id AND a.who = i.checkout_agent
           WHERE i.id IN (${placeholders})
             AND i.status IN ${sqlIdList(this.settings().active)}
             AND i.checkout_agent IS NOT NULL
-            AND i.checkout_at IS NOT NULL
-          GROUP BY i.id`,
+            AND i.checkout_at IS NOT NULL`,
       )
       .all(...(issueIds as never[])) as Array<{
       id: string;
@@ -6015,6 +6033,95 @@ export class WorkspaceStore {
   }
 
   /**
+   * Each issue's remaining work exactly as `staple forecast` weighs it as a unit
+   * (`telemetry/forecast.ts` `unitRemaining`): its estimate scaled by its class's calibrated
+   * ratio (`forecastDuration`, the `exact` set, the unfiltered population `staple calibrate`
+   * reads — the "a forecast scales an estimate by" figure of the Estimates view); the
+   * conditional remainder once work has started; 0 while it waits for review; null when it is
+   * unknown (no estimate, no samples, beyond its class's range). `estimateSeconds` is its own
+   * estimate. The calibration population is read once and reused until the data it is built
+   * from changes (`forecastPopulation`).
+   */
+  remainingForecasts(ids: readonly string[], asOf: string = nowIso()): Map<string, { estimateSeconds: number | null; seconds: number | null }> {
+    const out = new Map<string, { estimateSeconds: number | null; seconds: number | null }>();
+    if (ids.length === 0) return out;
+    // One read for the rows and one for the statuses: a list asks about every open task of every
+    // milestone at once, and a lookup per id was most of that read's cost.
+    const byId = new Map<string, IssueRow>();
+    for (let at = 0; at < ids.length; at += 500) {
+      const chunk = ids.slice(at, at + 500);
+      for (const row of this.db.prepare(`SELECT * FROM issues WHERE id IN (${chunk.map(() => "?").join(",")})`).all(...chunk) as unknown as IssueRow[]) {
+        byId.set(row.id, row);
+      }
+    }
+    const rows = ids.map((id) => byId.get(id) ?? this.requireRow(id));
+    const statuses = this.settings().byId;
+    const categoryOf = (status: string): StatusCategory | null => statuses.get(status)?.category ?? null;
+    const members = this.forecastPopulation(asOf);
+    // Rows of one class and one estimate read one duration; the class's ratios are read once.
+    const durations = new Map<string, DurationForecast>();
+    const ratiosOf = new Map<string, number[]>();
+    // Work, and the attempts that name a model, exist only where someone has held the task,
+    // and matter only for a unit the forecast weighs by its duration (not one in review): time
+    // only those (the timing read is most of this method's cost), and read the rest as no work
+    // yet and no model, exactly what the timing read would say of them.
+    const weighed = rows.filter((row) => {
+      const category = categoryOf(row.status);
+      return category !== "done" && category !== "cancelled" && category !== "review" && category !== "gated";
+    });
+    const held = new Set(
+      weighed.length === 0
+        ? []
+        : (
+            this.db
+              .prepare(`SELECT DISTINCT issue_id FROM attempts WHERE issue_id IN (${weighed.map(() => "?").join(",")})`)
+              .all(...weighed.map((row) => row.id)) as Array<{ issue_id: string }>
+          ).map((row) => row.issue_id),
+    );
+    const behind = new Map<string, string[]>();
+    const timings = held.size === 0 ? new Map<string, IssueTiming>() : this.timingFor([...held], asOf, { contributing: behind });
+    for (const row of rows) {
+      const category = categoryOf(row.status);
+      const node: PlanNode = {
+        id: row.id,
+        identifier: row.identifier,
+        parentId: row.parent_id,
+        estimatedSeconds: row.estimated_seconds,
+        status: row.status,
+        cancelled: category === "cancelled",
+        done: category === "done",
+      };
+      // The unit rule of `forecast`: a duration only for work not done and not waiting for review.
+      const needsDuration = !node.done && category !== "review" && category !== "gated";
+      let duration: DurationForecast | null = null;
+      if (needsDuration) {
+        const key = this.forecastKeyOf(row, behind, null);
+        const memo = `${JSON.stringify(key)}|${row.estimated_seconds ?? ""}`;
+        duration = durations.get(memo) ?? null;
+        if (duration === null) {
+          duration = forecastDuration(
+            "exact",
+            { identifier: row.identifier, title: row.title, status: row.status, estimateSeconds: row.estimated_seconds, dimensions: key },
+            members,
+          );
+          durations.set(memo, duration);
+        }
+      }
+      let ratios: number[] = [];
+      if (duration !== null) {
+        const klass = JSON.stringify(duration.cohort.class);
+        ratios = ratiosOf.get(klass) ?? classRatios("exact", duration.cohort.class, members);
+        ratiosOf.set(klass, ratios);
+      }
+      const unit = unitRemaining({ node, title: row.title, category, workSeconds: timings.get(row.id)?.workSeconds ?? null, duration, ratios });
+      out.set(row.id, { estimateSeconds: row.estimated_seconds ?? null, seconds: unit.seconds });
+    }
+    return out;
+  }
+
+
+
+  /**
    * `staple forecast <ref>` / MCP `forecast` / `GET /api/forecast`: the completion forecast of
    * an issue (its remaining labor and the longest dependency chain of remaining work over the
    * certified plan's units, from each unit's calibrated duration, with resampled bands) and,
@@ -6151,6 +6258,60 @@ export class WorkspaceStore {
     };
   }
 
+  /** The worker attempts behind an issue's `workSeconds` (`timingFor`'s `contributing`), oldest first. */
+  private contributingAttempts(behind: ReadonlyMap<string, readonly string[]>, issueId: string): AttemptRecord[] {
+    return (behind.get(issueId) ?? [])
+      .map((id) => readAttempt(this.db, id))
+      .filter((attempt): attempt is AttemptRecord => attempt !== null)
+      .sort((x, y) => (x.startedAt === y.startedAt ? (x.id < y.id ? -1 : 1) : x.startedAt < y.startedAt ? -1 : 1));
+  }
+
+  /**
+   * A forecast issue's key: the sample rules, except the model. Pinned by the caller, or read
+   * from its attempts; with none, `*`, so an unstarted issue never matches the samples that
+   * named no model as if "no model" were one.
+   */
+  private forecastKeyOf(
+    row: { id: string; kind: string; priority: string; labels: string },
+    behind: ReadonlyMap<string, readonly string[]>,
+    pinnedModel: string | null,
+  ): CohortKey {
+    const contributing = this.contributingAttempts(behind, row.id);
+    const key = cohortDimensions(row, contributing);
+    if (pinnedModel !== null) return { ...key, model: pinnedModel };
+    return contributing.length === 0 ? { ...key, model: ANY } : key;
+  }
+
+  /** The unfiltered calibration population `forecastPopulation` last built, and what it was built from. */
+  private forecastPopulationCache: { fingerprint: string; members: CalibrationMember[] } | null = null;
+
+  /**
+   * The unfiltered calibration population (`calibrate`'s, no filter), built once and reused
+   * until the data it is built from changes. Its members are FINISHED work: resolved issues with
+   * their ended attempts, so the population moves only when an issue is resolved, reopened or
+   * edited after resolving, an attempt ends, an attempt's history is written, or the statuses'
+   * categories change — and the fingerprint reads exactly those. A write to open work, the
+   * common case on a milestone page, leaves it in place.
+   */
+  private forecastPopulation(asOf: string): CalibrationMember[] {
+    const fingerprint = JSON.stringify(
+      this.db
+        .prepare(
+          `SELECT
+             (SELECT COUNT(*) || '|' || COALESCE(MAX(updated_at), '') FROM issues
+               WHERE completed_at IS NOT NULL OR cancelled_at IS NOT NULL) AS resolved,
+             (SELECT COUNT(*) || '|' || COALESCE(MAX(ended_at), '') FROM attempts WHERE ended_at IS NOT NULL) AS ended,
+             (SELECT COUNT(*) FROM attempt_transitions) AS transitions,
+             (SELECT COALESCE(GROUP_CONCAT(id || ':' || category), '') FROM workspace_statuses) AS statuses`,
+        )
+        .get(),
+    );
+    if (this.forecastPopulationCache?.fingerprint === fingerprint) return this.forecastPopulationCache.members;
+    const { members } = this.calibrationBasis({ kinds: null, priorities: null, parentRow: null, since: null, forRows: [], pinnedModel: null }, asOf);
+    this.forecastPopulationCache = { fingerprint, members };
+    return members;
+  }
+
   /**
    * The calibration population of a filter, and the key a forecast issue reads, by the rules
    * `calibration` states: one derivation for `staple calibrate` and `staple forecast`, so a
@@ -6181,34 +6342,10 @@ export class WorkspaceStore {
     /** The worker attempts behind each member's `workSeconds`, by the rule that sums it. */
     const behind = new Map<string, string[]>();
     const timings = this.timingFor([...new Set([...ratioRows, ...forRows].map((row) => row.id))], asOf, { contributing: behind });
-    /** The worker attempts behind an issue's `workSeconds`, oldest first. */
-    const contributingTo = (issueId: string): AttemptRecord[] =>
-      (behind.get(issueId) ?? [])
-        .map((id) => readAttempt(this.db, id))
-        .filter((attempt): attempt is AttemptRecord => attempt !== null)
-        .sort((x, y) => (x.startedAt === y.startedAt ? (x.id < y.id ? -1 : 1) : x.startedAt < y.startedAt ? -1 : 1));
-    /** A key, by one rule for a sample and for an issue being forecast. */
-    const dimensionsOf = (row: { kind: string; priority: string; labels: string }, contributing: readonly AttemptRecord[]): CohortKey => {
-      const labels = JSON.parse(row.labels) as string[];
-      return {
-        kind: row.kind,
-        priority: row.priority,
-        workType: labelDimension(labels, LABEL_PREFIX.workType),
-        area: labelDimension(labels, LABEL_PREFIX.area),
-        model: modelDimension(contributing.map((attempt) => attempt.harness?.model ?? null)),
-      };
-    };
-    /**
-     * A forecast issue's key: the sample rules, except the model. Pinned by the caller, or read
-     * from its attempts; with none, `*`, so an unstarted issue never matches the samples that
-     * named no model as if "no model" were one.
-     */
-    const forecastKey = (row: AnalyticsRow | IssueRow): CohortKey => {
-      const contributing = contributingTo(row.id);
-      const key = dimensionsOf(row, contributing);
-      if (pinnedModel !== null) return { ...key, model: pinnedModel };
-      return contributing.length === 0 ? { ...key, model: ANY } : key;
-    };
+    const contributingTo = (issueId: string): AttemptRecord[] => this.contributingAttempts(behind, issueId);
+    const dimensionsOf = (row: { kind: string; priority: string; labels: string }, contributing: readonly AttemptRecord[]): CohortKey =>
+      cohortDimensions(row, contributing);
+    const forecastKey = (row: AnalyticsRow | IssueRow): CohortKey => this.forecastKeyOf(row, behind, pinnedModel);
     const members: CalibrationMember[] = ratioRows.map((row) => {
       const timing = timings.get(row.id)!;
       const contributing = contributingTo(row.id);

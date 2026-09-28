@@ -64,6 +64,7 @@ export function view(over: ViewOver = {}): MilestoneView {
       startDate: null,
       state: "active",
       planPosition: null,
+      closedAt: null,
       ...(over.milestone ?? {}),
     },
     progress: over.progress ?? progress(),
@@ -71,6 +72,7 @@ export function view(over: ViewOver = {}): MilestoneView {
     members: over.members ?? [],
     next: over.next ?? null,
     goal: over.goal ?? goal(),
+    remaining: over.remaining ?? { estimated: 0, unestimated: 0, unknown: 0, estimateSeconds: null, forecastSeconds: null },
   };
 }
 

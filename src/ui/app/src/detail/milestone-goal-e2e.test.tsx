@@ -72,7 +72,9 @@ function session(): StapleSession {
     ws: "goal",
     setWs: noop,
     issues: { data: issues, error: undefined, loading: false, reload: noop },
-    filters: emptyFilters(),
+    // The page's issue list is read once, after the run finished every member, so they are all
+    // done by then; Done is shown so the member list still draws them next to the earlier plan.
+    filters: { ...emptyFilters(), showDone: true },
     setFilters: noop,
     filterContext: buildFilterContext([]),
     assignee: "",

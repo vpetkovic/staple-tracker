@@ -51,7 +51,7 @@ export function BottomSheet({
             </DialogPrimitive.Title>
             <DialogPrimitive.Close
               aria-label="Close"
-              className="-mr-2 flex size-11 shrink-0 items-center justify-center rounded-full text-text-tertiary outline-none hover:bg-surface-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+              className="-mr-2 flex size-11 shrink-0 items-center justify-center rounded-full text-text-tertiary outline-hidden hover:bg-surface-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
             >
               <XIcon className="size-5" aria-hidden />
             </DialogPrimitive.Close>

@@ -11,7 +11,7 @@
  * Pure and tested (goal-text.test.ts); the real payloads are pinned end to end in
  * detail/milestone-goal-e2e.test.tsx.
  */
-import { shortDay } from "@/views/milestones/milestone-plain";
+import { daysFrom, shortDay } from "@/views/milestones/milestone-plain";
 import { formatEffort } from "./forecast-text";
 import { clockText, type RunTone } from "./run-text";
 import type { CriterionVerdict, EvidenceItem, GoalCounts, GoalCriterion, GoalPace, IssueGate, PaceVerdict } from "./types";
@@ -120,10 +120,29 @@ export const PACE_TONE: Readonly<Record<PaceVerdict, RunTone>> = {
 const days = (n: number): string => (n === 1 ? "1 day" : `${n} days`);
 
 /**
+ * The pace as the page shows it: the days to the target, and whether it has passed, on the
+ * reader's LOCAL calendar day — the check reads the UTC day, so in the evening in New York it
+ * would call a target "today" that is still tomorrow there. Behind or on track is re-read
+ * against the end of the local target day; everything else is the check's.
+ */
+export function shownPace(pace: GoalPace, now: Date = new Date()): GoalPace {
+  if (pace.targetDate === null || pace.verdict === "done" || pace.verdict === "no_target") return pace;
+  const local = daysFrom(pace.targetDate, now);
+  if (local === null) return pace;
+  if (local < 0) return { ...pace, daysToTarget: local, verdict: "overdue" };
+  if (pace.remainingSeconds === null) return { ...pace, daysToTarget: local, verdict: "no_estimate" };
+  const [y, m, d] = pace.targetDate.split("-").map(Number);
+  const endOfDay = new Date(y!, m! - 1, d!, 23, 59, 59, 999).getTime();
+  const secondsLeft = Math.max(0, Math.floor((endOfDay - now.getTime()) / 1000));
+  return { ...pace, daysToTarget: local, verdict: pace.remainingSeconds > secondsLeft ? "behind" : "on_track" };
+}
+
+/**
  * The pace against the target, in plain words, with the numbers: the verdict's reason
  * first, then how much is done. Every figure is the check's own (`goal.pace`).
  */
-export function paceText(pace: GoalPace, now: Date = new Date()): string {
+export function paceText(checked: GoalPace, now: Date = new Date()): string {
+  const pace = shownPace(checked, now);
   const { leaves } = pace;
   const done = leaves.countable === 0 ? "Nothing to count yet" : `${leaves.done} of ${leaves.countable} ${leaves.countable === 1 ? "task" : "tasks"} done`;
   const left =

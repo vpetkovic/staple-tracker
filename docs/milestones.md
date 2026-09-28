@@ -659,7 +659,26 @@ as a reader does.
 Title, assignee and status are edited with the ordinary issue commands; `set`
 takes the dates and the goal. The view's `milestone` also carries
 `description` and `acceptanceCriteria`, and the view carries `goal` (see
-[Goal](#goal)). A non-milestone
+[Goal](#goal)). The view's `milestone` carries `closedAt` too: its `completedAt`
+when its status is in the done category, its `cancelledAt` when cancelled, and
+`null` otherwise — a reopened milestone is open, whatever stamp it kept.
+
+The view (and every `ls` row) carries `remaining`, the work still open in the
+milestone from its estimates, derived on every read:
+`{"estimated": 4, "unestimated": 1, "unknown": 1, "estimateSeconds": 39600, "forecastSeconds": 9300}`.
+It is over the milestone's open LEAVES (not done, not cancelled; the tasks
+`progress` counts). `estimateSeconds` sums their own estimates. `forecastSeconds`
+sums each one's remaining work exactly as `staple forecast` adds its units into
+the labor: the estimate scaled by its class's calibrated ratio for work nobody
+has started, the expected remainder once work has started, and nothing for
+work waiting in review. `unknown` counts the open tasks the forecast cannot
+weigh (no estimate, no samples for its class, or beyond its class's range); they
+are in neither figure, which is then a lower bound. `forecastSeconds` is `null`
+when no open task can be weighed. It is a SUM, not the critical path
+`goal.pace.remainingSeconds` reads. The web UI projects a due date from it while
+no target is set (now plus `forecastSeconds`, labelled an estimate, "no earlier
+than" when `unknown` is not 0); the projection is never stored. The calibration
+population behind it is read once and reused until finished work changes it. A non-milestone
 identifier given where a milestone is expected is refused with `validation`
 naming its kind (`STA-66 is an epic, not a milestone`); an unknown identifier
 is `not_found`; `--at N` is a 1-based position; `rm` of a non-member is
