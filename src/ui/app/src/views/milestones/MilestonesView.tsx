@@ -101,6 +101,8 @@ import {
   progressSentence,
   projectedDue,
   riskSentence,
+  shownState,
+  waitBreakdown,
   type ProjectedDue,
 } from "./milestone-plain";
 import { MilestoneDueControl, useSetMilestoneTarget } from "./MilestoneDue";
@@ -277,8 +279,8 @@ export function MilestoneListPane({
                 aria-current={selected ? "true" : undefined}
                 onClick={() => onSelect(row.milestone.identifier)}
                 className={cn(
-                  "staple-milestone-card flex w-full flex-col gap-2 rounded-xl border bg-card px-3.5 py-3 text-left outline-none",
-                  "hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                  "staple-milestone-card flex w-full flex-col gap-2 rounded-xl border bg-card px-3.5 py-3 text-left outline-hidden",
+                  "hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-ring",
                   selected && "border-ring",
                 )}
               >
@@ -290,7 +292,7 @@ export function MilestoneListPane({
                   data-milestone-target
                   className={cn(
                     "text-label text-muted-foreground",
-                    row.milestone.state === "overdue" && "text-[var(--plain-risk-fg)]",
+                    shownState(row.milestone, now) === "overdue" && "text-[var(--plain-risk-fg)]",
                   )}
                 >
                   {dueText(row.milestone, projectedDue(row.remaining, now), now)}
@@ -331,15 +333,15 @@ export function MilestoneListPane({
               aria-current={selected ? "true" : undefined}
               onClick={() => onSelect(row.milestone.identifier)}
               className={cn(
-                "flex w-full flex-col gap-1 rounded-md border px-3 py-2 text-left outline-none",
-                "hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring",
+                "flex w-full flex-col gap-1 rounded-md border px-3 py-2 text-left outline-hidden",
+                "hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-ring",
                 selected ? "border-ring bg-surface-hover" : "border-transparent",
               )}
             >
               <span className="flex items-center gap-2">
                 <span className="font-mono text-[11px] text-text-tertiary">{row.milestone.identifier}</span>
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{row.milestone.title}</span>
-                <StateBadge state={row.milestone.state} complete={row.progress.complete} />
+                <StateBadge state={shownState(row.milestone, new Date())} complete={row.progress.complete} />
               </span>
               <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 <span data-milestone-target>target {dateLabel(row.milestone.targetDate)}</span>
@@ -520,7 +522,7 @@ function MemberRow({
         if (event.target !== event.currentTarget) return;
         onKeyDown?.(event);
       }}
-      className="flex cursor-pointer items-center gap-1 rounded-md outline-none hover:bg-surface-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+      className="flex cursor-pointer items-center gap-1 rounded-md outline-hidden hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring"
     >
         <div role="gridcell" className="min-w-0 flex-1">
           <TaskRowLine row={row} config={config} semantics="bare" now={now} isExpanded={row.isExpanded} onToggleExpand={onToggle} />
@@ -664,11 +666,12 @@ export function Rollups({
   const { milestone, progress, next } = view;
   // Blocked and gated are the QUEUE's verdict, not a status category — see `milestoneRisk`.
   const risk = milestoneRisk(view, effective);
-  // The legend's "blocked" is the first two rows: work not started that waits on other tasks,
-  // and work that waits on a person (parked by hand, or for an approval). Started work that
-  // still waits is in its own bucket (in review, in progress) and gets its own row.
-  const waiting = risk.waiting ?? { onTasksNotStarted: 0, onTasksStarted: {}, onPerson: 0 };
-  const startedWaiting = (waiting.onTasksStarted.active ?? 0) + (waiting.onTasksStarted.review ?? 0);
+  // Filed by the bar's bucket first, then by reason (`waitBreakdown`): the first two rows add
+  // up to the legend's "blocked"; started work that still waits is in its own bucket on the
+  // bar (in review, in progress) and gets its own rows, held for a blocker or for an approval.
+  const w = waitBreakdown(progress, effective.length > 0 ? risk : null);
+  const startedOnTasks = w.startedOnTasks.active + w.startedOnTasks.review;
+  const startedOnGate = w.startedOnGate.active + w.startedOnGate.review;
   const counted =
     progress.counts.cancelled > 0 ? `${progress.countable} (${progress.counts.cancelled} cancelled not counted)` : `${progress.countable}`;
   const dated = (cell: Cell): Cell[] => (withDates ? [cell] : []);
@@ -676,10 +679,11 @@ export function Rollups({
     ...dated(["reference", "Reference", milestone.identifier]),
     ["counted", "Tasks counted", counted],
     ...dated(["start", "Starts", dateLabel(milestone.startDate)]),
-    ["blocked-tasks", "Blocked, waiting on other tasks", `${waiting.onTasksNotStarted}`],
+    ["blocked-tasks", "Blocked, waiting on other tasks", `${w.onTasks}`],
     ...dated(["target", "Target", dateLabel(milestone.targetDate)]),
-    ["blocked-person", "Blocked, waiting on a person", `${waiting.onPerson}`],
-    ...(startedWaiting > 0 ? ([["started-waiting", "Started, still waiting on other tasks", `${startedWaiting}`]] as Cell[]) : []),
+    ["blocked-person", "Blocked, waiting on a person", `${w.onPerson}`],
+    ...(startedOnTasks > 0 ? ([["started-waiting", "Started, still waiting on other tasks", `${startedOnTasks}`]] as Cell[]) : []),
+    ...(startedOnGate > 0 ? ([["started-gated", "Started, waiting for an approval", `${startedOnGate}`]] as Cell[]) : []),
     ...(milestone.planPosition !== null ? dated(["plan", "Plan position", `#${milestone.planPosition}`]) : []),
     ["next", "Next up", next ? `${next.identifier}, #${next.position} in the pickup order` : NOT_QUEUED_LABEL],
   ];
@@ -844,6 +848,7 @@ export function MilestoneDetailPane({
           <Button
             variant="ghost"
             size="icon"
+            className="max-md:size-11"
             aria-label={fullScreen ? "Collapse from full screen" : "Expand to full screen"}
             aria-pressed={fullScreen}
             title={fullScreen ? "Collapse from full screen" : "Expand to full screen"}
@@ -883,6 +888,7 @@ export function MilestoneDetailPane({
             <Button
               variant="ghost"
               size="icon-xs"
+              className="max-md:size-11"
               aria-label={`Open ${milestone.identifier}`}
               onClick={() => onOpen("", milestone.identifier)}
             >
@@ -891,7 +897,7 @@ export function MilestoneDetailPane({
           </div>
           <h2 className="text-[17px] font-semibold tracking-[var(--tracking-heading)]">{milestone.title}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
-            {decision ? statusControl : <StateBadge state={milestone.state} complete={view.progress.complete} />}
+            {decision ? statusControl : <StateBadge state={shownState(milestone, now)} complete={view.progress.complete} />}
             <span data-milestone-start>start {dateLabel(milestone.startDate)}</span>
             {dueControl}
             {milestone.assignee ? <span>owner {milestone.assignee}</span> : null}
@@ -901,6 +907,7 @@ export function MilestoneDetailPane({
         <Button
           variant="ghost"
           size="icon"
+          className="max-md:size-11"
           aria-label={fullScreen ? "Collapse from full screen" : "Expand to full screen"}
           aria-pressed={fullScreen}
           title={fullScreen ? "Collapse from full screen" : "Expand to full screen"}
@@ -1008,7 +1015,7 @@ export function MilestoneDetailPane({
             placeholder={desk ? (exampleRef ? `Task, like ${exampleRef}` : "Task reference") : "STA-66"}
             disabled={busy}
             onChange={(event) => setAddRef(event.target.value)}
-            className={cn("h-7 text-[12px]", desk ? "h-8 w-40" : "w-28 font-mono")}
+            className={cn("h-7 text-[12px] max-md:h-11", desk ? "h-8 w-40" : "w-28 font-mono")}
           />
           <Input
             value={addNote}
@@ -1016,9 +1023,9 @@ export function MilestoneDetailPane({
             placeholder={desk ? "Why it is here (optional)" : "note (optional)"}
             disabled={busy}
             onChange={(event) => setAddNote(event.target.value)}
-            className="h-7 min-w-0 flex-1 text-[12px]"
+            className="h-7 min-w-0 flex-1 text-[12px] max-md:h-11"
           />
-          <Button type="submit" variant="outline" size={desk ? "sm" : "xs"} disabled={busy || addRef.trim() === ""}>
+          <Button type="submit" variant="outline" size={desk ? "sm" : "xs"} className="max-md:min-h-11" disabled={busy || addRef.trim() === ""}>
             {desk ? "Add to milestone" : "Add member"}
           </Button>
         </form>

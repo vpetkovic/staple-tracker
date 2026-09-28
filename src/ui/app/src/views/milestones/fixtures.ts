@@ -72,7 +72,7 @@ export function view(over: ViewOver = {}): MilestoneView {
     members: over.members ?? [],
     next: over.next ?? null,
     goal: over.goal ?? goal(),
-    remaining: over.remaining ?? { estimated: 0, unestimated: 0, estimateSeconds: null, forecastSeconds: null },
+    remaining: over.remaining ?? { estimated: 0, unestimated: 0, unknown: 0, estimateSeconds: null, forecastSeconds: null },
   };
 }
 

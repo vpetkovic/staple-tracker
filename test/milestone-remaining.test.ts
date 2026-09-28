@@ -24,6 +24,8 @@ type Store = ReturnType<typeof initWorkspace>["store"];
 let home: string;
 let store: Store;
 const refs: Record<string, string> = {};
+/** The instant the fixture ends at: every read is taken as of then, as a forecast's is. */
+let asOf = "";
 
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), "staple-milestone-remaining-"));
@@ -46,15 +48,23 @@ beforeAll(() => {
     t += minutes + 1;
   }
   at(t);
-  // Open work, independent of each other: 4h and 2h. C has no estimate; D is cancelled.
+  // Open work, independent of each other: A (4h) and B (2h) not started; R (2h) handed over
+  // for review, which forecast weighs as nothing left; S (3h) started 30 minutes ago; C with
+  // no estimate; D cancelled.
   const a = store.createIssue({ title: "A", parent: epic.id, estimatedSeconds: 14400, labels: ["area:ui"], priority: "high" });
   const b = store.createIssue({ title: "B", parent: epic.id, estimatedSeconds: 7200, labels: ["area:ui"], priority: "high" });
+  const r = store.createIssue({ title: "R", parent: epic.id, estimatedSeconds: 7200, labels: ["area:ui"], priority: "high" });
+  store.updateIssue(r.id, { status: "in_review" }, "w");
+  const started = store.createIssue({ title: "S", parent: epic.id, estimatedSeconds: 10800, labels: ["area:ui"], priority: "high" });
+  store.checkoutIssue(started.id, "w", undefined, {});
+  for (let m = t + 10; m <= t + 30; m += 10) (at(m), store.addComment(started.id, "progress", "w", "agent"));
   const c = store.createIssue({ title: "C", parent: epic.id, labels: ["area:ui"], priority: "high" });
   const d = store.createIssue({ title: "D", parent: epic.id, estimatedSeconds: 10800, labels: ["area:ui"], priority: "high" });
   store.updateIssue(d.id, { status: "cancelled" }, "w");
+  asOf = new Date(clock).toISOString();
   const milestone = store.milestones().create({ title: "Release" }, "vp") as MilestoneCreateResult;
   store.milestones().addMember(milestone.milestone.id, epic.id, {}, "vp");
-  Object.assign(refs, { epic: epic.identifier, a: a.identifier, b: b.identifier, c: c.identifier, milestone: milestone.milestone.identifier });
+  Object.assign(refs, { epic: epic.identifier, a: a.identifier, b: b.identifier, r: r.identifier, s: started.identifier, c: c.identifier, milestone: milestone.milestone.identifier });
 });
 
 afterAll(() => {
@@ -64,22 +74,34 @@ afterAll(() => {
 });
 
 describe("a milestone's remaining work", () => {
-  it("sums its open tasks' estimates, and scales each the way a forecast scales a unit", () => {
-    const view = store.milestones().get(refs.milestone!);
-    // A and B carry estimates; C does not; D is cancelled and the samples are done.
-    expect(view.remaining).toMatchObject({ estimated: 2, unestimated: 1, estimateSeconds: 6 * 3600 });
-    // 0.35 × 4h + 0.35 × 2h = 7560 s: each unit's own calibrated figure, summed.
-    expect(view.remaining.forecastSeconds).toBeCloseTo(7560, 6);
-    const durations = store.calibratedDurations([refs.a!, refs.b!]);
-    const units = [...durations.values()].reduce((sum, d) => sum + (d.seconds ?? 0), 0);
-    expect(view.remaining.forecastSeconds).toBeCloseTo(units, 9);
+  it("is the labor `staple forecast` reads for the same tasks, unit for unit", () => {
+    setClock(() => Date.parse(asOf));
+    try {
+      const view = store.milestones().get(refs.milestone!);
+      const forecast = store.forecast({ ref: refs.epic! }, asOf);
+      // The epic holds exactly the milestone's tasks, so the two sums are over the same units.
+      expect(view.remaining.forecastSeconds).toBeCloseTo(forecast.completion.labor.expectedSeconds!, 6);
+      const byRef = new Map(forecast.completion.units.items.map((item) => [item.ref, item]));
+      const units = store.remainingForecasts([refs.a!, refs.b!, refs.r!, refs.s!, refs.c!], asOf);
+      const by = (ref: string) => units.get(store.getIssue(ref).id)!;
+      // Not started: the estimate scaled, 0.35 × 4h. In review: nothing left. Started: the
+      // conditional remainder, not the whole duration. No estimate: unknown.
+      expect(by(refs.a!).seconds).toBeCloseTo(byRef.get(refs.a!)!.expected!.remainingSeconds, 9);
+      expect(by(refs.a!).seconds).toBeCloseTo(5040, 6);
+      expect(by(refs.r!).seconds).toBe(0);
+      expect(by(refs.s!).seconds).toBeCloseTo(byRef.get(refs.s!)!.expected!.remainingSeconds, 9);
+      expect(by(refs.s!).seconds).toBeLessThan(0.35 * 10800);
+      expect(by(refs.c!).seconds).toBeNull();
+      expect(view.remaining).toMatchObject({ estimated: 4, unestimated: 1, unknown: 1, estimateSeconds: (4 + 2 + 2 + 3) * 3600 });
+    } finally {
+      setClock(null);
+    }
   });
 
   it("is the sum of the work, not the critical path the goal's pace reads", () => {
     const view = store.milestones().get(refs.milestone!);
-    // The pace reads the longest chain of the plan's own estimates: A alone, 4h.
-    expect(view.goal.pace.remainingSeconds).toBe(4 * 3600);
-    expect(view.remaining.forecastSeconds).toBeCloseTo(7560, 6);
+    // The pace reads the longest chain of the plan's own estimates: one task alone.
+    expect(view.goal.pace.remainingSeconds).toBeLessThan(view.remaining.estimateSeconds!);
   });
 
   it("comes with the list read too, so a card needs no second request", () => {
@@ -87,8 +109,40 @@ describe("a milestone's remaining work", () => {
     expect(row.remaining).toEqual(store.milestones().get(refs.milestone!).remaining);
   });
 
-  it("falls back to the estimate itself for a class with no samples to scale by", () => {
-    const lone = store.createIssue({ title: "unsampled", estimatedSeconds: 3600, labels: ["area:docs"], priority: "low", kind: "chore" });
-    expect(store.calibratedDurations([lone.id]).get(lone.id)).toEqual({ estimateSeconds: 3600, seconds: expect.any(Number) });
+  it("rebuilds the calibration population when finished work changes it, and only then", () => {
+    const before = store.remainingForecasts([refs.a!], asOf).get(store.getIssue(refs.a!).id)!.seconds!;
+    // Work on open tasks leaves the population alone: same figure.
+    store.addComment(refs.b!, "still going", "w", "agent");
+    expect(store.remainingForecasts([refs.a!], asOf).get(store.getIssue(refs.a!).id)!.seconds).toBe(before);
+    // A sixth sample, finished at 4× its estimate, moves the class's ratio: a new figure.
+    let clock = Date.parse(asOf);
+    setClock(() => clock);
+    try {
+      const sample = store.createIssue({ title: "slow sample", estimatedSeconds: 600, labels: ["area:ui"], priority: "high" });
+      store.checkoutIssue(sample.id, "w", undefined, {});
+      for (let m = 10; m <= 40; m += 10) (clock += 10 * 60_000, store.addComment(sample.id, "progress", "w", "agent"));
+      store.updateIssue(sample.id, { status: "done" }, "w");
+    } finally {
+      setClock(null);
+    }
+    expect(store.remainingForecasts([refs.a!], asOf).get(store.getIssue(refs.a!).id)!.seconds).not.toBe(before);
+  });
+});
+
+describe("a milestone's closedAt", () => {
+  it("is set while it is closed and null once it is reopened, whatever stamps the issue keeps", () => {
+    const m = store.milestones().create({ title: "Reopened" }, "vp") as MilestoneCreateResult;
+    const id = m.milestone.id;
+    store.updateIssue(id, { status: "cancelled" }, "vp");
+    const cancelled = store.milestones().get(id).milestone;
+    expect(cancelled.closedAt).toBe(store.getIssue(id).cancelledAt);
+    expect(cancelled.closedAt).not.toBeNull();
+    store.updateIssue(id, { status: "backlog" }, "vp");
+    // The store keeps the old cancelledAt after a reopen; the milestone is open, so no closedAt.
+    expect(store.getIssue(id).cancelledAt).not.toBeNull();
+    expect(store.milestones().get(id).milestone.closedAt).toBeNull();
+    expect(store.milestones().list({ all: true }).find((r) => r.milestone.id === id)!.milestone.closedAt).toBeNull();
+    store.updateIssue(id, { status: "done" }, "vp");
+    expect(store.milestones().get(id).milestone.closedAt).toBe(store.getIssue(id).completedAt);
   });
 });

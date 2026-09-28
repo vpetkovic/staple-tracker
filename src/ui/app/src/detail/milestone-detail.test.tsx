@@ -121,7 +121,7 @@ describe("a milestone's own detail", () => {
   });
 
   it("projects the due date from the calibrated work left when no target is set", () => {
-    const plan = view({ milestone: { targetDate: null }, remaining: { estimated: 1, unestimated: 0, estimateSeconds: 3600, forecastSeconds: 3600 } });
+    const plan = view({ milestone: { targetDate: null }, remaining: { estimated: 1, unestimated: 0, unknown: 0, estimateSeconds: 3600, forecastSeconds: 3600 } });
     const html = render({ ...PLAN, milestonePlan: plan });
     expect(html).toMatch(/data-milestone-sentence="">[^<]*Due ~\d+ \w+ \(estimated\)\.</);
     expect(html).toContain('data-due-source="estimate"');

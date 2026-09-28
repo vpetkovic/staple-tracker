@@ -187,7 +187,7 @@ export function EpicPicker({
                   className={cn(
                     "flex size-4 items-center justify-center rounded-sm text-text-tertiary transition-colors",
                     "hover:bg-surface-hover hover:text-foreground",
-                    "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                    "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring",
                   )}
                 >
                   <X className="size-3" aria-hidden />
@@ -426,7 +426,7 @@ function EpicPickerRow({
         data-epic-matched={matched ? "" : undefined}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-muted",
-          "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+          "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring",
           // A row present only to hold up a match's indentation is context, not a result.
           !matched && "opacity-60",
         )}
@@ -459,7 +459,7 @@ function EpicPickerRow({
         className={cn(
           "flex size-6 shrink-0 items-center justify-center rounded-sm transition-colors",
           "hover:bg-muted",
-          "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+          "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring",
           collapsed ? "text-foreground" : "text-muted-foreground",
         )}
       >

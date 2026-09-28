@@ -174,7 +174,7 @@ describe("every operation has the same shape and refusal on every surface", () =
         },
       },
       // The work left from estimates: its one open task has none, so neither sum exists.
-      remaining: { estimated: 0, unestimated: 1, estimateSeconds: null, forecastSeconds: null },
+      remaining: { estimated: 0, unestimated: 1, unknown: 1, estimateSeconds: null, forecastSeconds: null },
     });
     expect(fromMcp).toEqual(fromCli);
     expect(fromHttp).toEqual(fromCli);

@@ -46,7 +46,8 @@ describe("the milestone list", () => {
       <MilestoneListPane
         rows={[
           listRow({
-            milestone: { identifier: "STA-190", title: "October cut", targetDate: "2026-10-31", state: "overdue" },
+            // Its target passed on every calendar: overdue by the store and by the reader's day.
+            milestone: { identifier: "STA-190", title: "October cut", targetDate: "2026-08-31", state: "overdue" },
             progress: progress({ counts: { done: 5, ready: 6 } }),
             memberCount: 3,
             next: { identifier: "STA-67", position: 4 },
@@ -69,7 +70,7 @@ describe("the milestone list", () => {
     );
     expect(html).toContain('data-milestone-row="STA-190"');
     expect(html).toContain('aria-current="true"');
-    expect(html).toContain("target 2026-10-31");
+    expect(html).toContain("target 2026-08-31");
     expect(html).toContain("5/11 done · 45%");
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-valuenow="45"');
@@ -137,7 +138,7 @@ describe("the milestone detail", () => {
   it("shows title, dates, owner, rollups and next work", () => {
     const html = renderDetail(
       data,
-      { effective: [effective({ identifier: "STA-67", milestonePath: ["STA-190"], eligibility: "blocked" })] },
+      { effective: [effective({ identifier: "STA-67", milestonePath: ["STA-190"], eligibility: "blocked", status: "todo" })] },
       issues,
     );
     expect(html).toContain('data-milestone-detail="STA-190"');
@@ -199,7 +200,7 @@ describe("the milestone detail", () => {
   it("on the desk, gives in-review work its own bucket and an aligned details grid with nothing said twice", () => {
     const reviewed = view({
       milestone: { identifier: "STA-190", status: "in_review" },
-      progress: progress({ counts: { review: 9, cancelled: 1 } }),
+      progress: progress({ counts: { review: 9, blocked: 1, cancelled: 1 } }),
       members: [member({ identifier: "STA-66", kind: "epic" })],
     });
     const html = renderDetail(
@@ -215,15 +216,15 @@ describe("the milestone detail", () => {
       issues,
     );
     // The headline counts nine; the legend has an in-review bucket and puts all nine in it.
-    expect(html).toContain("0 of 9 tasks finished (0%).");
+    expect(html).toContain("0 of 10 tasks finished (0%).");
     expect(html).toMatch(/data-legend="review"[^>]*>.*?<span class="staple-progress-count">9<\/span> in review/);
     expect(html).toMatch(/data-legend="active"[^>]*data-empty=""/);
-    expect(html).toContain("1 in review still waits on another task. 1 cancelled task is not counted.");
+    expect(html).toContain("1 is blocked, waiting on a person. 1 in review still waits on another task. 1 cancelled task is not counted.");
     // The status pill is the stored status, with the Tasks list's glyph and word.
     expect(html).toMatch(/data-milestone-status="in_review"[^>]*>.*?In Review<\/span>/);
     // One grid of label/value pairs, two pairs to a line; the old trailing risk line is gone.
     const grid = /<dl data-milestone-rollups[^>]*class="([^"]*)"/.exec(html)![1]!;
-    expect(grid).toContain("grid-cols-[max-content_minmax(0,1fr)_max-content_minmax(0,1fr)]");
+    expect(grid).toContain("min-[1280px]:grid-cols-[max-content_minmax(0,1fr)_max-content_minmax(0,1fr)]");
     // reference, counted, starts, waiting on tasks, target, waiting on a person, started-and-waiting, next
     expect(html.match(/<dt /g)).toHaveLength(8);
     expect(html).toMatch(/Started, still waiting on other tasks<\/dt><dd[^>]*>1<\/dd>/);
@@ -257,9 +258,14 @@ describe("the milestone detail", () => {
     expect(html).not.toContain("Nothing is in this milestone yet");
   });
 
-  it("gives the row's controls a 44px target on a phone", () => {
+  it("gives every control on the phone page a 44px target", () => {
     const html = renderDetail(data, {}, issues);
     expect(html).toMatch(/class="[^"]*max-md:size-11[^"]*"[^>]*aria-label="Open STA-146"/);
+    // The header's own Open and the full-screen toggle, and the add form.
+    expect(html).toMatch(/class="[^"]*max-md:size-11[^"]*"[^>]*aria-label="Open STA-190"/);
+    expect(html).toMatch(/class="[^"]*max-md:size-11[^"]*"[^>]*aria-label="Expand to full screen"/);
+    expect(html).toMatch(/class="[^"]*max-md:min-h-11[^"]*"[^>]*>Add member</);
+    expect(html).toMatch(/<input[^>]*max-md:h-11[^>]*aria-label="Identifier to add"|aria-label="Identifier to add"[^>]*max-md:h-11/);
   });
 
   it("gives the member list the Tasks list's keyboard: arrows move, Enter and Space open, left and right fold", () => {

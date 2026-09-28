@@ -1346,6 +1346,8 @@ export interface MilestoneView {
 export interface MilestoneRemaining {
   estimated: number;
   unestimated: number;
+  /** Open leaves `forecast` cannot weigh: `forecastSeconds` is then a lower bound. */
+  unknown: number;
   estimateSeconds: number | null;
   forecastSeconds: number | null;
 }

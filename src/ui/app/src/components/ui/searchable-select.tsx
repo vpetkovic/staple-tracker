@@ -447,7 +447,7 @@ export function SearchableSelect({
                   className={cn(
                     "flex size-4 items-center justify-center rounded-sm text-text-tertiary transition-colors",
                     "hover:bg-surface-hover hover:text-foreground",
-                    "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                    "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring",
                   )}
                 >
                   <X className="size-3" aria-hidden />

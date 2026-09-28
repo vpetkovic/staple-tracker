@@ -2409,9 +2409,13 @@ const milestoneGoalShape = z
 const milestoneRemainingShape = z
   .object({
     estimated: z.number().describe("Open leaves (not done, not cancelled) with an estimate"),
-    unestimated: z.number().describe("Open leaves without one; their work is in neither sum"),
+    unestimated: z.number().describe("Open leaves without one"),
+    unknown: z.number().describe("Open leaves forecast cannot weigh (no estimate, no samples, beyond range): forecastSeconds is then a lower bound"),
     estimateSeconds: z.number().nullable().describe("Their own estimates, summed; null when none has one"),
-    forecastSeconds: z.number().nullable().describe("Their calibrated durations, summed (estimate × class ratio, as forecast scales a unit)"),
+    forecastSeconds: z
+      .number()
+      .nullable()
+      .describe("Their remaining work exactly as `forecast` adds its units: scaled estimates, the remainder once started, 0 while in review; null when none can be weighed"),
   })
   .describe("The work still open in the milestone, from its estimates; derived on every read");
 

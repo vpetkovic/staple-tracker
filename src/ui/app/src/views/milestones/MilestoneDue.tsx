@@ -21,7 +21,7 @@ import { describeRefusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import type { MilestoneState } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { dueText, localIso, projectionNote, type ProjectedDue } from "./milestone-plain";
+import { dueText, localIso, projectionNote, shownState, type ProjectedDue } from "./milestone-plain";
 
 export interface DueMilestone {
   targetDate: string | null;
@@ -100,7 +100,7 @@ export function MilestoneDueControl({
       data-milestone-target=""
       data-due-source={milestone.targetDate ? "target" : projected ? "estimate" : "none"}
       title={projected ? projectionNote(projection!) : undefined}
-      className={cn(milestone.state === "overdue" && "text-[var(--plain-risk-fg)]")}
+      className={cn(shownState(milestone, now) === "overdue" && "text-[var(--plain-risk-fg)]")}
     >
       {text}
     </span>

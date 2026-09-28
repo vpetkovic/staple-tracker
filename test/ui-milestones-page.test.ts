@@ -55,6 +55,17 @@ const bundle = uiBundleExists();
 const browserReady = bundle && (await chromiumAvailable());
 const reason = !bundle ? "no UI bundle (run npm run build:ui)" : !browserReady ? "no Chromium for playwright-core" : "";
 if (reason) console.warn(`ui-milestones-page: skipped — ${reason}`);
+/**
+ * In CI this suite MUST run: CI installs Chromium for playwright-core (.github/workflows/ci.yml),
+ * and a skip there would pass the gate having pressed nothing. Locally a missing browser skips.
+ */
+if (reason && process.env.CI) {
+  describe("ui-milestones-page: a browser to run in", () => {
+    it("has the UI bundle and Chromium", () => {
+      throw new Error(`ui-milestones-page cannot run in CI: ${reason}.`);
+    });
+  });
+}
 
 const WS = "alpha";
 /** The person this browser says it is (`staple:me`, detail/parts/person.ts). */
@@ -97,7 +108,15 @@ beforeAll(async () => {
     const gated = store.milestones().create({ title: "Review me" }, null) as MilestoneCreateResult;
     for (const issue of [a, b]) store.milestones().addMember(gated.milestone.id, issue.id, {}, null);
     store.gateIssue(gated.milestone.id, { owner: PERSON }, "autopilot");
+    // A done epic with an open child: the child is lifted into its place, wearing its chip.
+    const doneEpic = store.createIssue({ title: "Shipped epic", kind: "epic" });
+    const late = store.createIssue({ title: "Late child", parent: doneEpic.id });
+    store.updateIssue(doneEpic.id, { status: "done" }, "w");
+    const carried = store.milestones().create({ title: "Carried" }, null) as MilestoneCreateResult;
+    store.milestones().addMember(carried.milestone.id, doneEpic.id, {}, null);
     Object.assign(refs, {
+      carried: carried.milestone.identifier,
+      late: late.identifier,
       epic: epic.identifier,
       open: open.identifier,
       cancelled: cancelled.identifier,
@@ -129,8 +148,8 @@ afterAll(async () => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-async function open(focus: string, ws = WS): Promise<{ page: Page; context: BrowserContext }> {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+async function open(focus: string, ws = WS, viewport = { width: 1440, height: 900 }): Promise<{ page: Page; context: BrowserContext }> {
+  const context = await browser.newContext({ viewport });
   // Who this browser is: the name every detail write is signed with.
   await context.addInitScript((name) => localStorage.setItem("staple:me", name), PERSON);
   const page = await context.newPage();
@@ -171,6 +190,22 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
+  it("draws a visible focus ring on the row the keyboard is on", async () => {
+    const { page, context } = await open(refs.plan!);
+    const row = page.locator(`[data-member-row="${refs.open}"]`);
+    await page.keyboard.press("Tab"); // keyboard modality, so :focus-visible applies
+    await row.focus();
+    const ring = await row.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor, visible: element.matches(":focus-visible") };
+    });
+    expect(ring.visible).toBe(true);
+    expect(ring.style).toBe("solid");
+    expect(ring.width).toBe("2px");
+    expect(ring.color).not.toBe("rgba(0, 0, 0, 0)");
+    await context.close();
+  });
+
   it("opens it on Enter and on Space while the row has the focus", async () => {
     for (const key of ["Enter", " "]) {
       const { page, context } = await open(refs.plan!);
@@ -205,10 +240,13 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await context.close();
   });
 
-  it("sets the milestone's own target from the calendar, signed by the person, and clears it back to the estimate", async () => {
+  it("sets the milestone's own target from the calendar, signed by the person, and clears it back", async () => {
     const { page, context } = await open(refs.plan!);
     const target = page.locator("[data-milestone-detail] [data-milestone-target]").first();
-    expect(await target.getAttribute("data-due-source")).toBe("estimate");
+    // No finished work to calibrate against yet, so the forecast cannot weigh the open task:
+    // no projection, and the page says so rather than guessing.
+    const before = await target.getAttribute("data-due-source");
+    expect(before).toBe("none");
     await page.locator("[data-milestone-detail] [data-milestone-due-button]").first().click();
     await page.locator('[data-milestone-due-picker] input[type="date"]').fill("2030-01-15");
     await page.locator("[data-milestone-due-save]").click();
@@ -223,7 +261,7 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await page.waitForTimeout(800);
     const cleared = await get<{ milestone: { targetDate: string | null } }>(`/api/milestone?ws=${WS}&ref=${refs.plan}`);
     expect(cleared.milestone.targetDate).toBeNull();
-    expect(await target.getAttribute("data-due-source")).toBe("estimate");
+    expect(await target.getAttribute("data-due-source")).toBe(before);
     await context.close();
   });
 
@@ -252,6 +290,32 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     await page.locator("[data-create-milestone]").click();
     await page.waitForSelector("[data-create-kind]");
     expect(await page.locator("[data-create-kind]").innerText()).toContain("Milestone");
+    await context.close();
+  });
+
+  it("gives every control on the phone page a target of at least 44px", async () => {
+    const { page, context } = await open(refs.carried!, WS, { width: 390, height: 844 });
+    const size = (selector: string) =>
+      page.locator(selector).first().evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return [box.width, box.height];
+      });
+    for (const selector of [
+      `[data-milestone-detail] header [aria-label="Open ${refs.carried}"]`,
+      '[aria-label="Expand to full screen"]',
+      "[data-milestone-due-button]",
+      "[data-milestone-add] button[type=submit]",
+      '[aria-label="Identifier to add"]',
+      // The lifted row's own control: the hidden member's `⋯` it carries.
+      `[data-milestone-member="${refs.late}"] [role=gridcell]:last-child button`,
+    ]) {
+      const [, height] = await size(selector);
+      expect(height, selector).toBeGreaterThanOrEqual(44);
+    }
+    // The lifted child's parent chip keeps its drawn size and grows a 44px target.
+    const chip = page.locator(`[data-member-row="${refs.late}"] .staple-row-breadcrumb`);
+    const target = await chip.evaluate((element) => parseFloat(getComputedStyle(element, "::before").height));
+    expect(target).toBeGreaterThanOrEqual(44);
     await context.close();
   });
 });

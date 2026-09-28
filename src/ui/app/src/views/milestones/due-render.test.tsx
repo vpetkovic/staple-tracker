@@ -15,7 +15,7 @@ import { projectedDue } from "./milestone-plain";
 
 const NOW = new Date(2026, 8, 27, 15, 30);
 const noop = () => {};
-const LEFT = { estimated: 2, unestimated: 0, estimateSeconds: 6 * 3600, forecastSeconds: 8 * 3600 };
+const LEFT = { estimated: 2, unestimated: 0, unknown: 0, estimateSeconds: 6 * 3600, forecastSeconds: 8 * 3600 };
 
 function due(props: Partial<Parameters<typeof MilestoneDueControl>[0]>): string {
   return renderToStaticMarkup(
@@ -29,7 +29,9 @@ describe("the due control", () => {
   it("shows the projection as an estimate, with a calendar that sets the milestone's own date", () => {
     const html = due({ projection: projectedDue(LEFT, NOW), onSetTarget: async () => true });
     expect(html).toMatch(/data-due-source="estimate"[^>]*>Due ~27 Sept? \(estimated\)</);
-    expect(html).toContain('title="8h of work left (6h estimated, scaled by how long estimates have really taken), counted from now. Set a date to override it."');
+    expect(html).toContain(
+      'title="8h of work left (6h estimated, scaled by how long estimates have really taken; work in review counts as done), counted from now, as staple forecast reads it. Set a date to override it."',
+    );
     expect(html).toContain('aria-label="Set a due date"');
   });
 

@@ -85,11 +85,11 @@ describe("milestoneRisk", () => {
   });
 
   it("reads overdue from the state and blocked/gated from the queue's eligibility", () => {
-    const risky = view({ milestone: { identifier: "STA-190", state: "overdue" } });
+    const risky = view({ milestone: { identifier: "STA-190", state: "overdue", targetDate: "2026-08-31" } });
     // Every fixture row is `backlog`, so all three waiting rows sit in the not-started category.
     expect(milestoneRisk(risky, queueRows)).toMatchObject({ overdue: true, blocked: 2, gated: 1, waitingIn: { unstarted: 3 } });
     // Two wait on other tasks (blocked, not started); the gated one waits on a person's approval.
-    expect(milestoneRisk(risky, queueRows).waiting).toEqual({ onTasksNotStarted: 2, onTasksStarted: {}, onPerson: 1 });
+    expect(milestoneRisk(risky, queueRows).waiting).toEqual({ onTasksNotStarted: 2, startedOnTasks: {}, startedOnGate: {} });
     expect(riskLabels(milestoneRisk(risky, queueRows))).toEqual(["! overdue", "⊘ 2 blocked", "◇ 1 gated"]);
   });
 

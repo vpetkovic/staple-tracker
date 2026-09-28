@@ -31,6 +31,7 @@ import type {
   StatusCategory,
 } from "@/lib/types";
 import { statusCategory } from "@/lib/settings";
+import { shownState } from "./milestone-plain";
 
 // ---------- ordering ----------
 
@@ -90,12 +91,20 @@ export interface MilestoneRisk {
    */
   waitingIn?: Partial<Record<StatusCategory, number>>;
   /**
-   * What each waiting row waits ON. A PERSON: parked for a person's action by hand (a status in
-   * the blocked category), waiting for approval (the gated category), or queued behind a
-   * parent's approval gate (`gated`). OTHER TASKS: held by the queue for an unfinished blocker
-   * — split by whether its work has started (in progress or in review) or not.
+   * The waiting rows, filed by the bar's bucket FIRST and by their reason second, so what the
+   * details say always adds up to what the bar shows (`waitBreakdown`):
+   *
+   *   - NOT STARTED and held for an unfinished blocker (`blocked`): `onTasksNotStarted`. The
+   *     rest of the blocked bucket — parked by hand for a person, waiting for approval by
+   *     status, or queued behind an approval gate — waits on a person.
+   *   - STARTED (in progress or in review), which the bar draws in its own bucket: still held
+   *     for a blocker (`startedOnTasks`), or queued behind an approval gate (`startedOnGate`).
    */
-  waiting?: { onTasksNotStarted: number; onTasksStarted: Partial<Record<"active" | "review", number>>; onPerson: number };
+  waiting?: {
+    onTasksNotStarted: number;
+    startedOnTasks: Partial<Record<"active" | "review", number>>;
+    startedOnGate: Partial<Record<"active" | "review", number>>;
+  };
 }
 /**
  * Overdue comes off the milestone's own state. Blocked and gated come off the QUEUE, not
@@ -112,11 +121,16 @@ export interface MilestoneRisk {
 export function milestoneRisk(
   row: Pick<MilestoneView, "milestone">,
   effective: readonly EffectiveQueueRow[] = [],
+  now: Date = new Date(),
 ): MilestoneRisk {
   let blocked = 0;
   let gated = 0;
   const waitingIn: Partial<Record<StatusCategory, number>> = {};
-  const waiting = { onTasksNotStarted: 0, onTasksStarted: {} as Partial<Record<"active" | "review", number>>, onPerson: 0 };
+  const waiting = {
+    onTasksNotStarted: 0,
+    startedOnTasks: {} as Partial<Record<"active" | "review", number>>,
+    startedOnGate: {} as Partial<Record<"active" | "review", number>>,
+  };
   for (const queueRow of effective) {
     if (!queueRow.milestonePath.includes(row.milestone.identifier)) continue;
     if (queueRow.eligibility === "blocked") blocked += 1;
@@ -124,11 +138,15 @@ export function milestoneRisk(
     else continue;
     const category = statusCategory(queueRow.status);
     waitingIn[category] = (waitingIn[category] ?? 0) + 1;
-    if (queueRow.eligibility === "gated" || category === "blocked" || category === "gated") waiting.onPerson += 1;
-    else if (category === "active" || category === "review") waiting.onTasksStarted[category] = (waiting.onTasksStarted[category] ?? 0) + 1;
-    else waiting.onTasksNotStarted += 1;
+    if (category === "active" || category === "review") {
+      const into = queueRow.eligibility === "gated" ? waiting.startedOnGate : waiting.startedOnTasks;
+      into[category] = (into[category] ?? 0) + 1;
+    } else if ((category === "ready" || category === "unstarted") && queueRow.eligibility === "blocked") {
+      waiting.onTasksNotStarted += 1;
+    }
   }
-  return { overdue: row.milestone.state === "overdue", blocked, gated, waitingIn, waiting };
+  // Overdue on the reader's local day, as every other word on the page (`shownState`).
+  return { overdue: shownState(row.milestone, now) === "overdue", blocked, gated, waitingIn, waiting };
 }
 
 /** The risk as words, each with its own glyph. Empty when there is nothing to warn about. */

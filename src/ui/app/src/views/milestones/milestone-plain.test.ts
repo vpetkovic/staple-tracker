@@ -11,7 +11,13 @@ import {
   progressSegments,
   progressSentence,
   riskSentence,
+  shownState,
+  waitBreakdown,
 } from "./milestone-plain";
+import { paceText, shownPace } from "@/lib/goal-text";
+import { effective } from "@/views/queue/fixtures";
+import { view } from "./fixtures";
+import { milestoneRisk } from "./milestones-model";
 
 const NOW = new Date(2026, 8, 27, 15, 30); // 27 Sep 2026, afternoon, local time
 
@@ -63,7 +69,7 @@ describe("progress and risk sentences", () => {
         blocked: 2,
         gated: 1,
         waitingIn: { unstarted: 2, gated: 1 },
-        waiting: { onTasksNotStarted: 2, onTasksStarted: {}, onPerson: 1 },
+        waiting: { onTasksNotStarted: 2, startedOnTasks: {}, startedOnGate: {} },
       }),
     ).toBe("3 are blocked: 2 wait on other tasks, 1 on a person.");
     expect(riskSentence(progress(0, 3), { overdue: true, blocked: 0, gated: 0 })).toBeNull();
@@ -90,7 +96,7 @@ describe("the bar, from progress and the queue", () => {
   it("gives in-review work its own bucket, in the in-review hue, never lumped into in progress", () => {
     // The milestone VP reported: nine tasks, all in review, seven still waiting on another, one cancelled.
     const progress = p({ review: 9, cancelled: 1 }, 9);
-    const risk = { overdue: false, blocked: 7, gated: 0, waitingIn: { review: 7 }, waiting: { onTasksNotStarted: 0, onTasksStarted: { review: 7 }, onPerson: 0 } };
+    const risk = { overdue: false, blocked: 7, gated: 0, waitingIn: { review: 7 }, waiting: { onTasksNotStarted: 0, startedOnTasks: { review: 7 }, startedOnGate: {} } };
     expect(progressBuckets(progress, risk)).toEqual({ done: 0, review: 9, active: 0, blocked: 0, ready: 0, notStarted: 0 });
     const segments = progressSegments(progress, risk);
     expect(segments.map((s) => [s.key, s.count, s.word])).toEqual([
@@ -114,7 +120,7 @@ describe("the bar, from progress and the queue", () => {
   it("counts the queue's blocked tasks that have not started in the blocked bucket, so bar and sentence agree", () => {
     // A docs milestone: five tasks, none started by status, four waiting on another by the queue.
     const progress = p({ unstarted: 4, blocked: 1 }, 5);
-    const risk = { overdue: false, blocked: 4, gated: 0, waitingIn: { unstarted: 3, blocked: 1 }, waiting: { onTasksNotStarted: 3, onTasksStarted: {}, onPerson: 1 } };
+    const risk = { overdue: false, blocked: 4, gated: 0, waitingIn: { unstarted: 3, blocked: 1 }, waiting: { onTasksNotStarted: 3, startedOnTasks: {}, startedOnGate: {} } };
     expect(progressBuckets(progress, risk)).toEqual({ done: 0, review: 0, active: 0, blocked: 4, ready: 0, notStarted: 1 });
     expect(riskSentence(progress, risk)).toBe("4 are blocked: 3 wait on other tasks, 1 on a person.");
     const blocked = progressSegments(progress, risk).find((s) => s.key === "blocked")!;
@@ -132,9 +138,10 @@ describe("the bar, from progress and the queue", () => {
 });
 
 describe("the due date: the set target, else the projection from the work left", () => {
-  const remaining = (forecastHours: number | null, estimateHours: number | null = forecastHours, unestimated = 0) => ({
+  const remaining = (forecastHours: number | null, estimateHours: number | null = forecastHours, unknown = 0) => ({
     estimated: forecastHours === null ? 0 : 3,
-    unestimated,
+    unestimated: unknown,
+    unknown,
     estimateSeconds: estimateHours === null ? null : estimateHours * 3600,
     forecastSeconds: forecastHours === null ? null : forecastHours * 3600,
   });
@@ -176,26 +183,134 @@ describe("the due date: the set target, else the projection from the work left",
 
   it("says in its tooltip what it counted and what it left out", () => {
     expect(projectionNote(projectedDue(remaining(12, 8), NOW)!)).toBe(
-      "12h of work left (8h estimated, scaled by how long estimates have really taken), counted from now. Set a date to override it.",
+      "12h of work left (8h estimated, scaled by how long estimates have really taken; work in review counts as done), counted from now, as staple forecast reads it. Set a date to override it.",
     );
-    expect(projectionNote(projectedDue(remaining(1, 1, 1), NOW)!)).toContain("1 open task has no estimate and is not included, so it can only be later.");
+    expect(projectionNote(projectedDue(remaining(1, 1, 1), NOW)!)).toContain(
+      "1 open task cannot be weighed (no estimate, or nothing like it finished yet) and is not included, so it can only be later.",
+    );
   });
 });
 
-describe("the due day is the UTC day the store judges overdue by", () => {
-  it("agrees with the store near midnight, whatever the local time zone", () => {
-    const zone = process.env.TZ;
+describe("the due day is the reader's own calendar day", () => {
+  /** Run with the process in `zone`, as a browser there would. */
+  function inZone<T>(zone: string, fn: () => T): T {
+    const was = process.env.TZ;
+    process.env.TZ = zone;
     try {
-      // 23:30 on 27 Sep in Los Angeles is 06:30 on 28 Sep in UTC: the store's day is the 28th.
-      process.env.TZ = "America/Los_Angeles";
-      const lateEvening = new Date("2026-09-28T06:30:00.000Z");
-      expect(daysFrom("2026-09-28", lateEvening)).toBe(0);
-      expect(plainDue("2026-09-28", "active", lateEvening)).toBe("Due today");
-      // The 27th ended in UTC, so the store says overdue; the words say late too.
-      expect(plainDue("2026-09-27", "overdue", lateEvening)).toMatch(/^Was due 27 Sept?, 1 day ago$/);
+      return fn();
     } finally {
-      if (zone === undefined) delete process.env.TZ;
-      else process.env.TZ = zone;
+      if (was === undefined) delete process.env.TZ;
+      else process.env.TZ = was;
     }
+  }
+
+  it("reads 'tomorrow' in New York at 21:30, when it is already the next day in UTC", () => {
+    inZone("America/New_York", () => {
+      // 21:30 on 28 Sep in New York (EDT) is 01:30 on 29 Sep in UTC.
+      const evening = new Date("2026-09-29T01:30:00.000Z");
+      expect(daysFrom("2026-09-29", evening)).toBe(1);
+      expect(plainDue("2026-09-29", "active", evening)).toBe("Due tomorrow");
+      expect(plainDue("2026-09-28", "active", evening)).toBe("Due today");
+      // The store, on the UTC day, already calls the 28th late; the page does not.
+      expect(shownState({ state: "overdue", targetDate: "2026-09-28" }, evening)).toBe("active");
+    });
+  });
+
+  it("calls a target late in Tokyo in the morning, before the UTC day has turned", () => {
+    inZone("Asia/Tokyo", () => {
+      // 08:00 on 29 Sep in Tokyo is 23:00 on 28 Sep in UTC: the store still says due today.
+      const morning = new Date("2026-09-28T23:00:00.000Z");
+      expect(daysFrom("2026-09-28", morning)).toBe(-1);
+      expect(plainDue("2026-09-28", "active", morning)).toMatch(/^Was due 28 Sept?, 1 day ago$/);
+      expect(shownState({ state: "active", targetDate: "2026-09-28" }, morning)).toBe("overdue");
+    });
+  });
+
+  it("judges the pace on the same local day", () => {
+    inZone("America/New_York", () => {
+      const evening = new Date("2026-09-29T01:30:00.000Z");
+      // The check, on the UTC day, says the target is today and 2h of work fits in 22.5h of UTC day.
+      const pace = { targetDate: "2026-09-29", daysToTarget: 0, leaves: { done: 1, countable: 2, percent: 50 }, laborSeconds: 7200, remainingSeconds: 7200, partial: false, unplannedRefs: [], verdict: "on_track" as const, message: "" };
+      expect(shownPace(pace, evening)).toMatchObject({ daysToTarget: 1, verdict: "on_track" });
+      expect(paceText(pace, evening)).toContain("1 day to 29 Sept");
+      // And a target the UTC check calls overdue that is today here is not overdue here.
+      expect(shownPace({ ...pace, targetDate: "2026-09-28", daysToTarget: -1, verdict: "overdue" }, evening).verdict).toBe("on_track");
+    });
+  });
+});
+
+
+describe("the details add up to the bar, whatever the mix", () => {
+  /**
+   * Many milestones' worth of leaves, each a status and a queue verdict the resolver could give
+   * it: held for a blocker, queued behind an approval gate, or free. Whatever the mix, the two
+   * "blocked" rows of the details add up to the bar's blocked bucket, and every countable leaf
+   * is in exactly one bucket.
+   */
+  const STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "awaiting_approval"] as const;
+  const CATEGORY: Record<(typeof STATUSES)[number], keyof ReturnType<typeof counts0>> = {
+    backlog: "unstarted",
+    todo: "ready",
+    in_progress: "active",
+    in_review: "review",
+    blocked: "blocked",
+    awaiting_approval: "gated",
+  };
+  function counts0() {
+    return { unstarted: 0, ready: 0, active: 0, review: 0, gated: 0, blocked: 0, done: 0, cancelled: 0 };
+  }
+  let seed = 7;
+  const random = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const pick = <T,>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!;
+
+  it("splits the blocked bucket exactly into 'on other tasks' and 'on a person'", () => {
+    for (let trial = 0; trial < 300; trial += 1) {
+      const leaves = Array.from({ length: 1 + Math.floor(random() * 12) }, (_, i) => {
+        const status = pick(STATUSES);
+        // A status parked for a person is held by the queue too; anything else may or may not be.
+        const eligibility =
+          status === "blocked" ? "blocked" : status === "awaiting_approval" ? "gated" : pick(["eligible", "blocked", "gated"] as const);
+        return { identifier: `STA-${i}`, status, eligibility };
+      });
+      const counts = counts0();
+      for (const leaf of leaves) counts[CATEGORY[leaf.status]] += 1;
+      const progress = { total: leaves.length, countable: leaves.length, percent: 0, complete: false, counts };
+      const risk = milestoneRisk(
+        view({ milestone: { identifier: "STA-1" } }),
+        leaves.map((leaf) => effective({ ...leaf, milestonePath: ["STA-1"] })),
+      );
+      const w = waitBreakdown(progress, risk);
+      const b = progressBuckets(progress, risk);
+      expect(w.onTasks + w.onPerson, JSON.stringify(leaves)).toBe(b.blocked);
+      expect(w.onTasks).toBeGreaterThanOrEqual(0);
+      expect(w.onPerson).toBeGreaterThanOrEqual(0);
+      expect(b.done + b.review + b.active + b.blocked + b.ready + b.notStarted).toBe(progress.countable);
+      // Started work that waits is never filed as blocked: it is drawn in review or in progress.
+      const started = leaves.filter((leaf) => (leaf.status === "in_review" || leaf.status === "in_progress") && leaf.eligibility !== "eligible").length;
+      expect(w.startedOnTasks.active + w.startedOnTasks.review + w.startedOnGate.active + w.startedOnGate.review).toBe(started);
+    }
+  });
+
+  it("files started work held behind an epic's approval gate as started, not as waiting on a person", () => {
+    // The reviewer's repro: a gated epic whose children are in review, in progress and to do.
+    const leaves = [
+      { identifier: "STA-2", status: "in_review", eligibility: "gated" },
+      { identifier: "STA-3", status: "in_review", eligibility: "gated" },
+      { identifier: "STA-4", status: "in_progress", eligibility: "gated" },
+      { identifier: "STA-5", status: "todo", eligibility: "gated" },
+      { identifier: "STA-6", status: "backlog", eligibility: "blocked" },
+    ] as const;
+    const progress = { total: 5, countable: 5, percent: 0, complete: false, counts: { ...counts0(), review: 2, active: 1, ready: 1, unstarted: 1 } };
+    const risk = milestoneRisk(view({ milestone: { identifier: "STA-1" } }), leaves.map((leaf) => effective({ ...leaf, milestonePath: ["STA-1"] })));
+    expect(waitBreakdown(progress, risk)).toEqual({
+      blocked: 2,
+      onTasks: 1,
+      onPerson: 1,
+      startedOnTasks: { active: 0, review: 0 },
+      startedOnGate: { active: 1, review: 2 },
+    });
+    expect(riskSentence(progress, risk)).toBe(
+      "2 are blocked: 1 waits on other tasks, 1 on a person. 1 in progress and 2 in review wait for an approval.",
+    );
   });
 });
