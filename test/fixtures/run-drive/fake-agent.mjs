@@ -43,9 +43,14 @@ if (mode === "background") {
   child.unref();
   writeFileSync(`${ref}.pids`, JSON.stringify({ session: process.pid, grandchild: child.pid }));
 }
-if (mode === "mainline") {
+if (mode === "mainline" || mode === "mainline-sleep" || mode === "mainline-handed-on") {
   mkdirSync(".git/refs/heads", { recursive: true });
   writeFileSync(".git/refs/heads/master", "2222222222222222222222222222222222222222\n");
+}
+if (mode === "mainline-handed-on") {
+  // Moves the main line AND hands its ticket on, then lingers: nothing holds it any more.
+  staple("comment", ref, "review: done");
+  staple("status", ref, "in_review");
 }
 
 if (["review", "done", "unreviewed", "background", "mainline"].includes(mode)) {
@@ -62,7 +67,7 @@ if (["review", "done", "unreviewed", "background", "mainline"].includes(mode)) {
   process.exit(3);
 } else if (mode === "idle") {
   process.exit(0);
-} else if (mode === "sleep" || mode === "stubborn") {
+} else if (mode === "sleep" || mode === "stubborn" || mode === "mainline-sleep" || mode === "mainline-handed-on") {
   if (mode === "stubborn") process.on("SIGTERM", () => {});
   const child = sleeper(mode === "stubborn");
   writeFileSync(`${ref}.pids`, JSON.stringify({ session: process.pid, grandchild: child.pid }));

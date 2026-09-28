@@ -286,17 +286,15 @@ describe("run continue", () => {
     expect(cont()).toMatchObject({ action: "stop", reason: "no_run" });
   });
 
-  it("an ended run holds nothing: a continue with no outcome after a stop mid-ticket fails the held ticket and releases it", () => {
+  it("an ended run holds nothing: a stop mid-ticket fails the held ticket and releases it, and a later continue has nothing left to record", () => {
     const { epic, a } = epicWithTwo();
     const run = runs.start({ actor: BOT, scope: epic });
     expect(cont()).toMatchObject({ action: "take", ref: a });
     runs.stop(run.id, "vp", "enough");
+    expect(holder(a)).toBeNull();
     const answer = cont({ run: run.id });
-    expect(answer).toMatchObject({
-      action: "stop",
-      reason: "stopped_by_human",
-      recorded: { ref: a, outcome: "failed", reason: expect.stringMatching(/^stopped_by_human: /), source: "status" },
-    });
+    expect(answer).toMatchObject({ action: "stop", reason: "stopped_by_human", recorded: null });
+    expect(runs.get(run.id).tickets[0]).toMatchObject({ outcome: "failed", reason: "stopped_by_human: enough" });
     expect(holder(a)).toBeNull();
     expect(runs.get(run.id).tickets).toEqual([expect.objectContaining({ identifier: a, outcome: "failed" })]);
     // A later run takes it with the old row settled: nothing left open to record twice.
@@ -548,6 +546,8 @@ describe("run continue", () => {
     const { epic, a } = epicWithTwo();
     const run = runs.start({ actor: BOT, scope: epic });
     cont();
+    // Handed on before the stop (not held), so the stop leaves it for continue to settle.
+    store.updateIssue(a, { status: "in_review" }, BOT);
     runs.stop(run.id, "vp", "enough");
     // Stated, the outcome wins.
     const answer = cont({ outcome: "failed", reason: "stopped mid-ticket" });
@@ -1020,3 +1020,18 @@ describe("evaluateStopRules", () => {
     expect(evaluateStopRules(ended, baseFacts())).toMatchObject({ stop: true, reason: "scope_empty", state: "completed" });
   });
 });
+
+describe("run stop settles the run's held ticket", () => {
+  it("fails and releases the ticket the actor still holds, with the stop's reason; a ticket handed on is left to continue", () => {
+    const epic = store.createIssue({ title: "Epic", kind: "epic" }).identifier;
+    const a = store.createIssue({ title: "A", parent: epic }).identifier;
+    const run = runs.start({ actor: BOT, scope: epic });
+    expect(runs.continue({ actor: BOT })).toMatchObject({ action: "take", ref: a });
+    const stopped = runs.stop(run.id, "vp", "enough");
+    expect(stopped.tickets[0]).toMatchObject({ outcome: "failed", reason: "stopped_by_human: enough" });
+    expect(store.getIssue(a).checkoutAgent).toBeNull();
+    const touched = runs.stop(runs.start({ actor: "bot-2", scope: epic }).id, "staple run drive", "moved master", "touched_main_line", { ticket: a });
+    expect(touched.stop).toMatchObject({ reason: "touched_main_line", detail: { ticket: a } });
+  });
+});
+

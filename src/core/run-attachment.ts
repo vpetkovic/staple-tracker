@@ -33,8 +33,10 @@ export interface DriverRecord {
   heartbeatAt: string;
   /** The ticket a session is working now; null between sessions. */
   ticket: string | null;
-  /** The session's pid while one runs. */
+  /** The session's pid while one runs (it leads its own process group). */
   sessionPid: number | null;
+  /** When that session started; null between sessions. */
+  sessionStartedAt?: string | null;
   logDir: string;
 }
 
@@ -79,39 +81,111 @@ export function writeDriver(dbFile: string, runId: string, record: DriverRecord)
 /**
  * One driver per run: `driver.lock`, created with O_EXCL and holding the owner's pid and
  * host. Two `run drive` processes starting at once cannot both create it, so they cannot
- * both read "no live driver" and go on. A lock whose owner is gone (its pid is not
- * running on this host) is stale: it is removed and taken. Returns the release function,
- * or the owner that holds it.
+ * both read "no live driver" and go on. Returns the release function, or the owner that
+ * holds it.
+ *
+ * ## Taking over a stale lock
+ *
+ * A lock whose owner is gone (its pid is not running on this host) is stale. Removing it
+ * and creating a new one is a race: two processes both judge it stale, one removes it and
+ * creates its own, and the other then removes THAT one and creates a second. So the
+ * judgement and the replacement happen under a second lock, `driver.lock.takeover`, also
+ * O_EXCL: one process at a time re-reads the owner under it, and only a still-stale lock is
+ * replaced, written whole to a temporary file and renamed over it (atomic). While the stale
+ * file stands nobody can create a lock beside it, and once it is replaced every other
+ * process reads a live owner. A takeover lock whose own writer is gone is removed; a file
+ * that vanishes between two reads (a release, a takeover) is read again, never a crash.
  */
 export function acquireDriverLock(dbFile: string, runId: string): { release: () => void } | { heldBy: { pid: number; host: string } } {
   const path = join(ensureRunDirectory(dbFile, runId), "driver.lock");
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const mine = { pid: process.pid, host: hostname() };
+  const owned = { release: () => {
+    if (lockOwner(path)?.pid === process.pid && lockOwner(path)?.host === mine.host) rmSync(path, { force: true });
+  } };
+  for (let attempt = 0; attempt < 20; attempt++) {
     try {
       const fd = openSync(path, "wx");
       try {
-        writeSync(fd, JSON.stringify({ pid: process.pid, host: hostname() }));
+        writeSync(fd, JSON.stringify(mine));
       } finally {
         closeSync(fd);
       }
-      return {
-        release: () => {
-          if (lockOwner(path)?.pid === process.pid) rmSync(path, { force: true });
-        },
-      };
+      return owned;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = lockOwner(path);
-      if (owner === null) {
-        // A lock being written this instant has no owner yet: held. One left unwritten for
-        // seconds belongs to a process that died between creating and writing it: stale.
-        if (Date.now() - statSync(path).mtimeMs < 10_000) return { heldBy: { pid: 0, host: "unknown" } };
-      } else if (owner.host !== hostname() || pidAlive(owner.pid)) {
-        return { heldBy: owner };
-      }
-      rmSync(path, { force: true });
     }
+    const verdict = judge(path);
+    if (verdict === "gone") continue;
+    if (verdict !== "stale") return { heldBy: verdict };
+    const taken = takeOver(path, mine);
+    if (taken === "retry") continue;
+    if (taken === "mine") return owned;
+    return { heldBy: taken };
   }
   return { heldBy: lockOwner(path) ?? { pid: 0, host: "unknown" } };
+}
+
+/** The lock's state: its live owner, `stale`, or `gone` (removed since the caller looked). */
+function judge(path: string): { pid: number; host: string } | "stale" | "gone" {
+  const owner = lockOwner(path);
+  if (owner !== null) return owner.host !== hostname() || pidAlive(owner.pid) ? owner : "stale";
+  // No owner yet: being written this instant (held), or left unwritten by a process that died
+  // between creating and writing it (stale, after a few seconds).
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "gone";
+    throw error;
+  }
+  return Date.now() - mtimeMs < 10_000 ? { pid: 0, host: "unknown" } : "stale";
+}
+
+/** Replace a stale lock with `mine`, under the takeover lock: `mine`, the live owner, or `retry`. */
+function takeOver(path: string, mine: { pid: number; host: string }): "mine" | "retry" | { pid: number; host: string } {
+  const guard = `${path}.takeover`;
+  try {
+    const fd = openSync(guard, "wx");
+    try {
+      writeSync(fd, JSON.stringify(mine));
+    } finally {
+      closeSync(fd);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    // Another process is taking over. One whose writer is gone left it behind: clear it.
+    const holder = lockOwner(guard);
+    const abandoned =
+      holder !== null
+        ? holder.host === hostname() && !pidAlive(holder.pid)
+        : (() => {
+            try {
+              return Date.now() - statSync(guard).mtimeMs >= 10_000;
+            } catch {
+              return false;
+            }
+          })();
+    if (abandoned) rmSync(guard, { force: true });
+    sleepSync(20);
+    return "retry";
+  }
+  try {
+    // Under the takeover lock, the judgement is the only one being made.
+    const verdict = judge(path);
+    if (verdict === "gone") return "retry";
+    if (verdict !== "stale") return verdict;
+    const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(mine));
+    renameSync(tmp, path);
+    const now = lockOwner(path);
+    return now !== null && now.pid === mine.pid && now.host === mine.host ? "mine" : now ?? "retry";
+  } finally {
+    rmSync(guard, { force: true });
+  }
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function lockOwner(path: string): { pid: number; host: string } | null {

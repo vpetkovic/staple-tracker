@@ -52,7 +52,7 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { mainLineMoves, mainLineSnapshot } from "./main-line-guard.js";
+import { mainLineGuardGap, mainLineMoves, mainLineSnapshot } from "./main-line-guard.js";
 import { acquireDriverLock, clearDriver, ensureRunDirectory, groupAlive, readDriver, writeDriver, type DriverRecord } from "./run-attachment.js";
 import { buildBrief, type DriveFinish } from "./run-brief.js";
 import type { ContinueAnswer, RunStore, RunTicketOutcome } from "./run-store.js";
@@ -177,7 +177,8 @@ export interface SessionResult {
 /** What the driver reports as it goes: one JSON line each under `--json`. */
 export type DriveEvent =
   | { event: "attached"; runId: string; pid: number; host: string; agent: string; logDir: string }
-  | { event: "reaped"; pid: number; ticket: string | null; driverPid: number }
+  | { event: "stale_session_forgotten"; pid: number; ticket: string | null; driverPid: number }
+  | { event: "main_line_unguarded"; reason: string }
   | { event: "main_line_moved"; ref: string; moves: string[] }
   | { event: "take"; ref: string; title: string; resumed: boolean; why: string; recorded: ContinueAnswer["recorded"] }
   | { event: "session_started"; ref: string; pid: number; command: string; brief: string; stdout: string; stderr: string }
@@ -212,6 +213,11 @@ export interface DriveOptions {
   signal?: AbortSignal;
   /** Aborted on a second interruption: KILL the session now, no grace. */
   force?: AbortSignal;
+  /**
+   * A dead driver's session group is still running: go on without ending it (the person
+   * checked it is not the session, or ended it). Without this the driver refuses.
+   */
+  forgetStaleSession?: boolean;
   report: (event: DriveEvent) => void;
 }
 
@@ -251,7 +257,7 @@ export async function drive(options: DriveOptions): Promise<DriveResult> {
   }
   try {
     assertNoLiveDriver(dbFile, runId);
-    await reapStaleSession(options);
+    checkStaleSession(options);
     return await driveLocked(options);
   } finally {
     lock.release();
@@ -260,15 +266,36 @@ export async function drive(options: DriveOptions): Promise<DriveResult> {
 
 /**
  * A driver that died without cleaning up (`kill -9`, a crash) leaves `driver.json` behind,
- * naming the session it was running. That session's process group may still be working
- * the ticket; resuming now would start a second session on it. End the group first.
+ * naming the session it was running. That session's process group may still be working the
+ * ticket, and resuming would start a second session on it.
+ *
+ * The driver does NOT end that group itself. All it has is a process-group id, and ids are
+ * reused: once the old session is gone, the same number can lead an unrelated process, and
+ * ending it would kill a stranger. Proving the group is still the session needs the
+ * process's start time or environment, which on macOS only another process (`ps`) can read,
+ * and a check that spawns a process to decide whether to kill one is a race of its own. So
+ * it refuses, naming the group, the ticket and when the session started, and a person
+ * decides: end the group if it is the session, or pass `--forget-stale-session` to go on
+ * without touching it.
  */
-async function reapStaleSession(options: DriveOptions): Promise<void> {
+function checkStaleSession(options: DriveOptions): void {
   const stale = readDriver(options.dbFile, options.runId);
   if (stale === null || stale.sessionPid === null || stale.host !== hostname() || stale.alive === true) return;
   if (!groupAlive(stale.sessionPid)) return;
-  options.report({ event: "reaped", pid: stale.sessionPid, ticket: stale.ticket, driverPid: stale.pid });
-  await endGroup(stale.sessionPid, options.killGraceMs, options.force);
+  if (options.forgetStaleSession === true) {
+    options.report({ event: "stale_session_forgotten", pid: stale.sessionPid, ticket: stale.ticket, driverPid: stale.pid });
+    return;
+  }
+  const pgid = stale.sessionPid;
+  throw new StapleError(
+    "conflict",
+    `A driver of run ${options.runId} (pid ${stale.pid}) died while its session was running as process group ${pgid}` +
+      `${stale.ticket ? ` on ${stale.ticket}` : ""}${stale.sessionStartedAt ? `, started ${stale.sessionStartedAt}` : ""}, and a process group ${pgid} is still running. ` +
+      `It may be that session, or the number may now belong to another process: check it (ps -o pid,lstart,command -g ${pgid}). ` +
+      `If it is the session, end it (kill -TERM -${pgid}) and drive again; if it is not, drive again with --forget-stale-session. ` +
+      "staple run drive does not kill a process it cannot prove is its own.",
+    { runId: options.runId, pgid, ticket: stale.ticket, driverPid: stale.pid, sessionStartedAt: stale.sessionStartedAt ?? null },
+  );
 }
 
 async function driveLocked(options: DriveOptions): Promise<DriveResult> {
@@ -282,6 +309,7 @@ async function driveLocked(options: DriveOptions): Promise<DriveResult> {
     heartbeatAt: nowIso(),
     ticket: null,
     sessionPid: null,
+    sessionStartedAt: null,
     logDir,
   };
   const beat = (change: Partial<DriverRecord> = {}): void => {
@@ -290,6 +318,9 @@ async function driveLocked(options: DriveOptions): Promise<DriveResult> {
   };
   beat();
   options.report({ event: "attached", runId, pid: record.pid, host: record.host, agent: options.agent, logDir });
+  // Said once, at attach: every session of this driver runs unguarded.
+  const unguarded = mainLineGuardGap(options.cwd);
+  if (unguarded !== null) options.report({ event: "main_line_unguarded", reason: unguarded });
 
   let sessions = 0;
   let stated: { outcome?: RunTicketOutcome; reason?: string } = {};
@@ -353,7 +384,8 @@ async function driveLocked(options: DriveOptions): Promise<DriveResult> {
         const why = `touched_main_line: the session on ${answer.ref} moved ${moves.join(", ")}`;
         stated = { outcome: "failed", reason: why };
         options.report({ event: "main_line_moved", ref: answer.ref, moves });
-        runs.stop(runId, "staple run drive", `${why}. Nothing more runs until a person looks.`);
+        // Its own stop reason; the stop also fails and releases the ticket if the session left it held.
+        runs.stop(runId, "staple run drive", `${why}. Nothing more runs until a person looks.`, "touched_main_line", { ticket: answer.ref, moves });
       } else {
         stated = outcomeOf(store, answer.run.actor, answer.ref, result, options.ticketTimeoutMs, sessionStartedAt);
       }
@@ -367,9 +399,14 @@ async function driveLocked(options: DriveOptions): Promise<DriveResult> {
         outcome: stated.outcome ?? null,
         reason: stated.reason ?? null,
       });
-      beat({ ticket: null, sessionPid: null });
-      // Nothing is recorded: the ticket stays held, and the next driver's continue hands it back (resumed).
-      if (result.ended === "interrupted") return { answer, interrupted: true, sessions };
+      beat({ ticket: null, sessionPid: null, sessionStartedAt: null });
+      // Nothing is recorded: the ticket stays held, and the next driver's continue hands it back
+      // (resumed). Unless a failure is already known (the session moved the main line): that
+      // one is sent now, or it would be lost with this process and the ticket held for ever.
+      if (result.ended === "interrupted") {
+        if (stated.outcome !== undefined) runs.continue({ run: runId, outcome: stated.outcome, reason: stated.reason ?? null });
+        return { answer, interrupted: true, sessions };
+      }
     }
   } finally {
     clearDriver(dbFile, runId);
@@ -485,7 +522,7 @@ async function runSession(
   );
   const pid = child.pid!;
   options.report({ event: "session_started", ref: files.ref, pid, command: command.display, brief: files.brief, stdout: files.stdout, stderr: files.stderr });
-  beat({ ticket: files.ref, sessionPid: pid });
+  beat({ ticket: files.ref, sessionPid: pid, sessionStartedAt: nowIso() });
 
   let ended: SessionResult["ended"] = "exited";
   let stopReason: string | null = null;

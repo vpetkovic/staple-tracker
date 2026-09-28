@@ -165,11 +165,12 @@ Stable: never renamed. Stop reasons, first match wins:
 | Reason | When | Run ends |
 |---|---|---|
 | `stopped_by_human` | somebody ran `run stop` (`run.stop.by`, `run.stop.note`) | `stopped` |
+| `touched_main_line` | `run drive` saw a session move `master` or `main` (`detail.ticket`, `detail.moves`) | `stopped` |
 | `budget` | `detail.budget` is `tickets` (the run took `--max-tickets` distinct tickets), `time` (`--until` passed), `ceiling` (a current rate-limit window's high-water use reached `--ceiling`) or `goal_children` (a goal run's scope is empty short of its goal and it created its `--goal-cap` tickets) | `stopped` |
 | `failure_streak` | the last two recorded outcomes are both `failed` | `stopped` |
 | `scope_gone` | the scope no longer resolves: its issue was deleted (a restore can remove it) or it holds nothing any more (a parent left with no children). `detail.why` says which | `stopped` |
 | `vp_blocked` | a ticket the run took is blocked on a named person, or nothing is workable and something in scope is | `stopped` |
-| `gate_pending` | the scope issue awaits approval, or nothing is workable and something in scope does (a goal run's own gate on its milestone is not one) | `stopped` |
+| `gate_pending` | the scope issue holds a person's open gate, or nothing is workable and something in scope does. Open is `pending`, or a person's `changes_requested`, which still holds the work beneath it (`detail.gates[].state` says which; without it the run would wait on that work for ever). A goal run's gate on its milestone is not one | `stopped` |
 | `goal_met` | a goal run: nothing unresolved is left in scope and every criterion of the milestone is met; the milestone stays gated to its owner | `completed` |
 | `scope_empty` | nothing unresolved is left in scope | `completed` |
 | `no_run` | the actor has no live run (`continue` only; `run` is null) | — |
@@ -254,10 +255,20 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   a fresh session on it, whose brief says it is resuming (read what the last
   session left; post a fresh review). The signal handler stays installed: a
   second Ctrl-C KILLs the session at once instead of killing the driver
-  mid-grace. A driver killed outright (`kill -9`) cannot end its session; the
-  next driver to attach finds the session's process group in the dead
-  driver's `driver.json`, ends it (TERM, then KILL) and says so (`reaped`)
-  before it resumes the ticket, so a ticket never has two sessions.
+  mid-grace. A driver interrupted after its session moved the main line still
+  sends that failure before it exits (the run is already stopped). A driver
+  killed outright (`kill -9`) cannot end its session. The next driver to attach
+  finds the session's process group in the dead driver's `driver.json` and, if
+  a group of that id is still running, **refuses** (`conflict`, exit 4), naming
+  the group, the ticket and when the session started: process ids are reused,
+  and proving the group is still that session needs its start time or
+  environment, which on macOS only another process (`ps`) can read. It never
+  kills a process it cannot prove is its own. A person checks it
+  (`ps -o pid,lstart,command -g <pgid>`), ends it if it is the session
+  (`kill -TERM -<pgid>`) and drives again, or drives again with
+  `--forget-stale-session` to go on without touching it
+  (`stale_session_forgotten`). Either way a ticket never has two sessions
+  unknowingly.
 - **Providers are rows** (`DRIVE_PROVIDERS`): the executable, its arguments
   with placeholders, the model flag, variables not to inherit. Adding a
   provider is a row.
@@ -324,10 +335,11 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   in a row stop the run (`failure_streak`).
 - **Stop mid-ticket.** The driver reads the run every `--poll` seconds (5)
   while a session works. `staple run stop` (or `stop_run`, or the UI) from
-  anywhere ends the run; within one poll the driver sends TERM to the session's
-  process group, KILL five seconds later, records the ticket `failed` with
-  reason `stopped_by_human: …` (released, not left held by a session that no
-  longer exists), prints the stop and exits 0. Recording it failed rather than
+  anywhere ends the run. `run stop` itself records the run's held ticket
+  `failed` with reason `stopped_by_human: <note>` and releases it, on every
+  path that stops a run, driver or none; within one poll the driver sends TERM
+  to the session's process group, KILL five seconds later, prints the stop and
+  exits 0. Recording it failed rather than
   leaving it open is deliberate: an open ticket stays claimed by nobody alive.
   The run has already ended, so the failure starts no streak. A **pause** lets
   the session finish; the next `continue` then answers `wait`. A time budget or
@@ -343,8 +355,13 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   with `alive` (is the pid running; null when the driver is on another host),
   so a UI can show a run is being driven. One driver per run: `driver.lock`,
   created exclusively and holding the owner's pid, makes a second `run drive`
-  on the run refused (`conflict`), even when two start at the same instant; a
-  lock whose owner is no longer running is stale and taken over. It is a file rather than a column:
+  on the run refused (`conflict`), even when two start at the same instant. A
+  lock whose owner is no longer running is stale and taken over, one taker at a
+  time: under a second exclusive lock (`driver.lock.takeover`) the owner is
+  read again and a still-stale lock is replaced whole by a rename, so of many
+  drivers starting over a dead one's lock exactly one owns it (a test starts
+  six at once, five times). A lock that vanishes between two reads is read
+  again, never a crash. It is a file rather than a column:
   no migration, and no write transaction every few seconds against the
   database the session works in.
 - **`--dry-run`** starts nothing and claims nothing: it prints the next
@@ -354,8 +371,10 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   `session_started`, `session_ended` (`ended`: `exited`, `timeout`, `stopped`,
   `interrupted`; `exitCode`; the stated `outcome` and `reason`, null when the
   tracker reads it), `wait`, `stop` (the stop answer's `reason`, `message`,
-  `detail` and `recorded`), `reaped` (a dead driver's session group ended:
-  `pid`, `ticket`, `driverPid`) and `main_line_moved` (`ref`, `moves`).
+  `detail` and `recorded`), `stale_session_forgotten` (`pid`, `ticket`,
+  `driverPid`: a dead driver's session group left running under
+  `--forget-stale-session`), `main_line_unguarded` (`reason`: once, at attach)
+  and `main_line_moved` (`ref`, `moves`).
 
 **No MCP tool.** An MCP call answers and returns; a driver is a local process
 that owns child sessions for hours and must outlive any one client. What MCP
@@ -369,9 +388,13 @@ person's decision: the brief forbids it, and the run leaves a stack of branches
 reads where `master` and `main` point in the session's repository before and
 after every session (plain reads of the loose refs and `packed-refs` in the
 repository's common directory; no git process). If either moved, the ticket is
-recorded `failed` with reason `touched_main_line: …`, the run is stopped (by
-`staple run drive`, with the moves in the note) and the driver exits: nothing
-more runs until a person looks. It sees the local repository only; a push
+recorded `failed` with reason `touched_main_line: …`, the run is stopped with
+its own reason, `touched_main_line` (by `staple run drive`, the ticket and the
+moves in `detail`), and the driver exits: nothing more runs until a person
+looks. A repository whose refs live in a reftable (`extensions.refStorage =
+reftable` in its config) has no ref files to read: the driver says once, at
+attach, that it cannot guard the main line there (`main_line_unguarded`) and
+reads nothing, rather than reporting that nothing moved. It sees the local repository only; a push
 straight to a remote that leaves the local refs alone is the remote's branch
 protection's to refuse.
 
@@ -418,7 +441,12 @@ gate:
 
 A gate a person opened (before the run, or after answering the run's) is an
 ordinary gate: it holds the milestone's parented children and it stops the run
-`gate_pending`.
+`gate_pending`, pending or with changes requested. A person may gate over the
+run's pending gate: theirs replaces it (and the run never gates over a pending
+gate), so their review wins. Only the run path writes the marker: an actor named
+`goal-run:…` is refused on the CLI (`$STAPLE_AGENT`, `--actor`, `--agent`,
+`--author`, `--by`), over MCP and by the store's gate itself, and the marker
+exempts only a milestone's gate, whatever road it arrived by.
 
 The run keeps a gate open from then on, on **every `continue`** (idempotent), before
 it adds a member, and at `goal_met`:
@@ -442,6 +470,10 @@ ends `scope_empty`.
    (`Goal check: <milestone title>`, label `goal-check`), makes it a member and
    takes it. `run status` shows this as `{stop: false, goalCheck}`;
 3. else: stop `budget`, `detail.budget` `goal_children`, the milestone gated.
+
+Finishing takes no ticket: a goal met with the scope empty ends `goal_met` even
+when `--max-tickets` is spent. A goal-check ticket is a new ticket, though: at
+the ticket budget the run stops `budget` before creating one.
 
 A milestone with no criteria has none left to show: its goal is that its
 members land, and the run ends `goal_met` when they have.

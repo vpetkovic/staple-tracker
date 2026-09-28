@@ -72,7 +72,7 @@ import {
   type KindAppearanceMap,
   type KindWithAppearance,
 } from "./kind-appearance.js";
-import { MILESTONE_KIND, isGoalRunGate } from "./milestones.js";
+import { MILESTONE_KIND, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
@@ -3522,7 +3522,7 @@ export class WorkspaceStore {
   private gateWalkIndex(): GateWalkIndex {
     const rows = this.db
       .prepare(
-        "SELECT id, parent_id, identifier, title, status, gate_state, gate_owner, gate_requested_by, gate_released FROM issues",
+        "SELECT id, parent_id, identifier, title, kind, status, gate_state, gate_owner, gate_requested_by, gate_released FROM issues",
       )
       .all() as Array<{
       id: string;
@@ -3534,6 +3534,7 @@ export class WorkspaceStore {
       gate_owner: string | null;
       gate_requested_by: string | null;
       gate_released: number;
+      kind: string;
     }>;
     const nodes = new Map<string, GateWalkNode>(
       rows.map((row) => [
@@ -3546,7 +3547,8 @@ export class WorkspaceStore {
           status: row.status as IssueStatus,
           gateState: row.gate_state,
           gateOwner: row.gate_owner ?? "?",
-          runGate: isGoalRunGate(row.gate_requested_by),
+          // Only on a milestone: that is the one row the run path gates (`RunStore.ensureGoalGate`).
+          runGate: row.kind === MILESTONE_KIND && isGoalRunGate(row.gate_requested_by),
           released: row.gate_released === 1,
           hasChildren: false,
           hasOpenDescendant: false,
@@ -3815,7 +3817,9 @@ export class WorkspaceStore {
     actor?: string | null,
   ): Issue {
     const owner = opts.owner?.trim();
-    // Who asked, when it is not the actor: a goal run's marker (`goalRunGateRequester`).
+    // Who asked, when it is not the actor: a goal run's marker (`goalRunGateRequester`), which
+    // only the run path passes; an actor may not claim the reserved prefix itself.
+    assertNotReservedActor(actor);
     const requestedBy = opts.requestedBy ?? actor ?? null;
     if (!owner) {
       throw new StapleError("validation", "gate requires --owner: name the human who must approve");
@@ -3857,7 +3861,13 @@ export class WorkspaceStore {
             : `Cannot gate ${row.identifier}: it has no children, so there is nothing to queue. Use \`staple status ${row.identifier} in_review\` for a leaf awaiting a human.`,
         );
       }
-      if (row.gate_state === "pending") {
+      /**
+       * A pending gate is not replaced, except a goal run's by a person: their gate wins over
+       * the run's (it holds the milestone's children and stops the run `gate_pending`), and the
+       * run never re-gates over a pending gate (`RunStore.ensureGoalGate`).
+       */
+      const personOverRun = row.kind === MILESTONE_KIND && isGoalRunGate(row.gate_requested_by) && !isGoalRunGate(requestedBy);
+      if (row.gate_state === "pending" && !personOverRun) {
         throw new StapleError(
           "conflict",
           `${row.identifier} is already gated, awaiting ${row.gate_owner ?? "?"}. Resolve that gate before opening another.`,

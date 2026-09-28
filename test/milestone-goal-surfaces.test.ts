@@ -103,4 +103,25 @@ describe("goal mode on the CLI and over MCP", () => {
     // The CLI run's gate is a goal-run gate: no stop for the MCP run, which waits on the held task.
     expect(viaMcp).toMatchObject({ action: "wait", reason: "waiting_on_others", goal: { gate: { byGoalRun: true, ownedByRun: false } } });
   });
+
+  it("refuses the reserved goal-run actor name on the CLI (env and flag) and over MCP", async () => {
+    const epic = String((await cli("new", "Held epic", "--kind", "epic")).json.identifier);
+    expect((await cli("new", "Held child", "--parent", epic)).status).toBe(0);
+    // Any command, not only a gate: the name is refused before the command runs.
+    const viaEnv = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "comment", epic, "hello", "--ws", WS, "--json"], {
+      cwd: REPO_ROOT,
+      env: bareEnv({ STAPLE_HOME: home, HOME: home, STAPLE_AGENT: "goal-run:mallory" }),
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(viaEnv.status).toBe(2);
+    expect(viaEnv.stderr).toContain("reserved");
+    const viaFlag = await cli("run", "start", "--scope", epic, "--actor", "goal-run:mallory");
+    expect(viaFlag.status).toBe(2);
+    expect(viaFlag.stderr).toContain("reserved");
+    const viaMcp = await mcp.call("gate_task", { ws: WS, ref: epic, owner: "VP", actor: "goal-run:mallory" });
+    expect(viaMcp.isError).toBe(true);
+    expect(JSON.stringify(viaMcp.content)).toContain("reserved");
+  });
 });
+

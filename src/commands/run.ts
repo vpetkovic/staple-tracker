@@ -43,7 +43,8 @@ until a stop rule, run by the tracker, says otherwise.
               it; with no id, your live runs; --all every run, any actor or state
   run stop [<run-id>] [-m why]
               stop a run (yours when no id is given): stopped_by_human, recorded
-              with who and why. Stopping an ended run changes nothing
+              with who and why; a ticket it still holds is failed and released.
+              Stopping an ended run changes nothing
   run pause|resume [<run-id>]
               hold a live run (yours when no id is given) without ending it, and
               let it take again. A paused run answers continue with wait
@@ -65,7 +66,8 @@ until a stop rule, run by the tracker, says otherwise.
               brief each, logs under .staple/runs/<run-id>/; stoppable
               mid-ticket with run stop (staple run drive --help)
 
-Stop reasons, first match wins, stable in --json: stopped_by_human, budget
+Stop reasons, first match wins, stable in --json: stopped_by_human,
+touched_main_line (run drive saw a session move master or main), budget
 (detail.budget: tickets | time | ceiling | goal_children), failure_streak (two failed tickets in
 a row), scope_gone (the scope issue was deleted or holds nothing any more),
 vp_blocked (a ticket the run took is blocked on a person, or nothing is

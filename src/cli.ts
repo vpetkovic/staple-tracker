@@ -17,6 +17,7 @@ import { runDoctorCommand } from "./commands/doctor.js";
 import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
+import { assertNotReservedActor } from "./core/milestones.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runRunCommand } from "./commands/run.js";
 import { runDriveCommand } from "./commands/run-drive.js";
@@ -1064,7 +1065,7 @@ Autopilot runs
               queue.policy it follows the whole plan unless started with --override.
               A milestone run is a goal run: it gates the milestone to W and ends goal_met
   run status [<run-id>] [--all]         a run and whether a stop rule trips now:
-              stopped_by_human, budget, failure_streak, scope_gone, vp_blocked,
+              stopped_by_human, touched_main_line, budget, failure_streak, scope_gone, vp_blocked,
               gate_pending, goal_met, scope_empty (staple run --help)
   run stop [<run-id>] [-m why]          stop a run, recorded as stopped_by_human
   run pause|resume [<run-id>]           hold a run without ending it, and let it go on
@@ -1175,6 +1176,16 @@ function main() {
     // command, exactly as before.
     runBareCommand(command ? [command, ...rest] : rest, { token: persistentUiToken() });
     return;
+  }
+
+  /**
+   * The goal-run gate marker is reserved (`assertNotReservedActor`): refused as $STAPLE_AGENT
+   * and as any flag that names who acts, before any command runs.
+   */
+  assertNotReservedActor(process.env.STAPLE_AGENT);
+  for (const [index, arg] of rest.entries()) {
+    const flag = /^--(actor|agent|author|by)(?:=(.*))?$/.exec(arg);
+    if (flag) assertNotReservedActor(flag[2] ?? rest[index + 1]);
   }
 
   const common = {

@@ -205,6 +205,20 @@ export function isGoalRunGate(requestedBy: string | null | undefined): boolean {
   return typeof requestedBy === "string" && requestedBy.startsWith(GOAL_RUN_GATE_PREFIX);
 }
 
+/**
+ * The prefix is reserved: an actor named `goal-run:…` could otherwise open a gate that holds
+ * nothing, on any issue. Refused wherever an actor is named (CLI, MCP, and the store's gate).
+ */
+export function assertNotReservedActor(actor: string | null | undefined): void {
+  if (typeof actor === "string" && actor.trim().startsWith(GOAL_RUN_GATE_PREFIX)) {
+    throw new StapleError(
+      "validation",
+      `"${actor.trim()}" is not a usable actor name: the "${GOAL_RUN_GATE_PREFIX}" prefix is reserved for the gate a goal run opens.`,
+      { actor: actor.trim() },
+    );
+  }
+}
+
 /** The command that turns the feature on; every surface names it the same way. */
 export const MILESTONE_KIND_MISSING_MESSAGE =
   "No `milestone` kind is configured in this workspace. Run `staple kinds add milestone --label Milestone` to enable milestones.";

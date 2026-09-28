@@ -10,6 +10,10 @@
  * repository's common directory, so a linked worktree reads the refs it shares with the
  * main checkout. A directory that is not in a repository has nothing to guard (null).
  *
+ * A repository whose refs live in a reftable (`extensions.refStorage = reftable`) has no
+ * loose refs and no `packed-refs` to read: the guard cannot see its main line at all, so it
+ * says so ({@link mainLineGuardGap}) rather than reporting "nothing moved".
+ *
  * What it can see is the local repository. A session that pushes straight to a remote
  * without moving its local refs is outside it; that is the remote's branch protection's.
  */
@@ -42,10 +46,22 @@ export function commonDirectory(cwd: string): string | null {
   }
 }
 
-/** Where the main-line branches point now, or null when `cwd` is not in a repository. */
-export function mainLineSnapshot(cwd: string): MainLineSnapshot | null {
+/** Why the main line of `cwd`'s repository cannot be guarded, or null when it can (or there is no repository). */
+export function mainLineGuardGap(cwd: string): string | null {
   const common = commonDirectory(cwd);
   if (common === null) return null;
+  const config = existsSync(join(common, "config")) ? readFileSync(join(common, "config"), "utf8") : "";
+  const extensions = /^\s*\[extensions\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/im.exec(config)?.[1] ?? "";
+  if (/^\s*refstorage\s*=\s*reftable\s*$/im.test(extensions)) {
+    return "cannot guard the main line in a reftable repository (extensions.refStorage = reftable): its refs are not files this guard can read";
+  }
+  return null;
+}
+
+/** Where the main-line branches point now, or null when `cwd` is not in a repository (or its refs cannot be read). */
+export function mainLineSnapshot(cwd: string): MainLineSnapshot | null {
+  const common = commonDirectory(cwd);
+  if (common === null || mainLineGuardGap(cwd) !== null) return null;
   const packed = existsSync(join(common, "packed-refs")) ? readFileSync(join(common, "packed-refs"), "utf8") : "";
   const read = (branch: string): string | null => {
     const loose = join(common, "refs", "heads", branch);

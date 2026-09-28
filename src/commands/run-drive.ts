@@ -57,6 +57,11 @@ prints the reason and exits 0. Non-zero only for a driver error.
   --cwd DIR           where sessions run (default: the workspace's directory)
   --dry-run           start nothing, claim nothing: print the command and the
                       brief the next ticket would get
+  --forget-stale-session
+                      a driver that died left its session's process group
+                      running: go on without ending it. Without this the
+                      driver refuses, naming the group; it never kills a
+                      process it cannot prove is its own (pids are reused)
 
 Each session runs in its own process group with STAPLE_AGENT (the run's actor),
 STAPLE_DB (this workspace) and STAPLE_RUN set, and logs to
@@ -123,6 +128,7 @@ export function runDriveCommand(rest: string[]): void {
       instructions: { type: "string" },
       cwd: { type: "string" },
       "dry-run": { type: "boolean" },
+      "forget-stale-session": { type: "boolean" },
     },
   });
   if (values.help === true) return console.log(DRIVE_HELP);
@@ -212,6 +218,7 @@ export function runDriveCommand(rest: string[]): void {
           env: process.env,
           signal: controller.signal,
           force: force.signal,
+          forgetStaleSession: values["forget-stale-session"] === true,
           report: (event) => (json ? console.log(JSON.stringify(event)) : printEvent(event)),
         });
         if (result.interrupted) {
@@ -277,8 +284,10 @@ function printEvent(event: DriveEvent): void {
   switch (event.event) {
     case "attached":
       return console.log(`driving run ${event.runId} with ${event.agent} (pid ${event.pid} on ${event.host})\nlogs     ${event.logDir}`);
-    case "reaped":
-      return console.log(`reaped   the session a dead driver (pid ${event.driverPid}) left running: process group ${event.pid}${event.ticket ? ` on ${event.ticket}` : ""}`);
+    case "stale_session_forgotten":
+      return console.log(`going on past process group ${event.pid}, left by a dead driver (pid ${event.driverPid})${event.ticket ? ` on ${event.ticket}` : ""}: not ended (--forget-stale-session)`);
+    case "main_line_unguarded":
+      return console.error(`warning  the main line is not guarded: ${event.reason}`);
     case "main_line_moved":
       return console.log(`STOPPING ${event.ref}'s session moved the main line (${event.moves.join(", ")}): recorded failed, run stopped for a person to look`);
     case "take":

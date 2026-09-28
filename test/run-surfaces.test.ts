@@ -255,18 +255,27 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
     await tool("stop_run", { note: "done here" });
   }, 120_000);
 
-  it("a run stopped mid-ticket: continue without --run settles the ticket and answers stopped_by_human, not no_run", async () => {
+  it("a run stopped mid-ticket: run stop settles the held ticket itself; one handed on is settled by the next continue without --run", async () => {
     const { epic: scope } = await epicWith("Midway", 2);
     const who = "drv-midway";
     const started = await cliAs(who, "run", "start", "--scope", scope);
     const taken = await next(who);
-    await cli("run", "stop", String(started.json.id), "-m", "pulled");
+    const stopped = await cli("run", "stop", String(started.json.id), "-m", "pulled");
+    // Still held when it was stopped: failed and released by the stop, on the record.
+    expect(stopped.json).toMatchObject({ tickets: [expect.objectContaining({ identifier: taken.ref, outcome: "failed", reason: "stopped_by_human: pulled" })] });
+    expect((await cli("show", String(taken.ref))).json).toMatchObject({ issue: { checkoutAgent: null } });
+    expect(await next(who)).toMatchObject({ action: "stop", reason: "no_run" });
+
+    // Handed on before the stop, it is the continue that settles it, answering the run's reason.
+    const again = await cliAs(who, "run", "start", "--scope", scope);
+    const second = await next(who);
+    expect((await cliAs(who, "status", String(second.ref), "in_review")).status).toBe(0);
+    await cli("run", "stop", String(again.json.id), "-m", "pulled again");
     expect(await next(who, "--outcome", "failed", "--reason", "run was stopped")).toMatchObject({
       action: "stop",
       reason: "stopped_by_human",
-      recorded: { ref: taken.ref, outcome: "failed", reason: "run was stopped" },
+      recorded: { ref: second.ref, outcome: "failed", reason: "run was stopped" },
     });
-    expect((await cli("show", String(taken.ref))).json).toMatchObject({ issue: { checkoutAgent: null } });
     expect(await next(who)).toMatchObject({ action: "stop", reason: "no_run" });
   }, 120_000);
 

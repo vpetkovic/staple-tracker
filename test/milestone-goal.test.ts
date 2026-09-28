@@ -515,4 +515,49 @@ describe("a run over a milestone is a goal run", () => {
     expect(runs.get(run.id).goal!.children).toEqual([]);
     expect(store.categoryOf(status(m))).toBe("gated");
   });
+
+  it("the goal-run marker is reserved: no actor can claim it, and it exempts only a milestone's gate", () => {
+    const epic = issue("Epic", { kind: "epic" });
+    const child = issue("Child", { parent: epic });
+    expect(refused(() => store.gateIssue(epic, { owner: "VP" }, "goal-run:mallory"), "validation").message).toContain("reserved");
+    // Even arriving by another road (a synced row), the marker on a non-milestone holds as any gate does.
+    store.gateIssue(epic, { owner: "VP" }, "vp");
+    store.db.prepare("UPDATE issues SET gate_requested_by = 'goal-run:mallory' WHERE identifier = ?").run(epic);
+    expect(store.queuedBy(child)).toMatchObject({ identifier: epic });
+  });
+
+  it("a goal already met ends goal_met even when the ticket budget is spent", () => {
+    const { m, a, b } = goalMilestone(["Docs written"]);
+    runs.start({ actor: BOT, scope: m, maxTickets: 1 });
+    expect(cont()).toMatchObject({ action: "take", ref: a });
+    store.updateIssue(a, { status: "done" }, BOT);
+    store.updateIssue(b, { status: "done" }, "vp");
+    store.milestones().markCriterion(m, 1, { verdict: "met", evidence: [a] }, BOT);
+    expect(cont()).toMatchObject({ action: "stop", reason: "goal_met" });
+  });
+
+  it("a person's changes requested on the milestone stops the run gate_pending, saying so, instead of waiting for ever", () => {
+    const created = store.milestones().create({ title: "Objected", acceptanceCriteria: ["Done"] }, "vp");
+    if (created.preview) throw new Error("unreachable");
+    const m = created.milestone.identifier;
+    issue("Parented", { parent: m });
+    store.gateIssue(m, { owner: "VP" }, "vp");
+    store.requestChanges(m, { comment: "not like this" }, "VP");
+    runs.start({ actor: BOT, scope: m });
+    const answer = cont();
+    expect(answer).toMatchObject({ action: "stop", reason: "gate_pending", detail: { gates: [expect.objectContaining({ identifier: m, state: "changes_requested", owner: "VP" })] } });
+    if (answer.action === "stop") expect(answer.message).toContain("changes requested by VP");
+  });
+
+  it("a person may gate over the run's gate: theirs wins, stops the run, and the run does not gate over it", () => {
+    const { m } = goalMilestone();
+    const run = runs.start({ actor: BOT, scope: m });
+    expect(gateOf(m)).toMatchObject({ requestedBy: `goal-run:${BOT}` });
+    store.gateIssue(m, { owner: "VP", comment: "I will review this myself" }, "vp");
+    expect(gateOf(m)).toMatchObject({ state: "pending", requestedBy: "vp" });
+    expect(runs.continue({ actor: BOT, run: run.id })).toMatchObject({ action: "stop", reason: "gate_pending" });
+    expect(gateOf(m)).toMatchObject({ state: "pending", requestedBy: "vp" });
+    // A person's pending gate is not replaced by another person.
+    expect(refused(() => store.gateIssue(m, { owner: "Other" }, "other"), "conflict").message).toContain("already gated");
+  });
 });

@@ -113,6 +113,7 @@ export const LIVE_RUN_STATES: readonly RunState[] = ["active", "paused"];
 /** The stop reasons, in evaluation order. A public JSON contract: never rename one. */
 export const RUN_STOP_REASONS = [
   "stopped_by_human",
+  "touched_main_line",
   "budget",
   "failure_streak",
   "scope_gone",
@@ -238,7 +239,12 @@ export interface RunFacts {
   /** Unresolved rows in scope the run cannot take, with the queue's eligibility and reason. */
   waiting: Array<{ issueId: string; identifier: string; eligibility: string; reason: string | null }>;
   /** Unresolved issues in scope (the scope issue included) holding a pending review gate. */
-  pendingGates: Array<{ issueId: string; identifier: string; owner: string | null }>;
+  /**
+   * Unresolved issues in scope holding an open gate that holds work: `pending`, or a person's
+   * `changes_requested` (which still holds the children beneath it). A goal run's own kind of
+   * gate on its milestone is not one. `state` says which.
+   */
+  pendingGates: Array<{ issueId: string; identifier: string; owner: string | null; state?: string }>;
   /** Unresolved issues in scope blocked on a named person. */
   personBlocks: Array<{ issueId: string; identifier: string; owner: string; action: string | null }>;
   /** Null when the run has no ceiling. */
@@ -357,7 +363,12 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
     run.tickets.some((ticket) => ticket.issueId === next.issueId) &&
     !run.tickets.some((ticket) => ticket.issueId === next.issueId && ticket.outcome === null);
   const { maxTickets, until, ceilingPercent } = run.budget;
-  if (maxTickets !== null && taken >= maxTickets && !retry) {
+  /**
+   * Finishing takes no ticket: a goal run whose scope is empty and whose goal is met ends
+   * `goal_met` (below) whatever its ticket budget says. Every other rule still comes first.
+   */
+  const finishing = facts.goal != null && facts.goal.met && facts.workable.length === 0 && facts.waiting.length === 0;
+  if (maxTickets !== null && taken >= maxTickets && !retry && !finishing) {
     return stop("budget", { budget: "tickets", maxTickets, taken }, `The run took ${taken} of its ${maxTickets} ticket(s).`);
   }
   if (until !== null && Date.parse(facts.now) >= Date.parse(until)) {
@@ -394,7 +405,11 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
   const rootId = run.scope.kind === "queue" ? null : run.scope.issueId;
   const rootGate = rootId === null ? undefined : facts.pendingGates.find((gate) => gate.issueId === rootId);
   if (rootGate) {
-    return stop("gate_pending", { gates: [rootGate] }, `${rootGate.identifier} is awaiting approval${rootGate.owner ? ` by ${rootGate.owner}` : ""}.`);
+    const waitsOn =
+      rootGate.state === "changes_requested"
+        ? `has changes requested${rootGate.owner ? ` by ${rootGate.owner}` : ""}`
+        : `is awaiting approval${rootGate.owner ? ` by ${rootGate.owner}` : ""}`;
+    return stop("gate_pending", { gates: [rootGate] }, `${rootGate.identifier} ${waitsOn}.`);
   }
 
   if (facts.workable.length > 0) return { stop: false };
@@ -686,9 +701,14 @@ export class RunStore {
       .filter((row) => inScope(row.id) && !this.store.isResolvedStatus(row.status));
     // A goal run's gate on this goal run's milestone holds the close for review; it is not a stop.
     const ownGoalGate = (row: (typeof unresolved)[number]): boolean => row.id === rootId && run.goal !== null && isGoalRunGate(row.gate_requested_by);
+    /**
+     * `changes_requested` counts when a person's gate is in it: it still holds the work beneath
+     * (`GATE_QUEUEING_STATES`), and without it here a run over that work would wait on it for
+     * ever. A goal run's gate in that state holds nothing, so it explains nothing.
+     */
     const pendingGates = unresolved
-      .filter((row) => row.gate_state === "pending" && !ownGoalGate(row))
-      .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.gate_owner }));
+      .filter((row) => (row.gate_state === "pending" || (row.gate_state === "changes_requested" && !isGoalRunGate(row.gate_requested_by))) && !ownGoalGate(row))
+      .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.gate_owner, state: row.gate_state! }));
     const personBlocks = unresolved
       .filter((row) => this.store.categoryOf(row.status) === "blocked" && (row.unblock_owner ?? "").trim() !== "")
       .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.unblock_owner!, action: row.unblock_action }));
@@ -962,14 +982,39 @@ export class RunStore {
    * already ended changes nothing and answers the run as it stands, so a second press of
    * a Stop button is harmless.
    */
-  stop(ref: string, by: string, note: string | null = null): Run {
+  stop(
+    ref: string,
+    by: string,
+    note: string | null = null,
+    reason: Extract<RunStopReason, "stopped_by_human" | "touched_main_line"> = "stopped_by_human",
+    detail: Record<string, unknown> = {},
+  ): Run {
     return this.store.journaled(() => {
       const row = this.requireRow(ref);
       if (!isLive(row.state)) return this.toRun(row);
       const cleanNote = note?.trim() ? note.trim() : null;
-      this.end(row, { reason: "stopped_by_human", state: "stopped", detail: {}, by, note: cleanNote });
+      /**
+       * A stopped run holds nothing: the ticket it is still working fails for the stop's
+       * reason and is released, on every path that stops a run (a person, the UI, a driver),
+       * so no ticket stays claimed by a run that will never come back to it.
+       */
+      this.releaseHeldCurrent(row, `${reason}: ${cleanNote ?? `stopped by ${by}`}`);
+      this.end(row, { reason, state: "stopped", detail, by, note: cleanNote });
       return this.get(row.id);
     });
+  }
+
+  /** Fail and release the run's current ticket when its actor still holds it; else leave it to `continue`. */
+  private releaseHeldCurrent(row: RunRow, why: string): void {
+    const open = this.db
+      .prepare("SELECT issue_id FROM run_tickets WHERE run_id = ? AND outcome IS NULL ORDER BY seq DESC LIMIT 1")
+      .get(row.id) as { issue_id: string } | undefined;
+    if (!open) return;
+    const issue = this.db.prepare("SELECT checkout_agent, status FROM issues WHERE id = ?").get(open.issue_id) as
+      | { checkout_agent: string | null; status: string }
+      | undefined;
+    if (issue === undefined || issue.checkout_agent !== row.actor || !this.store.isActiveStatus(issue.status)) return;
+    this.settleCurrent(row, "failed", why);
   }
 
   /**
