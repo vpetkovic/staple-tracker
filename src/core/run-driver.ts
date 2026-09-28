@@ -543,7 +543,7 @@ async function runSession(
         }
       }
       if (ended !== "exited") {
-        await killGroup(pid, exited, options.killGraceMs, options.force);
+        await endGroup(pid, options.killGraceMs, options.force);
         break;
       }
     }
@@ -562,26 +562,14 @@ function signalGroup(pgid: number, signal: NodeJS.Signals): void {
   }
 }
 
-/** A promise that settles when `signal` aborts (never, without one). */
-function aborted(signal: AbortSignal | undefined): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal === undefined) return;
-    if (signal.aborted) return resolve();
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
-}
-
-/** TERM the session's process group, then KILL it once the leader exits, the grace ends, or a second interruption forces it. */
-async function killGroup(pid: number, exited: Promise<unknown>, graceMs: number, force?: AbortSignal): Promise<void> {
-  signalGroup(pid, "SIGTERM");
-  await Promise.race([exited.then(() => undefined, () => undefined), sleep(graceMs, undefined, true), aborted(force)]);
-  // Whether or not the leader went on TERM: anything it left behind in its group goes too.
-  signalGroup(pid, "SIGKILL");
-}
-
 /**
- * End a process group whose leader may already be gone: TERM, wait for it to empty for
- * up to the grace (or until forced), then KILL what is left. Nothing to do when it is empty.
+ * End a session's process group: TERM, wait for the whole group to empty for up to the
+ * grace (or until forced), then KILL what is left. Nothing to do when it is empty.
+ *
+ * The wait is on the group, never on the leader alone. The leader may be a wrapper and
+ * not the agent: a `custom` template runs under `/bin/sh -c`, and dash (`/bin/sh` on
+ * Debian and Ubuntu) forks the command where bash execs it. TERM ends that shell at once,
+ * so a wait on the leader would KILL the agent the instant its shell died, with no grace.
  */
 async function endGroup(pgid: number, graceMs: number, force?: AbortSignal): Promise<void> {
   if (!groupAlive(pgid)) return;

@@ -134,6 +134,11 @@ function readPids(dir: string, ref: string): { session: number; grandchild: numb
   return JSON.parse(readFileSync(join(dir, `${ref}.pids`), "utf8")) as { session: number; grandchild: number };
 }
 
+/** The process group `pid` belongs to, from `ps` (Node has no getpgid). */
+function pgidOf(pid: number): number {
+  return Number(spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim());
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -370,6 +375,12 @@ describe("nothing outlives its session", () => {
     await until(() => existsSync(join(dir, `${refs[0]}.pids`)));
     const pids = readPids(dir, refs[0]!);
     const attached = lines(first.out())[0]!;
+    // The group the driver spawned. Its leader is not always the agent: a custom template
+    // runs under /bin/sh, which forks the command on Linux (dash) and execs it on macOS.
+    await until(() => lines(first.out()).some((e) => e.event === "session_started"));
+    const group = Number(lines(first.out()).find((e) => e.event === "session_started")!.pid);
+    expect(pgidOf(pids.session)).toBe(group);
+    expect(pgidOf(pids.grandchild)).toBe(group);
     process.kill(Number(attached.pid), "SIGKILL");
     await first.exited;
     expect(alive(pids.session)).toBe(true); // nobody ended it
@@ -380,8 +391,8 @@ describe("nothing outlives its session", () => {
     const refused = await cli(dir, ["run", "drive", "--run", runId, ...fake("sleep"), "--poll", "0.2", "--json"]);
     expect(refused.status).toBe(4);
     const error = JSON.parse(refused.stderr.trim().split("\n").at(-1)!) as { code: string; message: string; detail: Record<string, unknown> };
-    expect(error).toMatchObject({ code: "conflict", detail: { pgid: pids.session, ticket: refs[0], driverPid: Number(attached.pid), sessionStartedAt: expect.any(String) } });
-    expect(error.message).toContain(`kill -TERM -${pids.session}`);
+    expect(error).toMatchObject({ code: "conflict", detail: { pgid: group, ticket: refs[0], driverPid: Number(attached.pid), sessionStartedAt: expect.any(String) } });
+    expect(error.message).toContain(`kill -TERM -${group}`);
     expect(error.message).toContain("--forget-stale-session");
     expect(alive(pids.session)).toBe(true);
 
@@ -389,12 +400,12 @@ describe("nothing outlives its session", () => {
     const second = startDriver(dir, ["--run", runId, ...fake("sleep"), "--poll", "0.2", "--forget-stale-session"]);
     await until(() => lines(second.out()).some((e) => e.event === "session_started"));
     const events = lines(second.out());
-    expect(events.find((e) => e.event === "stale_session_forgotten")).toMatchObject({ pid: pids.session, ticket: refs[0], driverPid: Number(attached.pid) });
+    expect(events.find((e) => e.event === "stale_session_forgotten")).toMatchObject({ pid: group, ticket: refs[0], driverPid: Number(attached.pid) });
     expect(events.find((e) => e.event === "take")).toMatchObject({ ref: refs[0], resumed: true });
     expect(alive(pids.session)).toBe(true);
 
     // The test started that orphan: end it, as the message says.
-    process.kill(-pids.session, "SIGKILL");
+    process.kill(-group, "SIGKILL");
     await until(() => !alive(pids.session) && !alive(pids.grandchild), 3_000);
     expect((await cli(dir, ["run", "stop", runId, "--json"], "vp")).status).toBe(0);
     expect(await second.exited).toBe(0);
