@@ -1,18 +1,24 @@
+---
+title: Milestones
+description: Dated, human-ordered plans over epics and tasks from anywhere in the tree, with derived state, progress, a goal check and a place in the pickup queue.
+sidebar_position: 5
+---
+
 # Milestones
 
 A milestone is a dated, human-ordered plan that may contain epics and tasks
-from anywhere in the tree **without moving them**. This page is the contract
-the R3 tickets implement: R3b (store, migration, CLI, MCP, HTTP), R3c (the
-Milestones view beside Graph) and R3d (milestones in the pickup queue). The
-pure types and helpers it names live in `src/core/milestones.ts` and are
-pinned today by `test/milestones.test.ts`; what needs a database is pinned by
-`test/store-milestones.test.ts` and `test/contract-milestones.test.ts` (R3b),
-what needs the queue by `test/store-queue-resolver.test.ts` (R3d), and what
+from anywhere in the tree **without moving them**. This page covers the store
+and its migration, the CLI, MCP and HTTP surfaces, the web UI's Milestones
+view, the goal and its criteria, and how milestones sit in the pickup queue.
+The pure types and helpers it names live in `src/core/milestones.ts` and are
+pinned by `test/milestones.test.ts`; what needs a database is pinned by
+`test/store-milestones.test.ts` and `test/contract-milestones.test.ts`,
+what needs the queue by `test/store-queue-resolver.test.ts`, and what
 needs the whole system at once by `test/milestones-e2e.test.ts` and
-`src/ui/app/src/views/milestones/milestones-e2e.test.tsx` (R3e) — see
+`src/ui/app/src/views/milestones/milestones-e2e.test.tsx` — see
 [What the tests prove](#what-the-tests-prove) at the end.
-Where this page and [semantics.md](semantics.md) disagree, semantics.md describes today
-and this page the target. The queue it plugs into is [queue.md](queue.md).
+The queue it plugs into is [queue.md](queue.md); goal runs, which work a
+milestone until its goal is met, are in [runs.md](runs.md).
 
 ## Identity: an issue of the `milestone` kind
 
@@ -105,10 +111,8 @@ keeps the exception where the exception is, and `ON DELETE CASCADE` gives
 deletion its semantics for free. The row is created lazily — on the first
 `milestone set`, `milestone add`, or `create-from-epic` — so a milestone with
 no dates and no members is just an issue of the `milestone` kind, and
-`milestone ls` still lists it. R3b added the tables in workspace migration
-**007** (`007-milestones.ts`; if the queue's migration merges first, whichever
-merges second renumbers, per `src/core/migrations/workspace/index.ts`); the
-migration creates the two tables and seeds nothing. (Pinned by
+`milestone ls` still lists it. Workspace migration **007**
+(`007-milestones.ts`) creates the two tables and seeds nothing. (Pinned by
 `migrations-fixtures.test.ts` — *"the milestone migration preserves every issue
 and every configured kind and creates no rows"*.)
 
@@ -290,7 +294,8 @@ milestone's structure and re-parenting is impossible by construction.
 `--preview` returns the exact plan and writes nothing:
 
 ```json
-{"milestone": {"title": "S: opt-in cloud continuity"},
+{"preview": true,
+ "milestone": {"title": "S: opt-in cloud continuity", "targetDate": null, "startDate": null},
  "members": [{"identifier": "STA-66", "position": 1}],
  "hierarchyChanges": []}
 ```
@@ -387,7 +392,7 @@ interface MilestoneProgress {
 The categories are read from the workspace's configured statuses at read time,
 never from the status ids, so a renamed `done` still counts. (Pinned by
 `store-milestones.test.ts` — *"progress reads categories, not status ids"*;
-the fixture case in `milestones-e2e.test.ts` (R3e) — *"counts a member epic's
+the fixture case in `milestones-e2e.test.ts` — *"counts a member epic's
 child that is also a direct member once, and drops the cancelled leaf from the
 denominator"*.)
 
@@ -423,12 +428,12 @@ A ticket's lapse is read from its `status_changed` events after the mark.
 Evidence is a ticket (`ABC-12`), a document on one (`ABC-12:plan`) or text; `met`
 needs some, and a cited ticket or document must exist in this workspace. The
 position is 1-based, in the criteria's order. `--follow-up` files the work an
-unmet criterion needs through the marker's live goal run (docs/runs.md,
-"Goal mode"), attributed to it and counted against its cap; without a goal run
+unmet criterion needs through the marker's live goal run
+([runs.md](runs.md#goal-mode)), attributed to it and counted against its cap; without a goal run
 it is refused. Marks replicate (workspace migration 016 stores them in
 `milestone_criterion_marks`): each is the milestone's field `criterion<n>` on the
 wire, so concurrent marks of one criterion are a field conflict, preserved until
-someone decides, and marks of two criteria never collide (docs/sync.md). The runs
+someone decides, and marks of two criteria never collide ([sync.md](sync.md)). The runs
 that usually make them stay machine-local; a mark's `runId` is a label.
 
 **Pace** is `goal.pace`: done work, the remaining estimate and the days to the
@@ -448,8 +453,8 @@ figure, so two reads a moment apart agree on them; the `behind`/`on_track`
 verdict alone compares the remaining estimate with the seconds left to the end
 of the target day at the moment of the read, so it can flip from `on_track` to
 `behind` during that day with nothing else changed. `show` prints it as the
-`pace` line. The web UI shows the whole check on the milestone's detail (docs/runs.md,
-"In the web UI").
+`pace` line. The web UI shows the whole check on the milestone's detail
+([runs.md](runs.md#in-the-web-ui)).
 
 ### Gating a milestone
 
@@ -463,8 +468,8 @@ members stay eligible, and only issues somebody parented under the milestone
 itself are held. Approving the gate lands the milestone where its members say
 (done when they all landed).
 
-A **goal run's gate** (`gate_requested_by` `goal-run:<actor>`, docs/runs.md
-"Goal mode") differs in exactly two ways: it holds nothing beneath the milestone,
+A **goal run's gate** (`gate_requested_by` `goal-run:<actor>`,
+[runs.md](runs.md#goal-mode)) differs in exactly two ways: it holds nothing beneath the milestone,
 parented children included, so the run can work all of it; and it may stand on a
 milestone that holds nothing yet. It still holds the close, which is its whole
 purpose.
@@ -559,11 +564,15 @@ All carry `actor`; membership events carry the milestone's resulting
 - `milestone_member_added` — on the milestone: `{identifier, rank, position}`
 - `milestone_member_removed` — on the milestone: `{identifier, position}`
 - `milestone_member_moved` — on the milestone: `{identifier, fromPosition,
-  toPosition, rank}`, also used for a move between milestones with `from` and
-  `to` milestone identifiers
+  toPosition, rank}`, also used for a move between milestones, on the
+  destination, with `from` and `to` milestone identifiers; the source then
+  gets a `milestone_member_removed` carrying `movedTo`
 - `milestone_members_reordered` — on the milestone: `{order: [identifiers]}`
 - `milestone_joined` — on the **member**: `{milestone}`, so the member's own
   timeline says when and by whom it was planned; `milestone_left` is its twin
+- `milestone_criterion_marked` — on no issue: `{milestone, position, criterion,
+  verdict, evidence, runId}`, this device's note of a judgement; it is never
+  transported (the mark itself replicates, see [Goal](#goal))
 
 None moves an issue's status, so none joins `STATUS_MOVING_EVENT_KINDS`.
 
@@ -575,14 +584,14 @@ None moves an issue's status, so none joins `STATUS_MOVING_EVENT_KINDS`.
 | `staple milestone show <ref>` | `get_milestone` | `GET /api/milestone?ref=` |
 | `staple milestone new "<title>" [-d D] [--criteria "a;b"] [--target D] [--start D] [--from-epic <ref>] [--preview]` | `create_milestone` | `POST /api/milestone/create` |
 | `staple milestone set <ref> [-d D] [--criteria "a;b"] [--target D\|none] [--start D\|none]` | `update_milestone` | `POST /api/milestone/update` |
-| `staple milestone criterion <ref> <n> (--met\|--unmet\|--unknown) [--evidence E]… [--follow-up T]` | `mark_milestone_criterion` | `POST /api/milestone/criterion` |
+| `staple milestone criterion <ref> <n> (--met\|--unmet\|--unknown) [--evidence E]… [-m note] [--follow-up T [--follow-up-description D]] [--run <id>]` | `mark_milestone_criterion` | `POST /api/milestone/criterion` |
 | `staple milestone add <milestone> <ref> [--before R \| --after R \| --at N] [--base N] [-m note]` | `add_milestone_member` | `POST /api/milestone/add` |
 | `staple milestone rm <milestone> <ref> [--base N]` | `remove_milestone_member` | `POST /api/milestone/remove` |
 | `staple milestone mv <ref> (--before R \| --after R \| --at N \| --to <milestone>) [--base N]` | `move_milestone_member` | `POST /api/milestone/move` |
-| `staple milestone reorder <milestone> <r1,r2,…> --base N` | `reorder_milestone_members` | `POST /api/milestone/reorder` |
+| `staple milestone reorder <milestone> <r1,r2,…> [--base N]` | `reorder_milestone_members` | `POST /api/milestone/reorder` |
 
-`ls` prints identifier, state, target date, `done/countable` and percent, and
-the next eligible row from the resolver; `--all` includes resolved milestones.
+`ls` prints identifier, state, target date, `done/countable` and percent, the
+title, and the next eligible row from the resolver; `--all` includes resolved milestones.
 `show` returns one shape everywhere under `--json`:
 
 ```json
@@ -600,16 +609,19 @@ the next eligible row from the resolver; `--all` includes resolved milestones.
  "next": {"identifier": "STA-67", "position": 4}}
 ```
 
-Each member row also carries `title`, `addedBy`, `addedAt` and `note`, which
-the view (R3c) renders. `planPosition` and `next` are the QUEUE's two fields on
-this shape and the resolver fills them (R3d): `planPosition` is the milestone's
+The example is trimmed: the view's `milestone` also carries `id` (the issue
+id), `description` and `acceptanceCriteria`, the view carries `goal` (see
+[Goal](#goal)), and each member row also carries `issueId`, `title`,
+`addedBy`, `addedAt` and `note`, which the web UI's Milestones view renders.
+`planPosition` and `next` are the QUEUE's two fields on this shape and the
+resolver fills them: `planPosition` is the milestone's
 own row in the pickup plan, `null` when it is not queued, and `next` is the
 first `eligible` effective row that reports this milestone in its
 `milestonePath` — the real next work under this plan, in the position an agent
 sees it at, and `null` when nothing under the milestone is takeable. A milestone
 that is not queued still has next work: its members are in the unqueued band and
-are still work, just later. `ls` returns the same object without `members`, plus
-`memberCount`, sorted by plan position first. (Pinned by
+are still work, just later. `ls` returns the same object without `members`
+and `goal`, plus `memberCount`, sorted by plan position first. (Pinned by
 `store-milestones.test.ts` — *"fills planPosition and next from the resolver"*,
 *"sorts the list by plan position first, then by date"*;
 `contract-milestones.test.ts` — *"a queued milestone reports its plan position
@@ -619,9 +631,7 @@ mutation returns this same view, so a writer redraws from its result exactly
 as a reader does.
 
 Title, assignee and status are edited with the ordinary issue commands; `set`
-takes the dates and the goal. The view's `milestone` also carries
-`description` and `acceptanceCriteria`, and the view carries `goal` (see
-[Goal](#goal)). A non-milestone
+takes the dates and the goal. A non-milestone
 identifier given where a milestone is expected is refused with `validation`
 naming its kind (`STA-66 is an epic, not a milestone`); an unknown identifier
 is `not_found`; `--at N` is a 1-based position; `rm` of a non-member is
@@ -638,11 +648,12 @@ shipped by the end of October, and S2 done before anything else in S.
 ```
 $ staple kinds add milestone --label Milestone           # once per workspace
 $ staple milestone new "October cut" --target 2026-10-31 --from-epic STA-66 --preview
-  would create  October cut  (milestone, target 2026-10-31)
-  + member  STA-66  S: opt-in cloud continuity   at 1
-  hierarchy changes: none
+would create  October cut  (milestone, target 2026-10-31)
+  + member  STA-66  at 1
+hierarchy changes: none
 $ staple milestone new "October cut" --target 2026-10-31 --from-epic STA-66
-  STA-190  October cut
+STA-190 · October cut
+…
 $ staple milestone add STA-190 STA-146                    # the flake, no epic
 $ staple milestone add STA-190 STA-68 --before STA-66     # S2, pulled forward
 $ staple queue add STA-190
@@ -666,19 +677,21 @@ $ staple queue add STA-190
   `2026-11-01T00:00:00Z` it is `overdue`, in every zone, and `daysUntil` reads
   `-1`. `queue` shows `dueAt: 2026-10-31T23:59:59.999Z` on all thirteen rows.
 - **Landing.** When S12 lands and STA-146 is fixed, `progress.complete` is
-  true and STA-190 is still `in_progress` (or whatever VP set) until
-  `staple done STA-190`; its queue row then reads `resolved` and `queue prune`
-  removes it. The members stay in `milestone_members` as the record.
+  true and STA-190 closes itself with its last member, as a parent does —
+  unless VP moved its status by hand or a gate is open on it, in which case
+  `staple done STA-190` (or the approval) closes it. Its queue row then reads
+  `resolved` and `queue prune` removes it. The members stay in `milestone_members` as the record.
 
-Those transitions are what R3e replays end to end, on its own fixture, in
+Those transitions are what `milestones-e2e.test.ts` replays end to end, on its own fixture, in
 `test/milestones-e2e.test.ts` — *"commits exactly the previewed plan and leaves
 the epic's hierarchy byte-identical"*, *"a reorder changes the next read and does
 not touch the plan revision"*.
 
 ## What the tests prove
 
-R3a–R3d each pin one rule on the smallest workspace that rule needs. R3e adds
-one realistic workspace — `test/fixtures/milestones-scenario.ts` — and replays
+The unit, store, contract and resolver tests each pin one rule on the
+smallest workspace that rule needs. The two end-to-end suites add one
+realistic workspace — `test/fixtures/milestones-scenario.ts` — and replays
 the whole feature over it through the real surfaces, so that the places where
 the rules MEET are covered and not merely implied.
 

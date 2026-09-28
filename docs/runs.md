@@ -1,3 +1,9 @@
+---
+title: Autopilot runs
+description: How an autopilot run works a scope ticket after ticket, and how the tracker decides whether it takes, waits or stops.
+sidebar_position: 6
+---
+
 # Autopilot runs
 
 A **run** is one agent working a scope ticket after ticket: the whole pickup
@@ -542,7 +548,7 @@ on, never merge to master or main, and stop means stop.
 ## Goal mode
 
 A run over a milestone is a **goal run**: the milestone's own acceptance
-criteria (docs/milestones.md, "Goal") are what it works toward, and the
+criteria ([milestones.md](milestones.md#goal)) are what it works toward, and the
 milestone is the goal, not a separate document. Code: `src/core/milestone-goal.ts`
 (the pure rules), `run-store.ts` (the run's half), `milestone-store.ts` (marks).
 
@@ -586,7 +592,7 @@ ordinary gate: it holds the milestone's parented children and it stops the run
 run's pending gate: theirs replaces it (and the run never gates over a pending
 gate), so their review wins. Only the run path writes the marker: an actor named
 `goal-run:…` is refused on the CLI (`$STAPLE_AGENT`, `--actor`, `--agent`,
-`--author`, `--by`, and the `$USER` fallback when none of those is given), over
+`--author`, and the `$USER` fallback when none of those is given), over
 MCP, over HTTP (every `actor` field and query parameter) and by the store's gate
 itself, and the marker
 exempts only a milestone's gate, whatever road it arrived by.
@@ -659,7 +665,7 @@ and the run's next empty scope stops `budget`. `run.goal.children` lists them.
                   "note": null, "markedBy": "bot", "markedAt": "…", "runId": "…", "why": null } ],
   "counts": { "met": 1, "unmet": 0, "unknown": 1, "total": 2 },
   "met": false,
-  "pace": { … },                                   // docs/milestones.md, "Goal"
+  "pace": { … },                                   // milestones.md, "Goal"
   "children": { "cap": 5, "created": 1, "left": 4, "refs": ["ABC-44"] },
   "gate": { "state": "pending", "owner": "VP", "requestedAt": "…", "requestedBy": "goal-run:bot",
             "byGoalRun": true, "ownedByRun": true } }
@@ -746,7 +752,7 @@ HTTP: `GET /api/runs[?ws=&limit=N]` answers `{runs: [{workspace, run, decision, 
 driver, goal}], now}` (`now`: the server's clock) (every live run and the `limit` (50) most recent ended ones per workspace, each
 the `run status --json` object); `POST /api/run/stop {ws, id, actor?, note?}`,
 `POST /api/run/pause|resume {ws, id, actor?}` answer the run's fresh entry. They are
-writes like every other (POST only, token, the write rule in docs/web-ui.md "Auth"), so
+writes like every other (POST only, token, the write rule in [web-ui.md](web-ui.md#auth)), so
 the app on a phone through the tailnet forwarder stops a run: its page sends the token
 header. The change fingerprint (`/api/poll`) carries which live runs have a driver attached
 and whether it is running, so the banner follows a driver starting or dying.

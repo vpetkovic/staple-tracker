@@ -1,8 +1,15 @@
+---
+title: CLI
+description: Every staple command, flag, JSON shape and exit code, with the rules each one enforces.
+sidebar_position: 11
+---
+
 # CLI
 
 ## At a glance
 
 ```
+staple [--yes]                        set this repo up if it needs it, then open the UI
 staple init [--global <slug>]         staple start|done|cancel|release <ref>
        (repo-local also writes .staple/AGENTS.md, never clobbering an edited one)
 staple new <title> [--parent R]       staple block <ref> --owner O --action TEXT
@@ -10,11 +17,17 @@ staple new <title> [--parent R]       staple block <ref> --owner O --action TEXT
 staple ls | show <ref> | tree | board staple link <blocker> <blocked>   (cross-ws)
 staple inbox [--hub] [--assignee A]   staple doc <ref> <key> [--put f --base N]
 staple events [--since N]             staple hub [ls|links|events]
-                                      staple hub unregister <slug|prefix> | prune | unlink
+staple comment <ref> <text>           staple hub unregister <slug|prefix> | prune | unlink
+staple status <ref> <status>          staple hub registry [status|identity|connect|publish|adopt|backup|restore]
 staple open [--port 4400] [--hub]     staple config [show|set|home]
 staple migrate [--yes]                staple doctor [--json] [--fix --only <check>]
 staple install [status|--rollback]    staple add <path> --yes | discover <root>
 staple settings [get <key>|set <key> <value>]       this workspace's registered settings
+staple statuses ls|add|rename|recategorize|reorder|rm   this workspace's status vocabulary
+staple kinds ls|add|rename|reorder|rm               this workspace's kind vocabulary
+
+staple cloud [status] | connect | sync | disconnect  optional cloud sync (off until connected)
+staple cloud auto on|off | devices | backup | restore | conflicts | resolve | purge
 
 staple wait <ref> [--timeout s] [--interval ms]     block until ready or finished
 staple events --follow [--since N] [--max N]        stream events as they land
@@ -26,6 +39,8 @@ staple events --follow [--since N] [--max N]        stream events as they land
 staple estimate <ref> <dur> | <ref> --clear         change only the estimate (no status to restate)
 staple compare <ref> [<ref> ...]                    total labor, estimate coverage and critical path
                                                     of named issues, with no tree dump
+staple timing quality [--kind K] [--exclude S]      one quality state per timing record, and coverage
+staple calibrate [--kind K] [--for REF]             calibration cohorts over trusted samples
 staple forecast <ref> [--reserve P]                 remaining labor and chain from calibrated durations,
                                                     and apart, what the work costs each provider limit
 
@@ -40,13 +55,20 @@ staple approve <ref> [--children R1,R2] [-m text]   release the whole queue, or 
 staple request-changes <ref> -m text                send it back; the children stay queued
 
 staple milestone ls | show <ref>                    dated, ordered plans (needs the `milestone` kind)
-staple milestone new <title> [--target D] [--from-epic R] [--preview]
+staple milestone new <title> [--criteria "a;b"] [--target D] [--from-epic R] [--preview]
+staple milestone set <ref> [-d desc] [--criteria "a;b"] [--target D|none] [--start D|none]
+staple milestone criterion <ref> <n> --met|--unmet|--unknown [--evidence E]   judge one goal criterion
 staple milestone add|rm <milestone> <ref> [--base N] | mv <ref> --to M | reorder M <r1,r2>
 
 staple queue [--all] [--effective]                  the plan, and the order agents receive
 staple queue next [--actor A] [--scope <ref>]       the one row to take, and what it skipped
 staple queue add|rm <ref> [--at N] [--base N] | mv <ref> --at N | reorder <r1,r2> | prune
 staple checkout <ref> --override -m <why>           take a row out of turn, on the record
+
+staple run start --scope <queue|ref> [--max-tickets N] [--until T]   one agent, ticket after ticket
+staple run continue | status | stop | pause | resume                 drive and control a run
+staple run drive --agent <claude|codex|custom>      a fresh headless session per ticket
+staple run hook install|bind|unbind                 keep an interactive session working a run
 
 staple budget ingest --source claude-statusline [--tee] [--account A]   a status-line reading (stdin)
 staple budget ingest --source codex-rollout <file> [--account A]        a Codex rollout's readings
@@ -272,8 +294,10 @@ staple milestone mv STA-68 --after STA-146           # or --to <milestone> to mo
 staple milestone reorder STA-190 STA-68,STA-66,STA-146 --base 3
 staple milestone rm STA-190 STA-146
 staple milestone set STA-190 --start 2026-10-01 --target none
+staple milestone set STA-190 --criteria "Invoices split;Retries idempotent"
+staple milestone criterion STA-190 1 --met --evidence STA-66
 staple milestone ls [--all]                          # --all includes done and cancelled
-staple milestone show STA-190
+staple milestone show STA-190                        # members, progress, goal check, pace
 ```
 
 - **`--from-epic` adds the epic as the one member.** Its children come along
@@ -289,7 +313,8 @@ staple milestone show STA-190
   cannot be a member.
 - **Dates are UTC calendar days**, `YYYY-MM-DD`, inclusive: a target of
   `2026-10-31` is due by the end of that day and overdue from the next UTC
-  midnight. `none` clears one. `set` takes only the dates; title, description,
+  midnight. `none` clears one. `set` takes the dates, the description (`-d`) and
+  the goal (`--criteria "a;b"`; `-d ""` and `--criteria ""` clear); title,
   assignee and status are edited with the ordinary commands.
 - **Order is durable and independent** — a column, not a sort; priority,
   creation time and tree position never reorder it. `show` prints the members
@@ -301,12 +326,19 @@ staple milestone show STA-190
   its epic and as a direct member counted once, cancelled leaves out of the
   denominator. `state` is derived — `done`, `cancelled`, `overdue`, `active`,
   `planned` — never stored.
+- **The goal is the acceptance criteria.** `--criteria` on `new` or `set`
+  records them; `milestone criterion <ref> <n>` judges criterion `n`
+  `--met` (evidence required), `--unmet` or `--unknown`, where `--evidence` is a
+  ticket, a document (`STA-12:plan`) or text. `show` prints each criterion's
+  verdict with its evidence and the pace against the target date. An autopilot
+  run over a milestone works toward these criteria
+  ([runs.md](runs.md#goal-mode)).
 - A non-milestone given where a milestone is expected is exit 2 naming its
   kind (`STA-66 is an epic, not a milestone.`); an unknown reference is exit 3;
   `rm` of a non-member is exit 3.
 
 `--json` on every subcommand prints the one shape MCP and the UI server
-return: `{milestone, progress, revision, members, next}` — see
+return: `{milestone, progress, revision, members, next, goal}` — see
 [milestones.md](milestones.md#operations-by-surface).
 
 ## The pickup queue
@@ -342,7 +374,8 @@ staple queue next --scope STA-66             # the same, inside one epic or mile
   later. `--all` keeps resolved entries visible; by default they are hidden and
   `prune` removes them.
 - **Every row is classified, and none is dropped**: `resolved`, `gated`,
-  `blocked`, `claimed`, else `eligible` — the first that matches, with a reason.
+  `blocked`, `claimed`, `unavailable` (a status outside the checkout set), else
+  `eligible` — the first that matches, with a reason.
   A blocker, a gate, a live claim and a resolved status refuse exactly as they
   always have; rank cannot lift any of them.
 - **Order is durable and independent** — nothing about it derives from priority,
@@ -386,8 +419,8 @@ answering `{revision, next, skipped}` (`{revision, scope, next, skipped}` with
 
 ## Autopilot runs
 
-One agent working the queue, an epic or a milestone ticket after ticket, until
-a stop rule the tracker evaluates says stop. The full contract, with every
+One agent working the queue, an epic or parent, or a milestone ticket after
+ticket, until a stop rule the tracker evaluates says stop. The full contract, with every
 reason code and a driver loop, is [runs.md](runs.md).
 
 ```bash
@@ -398,10 +431,32 @@ staple run pause                         # continue answers wait until resume
 staple run resume
 staple run status --all
 staple run stop -m "enough for today"
+staple run start --scope STA-190 --gate-owner VP --goal-cap 5   # a milestone: a goal run
+staple run drive --scope STA-66 --agent claude   # a fresh headless session per ticket
+staple run hook install claude --project         # or keep the session you are in working the run
+staple run hook bind
 ```
 
 `run continue` exits 0 for take, wait and stop alike; a driver loops on
-`action` and ends on `stop`.
+`action` and ends on `stop`. The stop reasons, first match wins, are
+`stopped_by_human`, `touched_main_line`, `budget`, `failure_streak`,
+`scope_gone`, `vp_blocked`, `gate_pending`, `goal_met` and `scope_empty`.
+
+- **A milestone run is a goal run.** It gates the milestone to `--gate-owner`
+  (default `VP`) so the milestone never closes unreviewed, creates a
+  goal-check ticket when the scope empties with criteria unmet, and may create
+  at most `--goal-cap` tickets itself (default 5). It ends `goal_met` when
+  nothing is left and every criterion is met
+  ([runs.md](runs.md#goal-mode)).
+- **`run drive`** loops `run continue` in one process and launches one
+  headless `claude`, `codex` or custom session per ticket, with logs under
+  `.staple/runs/<run-id>/`. `--dry-run` prints the next ticket's command and
+  brief and claims nothing; `staple run drive --help` lists every option
+  ([runs.md](runs.md#run-drive-the-headless-driver)).
+- **`run hook`** installs a stop hook (`claude`, `codex`, `gemini`, `cursor`,
+  `copilot`, `droid`, `qwen`) that hands an interactive session the run's next
+  ticket whenever it would end its turn; `run hook bind` ties the session to a
+  live run ([runs.md](runs.md#interactive-sessions-stop-hooks)).
 
 ## Estimates vs actuals
 
@@ -1001,7 +1056,7 @@ staple request-changes <ref> -m text                  send it back; children sta
 
 Four rules decide what a gate holds, and every surface — `inbox`, the checkout
 guard, the `[queued: …]` cue on `ls`, and the reviewer's checklist in the web UI
-— reads the same answer (STA-154):
+— reads the same answer:
 
 - **(a) Only OPEN work is queued.** `done` and `cancelled` issues under a gated
   parent carry no `queuedBy`, are never listed for approval and are never
@@ -1044,7 +1099,7 @@ queued: behind STA-142, awaiting approval by VP — checkout is refused until th
 
 ### The QUEUED section of the inbox
 
-`staple inbox` grows a third section between READY and BLOCKED, printed only
+`staple inbox` has a third section between READY and BLOCKED, printed only
 when it is non-empty. QUEUED is work a **human** must release; BLOCKED is work
 waiting on other **work**. Gate holders are listed first inside the section —
 the one row a person can act on should not sit under the three tickets it is
@@ -1053,7 +1108,7 @@ pickup order.
 
 ```console
 READY (pickup order):
-  ◌! STA-61    backlog     L1: scaffold Docusaurus site (single locale) replacing the POC
+  ◌! STA-61    backlog     L1: scaffold Docusaurus site (single locale)
 QUEUED (waiting on a human — checkout is refused):
   ⊙! STA-142   awaiting_approval Q: approval gates — park a parent for VP review …  [awaiting VP]
   ◐! STA-143   in_progress Q1: gate model in the store … @opus-q1  [awaiting VP on STA-142]
@@ -1066,7 +1121,7 @@ BLOCKED:
 every entry carries `gate` and `queuedBy` beside `unresolvedBlockers` and
 `claim`. An entry with a `gate` and no `queuedBy` **is** the gate; an entry with
 `queuedBy` is standing behind the one it names. `staple inbox --hub` goes
-through the hub's unified list and carries no gate cue today — checkout is still
+through the hub's unified list and carries no gate cue — checkout is still
 refused, it is just less informative.
 
 ### Exit code 9 and the `gated` error
@@ -1440,11 +1495,11 @@ they always agree with the top level:
 {"code":"offline","message":"Could not reach https://sync.example.com (TypeError). Local work is unaffected; nothing was sent and nothing was changed.","detail":{"endpoint":"https://sync.example.com","cloudCode":"offline","retryable":true},"retryable":true}
 ```
 
-Until STA-251 the code was folded into a store code and only `detail` held the
-truth. `auth`, `forbidden`, `revoked`, `cursor_invalid`, `payload_too_large`,
+Earlier builds folded the code into a store code, and only `detail` held the
+truth: `auth`, `forbidden`, `revoked`, `cursor_invalid`, `payload_too_large`,
 `schema_ahead` and `protocol_unsupported` were `validation` (exit 2).
 `epoch_changed`, `rate_limited`, `unavailable` and `offline` were a
-non-retryable `conflict` (exit 4). A script that branched on those two exit
+non-retryable `conflict` (exit 4). A script that branches on those two exit
 codes for a cloud command should branch on the codes below instead.
 
 ## Exit codes

@@ -1,3 +1,9 @@
+---
+title: Continuity
+description: What happens after an agent dies mid-task, and how another agent takes over its claim.
+sidebar_position: 8
+---
+
 # Continuity
 
 What happens after an agent dies mid-task.

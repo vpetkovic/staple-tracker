@@ -1,20 +1,23 @@
+---
+title: The pickup queue
+description: The explicit, human-ordered plan of what agents pick up next, how it resolves to an effective order, and how strict policy and overrides enforce it.
+sidebar_position: 4
+---
+
 # The pickup queue
 
 An explicit, human-ordered plan of what agents pick up next, separate from
-status, priority and display grouping. This is the contract the R2 tickets
-implement and that R3d (milestones) and R6d (the policy setting) plug into.
-Every rule names the test that pins it, or that will. The STORAGE half (R2b,
-migration 008: the `queue_entries` table, the plan's order and its revision),
-the RESOLVER and the four surfaces (R2c), the visual editor (R2d), the agent
-protocol, diagnostics and lifecycle regressions (R2e), and the milestone plumbing —
-expansion order, the path fields, and the two queue fields on the milestone view
-(R3d) — are built. Where this page
-and [semantics.md](semantics.md) disagree, semantics.md describes today and this
-page the target.
+status, priority and display grouping. This page covers the plan's storage
+(workspace migration 008: the `queue_entries` table, the plan's order and its
+revision), the resolver that turns it into an effective order, the
+`queue.policy` setting, the human override, the CLI, MCP and HTTP surfaces,
+the web UI's Queue view, the agent protocol and the diagnostics. Milestones
+plug into it as containers ([milestones.md](milestones.md)). Every rule names
+the test that pins it.
 
 ## Presentation sort is not the queue
 
-Today `inbox` READY is a **presentation sort**: category tier (`active, review,
+With nothing queued, `inbox` READY is in **presentation sort**: category tier (`active, review,
 ready, unstarted`), then priority, then `created_at`, then `rowid`
 (`issuesQuery` in `src/core/store.ts`). It is a good default and it stays the
 default for everything the queue does not mention. But it is derived from
@@ -43,7 +46,7 @@ checkout guard, MCP, HTTP and the editor's preview — reads it. Its inputs are
 exactly: the `queue_entries` table; the issue tree (`parent_id`, sibling order);
 status categories; local `blocks` edges and hub `cross_links`; gates
 (`queuedByFor`); live claims (`checkout_agent`);
-milestone membership order (R3); and the configured checkout statuses. The
+milestone membership order; and the configured checkout statuses. The
 optional actor remains accepted for caller compatibility; a held row is never
 a fresh pickup, even for its holder.
 Cross-workspace blockers are the one input the resolver takes INJECTED rather
@@ -70,7 +73,7 @@ plan or in the unqueued band, because nobody checks out a milestone.
 Membership is read on every call and nothing is cached, so a `milestone mv` is
 visible on the very next read and no queue write happens or is needed.
 Siblings inside a container expand in **presentation sort**, so a queued epic
-behaves exactly like today's inbox restricted to that epic; a human who wants
+behaves exactly like the unqueued inbox restricted to that epic; a human who wants
 a different order inside it queues the child explicitly. An issue reached
 twice — queued directly and via a container, or via two containers — is
 emitted once, at its **first** occurrence. (Pinned by
@@ -104,8 +107,9 @@ rule that matches; the ladder is hard constraints only, and rank is not on it:
 | 5 | `unavailable` | status is outside the configured checkout status set, such as review or active without a claim |
 | 6 | `eligible` | an unclaimed leaf in a checkout status |
 
-Every non-eligible row carries a `detail` saying why (`queuedBy`, the blocker
-identifiers, the holder and their `idleSeconds`, or an unavailable status). Every
+Every non-eligible row carries a `reason` sentence and a `detail` object saying
+why (`queuedBy`, the blocker identifiers, the holder and their `idleSeconds`, or
+an unavailable status). Every
 effective row also carries `claim`: full holder, activity, and scope metadata
 when held, or `null` for a fresh pickup. Rows are **never dropped** for
 being ineligible — the plan is shown whole, so a human can see what their order
@@ -130,7 +134,7 @@ than null when there is nothing to say. **`milestonePath`** is the milestone
 the row belongs to — its own membership, else the nearest ancestor's — so a
 row reached THROUGH a queued milestone and a row that merely belongs to one
 report the same thing, and `via` stays the field that says which container
-this row was expanded out of. It holds at most one element today, because a
+this row was expanded out of. It holds at most one element, because a
 milestone cannot be a member of a milestone. **`epicPath`** is the row's
 ANCESTOR epics; a row is never in its own path. Both are facts about the tree
 rather than about the plan, so the unqueued band carries them too, and neither
@@ -202,14 +206,14 @@ shape on CLI, MCP and HTTP, limited to the scope"*, *"an unknown or leaf scope i
 refused the same way on every surface"*.)
 
 **READY takes its order from the resolver and keeps its membership.** The three
-inbox buckets partition open work exactly as today (`gated` and `queuedBy` →
+inbox buckets partition open work exactly as they do without a queue (`gated` and `queuedBy` →
 QUEUED; `blocked` and unresolved blockers → BLOCKED; the rest → READY); what
 changes is that READY is printed in effective order rather than presentation
 sort, with each row's `position`, and QUEUED/BLOCKED rows that are in the plan
 carry their `planPosition` as a cue. A container is in READY but is not an
 effective row, so it has no `position` of its own and ranks where its earliest
 plan-band descendant does; with an EMPTY queue nothing is in the plan band and
-the list is byte-identical to what it always was. (Pinned by
+the list is byte-identical to the presentation sort. (Pinned by
 `queue-surfaces.test.ts` — *"READY is in effective order and carries
 positions"*, *"a queued-but-gated row stays in QUEUED with its plan
 position"*.)
@@ -217,7 +221,8 @@ position"*.)
 ## Policy: advisory or strict
 
 `queue.policy` is a workspace-scoped setting with two values, registered through
-the R6 settings registry (STA-179) and read by the resolver on every checkout.
+the settings registry (`src/core/settings-registry.ts`) and read by the
+resolver on every checkout.
 **`advisory`** is the default: the queue orders and explains, and checkout is
 never refused for order. Upgrading a workspace changes nothing an agent can
 observe until a human sets `strict`. (Pinned by `store-settings.test.ts` —
@@ -270,7 +275,7 @@ process"*;
 
 **Hard constraints are never bypassed by rank, in either mode.** A blocker, a
 pending or `changes_requested` gate, a live claim and a resolved status all
-refuse or skip exactly as they do today; the queue can only order what is
+refuse or skip exactly as they do without a queue; the queue can only order what is
 already takeable. Approve, request-changes, `blockers_resolved` and a release
 change eligibility on the very next read — no queue write happens or is needed.
 (Pinned by `store-queue-resolver.test.ts` — *"rank cannot lift a blocked row"*,
@@ -285,9 +290,10 @@ because a re-derivation that needed a queue write would not be one.)
 
 The store cannot tell a human from an agent and does not try; the override flag
 is the distinction. `staple checkout <ref> --override -m "<reason>"` (MCP
-`checkout_task {override_reason}`, HTTP `/api/action` with `overrideReason`,
-UI: a confirm dialog with a reason field) skips **only** the `out_of_order`
-check. The reason is mandatory, as it is for `request-changes`. Blockers, gates
+`checkout_task {override_reason}`, HTTP `/api/action` with `overrideReason`)
+skips **only** the `out_of_order` check. The web UI offers no override: its
+checkout shows the `out_of_order` refusal and leaves the choice to the CLI or
+MCP. The reason is mandatory, as it is for `request-changes`. Blockers, gates
 and conflicts still refuse — an override is "take this out of turn", never
 "take this regardless". (Pinned by `store-queue-resolver.test.ts` — *"override
 takes a later row and records why"*, *"override requires a reason"*, *"override
@@ -300,7 +306,7 @@ rows keep their positions and the next agent still gets them first. In
 `advisory` mode the flag is accepted, the event is still written, and nothing
 else differs — the audit trail is the point, not the refusal. Queue mutations
 themselves need no override: they are actor-attributed events, so an agent that
-reorders is visible rather than forbidden, and the agent guide (STA-170) tells
+reorders is visible rather than forbidden, and the agent guide tells
 it not to. (Pinned by `store-queue-resolver.test.ts` — *"emits queue_overridden
 with actor, reason and the displaced rows"*, *"writes the event under advisory
 too, where nothing was refused"*, *"an override does not reorder the plan"*;
@@ -348,13 +354,13 @@ status change and re-parent"*, *"deleting an issue deletes its entry"*.)
 only its own issues; enqueueing a foreign identifier is refused with
 `validation` naming the workspace it belongs to. Other workspaces reach the
 queue only as blockers, through the hub's `cross_links`, and those are hard
-constraints as today — a blocker whose file is not on this machine is
-`unresolvable` and reads as blocked. `inbox --hub` concatenates each
-workspace's effective order in hub registration order; strict enforcement is
-per workspace, since a checkout consults the queue of the file the issue lives
-in. (Pinned by `store-queue.test.ts` — *"refuses a foreign identifier and
-names its workspace"*; to be pinned by `hub.test.ts` — *"hub inbox concatenates
-per-workspace effective orders"*.)
+constraints as everywhere else — a blocker whose file is not on this machine is
+`unresolvable` and reads as blocked. There is no cross-workspace queue:
+`inbox --hub` lists each available registered workspace's issues, workspace by
+workspace in slug order, each in presentation sort rather than effective order,
+and strict enforcement is per workspace, since a checkout consults the queue of
+the file the issue lives in. (Pinned by `store-queue.test.ts` — *"refuses a
+foreign identifier and names its workspace"*.)
 
 ## Concurrent reorder: revision and CAS
 
@@ -369,8 +375,10 @@ and otherwise writes blind, which is the human's own risk to take. Bulk reorder
 is one call, one transaction, one revision bump. (Pinned by
 `store-queue.test.ts` — *"a stale baseRevision is refused with
 revision_conflict and leaves the order unchanged"*, *"bulk reorder is atomic
-and bumps the revision once"*; to be pinned by `ui-queue-editor.test.ts` — *"a
-stale reorder keeps the server order and offers a retry"*; pinned by
+and bumps the revision once"*; `src/ui/app/src/views/queue/queue-render.test.tsx` —
+*"keeps the server order on screen and offers a deliberate Reload and Retry"*;
+`src/ui/app/src/lib/api-queue.test.ts` — *"is followed by a retry at the
+revision the server named, keeping the other writer's row"*;
 `queue-surfaces.test.ts` — *"a stale base is the same revision_conflict triple
 on every surface"*.) Checkout does not
 bump the revision — it changes eligibility, not the plan — so two reads of one
@@ -389,9 +397,7 @@ order on the next read"*.)
 
 ## Storage
 
-One table, added by workspace migration **008** (this page said 007 when it was
-written, before R3b's milestones took that number; R2b took the next one free at
-merge, per the rule in `src/core/migrations/workspace/index.ts`):
+One table, added by workspace migration **008** (`008-queue-entries.ts`):
 
 ```sql
 CREATE TABLE queue_entries (
@@ -404,8 +410,8 @@ CREATE TABLE queue_entries (
 ```
 
 The migration creates the table and seeds nothing: every existing issue is
-preserved untouched and the initial queue is empty. Milestone membership (R3)
-gets its own table; the queue references the milestone issue only. (Pinned by
+preserved untouched and the initial queue is empty. Milestone membership
+gets its own table ([milestones.md](milestones.md#membership-a-relation-not-a-hierarchy)); the queue references the milestone issue only. (Pinned by
 `migrations-fixtures.test.ts` — *"the queue migration preserves every issue and
 leaves the queue empty"*.)
 
@@ -421,16 +427,17 @@ small and readable. `UNIQUE (rank)` plus a midpoint computed inside an immediate
 transaction is what makes concurrent inserts unable to collide. (Pinned by `store-queue.test.ts` — *"insert
 between neighbours takes the midpoint"*, *"renumbers when the gap is exhausted,
 in one transaction"*, and *"concurrent inserts never produce duplicate ranks"* —
-which lives with the encoding it is about, two real processes racing one file,
-rather than waiting for `queue-concurrency.test.ts`.)
+which lives with the encoding it is about: two real processes racing one file.)
 
-**Events**, all carrying `actor` and the resulting `revision`:
+**Events**, all carrying `actor`; the four plan mutations also carry the
+resulting `revision`:
 
 - `queue_enqueued` — `{identifier, rank, position}`
 - `queue_dequeued` — `{identifier, position, reason: "removed" | "pruned"}`
 - `queue_moved` — `{identifier, fromPosition, toPosition, rank}`
 - `queue_reordered` — `{order: [identifiers]}` (bulk reorder, one event)
-- `queue_overridden` — on the issue, as above
+- `queue_overridden` — on the issue, as above; it changes no plan, so it
+  carries no revision
 
 None moves an issue's status, so none joins `STATUS_MOVING_EVENT_KINDS`.
 `queue_reordered` is the one with no `issue_id`: it is a fact about the plan
@@ -441,14 +448,14 @@ mutation carries the actor and the resulting revision"*.)
 
 | CLI | MCP | HTTP |
 |---|---|---|
-| `staple queue [--all] [--effective]` | `list_queue` | `GET /api/queue` |
+| `staple queue [ls] [--all] [--effective] [--actor A]` | `list_queue` | `GET /api/queue` |
 | `staple queue next [--actor A] [--scope <ref>]` | `next_task {scope}` | `GET /api/queue/next?scope=` |
 | `staple queue add <ref> [--before R \| --after R \| --at N] [--base N] [-m note]` | `enqueue_task` | `POST /api/queue/enqueue` |
 | `staple queue rm <ref> [--base N]` | `dequeue_task` | `POST /api/queue/remove` |
 | `staple queue mv <ref> (--before R \| --after R \| --at N) [--base N]` | `move_queue_entry` | `POST /api/queue/move` |
-| `staple queue reorder <r1,r2,…> --base N` | `reorder_queue` | `POST /api/queue/reorder` |
-| `staple queue prune` | `prune_queue` | `POST /api/queue/prune` |
-| `staple checkout <ref> --override -m …` | `checkout_task {override_reason}` | `POST /api/action` |
+| `staple queue reorder <r1,r2,…> [--base N]` | `reorder_queue` | `POST /api/queue/reorder` |
+| `staple queue prune [--base N]` | `prune_queue` | `POST /api/queue/prune` |
+| `staple checkout <ref> --override -m …` | `checkout_task {override_reason}` | `POST /api/action` (`overrideReason`) |
 
 `queue` prints plan order with the expansion indented under each container and
 a `→ n` effective cue per leaf; `--effective` prints effective order with its
@@ -522,7 +529,7 @@ $ staple queue
   `staple queue add WOR-12` here is refused with `validation` — it belongs to
   the WOR queue.
 
-Those nine transitions are what STA-170's regression suite replays end to end,
+Those transitions are what `queue-lifecycle.test.ts` replays end to end,
 against a scratch workspace whose prefix really is `STA` — the transitions are
 written about these identifiers, and a replay that renamed them would not be
 one. (Pinned by `queue-lifecycle.test.ts`, describe *"replays the STA-31 →
@@ -549,7 +556,7 @@ reachable by deleting rows with foreign keys off, which is not something doctor
 should silently undo. A workspace older than migration 008 skips the check.
 (Pinned by `doctor.test.ts` — *"reports the revision, the entry count and an
 open plan"*, *"warns about an orphaned entry and an exhausted rank gap, and
-repairs neither"*; the check id list pin moved to make room for it.)
+repairs neither"*.)
 
 ## What agents are told
 
