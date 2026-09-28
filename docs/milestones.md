@@ -444,7 +444,8 @@ figure, so two reads a moment apart agree on them; the `behind`/`on_track`
 verdict alone compares the remaining estimate with the seconds left to the end
 of the target day at the moment of the read, so it can flip from `on_track` to
 `behind` during that day with nothing else changed. `show` prints it as the
-`pace` line.
+`pace` line. The web UI shows the whole check on the milestone's detail (docs/runs.md,
+"In the web UI").
 
 ### Gating a milestone
 

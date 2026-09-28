@@ -45,6 +45,7 @@ const run = (over: Partial<Run> = {}): Run => ({
   scope: { kind: "issue", issueId: "e-1", identifier: "ABC-10" },
   state: "active",
   budget: { maxTickets: null, until: null, ceilingPercent: null, ceilingAccount: null },
+  goal: null,
   override: null,
   tickets: [],
   counts: { taken: 0, done: 0, failed: 0, open: 0 },
@@ -79,9 +80,11 @@ describe("the stop reasons", () => {
   it("names the person who stopped it, and the driver's main-line stop as what it is", () => {
     expect(stopReasonText({ reason: "stopped_by_human", detail: {}, by: "vp", note: null })).toBe("Stopped by vp");
     expect(stopReasonText({ reason: "stopped_by_human", detail: {}, by: null, note: null })).toBe("Stopped by a person");
-    expect(
-      stopReasonText({ reason: "stopped_by_human", detail: {}, by: DRIVER_ACTOR, note: "touched_main_line: the session on ABC-3 moved master" }),
-    ).toBe("Stopped by its driver: a session changed master or main");
+    // The driver's main-line stop is its own reason, naming the ticket whose session moved it.
+    expect(stopReasonText({ reason: "touched_main_line", detail: { ticket: "ABC-3", moves: ["master"] }, by: DRIVER_ACTOR, note: "x" })).toBe(
+      "Stopped: the session on ABC-3 changed master or main",
+    );
+    expect(stopReasonText({ reason: "touched_main_line", detail: {} })).toBe("Stopped: a session changed master or main");
     // The driver stopping for another reason is still the driver, by name.
     expect(stopReasonText({ reason: "stopped_by_human", detail: {}, by: DRIVER_ACTOR, note: "other" })).toBe(`Stopped by ${DRIVER_ACTOR}`);
   });
@@ -92,6 +95,10 @@ describe("the stop reasons", () => {
     expect(stopReasonText({ reason: "budget", detail: { budget: "time" } })).toBe("Its time ran out");
     expect(stopReasonText({ reason: "budget", detail: { budget: "ceiling", ceilingPercent: 80 } })).toBe("Usage reached its 80% limit");
     expect(stopReasonText({ reason: "budget", detail: {} })).toBe("Reached its limit");
+    expect(stopReasonText({ reason: "budget", detail: { budget: "goal_children", childCap: 5, created: 5, milestone: "ABC-40" } })).toBe(
+      "ABC-40's goal is not met and it created all 5 tickets it may",
+    );
+    expect(stopReasonText({ reason: "budget", detail: { budget: "goal_children", childCap: 1 } })).toBe("The goal is not met and it created all 1 ticket it may");
   });
 
   it("names the tickets, the owner and the approvals the detail carries", () => {
@@ -104,6 +111,10 @@ describe("the stop reasons", () => {
     );
     expect(stopReasonText({ reason: "scope_gone", detail: { why: "deleted" } })).toBe("What it was working on no longer exists");
     expect(stopReasonText({ reason: "scope_empty", detail: {} })).toBe("Finished: nothing left to do");
+    expect(stopReasonText({ reason: "goal_met", detail: { milestone: "ABC-40", counts: { met: 2, unmet: 0, unknown: 0, total: 2 } } })).toBe(
+      "Goal met: ABC-40 is waiting for approval",
+    );
+    expect(stopReasonText({ reason: "goal_met", detail: {} })).toBe("Goal met: waiting for approval");
   });
 });
 
@@ -157,8 +168,11 @@ describe("the banner", () => {
       ),
     ).toMatch(/^stops after 5 tickets \(1 taken\), stops at \d\d:\d\d, stops at 80% usage$/);
     expect(stopRuleText(run(), { stop: true, reason: "gate_pending", state: "stopped", detail: { gates: [{ identifier: "ABC-10" }] }, message: "" }, NOW)).toBe(
-      "will stop: abc-10 is waiting for approval",
+      "will stop: ABC-10 is waiting for approval",
     );
+    expect(stopRuleText(run(), { stop: true, reason: "budget", state: "stopped", detail: { budget: "time" }, message: "" }, NOW)).toBe("will stop: its time ran out");
+    // A goal run stops when its goal is met, not when its scope empties.
+    expect(stopRuleText(run({ goal: { gateOwner: "VP", childCap: 5, children: [], gatedAt: null } }), { stop: false }, NOW)).toBe("stops when its goal is met");
   });
 
   it("is one line: Autopilot · scope · n/m done · next · stop rule", () => {
@@ -174,13 +188,21 @@ describe("state, driver and history words", () => {
     expect(liveStateText({ run: run({ state: "paused" }), decision: { stop: false } })).toEqual({ text: "Paused", tone: "tight" });
     expect(liveStateText({ run: run(), decision: { stop: false, wait: { reason: "out_of_order", detail: {}, message: "" } } }).tone).toBe("tight");
     expect(liveStateText({ run: run(), decision: { stop: true, reason: "budget", state: "stopped", detail: {}, message: "" } })).toEqual({ text: "Stopping", tone: "risk" });
+    expect(liveStateText({ run: run(), decision: { stop: false, goalCheck: { counts: { met: 0, unmet: 1, unknown: 0, total: 1 }, message: "" } } })).toEqual({
+      text: "Checking its goal",
+      tone: "ok",
+    });
   });
 
   it("an ended run: finished is fine, two failures and a main-line stop are not", () => {
     const at = "2026-09-28T11:30:00.000Z";
     expect(endedStateText(run({ state: "completed", stop: { reason: "scope_empty", detail: {}, by: null, note: null, at } })).tone).toBe("ok");
     expect(endedStateText(run({ state: "stopped", stop: { reason: "failure_streak", detail: {}, by: null, note: null, at } })).tone).toBe("risk");
-    expect(endedStateText(run({ state: "stopped", stop: { reason: "stopped_by_human", detail: {}, by: DRIVER_ACTOR, note: "touched_main_line: x", at } })).tone).toBe("risk");
+    expect(endedStateText(run({ state: "stopped", stop: { reason: "touched_main_line", detail: { ticket: "ABC-3" }, by: DRIVER_ACTOR, note: "x", at } })).tone).toBe("risk");
+    expect(endedStateText(run({ state: "completed", stop: { reason: "goal_met", detail: { milestone: "ABC-40" }, by: null, note: null, at } }))).toEqual({
+      text: "Goal met: ABC-40 is waiting for approval",
+      tone: "ok",
+    });
     expect(endedStateText(run({ state: "stopped", stop: { reason: "stopped_by_human", detail: {}, by: "vp", note: null, at } }))).toEqual({ text: "Stopped by vp", tone: "unknown" });
     expect(stoppedByText(run({ state: "stopped", stop: { reason: "stopped_by_human", detail: {}, by: "vp", note: null, at } }))).toBe("Stopped by vp.");
     expect(stoppedByText(run({ state: "stopped", stop: { reason: "budget", detail: {}, by: null, note: null, at } }))).toBe("A stop rule ended it.");

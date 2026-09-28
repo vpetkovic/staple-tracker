@@ -43,6 +43,7 @@ export function TaskList({
   label,
   currentRef = null,
   empty = null,
+  captionOf,
   onOpen,
 }: {
   /** Either raw API rows or fully-placed ones — a flat list needs no placement pass. */
@@ -54,6 +55,8 @@ export function TaskList({
   /** Identifier currently open in the detail drawer, so the list can mark it. */
   currentRef?: string | null;
   empty?: React.ReactNode;
+  /** A per-row aside after the title (`TaskRowLine`'s `caption`); undefined draws none. */
+  captionOf?: (row: TaskRow) => string | undefined;
   onOpen: (workspace: string, identifier: string) => void;
 }) {
   // The same width ladder as the tree (row-layout.ts), so a child list in the detail sheet on
@@ -126,6 +129,7 @@ export function TaskList({
           now={now}
           isCurrent={currentRef === row.issue.identifier}
           isFocused={focus.activeKey === row.issue.id}
+          caption={captionOf?.(row)}
           onOpen={() => onOpen(row.workspace, row.issue.identifier)}
           onFocus={() => focus.set(row.issue.id)}
           onKeyDown={(event) => handleKey(event, index)}

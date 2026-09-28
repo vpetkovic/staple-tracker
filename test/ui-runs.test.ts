@@ -20,6 +20,7 @@ import type { AddressInfo } from "node:net";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { MILESTONE_KIND } from "../src/core/milestones.js";
 import { clearDriver, writeDriver } from "../src/core/run-attachment.js";
 import { initWorkspace, openWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
@@ -39,10 +40,12 @@ interface Entry {
     scope: { kind: string; identifier?: string | null };
     tickets: Array<{ identifier: string; outcome: string | null }>;
     stop: { reason: string; by: string | null; note: string | null } | null;
+    goal: unknown;
   };
   decision: { stop: boolean; reason?: string };
   facts: unknown;
   driver: unknown;
+  goal: unknown;
 }
 
 async function get(path: string): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -113,7 +116,7 @@ describe("GET /api/runs", () => {
     const { runId, epic, taken } = liveRun("reader");
     const entry = (await runs()).find((candidate) => candidate.run.id === runId)!;
     expect(entry).toBeDefined();
-    expect(Object.keys(entry).sort()).toEqual(["decision", "driver", "facts", "run", "workspace"]);
+    expect(Object.keys(entry).sort()).toEqual(["decision", "driver", "facts", "goal", "run", "workspace"]);
     expect(entry.workspace).toBe("runs");
     expect(entry.run.state).toBe("active");
     expect(entry.run.scope).toMatchObject({ kind: "issue", identifier: epic });
@@ -121,6 +124,9 @@ describe("GET /api/runs", () => {
     expect(entry.decision.stop).toBe(false);
     expect(entry.facts).not.toBeNull();
     expect(entry.driver).toBeNull();
+    // A run over an epic is not a goal run: no goal on the entry or the run.
+    expect(entry.goal).toBeNull();
+    expect(entry.run.goal).toBeNull();
   });
 
   it("keeps every live run and caps the ended ones at limit", async () => {
@@ -136,6 +142,38 @@ describe("GET /api/runs", () => {
     expect(ids).toContain(b.runId);
     expect(ids).not.toContain(a.runId);
     expect((await get("/api/runs?limit=-1")).status).toBe(409);
+  });
+
+  it("carries a goal run's goal check, as run status --json does, and the milestone's detail carries the same goal", async () => {
+    const ws = openWorkspace(dbPath);
+    let runId: string;
+    let milestone: string;
+    let expected: unknown;
+    try {
+      ws.store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+      const created = ws.store.milestones().create({ title: "Goal", acceptanceCriteria: ["Docs written", "Tests pass"] }, "vp");
+      if (created.preview) throw new Error("unreachable");
+      milestone = created.milestone.identifier;
+      const member = ws.store.createIssue({ title: "goal member", status: "todo" }).identifier;
+      ws.store.milestones().addMember(milestone, member, {}, "vp");
+      runId = ws.store.runs().start({ actor: "goal-reader", scope: milestone, gateOwner: "VP" }).id;
+      ws.store.milestones().markCriterion(milestone, 2, { verdict: "unmet", evidence: ["no tests yet"] }, "goal-reader");
+      expected = ws.store.runs().status(runId).goal;
+    } finally {
+      ws.store.db.close();
+    }
+    const entry = (await runs()).find((candidate) => candidate.run.id === runId)!;
+    expect(entry.goal).toEqual(expected);
+    expect(entry.goal).toMatchObject({
+      milestone: { identifier: milestone },
+      counts: { met: 0, unmet: 1, unknown: 1, total: 2 },
+      gate: { state: "pending", owner: "VP", requestedBy: "goal-run:goal-reader", byGoalRun: true },
+    });
+    expect(entry.run.goal).toMatchObject({ gateOwner: "VP", childCap: 5 });
+    // The milestone's own detail: the same criteria, as the goal view reads them.
+    const detail = (await get(`/api/issue?ref=${milestone}`)).body as { milestonePlan: { goal: { criteria: unknown[] } }; gate: { requestedBy: string } };
+    expect(detail.milestonePlan.goal.criteria).toEqual((expected as { criteria: unknown[] }).criteria);
+    expect(detail.gate.requestedBy).toBe("goal-run:goal-reader");
   });
 
   it("is a read: a POST is refused", async () => {

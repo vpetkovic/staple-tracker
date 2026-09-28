@@ -4,7 +4,7 @@
  * for the reason `components/task-list/fixtures.ts` gives: typed against the browser app's
  * `lib/types.ts`, which the Node-side suite cannot see.
  */
-import type { MilestoneListRow, MilestoneMemberRow, MilestoneProgress, MilestoneView } from "@/lib/types";
+import type { GoalCriterion, GoalPace, MilestoneGoal, MilestoneListRow, MilestoneMemberRow, MilestoneProgress, MilestoneView } from "@/lib/types";
 
 type ProgressOver = Omit<Partial<MilestoneProgress>, "counts"> & { counts?: Partial<MilestoneProgress["counts"]> };
 type ViewOver = Omit<Partial<MilestoneView>, "milestone"> & { milestone?: Partial<MilestoneView["milestone"]> };
@@ -58,6 +58,8 @@ export function view(over: ViewOver = {}): MilestoneView {
       status: "in_progress",
       kind: "milestone",
       assignee: null,
+      description: null,
+      acceptanceCriteria: [],
       targetDate: "2026-10-31",
       startDate: null,
       state: "active",
@@ -68,10 +70,50 @@ export function view(over: ViewOver = {}): MilestoneView {
     revision: over.revision ?? 3,
     members: over.members ?? [],
     next: over.next ?? null,
+    goal: over.goal ?? goal(),
   };
 }
 
+/** A criterion as the goal check reads it; unmarked (`unknown`) unless told otherwise. */
+export function criterion(over: Partial<GoalCriterion> & { position: number }): GoalCriterion {
+  return {
+    text: `Criterion ${over.position}`,
+    verdict: "unknown",
+    marked: null,
+    evidence: [],
+    note: null,
+    markedBy: null,
+    markedAt: null,
+    runId: null,
+    why: "not marked yet",
+    ...over,
+  };
+}
+
+export function pace(over: Partial<GoalPace> = {}): GoalPace {
+  return {
+    targetDate: "2026-10-31",
+    daysToTarget: 33,
+    leaves: { done: 0, countable: 0, percent: null },
+    laborSeconds: null,
+    remainingSeconds: null,
+    partial: false,
+    unplannedRefs: [],
+    verdict: "no_estimate",
+    message: "",
+    ...over,
+  };
+}
+
+/** The goal check: counts and `met` follow the criteria, as core computes them. */
+export function goal(over: { criteria?: GoalCriterion[]; pace?: Partial<GoalPace> } = {}): MilestoneGoal {
+  const criteria = over.criteria ?? [];
+  const count = (verdict: GoalCriterion["verdict"]) => criteria.filter((c) => c.verdict === verdict).length;
+  const counts = { met: count("met"), unmet: count("unmet"), unknown: count("unknown"), total: criteria.length };
+  return { criteria, counts, met: counts.met === counts.total, pace: pace(over.pace) };
+}
+
 export function listRow(over: ListRowOver = {}): MilestoneListRow {
-  const { members: _members, ...rest } = view(over);
+  const { members: _members, goal: _goal, ...rest } = view(over);
   return { ...rest, memberCount: over.memberCount ?? 0 };
 }

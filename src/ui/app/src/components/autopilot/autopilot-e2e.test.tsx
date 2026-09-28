@@ -299,6 +299,11 @@ describe("the rail banner", () => {
       1440,
     );
     expect(desk).not.toContain("data-run-strip");
+    // The run-stopped notices: in the flow above the strip on a phone, a corner stack on a desk.
+    const notices = phone.indexOf('data-run-stop-notices="strip"');
+    expect(notices).toBeGreaterThan(phone.indexOf("data-the-view"));
+    expect(notices).toBeLessThan(strip);
+    expect(desk).toContain('data-run-stop-notices="corner"');
     expect(render(<RunStrip />)).toContain(`working ${newest.run.tickets.at(-1)!.identifier}`);
   });
 });

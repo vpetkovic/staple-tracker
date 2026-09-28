@@ -137,3 +137,25 @@ export function takePendingDocumentKey(): string | null {
   pendingDocumentKey = null;
   return key;
 }
+
+/**
+ * A tab to open on ANOTHER issue once its detail mounts: a goal's evidence citing
+ * `ABC-12:plan` opens ABC-12 on its Documents tab with `plan` pinned. The event above cannot
+ * do it (the new panel is not mounted when the link is pressed), so the request waits here,
+ * keyed by the reference, and the panel for that reference takes it in its first render.
+ * Any other issue's panel leaves it alone; the next request replaces it.
+ */
+let arrival: { ref: string; tabId: string } | null = null;
+
+export function openTabOnArrival(ref: string, tabId: string, documentKey?: string): void {
+  arrival = { ref, tabId };
+  pendingDocumentKey = documentKey ?? null;
+}
+
+/** The tab asked for this issue, consumed; null when none was. */
+export function takeArrivalTab(ref: string): string | null {
+  if (arrival === null || arrival.ref !== ref) return null;
+  const { tabId } = arrival;
+  arrival = null;
+  return tabId;
+}

@@ -62,7 +62,7 @@ import { PersonChip, RelativeTime } from "./parts";
 import { MilestoneCrumb, MilestoneDue, MilestoneSentence, MilestoneValue, OpenPlanAction, opensPlan, planOf } from "./MilestoneParts";
 import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
 import { detailFacts } from "./properties";
-import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
+import { onOpenDetailTab, takeArrivalTab, visibleTabs } from "./tabs/registry";
 
 export function IssueDetailPanel({
   selection,
@@ -716,7 +716,8 @@ function DetailTabs({
   refresh: () => void;
   onAuthError: (error: AuthError) => void;
 }) {
-  const [tab, setTab] = useState("overview");
+  // "overview", unless a link elsewhere asked for another tab on this issue (a goal's evidence).
+  const [tab, setTab] = useState(() => takeArrivalTab(detail.issue.identifier) ?? "overview");
   /**
    * A tab asking to hand the reader to another tab (Details' worklog "Show all" lands on
    * Documents). This file subscribes to a verb and sets its own state; see

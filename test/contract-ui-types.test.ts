@@ -46,8 +46,13 @@ import { RUN_STOP_REASONS, RUN_WAIT_REASONS, type RunStatus } from "../src/core/
 import {
   RUN_STOP_REASONS as UI_RUN_STOP_REASONS,
   RUN_WAIT_REASONS as UI_RUN_WAIT_REASONS,
+  CRITERION_VERDICTS as UI_CRITERION_VERDICTS,
+  PACE_VERDICTS as UI_PACE_VERDICTS,
+  type MilestoneGoal as UiMilestoneGoal,
   type RunEntry as UiRunEntry,
 } from "../src/ui/app/src/lib/types.js";
+import { CRITERION_VERDICTS, PACE_VERDICTS } from "../src/core/milestone-goal.js";
+import type { MilestoneGoal } from "../src/core/milestone-store.js";
 import type { CalibrationReport as UiCalibrationReport, ForecastReport as UiForecastReport } from "../src/ui/app/src/lib/types.js";
 import type { TimingQuality as UiTimingQuality, TimingQualityReport as UiTimingQualityReport } from "../src/ui/app/src/lib/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
@@ -229,6 +234,14 @@ type _ForecastReportMatches = Expect<Equals<Omit<ForecastReport, "method">, Omit
  */
 type _RunEntryMatches = Expect<Equals<RunStatus, Omit<UiRunEntry, "workspace">>>;
 
+/**
+ * A milestone's goal check: what the milestone's detail renders criterion by criterion (the
+ * verdict, the evidence, why it is unknown) and the pace against its target. The page
+ * branches on the verdicts; a mirror that drifted would draw a criterion met the check never
+ * said was, or drop the reason one is unknown.
+ */
+type _MilestoneGoalMatches = Expect<Equals<MilestoneGoal, UiMilestoneGoal>>;
+
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
    * The assertions above are types, and types are erased — so `vitest` would
@@ -260,6 +273,7 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _CalibrationReportMatches,
       true satisfies _ForecastReportMatches,
       true satisfies _RunEntryMatches,
+      true satisfies _MilestoneGoalMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
     // preview and the device row; see the comment above them.
@@ -281,11 +295,17 @@ describe("the browser app's mirror of the wire vocabulary", () => {
     // GOLDEN, moved by the forecast report: 13 -> 15. The calibration report and
     // the forecast report the Analytics pages render; see the comment above them.
     // GOLDEN, moved by autopilot runs: 15 -> 16. The run entry; see the comment above it.
-    expect(proofs).toHaveLength(16);
+    // GOLDEN, moved by milestone goal mode: 16 -> 17. The milestone's goal check; see the comment above it.
+    expect(proofs).toHaveLength(17);
   });
 
   it("words the same stop and wait reasons as core, in the same order", () => {
     expect([...UI_RUN_STOP_REASONS]).toEqual([...RUN_STOP_REASONS]);
     expect([...UI_RUN_WAIT_REASONS]).toEqual([...RUN_WAIT_REASONS]);
+  });
+
+  it("names the same criterion and pace verdicts as core, in the same order", () => {
+    expect([...UI_CRITERION_VERDICTS]).toEqual([...CRITERION_VERDICTS]);
+    expect([...UI_PACE_VERDICTS]).toEqual([...PACE_VERDICTS]);
   });
 });

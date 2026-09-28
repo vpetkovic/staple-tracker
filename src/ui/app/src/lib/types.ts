@@ -1277,6 +1277,10 @@ export interface MilestoneSummary {
   status: StatusId;
   kind: KindId;
   assignee: string | null;
+  /** The issue's own description: what the milestone is for. */
+  description: string | null;
+  /** The issue's own acceptance criteria: the milestone's goal. Empty when none. */
+  acceptanceCriteria: string[];
   targetDate: string | null;
   startDate: string | null;
   /** Derived on every read; never stored. */
@@ -1326,10 +1330,88 @@ export interface MilestoneView {
   members: MilestoneMemberRow[];
   /** The first eligible row of the effective queue planned under this milestone. */
   next: MilestoneNext | null;
+  /** The goal check: each criterion's verdict with its evidence, and the pace against the target date. */
+  goal: MilestoneGoal;
 }
 
-/** A `GET /api/milestones` row: the view without its members, plus how many there are. */
-export type MilestoneListRow = Omit<MilestoneView, "members"> & { memberCount: number };
+/** A `GET /api/milestones` row: the view without its members or goal, plus how many members there are. */
+export type MilestoneListRow = Omit<MilestoneView, "members" | "goal"> & { memberCount: number };
+
+/**
+ * The milestone's goal as the check reads it now (core/milestone-goal.ts, docs/milestones.md
+ * "Goal"). The tracker never judges a criterion: an agent marks it, and the check weighs the
+ * mark at every read. Pinned against core in test/contract-ui-types.test.ts.
+ */
+export const CRITERION_VERDICTS = ["met", "unmet", "unknown"] as const;
+export type CriterionVerdict = (typeof CRITERION_VERDICTS)[number];
+
+export type EvidenceKind = "ticket" | "document" | "text";
+
+export interface EvidenceItem {
+  kind: EvidenceKind;
+  /** The text as it was given. */
+  value: string;
+  /** The issue it names, for a ticket or a document. */
+  ref: string | null;
+  /** The document key, for a document. */
+  document: string | null;
+  /** The cited ticket's status now, for a ticket. */
+  status: string | null;
+  /** Text always holds; a ticket holds while it is done; a document while it exists. */
+  holds: boolean;
+  /** Why it does not hold; null when it does. */
+  problem: string | null;
+}
+
+export interface GoalCriterion {
+  /** 1-based, in the milestone's criteria order. */
+  position: number;
+  text: string;
+  /** What the check makes of it now. */
+  verdict: CriterionVerdict;
+  /** What was marked; differs from `verdict` when the mark no longer stands. */
+  marked: CriterionVerdict | null;
+  evidence: EvidenceItem[];
+  note: string | null;
+  markedBy: string | null;
+  markedAt: string | null;
+  runId: string | null;
+  /** Why `verdict` reads `unknown`; null when the mark stands. */
+  why: string | null;
+}
+
+export interface GoalCounts {
+  met: number;
+  unmet: number;
+  unknown: number;
+  total: number;
+}
+
+export const PACE_VERDICTS = ["done", "no_target", "overdue", "no_estimate", "behind", "on_track"] as const;
+export type PaceVerdict = (typeof PACE_VERDICTS)[number];
+
+export interface GoalPace {
+  targetDate: string | null;
+  /** Whole UTC calendar days to the target: 0 on the day, negative after. Null without a target. */
+  daysToTarget: number | null;
+  leaves: { done: number; countable: number; percent: number | null };
+  laborSeconds: number | null;
+  /** 0 when every member landed; null when nothing open is planned. */
+  remainingSeconds: number | null;
+  /** Some open member is unplanned or partly planned: the estimates are lower bounds. */
+  partial: boolean;
+  unplannedRefs: string[];
+  verdict: PaceVerdict;
+  message: string;
+}
+
+export interface MilestoneGoal {
+  criteria: GoalCriterion[];
+  counts: GoalCounts;
+  /** Every criterion met; true when the milestone has none. */
+  met: boolean;
+  pace: GoalPace;
+}
 
 // ---------- the pickup queue (R2c / STA-168) ----------
 
@@ -2828,11 +2910,13 @@ export type RunState = "active" | "paused" | "stopped" | "completed";
 
 export const RUN_STOP_REASONS = [
   "stopped_by_human",
+  "touched_main_line",
   "budget",
   "failure_streak",
   "scope_gone",
   "vp_blocked",
   "gate_pending",
+  "goal_met",
   "scope_empty",
 ] as const;
 export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
@@ -2870,12 +2954,24 @@ export interface RunStop {
   at: string;
 }
 
+/** What makes a run over a milestone a goal run; null on any other run. */
+export interface RunGoal {
+  gateOwner: string;
+  childCap: number;
+  children: Array<{ identifier: string; title: string; status: string; purpose: RunGoalChildPurpose }>;
+  gatedAt: string | null;
+}
+
+export type RunGoalChildPurpose = "goal_check" | "follow_up";
+
 export interface Run {
   id: string;
   actor: string;
   scope: RunScope;
   state: RunState;
   budget: RunBudget;
+  /** Null unless the run is over a milestone. */
+  goal: RunGoal | null;
   override: string | null;
   tickets: RunTicket[];
   counts: { taken: number; done: number; failed: number; open: number };
@@ -2891,18 +2987,46 @@ export interface RunWait {
   message: string;
 }
 
+/** A goal run's scope emptied short of its goal: the next take is a new goal-check ticket. */
+export interface RunGoalCheck {
+  counts: GoalCounts;
+  message: string;
+}
+
 export type RunDecision =
-  | { stop: false; wait?: RunWait }
+  | { stop: false; wait?: RunWait; goalCheck?: RunGoalCheck }
   | { stop: true; reason: RunStopReason; state: "stopped" | "completed"; detail: Record<string, unknown>; message: string };
 
 export interface RunFacts {
   now: string;
   workable: Array<{ issueId: string; identifier: string; held: boolean }>;
   waiting: Array<{ issueId: string; identifier: string; eligibility: string; reason: string | null }>;
-  pendingGates: Array<{ issueId: string; identifier: string; owner: string | null }>;
+  /** `state` is `pending` or a person's `changes_requested`. */
+  pendingGates: Array<{ issueId: string; identifier: string; owner: string | null; state?: string }>;
   personBlocks: Array<{ issueId: string; identifier: string; owner: string; action: string | null }>;
   ceiling: { usedPercent: number | null; accountRef: string | null; limitKey: string | null; missing: string | null } | null;
   scopeGone?: string | null;
+  goal?: RunGoalFacts | null;
+}
+
+/** What the goal check reads: the criteria counts and the room left under the cap. */
+export interface RunGoalFacts {
+  milestone: string;
+  counts: GoalCounts;
+  met: boolean;
+  childCap: number;
+  childrenCreated: number;
+}
+
+/**
+ * A goal run's goal, as every run answer carries it: the milestone's goal check, the tickets
+ * the run created against its cap, and the gate on the milestone. `byGoalRun`: a goal run
+ * asked for the gate (it holds the close and nothing else); `ownedByRun`: this run did.
+ */
+export interface RunGoalReport extends MilestoneGoal {
+  milestone: { identifier: string; title: string; status: string };
+  children: { cap: number; created: number; left: number; refs: string[] };
+  gate: { state: string; owner: string; requestedAt: string; requestedBy: string | null; byGoalRun: boolean; ownedByRun: boolean } | null;
 }
 
 /** The `staple run drive` process attached to a run (core/run-attachment.ts). */
@@ -2914,6 +3038,8 @@ export interface RunDriver {
   heartbeatAt: string;
   ticket: string | null;
   sessionPid: number | null;
+  /** When that session started; null between sessions. */
+  sessionStartedAt?: string | null;
   logDir: string;
   /** Null when the driver is on another host and this one cannot tell. */
   alive: boolean | null;
@@ -2927,4 +3053,6 @@ export interface RunEntry {
   /** Null once the run has ended. */
   facts: RunFacts | null;
   driver: RunDriver | null;
+  /** A goal run's goal check now; null on any other run. */
+  goal: RunGoalReport | null;
 }

@@ -125,6 +125,18 @@ export function MilestoneCrumb({ milestone, workspace }: { milestone: EffectiveM
   );
 }
 
+/**
+ * A ticket an autopilot run created itself (a goal check or a follow-up: `originKind` `run`,
+ * docs/runs.md "Goal mode") says so after its title, so the reader tells the plan a person
+ * made from the work a goal run added to it. A member the page's list does not carry yet is
+ * drawn from its member row, which has no origin, and says nothing until the next poll.
+ */
+export const MADE_BY_RUN_CAPTION = "Created by autopilot";
+
+export function madeByRunCaption(row: { issue: { originKind: string } }): string | undefined {
+  return row.issue.originKind === "run" ? MADE_BY_RUN_CAPTION : undefined;
+}
+
 /** "What is in this milestone": progress, then the members in plan order with their epics' children. */
 export function MilestoneMembers({ plan, workspace }: { plan: MilestoneView; workspace: string }) {
   const session = useSession();
@@ -148,7 +160,7 @@ export function MilestoneMembers({ plan, workspace }: { plan: MilestoneView; wor
       ) : null}
       {rows.length > 0 ? (
         <DetailCard padded={false} className="overflow-hidden">
-          <TaskList label="Milestone members" preset="panel" rows={rows} onOpen={session.open} />
+          <TaskList label="Milestone members" preset="panel" rows={rows} captionOf={madeByRunCaption} onOpen={session.open} />
         </DetailCard>
       ) : (
         <p className="m-0 text-reading text-text-tertiary">Nothing is planned here yet. Add work from the Milestones page.</p>

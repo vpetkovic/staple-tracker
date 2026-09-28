@@ -53,6 +53,7 @@ import { DetailCard, PersonChip, RelativeTime, SectionHeading, actorLabel } from
 import { unreachableBlockers } from "../IssueActions";
 import { openDetailTab, type TabProps } from "./registry";
 import { MilestoneMembers } from "../MilestoneParts";
+import { MilestoneGoalSection } from "../MilestoneGoal";
 
 /**
  * A related task as one quiet row: its status icon, its title, and its reference at the end.
@@ -251,7 +252,10 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
         </p>
       )}
 
-      {issue.acceptanceCriteria?.length ? (
+      {/* A milestone's criteria are its goal, and the goal check says where each one stands. */}
+      {detail.milestonePlan ? <MilestoneGoalSection plan={detail.milestonePlan} gate={detail.gate} workspace={workspace} /> : null}
+
+      {!detail.milestonePlan && issue.acceptanceCriteria?.length ? (
         <section aria-label="Acceptance criteria" className="mt-8">
           <SectionHeading action={<span className="text-text-tertiary">{issue.acceptanceCriteria.length}</span>}>Done when</SectionHeading>
           <ul className="m-0 flex min-w-0 list-none flex-col gap-0.5 p-0" data-criteria="" aria-label={finished ? "Done when (met)" : "Done when"}>

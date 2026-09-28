@@ -9,16 +9,15 @@
  * here; `STOP_REASON_WORDS` is a `Record` over the tuple, so a code added to core without
  * words fails to compile once the mirror in lib/types.ts learns it.
  *
- * Two reasons arrive in disguise and are unwrapped rather than shown raw:
+ * `touched_main_line` is its own stop reason (`staple run drive` stops the run with it, by
+ * `staple run drive`, when a session moved master or main): the most serious way a run can
+ * end, so it is named as what it is. A ticket's failure reason is free text, but the
+ * driver's own ones start with a code (`session exited 1`, `timed out: …`, `no_review: …`,
+ * `stopped_by_human: …`, `touched_main_line: …`). Those get words; anything else is the
+ * tracker's own sentence, passed through.
  *
- *   - `touched_main_line` is not a stop reason of its own. `staple run drive` stops the run
- *     itself (`by: "staple run drive"`, a `stopped_by_human` stop) with a note that starts
- *     `touched_main_line:` when a session moved master or main. That is the most serious
- *     way a run can end, so it is named as what it is, not as "stopped by staple run drive".
- *   - A ticket's failure reason is free text, but the driver's own ones start with a code
- *     (`session exited 1`, `timed out: …`, `no_review: …`, `stopped_by_human: …`,
- *     `touched_main_line: …`). Those get words; anything else is the tracker's own sentence,
- *     passed through.
+ * A goal run (a run over a milestone, docs/runs.md "Goal mode") adds `goal_met`, the
+ * `goal_children` budget and the goal check a live run is about to take; each has words.
  *
  * Pure and tested (run-text.test.ts).
  */
@@ -30,11 +29,13 @@ export const DRIVER_ACTOR = "staple run drive";
 /** The plain words for each stop reason, before any detail is added. */
 export const STOP_REASON_WORDS: Readonly<Record<RunStopReason, string>> = {
   stopped_by_human: "Stopped by a person",
+  touched_main_line: "Stopped: a session changed master or main",
   budget: "Reached its limit",
   failure_streak: "Two tickets in a row failed",
   scope_gone: "Its work no longer exists",
   vp_blocked: "Waiting on a person",
   gate_pending: "Waiting for approval",
+  goal_met: "Goal met: waiting for approval",
   scope_empty: "Finished: nothing left to do",
 };
 
@@ -72,16 +73,20 @@ export function clockText(iso: string, now: Date = new Date()): string {
 export function stopReasonText(stop: Pick<RunStop, "reason" | "detail"> & Partial<Pick<RunStop, "by" | "note">>): string {
   const detail = stop.detail ?? {};
   switch (stop.reason) {
-    case "stopped_by_human": {
-      if (stop.by === DRIVER_ACTOR && (stop.note ?? "").startsWith("touched_main_line")) {
-        return "Stopped by its driver: a session changed master or main";
-      }
+    case "stopped_by_human":
       return stop.by ? `Stopped by ${stop.by}` : STOP_REASON_WORDS.stopped_by_human;
-    }
+    case "touched_main_line":
+      return typeof detail.ticket === "string" && detail.ticket
+        ? `Stopped: the session on ${detail.ticket} changed master or main`
+        : STOP_REASON_WORDS.touched_main_line;
     case "budget": {
       if (detail.budget === "tickets") return `Reached its limit of ${tickets(Number(detail.maxTickets))}`;
       if (detail.budget === "time") return "Its time ran out";
       if (detail.budget === "ceiling") return `Usage reached its ${String(detail.ceilingPercent)}% limit`;
+      if (detail.budget === "goal_children") {
+        const of = typeof detail.milestone === "string" ? `${detail.milestone}'s goal` : "The goal";
+        return `${of} is not met and it created all ${tickets(Number(detail.childCap))} it may`;
+      }
       return STOP_REASON_WORDS.budget;
     }
     case "failure_streak": {
@@ -101,6 +106,10 @@ export function stopReasonText(stop: Pick<RunStop, "reason" | "detail"> & Partia
       const refs = refsOf(detail.gates);
       return refs.length > 0 ? `${list(refs)} ${refs.length === 1 ? "is" : "are"} waiting for approval` : STOP_REASON_WORDS.gate_pending;
     }
+    case "goal_met":
+      return typeof detail.milestone === "string" && detail.milestone
+        ? `Goal met: ${detail.milestone} is waiting for approval`
+        : STOP_REASON_WORDS.goal_met;
     case "scope_empty":
       return STOP_REASON_WORDS.scope_empty;
   }
@@ -170,14 +179,20 @@ export function nextText(run: Pick<Run, "tickets">, facts: Pick<RunFacts, "worka
  * usage ceiling, and always the scope running dry. When the tracker already says the next
  * `continue` stops it, that is said instead.
  */
-export function stopRuleText(run: Pick<Run, "budget" | "counts" | "tickets">, decision: RunDecision, now: Date = new Date()): string {
-  if (decision.stop) return `will stop: ${stopReasonText(decision).toLowerCase()}`;
+export function stopRuleText(run: Pick<Run, "budget" | "counts" | "tickets"> & Partial<Pick<Run, "goal">>, decision: RunDecision, now: Date = new Date()): string {
+  if (decision.stop) return `will stop: ${lowerFirst(stopReasonText(decision))}`;
   const taken = new Set(run.tickets.map((ticket) => ticket.issueId)).size;
   const parts: string[] = [];
   if (run.budget.maxTickets !== null) parts.push(`stops after ${tickets(run.budget.maxTickets)} (${taken} taken)`);
   if (run.budget.until !== null) parts.push(`stops at ${clockText(run.budget.until, now)}`);
   if (run.budget.ceilingPercent !== null) parts.push(`stops at ${run.budget.ceilingPercent}% usage`);
-  return parts.length > 0 ? parts.join(", ") : "stops when nothing is left";
+  const last = run.goal ? "stops when its goal is met" : "stops when nothing is left";
+  return parts.length > 0 ? parts.join(", ") : last;
+}
+
+/** Lower-case the first letter only, so a ticket reference inside the sentence keeps its case. */
+function lowerFirst(text: string): string {
+  return /^[A-Z][a-z]/.test(text) ? text[0]!.toLowerCase() + text.slice(1) : text;
 }
 
 /** THE banner line: "Autopilot · ABC-40 · 2/5 done · next ABC-43 · stops after 5 tickets (2 taken)". */
@@ -200,6 +215,7 @@ export function liveStateText(entry: Pick<RunEntry, "run" | "decision">): { text
   if (run.state === "paused") return { text: WAIT_REASON_WORDS.paused, tone: "tight" };
   if (decision.stop) return { text: "Stopping", tone: "risk" };
   if (decision.wait) return { text: waitReasonText(decision.wait), tone: "tight" };
+  if (decision.goalCheck) return { text: "Checking its goal", tone: "ok" };
   return { text: "Working", tone: "ok" };
 }
 
@@ -207,10 +223,8 @@ export function liveStateText(entry: Pick<RunEntry, "run" | "decision">): { text
 export function endedStateText(run: Pick<Run, "state" | "stop">): { text: string; tone: RunTone } {
   if (run.stop === null) return { text: run.state === "completed" ? "Finished" : "Stopped", tone: "unknown" };
   const text = stopReasonText(run.stop);
-  if (run.stop.reason === "scope_empty") return { text, tone: "ok" };
-  if (run.stop.reason === "failure_streak" || (run.stop.by === DRIVER_ACTOR && (run.stop.note ?? "").startsWith("touched_main_line"))) {
-    return { text, tone: "risk" };
-  }
+  if (run.stop.reason === "scope_empty" || run.stop.reason === "goal_met") return { text, tone: "ok" };
+  if (run.stop.reason === "failure_streak" || run.stop.reason === "touched_main_line") return { text, tone: "risk" };
   return { text, tone: "unknown" };
 }
 
