@@ -95,6 +95,7 @@ import {
   type IssueStatus,
   type StatusId,
 } from "@/lib/types";
+import { MILESTONE_KIND } from "@/detail/plain-actions";
 
 /**
  * The BUILT-IN group order: the open statuses in board order, then the resolved ones.
@@ -1234,8 +1235,10 @@ export function flattenFlat(rows: IssueRow[], options: BuildOptions): TaskRow[] 
     presentAnywhere,
     options,
     // Flat: this row, or anything beneath it, is active. Anything else stays folded, so the
-    // backlog is still not a wall.
-    (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holders.has(issue.id),
+    // backlog is still not a wall. A milestone opens one level regardless: it is a plan, and
+    // a plan folded shut hides the very membership it exists to show. Its epics still fold
+    // by the rule above.
+    (issue) => DEFAULT_EXPANDED_GROUPS.has(issue.status) || holders.has(issue.id) || issue.kind === MILESTONE_KIND,
     rowComparator(visible, options, statusOrder, (row) => activityRank(row, subtree, statusOrder)),
     // O3b (STA-127). The unfiltered source, NOT `visible` — the one line where the rollup
     // and the tier above deliberately disagree about which set they read.
