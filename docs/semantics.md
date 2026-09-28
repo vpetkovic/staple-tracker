@@ -1,3 +1,9 @@
+---
+title: Semantics
+description: What an issue is in staple, and what the store guarantees about statuses, kinds, parents, checkout, dependencies, approval gates and documents.
+sidebar_position: 10
+---
+
 # Semantics
 
 What an issue is, and what the store guarantees about it. Every rule here is
@@ -26,15 +32,18 @@ default is the registered workspace setting `kinds.default` (see
 workspace chooses otherwise, and a chosen kind that is later removed resets it.
 Like statuses, the vocabulary is data: it lives in `workspace_kinds` and is edited
 with `staple kinds` or MCP `update_kinds`, so validation asks the workspace what
-it has rather than consulting a compile-time list. That is why adding
-`milestone` needs no code change and why the MCP schemas type `kind` as a string
+it has rather than consulting a compile-time list. That is why enabling
+milestones is `staple kinds add milestone` rather than a code change, and why the MCP schemas type `kind` as a string
 rather than an enum — an enum would silently strip a configured kind on output.
 
 Unlike a status, a kind carries **no category and therefore no behaviour**.
 Nothing branches on it: an epic is not checked out differently, does not derive
 its status differently, and is not ordered differently. It is a label for humans
 and for filtering, and keeping it inert is deliberate — the moment a kind
-implied a rule, adding one would mean adding a rule nobody had tested.
+implied a rule, adding one would mean adding a rule nobody had tested. The one
+documented exception is the reserved `milestone` kind, which may own dates,
+members and a goal
+([milestones.md](milestones.md#identity-an-issue-of-the-milestone-kind)).
 
 The name is the whole design: **kind is declared, not derived**. A `task` that
 gains children stays a `task`. Surfaces may *suggest* promoting it to an `epic`,
@@ -68,9 +77,9 @@ tree and the board, but can never lift `done` above `in_progress`:
 - list/board rank: `active, review, gated, blocked, ready, unstarted, done, cancelled`
 - inbox pickup: `active, review, ready, unstarted`
 
-The pickup **queue** ([queue.md](queue.md)) will sit in front of the inbox
-order once R2 lands: a human-ordered plan READY is derived from, with these
-tiers ordering only what the plan does not mention.
+The pickup **queue** ([queue.md](queue.md)) sits in front of the inbox order:
+a human-ordered plan READY is derived from, with these tiers ordering only what
+the plan does not mention.
 
 **Removal is guarded twice.** A status that issues still carry needs
 `--migrate-to <status>`, and every such row moves in the same transaction (as a
@@ -90,7 +99,7 @@ the status.
 
 Issue **kinds** (`epic`, `task`, `bug`, `chore`, `spike`) are the same kind of
 list without the categories: they label what a ticket *is* and carry no
-behaviour.
+behaviour. `milestone`, which a workspace adds itself, is the exception above.
 
 ## A parent's status is derived from its children
 
@@ -152,7 +161,7 @@ contributions** — never both. That one rule is what lets a middle epic nobody
 estimated pass its children's plan up to its parent while a parent's plan and
 its descendants' are never counted twice in one ancestor total. The depth-1
 `childrenEstimatedSeconds` keeps its meaning beside it; the recursive figure is
-`subtreePlan` (see `docs/cli.md`, "Estimates vs actuals").
+`subtreePlan` (see [Estimates vs actuals](cli.md#estimates-vs-actuals)).
 
 The automatic close does not replace the summary. `children_complete` still
 fires when the last child lands (before the close, so the wake is never
@@ -193,15 +202,19 @@ Release is the inverse and returns the issue to `todo`.
   last open child the parent finishes rather than becoming startable; a human
   who has follow-up work of their own says so by giving the parent a status,
   which derivation then leaves alone.
-- `unblockDescriptor` makes blocked work actionable: it names **who** must act
-  and **what** clears it. A blocked ticket with no descriptor is a dead end.
+- The unblock descriptor (`unblockOwner` and `unblockAction`; MCP
+  `update_task`'s `unblock_owner` / `unblock_action`, allowed only with status
+  `blocked`) makes blocked work actionable: it names **who** must act and
+  **what** clears it. A blocked ticket with no descriptor is a dead end.
 
 ## Approval gates
 
 A **gate** parks a parent on a named human while its subtree waits. It is the
 counterpart of the graph above: a blocker is work waiting on other *work*, a
 gate is work waiting on a *person*. Any parent with children can be gated, not
-only an epic.
+only an epic, and so can a milestone with members, whose gate holds its close
+and queues nothing through membership
+([milestones.md](milestones.md#gating-a-milestone)).
 
 `staple gate <ref> --owner <who>` moves the parent to **`awaiting_approval`**
 and **clears its claim** — nobody is working a parked ticket, and leaving
@@ -246,7 +259,8 @@ identically to the single-issue read"*.)
 
 **Only OPEN work can stand in a queue, and only work that has something to
 release.** Two eligibility rules run before the ancestor walk, and neither is an
-optimisation — each closes a way the review screen lied to a reviewer (STA-154):
+optimisation — each closes a way the review screen would otherwise mislead a
+reviewer:
 
 - **(a) A resolved issue is never queued.** `done` and `cancelled` carry no
   `queuedBy`, never appear in a gate's checklist, and are never counted in it. A
@@ -311,14 +325,16 @@ SAME triple the CLI gives"*.)
 every per-child release flag under it is reset (a stale one would leak into the
 next cycle), and the parent's status is **re-derived from its children** by the
 ordinary ladder — all-backlog children give `backlog`, a child that kept working
-through the gate gives `in_progress`, and nothing open underneath gives `todo`,
-because the ladder's "leave it alone" answer would mean leaving it parked. With
+through the gate gives `in_progress`, and a subtree that finished while the
+reviewer was reading it closes the parent (rungs 5 and 6), because the open
+gate only deferred the automatic close. With
 `--children`, each named ref must be a **descendant** of the gated issue; those
 are released, the parent stays parked and the gate stays active — the reviewer
 is letting one thread proceed, not ending the review. A `changes_requested` gate
 can be approved, which is one of the two ways the queue ends.
 (`store-gates.test.ts` — *"re-derives the parent from its children and drains
-every queue"*, *"lands on `todo` when nothing is open underneath"*, *"derives
+every queue"*, *"closes the parent when everything underneath has already
+landed"*, *"derives
 in_progress when a child kept working through the gate"*, *"clears per-child
 release flags so they cannot leak into the next cycle"*, *"per-child approve
 keeps the parent parked and the gate pending"*, *"refuses to release a ref that
@@ -329,7 +345,7 @@ is not underneath the gate"*, *"refuses a second whole-gate approve"*;
 **Request-changes returns the parent and keeps the queue.** One sentence says
 all three consequences, and it is the sentence the CLI's `--help`, the MCP
 `request_changes` description and the web UI's "Send back" button all carry
-verbatim (STA-154):
+verbatim:
 
 > Posts your note as a comment on `<ref>`, returns it to todo for the next
 > agent, and keeps the queued children parked until you approve.
@@ -413,8 +429,8 @@ underneath. Once the gate is `approved` the parent follows the normal rule, and
 when the whole subtree finished while the reviewer was reading it.
 (`store-gates.test.ts` — *"does not auto-close a parent whose gate is still
 PENDING"*, *"does not auto-close a parent whose gate is CHANGES_REQUESTED"*,
-*"auto-closes normally once the gate is approved"*, *"approve closes the parent
-when every child has already landed"*.)
+*"auto-closes normally once the gate is approved"*, *"closes the parent when
+everything underneath has already landed"*.)
 
 **Events.** Every gate transition emits two: the semantic one, plus a plain
 `status_changed`, so the timing replay keeps explaining the row instead of

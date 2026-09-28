@@ -1,12 +1,19 @@
+---
+title: Timing semantics
+description: What each time number staple reports means, how an issue's elapsed time and its agent work are measured, and which number an estimate is compared against.
+sidebar_position: 14
+---
+
 # Timing semantics
 
 What each time number staple reports means, which instants bound it, and which
-single number an estimate is compared against. This page is a contract, and every
-quantity on it is built: the `wall` partition, `workSeconds`, `orchestrationSeconds`
-and the attempt `role` arrived with the lifecycle work (workspace migration 014, hub
-migration 007), with every open-question default below accepted. Where building it
-showed the page was ambiguous, the reading taken is stated in place and collected
-under [Clarifications from building it](#clarifications-from-building-it).
+single number an estimate is compared against. The `wall` partition,
+`workSeconds`, `orchestrationSeconds` and the attempt `role` need workspace
+migration 014 and hub migration 007, which a store applies when it opens.
+Where a rule needed a reading the definitions did not settle, the reading is
+stated in place and collected under
+[Clarifications from building it](#clarifications-from-building-it). The
+choices behind the rules are under [Design decisions](#design-decisions).
 
 Two pages already define time numbers, and this one does not redefine either:
 
@@ -23,11 +30,40 @@ how one issue's elapsed time divides into buckets that never overlap, where the
 boundary of each bucket falls at every transition, how orchestrator time is kept
 out of agent work, and which measure the estimate ratio uses.
 
-Why a new page rather than a section of [semantics.md](semantics.md): that page
+Why a separate page rather than a section of [semantics.md](semantics.md): that page
 states what the store guarantees about an issue (statuses, claims, the graph,
 gates). The timing numbers are specified in cli.md and the attempt numbers in
 execution-telemetry.md. Putting the reconciliation in semantics.md would make it a
 third place defining `activeSeconds`. Here it is referenced and not restated.
+
+## In brief
+
+- **`timing.activeSeconds`**, printed as "ran" by `staple show`: category time,
+  every second the issue sat in `active`, pauses and silences included. It is
+  read from the local event log.
+- **`timing.reviewSeconds`**, printed as "review" by `staple show`: seconds in
+  the `review` category. An open review runs to the read instant.
+- **`workSeconds`**: agent work, summed from worker attempts and read from
+  replicated data only, so it is the same on every device. **This is the actual
+  an estimate is compared against**: `estimateRatio = workSeconds /
+  estimatedSeconds` ([The estimate ratio](#the-estimate-ratio)).
+- **`orchestrationSeconds`**: coordination time, from attempts opened with
+  `staple attempt open <ref> --role orchestrator`. It is never part of
+  `workSeconds`.
+- **`wall`**: the issue's elapsed span, split into buckets that never overlap
+  (`work`, `paused`, `silent`, `interrupted`, `unattributed`, `review`, `gated`,
+  `blocked`, `queued`, `resolved`). It is device-local. `leadSeconds` is the
+  time from creation to the first start.
+- These fields, the estimate fields and each figure's quality state are in
+  `timing` on `staple show <ref> --json` (MCP `get_task`). One attempt's figures
+  are on `staple attempts <ref>` and `staple attempt <attempt-id>`.
+- The plan side: `staple compare <ref>` gives the planned labor and the planned
+  and remaining dependency paths. Plan figures are estimates, never
+  measurements.
+- `staple timing quality` counts how many records in a population can be
+  trusted. `staple calibrate` builds cohorts of `workSeconds / estimate` from the
+  trusted ones, and `staple forecast <ref>` turns them into remaining work and
+  its cost against provider limits.
 
 ## Two axes: elapsed and effort
 
@@ -65,7 +101,7 @@ The complete list. A field not in this table is not a timing field.
 | `attempt.estimateAtStart` | plan | A reading of `subtreePlan` at the moment the attempt opened, stored with the attempt. For a parent whose plan is built from descendants, readings taken since the rollup was certified leave out cancelled work (a cancelled issue's own estimate). Readings stored before that include it, so an older and a newer record of the same tree can differ by exactly that amount. | execution-telemetry.md | never null |
 | `timing.ownActiveSeconds` | elapsed | Seconds this issue itself sat in the `active` category, summed over intervals not opened by a derived flip, with an open interval ending at `countedThrough`. | cli.md | never active |
 | `timing.activeSeconds` | elapsed | The comparable form of `ownActiveSeconds`: a leaf's own, a parent's sum over direct children, `null` when cancelled. The number surfaces print as "ran". | cli.md | never active, or cancelled |
-| `timing.reviewSeconds` | elapsed | Seconds in the `review` category, non-derived intervals only. An open interval ends at the newest event on the issue ([see Q3](#open-questions)). | cli.md | never in review |
+| `timing.reviewSeconds` | elapsed | Seconds in the `review` category, non-derived intervals only. An open interval ends at the read's `asOf` ([decision 3](#design-decisions)). | cli.md | never in review |
 | `timing.countedThrough` | instant | Where a leaf's open active interval stopped counting. Held issue: the holder's `lastActivityAt`. Unheld issue (a status write into `active` with no checkout): the newest event, comment or document revision by **any** actor on the issue. Comments and revisions count because they replicate and their events do not, so a device that read the tail stops the interval where the writer does. A comment deleted later still counts, as its event on the writer does. | cli.md, `store.ts` `timingFor` | no open active interval, or a parent |
 | `timing.approximate` | quality | The event log could not be replayed, so the numbers came from the fallback: `completedAt − startedAt` for `done`, `now − startedAt` for `active` and `review`, `null` otherwise. A parent is also `approximate` when any child is (the flags are ORed up). | cli.md, `store.ts` `approximateActiveOf` | never null |
 | `claim.lastActivityAt` | instant | The newest event, comment or document revision by the holder on the issue, floored at `checkoutAt`. A comment deleted later still counts. | continuity.md | not held |
@@ -88,7 +124,7 @@ ISO-8601 UTC with milliseconds ([Formats](execution-telemetry.md#formats)). A ze
 is a measured zero, and `null` is never `0`
 ([Missingness](execution-telemetry.md#missingness)).
 
-Two existing fields have names close to new ones, and each keeps its existing
+Two older fields have names close to these, and each keeps its own
 meaning. `timing.activeSeconds` is **category time**: it counts every second the
 issue sat in `active`, including paused time, interruption gaps and silent
 stretches. `attempt.activeSeconds` is **tenure time**: one agent's tenure minus
@@ -142,7 +178,7 @@ attempts, each read with the orphan rule applied. For a worker attempt `A`:
   next `attempt_resumed`, or to `end(A)` when none followed.
 - "The latest worker attempt started at or before `x`" is the one with the
   greatest `startedAt` not after `x`, ties broken by the greater `id`, the order
-  the telemetry contract uses.
+  [execution-telemetry.md](execution-telemetry.md#execution-attempts) uses.
 
 ### The buckets
 
@@ -204,7 +240,7 @@ work. A pre-work second with an unresolved blocker cannot be worked, because the
 `in_progress` guard refuses it, so it is blocked whichever way the block was
 recorded. Precedence is by category: an issue in `active` that gains a blocker
 stays in the `active` buckets. Checkout is refused only on entry, and the agent's
-attempt is still open. [Agent guidance](#what-downstream-work-takes-from-this-page)
+attempt is still open. The agent guidance in [agents.md](agents.md)
 asks the agent to yield or pause in that case, so the time moves to `blocked` or
 `paused`.
 
@@ -212,7 +248,7 @@ asks the agent to yield or pause in that case, so the time moves to `blocked` or
 and waiting on a reviewer. `gated` is a parent parked on a named owner. Both are
 waits on a person, and reports that want "review delay" sum the two. They stay
 separate because `timing.reviewSeconds` already means the `review` category
-alone, and folding the gate into it would change an existing field.
+alone, and folding the gate into it would change what that field means.
 
 ### Parents
 
@@ -242,7 +278,7 @@ blocked is the right rule for elapsed time: one workable child means the subtree
 is not waiting.
 
 On the maintainers' tracker, parents spent 247.9 hours in derived `active`
-intervals. That time is correctly not billed as effort today, and it is the
+intervals. That time is correctly not billed as effort, and it is the
 parent `active` bucket here.
 
 ## Boundary rules
@@ -295,8 +331,8 @@ holds the same events replays alike. Attempts and transitions are ordered by
 | Reopen from `done`/`cancelled` | `[endAt, t)` becomes `resolved`. `wall.endAt` is recomputed | none |
 | Attempt read as orphaned | its end is `endedAtBound`, clipped to the `active` category | replicated evidence before the earliest limit ([Work](#work)) |
 | Issue deleted | `wall` ends at the deletion. Excluded from every ratio | open attempts orphan (`issue_removed`) |
-| A status is recategorized in the vocabulary (`staple statuses`) | no event. The replay reads each status's category from the **current** vocabulary, so it still replays exactly and the history is re-bucketed retroactively ([Q9](#open-questions)) | open worker attempts orphan by clause 2 if the status left `active` |
-| `statuses remove --migrate-to` | no event, and the removed id is unreadable to the replay, so the issue falls back to `approximate` and `wall` is `replay_unavailable` | as above |
+| A status is recategorized in the vocabulary (`staple statuses`) | no event. The replay reads each status's category from the **current** vocabulary, so it still replays exactly and the history is re-bucketed retroactively ([decision 9](#design-decisions)) | open worker attempts orphan by clause 2 if the status left `active` |
+| `staple statuses rm <id> --migrate-to <id>` | no event, and the removed id is unreadable to the replay, so the issue falls back to `approximate` and `wall` is `replay_unavailable` | as above |
 
 Two consequences:
 
@@ -326,34 +362,33 @@ wall span. The sources, in order of authority:
    set after the change (`blocked-by` is set replacement), identified by
    `identifier`. This is authoritative for every change it records.
 2. **`relations.created_at`** for an edge no event explains. It is only a lower
-   bound on how long the edge has existed: `blocked-by` deletes and re-inserts the
-   whole set, which resets `created_at` on every edge it keeps.
+   bound on how long the edge has existed: older builds' `blocked-by` deleted and
+   re-inserted the whole set, which reset `created_at` on every edge it kept.
 3. **The blocker's own status-moving events** for when it resolved (entered
    `done` or `cancelled`) and reopened.
 
-The gaps, as measured before the lifecycle work, and how each is closed now:
+How each path that writes or removes an edge keeps that history:
 
 - An edge created with the issue (`new --blocked-by`) and every
-  `blockParentUntilDone` edge were inserted without a `blockers_changed` event.
-  Both now emit one, with the whole set, on the dependent: the new issue for
-  `--blocked-by`, the parent for `blockParentUntilDone`. The child-to-parent edge
-  also travels now, with the child's create, and every applier adds it to the
-  parent's set rather than replacing the set, so two children created offline on two
-  devices both keep theirs. Before, it existed nowhere but on the device that created
-  the child, and was lost even there when the parent's own create came back.
+  `blockParentUntilDone` edge emit a `blockers_changed` event with the whole set
+  on the dependent: the new issue for `--blocked-by`, the parent for
+  `blockParentUntilDone`. The child-to-parent edge travels with the child's
+  create, and every applier adds it to the parent's set rather than replacing the
+  set, so two children created offline on two devices both keep theirs.
+  Such edges written by older builds have no event, and fall under the
+  `relations.created_at` rule below.
 - Deleting an issue removes its edges by cascade, with no event on the dependent.
-  No mutation of this build deletes an issue; the one path that removes rows and
-  edges is a restore's rewind, and it now writes a `blockers_changed` on every issue
-  whose set it changed, dated at the instant the restore committed (the snapshot's
+  No mutation deletes an issue; the one path that removes rows and edges is a
+  restore's rewind, and it writes a `blockers_changed` on every issue whose set it
+  changed, dated at the instant the restore committed (the snapshot's
   `restoredAt`), the same on every device. An edge the newest event names and the
   device no longer holds, however it went, is reported as `edge_history_incomplete`.
-- `blocked-by` deleted and re-inserted the whole set, resetting `created_at` on
-  every edge it kept. It now removes only the edges that leave and inserts only
-  the ones that arrive.
-- Events do not replicate, so edge history was device-local. Pulled operations now
-  re-emit their `blockers_changed` at the origin's instant ([Multi-device](#multi-device)).
-  Each event carries the blocker ids (`blockedByIds`) beside the identifiers, and
-  the replay reads the ids, which survive a renumber.
+- `blocked-by` removes only the edges that leave and inserts only the ones that
+  arrive, so a kept edge keeps its `created_at`.
+- Events do not replicate. Pulled operations re-emit their `blockers_changed` at
+  the origin's instant ([Multi-device](#multi-device)). Each event carries the
+  blocker ids (`blockedByIds`) beside the identifiers, and the replay reads the
+  ids, which survive a renumber.
 
 On the maintainers' tracker there are 37 `blockers_changed` events and 221
 `blocks` edges, and 22 of those edges are child-to-parent `blockParentUntilDone`
@@ -389,8 +424,8 @@ named so a skew there is expected:
    dependent's own boundaries. Both are in the same local log, but once events
    are re-emitted with origin instants they can come from different devices.
 
-An interval whose end precedes its start counts as `0`, as the existing replay
-already does. That clamp breaks the exact partition invariant by the clamped
+An interval whose end precedes its start counts as `0`, as the `timing` replay
+does. That clamp breaks the exact partition invariant by the clamped
 amount, so the record carries `clock_skew` and is `approximate` whenever an
 inversion exceeds one second. A resumed attempt that starts more than a second
 before the end of the attempt it resumes is such an inversion: the interruption
@@ -478,7 +513,7 @@ keeps `[pausedAt, L)`, and everything from `L` to the steal or release becomes
 `interrupted`. That is deliberate. A pause nobody resumed before the claim was
 taken away was, in the end, an interruption.
 
-This is the existing rule for `countedThrough` applied to buckets: a dead
+This is the rule for `countedThrough` applied to buckets: a dead
 process is never billed for a weekend, and a live one is credited once it proves
 it was alive.
 
@@ -592,7 +627,7 @@ attempts. `workSeconds` applies the judgement `activeSeconds` applies:
 
 A parent's own worker attempts (a parent checked out and worked directly) stay
 in its `ownWorkSeconds` and are not added to its `workSeconds`, mirroring
-`ownActiveSeconds`. [Q5](#open-questions) asks whether that should change.
+`ownActiveSeconds` ([decision 5](#design-decisions)).
 
 The elapsed `work` bucket is a different, device-local reading of the same
 tenures: it uses `countedThrough` and the attempt's effective end from the
@@ -607,7 +642,7 @@ If the issue's first worker attempt started more than one second after
 bound**, and the record carries the `capture_gap` quality input. If the row has
 a `startedAt` and there is no worker attempt at all, `workSeconds` is `null` with
 `no_worker_attempt`. This test needs no "capture began" instant, which would be
-device-local (it is when migration 013 ran on that device).
+device-local (it is when workspace migration 013 ran on that device).
 
 Before capture began, attempts exist only if `staple attempt reconstruct` built
 them, with `provenance: reconstructed`. Those carry no pauses, so their work
@@ -615,19 +650,19 @@ equals the category time of the reconstructed tenures.
 
 ### Missingness for the new fields
 
-These follow the telemetry contract's [Missingness](execution-telemetry.md#missingness)
-rules, and add five reason codes to its closed set. That is a contract addition:
+These follow the [Missingness](execution-telemetry.md#missingness) rules of
+execution-telemetry.md, and add five reason codes to its closed set:
 
 | Code | Meaning |
 |---|---|
 | `never_started` | The replicated row has no `startedAt` and the issue has no worker attempt. `workSeconds` and `leadSeconds` are `null`. On the maintainers' tracker, 6 of the 187 done leaves went to `done` this way. `wall` uses it too, for an issue whose replay never enters `active`. |
 | `not_applicable_cancelled` | `workSeconds` of a cancelled issue. `ownWorkSeconds` still reports what ran. |
 | `no_worker_attempt` | The row has a `startedAt` and the issue has no worker attempt: work before capture that was never reconstructed, or a capture gap. The two are not told apart, because the instant capture began is device-local. |
-| `no_orchestrator_attempt` | `orchestrationSeconds` when no issue in the subtree has an orchestrator attempt, including every issue while [Q1](#open-questions) is unresolved. |
+| `no_orchestrator_attempt` | `orchestrationSeconds` when no issue in the subtree has an orchestrator attempt. |
 | `replay_unavailable` | `wall` on a device whose event replay does not reach the row's status ([Multi-device](#multi-device)). |
 
-A parent's `workSeconds` is a sum over a set, so it follows the contract's
-Propagation rule and carries `coverage: {known, total}`:
+A parent's `workSeconds` is a sum over a set, so it follows the Propagation
+rule of [Missingness](execution-telemetry.md#missingness) and carries `coverage: {known, total}`:
 
 - `total` is the number of direct children that are not cancelled and are not
   `never_started`. A child that never started owes no work.
@@ -646,8 +681,8 @@ the same issues, so it lies on the effort axis only. It is never an elapsed
 bucket, because a second in which an orchestrator reviews a ticket that is in
 `review` is already that ticket's `review` second.
 
-**Attribution is an explicit, per-attempt field.** The recommendation adds
-`role` to the attempt record: `worker` or `orchestrator`. An attempt opened by
+**Attribution is an explicit, per-attempt field.** The attempt record carries
+`role`: `worker` or `orchestrator`. An attempt opened by
 `checkout`, a steal, a re-claim or a status write is always `worker`. Those
 writes refuse a `role` argument, and no environment variable sets it. The only
 way to get an `orchestrator` attempt is `staple attempt open <ref> --role
@@ -669,33 +704,32 @@ Why not an identity convention (for example "any `STAPLE_AGENT` containing
   The role belongs to the tenure, not to the actor. This is also why checkout
   refuses `role`: an orchestrator that takes a leaf is working it.
 - **Shared identities hide it.** `claude` and the `$USER` fallback are shared by
-  concurrent sessions ([Q3 of the telemetry contract](execution-telemetry.md#open-questions)).
-  A name cannot say which session was coordinating.
+  concurrent sessions. A name cannot say which session was coordinating.
 
 ### The orchestrator lane
 
 An orchestrator does not hold the claim on the tickets it coordinates, a worker
 does. So orchestrator attempts are a second **lane** of attempts on an issue,
-with their own opening path and their own end rules. Every rule of the attempt
-contract as implemented on master is scoped to the **worker lane**, and the
-orchestrator lane gets the rules below. [Q1](#open-questions) lists each of these
-as a contract change.
+with their own opening path and their own end rules. Every attempt rule in
+[execution-telemetry.md](execution-telemetry.md#execution-attempts) applies to the
+**worker lane** only, and the orchestrator lane has the rules below
+([decision 1](#design-decisions)).
 
-**Worker-lane scoping, by function** (paths under `src/` on master):
+**Worker-lane scoping, by function** (paths under `src/`):
 
-| Function | Change |
+| Function | Rule |
 |---|---|
 | `evaluateIssue` (`core/telemetry/attempt-derive.ts`) | Evaluates worker attempts only. The contested set, clauses 3 to 5 and `laterOpen` never see an orchestrator attempt, so an open orchestrator attempt cannot orphan an older worker attempt as `superseded_by_merge`. |
 | `viewsOfIssue` and `viewOf` (`attempt-derive.ts`) | Evaluate each lane with its own clauses: worker attempts through `evaluateIssue`, orchestrator attempts through the orchestrator-lane clauses below. Every view carries `role`. |
 | `effectivelyOpen`, and `targets` (`core/telemetry/attempts.ts`) through it | Return worker attempts only. A release, steal or status write ends the worker's attempt and leaves the orchestrator's alone. |
 | `resumeFor` (`attempts.ts`) | "The latest attempt" means the latest **worker** attempt. |
-| `record` (`attempts.ts`) | `pause`, `resume`, `milestone` and `interrupt` choose among the actor's **worker** attempts, and the `open[0]` fallback for `interrupt` is limited to worker attempts. To act on an orchestrator attempt the caller passes a new `--role orchestrator` flag or the attempt id, which is required when the actor holds one of each. With neither, an actor holding an attempt in one lane only acts on that lane, so an orchestrator with nothing claimed pauses its own attempt without the flag. |
-| `countEffectivelyOpen` (`attempt-derive.ts`), the concurrency context (`concurrency` in `attempts.ts`) and the presence index (`ownAttempts`, `writeRows` in `core/telemetry/presence.ts`) | Count both lanes, because both burn provider budget, and report the split by `role` in new concurrency fields. The presence index gains a `role` column. |
+| `record` (`attempts.ts`) | `pause`, `resume`, `milestone` and `interrupt` choose among the actor's **worker** attempts, and the `open[0]` fallback for `interrupt` is limited to worker attempts. To act on an orchestrator attempt the caller passes `--role orchestrator` or the attempt id, which is required when the actor holds one of each. With neither, an actor holding an attempt in one lane only acts on that lane, so an orchestrator with nothing claimed pauses its own attempt without the flag. |
+| `countEffectivelyOpen` (`attempt-derive.ts`), the concurrency context (`concurrency` in `attempts.ts`) and the presence index (`ownAttempts`, `writeRows` in `core/telemetry/presence.ts`) | Count both lanes, because both burn provider budget, and report the split by `role` (`openAttemptsInWorkspaceByRole`, `storedOpenAttemptsStartedHereByRole`). The presence index has a `role` column (hub migration 007). |
 | `attemptLinkerFor` (`core/telemetry/attempt-link.ts`) | A harness session that holds one attempt in each lane would link a budget sample to two candidates and return `ambiguous_attempt`. The linker prefers the worker attempt and falls back to the orchestrator attempt only when no worker attempt matches. |
 | The read summary `attempts: {current, last, count}` on `show`/`get_task` ([Surfaces](execution-telemetry.md#surfaces)) | Describes the worker lane only. Orchestrator attempts appear beside it as `orchestration: {current, count}`. |
 | `reconstructAttempts` (`core/telemetry/reconstruct.ts`) | Builds worker attempts only. Orchestration before capture is `null` with `no_orchestrator_attempt`. |
 | `writeOrphanEnds` (`attempts.ts`) | Writes stored ends for orchestrator attempts using the orchestrator-lane clauses below. |
-| `ORPHAN_END_REASONS` (`core/cloud/attempt-ends.ts`) | Gains `issue_resolved` and `superseded_by_newer`. Every reader of the log applies the orphan-versus-real-end rule through this set: the client applier (`apply-attempts.ts`), conflict screening (`conflicts.ts`), hydration through `ATTEMPT_END_FIELDS` (`hydrate.ts`), the tail fold (`tail-fold.ts`), the Worker fold (`worker/src/fold.ts`) and the test service. Without the new reasons, each of them would treat an orchestrator's stored orphan end as a real end, and a stored `superseded_by_newer` would conflict with a real `coordination_ended`. The Worker imports this file, so it must be **redeployed** before any client writes the new reasons. |
+| `ORPHAN_END_REASONS` (`core/cloud/attempt-ends.ts`) | Includes `issue_resolved` and `superseded_by_newer`. Every reader of the log applies the orphan-versus-real-end rule through this set: the client applier (`apply-attempts.ts`), conflict screening (`conflicts.ts`), hydration through `ATTEMPT_END_FIELDS` (`hydrate.ts`), the tail fold (`tail-fold.ts`), the Worker fold (`worker/src/fold.ts`) and the test service. Without those two reasons, each of them would treat an orchestrator's stored orphan end as a real end, and a stored `superseded_by_newer` would conflict with a real `coordination_ended`. The sync Worker imports this file, so it has to be deployed from a build that includes both before any client writes them. |
 
 **How an orchestrator attempt opens.** `staple attempt open <ref> --role
 orchestrator` (MCP `record_attempt_event` with `event: "open"`) opens an attempt
@@ -727,7 +761,7 @@ means an epic resolved on another device still ends its orchestrator attempt on
 every device, with no local mutation needed. Clause 3 makes "one open
 orchestrator attempt per agent" a read-time rule: the newest wins
 deterministically, whichever device opened which. Two sessions sharing one
-identity (`claude`) will supersede each other. That is the documented cost of a
+identity (`claude`) supersede each other. That is the documented cost of a
 shared identity, and it is visible as `superseded_by_newer`. The device that
 opened a superseded or resolved attempt writes its stored end the same way it
 writes a worker orphan end, and the apply rule then settles it against any real
@@ -757,8 +791,8 @@ children's `orchestrationSeconds`. An orchestrator's writes outside every
 orchestrator attempt are not orchestration time. They are events, with no
 duration.
 
-**Why not measure orchestration from write cadence.** It can be done today with
-no new write path: group an orchestrator's writes into sessions separated by more
+**Why not measure orchestration from write cadence.** It can be done with no
+write path of its own: group an orchestrator's writes into sessions separated by more
 than 15 minutes of silence. On the maintainers' tracker, `voya-orchestrator` has
 148 writes (events and comments) over 18 days, and that method yields 33 sessions
 totalling 1.59 hours. That is far below the real coordination time, because
@@ -768,8 +802,8 @@ and is not a measure.
 
 **Review effort.** A reviewer agent dispatched to check a worker's result is
 coordination, not execution of the ticket. It opens an orchestrator attempt on
-the ticket in review. [Q6](#open-questions) asks whether review needs a third
-role.
+the ticket in review. There is no separate reviewer role
+([decision 6](#design-decisions)).
 
 **Humans.** A person approving a gate or reading a review is not measured as
 effort. Their wait shows as the issue's `review` and `gated` buckets, which is
@@ -796,14 +830,15 @@ An aggregate over a set of issues is `Σ workSeconds / Σ estimatedSeconds` over
 the eligible members (a ratio of sums, weighted by size). It carries
 `coverage: {known, total}`, where `total` is the number of issues in the
 requested set that are `done` and have `subtreePlan.source` `own`, and `known`
-is the number of those that are eligible. That is the denominator the quality
-work reports coverage against.
+is the number of those that are eligible. `staple timing quality` reports ratio
+coverage against this denominator, leaving out parents over estimated
+descendants ([Cohort coverage](#cohort-coverage)).
 
 Why `workSeconds` and not the alternatives:
 
 | Candidate | Why not |
 |---|---|
-| `timing.activeSeconds` (today's "ran") | It is category time. It includes paused time (a provider-limit wait with the claim held), interruption gaps before a steal, and, once the agent writes again, the silence before that write. These are the non-work intervals the attempt contract was built to separate. It is also computed from the local event log, so it is `approximate` on every device that did not write the history ([Multi-device](#multi-device)). |
+| `timing.activeSeconds` ("ran") | It is category time. It includes paused time (a provider-limit wait with the claim held), interruption gaps before a steal, and, once the agent writes again, the silence before that write. These are the non-work intervals attempts exist to separate. It is also computed from the local event log, so it is `approximate` on every device that did not write the history ([Multi-device](#multi-device)). |
 | `wall.seconds` | Elapsed, not effort. It includes review, gates, blocking and queueing, which the estimate never planned for. On the maintainers' tracker, 15 of the 124 estimated done leaves have `(completedAt − startedAt) / estimate` above 0.5, against 13 for `activeSeconds / estimate`, and its 90th percentile is 0.715 against 0.293. The extra tail is waiting, not work. |
 | `attempt.activeSeconds` of the last attempt | A single tenure. Work that was interrupted and resumed spans several attempts. |
 | `workSeconds + orchestrationSeconds` | It charges coordination to the ticket. The estimate is for doing the work. Orchestration overhead is reported beside the ratio, as a separate figure. |
@@ -817,12 +852,13 @@ Durations these surfaces print (`staple show`, `staple compare`) use days of
 24 hours: `5d5h` is 125 hours, not five working days. JSON is always seconds.
 
 **Which estimate.** The denominator is the issue's own `estimatedSeconds` at
-read time, which is what every surface shows today. `attempt.estimateAtStart` is
-the better calibration input once there is enough of it, because the estimate
-column is overwritten in place. Each change is recorded as an `estimate_changed`
-event (`from`, `to`, actor), but a read of the column shows only the latest
-value, and an imported or restored workspace has no event log to replay.
-[Q4](#open-questions) asks when to switch.
+read time, which is what every surface shows. The estimate column is overwritten
+in place: each change is recorded as an `estimate_changed` event (`from`, `to`,
+actor), but a read of the column shows only the latest value, and an imported or
+restored workspace has no event log to replay. Calibration therefore divides by
+`attempt.estimateAtStart` where it has one ([Calibration cohorts](#calibration-cohorts)),
+and the per-issue `estimateRatio` keeps the current estimate
+([decision 4](#design-decisions)).
 
 ## Quality inputs
 
@@ -918,7 +954,7 @@ and an approximate one under a minute reads `["sparse", "timing_floor"]`.
 | `missing` | The figure's reason code: `never_started`, `no_worker_attempt`, `input_missing` (work); `replay_unavailable`, `never_started` (wall); any capture reason for a budget figure (below) |
 | `reconstructed` | `reconstructed` |
 | `approximate` | Work and attempts: the replicated inputs (`sparse`, `capture_gap`, `contested`, `partial`, `orphan_provisional`, `end_unbounded`, `clock_skew`). Wall: the device-local inputs, and `timing_approximate` when `timing.approximate` is set. Budget: `estimated`, `low_confidence`, `reset_not_reported` (a sample that joined no window), `stale` (a current reading older than 600 s), `lower_bound`, `partial`, `shared` and `attribution_unknown` (a burn not known to be this attempt's alone) |
-| `timing-floor` | `timing_floor`: the figure is under 60 seconds ([Q7](#open-questions)) |
+| `timing-floor` | `timing_floor`: the figure is under 60 seconds ([decision 7](#design-decisions)) |
 | `provider-unavailable` | The null budget figure's reason, when the provider does not expose the value: `not_reported_by_source`, `not_subscriber`, `sliding_window`, `limit_not_published`, `unit_not_normalizable`, `reset_not_reported` |
 | `exact` | none |
 
@@ -1013,9 +1049,9 @@ under `excluded`.
 worker attempt on the issue itself, among those behind its `workSeconds`,
 whose reading is the issue's own estimate above 0 (a reconstructed attempt
 read none, so a later captured attempt's reading is used), and otherwise the
-current own estimate ([Q4](#open-questions), clarification 27).
+current own estimate ([decision 4](#design-decisions), clarification 27).
 `estimate.source` says which, and `estimate.missing.atStart` says why there
-was no reading: `parent` (a parent data point: its work is its children's, Q5
+was no reading: `parent` (a parent data point: its work is its children's, decision 5
 keeps its own attempts out of it, and a child's reading is of the child's
 estimate), `no_worker_attempt`, `not_recorded` (every attempt read no
 estimate, as a reconstructed one does) or `not_own` (the plan came from
@@ -1031,7 +1067,7 @@ descendants). A sample's
 | `priority` | the issue's priority | never empty |
 | `workType` | labels `type:<x>` | `unknown` |
 | `area` | labels `area:<x>` | `unknown` |
-| `model` | `harness.model` of the worker attempts behind `workSeconds`, collected by the rule that sums it: a leaf's own; for a parent, those of the children its rollup counts, so never a cancelled child's and never a non-leaf's own ([Q5](#open-questions)) | `unknown` |
+| `model` | `harness.model` of the worker attempts behind `workSeconds`, collected by the rule that sums it: a leaf's own; for a parent, those of the children its rollup counts, so never a cancelled child's and never a non-leaf's own ([decision 5](#design-decisions)) | `unknown` |
 
 The tracker has no column for work type or repository area, so both read a
 label convention: the prefix is matched without case, the value is lowercased
@@ -1519,14 +1555,14 @@ the pace that would land on the reserve at the reset.
 
 **The reserve is a parameter.** `--reserve P` (MCP `reserve`, HTTP `reserve=`) takes a
 percent of each limit, `20` or `20%`. Deciding the protected reserve, and what pressure
-against it means for admitting work, belongs to the admission policy, which does not
-exist yet. Until it does, a **provisional default of 20%** applies. Every report says
+against it means for admitting work, belongs to an admission policy, and staple has
+no admission policy. Without `--reserve`, a **provisional default of 20%** applies. Every report says
 which applied, on `budget.reserve` and on every limit's `reserve`: `source` is
 `argument` or `provisional_default`, and the default carries a `note`. Nothing reads the
 default as policy.
 
 **Unknown is never 0.** Every null figure has its reason in `missing`, from the
-[telemetry contract's closed set](execution-telemetry.md#missingness); an
+[closed set in execution-telemetry.md](execution-telemetry.md#missingness); an
 `input_missing` figure names what it lacked in `missingInputs`:
 
 | Figure | Null when | Reason |
@@ -1652,8 +1688,8 @@ leaves eligible, 133 of them with their own estimate), read with
 | As captured | exact 4, approximate 3, missing 189 | `no_worker_attempt` 183, `never_started` 6, `sparse` 2, `capture_gap` 1 |
 | After `staple attempt reconstruct` on a copy | exact 4, approximate 2, reconstructed 184, missing 6 | `reconstructed` 184, `sparse` 33, `never_started` 6, `timing_floor` 1 |
 
-Attempts have been captured only since the lifecycle work landed, so nearly all
-history is `missing` until it is reconstructed. Reconstructed, 33 of the 196
+Attempts are captured only from workspace migration 013 on, so nearly all of that
+tracker's history is `missing` until it is reconstructed. Reconstructed, 33 of the 196
 done leaves are sparse (21 of the 133 estimated ones), the same minority the
 2026-09-24 figures above found (30 of 187) on a tracker that grew by nine done
 leaves. `reconstructed` outranks `approximate`, so 31 of the 33 are
@@ -1719,19 +1755,19 @@ place.
 The ratios are far below 1 because estimates are recorded as human-effort plans
 and agents execute faster. That is the thing being calibrated, not an error.
 
-## What downstream work takes from this page
+## What builds on these definitions
 
-| Work | Takes |
+| Part | What it takes from this page |
 |---|---|
-| Closing lifecycle capture gaps | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition) as the reconstruction spec. `asOf` as a parameter. One mutation instant for every writer. `workSeconds` from replicated data only, as specified in [Work](#work). Re-emitting status-moving and edge events dated at the origin instant, so `wall` stops being device-local. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as the explicit approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping, if [Q1](#open-questions) is accepted. Agent guidance: yield or pause when a blocker appears mid-work. |
-| Validating against controlled runs | Every bucket is defined in milliseconds from recorded instants, so a controlled run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted` and `resumeGapSeconds`, and `orchestrationSeconds`. **Fixtures must control the write clock**, not just `asOf`: every instant on this page comes from `nowIso()` at write time, so a reproducible run injects the clock the store, the event writer and the attempt ledger all read. Tolerance: one second per interval for `activeSeconds`, one second per nonzero bucket for the partition, plus the one-second snapping window. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a bug. Runs on a second device check that `workSeconds` matches everywhere, that `wall` matches on a device that read the tail, and that it reads `replay_unavailable` on one that hydrated. Built: see [Controlled runs](#controlled-runs). |
-| Quality indicators | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five new reason codes. Built: see [Quality states](#quality-states). |
-| Calibration and forecasting | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. Cohorts built: see [Calibration cohorts](#calibration-cohorts). Ranges, floors, tails and per-issue forecasts built: see [Confidence ranges](#confidence-ranges). A completion forecast along a path sums `forecasts[].expected.seconds` (a floor forecast's is its 60-second bound) as the `walkPlanGraph` weight, and carries the warnings. Quantiles and bounds do not add along a path: a band for a chain needs the links' distributions combined, not their quantiles summed. A fence-clipped `expected` reads low on a heavy-tailed class, and the sum inherits it. Completion and budget forecasts built: see [Forecasts](#forecasts). |
+| Lifecycle capture | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition). `asOf` as a parameter of every derivation. One mutation instant for every writer (`Journal.mutationAt`). `workSeconds` from replicated data only ([Work](#work)). Status-moving and edge events re-emitted at the origin instant, so `wall` reads the same on a device that read the tail. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping. The agent guidance in [agents.md](agents.md): yield or pause when a blocker appears mid-work. |
+| Controlled runs | Every bucket is defined in milliseconds from recorded instants, so a run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted`, `resumeGapSeconds` and `orchestrationSeconds`. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a defect. See [Controlled runs](#controlled-runs). |
+| Quality states | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five reason codes this page adds. See [Quality states](#quality-states). |
+| Calibration and forecasts | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. See [Calibration cohorts](#calibration-cohorts), [Confidence ranges](#confidence-ranges) and [Forecasts](#forecasts). A completion forecast along a path sums `forecasts[].expected.seconds` (a floor forecast's is its 60-second bound) as the `walkPlanGraph` weight, and carries the warnings. Quantiles and bounds do not add along a path. A fence-clipped `expected` reads low on a heavy-tailed class, and the sum inherits it. |
 
 ## Where the numbers appear
 
 `timing` on every detail surface (`staple show --json`, MCP `get_task`, HTTP
-`/api/issue` and `/api/agent-context`) carries, beside the existing fields:
+`/api/issue` and `/api/agent-context`) carries, beside the fields cli.md defines:
 
 ```json
 {
@@ -1759,14 +1795,14 @@ and agents execute faster. That is the thing being calibrated, not an error.
 
 A parent's `wall.buckets` are `active`, `review`, `gated`, `blocked`, `queued` and
 `resolved`; its `quality.work.coverage` is `{known, total, partial}`, and
-`missingInputs` (the contract's name for the inputs of an `input_missing` value) names the children counted in `total` whose `workSeconds` is
+`missingInputs` (the [Missingness](execution-telemetry.md#missingness) name for the inputs of an `input_missing` value) names the children counted in `total` whose `workSeconds` is
 null. `resumeGaps` lists the issue's own worker-lane chain links, oldest by the
 resuming attempt's start: each `{attemptId, resumedByAttemptId, endedAt,
 resumedAt, resumeGapSeconds, clockSkew}`. An attempt resumed twice (two devices
 re-claimed it offline) links to the earlier resumer. `staple attempt <id> --json`
 (MCP `get_attempt`) carries the same `resumeGapSeconds` on each `chain` entry: from
 that attempt's end to the start of the attempt that resumed it, `null` when
-nothing has yet. `missing` holds the reason for each new field that is null. The work
+nothing has yet. `missing` holds the reason for each of these fields that is null. The work
 state of a cancelled issue is `null`: it owes no comparable work, so it is neither
 `missing` nor any other state. The wall state is `missing` whenever `wall` is
 `null`, with `missing.wall`'s code as its reason; it is `null` only on a read that
@@ -1788,8 +1824,8 @@ which count both lanes.
 
 ## Controlled runs
 
-The downstream row above asks for runs with known durations, compared against what
-staple records. They are in the repository and run in CI with the rest of the suite:
+Controlled runs are timelines with known durations, compared against what staple
+records. They are in the repository and run in CI with the rest of the suite:
 
 ```
 npm run validate:timing     # the controlled runs alone
@@ -1920,8 +1956,8 @@ quality states and inputs, and coverage are compared exactly.
 | `33-steal-refused-document` | a steal on the other device refused at 20 minutes idle because the holder wrote a document revision, then allowed past the threshold |
 | `34-steal-refused-deleted-comment` | the same with a comment the holder wrote and that was deleted later by a replicated deletion |
 | `35-quality-states` | one record in each work state (exact, timing-floor, sparse, missing, reconstructed, reconstructed and sparse) with its reasons and its attempt's state, a cancelled issue with no state, a parent that is reconstructed, and the cohort the leaves make: the eligible denominator, the ratio aggregates, and exclusion by state and by reason |
-| `37-confidence-ranges` | eleven samples of one key with three tickets that took four times a five-minute estimate: the lower quantiles, the median's order-statistic interval (ranks 3 to 9, 1914/2048), the bounds below 90% and said so, a heavy tail read with the fence-clipped expected ratio, two timing floors listed apart, a key with one sample and four floors reading its own class as floor-dominated, and forecasts for an unstarted issue (its walk starting without the model), two in the floor-dominated class (the floor, with and without an estimate) and one with no estimate, the same on every device |
 | `36-calibration-cohorts` | calibration over the leaves of a parent: exact samples with models from the checkouts and labels for work type and area, a sample re-estimated after it started dividing by its estimate at start, keys of three and two samples falling back to their class without model, a lone bug falling back to the whole set, sparse, timing-floor and reconstructed records kept out of the exact set, the reconstructed set on request, and one snapshot id on every device |
+| `37-confidence-ranges` | eleven samples of one key with three tickets that took four times a five-minute estimate: the lower quantiles, the median's order-statistic interval (ranks 3 to 9, 1914/2048), the bounds below 90% and said so, a heavy tail read with the fence-clipped expected ratio, two timing floors listed apart, a key with one sample and four floors reading its own class as floor-dominated, and forecasts for an unstarted issue (its walk starting without the model), two in the floor-dominated class (the floor, with and without an estimate) and one with no estimate, the same on every device |
 | `38-forecasts` | a subtree's remaining work over the plan's units: an in-progress unit's expected remainder, the mean of the four samples longer than its work (3 000 s), with draws from those four (`few_admissible`), a unit it blocks on the chain, a unit in review weighing 0, an unestimated unit unknown and the sums partial; the whole completion block, draws included, and its snapshot id the same on the writer, a tail device and a hydrated device |
 
 **Adding one.** Write the timeline you want to check as a new file in
@@ -1930,18 +1966,18 @@ every figure you `expect` from the timeline and this page, not from what the bui
 prints, then run `npm run validate:timing`. A figure that disagrees is either a mistake
 in the expectation or a defect; the second is the point of the run.
 
-**Defects the runs found.** Each is fixed, and the run that found it now passes.
+**Defects the runs found.** Each is fixed, and the run that found it passes and guards against its return.
 
 1. **A tail device stopped an unheld interval early** (`18-status-write-without-claim`).
    An issue moved into `active` by a status write has no holder, and its open interval
    counted through the newest *event* on the issue. Comments replicate and their events
    do not, so after a bystander's comment at 25 minutes the writer read
-   `activeSeconds` 1500 and a device that read the tail read 0. The clamp now reads
-   comments too, as the held clamp did.
+   `activeSeconds` 1500 and a device that read the tail read 0. The clamp reads
+   comments too, as the held clamp does.
 2. **An interruption resumed on a slow clock read exact** (`24-clock-skew`). A device
    whose clock ran two minutes behind re-claimed an interrupted attempt, so the
    resuming attempt started a minute before the end it resumed. The partition counted
-   the overlap as work and the link's gap as `0`, and `wall` read `exact`. It now
+   the overlap as work and the link's gap as `0`, and `wall` read `exact`. It
    carries `clock_skew` (approximate), and the link carries `clockSkew: true`.
 3. **A steal on the other device moved the holder's work into `interrupted`**
    (`25-steal-misses-replicated-evidence`). The holder commented at 10 minutes and
@@ -1949,42 +1985,42 @@ in the expectation or a defect; the second is the point of the run.
    revision writes no event there, so its `lastActivityOf`, and the stored end, said
    10 minutes. `workSeconds` already took the later replicated evidence (50 minutes),
    but the partition and the chain link read the stored end alone: `work` 30 minutes,
-   `interrupted` 80, `resumeGapSeconds` 4800 on every device. Both now read the end
+   `interrupted` 80, `resumeGapSeconds` 4800 on every device. Both read the end
    `workSeconds` reads: `work` 50, `interrupted` 60, gap 3600.
 4. **A holder's document revision moved an open interval on the writer only**
    (`26-open-document-revision`, found in review). The held clamp and an open
    attempt's evidence limit read the holder's events and comments. Revisions
    replicate and their events do not, so with a comment at 10 minutes and a revision at
    30, the writer read `activeSeconds` 1800 and `work` 30 minutes while the tail read
-   600 and 10. Both now read the agent's document revisions (the claim's
+   600 and 10. Both read the agent's document revisions (the claim's
    `lastActivityAt`, `countedThrough` and an attempt's `lastActivityOf`).
 5. **A deleted comment moved an unheld interval on the writer only**
    (`32-deleted-comment`). The writer's `comment_added` event outlives the deletion, and a
    device that read the tail holds only the deleted row, which the clamps skipped: the
-   writer read `activeSeconds` 1500, the tail 600. The clamps now count a comment
+   writer read `activeSeconds` 1500, the tail 600. The clamps count a comment
    whether or not it was later deleted. (Effort's replicated evidence still skips
    deleted comments, as [Work](#work) says.)
 6. **An orphan resumed on a device that was not its opener linked to nothing**
    (`29-resumed-orphan`). The resume rule read the issue after the resuming mutation had
    moved it back into `active`, where the orphan (`left_active`) reads revived, so no
    `resumesAttemptId` was stored; on the opener the stored orphan end, written at the
-   start of the command, hid this. The rule now reads the issue as it stood before the
+   start of the command, hid this. The rule reads the issue as it stood before the
    mutation.
 7. **That link measured from the resumer's own activity** (`29-resumed-orphan`). An
    orphan's `endedAtBound` and its stored end are the opener's `lastActivityOf`, which
    counts the same agent's activity after it resumed: the gap read 0 with `clockSkew`,
-   and `wall` read `clock_skew`, where the agent waited 20 minutes. A chain link now
+   and `wall` read `clock_skew`, where the agent waited 20 minutes. A chain link
    measures from the orphan's replicated evidence before the resumer, as `workSeconds`
    does.
 
 ## Clarifications from building it
 
-Each is a reading of this page the implementation had to choose. The page above
-states the choice in place.
+Each is a reading the definitions above left open, and the one the build takes.
+The page above states each in place.
 
 1. **Replay order.** The replay orders events by `created_at`, then the tie-break of item 10, with the
-   birth first. The page said `seq`, which is only a device-local order once
-   events are re-emitted at their origin's instant ([Intervals are half-open](#intervals-are-half-open)).
+   birth first. `seq` alone is a device-local order once events are re-emitted at
+   their origin's instant ([Intervals are half-open](#intervals-are-half-open)).
 2. **A hydrated device.** Re-emission makes `wall` the same on a device that read
    the tail. A device that hydrated from the snapshot still reads
    `replay_unavailable`, because a fold carries no history ([Multi-device](#multi-device)).
@@ -1996,23 +2032,21 @@ states the choice in place.
    on it. `--role` or the attempt id is required only when it holds one of each.
 5. **A cancelled issue's work state** is `null`, not `missing`: the table defines
    `missing` for issues that are not cancelled.
-6. **Five reason codes, not four.** The table under
+6. **Five reason codes.** The table under
    [Missingness](#missingness-for-the-new-fields) lists five
    (`never_started`, `not_applicable_cancelled`, `no_worker_attempt`,
-   `no_orchestrator_attempt`, `replay_unavailable`), and so does Q10. The downstream
-   row said four.
+   `no_orchestrator_attempt`, `replay_unavailable`), and so does decision 10.
 7. **`sparse` is measured over working time.** The gaps are between consecutive
    evidence instants, with the attempt's start and effective end counted as
    evidence, and paused time taken out of each gap.
-8. **The child-to-parent edge now replicates.** `blockParentUntilDone` edges were
-   device-local, and were lost even on the originating device when the parent's own
-   create came back. They travel with the child's create and are added to the
-   parent's set, never replacing it.
-9. **`resumeGapSeconds`** was defined here for the calibration work and not emitted
-   by the lifecycle work. The controlled runs compare it, so they emit it: per link
-   in `timing.resumeGaps`, and on each `chain` entry. A link's `previous.endedAt` is
-   the same end the elapsed partition uses: the stored `endedAt`, the corrected end of
-   an inferred one (item 15), or the orphan's `endedAtBound`.
+8. **The child-to-parent edge replicates.** A `blockParentUntilDone` edge travels
+   with the child's create and is added to the parent's set, never replacing it.
+   Kept device-local, it would be lost even on the originating device when the
+   parent's own create came back.
+9. **`resumeGapSeconds` is emitted** per link in `timing.resumeGaps` and on each
+   `chain` entry, and the controlled runs compare it. A link's `previous.endedAt` is
+   the stored `endedAt` for an end the mutation wrote, and the replicated evidence
+   before the resumer for an inferred or orphan end (items 15 and 17).
 10. **Tie-break for one millisecond.** Events carry the device that wrote them first
    and its `seq` (`origin_device`, `origin_seq`), and the replay orders by
    `(created_at, origin_device, origin_seq or seq)`, the same on every device.
@@ -2028,7 +2062,7 @@ states the choice in place.
    `conflictLastWriteAt`). The replay replaces only the disputed span, from the first
    write to the first event both sides hold after the second (or to the decision), with
    the decision; history before and after it stays, however late the decision comes.
-   Every device reads the same partition, and `wall` carries the new input
+   Every device reads the same partition, and `wall` carries the input
    `conflict_resolved` (approximate), on the issue and on every dependent whose
    blocker's history was settled this way. Two devices that decide one record offline
    to different values converge on the decision later in the log, on every device, the
@@ -2041,12 +2075,12 @@ states the choice in place.
    is `contested` on the devices that hold its record; a device that hydrated from the
    snapshot holds no record, cannot see the disagreement, and reads the fold's end
    unflagged until it is settled.
-13. **The clamps read what replicates.** `timing.countedThrough` for an issue in
-   `active` with no holder was the newest event on the issue, and the holder's clamp
-   and an attempt's `lastActivityOf` the newest event or live comment. Comments and
-   document revisions replicate and their events do not, and a comment's event outlives
-   its deletion, so a device that read the tail stopped intervals early. Every clamp now
-   reads events, comments (deleted or not) and document revisions
+13. **The clamps read what replicates.** Comments and document revisions
+   replicate and their events do not, and a comment's event outlives its deletion,
+   so a clamp that read events alone, or only live comments, would stop intervals
+   early on a device that read the tail. Every clamp (`timing.countedThrough`, the
+   holder's clamp and an attempt's `lastActivityOf`) reads events, comments (deleted
+   or not) and document revisions
    ([Controlled runs](#controlled-runs), defects 1, 4 and 5).
 14. **An inverted chain link is clock skew.** A resumed attempt that starts more
    than a second before the end it resumes makes `wall` `clock_skew`
@@ -2063,13 +2097,12 @@ states the choice in place.
    orphan end, `resumeGapSeconds` and its clock-skew test read the replicated evidence
    before the resumer, as `workSeconds` does ([Controlled runs](#controlled-runs),
    defect 7).
-18. **An older build's operation narrates only a pristine birth.** The Multi-device
-   bullet said such an operation was narrated from the change itself, `status_changed`
-   included; `reemit.ts` narrates only an unedited create, and the replay reads
-   `replay_unavailable` for the rest. The page now says what is built.
-19. **An orphan's end in the partition stays its agent's last activity.** Review asked
-   whether `end(A)` for an orphan should read the chain link's corrected end. It should
-   not: in `28-contested-reclaim` and the contested case of `cloud-timing-convergence`,
+18. **An older build's operation narrates only a pristine birth.** `reemit.ts`
+   narrates only an unedited create for an operation that carries no
+   `originEvents`, and the replay reads `replay_unavailable` for the rest, rather
+   than narrating the change itself ([Multi-device](#multi-device)).
+19. **An orphan's end in the partition stays its agent's last activity.** `end(A)`
+   for an orphan does not read the chain link's corrected end: in `28-contested-reclaim` and the contested case of `cloud-timing-convergence`,
    the older agent really kept working, or kept its pause, after the other device's
    agent started. Cutting its tenure at that start would drop real elapsed time (a
    15-minute pause read as silence). The partition keeps the overlap and resolves it by
@@ -2079,8 +2112,8 @@ states the choice in place.
    `--steal-if-stale` and `release --if-stale` guards, reads the holder's document
    revisions and its comments whether or not they were deleted later, at their
    `created_at` (`33-steal-refused-document`, `34-steal-refused-deleted-comment`).
-21. **A wall with no figure has a state.** `quality.wall.state` was `null` whenever
-   `wall` was. Every record now has one state, so it reads `missing`, with
+21. **A wall with no figure has a state.** Every record has one state, so
+   `quality.wall.state` reads `missing` when `wall` is `null`, with
    `missing.wall`'s code (`replay_unavailable`, `never_started`) as its reason. It
    is `null` only on a read that skipped telemetry. The work state of a cancelled
    issue stays `null` (item 5): it has no work record at all.
@@ -2111,10 +2144,9 @@ states the choice in place.
    *longer than* 30 minutes. On the maintainers' tracker one done leaf is sparse by
    a 30 min 51 s gap between a comment and a worklog revision inside its second
    attempt; the threshold is applied as written.
-27. **Calibration divides by the estimate at start (Q4).** Q4 kept the current
-   estimate until estimate history existed. Every estimate write now records
-   `estimate_changed`, and every attempt stores `estimateAtStart`, so calibration
-   switched: a sample divides by the first reading of its own estimate among the
+27. **Calibration divides by the estimate at start (decision 4).** Every estimate
+   write records `estimate_changed`, and every attempt stores `estimateAtStart`,
+   so a calibration sample divides by the first reading of its own estimate among the
    attempts on the issue behind its work, and otherwise by the current one, and
    says which. A parent data point divides by its current estimate.
    The per-issue `estimateRatio` still divides by the current estimate.
@@ -2137,21 +2169,21 @@ states the choice in place.
    prediction interval for one more sample, the question a forecast asks, and the
    quantile intervals answer the other question beside it
    ([Confidence ranges](#confidence-ranges)).
-32. **Floors stop the fallback.** Version 1 walked the fallback on samples alone,
-   so a key whose work was mostly under a minute fell back to a broader class and
-   read that class's ratio. The walk now stops at a level where floors outnumber
-   samples and the two make 5, and the snapshot algorithm is `calibration/2`.
-   Nothing else changes for a class without floors.
+32. **Floors stop the fallback.** Walking the fallback on samples alone (the
+   `calibration/1` algorithm) sends a key whose work is mostly under a minute to a
+   broader class, which reads that class's ratio. The walk stops at a level where
+   floors outnumber samples and the two make 5, and the snapshot algorithm is
+   `calibration/2`. Nothing else differs for a class without floors.
 33. **Nothing is interpolated.** The page's quantile method is the lower
    quantile, and the intervals are order statistics, so every figure a cohort
    publishes is an observed value (or an observed value times the estimate). One
    method across the codebase keeps a figure here comparable with every
    percentile above.
-34. **The tail test is tuned against false alarms.** Review of the first cut
-   found that two outliers from five samples, with the lower median, flagged 6% to
-   16% of plain lognormal cohorts (the lower median of the deviations under-reads
-   the MAD at even n). A false alarm switches the expected ratio to the clipped
-   figure, which reads low along a path. The test now uses the standard median, needs
+34. **The tail test is tuned against false alarms.** Two outliers from five
+   samples, with the lower median, flag 6% to 16% of plain lognormal cohorts (the
+   lower median of the deviations under-reads the MAD at even n). A false alarm
+   switches the expected ratio to the clipped figure, which reads low along a
+   path. The test therefore uses the standard median, needs
    10 samples and 3 outliers, and ignores deviations under 5%. The simulation
    behind the threshold is a test (`test/calibration-ranges.test.ts`).
 35. **An unstarted issue has no model.** Its key reads `*`, not `unknown`:
@@ -2161,95 +2193,89 @@ states the choice in place.
    the caller knows it.
 
 
-## Open questions
+## Design decisions
 
-Each needs a decision. The page above is written to the recommended default.
+Each is a choice the rules above are built on, with the alternative it rules out.
 
-1. **Orchestrator attribution, and the attempt-contract changes it needs.**
-   Default: accept all of the following, each a change to the approved attempt
-   contract:
-   - a `role` field on the attempt (`worker` | `orchestrator`). That is a new
-     column, so workspace migration 014 and a new `schema` stamp, which again
-     forces every device to upgrade together (older clients refuse the page with
-     `schema_ahead`). The attempt create payload and the sync.md field inventory
-     gain `role`. The hub presence index gains a `role` column (a hub migration);
+1. **Orchestrator attribution is a per-attempt `role`.** What that adds to
+   attempts:
+   - a `role` column on the attempt (`worker` | `orchestrator`), added by workspace
+     migration 014 with a new `schema` stamp, so every device upgrades together
+     (an older client refuses the page with `schema_ahead`). The attempt create
+     payload carries `role`, and the hub presence index has a `role` column (hub
+     migration 007);
    - `role` is set only by `staple attempt open`. `checkout`, steals, re-claims
      and status writes refuse it, and no environment variable sets it;
-   - two new commands, `staple attempt open` and `staple attempt end`, which are an
-     exception to "No caller writes an attempt directly";
-   - a new `openedBy` value, `orchestrate`, and new end reasons
+   - `staple attempt open` and `staple attempt end` are the one exception to
+     "no caller writes an attempt directly";
+   - the `openedBy` value `orchestrate`, and the end reasons
      `coordination_ended`, `issue_resolved` and `superseded_by_newer`;
    - an orchestrator attempt's evidence includes the issue and all its
      descendants;
    - the orchestrator-lane read-time clauses (removed, resolved, superseded by
      any newer attempt of the same agent, first clause wins, earliest limit filters the evidence),
      applied by every reader and by `writeOrphanEnds`;
-   - `issue_resolved` and `superseded_by_newer` added to `ORPHAN_END_REASONS` in
-     `src/core/cloud/attempt-ends.ts`, which the client applier, conflict
-     screening, hydration, the tail fold, the Worker fold and the test service
-     all read. The Worker imports that file, so it is **redeployed first**, as
-     for protocol 3;
-   - a `--role orchestrator` flag (or an attempt id) on `staple attempt
+   - `issue_resolved` and `superseded_by_newer` in `ORPHAN_END_REASONS`
+     (`src/core/cloud/attempt-ends.ts`), which the client applier, conflict
+     screening, hydration, the tail fold, the sync Worker's fold and the test
+     service all read. The Worker imports that file, so it is deployed before any
+     client writes those reasons;
+   - `--role orchestrator` (or `--attempt ID`) on `staple attempt
      pause|resume|milestone|interrupt` and MCP `record_attempt_event`, required
      when the actor holds an attempt in each lane;
    - the concurrency context and the presence counts split by `role`;
    - budget-sample linking (`attemptLinkerFor`) preferring the worker attempt when
      one harness session holds both;
    - the read summary `attempts: {current, last, count}` describing the worker
-     lane, with a new `orchestration: {current, count}` beside it;
-   - every existing attempt rule scoped to the worker lane, in `evaluateIssue`,
+     lane, with `orchestration: {current, count}` beside it;
+   - every other attempt rule scoped to the worker lane, in `evaluateIssue`,
      `viewsOfIssue`/`viewOf`, `effectivelyOpen`, `targets`, `resumeFor`,
      `record`, `countEffectivelyOpen`, the presence index and
      `reconstructAttempts`, as listed in
      [The orchestrator lane](#the-orchestrator-lane).
 
-   The alternative is a registered set of orchestrator identities (a workspace
-   setting) classifying attempts by agent. It needs no contract change, but it
-   misfiles an orchestrator that implements a leaf, and it depends on identities
-   being spelled consistently, which the data shows they are not. Without either,
-   `orchestrationSeconds` is always `null` with `no_orchestrator_attempt`.
-2. **Sparse threshold.** Default: a gap of more than 30 minutes between
-   consecutive replicated evidence instants inside a worker attempt's working
-   time marks it `sparse` and makes it `approximate`. Nothing is
-   subtracted.
-3. **Open review intervals.** `timing.reviewSeconds` ends an open review interval
-   at the newest event on the issue, borrowed from the rule for active intervals.
-   Review is a queue, and a queue's clock does not stop because nobody writes.
-   Default, built: an open review interval ends at `asOf`. This changed the
-   reading for issues currently in review, and no closed interval.
-4. **Which estimate the ratio divides by.** Default: the current own
-   `estimatedSeconds`, until estimate history exists (the estimate-mutation event
-   the telemetry contract asks for). Then switch to the first worker attempt's
-   `estimateAtStart`, so a re-estimate made after the work started cannot flatter
-   the ratio.
-   Calibration has switched (clarification 27); the per-issue `estimateRatio`
-   has not.
-5. **A parent's own worker attempts.** Default: kept in `ownWorkSeconds`, not
-   added to the parent's `workSeconds`, mirroring `activeSeconds`. The alternative
-   adds them, which is more complete but makes the two rollups differ.
-6. **Review effort as its own role.** Default: no. A reviewer agent opens an
-   orchestrator attempt, and review effort is part of `orchestrationSeconds`. The
-   alternative is a third role, `reviewer`, if review cost needs forecasting on
-   its own.
-7. **`timing-floor` cut-off.** Default: `workSeconds < 60`. One done leaf is
-   below 60 seconds on the maintainers' tracker, and 12 are below 300 seconds.
-8. **Dependency waits inside `blocked`.** Default: yes, a pre-work second with an
-   unresolved `blocks` edge is `blocked`, for leaves and parents alike. The
-   alternative keeps `blocked` to the status category and reports dependency
-   waits inside `queued`. That would leave `blocked` near zero on a tracker that
-   records blocking as edges.
+   The alternative, a registered set of orchestrator identities (a workspace
+   setting) classifying attempts by agent, needs none of this, but it misfiles an
+   orchestrator that implements a leaf, and it depends on identities being spelled
+   consistently, which the data shows they are not. An issue with no orchestrator
+   attempt in its subtree reads `orchestrationSeconds: null` with
+   `no_orchestrator_attempt`.
+2. **Sparse threshold.** A gap of more than 30 minutes between consecutive
+   replicated evidence instants inside a worker attempt's working time marks it
+   `sparse` and makes it `approximate`. Nothing is subtracted.
+3. **Open review intervals run to `asOf`.** Review is a queue, and a queue's
+   clock does not stop because nobody writes, so `timing.reviewSeconds` ends an
+   open review interval at the read instant rather than at the newest event on
+   the issue, the rule active intervals use. This changes the reading only for
+   issues currently in review, never a closed interval.
+4. **Which estimate the ratio divides by.** The per-issue `estimateRatio` divides
+   by the current own `estimatedSeconds`. Calibration divides by the first worker
+   attempt's `estimateAtStart` where one exists (clarification 27), so a
+   re-estimate made after the work started cannot flatter a sample.
+5. **A parent's own worker attempts** stay in `ownWorkSeconds` and are not added
+   to the parent's `workSeconds`, mirroring `activeSeconds`. Adding them would be
+   more complete but would make the two rollups differ.
+6. **Review effort has no role of its own.** A reviewer agent opens an
+   orchestrator attempt, and review effort is part of `orchestrationSeconds`. A
+   third role, `reviewer`, does not exist; it would be needed only if review cost
+   had to be forecast on its own.
+7. **`timing-floor` cut-off** is `workSeconds < 60`. One done leaf is below 60
+   seconds on the maintainers' tracker, and 12 are below 300 seconds.
+8. **Dependency waits count as `blocked`.** A pre-work second with an unresolved
+   `blocks` edge is `blocked`, for leaves and parents alike. Keeping `blocked` to
+   the status category and reporting dependency waits inside `queued` would leave
+   `blocked` near zero on a tracker that records blocking as edges.
 9. **Recategorizing a status re-buckets history.** The replay reads categories
    from the current vocabulary, so moving a status to another category changes
    the buckets of every past interval spent in it, with no `approximate` flag.
-   Default: accept this. The elapsed partition is retroactive, and it is the
-   same rule `timing` follows today: a recategorization says what the status
-   means, including in the past. The alternative is to stamp the category into
-   each status-moving event and replay the stamped category. That is exact to
-   history but needs every emitter to change, and it still cannot fix events
+   The elapsed partition is retroactive, as `timing` is: a recategorization says
+   what the status means, including in the past. Stamping the category into each
+   status-moving event and replaying the stamped category would be exact to
+   history, but it needs every emitter to change, and it still cannot fix events
    written before the change.
-10. **New reason codes.** Default: add `never_started`, `not_applicable_cancelled`,
-    `no_worker_attempt`, `no_orchestrator_attempt` and `replay_unavailable` to the
-    telemetry contract's closed set, and the quality inputs `sparse`,
-    `capture_gap`, `orphan_provisional`, `end_unbounded`, `clock_skew` (for `workSeconds`) and
-    `unattributed`, `edge_history_incomplete`, `clock_skew` (for `wall`) to the
-    quality-indicators work.
+10. **Reason codes.** `never_started`, `not_applicable_cancelled`,
+    `no_worker_attempt`, `no_orchestrator_attempt` and `replay_unavailable` join
+    the closed set in [execution-telemetry.md](execution-telemetry.md#missingness),
+    and the quality inputs are `sparse`, `capture_gap`, `orphan_provisional`,
+    `end_unbounded`, `clock_skew` (for `workSeconds`) and `unattributed`,
+    `edge_history_incomplete`, `conflict_resolved`, `clock_skew` (for `wall`).

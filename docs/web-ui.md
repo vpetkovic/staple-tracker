@@ -1,84 +1,213 @@
+---
+title: Web UI
+description: The local browser app that staple open serves, with every view it has, what each one shows and changes, and how it authenticates.
+sidebar_position: 9
+---
+
 # Web UI
 
 ```bash
-staple open      # prints http://127.0.0.1:4400/?token=… and opens your browser
+staple open      # serves the app and opens it in your browser
 ```
 
 One command, no daemon: the server runs in the foreground and Ctrl-C closes it
 along with every database handle, then exits 130 (143 for SIGTERM). A second
 Ctrl-C or SIGTERM while it is closing is absorbed, not treated as a harder kill.
-`--hub` serves every registered workspace at
-once; the browser behaviour follows `config browser=auto|always|never`.
+It prints `staple ui — <mode> at http://localhost:<port>/` and a second line
+saying that a browser on this machine needs no token and where API callers find
+it (see [Auth](#auth)). The port is `config port` (4400 by default); an implicit
+port that is busy falls back to a free one, an explicit `--port` that is taken
+fails. `--hub` serves every registered workspace at once. Whether a browser
+opens follows `--browser` / `--no-browser`, then `config
+browser=auto|always|never`. `staple ui` is an alias.
 
-Views: Tasks (the subtask tree), the pickup queue, the dependency graph and
-milestones, plus a detail panel with documents, comments, and the agent-payload
-pane, and the Work Workspace Settings dialog for the status and kind
-vocabularies and the settings registry.
+## Views
+
+Six views, one per entry of `VIEWS` in `src/ui/app/src/lib/session.ts`, plus the
+surfaces that open on top of any of them.
+
+| View | What it shows | How to reach it |
+| --- | --- | --- |
+| [Tasks](#tasks) | Every issue as one tree, parents over children, with grouping, sorting, filters, search and the pickup cues | Rail and tab bar *Tasks*; "Go to Tasks"; a project row under it; `?view=tasks` |
+| [Queue](#queue) | The pickup order as one tree: the plan, what each queued epic or milestone expands to, what comes next, and the editor for it | *Queue*; "Go to Queue"; `?view=queue` |
+| [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph*; "Go to Graph"; `?view=graph` |
+| [Milestones](#milestones) | Milestones in plan order, each with progress, risk, members and its goal | *Milestones*; "Go to Milestones"; a row's milestone marker; `?view=milestones` |
+| [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates*; "Go to Estimates"; `?view=estimate-accuracy` |
+| [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* under *This computer*; "Go to Usage"; `?view=budget` |
+| [Task detail](#task-detail) | One issue: details, connections, documents, activity, the agent payload and time | Click or Enter on any row, node or reference |
+| [Autopilot runs](#autopilot-runs) | Live runs, their history, and a notice when one stops | The rail's *Autopilot* section; a task's run line |
+| [Settings](#settings) | Statuses, kinds, workflow settings, cloud, usage capture | The rail's *Settings*; the palette; `?settings` |
+| [Choose a workspace](#choose-a-workspace) | Shown in place of Queue or Estimates on *All workspaces* | Opening either view with no workspace chosen |
+
+The command palette (`⌘K`), the New task dialog (`c`), the project dialog and
+the dependencies dialog also open over any view. **New task**
+(`components/CreateIssueDialog.tsx`) asks for the workspace (in hub mode),
+title, description, kind, priority, parent, project, labels, *Blocked by* and
+*Blocking*; the relation fields only offer tasks that exist in the target
+workspace, nothing is validated in the browser, and a refusal is the store's
+own sentence. It posts to `POST /api/action`.
 
 ## Layout
 
-Navigation on the left, content on the right — Linear's shape.
+The app has two shapes, split at one breakpoint: 768px (`DESK_MIN_WIDTH` in
+`lib/use-media.ts`; Tailwind's `md:` is the same width). From 768px it is the
+**desk**: a rail, a top bar, a toolbar and the view. Below it, it is a **phone**
+app: a top bar, the view, and a tab bar.
 
-**The frame.** The page is the sidebar tint — one step off the content colour
-on the gray ramp, light and dark — and the content pane is an inset card on
-it: one hairline, an 8px gutter on top, right and bottom, a rounded top-left
-corner where it meets the rail. Below 768px the gutter and the radius go. Dark
-mode is charcoal, on the ramp (page 100, card 200, menus 300, foreground 900),
-not near-black.
+**The frame.** The page is the sidebar tint and the content is a card on it:
+one hairline, rounded corners, and an 8px gutter round it.
+Below 768px the gutter and the radius go and the frame is `100dvh`. Dark mode
+is charcoal, not near-black. Every shell size is a token in
+`styles/system-tokens.css`.
 
-**The rail** (232px) reads top to bottom: the **workspace switcher** (the
-workspace's name; in `--hub` mode a menu of *All workspaces* and every
-registered workspace, with each row's prefix), then one row with a bordered
-**New task** button (pen icon; the same `c` shortcut) beside a bordered
-**search** button (the command palette, `⌘K`) — shortcuts live in the
-tooltips, not in chips — then the views in named groups. Rows are 28px, 13px
-text, no gap; the active row is a fill and nothing else. The first group is
-**Workspace**: *Tasks*, *Queue*, *Graph*, *Milestones*. The groups are data
-(`components/nav/nav-model.ts`, an array of groups of items), so moving a view
-between groups is an edit to that array and not to the rail. In `--hub` mode a
-Workspace page shows the workspace the switcher names; the Graph keeps, beside
-that workspace's own tickets, each ticket in another workspace joined to one of
-them by a cross-workspace edge. The active view
-carries `aria-current="page"`; a group header is a real disclosure button in
-sentence case whose chevron shows on hover and focus. At the foot of the rail
-sit **Settings** (the Work Workspace Settings dialog) and **Dark mode**, both
-ordinary rows above a hairline.
+**The rail** is 240px (264px from 1680px) and reads top to bottom:
 
-**Projects hang off Tasks.** The Tasks row carries a `+` — visible on hover and
-focus, always in the tab order — that opens the project dialog to create one,
-and lists every tracked project beneath itself as a sub-row (see *Projects*
-below): a project glyph one indent step in, the name, and the project's open
-issue count on the right (from the rows the page already holds), which gives
-way to the gear on hover. Clicking a project switches to Tasks and narrows it to that project's
-issues, and nothing else; the row then carries `aria-current="true"` for as
-long as Tasks is filtered to exactly it. Each sub-row has a gear that opens the
-same dialog on that project. On *All workspaces* in hub mode the rows are
-captioned with their workspace, which is what tells two projects with one name
-apart.
+- the brand mark and a *Hide navigation* button;
+- in `--hub` mode, the **Workspaces** group: *All workspaces*, then each
+  registered workspace with a one-letter tile, capped at six (the current one is
+  always kept) with the rest behind *More workspaces*. A single-workspace page
+  lists none;
+- **Views**: *Tasks*, *Queue*, *Graph*, *Milestones*, *Estimates*;
+- **Autopilot**, once the workspace has had a run: one card per live run and a
+  *Run history* row (see [Autopilot runs](#autopilot-runs));
+- **This computer**: *Usage*, at the bottom of the rail;
+- the foot, above a hairline: *Settings* and a dark-mode switch
+  (`role="switch"`, remembered under `staple:theme`).
 
-The rail collapses with `[` or `⌘\` and remembers that it did; a *Show
-navigation* button then leads the content header. Below 768px the rail is a
-sheet opened from that same button and closed by a row, the scrim or Escape, so
-the list keeps its width on a narrow window.
+Rows are 32px (44px on a touch screen). The active view carries
+`aria-current="page"`; a group header is a disclosure button whose chevron
+shows on hover and focus. The groups are data (`components/nav/nav-model.ts`,
+an array of groups of items), so moving a view between groups is an edit to
+that array and not to the rail. *Usage* sits apart because budget readings are
+this computer's: the view takes no workspace, and no workspace row is marked
+current while it is open.
 
-**The content header** is one 40px row: the view's name on the left and, on
-the right, **Group**, **Sort**, **Filter**, **Done** and last the **search**
-field, every one the same ghost button (28px, 13px, a 16px icon). The sort
-trigger says "Sort: Activity" with a small arrow for the direction; the
-direction's full reading ("Most active first") is its accessible name, its
-tooltip and the menu's direction rows. Filter carries its count as a badge.
-Below 768px the words drop and the controls become icon buttons with tooltips,
-and the search folds into an icon that expands on click and stays open while
-it holds text; below 640px the list's date column hides (its tooltip keeps the
-stamp). The active-filter chips sit directly beneath the row and take no space
-when no filter is on. The Tasks view keeps every filter, sort and group control
-it had.
+**Projects hang off Tasks.** The Tasks row carries a `+` (*New project*),
+visible on hover and focus and always in the tab order, that opens the project
+dialog. Every tracked project is a sub-row beneath it (see
+[Projects](#projects)): the name and its open issue count, which gives way to a
+gear (*Project settings*) on hover. Clicking a project switches to Tasks and
+narrows it to that project's issues, and nothing else; the row then carries
+`aria-current="true"` for as long as Tasks is filtered to exactly it. On *All
+workspaces* the rows are captioned with their workspace, which is what tells two
+projects with one name apart.
 
-## Grouping
+The rail collapses with `[` or `⌘\` (Ctrl-\ elsewhere) and remembers that it
+did (`staple:rail:v1`); a *Show navigation* button then appears in the top bar.
+A bare `[` typed into a field, or pressed while a menu or dialog is open, is
+not a toggle.
+
+**The top bar** (52px) names the scope and the view: "All workspaces › Tasks"
+or "staple › Tasks" (the workspace's name), where the scope opens the workspace switcher in hub
+mode, and "This computer" on Usage. Beside it sits the sync pill (below), then,
+on the right, the palette field (*Find a task or command*, `⌘K`) and the
+**New task** button (`c`). The browser tab is titled `View · Scope · staple`.
+
+**The sync pill** says the workspace's sync state in a word or two
+("Synced", "Offline", "2 waiting to send"); a click opens a short card with what
+that means and the technical values behind *Show details*. It renders nothing
+when the workspace is not connected, and it never prompts you to connect. It
+reads `/api/cloud/status` once per workspace shown (on *All workspaces*,
+`/api/cloud/workspaces` once), never on the poll. See [sync.md](sync.md).
+
+**The toolbar** (44px) is only on views that use it (`viewControls` in
+`lib/session.ts`): Tasks has all of it, Graph has the filters only, Milestones
+has only *Done*, which moves into the top bar, and Queue, Estimates and Usage
+have no toolbar. On the left: **Filter** with its count as a badge, then the
+**quick filters**, one click each: *My tasks*, *In progress*, *Blocked*, *High
+priority*, *Bugs* (only where `bug` is a configured kind) and *Unassigned*
+(`components/filters/presets.ts`). Each is an ordinary filter, so a quick
+filter and the same filter built in the menu are one thing. *My tasks* asks
+once which assignee is you and remembers it in this browser (`staple:me:v1`).
+On the right: **Group**, **Sort**, **Done** and the **search** field. Controls
+are 32px. Below 1280px their words drop and they become icon buttons with
+tooltips, and the search folds into an icon that opens in place. Escape in the
+search clears it; a second Escape leaves the field.
+
+**On a phone** the top bar holds the menu button (the rail as a drawer, at most
+85% of the width, closed by a row, the scrim, Escape or Back), the workspace
+switcher as a pill (a bottom sheet), the sync state as one icon, search and New
+task. Under it, the view's name large, its controls as 44px icon buttons, and
+the active filters as one sideways-scrolling row. A bottom **tab bar** holds all
+six views (`components/nav/ViewTabBar.tsx`). On a touch screen, controls grow to
+44px at any width.
+
+**The address follows the page.** The workspace, the view, the search text,
+the done toggle, a milestone focus and every filter are written into the URL
+(`ws`, `view`, `q`, `done=1`, `focus`, one parameter per filter dimension;
+`lib/session-url.ts`), so a link opens the same page. Going to another view or
+workspace pushes a history entry, so Back returns from it; narrowing the list
+replaces the entry. An address naming a workspace the hub does not have lands on
+*All workspaces*. The page re-reads on a change fingerprint polled every 1.5s
+(`lib/useStaple.ts`), so a write from the CLI, MCP or another tab shows within
+one poll.
+
+### Keyboard
+
+| Keys | Where | Does |
+| --- | --- | --- |
+| `⌘K` / Ctrl-K | anywhere, even in a field | opens or closes the command palette |
+| `c` | anywhere but a field or open dialog | New task |
+| `[`, `⌘\` / Ctrl-\ | anywhere | hides or shows the rail |
+| ↑ ↓ ← → Home End Enter Space | the Tasks grid | move, fold and unfold, open |
+| `s` | a focused task row (desk) | opens the row's status menu |
+| `j` / `k`, Alt-↓ / Alt-↑ | task detail | next or previous task in the list on screen |
+| Escape | an open surface | closes it (the palette, a dialog, the detail, the phone drawer) |
+| Alt-↑ / Alt-↓ | Queue and Milestones rows, settings lists | move the row up or down |
+| Alt-Home / Alt-End | Queue rows | move the row to the top or bottom |
+
+The palette's first group lists "Go to Tasks", "Go to Queue", "Go to Graph",
+"Go to Milestones", "Go to Estimates" and "Go to Usage" (all but the current
+view), "Settings", "Settings: Usage", "Settings: Cloud account" and "Settings:
+Statuses", and in hub mode "Switch to All workspaces" and "Switch to"
+followed by each workspace's name.
+
+## Tasks
+
+The Tasks view (`views/TreeView.tsx`, `views/tree/`) is every issue of the
+scope as one tree, read from `GET /api/issues` (resolved work included, hidden
+by the Done toggle until you ask for it). On *All workspaces* it shows every
+workspace's issues at once. It has the whole toolbar: Filter, the quick
+filters, Group, Sort, Done and search.
+
+**Rows.** A row is 40px on a desk (44px on a touch screen) and one 48px line on
+a phone. Left to right it carries the priority signal, the fold chevron, the
+status icon (a button: its menu, or `s` on a focused row, changes the status),
+the kind glyph, the identifier and the title, then the cues below, the
+*Autopilot* badge when a run holds the task, dependency badges (what it waits
+on and what waits on it; a click opens the dependencies dialog), labels, a
+worklog cue (whether somebody else could pick it up), one avatar for the claim
+and the assignee, and the date it last moved. As the window narrows the row
+drops the least useful parts first, in a fixed order
+(`COLLAPSE_LADDER` in `components/task-list/row-layout.ts`): the second label
+below 1280px, label names below 1024px, the worklog cue below 960px, the date
+below 880px, the rolled-up plan and cue words below 768px, and the decorative
+marks and the identifier below 480px. A folded parent shows its sub-tasks'
+progress and, when they are estimated, their plan (*about 6 days of work*; `est
+6d5h` on a phone). The `⋯` menu on a row is the [row menu](#queue) (open,
+change status, queue). A refused status change shows as a notice under the
+row.
+
+**Keyboard.** The grid is one tab stop. ↑ / ↓ move (Shift extends the
+selection), → unfolds or steps into the children, ← folds or goes to the
+parent, Enter opens the row (or folds a group header), Space selects, Home and
+End jump, and Escape clears the selection, then closes the detail.
+
+**Search.** The toolbar's search field narrows the list by text as you type;
+it is part of the filter state and of the address (`q`).
+
+### Grouping
 
 The tree is ungrouped by default: one hierarchy, parents over children. The
-"Group" control adds an axis — status, pickup order, epic, or kind — and each
-axis is a way of *displaying* the same rows, never a second copy of them.
+"Group" control adds an axis (*Status*, *Pickup order*, *Epic* or *Kind*;
+*No grouping* goes back) and each axis is a way of *displaying* the same rows,
+never a second copy of them. *Pickup order* reads `GET /api/inbox`: the store's
+own dependency-ordered sections, with *Pending approval* first.
+
+**Milestones in the tree.** Ungrouped and under every axis but Epic, a row with
+no parent that is a direct member of a milestone is drawn under that milestone,
+in the list's copy only; a real parent always wins. A milestone row opens one
+level by default.
 
 **Expansion.** Every parent has one expand/collapse state, keyed by the issue
 and shared by every axis, so an epic folded in the ungrouped view is folded
@@ -100,20 +229,21 @@ at every width. There is no gap between an epic and its own first task.
 ### Row cues
 
 Ungrouped is the normal working view, not the absence of information. Every row
-in it carries four readings, and none of them adds a pixel of height: the row is
-`--row-height` in every density preset — 36px, 28px compact, 44px on a coarse
-pointer — exactly as it was before the cues existed.
+in it carries four readings, and none of them changes the row's height (the
+`--row-height` and desk-row sizes in `components/task-list/task-list.css` and
+`desktop-row.css`):
 
-- **Status** — the existing status icon, unchanged, in its own column.
-- **Kind** — the glyph the workspace configured for that kind (see *Glyph
-  catalog*), leading the identifier on every row.
-- **Pickup** — one glyph, and a number when there is one, immediately right of
-  the identifier.
-- **Milestone** — a `◇` marker when the row is planned under a milestone. It is
-  a button: it opens the Milestones view with that milestone focused.
+- **Status**: the status icon, in its own column.
+- **Kind**: the glyph the workspace configured for that kind (see
+  [Glyph catalog](#glyph-catalog)). A plain task's glyph is left out on a desk.
+- **Pickup**: one glyph, and a number when there is one, right of the
+  identifier. Below 480px the marks become one plain pill.
+- **Milestone**: a `◇` marker when the row is planned under a milestone, shown
+  on a desk as a chip with the milestone's name. It is a button: it opens the
+  Milestones view with that milestone focused.
 
-**The pickup cue speaks the queue's vocabulary** (see `docs/queue.md`), one word
-per row, first match wins:
+**The pickup cue speaks the queue's vocabulary** (see [queue.md](queue.md)), one
+word per row, first match wins:
 
 | Cue | Glyph | Prints | Means |
 | --- | --- | --- | --- |
@@ -124,6 +254,7 @@ per row, first match wins:
 | Gated | `⚑` | — | a human review gate holds it, or it stands behind one |
 | In flight | `◐` | — | somebody is holding it, or it is already being worked |
 | Unqueued | `·` | — | not in the pickup plan — still work, just later |
+| Unavailable | `–` | — | its status cannot be checked out |
 
 A **resolved** row has no pickup cue at all: finished work is not waiting for
 anything, and saying it is "not pickable" would file it beside work that is stuck.
@@ -150,13 +281,14 @@ so the list can never sort by anything other than what it shows. The list
 *displays* these numbers and can never set them — presentation sort is not the
 queue.
 
-**Ungrouped only.** The grouped axes are unchanged, element for element, and the
-queue is not fetched while one of them is active — so the plan, both as a cue and
-as an order, is an affordance of the view that shows it. In hub mode the cues
-appear once a workspace is selected: a plan is a per-workspace sequence, and there
-is no cross-workspace order to show.
+**Ungrouped only.** The cues are joined only in the ungrouped view; the grouped
+axes render without them. The queue is still read whenever a workspace is in
+view, because the row menu needs the plan's `revision` and entries to queue a
+task from any shape of the list. In hub mode the cues appear once a workspace is
+selected: a plan is a per-workspace sequence, and there is no cross-workspace
+order to show.
 
-## Sorting
+### Sorting
 
 The "Sort" control sits beside "Group" and names both halves of its own state without
 being opened — "Sort: Activity" with a direction arrow on the trigger, and the whole
@@ -168,7 +300,7 @@ setting one back to the default forgets it rather than pinning it.
 
 **Sorting is not the queue.** Ordering the list by queue position is a statement about
 your screen; it cannot move an item in the pickup plan, change checkout eligibility, or
-reorder a dependency. See `docs/queue.md`.
+reorder a dependency. See [queue.md](queue.md).
 
 Direction flips the **primary key only** — every tie-break below runs forwards in both
 directions, so two rows that tie never swap and "descending, then ascending" is exactly
@@ -205,15 +337,15 @@ Sorting orders **siblings**: it never lifts a child out from under its parent, a
 applies inside a group exactly as it does in the ungrouped view. Under Group by Status
 the activity tier is inert — every row in a status bucket ranks equally on it — so the
 default mode there is priority, then the newest update, then the identifier. Under
-**Group by Pickup order** the store's own dependency-ordered rank *is* the activity tier,
+*Pickup order* the store's own dependency-ordered rank *is* the activity tier,
 so Activity — the default — renders the queue exactly as `/api/inbox` published it,
 "Least active first" renders the back of it, and every other mode reorders inside each
 section by the key you named. Gate holders still head Pending approval whatever you sort
 by: that is what the section is, not an order you chose.
 
-## Filtering
+### Filtering
 
-The "Filter" button opens a two-page menu: pick a dimension, then pick values inside
+The *Filter* button opens a two-page menu: pick a dimension, then pick values inside
 it. **Alternatives inside one dimension are ORed, dimensions are ANDed** — "gated or
 waiting, and in Release 1.0" is one question — and an empty selection is the *absence*
 of a constraint rather than "match nothing". Every option is enumerated from data the
@@ -224,6 +356,7 @@ ancestry. Nothing in the menu is a value this build invented.
 | Dimension | Values | Read from |
 | --- | --- | --- |
 | **Status** | the workspace's configured statuses | the issue |
+| **Blocked** | Blocked or waiting on another task | the status and the open blockers |
 | **Kind** | the kinds present, in the configured order | the issue |
 | **Assignee** | the names on the page, plus Unassigned | the issue |
 | **Priority** | Urgent, High, Medium, Low | the issue |
@@ -237,7 +370,7 @@ ancestry. Nothing in the menu is a value this build invented.
 | **Project** | every tracked project, by name (captioned with its workspace when the page spans several) | the issue's `projectId` |
 
 **Pickup state** is the resolver's own word for the row when the server sends one
-(`docs/queue.md`, step 3). When it does not, four of the five are derived locally in the
+([queue.md](queue.md), step 3). When it does not, four of the five are derived locally in the
 resolver's order — gated (its own gate, or the gate it stands behind), waiting (an
 unresolved blocker or a blocked status), in flight (a claim, a checkout, or a working
 status), pickable (everything else) — and a resolved row has no pickup state at all.
@@ -262,28 +395,29 @@ surviving children, dimmed, as a ghost — it is a bracket around rows rather th
 so it is not in any count and it folds like the real one would.
 
 **An empty page says why.** With nothing left, the view names the dimensions
-responsible: either the one whose removal would bring rows back and how many
-("Removing Priority (4) would bring rows back"), or that they exclude every row only in
-combination, or — for a selection that could not match anything whatever the data said,
+responsible: either the one whose removal would bring rows back and how many (*No
+task matches all of these filters. Removing Priority would show 4 tasks.*), or,
+with several, one *Remove … · n tasks* button per filter that would, or that they
+exclude every row only in combination, or — for a selection that could not match anything whatever the data said,
 such as *done* plus *pickable* — that the two cannot both be true and one has to go.
 
 **Filters persist per workspace and per view**, under the same `staple:view:v1` key as
 the sort and the grouping. A scope you have never filtered in opens with whatever the
-pre-R4b global filter key holds, so nothing is lost on upgrade. Changing a filter is a
+older global filter key (`staple:filters:v1`) holds, so nothing is lost on upgrade. Changing a filter is a
 statement about your screen: it cannot touch `queue.policy`, the pickup plan, or any
 write path.
 
-## What the view tests prove
+### What the view tests prove
 
-Grouping, sorting, filtering and the row cues shipped as four separate tickets and meet
-on one page. The tests that hold that page together are listed here so a change knows
-what it is up against — and so the two things they *cannot* say are written down rather
-than assumed.
+Grouping, sorting, filtering and the row cues meet on one page. The tests that hold
+that page together are listed here so a change knows what it is up against.
 
-All of them are pure functions or `react-dom/server` markup: there is no browser, no
-jsdom and no screenshot harness in this repo. **A "visual check" below means the
-rendered markup at a narrow width (under the 719px two-line breakpoint) and a wide one,
-with class and attribute assertions, plus the `task-list.css` rule that does the rest.**
+All of them are pure functions or `react-dom/server` markup: the app's component tests
+use no jsdom and no screenshots. **A "visual check" below means the rendered markup at a
+phone width and a desk width, with class and attribute assertions, plus the
+`task-list.css` rule that does the rest.** (One repo test, `test/ui-phone-back.test.ts`,
+drives real Chromium through `playwright-core` against the built app, for the phone's
+Back behaviour.)
 
 One board — `views/tree/drift-fixture.ts` — backs all four files: two epics, one open
 and one folded, a gated child, a stale claim, a done child, a custom kind, a milestone
@@ -296,91 +430,817 @@ the same rows on the screen.
 | `views/tree/view-combinations.test.ts` | every sort mode × every grouping axis keeps section membership, the header counts, the nesting and the published visible order; filter combinations keep the ghosts and agree with the counts the menu and the empty state print; a queued milestone member is cued and ordered consistently; a folded epic keeps its rollup and its cue |
 | `views/tree/polling-stability.test.ts` | the 1.5s poll changes nothing you chose — sort, filters, folds and cues all survive a fresh payload, a new queue payload moves the cues and nothing else, and the rendered page is identical bar the absolute timestamps |
 | `views/tree/view-a11y.test.tsx` | the sort trigger names the mode *and* the direction in all sixteen states; chips and the empty state name the dimension, the value and the count; all six cue words reach a screen reader; `aria-level` and `aria-expanded` on rows and group headers; the controls tab in reading order and the grid has one roving tab stop |
-| `views/tree/view-responsive.test.tsx` | all five groupings at 400px and 1440px draw the same sections, rows, levels and cues; labels degrade to dots; the rolled-up plan yields to a `max-[719px]:hidden` utility; the sheet reflows the row to two lines and never drops either cue |
+| `views/tree/view-responsive.test.tsx` | all five groupings at 400px and 1440px draw the same sections, rows, levels and cues; labels degrade from names to dots to none; the rolled-up plan is absent, not hidden, on a phone; the row stays one 48px line on a phone; the date and the worklog cue drop in the ladder's order |
 
 Alongside them, `lib/sort-modes.test.ts` walks each mode's key and tie-breaks,
 `lib/filter-dimensions.test.ts` and `components/filters/filters-render.test.tsx` walk the
-twelve dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
+dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
 `views/tree/group-header.test.tsx` pins the epic-axis rhythm.
 
-`view-combinations.test.ts` also pins the three things that used to be gaps: the chosen
-sort reaches **Group by Pickup order**, **Queue position** orders by the numbers the cues
+`view-combinations.test.ts` also pins three cross-cutting rules: the chosen
+sort reaches the *Pickup order* grouping, **Queue position** orders by the numbers the cues
 print, and a container is ranked on the effective scale rather than on its plan index.
 
-## Auth
+## Queue
 
-Pages served to loopback carry their own token, so the browser never sees a
-token screen. The token — for curl, agents, and remote tabs — lives in
-`~/.staple/ui-token` (0600) and survives restarts; delete the file to rotate it.
+The Queue view (`views/queue/QueueView.tsx`) is the editor for the
+[pickup queue](queue.md): the order agents take work in, as one full-width tree.
+Everything on it comes from one `GET /api/queue?all=1` (`staple queue --json`),
+read whole regardless of the Done toggle, so resolved plan rows stay in place,
+dimmed, and the plan's numbering has no gaps. The view has no toolbar. On *All
+workspaces* it asks you to [choose a workspace](#choose-a-workspace): each
+workspace keeps its own order.
 
-Every `/api/*` route is gated by the per-process token (`X-Staple-Token`,
-`Authorization: Bearer`, or `?token=`), compared with `timingSafeEqual`; writes
-are `POST`-only and every route pins the methods it accepts.
+**The header.** *Pickup order*, a sentence saying what the order is for, and
+*Clear n finished* when the plan holds resolved rows (*Prune n resolved* on a
+phone), which prunes them. Under it, a summary card: *5 tasks are in the plan: 3
+ready to pick up, 1 being worked on and 1 waiting on something.* with a progress
+strip over the same counts (`views/queue/queue-summary.ts`). The plan's
+`revision` is behind *Show details*.
 
-**The write rule** ("Origin-checked" throughout these docs). A `POST` is accepted
-when its `Origin` is absent (curl, the CLI) or is the server's own loopback page
-(`http://127.0.0.1:<port>`, `http://localhost:<port>`), **or** when it carries the
-token in the `X-Staple-Token` header, compared in constant time. The page sends
-that header on every request (`lib/api.ts`), so the app opened through a forwarder
-that keeps the browser's own Origin (a phone on the tailnet; the forwarder
-rewrites `Host` to loopback, which is what seeds the token into the page) can
-write like the page on this computer. A cross-site page cannot set a custom
-header without a CORS preflight, and the server grants none: it sets no
-`Access-Control-*` header anywhere, and an `OPTIONS` is refused by the token or
-method gate like any other method. So a forged form or `fetch` from another site
-arrives without the header and is refused (`403`, `detail.reason:
-"cross_origin"`). `?token=` and `Bearer` open reads only and never stand in for
-the header on a write: a query string rides a plain cross-site form. Pinned in
-`test/ui-auth.test.ts` and `lib/api-write-header.test.ts`.
+**Next up.** A band across the top names the row an agent asking right now
+would be handed, with its title and *Open*. It is the first `eligible` row of
+the list below, which is what the resolver answers for a read with no actor, so
+the band and the list can never disagree. With nothing eligible it says
+*Nothing can be picked up right now: every task in the plan is waiting on
+something.*
 
-**A forwarder must check the Host it was sent.** Because the forwarder rewrites
-`Host` to loopback, the server cannot tell which name the browser used, and a
-page on a domain that resolves to the forwarder's address (DNS rebinding) would
-be handed the token like the real page — and, with the header rule, could write.
-So the forwarder answers only requests whose `Host` is its own tailnet name or
-address (`100.x.y.z:<port>`, `<machine>.<tailnet>.ts.net:<port>`) and refuses
-every other one (`421 Misdirected Request`) before forwarding anything. That
-check lives in the forwarder, not here: this server only ever sees loopback.
-The app reads the token out of its own URL once, keeps it in `sessionStorage`,
-and strips it from the address bar. Arriving without a valid token renders an
-explanation, not a blank page.
+**The order.** The plan's entries in plan order, each drawn with the same task
+row as the Tasks view, and each printing its **plan position** bare in a gutter
+(1, 2, 3, …). Under a queued epic or milestone, the rows it expands to are
+nested on the tree's own connector lines, in the order an agent meets them,
+each printing its **pickup number** with a `#` (`#5`). A container never gets a
+pickup number, because it is never a checkout target, and a resolved row loses
+its number. The expansion is capped at five rows with *and n more under
+STA-66*; the fold chevron opens and closes it. A row that is not pickable
+carries the store's sentence for why as its caption ("blocked by STA-35",
+"queued behind STA-66's review", "held by codex-1"). A claimed row keeps its
+place and its number dims: nothing moves while you are reading.
 
-## Work Workspace Settings
+**Not planned.** Every other open leaf follows in a folded section, *Not
+planned · n items · picked up after the plan*, in presentation sort, capped at
+ten with the rest counted.
 
-The settings surface is titled exactly that. It opens from the Settings row at
-the foot of the navigation rail, from the command palette, or by URL: `?settings`
-opens it on its first category and `?settings=kinds` focuses one. Opening from
-the rail pushes one
-history entry, so Back closes it and lands on the page you were on; moving
-between categories replaces that entry rather than adding to it; Forward
-reopens it. A deep-link arrival pushed nothing, so closing strips the
-parameter in place.
+**Reordering.** Drag (`@dnd-kit/core`, the reorder list the settings editors
+use), the per-row move buttons, Alt-↑ / Alt-↓, Alt-Home / Alt-End, and the row
+menu's *Move to top* / *Move to bottom* all end in one
+`POST /api/queue/reorder` carrying the view's `revision` as `baseRevision`. A
+move that would change nothing is never sent. Alt is required on the arrows and
+on Home/End so the plain keys stay with the list's own navigation.
 
-**Two panes.** Left, the categories, exactly as the registry serves them —
-grouped under *Workspace* and *Global*, in registry order, with no list of
-their own in the browser: registering a category in
-`src/core/settings-registry.ts` is the whole of adding it to the nav. Right,
-the selected category, with its scope named beside its heading. Under the
-title a scope line says which workspace is being edited and where global
-preferences live (the `global.path` the envelope reports). Scroll position is
-kept per category, and selecting one does not move focus off the nav.
+**The row menu** (`components/QueueRowMenu.tsx`, the `⋯` on every row, also
+opened by a long press) is where every row action lives, here and on the Tasks
+list: *Open details*; on a queued row the moves and *Remove from queue*
+(`POST /api/queue/remove`), disabled while somebody holds the row, with the
+reason; on a row not in the plan *Queue next* (`POST /api/queue/enqueue` at
+position 1) and *Add to queue* (appended). A row that is only in the order
+because its container is queued counts as not queued, so it offers the add
+items. On *All workspaces* the menu names which workspace's queue it acts on.
 
-**Narrow screens** (below 768px) stack the panes: the category list first,
-then the category, with a Back button in the header that returns to the list
-and puts focus back on the category you were in. The stacked frame is the
-whole viewport, so no form is clipped by a centred dialog.
+**Adding.** The picker above the list, *Queue a task, epic or milestone…*,
+lists this workspace's issues that are not already in the plan and adds the one
+you pick.
 
-**Full screen.** On wide displays a toggle in the header takes the dialog
-edge to edge and back; it is per open and never persisted, so the shell
-always reopens as a dialog. Esc closes, as every dialog in the app does.
+**A stale reorder.** Every write carries `baseRevision`, and the store refuses
+a stale one with `revision_conflict`, changing nothing, so the server's order is
+still the truth. The page re-reads and shows *The plan changed elsewhere —
+nothing was written.* with the store's sentence and two deliberate ways out:
+**Reload**, which abandons the move, and **Retry my order**, which re-applies
+the intent at the new revision, keeping whatever the other writer added and
+dropping whatever they removed. Neither happens on its own. Any other refusal
+is the store's own sentence in the shared refusal panel.
 
-What a category holds is decided by its registry `editor`: `statuses` and
-`kinds` are the two vocabulary editors below; a `fields` category renders a
-control per registered definition (see *Registry-driven categories*).
+`views/queue/queue-render.test.tsx` renders the pieces to static markup;
+`queue-model.test.ts`, `queue-tree.test.ts` and `queue-summary.test.ts` pin the
+numbering, the nesting and the summary.
+
+## Graph
+
+The Graph view (`views/GraphView.tsx`, `views/graph/`) draws the dependency
+graph from `GET /api/graph` with React Flow, laid out left to right by dagre.
+Only issues that take part in a dependency are drawn. The toolbar's filters
+apply here too (the same predicates as Tasks, joined on identifier), and an
+empty canvas says which filter to remove, or that there are no dependencies
+yet.
+
+**Nodes and edges.** A node is an issue: identifier, status, a two-line title,
+and in hub mode its workspace. An arrow runs from an issue to the work that
+waits on it. An edge to another workspace is dashed, an edge bridged across
+hidden done work is dotted, and an arrow that stands for several dependencies
+is labelled `×N`. A legend names each mark. A click on any node opens it in the
+[detail](#task-detail). Hovering or selecting an issue lights the chain it
+waits on and dims the rest.
+
+**Epics.** An expanded epic is a box around its members, with its progress
+(*3/4 done*) and a *collapse* chevron in its header; a collapsed epic is one
+node with its done count, and its chevron expands it. With more than 24 issues
+drawn, every epic starts collapsed. Opening or closing one epic re-lays out
+that level only and zooms to it. The **Epics** picker lists the epics as a
+tree: search, *Collapse all* / *Expand all*, and ticking epics narrows the
+canvas to them and their child epics. `/api/graph` in `--hub` mode carries no
+parents, so the hub graph is flat and the picker is hidden.
+
+**The toolbar**, left to right:
+
+- **View** (*View: Frontier · done faded*): a mode, *Off*, *Frontier* (only what
+  could be picked up right now) or *Path to target* (only the unfinished work
+  between now and the selected issue; disabled until one is selected); and done
+  work *Shown*, *Faded* or *Hidden* (its edges bridge across it). The done
+  setting starts from the page's Done toggle.
+- **Copy link** puts the canvas state in the address as `?graph=` (mode, done,
+  selected and collapsed epics, the target), so a shared link opens the same
+  canvas and reopens the target.
+- **Export**: *PNG — for a slide* or *SVG — vector, editable*, saved as
+  `staple-graph-YYYY-MM-DD` with a caption naming the scope and the date.
+- **Epics**, the picker above.
+- **Auto-arrange** drops dragged positions and applies the default layout.
+
+Dragged positions are kept per mode and workspace in the browser
+(`staple:graph-positions:v2:…`) and saved when a drag ends. On a narrow screen
+the first view frames the leftmost nodes at a readable zoom rather than fitting
+everything, and the minimap is hidden.
+
+**Scope.** With one workspace chosen in hub mode, the canvas shows that
+workspace's issues plus each issue in another workspace that blocks one of them
+or is blocked by one (`views/graph/graph-scope.ts`). *All workspaces* shows the
+whole hub graph.
+
+## Milestones
+
+The Milestones view (`views/milestones/MilestonesView.tsx`) is the planning view
+for [milestones](milestones.md): dated, human-ordered plans that contain epics
+and tasks without moving them. The toolbar has only the *Done* toggle, which
+sits in the top bar and decides whether resolved milestones are listed.
+
+**Turned off.** A workspace without the `milestone` kind shows *Milestones are
+not turned on in staple.* (the workspace's name) and a **Turn on milestones in Settings** button
+that opens that workspace's *Task types* in [Settings](#settings).
+
+**Left, the plan.** Every milestone in plan order, then target date, then
+identifier: an unplanned milestone sits below every planned one, and a date
+never reorders a plan. On a desk each is a card: the title, a pill in plain
+words (*Not started*, *In progress*, *Blocked*, *Done*, *Cancelled*), the due
+date in words (*Due 15 Oct, in 18 days*, *Was due …, 3 days ago*), a progress
+strip, *3 of 4 tasks finished (75%).* and what is in the way (*1 is blocked and
+2 wait for approval.*). On a phone a row is denser: identifier, target date,
+member count, `plan #`, a progress bar with `done/countable` and the percent,
+the state, the risk, and the queue's answer, `next: STA-67 (#4)`, or "no
+eligible work".
+
+**Right, one milestone.** On a desk: the title, the pill, the due date, *Owned
+by …*, **Open** (the milestone's [detail](#task-detail), where its goal is) and
+an expand button that gives the detail the whole content box. A progress card
+follows with the progress sentence, the risk, and *Next up: STA-67, number 4 in
+the pickup order.*; the identifier, start and target dates, plan position and
+the rollups (progress, blocked, gated, active, ready) are behind *Show
+details*. Then *What is in this milestone*: the ordered members, drawn with the
+same row as the Tasks view. A member epic's children follow it indented and
+read-only: membership never rewrites hierarchy and neither does this list. A
+member added with a note shows the note under its row.
+
+**Editing membership.** Each member has *Open*, *Move up*, *Move down* and
+*Remove*, plus Alt-↑ / Alt-↓ on the row. Below 1280px, and on a phone, the four
+fold into one `⋯` menu (*Open details*, *Move up*, *Move down*, *Remove from
+this milestone*). The form under the list adds a task by reference with an
+optional note (*Add to milestone*). Writes go to `POST /api/milestone/add`,
+`/remove` and `/reorder`, each carrying the view's `revision` as
+`baseRevision`; the store refuses a stale one with `revision_conflict` and the
+page shows *Member order changed elsewhere.* with the store's sentence and a
+Reload, because the fix is to read again. Any other refusal is the store's own
+sentence. There is no drag.
+
+**States without colour.** Where the technical state shows (a phone row, *Show
+details*), it is a glyph and a word: planned `○`, active `◐`, overdue `!`, done
+`✓`, cancelled `×`, with "all members done" beside an active milestone whose
+members have all landed (seen only while a gate or a manual status holds it
+open). Blocked and gated are facts about members, not milestone states, and
+appear as `⊘ n blocked` / `◇ n gated` in the risk line.
+
+**Layout.** Below 1024px (`SPLIT_MIN_WIDTH_PX`) the two panes stack: the list,
+then the detail with a "Back to milestones" button. From 1024px they split:
+wider than the shell's 768px because the rail takes its share of the window
+first. The expand button in the detail header gives it the whole content box at
+any width; press it again to return.
+
+**All workspaces.** With no workspace chosen in hub mode the view is *Milestones
+in every workspace*: read-only, grouped by workspace, leaving out workspaces
+with no milestones or without the kind, and naming a workspace whose read
+failed. Opening a milestone switches to its workspace and focuses it
+(`views/milestones/AllWorkspacesMilestones.tsx`).
+
+**In the rest of the app.** A row that is a direct member of a milestone and has
+no parent is drawn under the milestone in the Tasks tree (in the list's copy
+only: a real parent always wins, and the grouped-by-epic view skips it;
+`views/tree/milestone-placement.ts`). A row's milestone marker opens this view
+focused on that milestone (`?view=milestones&focus=`). An issue's detail names
+its milestone, direct or inherited.
+
+**How this section is verified.** `views/milestones/milestones-e2e.test.tsx`
+starts the real HTTP server over a scenario workspace, fetches
+`/api/milestones`, `/api/milestone`, `/api/issues` and `/api/queue`, and
+renders the real list, detail and layout pieces from those payloads with
+`react-dom/server`. It pins the stacked and split layouts and full screen, that
+the accessible row order equals the server's member order (the epic's child
+indented immediately under it, nothing drawn twice), that every reorder control
+carries its member's identifier and only the true edges are disabled, that each
+state is a glyph and a word with the glyph `aria-hidden`, and that a genuinely
+stale `baseRevision`, a real 409 from the real route, renders the conflict
+banner with the store's sentence verbatim while the server keeps the other
+writer's order.
+
+## Estimates
+
+The fifth view in the rail, **Estimates** (also "Go to Estimates" in
+the command palette, which also finds it by *estimate accuracy* and
+*calibration*), is the
+workspace's calibration report: `GET /api/calibration`, the payload of `staple
+calibrate --json` and MCP `calibration_cohorts`
+([timing-semantics.md](timing-semantics.md), "Calibration cohorts" and
+"Confidence ranges"). The view's internal id is `calibration` (saved preferences
+and commands key off it); the address calls it `estimate-accuracy`. It is per
+workspace; on *All workspaces* it shows [Choose a workspace](#choose-a-workspace)
+(*Estimates are checked for each workspace on its own.*). The view has no
+toolbar, and the palette's filter commands are hidden here: they narrow the
+issue list, and this report is not one. The page asks for the workspace it
+names, so the label and the data cannot diverge.
+
+**The answer first.** A card titled *How long work really takes in
+staple* (the workspace's name) opens the page with one sentence, the first three
+cards of the measured history in display order, cards that say the same thing
+said once, together: *Tasks (high priority) and all finished work (every kind)
+usually take about a fifth of the estimate.* (and how many more groups follow). It reads only the measured
+history, so it is the same with the older-history switch on or off. It holds the switch, **Include older history (rebuilt from logs, less
+precise)**; its *Show details* keeps the population line and the snapshot id with
+its member count and instant.
+
+**Each group is a card.** A cohort that read its own key: title (*Bug fixes
+(high priority)*; dimensions nobody recorded are left out), a confidence pill,
+the figure (*About ⅕ of the estimate*, the ratio a forecast scales by; below a
+fifth, *About 50 minutes per 10 estimated hours*), and plain sentences: *Tasks
+(high priority) usually take about a fifth of the estimate. Based on 8 finished
+tasks. Rough guess: not enough data to be sure.* Its confidence reads only its
+own fields: no samples or no bounds is *Unknown*; bounds under the 90% target or
+`small_sample` is *Rough guess*; a quantile under the target is *Fairly sure*;
+otherwise *Quite sure*. **Cohorts that fell back** to a broader class never get a
+card of their own, because the figure is the class's, not theirs: the cohorts
+that share a class are ONE card named for it and for what it spans (*All finished
+work (every kind)*, *All bug fixes (every priority)*), with the class's figure and count (*Based on 9 finished tasks.*) and
+*Also used for: Bug fixes (high priority): too few of their own (1)*, the own
+count being the fallback path's first level. Its pill is always *Rough guess*
+(the kinds it stands in for have too few of their own), never *Quite sure*, and
+it says so for them: *Rough guess for spikes (critical priority): only 3 of their
+own, so all finished work (every kind) stands in.* The verb agrees with the class: *All
+finished work (every kind) usually takes*, *All bug fixes (every priority) usually take*. The
+bar shows where 8 in 10 past tasks landed (the ratio's p10–p90) inside where the
+next one is likely to land (the prediction bounds, at the confidence they reach,
+in tens; under 50% it says *Too little data to say where the next one lands* and
+draws no band), the typical ratio as the marker, and the estimate itself as a
+dashed line. Under *Show details*: the
+key (`task · high · type unknown · area unknown · model unknown`), `n`, the class
+it read and how (`read at full, its own key`, or `fell back to all: its key has 1
+sample`) with the whole fallback path, coverage (`7 of 10 eligible (70%)`), the
+median and pooled ratio, the ratio a forecast scales by and how it was formed,
+`p10–p90`, where the next one lands with the confidence reached (under the 90%
+target marked in words), the median interval, the work median and `p10–p90`,
+floors and heavy tails when present, and the warning chips.
+
+**Measured history first; older history on by default, and apart.** The page leads
+with the `exact` set, *Finished tasks with measured time*, with a plain line
+(*Based on 9 finished tasks with measured time, out of 138 finished with an
+estimate.*) and what is not used, by the state the payload counts, said for that
+set (*Not used here: 2 have only approximate timing and 127 have timing rebuilt
+from logs (they're in the older history).*, the same with the switch on or off);
+the older history, drawn under it, says *10 are in the measured history above, 2
+have only approximate timing and 19 couldn't be rebuilt reliably*. The technical set line is behind *Show details*. The
+switch re-reads with `include=reconstructed`; the reconstructed groups then
+appear in their own section, *Older history (rebuilt from logs, less precise)*,
+*kept separate: never mixed with the history above*, after the exact one. The
+exact section reads the same either way. The switch is a remembered preference
+(`staple:estimates-include-older-history` in the browser's storage): on until you
+turn it off, and then off on every visit and reload until you turn it back on. With no samples a set says *We can't tell yet* and why.
+
+**How the two are verified.** `detail/forecast-e2e.test.tsx` starts the real
+HTTP server over `test/fixtures/forecast-scenario.ts`, a scenario written through
+the real store (checkouts and comments for the samples, a unit in progress, one
+in review, one unestimated, a dependency, reconstructed history rebuilt by the
+real `reconstruct`) and the real budget ingestion (a status-line limit read
+during a real attempt, a Codex account with no attempt), plus an empty
+workspace. It renders `ForecastReportView` and `CalibrationReportView` from the
+responses and pins the separate blocks, the lower bounds, the chain, the
+confidence and warnings, the unknowns with their reasons, the provisional
+reserve, the reconstructed toggle leaving the exact section and the opening
+answer identical, and the plain layer over the same payloads: each headline, each
+pill's word and icon, each visual's text alternative and legend, the fallback
+cohort grouped under its class, each set's per-state summary, and every technical
+figure sitting inside a closed *Show details*. `lib/plain-language.test.ts` pins the rounding, the
+phrasing and the status mapping on both sides of each threshold (other use and
+pace included), including unknown, lower bound, low confidence, in review and no
+samples;
+`lib/forecast-text.test.ts` pins the technical formats and the rule for which
+issues get a forecast. The type mirror is pinned against the store's types in
+`test/contract-ui-types.test.ts`.
+
+## Usage
+
+The rail's **This computer** group holds one view, **Usage** (also "Go to
+Usage" in the command palette, which also finds it by *budget*): this machine's provider limits and each
+one's session pressure, `GET /api/budget`, the payload of `staple budget
+--json` and MCP `get_budget` ([execution-telemetry.md](execution-telemetry.md#pressure)).
+It sits apart from the workspace views because budget readings live in this
+machine's hub and never synchronize: the view takes no workspace and shows
+the same figures whichever one the switcher names. It has no toolbar, and the
+top bar names the scope *This computer*. It also reads `GET /api/budget/polling`
+for the live-check state.
+
+**Plain first.** The view opens with one sentence: *Your subscription limits on
+this computer, and whether your recent pace keeps a safety reserve of 20% (a
+default until you set one). The pace check is an early rule of thumb until a
+budget policy is set.*, a pill counting the limits at risk, and the rule's
+technical wording behind *Show rule details*. Accounts are named for people
+(*Claude (Anthropic)*, *Codex (OpenAI)*) with the operator's label and *measured
+on this computer* / *not set up on this computer*. Each limit with a current
+reading is a plain card (the same components as the forecast's, see
+[Plain-language cards](#plain-language-cards)): a status pill, what is left as
+the figure (*78% left*, with its age when stale, *· 12 min ago*), a sentence
+with the reset and the verdict (*Resets in 3h 56m. At your current pace you'll
+stay above the reserve.*), a solid **Measured** frame (the gauge with the reserve
+line; *Using about 4.2% an hour lately; last read 1 min ago.*, *No use lately.*
+for an idle limit, *… as of 3h ago* for a stale one) and a dashed **Forecast**
+frame labelled *an early rule of thumb until a budget policy is set* (*To keep
+the 20% reserve until it resets, use no more than about 15% an hour.*; *Already
+at or below the 20% reserve; any more use eats into it.*; *Almost any pace is
+safe until the reset.* when the safe pace exceeds everything left). Both frames
+say a pace in the same unit, so they compare: one decimal under 10%, per hour for
+a short window and per day for a window of two days or more (*about 8.4% a
+day*). When the pace reaches the reserve is said once, in the sentence, never
+again in the Forecast frame; at a pressure of exactly ×1.00 the sentence says
+*you'll use up everything above the 20% reserve by the reset*, which the frame's
+safe pace agrees with.
+The status is `pressureStatus`, the store's own provisional state and no
+threshold of the page's: *unsafe* is **At risk** (with the hatched edge; the
+sentence says when the pace reaches the reserve, or that it already has),
+*within* is **On track**, no state is **Unknown** with its reason in words. Limits
+with no current window collapse into one line per account (*1 Claude limit can't
+be read yet: the provider doesn't say when it resets.*); an account or a machine
+with nothing says why in plain words (*Set up, but no reading has arrived yet.*,
+*Usage tracking is off on this computer…*), with `staple budget setup` behind
+*Show details*. Everything below is what each card's (or account's) *Show
+details* holds.
+
+**One card per limit, two blocks per card.** Accounts are listed as the read
+returns them, each limit a card. **Measured**, in a solid frame, is what the
+provider reported: the high-water remaining figure, the reset countdown and
+its local time, the observed pace (`%/h`, from the window's first reading to
+its latest) and the last reading's age and source, with a `stale` mark past
+10 minutes. **Forecast**, in a dashed frame labelled *provisional, as of*
+the read, is what the pace implies: the sustainable pace (what is left above
+the reserve over the time to the reset), the pressure (observed over
+sustainable), when the pace uses the limit up and when it reaches the
+reserve, safe concurrency, and the confidence of the pace with its warning
+chips (few readings, a span under 30 minutes, regressions in the window).
+No figure appears in both blocks, and the page computes none of them.
+
+**States.** Each card carries its pressure state as a word and an icon:
+*Within*, *Unsafe* or *Unknown*, and the line under it says *(provisional)*
+for the first two, since the rule behind them is. Unsafe also gets a red frame and a hatched
+left edge, so the state never rests on colour alone, and the header counts
+the unsafe limits. Unknown is always the word with the payload's reason
+(`stale`, `no_sample_yet`, `window_elapsed`, a missing second reading) in the
+italic placeholder style, never a 0. A limit with no current window (it
+reset, or its readings carried no reset instant) collapses to one line that
+says so. An account with no limits says why (no reading yet, capture off, no
+source bound) and names `staple budget setup`; a machine with no budget data
+at all says the same at the top. Safe concurrency always reads *Not defined
+yet*: it needs an admission policy, and staple has none.
+
+**The reserve and the rule.** The header states the reserve (20% of each
+limit, a provisional default until an admission policy sets one) and the
+provisional pressure rule (unsafe at ×1.00 or over), both from the payload.
+
+**Live.** The view re-reads every 30 seconds while the page is visible and at
+once when it becomes visible again. It does not follow the workspace
+fingerprint: budget readings live in the hub, not in a workspace.
+
+**Refresh.** The button runs one real collection
+(`POST /api/budget/collection/refresh`, what `staple budget collect` runs: the
+passive scan, then, with [live polling](execution-telemetry.md#live-polling)
+on, one check with each linked provider, at most once a minute per account),
+reads *Checking…* while it runs, then says per provider what happened:
+*Updated just now*, or the provider's reason in plain words (*Claude Code's
+sign-in on this computer has expired… Sign in to Claude Code again*). With live
+checks off it says so and where to turn them on. It works from the phone on
+the tailnet, and is the one write gated by the token alone (see
+[Auth](#auth)). With live checks on, each account says when it was last checked;
+when that check failed, a bordered line above its cards says why and how old
+the figures below are. A limit the provider reports with no window running
+reads *nothing used since it last reset, so the full allowance is there*
+instead of unknown. The last reading's source reads *live check*.
+Between reads, the reset countdown and the last reading's age tick by the
+seconds the page has held the answer, by the page's own clock, so a device
+whose clock is off still counts right; the forecast figures stay as of the
+read. At 390 px the two blocks stack, labels keep a fixed column and long
+values wrap; nothing scrolls sideways, and the controls keep the app's touch
+rules (the chips at 24 px).
+
+## Task detail
+
+Any issue opens in one detail surface (`detail/IssueDetailMount.tsx`,
+`detail/IssueDetailPanel.tsx`): a click or Enter on a row, a graph node, a
+breadcrumb, a reference chip or a palette result. It reads `GET /api/issue` and
+is not part of the address: Back closes it rather than navigating.
+
+**Drawer or page.** On a desk it is a drawer on the right (up to 46rem, with a
+scrim) or, with *Expand to full screen*, the whole window with the properties in
+a sticky right-hand column; *Collapse to drawer* goes back. The choice is
+remembered (`staple:detail-mode`). Below 768px it is always a full-screen sheet
+with *Back to the list*, summary chips (status, priority, kind, assignee), the
+properties behind *More details* and the primary action in a bar at the bottom.
+It closes with the X (*Close detail*), Escape (except while typing in a field),
+the scrim, or the browser's Back, and focus returns to the row it came from.
+
+**Moving through the list.** *Previous task* and *Next task*, `j` / `k` and
+Alt-↑ / Alt-↓ step through the list on screen, after filtering, grouping and
+folding, and the bar shows the position (*3 of 24*). It does not wrap. Once the
+issue has loaded, the selection is pinned to its internal id, so a sync that
+renumbers it cannot switch the drawer to another issue.
+
+**The top.** A breadcrumb (milestone, then parents, then the reference), the
+title (edited in place), and a status line: the status pill, a plain sentence
+(*Being worked on by …*), one primary action and a *More actions* menu. The
+actions, all `POST /api/action`, are *Start work* (a checkout, which asks for a
+working name once and remembers it as `staple:actor`), *Take it over* (when the
+holder has been silent for 30 minutes), *Mark done*, *Reopen*, *Stop working on
+it* (release), *Free it up* (a stale claim), *Ask for approval…* (a parent
+only) and *Copy task ID*. The status pill's menu lists the workspace's statuses
+with a line each; it never offers the gated status, and it sends you to *Start
+work* rather than moving an unassigned task into an active status. When a run
+holds the issue, a line names the run with *See the run*.
+
+**Properties.** Title, kind, priority and labels write through `POST
+/api/action` (`update`); the project writes through `POST /api/project/assign`.
+Assignee, milestone (with *via …* when inherited), dates and the timestamps are
+read-only here; *More details* shows ids and raw timestamps.
+
+**Approval.** While the issue's gate is active, a *Review gate* block sits above
+the properties (`detail/GateReview.tsx`): the children queued behind the gate as
+a tree to tick, *Approve all* (or *Approve and close gate* when nothing is
+queued), *Approve selected (N)*, and *Send back*, which takes a required note,
+posts it as a comment and returns the issue to the next agent. Every decision
+asks the signer to type their name. *Ask for approval…* in the menu opens the
+request form with an approver. Routes: `POST /api/gate/approve`,
+`/api/gate/request-changes`, `/api/gate/request`; each answers with the
+refreshed issue. `detail/gate-review.test.tsx` pins the block.
+
+**Tabs** (`detail/tabs/registry.ts`):
+
+| Tab | Shows | Reads and writes |
+| --- | --- | --- |
+| **Details** | The description; for a milestone its goal and *What is in this milestone*; *Done when* criteria; the unblock note; a worklog excerpt with *Show all*; *Waiting on*, *Holding up*, *Tasks inside* | `GET /api/document` |
+| **Connections** | *Part of*, *Sub-tasks* with progress, *Waiting on*, *Holding up*, as rows with summary sentences, and a read-only map behind *Show map* | `GET /api/graph` |
+| **Documents** | Only when the issue has documents. A picker, *Read* / *History*, a compare between two revisions (*One column* / *Side by side*), and *Restore this version* | `GET /api/document`, `GET /api/revisions`, `POST /api/action` (`doc_restore`, refused on a stale base revision) |
+| **Activity** | One timeline by day: comments as cards, events as lines, document revisions; a comment box (Enter sends) | `GET /api/events?issue=`, `POST /api/action` (`comment`) |
+| **For agents** | Exactly what an agent sees when it opens the issue, its size in tokens, with or without document bodies, *Copy*, *Where the size goes* | `GET /api/agent-context?ref=` |
+| **Time** | Planned against actual, the forecast, and how exact the figures are (below) | the issue payload, `GET /api/forecast`, `GET /api/timing/quality` |
+
+**A milestone's detail.** A milestone opens in the same surface. Its status line
+reads *3 of 9 tasks finished (33%). Due 11 Oct, in 13 days.*, its primary action
+is *Open plan* (the [Milestones](#milestones) view), and Details carries the
+**goal** in place of *Done when* (`detail/MilestoneGoal.tsx`,
+`lib/goal-text.ts`): *n/m met*, a summary line, each criterion with its verdict
+(*Met*, *Not met*, *Unknown*), its evidence as links (a ticket opens it, a
+document opens that document), who marked it and when, and why an unknown one
+is unknown; the pace (*On track*, *Behind*, *Overdue*, …) with its numbers; the
+gate, and whether a goal run or a person asked for it; and the goal run working
+it. A member a run created says *Created by autopilot*. See
+[milestones.md](milestones.md#goal) and [runs.md](runs.md#goal-mode).
+`detail/milestone-goal-e2e.test.tsx` pins the goal view against a real goal run.
+
+**The dependencies dialog** (`components/DependenciesDialog.tsx`) opens from a
+row's dependency badge: *Blocked by* and *Blocks*, read-only.
+
+### Time
+
+The **Time** tab (`detail/tabs/AnalyticsTab.tsx`; the tab id stays `analytics`)
+is estimate versus actual for one issue, drawn from the `timing` and
+`childrenTiming` the issue payload already carries (see [cli.md](cli.md),
+"Estimates vs actuals"). The page adds nothing up itself, so it can never
+disagree with `staple show` or with MCP `get_task`, and it runs no stopwatch of
+its own: figures move on the 1.5s poll.
+
+**One headline.** Leaf and parent alike open with one sentence-shaped line,
+*Planned 6 hours · 4 minutes so far* (*took …* once the work is finished), a bar
+that fills as the actual approaches the plan, and the difference said as what it
+means: *5 hours 56 minutes left in the plan*, *Took 20 minutes longer than
+planned*, *Right on the plan*. Planned is the recursive `subtreePlan`: the
+issue's own estimate when one is set, otherwise its descendants', so an epic
+nobody estimated over three 4h/3h/4h tasks leads with 11 hours. Actual is the
+headline `activeSeconds`, which for a parent is already its children's
+aggregate; an epic has no stopwatch of its own. An absence is the words *No
+estimate* or *No work recorded*, never a zero or a dash, and with neither the
+tab says there is nothing to compare yet and how to get there. Under the card
+one muted line carries the caveats: why there is no difference, how many
+sub-tasks have no estimate, whether the time is approximate, and time spent
+waiting for review, which is named but never counted as work. A screen reader
+hears the headline once, as one sentence (planned, actual, difference,
+coverage, source), and the drawn card is hidden from it.
+
+**This task and its sub-tasks.** A parent gets a compact block beneath the
+headline with two rows. *This task itself* is the estimate typed on the parent
+and the time worked on it directly; *Its sub-tasks* is the plan from the tasks
+under it and their added-up time. Every figure names its source in words,
+because the two plans are alternatives, never addends: the headline takes the
+own estimate when it exists, otherwise the sub-tasks'. A leaf has nothing to
+break down and shows the headline only.
+
+**Sub-tasks.** Two lines per direct child: status, title and the difference
+(*2 hours under the plan*), then *Planned 3 hours · 1 hour 50 minutes spent*.
+The plan is the child's *effective* plan, the figure its parent counts it as,
+and where it came from is the tooltip on it. A child that is itself a parent
+shows its own total. An unfinished child's difference says *so far* while its
+clock is fed and *stalled* once it has gone idle, and a line under the list says
+what each word means.
+
+**How exact these numbers are.** Last, when there is something to say: the
+agent-work figure and its measurement state, the time on the clock and its
+state, and, for a parent, a line counting how the finished tasks under it were
+measured (*Of the 9 finished tasks under it: 7 measured exactly (78%), …*), read
+from `GET /api/timing/quality?parent=` (`staple timing quality --parent`).
+
+In the task list, a folded parent shows the same rolled-up plan beside its
+progress bar; it is absent rather than a dash when nothing beneath is
+estimated.
+
+**Forecast.** Between the breakdown and the sub-task list, an open parent
+shows its forecast, and an open leaf with its own estimate a compact one: both
+read `GET /api/forecast?ref=` (`staple forecast --json`, MCP `forecast`; see
+[timing-semantics.md](timing-semantics.md), "Forecasts") and render it as
+returned. The page computes nothing: every figure is a field of the payload,
+rounded and phrased for a reader who is not an engineer, with the exact figure
+one click away. A resolved issue, or a leaf with no estimate, shows no forecast.
+A leaf in review or awaiting approval shows one card, *This task is waiting for
+review, so there's no work left to forecast*, with an *In review* pill, and
+makes no request: its work was handed over, and the wait is not work.
+
+### Plain-language cards
+
+Every block of the forecast and of [Estimates](#estimates) is a
+card (`components/plain/`), built the same way so it reads at a glance:
+
+1. a small title and, where the block has one, a **pill**;
+2. **one headline figure** (`16 hours`, `78% left`, `About ¾ of the estimate`);
+3. **the answer sentence**, in everyday words (`This should take about 16 hours
+   of work.`), which never repeats the figure's own words where it can help it;
+4. a **visual** with a text alternative (below);
+5. **What does this mean?**, a button that opens two or three sentences inline
+   (inline rather than a tooltip, so a touch screen gets it too);
+6. **Show details**, a closed disclosure holding every technical figure in its
+   exact form: quantiles, bands, bounds and
+   the confidence they reach, the fallback path, warning chips, reason codes,
+   snapshot ids. Power users and agents lose nothing.
+
+The cards sit in a container-query grid: one column in a narrow detail panel or
+on a phone (390 px), two where the panel has room, so they reflow on the width
+they are given rather than the window's. Light and dark each have their own
+validated steps (below).
+
+**Rounding and phrasing, never meaning** (`lib/plain-language.ts`, pure and
+tested in `lib/plain-language.test.ts`). Effort durations round by band: under a
+minute says *less than a minute*; under 5 minutes, *a few minutes*; under 90
+minutes, the nearest 5 minutes (so a typical *55 minutes* never jumps to *1
+hour*); under 10 hours, the nearest half hour (`8½ hours`); under 100 hours, the nearest hour; beyond, the nearest 5 hours. Effort is
+never written in days. A range shares its unit (`between 14 and 21 hours`),
+reads *up to about 1 hour* when it starts under a minute, and collapses to `about
+15 hours` when both ends round alike. A reset countdown reads
+like a clock (`3h 56m`, `3 hours`, `4 days 1h`), rounded once to the minute and
+carried (3 599 s is *1 hour*, never *60 minutes*); a stale reading's age is short
+(`12 min ago`, 3 598 s is *1h*, 23½ hours is *1 day*). *About* goes only before a
+number: *a few minutes*, never *about a few minutes*. An estimate ratio (work / estimate) reads *about as long as estimated*
+from 0.9 to 1.1; *a little less than estimated* from 0.85, *a little longer than
+estimated* up to 1.125 (a 10% overrun is never hidden as "1 times"); from a fifth
+up to 0.85, the nearest of *half*, *a third*, *a quarter*, *a fifth*, *two
+thirds*, *three quarters*; below a fifth, concretely on a 10-hour estimate (*a
+10-hour estimate usually takes about 50 minutes*), never `1/12`; from 1.125 the
+nearest quarter to 1.5 (*1¼ times*), then halves to 3 (*twice*), then wholes. A
+lower bound always keeps *at least* (and *at most* for what is left, *or more* on
+a range); an unknown is always *We can't tell yet* with the payload's reason in
+everyday words (`no usage has been measured on this computer`), never 0.
+Confidence is a word — high *Quite sure*, medium *Fairly sure*, low *Rough
+guess* — shown once, as the card's figure, with a sentence of what it rests on
+(`Based on 8 finished tasks with measured time.`) and why it is not surer.
+
+**The status word** (`limitStatus`, the one mapping, tested on both sides of each
+threshold). A provider limit is:
+
+| Status | Icon | When (first match wins) |
+|---|---|---|
+| **Unknown** | question mark | nothing is known to be left (`remainingPercent` null) |
+| **At risk** | octagon | already under the reserve (`reserve.alreadyBelow`) |
+| **Tight** | triangle | no projection of this work, but the account's pace runs out before the reset (`exhaustion.atPace` = `before_reset`): *At the account's current pace this limit runs out before it resets; what this work adds is unknown.* |
+| **Unknown** | question mark | no projection of this work (`work`, `reserve` or `reserve.breachProbability` null) |
+| **At risk** | octagon | the work alone runs the limit out (`work.remainingAtResetPercent.expected` < 0) |
+| **At risk** | octagon | the worse breach probability (alone, or with other use) ≥ 50% |
+| **Tight** | triangle | the worse breach probability ≥ 10% |
+| **On track** | check | the worse breach probability < 10% |
+| then one step worse | | the burn is a lower bound (`work.lowerBound`) |
+| then at least **Tight** | triangle | the account's pace runs out before the reset (`exhaustion.atPace` = `before_reset`) |
+
+The breach probability is the **worse** of the work alone
+(`reserve.breachProbability`) and, when the payload has it, the work with the
+account's other use (`reserve.withOtherUse.breachProbability`); the sentence says
+*Counting other use of this account, …* when the other use is what made it worse.
+Then, in order: a lower-bound burn (`work.lowerBound`: part of the work could not
+be measured, so the real use can only be higher) moves the result one step worse
+(On track → Tight, Tight → At risk), because *On track* is never claimed from part
+of the work (*Probably fits, but we could only measure part of this work, so it
+may need more.*); and when the account's own pace runs the limit out before the
+reset (`exhaustion.atPace` is `before_reset`) the result is at least **Tight**
+(*This work fits, but at the account's current pace this limit runs out before it
+resets.*). A low-confidence work rate does not change the word; the sentence adds
+*(a rough guess: little usage measured so far)*. The completion card's pill is its
+confidence word (a neutral outline, dashed for *Rough guess*), *Unknown* when
+there is no figure, *Done* when settled. Every pill is a word plus an icon of its
+own shape, never colour alone.
+
+**Visuals.** The **likely-range bar** starts at 0 and draws the draws' p10–p90
+as the strong *likely* band, the 90% band (p5–p95) as a pale edge with a ≥3:1
+outline, and the expected figure as an ink marker with a card-coloured ring; on
+estimate accuracy it adds the estimate itself as a dashed line. Its legend says
+ONE range, *Most likely between 14 and 19 hours (8 in 10 chances)* (*, or more*
+on a lower bound); the pale edge is named only as *Rarely beyond 20 hours*, and
+only when that rounds to different words and the figure is not a lower bound,
+whose upper ends promise nothing. The exact quantiles and band are under *Show
+details*. The **budget
+gauge** is the whole allowance, read left to right as what is left: solid for
+what this work leaves at the reset, striped for what this work is expected to use
+(stripes, not a second hue, so it reads under colour-blindness and in print),
+grey for already used, a dashed ink line at the safety reserve. Each visual is
+`role="img"` whose name says every mark in words (`78% left now. This work would
+use at least 20%, leaving at most 58% when it resets. Safety reserve: 20%.`); the
+legend beneath repeats it for sighted readers and is hidden from assistive
+technology so nothing is heard twice. The components take figures as props and
+only position them, so any other analytics view can reuse them.
+
+**Colour and access** (theme-tokens.css, `--plain-*` and `--viz-*`). Status
+tones are tints whose text clears 4.5:1 on its own background in both modes; the
+visuals are one blue ramp whose likely band, fill and wide-band edge clear 3:1 on
+the card, and the track's outline is drawn at full strength (≥3:1 on the card),
+light and dark each chosen and checked against its own surface. The
+help button and the details summary are at least 24 px tall (44 px on a coarse
+pointer) with a visible focus ring; the disclosure chevron's turn is the only
+motion and is off under reduced motion.
+
+### What the forecast shows
+
+- **Work left** (full width): the headline figure, the answer sentence, the
+  likely-range bar of the remaining labor, and a *Not counted* line naming how
+  many units are in review (*time waiting for review isn't work*) or cannot be
+  estimated (the latter only when the headline has not already said it). With no
+  figure at all, the *How sure we are* card is left out (there is nothing to be sure
+  about) and its technical line and warnings move under *Work left*'s details. A lower bound reads *At least
+  1½ hours of work is left, probably more: 1 task can't be estimated yet.* Under
+  *Show details*: *Remaining labor* (or *Remaining work* for a leaf) with the
+  expected figure, the draws' `p10–p90` and the `90% band`, *(lower bounds)*
+  where partial, *Unknown:* with its reason where null; the units in review as
+  *Not forecast* and the unknown units with their reason; the unit counts and the
+  plan's estimates; and *Effort along the work, not calendar time*. Effort
+  figures are hours past a day (`139h`, never `5d19h`).
+- **What has to happen in order** (full forecast only): the critical path in
+  words (*At least 8½ hours of it has to happen one step after another.*) with
+  its own range bar, and a line when some unit waits on work outside the subtree.
+  Under *Show details*: *Critical path* with its figures, the chain first to last
+  as issue links with each unit's expected remaining work, and every open outside
+  blocker by reference (`STA-42 waits on STA-7 (backlog)`). Identifiers never
+  break across lines.
+- **How sure we are**: the confidence word and sentence. Under *Show details*:
+  the line with what the classes' bounds reach against the 90% target and why it
+  is not high, and the warning chips in the payload's order. Each chip is a
+  button: hover or keyboard focus shows its sentence in the app's tooltip, a
+  press opens it inline, and the sentence is in the button's accessible name.
+- **Usage**, in its own dashed frame under its own heading, subtitled *Usage
+  measured on this computer*: usage data never synchronizes and never blends
+  with the completion figures. It opens with *How this work fits your
+  subscription limits. We aim to keep 20% of each limit in reserve (a default
+  until you set one).*, or *We can't tell yet: no usage has been measured on this
+  computer.* Each account is named for people, *Claude (Anthropic)* or *Codex
+  (OpenAI)*, with the operator's own label beside it and the raw account
+  reference behind the account's *Show account details*. Each limit with a
+  reading gets a card, named from its window (*5-hour limit*, *Weekly limit*):
+  the status pill, what is left as the figure (with its age when the reading is
+  stale, *93% left · 12 min ago*), the reset and the verdict as the sentence
+  (*Resets in 3h 56m. This work fits comfortably.*), the gauge, and a *What does
+  this mean?* that describes only the marks that card draws. Cards keep their own
+  height. The limits that can't be read at all collapse into one line per account
+  (*2 other Codex limits can't be read yet: the provider doesn't say when they
+  reset.*),
+  their technical rows behind the account's *Show account details*.
+  Under each card's *Show details*: the limit key, what is left, the
+  reset countdown with the read's clock time (`resets in 3h58m (as of 11:02)`),
+  the work rate in %/work-hour with its confidence and warnings, what the work
+  alone uses and leaves at the reset (across how many windows when more than
+  one; *runs the limit out before the reset* in words), and the chance of going
+  under the reserve alone and with other use of the account — *at least* on a
+  lower-bound burn, *no draw went under the reserve (the burn is a lower bound)*
+  instead of an empty *at least 0%*, *(already below it)* when it is. Every
+  unknown reads *unknown* with the reason from `missing` and `missingInputs`,
+  never 0%. The budget block's own *Show reserve details* names the reserve,
+  provisional or not, that the work runs serially from now, and that the data is
+  this machine's only.
+- **Where these numbers come from**, a closed disclosure: the forecast,
+  calibration and budget snapshot ids, the instant, and whether the scope is the
+  subtree or the issue itself.
+
+The forecast re-reads on the page's refresh fingerprint.
+
+## Autopilot runs
+
+The page watches and stops [autopilot runs](runs.md); it never starts or
+continues one. Everything reads one `GET /api/runs` per change fingerprint
+(`lib/runs.ts`). [runs.md](runs.md#in-the-web-ui) has the full description.
+
+- **The rail's Autopilot section**, once the workspace has had a run: one card
+  per live run (its scope, progress, the next ticket, what would stop it, its
+  state, whether a driver is attached, **Stop** and **Details**), then *Run
+  history*. On a phone the first live run is one line above the tab bar with a
+  44px Stop.
+- **The badge.** A task a live run holds, the run's scope row and a folded
+  parent hiding held work wear an *Autopilot* badge; the task's detail says
+  which run is working on it.
+- **Run history** (*Autopilot runs*): *Running now* and *Earlier*, each run with
+  who ran it, over what, when, how long, its driver, its tickets and how each
+  went, and how it ended in plain words (`lib/run-text.ts`). Live runs have
+  **Stop** and **Pause** / **Resume**. Stop asks first and takes an optional
+  note: `POST /api/run/stop`; pause and resume are `POST /api/run/pause` and
+  `/api/run/resume`.
+- **Stop notices.** When a run ends, every open page shows a notice within one
+  refresh: why, and a link to what needs a person (*Review*, *Unblock*,
+  *Open*). It sits in the corner on a desk, above the run strip on a phone, and
+  inside the detail while a task is open. What this browser has already seen is
+  kept in `staple:run-stops:v1`.
+
+`components/autopilot/autopilot-e2e.test.tsx` drives the banner, the phone
+strip, the badge, the history, a stop notice and a stop from the page against a
+real server and real runs.
+
+## Choose a workspace
+
+Queue and Estimates are about one workspace at a time. On *All workspaces* with
+more than one workspace they show a **Choose a workspace** card instead
+(`views/ChooseWorkspace.tsx`, `views/workspace-scope.ts`): a sentence saying why
+(*Each workspace keeps its own pickup order, so there is no single queue for all
+of them.*), a button per workspace with its prefix, and *What does this mean?*.
+Choosing one is the same as choosing it in the switcher, and it becomes the
+default answer when New task or Settings ask which workspace. Tasks and Graph
+show every workspace at once; Milestones shows its read-only all-workspaces
+list; Usage is not about a workspace at all.
+
+## Settings
+
+One **Settings** sheet holds everything configurable from the page, for this
+computer and for every workspace (`settings/SettingsDialog.tsx`,
+`settings/settings-shell.ts`). It opens from the Settings row at the foot of the
+rail, from the command palette ("Settings", "Settings: Usage", "Settings: Cloud
+account", "Settings: Statuses"), from the sync pill, or by URL: `?settings`
+opens it on its list, `?settings=kinds` opens one section, and
+`settings-ws=<workspace>` says which workspace a per-workspace section edits.
+Opening from the rail pushes one history entry, so Back closes it and lands on
+the page you were on; moving between sections or workspaces replaces that entry
+rather than adding to it. A deep-link arrival pushed nothing, so closing strips
+the parameters in place.
+
+**Two panes.** Left, the sections in two groups. *Across all workspaces*: *Cloud
+account*, *Workspaces on this computer* (the hub registry), *Usage*, and *This
+computer* (the machine's `config.json` preferences: `browser`, `port`,
+`setupComplete`). *Per workspace*: *Statuses*, *Task types*, *Picking up work*
+and *Cloud sync*. The registry sections come from `src/core/settings-registry.ts`
+(the page shows *Task types*, *Picking up work* and *This computer* for the
+registry's *Kinds*, *Workflow* and *This machine*); the cloud and usage
+sections are the page's own. Right, the selected section, with a line saying
+whom it applies to (*Applies to every workspace on this computer*, *Applies to
+staple only*). Under the title a line says whether a workspace is being
+edited. A per-workspace section carries its own workspace picker, and changing
+it re-points the section without closing the sheet. Opened from *All
+workspaces* with no workspace remembered, a per-workspace section shows a
+*Which workspace?* card (`settings/WorkspaceChooser.tsx`) instead of editing
+the first one. Scroll position is kept per section, and selecting one does not
+move focus off the list.
+
+**Narrow screens** (below 768px) stack the panes: the list first, then the
+section, with *Back to categories* in the header (and the phone's Back) that
+returns to the list and puts focus back on the section you were in. The
+stacked frame is the whole viewport, so no form is clipped by a centred dialog.
+
+**Full screen.** On wide displays *Enter full screen* takes the sheet edge to
+edge and *Exit full screen* brings it back; it is per open and never
+persisted. Esc closes, as every dialog in the app does.
+
+What a registry section holds is decided by its `editor`: `statuses` and
+`kinds` are the two vocabulary editors below; a `fields` section renders a
+control per registered definition (see
+[Registry-driven categories](#registry-driven-categories)).
 
 ### Form primitives
 
-Every category is built from one set of primitives (`settings/form/`), so
+Every section is built from one set of primitives (`settings/form/`), so
 saving, cancelling, dirty state, inline errors and conflicts behave the same
 way everywhere:
 
@@ -389,27 +1249,29 @@ way everywhere:
   tag that says *Workspace* or *Global* and where the value came from
   (`default`, `workspace`, `config`). **Section** groups fields and carries the
   error that belongs to no single field.
-- **ActionBar** — *Save changes* / *Cancel* / *Reset to defaults*. Nothing is
+- **ActionBar** — *Save changes* / *Cancel* / *Reset to defaults*, sticky at
+  the foot of the section, with a *Saved* confirmation after a save. Nothing is
   written until Save; Cancel drops the draft; Reset is offered only by forms
   that have defaults to go back to. While a save is in flight the bar says
   *Saving…* and every control is disabled; a refused save keeps the draft and
   puts the store's sentence on the row or field it names, or on the section
   when it names none. Nothing is paraphrased and nothing is retried.
 - **ReorderList** — drag by the handle, or the per-row *Move up* / *Move down*
-  buttons (always visible), or alt+arrow on the row. After a keyboard move
-  focus stays on the moved row: on the same button, or on the other one when
-  the row reached an end and that button became disabled.
+  buttons, or Alt-arrow on the row. After a keyboard move focus stays on the
+  moved row: on the same button, or on the other one when the row reached an
+  end and that button became disabled. In a narrow pane the handle and the
+  buttons give way to one `⋯` menu per row (*Move up*, *Move down*, *Remove*).
 - **Destructive confirmation** — a removal opens an inline confirmation under
   the row, with the migrate-to picker when issues still carry it; the
   confirm button stays disabled until a target is chosen.
 
 **Unsaved changes.** A form with a draft reports it to the shell, and every
 way out — the X, Esc, a click outside, the narrow layout's Back, selecting
-another category, closing the tab — asks first: *Discard changes* or *Keep
+another section, closing the tab — asks first: *Discard changes* or *Keep
 editing*. Nothing leaves a dirty form on a keypress.
 
 **External revisions.** The 1.5s poll republishes the settings envelope while
-the dialog is open. A clean form simply shows the new state. A dirty form
+the sheet is open. A clean form simply shows the new state. A dirty form
 remembers the served state it started from; when that moves underneath it
 (another tab, an agent through MCP, the CLI) a conflict banner appears and
 Save is held until you choose: *Reload* drops the draft and shows the new
@@ -425,8 +1287,9 @@ The status set and the kind vocabulary are workspace data, not staple's
 Two lists. Each row has an editable label, a drag handle, and — for statuses —
 a category select; removing a row that issues still carry requires a target to
 migrate them onto. Reorder by dragging, or with the per-row move buttons, which
-are the keyboard path and are always visible rather than revealed on hover.
-Edits accumulate as a draft — the list shows what Save will produce, with the
+are the keyboard path and are always visible rather than revealed on hover (in a
+narrow pane, the row's `⋯` menu).
+Edits accumulate as a draft — the list shows what Save produces, with the
 usage count moved along by a migrate-to removal — and Save posts them as one
 ordered, all-or-nothing batch of the same ops the MCP tools take. A refusal
 is the store's own sentence, on the row it names. A kind row carries one thing
@@ -438,7 +1301,7 @@ Behaviour follows the CATEGORY, never the id. A workspace that adds `pairing` in
 in-progress colour, with no new theme token — `styles/app.css` maps the eight
 categories onto the existing `--status-task-*` hues.
 
-**Order.** The dialog's list is the CONFIGURED order. Lists and group headers use
+**Order.** The sheet's list is the CONFIGURED order. Lists and group headers use
 the LIST RANK, which the server computes: categories in a fixed sequence (active,
 review, gated, blocked, ready, unstarted, then done and cancelled) with the
 configured order breaking ties inside each one. So dragging reorders statuses
@@ -481,15 +1344,20 @@ to its default. Global-scope definitions render disabled with the sentence
 naming `staple config set`. Registering a definition is the whole of adding
 it to the page: nothing in the form names a setting.
 
-**Workflow** is the first such category in workspace scope, and its first
-control is the queue policy
+**Picking up work** (the registry's *Workflow* category, id `queue`) is the
+first such section in workspace scope, and its control is the queue policy
 ([configuration.md](configuration.md#queuepolicy)): a select over `advisory`
 and `strict`, with the registry's description stating before you save what
 `strict` changes for agents, and the scope tag beside it saying *Workspace ·
 default* until a value is stored and *Workspace · workspace* after. The
 category, the control and its explanation all come from the registry entry;
-`fields-form.test.tsx` renders a second fixture toggle beside it and pins
-that none of the shell's files names the setting or the category.
+`settings/fields-form.test.tsx` renders a second fixture toggle beside it and
+pins that none of the shell's files names the setting or the category. *Task
+types* carries two registry fields as well: `kinds.default` (the kind a new
+ticket gets) and `kinds.appearance` (the glyphs, edited through the
+[glyph picker](#glyph-picker)). *This computer* shows the global definitions
+(`machine.browser`, `machine.port`, `machine.setupComplete`), disabled, with
+the sentence naming `staple config set`.
 
 Adding a setting or a category of your own is a registry entry and nothing
 else — the checklist is
@@ -505,10 +1373,22 @@ the conflict banner's two ways out, and the label, scope, error and
 
 ### Cloud: the hub registry
 
-The *Cloud* category (global scope) leads with the hub, then the **Hub
-registry** panel, then the workspace list. The panel is the page's half of
-`staple hub registry`: four tiles for its state (registry id, service,
-publishing, hub backups), then one block per step.
+Three sections deal with sync, and none of them is in the settings registry:
+they read `/api/cloud/status` and write the cloud routes, which act on this
+computer's files, because a credential written to the workspace database would
+replicate to every device. Opening them makes one network-free request; nothing
+leaves the machine without a press. See [sync.md](sync.md).
+
+- **Cloud account** (across all workspaces): this computer's connection to the
+  sync service. Connecting is two steps: a preview of the service, then a
+  connect that carries only the consent id the preview minted.
+- **Cloud sync** (per workspace): whether this workspace syncs, and the devices
+  it syncs with, listed only when asked (`/api/cloud/workspace/*`).
+- **Workspaces on this computer**: the hub registry panel below.
+
+The **hub registry** panel is the page's half of `staple hub registry`: four
+tiles for its state (*Registry id*, *Service*, *Publishing*, *Hub backups*),
+then one block per step.
 
 - **Identity.** The hub's registry id, or *None yet*. *Mint an id* is
   `staple hub registry id`; *Take on an existing id* is `staple hub registry
@@ -548,8 +1428,8 @@ must not leave the machine.
 
 ### Usage & budget
 
-The *Usage & budget* category (global scope, after *Cloud*) configures
-provider budget capture without the CLI. Like Cloud it is not in the settings
+The *Usage* section (across all workspaces, after *Workspaces on this
+computer*) configures provider budget capture without the CLI. Like the cloud sections it is not in the settings
 registry: everything it changes is this computer's (`config.json` `telemetry`,
 the Claude settings file, `~/Library/LaunchAgents`) and nothing of it is
 synced. It is written for a reader who has never seen the CLI, and each plain
@@ -572,14 +1452,16 @@ The server's own sentences stay behind *Show details*.
   its newest reading, and how it is fed: the status-line wrapper's state for
   Claude, the watcher's for Codex. The status's problems follow, in everyday
   words.
-- **Automatic collection.** *Turn on* opens a short form (the two account
+- **Automatic collection.** *Turn on automatic collection* (or *Check or
+  repair automatic collection* once it is on) opens a short form (the two account
   labels, pre-filled from existing bindings; the status-line step and the
   Codex check, both on), then *Show me what will change* asks
   `POST /api/budget/collection/plan` and shows the plan as sentences ("Turn on
   usage tracking", "Add a small step to your Claude status line … (a backup of
   your Claude settings is kept)", "Check your Codex sessions every 5 minutes").
   *Confirm and turn on* sends back only the plan's single-use consent ticket
-  and digest. *Turn off* shows the unsetup plan the same way. A ticket that
+  and digest. *Turn off automatic collection* shows the unsetup plan the same
+  way. A ticket that
   went stale (expired, used, or the machine changed under the plan: 404 or
   409) is never retried: the page asks for the plan again and shows it with
   the reason, to be confirmed again. A plan that refuses has no Confirm. A
@@ -632,9 +1514,12 @@ Routes (each the same store or service method as the CLI verb):
 `{enabled}` (`budget capture on|off`), `POST /api/budget/bindings/bind`
 `{source, account, provider?, configDir? | codexHome?, replacing?}` (`budget
 bind`; `source` is `claude-statusline` or `codex-rollout`, and `replacing`
-names the binding an edit replaces) and `POST /api/budget/bindings/unbind`
-`{source, configDir? | codexHome?}` (`budget unbind`). All are POST-only where
+names the binding an edit replaces), `POST /api/budget/bindings/unbind`
+`{source, configDir? | codexHome?}` (`budget unbind`) and `POST
+/api/budget/live` `{enabled}` (`budget live on|off`). All are POST-only where
 they write, token- and Origin-checked, and skip the post-write sync trigger.
+The server also answers `POST /api/budget/forget` (`budget forget`), which the
+page does not use.
 `test/budget-bindings-http.test.ts` runs each write through the CLI and the
 route and compares the two `config.json` files and answers, refusals included;
 `settings/telemetry-e2e.test.tsx` drives the page's own API functions against
@@ -787,9 +1672,9 @@ surface carries executable markup) and
 
 ### Glyph picker
 
-Every row of the Kinds editor carries its glyph, and the glyph *is* the control:
+Every row of the *Task types* editor carries its glyph, and the glyph *is* the control:
 pressing it (*Change glyph for Epic*) opens the picker under that row. Three
-tabs, one preview, and one form contract — `{ source, value, label, fallback }`
+tabs, one preview, and one form shape — `{ source, value, label, fallback }`
 — whichever tab produced the choice. `settings/glyph-picker/` holds it:
 `glyph-picker-model.ts` is every decision as a function, `GlyphPicker.tsx` the
 wiring, `GlyphPreview.tsx` the preview.
@@ -812,8 +1697,8 @@ that makes `icon-previews.generated.ts` its own chunk — and only once the
 catalog tab is open, so a page that never opens the picker never fetches them.
 Until they land a cell is a placeholder box, and the search, the keyboard and
 the choice all work without them. The main bundle therefore carries the
-manifest (data only, ~11 kB gzipped — `resolveIcon` answers synchronously) and
-never the 142 kB gzipped of icon code.
+manifest (data only, about 12 kB gzipped — `resolveIcon` answers synchronously)
+and never the icon code (about 140 kB gzipped).
 
 **The emoji tab** is one field, held to the same grapheme rule core states
 (`isEmojiGlyph`). **The custom SVG tab** posts the raw document to
@@ -830,7 +1715,7 @@ up to 8 KiB, and twelve of those is not what a recents strip is for.
 **The preview** is not a second renderer. It hands the appearance the draft
 currently holds to the same `KindGlyph` a list row draws, at the row's 12 px
 and the graph node's 14 px, so what the picker shows is what those surfaces
-will show by construction — every source, `lucide` included, since the glyph
+show by construction — every source, `lucide` included, since the glyph
 resolves all of them itself. Beside it are the accessible name and the terminal
 fallback, both bounded exactly as core bounds them, and *Reset to default* —
 offered only when this kind has an entry to drop. The picker sits beside the
@@ -853,573 +1738,6 @@ conflict banner for either half moving underneath.
 `glyph-picker.test.tsx` the markup, and `test/ui-glyph-sanitize.test.ts` the
 route.
 
-## Analytics
-
-The detail panel's Analytics tab is estimate versus actual for one issue, drawn
-entirely from the `timing` and `childrenTiming` the issue payload already
-carries (see [cli.md](cli.md), "Estimates vs actuals") — the page adds nothing
-up itself, so it can never disagree with `staple show` or with MCP `get_task`.
-
-**One headline.** Leaf and parent alike open with three figures: **planned**,
-**actual**, and the **difference**. Planned is the recursive `subtreePlan` —
-the issue's own estimate when one is set, otherwise its descendants' — so an
-epic nobody estimated over three 4h/3h/4h tasks leads with `11h`, and the epic
-above it leads with that same 11h whether or not the middle level was typed
-in. Actual is the headline `activeSeconds`, which for a parent is already its
-children's aggregate; an epic has no stopwatch of its own. A real duration or
-delta is set as a large tabular figure; an absence is the words *No estimate*,
-*No work recorded* or *No comparison*, small and muted in the interface face,
-never a number and never a dash. Where the plan came from is said beneath it
-(`inherited from 3 of 3 descendants`, or `own estimate; descendants add up to
-11h`), and under the card one muted line carries the caveats: why there is no
-difference, how many children have no plan, whether the time is approximate,
-and time spent in review, which is named but never counted as active.
-
-**This issue versus children.** A parent gets one compact block beneath the
-headline with two rows. *This issue* is the top-down estimate typed on the
-parent and the time it was worked directly; *Children* is the bottom-up plan
-(`from 3 of 3 descendants`) and the aggregate actual. Every figure names its
-source in words, because the two plans are alternatives — the headline takes
-the own estimate when it exists, otherwise the children's — and are never
-added. A leaf has nothing to break down and shows the summary only.
-
-**Per child.** Two lines per direct child: identifier, status and delta, then
-the title with `est … · ran …`. A child that is itself a parent shows its own
-aggregate. Unfinished children mark their delta `*` while the clock is being
-fed and `‡` once it has gone idle, and the same distinction is spelled out in
-the caveat line. The reading order — headline, breakdown, per child — is the
-same in the drawer and on the full-screen page.
-
-**Rolled-up plans in the rows.** The per-child `est` is the child's *effective*
-plan — the same figure its parent counts it as — so under STA-156 the STA-157
-line reads `est 11h`, not a dash, and the parent's planned headline is exactly
-the sum of what the child lines show. Where each figure came from (`own
-estimate`, `inherited from 3 of 3 descendants`) is the tooltip on the figure,
-never a third line per child, and the child's delta is measured against that
-same plan. The headline is also written once as a single sentence for screen
-readers — planned, actual, difference, coverage, source, in that order — with
-the visible figures hidden from the accessibility tree so nothing is heard
-twice. In the task list, a folded parent in comfortable density shows the same
-rolled-up plan as `est 11h` beside its progress bar, in the existing rollup slot
-at the count's own size, so the row does not grow; it is absent rather than
-`est —` when nothing beneath is estimated, and hidden below the two-line
-breakpoint where the title has the whole row.
-
-**Forecast.** Between the breakdown and the per-child list, an open parent
-shows its forecast, and an open leaf with its own estimate a compact one: both
-read `GET /api/forecast?ref=` (`staple forecast --json`, MCP `forecast`; see
-[timing-semantics.md](timing-semantics.md), "Forecasts") and render it as
-returned. The page computes nothing: every figure is a field of the payload,
-rounded and phrased for a reader who is not an engineer, with the exact figure
-one click away. A resolved issue, or a leaf with no estimate, shows no forecast.
-A leaf in review or awaiting approval shows one card, *This task is waiting for
-review, so there's no work left to forecast*, with an *In review* pill, and
-makes no request: its work was handed over, and the wait is not work.
-
-### Plain-language cards
-
-Every block of the forecast and of [Estimates](#estimates) is a
-card (`components/plain/`), built the same way so it reads at a glance:
-
-1. a small title and, where the block has one, a **pill**;
-2. **one headline figure** (`16 hours`, `78% left`, `About ¾ of the estimate`);
-3. **the answer sentence**, in everyday words (`This should take about 16 hours
-   of work.`), which never repeats the figure's own words where it can help it;
-4. a **visual** with a text alternative (below);
-5. **What does this mean?**, a button that opens two or three sentences inline
-   (inline rather than a tooltip, so a touch screen gets it too);
-6. **Show details**, a closed disclosure holding every technical figure the page
-   showed before, unchanged in value and wording: quantiles, bands, bounds and
-   the confidence they reach, the fallback path, warning chips, reason codes,
-   snapshot ids. Power users and agents lose nothing.
-
-The cards sit in a container-query grid: one column in a narrow detail panel or
-on a phone (390 px), two where the panel has room, so they reflow on the width
-they are given rather than the window's. Light and dark each have their own
-validated steps (below).
-
-**Rounding and phrasing, never meaning** (`lib/plain-language.ts`, pure and
-tested in `lib/plain-language.test.ts`). Effort durations round by band: under a
-minute says *less than a minute*; under 5 minutes, *a few minutes*; under 90
-minutes, the nearest 5 minutes (so a typical *55 minutes* never jumps to *1
-hour*); under 10 hours, the nearest half hour (`8½ hours`); under 100 hours, the nearest hour; beyond, the nearest 5 hours. Effort is
-never written in days. A range shares its unit (`between 14 and 21 hours`),
-reads *up to about 1 hour* when it starts under a minute, and collapses to `about
-15 hours` when both ends round alike. A reset countdown reads
-like a clock (`3h 56m`, `3 hours`, `4 days 1h`), rounded once to the minute and
-carried (3 599 s is *1 hour*, never *60 minutes*); a stale reading's age is short
-(`12 min ago`, 3 598 s is *1h*, 23½ hours is *1 day*). *About* goes only before a
-number: *a few minutes*, never *about a few minutes*. An estimate ratio (work / estimate) reads *about as long as estimated*
-from 0.9 to 1.1; *a little less than estimated* from 0.85, *a little longer than
-estimated* up to 1.125 (a 10% overrun is never hidden as "1 times"); from a fifth
-up to 0.85, the nearest of *half*, *a third*, *a quarter*, *a fifth*, *two
-thirds*, *three quarters*; below a fifth, concretely on a 10-hour estimate (*a
-10-hour estimate usually takes about 50 minutes*), never `1/12`; from 1.125 the
-nearest quarter to 1.5 (*1¼ times*), then halves to 3 (*twice*), then wholes. A
-lower bound always keeps *at least* (and *at most* for what is left, *or more* on
-a range); an unknown is always *We can't tell yet* with the payload's reason in
-everyday words (`no usage has been measured on this computer`), never 0.
-Confidence is a word — high *Quite sure*, medium *Fairly sure*, low *Rough
-guess* — shown once, as the card's figure, with a sentence of what it rests on
-(`Based on 8 finished tasks with measured time.`) and why it is not surer.
-
-**The status word** (`limitStatus`, the one mapping, tested on both sides of each
-threshold). A provider limit is:
-
-| Status | Icon | When (first match wins) |
-|---|---|---|
-| **Unknown** | question mark | nothing is known to be left (`remainingPercent` null) |
-| **At risk** | octagon | already under the reserve (`reserve.alreadyBelow`) |
-| **Tight** | triangle | no projection of this work, but the account's pace runs out before the reset (`exhaustion.atPace` = `before_reset`): *At the account's current pace this limit runs out before it resets; what this work adds is unknown.* |
-| **Unknown** | question mark | no projection of this work (`work`, `reserve` or `reserve.breachProbability` null) |
-| **At risk** | octagon | the work alone runs the limit out (`work.remainingAtResetPercent.expected` < 0) |
-| **At risk** | octagon | the worse breach probability (alone, or with other use) ≥ 50% |
-| **Tight** | triangle | the worse breach probability ≥ 10% |
-| **On track** | check | the worse breach probability < 10% |
-| then one step worse | | the burn is a lower bound (`work.lowerBound`) |
-| then at least **Tight** | triangle | the account's pace runs out before the reset (`exhaustion.atPace` = `before_reset`) |
-
-The breach probability is the **worse** of the work alone
-(`reserve.breachProbability`) and, when the payload has it, the work with the
-account's other use (`reserve.withOtherUse.breachProbability`); the sentence says
-*Counting other use of this account, …* when the other use is what made it worse.
-Then, in order: a lower-bound burn (`work.lowerBound`: part of the work could not
-be measured, so the real use can only be higher) moves the result one step worse
-(On track → Tight, Tight → At risk), because *On track* is never claimed from part
-of the work (*Probably fits, but we could only measure part of this work, so it
-may need more.*); and when the account's own pace runs the limit out before the
-reset (`exhaustion.atPace` is `before_reset`) the result is at least **Tight**
-(*This work fits, but at the account's current pace this limit runs out before it
-resets.*). A low-confidence work rate does not change the word; the sentence adds
-*(a rough guess: little usage measured so far)*. The completion card's pill is its
-confidence word (a neutral outline, dashed for *Rough guess*), *Unknown* when
-there is no figure, *Done* when settled. Every pill is a word plus an icon of its
-own shape, never colour alone.
-
-**Visuals.** The **likely-range bar** starts at 0 and draws the draws' p10–p90
-as the strong *likely* band, the 90% band (p5–p95) as a pale edge with a ≥3:1
-outline, and the expected figure as an ink marker with a card-coloured ring; on
-estimate accuracy it adds the estimate itself as a dashed line. Its legend says
-ONE range, *Most likely between 14 and 19 hours (8 in 10 chances)* (*, or more*
-on a lower bound); the pale edge is named only as *Rarely beyond 20 hours*, and
-only when that rounds to different words and the figure is not a lower bound,
-whose upper ends promise nothing. The exact quantiles and band are under *Show
-details*. The **budget
-gauge** is the whole allowance, read left to right as what is left: solid for
-what this work leaves at the reset, striped for what this work is expected to use
-(stripes, not a second hue, so it reads under colour-blindness and in print),
-grey for already used, a dashed ink line at the safety reserve. Each visual is
-`role="img"` whose name says every mark in words (`78% left now. This work would
-use at least 20%, leaving at most 58% when it resets. Safety reserve: 20%.`); the
-legend beneath repeats it for sighted readers and is hidden from assistive
-technology so nothing is heard twice. The components take figures as props and
-only position them, so any other analytics view can reuse them.
-
-**Colour and access** (theme-tokens.css, `--plain-*` and `--viz-*`). Status
-tones are tints whose text clears 4.5:1 on its own background in both modes; the
-visuals are one blue ramp whose likely band, fill and wide-band edge clear 3:1 on
-the card, and the track's outline is drawn at full strength (≥3:1 on the card),
-light and dark each chosen and checked against its own surface. The
-help button and the details summary are at least 24 px tall (44 px on a coarse
-pointer) with a visible focus ring; the disclosure chevron's turn is the only
-motion and is off under reduced motion.
-
-### What the forecast shows
-
-- **Work left** (full width): the headline figure, the answer sentence, the
-  likely-range bar of the remaining labor, and a *Not counted* line naming how
-  many units are in review (*time waiting for review isn't work*) or cannot be
-  estimated (the latter only when the headline has not already said it). With no
-  figure at all, the *How sure we are* card is left out (there is nothing to be sure
-  about) and its technical line and warnings move under *Work left*'s details. A lower bound reads *At least
-  1½ hours of work is left, probably more: 1 task can't be estimated yet.* Under
-  *Show details*: *Remaining labor* (or *Remaining work* for a leaf) with the
-  expected figure, the draws' `p10–p90` and the `90% band`, *(lower bounds)*
-  where partial, *Unknown:* with its reason where null; the units in review as
-  *Not forecast* and the unknown units with their reason; the unit counts and the
-  plan's estimates; and *Effort along the work, not calendar time*. Effort
-  figures are hours past a day (`139h`, never `5d19h`).
-- **What has to happen in order** (full forecast only): the critical path in
-  words (*At least 8½ hours of it has to happen one step after another.*) with
-  its own range bar, and a line when some unit waits on work outside the subtree.
-  Under *Show details*: *Critical path* with its figures, the chain first to last
-  as issue links with each unit's expected remaining work, and every open outside
-  blocker by reference (`STA-42 waits on STA-7 (backlog)`). Identifiers never
-  break across lines.
-- **How sure we are**: the confidence word and sentence. Under *Show details*:
-  the line with what the classes' bounds reach against the 90% target and why it
-  is not high, and the warning chips in the payload's order. Each chip is a
-  button: hover or keyboard focus shows its sentence in the app's tooltip, a
-  press opens it inline, and the sentence is in the button's accessible name.
-- **Usage**, in its own dashed frame under its own heading, subtitled *Usage
-  measured on this computer*: usage data never synchronizes and never blends
-  with the completion figures. It opens with *How this work fits your
-  subscription limits. We aim to keep 20% of each limit in reserve (a default
-  until you set one).*, or *We can't tell yet: no usage has been measured on this
-  computer.* Each account is named for people, *Claude (Anthropic)* or *Codex
-  (OpenAI)*, with the operator's own label beside it and the raw account
-  reference behind the account's *Show account details*. Each limit with a
-  reading gets a card, named from its window (*5-hour limit*, *Weekly limit*):
-  the status pill, what is left as the figure (with its age when the reading is
-  stale, *93% left · 12 min ago*), the reset and the verdict as the sentence
-  (*Resets in 3h 56m. This work fits comfortably.*), the gauge, and a *What does
-  this mean?* that describes only the marks that card draws. Cards keep their own
-  height. The limits that can't be read at all collapse into one line per account
-  (*2 other Codex limits can't be read yet: the provider doesn't say when they
-  reset.*),
-  their technical rows behind the account's *Show account details*.
-  Under each card's *Show details*, unchanged: the limit key, what is left, the
-  reset countdown with the read's clock time (`resets in 3h58m (as of 11:02)`),
-  the work rate in %/work-hour with its confidence and warnings, what the work
-  alone uses and leaves at the reset (across how many windows when more than
-  one; *runs the limit out before the reset* in words), and the chance of going
-  under the reserve alone and with other use of the account — *at least* on a
-  lower-bound burn, *no draw went under the reserve (the burn is a lower bound)*
-  instead of an empty *at least 0%*, *(already below it)* when it is. Every
-  unknown reads *unknown* with the reason from `missing` and `missingInputs`,
-  never 0%. The budget block's own *Show reserve details* names the reserve,
-  provisional or not, that the work runs serially from now, and that the data is
-  this machine's only.
-- **Where these numbers come from**, a closed disclosure: the forecast,
-  calibration and budget snapshot ids, the instant, and whether the scope is the
-  subtree or the issue itself.
-
-The forecast re-reads on the page's refresh fingerprint.
-
-## Estimates
-
-The fifth destination in the rail, **Estimates** (also "Go to Estimates" in
-the command palette, which still finds it by *estimate accuracy* and
-*calibration*), is the
-workspace's calibration report: `GET /api/calibration`, the payload of `staple
-calibrate --json` and MCP `calibration_cohorts`
-([timing-semantics.md](timing-semantics.md), "Calibration cohorts" and
-"Confidence ranges"). The view's id stays `calibration`, so saved preferences and
-commands are unchanged; only the name a reader sees is plain. It is per
-workspace; in hub mode with no workspace chosen it reads the first and says
-which. The header's group, sort and filter controls, and the palette's filter
-commands, are hidden here: they narrow the issue list, and this report is not
-one. The page asks for the workspace it names, so the label and the data cannot
-diverge.
-
-**The answer first.** A card opens the page with one sentence, the first three
-cards of the measured history in display order, cards that say the same thing
-said once, together: *Tasks (high priority) and all finished work (every kind)
-usually take about a fifth of the estimate.* (and how many more groups follow). It reads only the measured
-history, so it is the same with the older-history switch on or off. It holds the switch, **Include older history (rebuilt from logs, less
-precise)**; its *Show details* keeps the population line and the snapshot id with
-its member count and instant.
-
-**Each group is a card.** A cohort that read its own key: title (*Bug fixes
-(high priority)*; dimensions nobody recorded are left out), a confidence pill,
-the figure (*About ⅕ of the estimate*, the ratio a forecast scales by; below a
-fifth, *About 50 minutes per 10 estimated hours*), and plain sentences: *Tasks
-(high priority) usually take about a fifth of the estimate. Based on 8 finished
-tasks. Rough guess: not enough data to be sure.* Its confidence reads only its
-own fields: no samples or no bounds is *Unknown*; bounds under the 90% target or
-`small_sample` is *Rough guess*; a quantile under the target is *Fairly sure*;
-otherwise *Quite sure*. **Cohorts that fell back** to a broader class never get a
-card of their own, because the figure is the class's, not theirs: the cohorts
-that share a class are ONE card named for it and for what it spans (*All finished
-work (every kind)*, *All bug fixes (every priority)*), with the class's figure and count (*Based on 9 finished tasks.*) and
-*Also used for: Bug fixes (high priority): too few of their own (1)*, the own
-count being the fallback path's first level. Its pill is always *Rough guess*
-(the kinds it stands in for have too few of their own), never *Quite sure*, and
-it says so for them: *Rough guess for spikes (critical priority): only 3 of their
-own, so all finished work (every kind) stands in.* The verb agrees with the class: *All
-finished work (every kind) usually takes*, *All bug fixes (every priority) usually take*. The
-bar shows where 8 in 10 past tasks landed (the ratio's p10–p90) inside where the
-next one will likely land (the prediction bounds, at the confidence they reach,
-in tens; under 50% it says *Too little data to say where the next one lands* and
-draws no band), the typical ratio as the marker, and the estimate itself as a
-dashed line. Under *Show details*, unchanged: the
-key (`task · high · type unknown · area unknown · model unknown`), `n`, the class
-it read and how (`read at full, its own key`, or `fell back to all: its key has 1
-sample`) with the whole fallback path, coverage (`7 of 10 eligible (70%)`), the
-median and pooled ratio, the ratio a forecast scales by and how it was formed,
-`p10–p90`, where the next one lands with the confidence reached (under the 90%
-target marked in words), the median interval, the work median and `p10–p90`,
-floors and heavy tails when present, and the warning chips.
-
-**Measured history first; older history on by default, and apart.** The page leads
-with the `exact` set, *Finished tasks with measured time*, with a plain line
-(*Based on 9 finished tasks with measured time, out of 138 finished with an
-estimate.*) and what is not used, by the state the payload counts, said for that
-set (*Not used here: 2 have only approximate timing and 127 have timing rebuilt
-from logs (they're in the older history).*, the same with the switch on or off);
-the older history, drawn under it, says *10 are in the measured history above, 2
-have only approximate timing and 19 couldn't be rebuilt reliably*. The technical set line is behind *Show details*. The
-switch re-reads with `include=reconstructed`; the reconstructed groups then
-appear in their own section, *Older history (rebuilt from logs, less precise)*,
-*kept separate: never mixed with the history above*, after the exact one. The
-exact section reads the same either way. The switch is a remembered preference
-(`staple:estimates-include-older-history` in the browser's storage): on until you
-turn it off, and then off on every visit and reload until you turn it back on. With no samples a set says *We can't tell yet* and why.
-
-**How the two are verified.** `detail/forecast-e2e.test.tsx` starts the real
-HTTP server over `test/fixtures/forecast-scenario.ts`, a scenario written through
-the real store (checkouts and comments for the samples, a unit in progress, one
-in review, one unestimated, a dependency, reconstructed history rebuilt by the
-real `reconstruct`) and the real budget ingestion (a status-line limit read
-during a real attempt, a Codex account with no attempt), plus an empty
-workspace. It renders `ForecastReportView` and `CalibrationReportView` from the
-responses and pins the separate blocks, the lower bounds, the chain, the
-confidence and warnings, the unknowns with their reasons, the provisional
-reserve, the reconstructed toggle leaving the exact section and the opening
-answer identical, and the plain layer over the same payloads: each headline, each
-pill's word and icon, each visual's text alternative and legend, the fallback
-cohort grouped under its class, each set's per-state summary, and every technical
-figure sitting inside a closed *Show details*. `lib/plain-language.test.ts` pins the rounding, the
-phrasing and the status mapping on both sides of each threshold (other use and
-pace included), including unknown, lower bound, low confidence, in review and no
-samples;
-`lib/forecast-text.test.ts` pins the technical formats and the rule for which
-issues get a forecast. The type mirror is pinned against the store's types in
-`test/contract-ui-types.test.ts`.
-
-## Usage
-
-The rail's **Machine** group holds one destination, **Usage** (also "Go to
-Usage" in the command palette, which still finds it by *budget*): this machine's provider limits and each
-one's session pressure, `GET /api/budget`, the payload of `staple budget
---json` and MCP `get_budget` ([execution-telemetry.md](execution-telemetry.md#pressure)).
-It sits apart from the Workspace group because budget readings live in this
-machine's hub and never synchronize: the view takes no workspace and shows
-the same figures whichever one the switcher names. The header's group, sort
-and filter controls are hidden, as on Calibration.
-
-**Plain first.** The view opens with one sentence: *Your subscription limits on
-this computer, and whether your recent pace keeps a safety reserve of 20% (a
-default until you set one). The pace check is an early rule of thumb until a
-budget policy is set.*, a pill counting the limits at risk, and the rule's
-technical wording behind *Show rule details*. Accounts are named for people
-(*Claude (Anthropic)*, *Codex (OpenAI)*) with the operator's label and *measured
-on this computer* / *not set up on this computer*. Each limit with a current
-reading is a plain card (the same components as the forecast's, see
-[Plain-language cards](#plain-language-cards)): a status pill, what is left as
-the figure (*78% left*, with its age when stale, *· 12 min ago*), a sentence
-with the reset and the verdict (*Resets in 3h 56m. At your current pace you'll
-stay above the reserve.*), a solid **Measured** frame (the gauge with the reserve
-line; *Using about 4.2% an hour lately; last read 1 min ago.*, *No use lately.*
-for an idle limit, *… as of 3h ago* for a stale one) and a dashed **Forecast**
-frame labelled *an early rule of thumb until a budget policy is set* (*To keep
-the 20% reserve until it resets, use no more than about 15% an hour.*; *Already
-at or below the 20% reserve; any more use eats into it.*; *Almost any pace is
-safe until the reset.* when the safe pace exceeds everything left). Both frames
-say a pace in the same unit, so they compare: one decimal under 10%, per hour for
-a short window and per day for a window of two days or more (*about 8.4% a
-day*). When the pace reaches the reserve is said once, in the sentence, never
-again in the Forecast frame; at a pressure of exactly ×1.00 the sentence says
-*you'll use up everything above the 20% reserve by the reset*, which the frame's
-safe pace agrees with.
-The status is `pressureStatus`, the store's own provisional state and no
-threshold of the page's: *unsafe* is **At risk** (with the hatched edge; the
-sentence says when the pace reaches the reserve, or that it already has),
-*within* is **On track**, no state is **Unknown** with its reason in words. Limits
-with no current window collapse into one line per account (*1 Claude limit can't
-be read yet: the provider doesn't say when it resets.*); an account or a machine
-with nothing says why in plain words (*Set up, but no reading has arrived yet.*,
-*Usage tracking is off on this computer…*), with `staple budget setup` behind
-*Show details*. Everything below is what each card's (or account's) *Show
-details* holds, unchanged.
-
-**One card per limit, two blocks per card.** Accounts are listed as the read
-returns them, each limit a card. **Measured**, in a solid frame, is what the
-provider reported: the high-water remaining figure, the reset countdown and
-its local time, the observed pace (`%/h`, from the window's first reading to
-its latest) and the last reading's age and source, with a `stale` mark past
-10 minutes. **Forecast**, in a dashed frame labelled *provisional, as of*
-the read, is what the pace implies: the sustainable pace (what is left above
-the reserve over the time to the reset), the pressure (observed over
-sustainable), when the pace uses the limit up and when it reaches the
-reserve, safe concurrency, and the confidence of the pace with its warning
-chips (few readings, a span under 30 minutes, regressions in the window).
-No figure appears in both blocks, and the page computes none of them.
-
-**States.** Each card carries its pressure state as a word and an icon:
-*Within*, *Unsafe* or *Unknown*, and the line under it says *(provisional)*
-for the first two, since the rule behind them is. Unsafe also gets a red frame and a hatched
-left edge, so the state never rests on colour alone, and the header counts
-the unsafe limits. Unknown is always the word with the payload's reason
-(`stale`, `no_sample_yet`, `window_elapsed`, a missing second reading) in the
-italic placeholder style, never a 0. A limit with no current window (it
-reset, or its readings carried no reset instant) collapses to one line that
-says so. An account with no limits says why (no reading yet, capture off, no
-source bound) and names `staple budget setup`; a machine with no budget data
-at all says the same at the top. Safe concurrency always reads *Not defined
-yet*: it belongs to the admission policy, which is not built.
-
-**The reserve and the rule.** The header states the reserve (20% of each
-limit, a provisional default until an admission policy sets one) and the
-provisional pressure rule (unsafe at ×1.00 or over), both from the payload.
-
-**Live.** The view re-reads every 30 seconds while the page is visible and at
-once when it becomes visible again. It does not follow the workspace
-fingerprint: budget readings live in the hub, not in a workspace.
-
-**Refresh.** The button runs one real collection
-(`POST /api/budget/collection/refresh`, what `staple budget collect` runs: the
-passive scan, then, with [live polling](execution-telemetry.md#live-polling)
-on, one check with each linked provider, at most once a minute per account),
-reads *Checking…* while it runs, then says per provider what happened:
-*Updated just now*, or the provider's reason in plain words (*Claude Code's
-sign-in on this computer has expired… Sign in to Claude Code again*). With live
-checks off it says so and where to turn them on. It is the one write the server
-accepts from another device, so it works from the phone on the tailnet: it
-takes no input, can only do what the schedule already does, and still needs
-the token. With live checks on, each account says when it was last checked;
-when that check failed, a bordered line above its cards says why and how old
-the figures below are. A limit the provider reports with no window running
-reads *nothing used since it last reset, so the full allowance is there*
-instead of unknown. The last reading's source reads *live check*.
-Between reads, the reset countdown and the last reading's age tick by the
-seconds the page has held the answer, by the page's own clock, so a device
-whose clock is off still counts right; the forecast figures stay as of the
-read. At 390 px the two blocks stack, labels keep a fixed column and long
-values wrap; nothing scrolls sideways, and the controls keep the app's touch
-rules (the chips at 24 px).
-
-## Milestones
-
-The third tab beside Graph — also "Go to milestones" in the command palette —
-is the planning view for [milestones](milestones.md): dated, human-ordered plans
-that contain epics and tasks without moving them. It needs the `milestone` kind
-configured (`staple kinds add milestone --label Milestone`); without it the
-page shows the store's own refusal naming that command.
-
-**Left, the plan.** Every milestone in plan order, then target date, then
-identifier — an unplanned milestone sits below every planned one, and a date
-never reorders a plan. Each row shows the target date, member count, a progress
-bar with `done/countable` and the percent, the derived state, the risk, and the
-queue's answer: `next: STA-67 (#4)` — the first eligible row of the effective
-queue planned under this milestone (R3d) — or a muted "no eligible work" when
-nothing under it is takeable. Resolved milestones follow the page's "show done" filter.
-
-**Right, one milestone.** Title, start and target dates, owner, plan position;
-rollups (progress, blocked, gated, active, ready); the ordered members drawn
-with the same row as the tree, so kind glyph, status glyph and identifier read
-the same everywhere. A member epic's own children follow it indented, read-only
-— membership never rewrites hierarchy and neither does this list. A member added
-with a note shows the note under its row.
-
-**Editing membership.** Every member has Open, Move up, Move down and Remove
-buttons, always visible, plus alt+arrow on the row; the form under the list adds
-an identifier with an optional note. Each write carries the view's `revision` as
-`baseRevision`, and the store refuses a stale one with `revision_conflict`: the
-page shows "Member order changed elsewhere" with the store's sentence and a
-Reload, rather than a refusal, because the fix is to read again. Any other
-refusal is the store's own sentence. Drag is deliberately absent — the row list
-carries no drag wiring, and the buttons are the keyboard path either way.
-
-**States without colour.** Planned `○`, active `◐`, overdue `!`, done `✓`,
-cancelled `×` — glyph and word together, so no state is told by hue alone; an
-active milestone whose members have all landed says "all members done" beside
-the badge — which, now that a milestone closes with its last member, is only
-seen while a gate or a manual status holds it open. Blocked and gated are not milestone states
-(they are facts about members) and appear as `⊘ n blocked` / `◇ n gated` in the
-risk line.
-
-**Layout.** Below `md` (48rem) the two panes stack: the list, then the detail
-with a "Back to milestones" button. From `md` up they split. The expand button in
-the detail header gives it the whole content box at any width; press it again to
-return.
-
-**How this section is verified.** `views/milestones/milestones-e2e.test.tsx`
-(R3e) starts the real HTTP server over the scenario workspace, fetches
-`/api/milestones`, `/api/milestone` and `/api/issues`, and renders the real
-`MilestoneListPane`, `MilestoneDetailPane` and `MilestonesLayout` from those
-payloads with `react-dom/server` — no jsdom, no screenshots, no new dependency,
-and no hand-written view fixture. It pins the three layouts at real widths
-through `layoutFor`, that the accessible row order equals the server's member
-order (the epic's child indented immediately under it, nothing drawn twice), that
-every reorder control carries its member's identifier and only the true edges are
-disabled, that each state is a glyph AND a word with the glyph `aria-hidden` so a
-screen reader hears the word, and that a genuinely stale `baseRevision` — a real
-409 from the real route — renders the conflict banner with the store's sentence
-verbatim while the server keeps the other writer's order. The one thing it does
-not render is `MilestonesView` itself, which reads `window.innerWidth` and the
-session; it composes the same three exported pieces the same way.
-
-## Queue
-
-The fourth tab — also "Go to queue" in the command palette — is the visual
-editor for the [pickup queue](queue.md). Two panes over one payload: the **plan**
-a human writes, and the **effective order** an agent is handed. Both come from a
-single `GET /api/queue`, so the preview can never be one poll behind the list it
-is previewing.
-
-**Left, the plan.** `entries` in plan order — the rows somebody put there,
-containers included — drawn with the same task row as the tree, so kind glyph,
-status glyph and identifier read the same everywhere. The header says how many
-entries there are and which `revision` the next write will send. An entry added
-with a note shows the note under its row, and a plan row that is not itself
-pickable carries the store's sentence for why (`✓ STA-31 is done`).
-
-**Two numbers, side by side only where they differ.** The plan position is an
-editable field on every row; the effective position sits beside it as
-`pickup #5` when the two disagree, and is silent when they agree — a column of
-`#3 · pickup #3` would teach a reader that the distinction does not matter. A
-container has no effective position of its own (the resolver never emits one as
-a row) so it shows `expands to 3` instead, or `no pickup row` when nothing is
-open underneath it.
-
-**Containers expand inline.** Under a queued epic or milestone, the effective
-rows it expanded to, in the order an agent will meet them, each with its pickup
-number, its eligibility and its reason. Capped at five with `and n more under
-STA-66` — a plan of five epics is otherwise sixty rows of somebody else's
-problem.
-
-**One atomic reorder.** Drag (`@dnd-kit/core`, the same reorder list the
-settings vocabulary editors use), Move up / Move down buttons, alt+arrow on the
-row, alt+Home / alt+End for the ends, and typing a new number into the position
-field all end in ONE `POST /api/queue/reorder` carrying the view's `revision` as
-`baseRevision`. There is deliberately no second write path: `move` and
-`enqueue --at` exist on the wire and would each be a different idea of what a
-move is. A typed position out of range is clamped rather than refused — 99 in a
-plan of eleven means "last" — and a move that would change nothing is never
-sent. `alt` is required on the arrows and on Home/End because a bare Home
-belongs to the caret in the position field.
-
-**Adding and removing.** The search box matches issues, epics and milestones by
-identifier or title over the page's own issue list, offers eight, and never
-offers something already in the plan; a match adds on click, and the raw text
-adds on Enter so an identifier you already know needs no search. Every entry has
-a Remove, and the header offers `Prune n resolved` when the plan has resolved
-rows in it.
-
-**Right, the effective order.** `effective`, in two bands. *From the plan* is
-every row the plan produced, never capped — the plan is shown whole, so a human
-can see what their order is waiting on. *Unqueued, and therefore later* is every
-other open leaf in presentation sort, capped at ten with the remainder counted.
-The header names the row an agent asking right now would be given:
-`next: STA-67 (#2)`, or "nothing is pickable right now". That row is the first
-`eligible` row of the list already on screen, which is exactly what the resolver
-answers for an actorless read — a second `GET /api/queue/next` on the poll would
-be a second source of truth that could disagree with the list under it.
-
-**Eligibility without colour.** Eligible `○`, claimed `◐`, blocked `⊘`, gated
-`◇`, resolved `✓` — glyph and word together on every row, with the store's own
-sentence underneath when it is not pickable ("blocked by STA-35, STA-67",
-"queued behind STA-66's review", "held by codex-1, idle 4m"). A milestone target
-date rides along as `due 2026-10-31`: it explains urgency and never reorders
-anything.
-
-**A stale reorder.** Every mutation carries `baseRevision` and the store refuses
-a stale one with `revision_conflict`, changing nothing — so the server's order is
-still the truth. The page drops what it was showing, re-reads, and puts up "The
-plan changed elsewhere — nothing was written" with the store's sentence and TWO
-deliberate ways out: **Reload**, which abandons the move, and **Retry my order**,
-which re-applies the intent at the new revision — keeping whatever the other
-writer added and dropping whatever they removed, so a retry never silently
-undoes them. Neither happens on its own. Any other refusal is the store's own
-sentence in the shared refusal panel.
-
-**Layout.** Below `md` (48rem) the queue is a drawer: one pane at a time, with
-"Effective order" at the foot of the plan and "Back to the plan" at the head of
-the preview. From `md` up they split, plan left and preview right. Each pane's
-header carries an expand button that gives it the whole content box at either
-width; press it again to return.
-
 ## Projects
 
 A project is a named container an issue can be filed under — the thing the rail
@@ -1432,9 +1750,7 @@ data: workspace migration **009** adds a `projects` table and a nullable
 explicitly rather than inferred from the shape of a string: `github` (a
 repository URL like `https://github.com/owner/repo`) or `local` (a folder path).
 The record is `{ id, slug, name, kind, sourceKind, source, createdAt, updatedAt }`;
-`sourceKind` and `source` are null exactly when the kind is `unmanaged`. The
-settings a project grows later — initiating a tracker in it, repointing it —
-hang off this distinction and are not modelled yet.
+`sourceKind` and `source` are null exactly when the kind is `unmanaged`.
 
 **Rules.** The name is required. A managed project needs both a source kind and
 a source; a GitHub source must look like a repository URL; a local path is any
@@ -1459,8 +1775,8 @@ sentence unchanged. An edit starts on the served values, saves only when
 something changed, and offers *Delete project* behind a confirm that says what
 deleting does — the issues stay, unfiled. The draft is a discriminated union on
 kind (`components/projects/projectForm.ts`, pinned without a DOM), switching
-kind keeps the name and drops or seeds the source, and the sections are a list
-the next project setting slots into.
+kind keeps the name and drops or seeds the source, and the sections are a list,
+so a new project setting is one more entry.
 
 **Where a project shows up.** The page fetches every workspace's projects once
 per poll and narrows them where they are used, so an issue opened from another
@@ -1488,24 +1804,79 @@ gate, the refusals and the row shape; `test/store-projects.test.ts` pins the
 store. CLI and MCP have no project verbs — `projectId` simply rides along on the
 issue shape they already print.
 
+## Auth
+
+Pages served to loopback carry their own token, so the browser never sees a
+token screen. The token — for curl, agents, and remote tabs — lives in
+`~/.staple/ui-token` (0600) and survives restarts; delete the file to rotate it.
+
+Every `/api/*` route is gated by the per-process token (`X-Staple-Token`,
+`Authorization: Bearer`, or `?token=`), compared with `timingSafeEqual`; writes
+are `POST`-only and every route pins the methods it accepts.
+
+**The write rule** ("Origin-checked" throughout these docs). A `POST` is accepted
+when its `Origin` is absent (curl, the CLI) or is the server's own loopback page
+(`http://127.0.0.1:<port>`, `http://localhost:<port>`), **or** when it carries the
+token in the `X-Staple-Token` header, compared in constant time. The page sends
+that header on every request (`lib/api.ts`), so the app opened through a forwarder
+that keeps the browser's own Origin (a phone on the tailnet; the forwarder
+rewrites `Host` to loopback, which is what seeds the token into the page) can
+write like the page on this computer. A cross-site page cannot set a custom
+header without a CORS preflight, and the server grants none: it sets no
+`Access-Control-*` header anywhere, and an `OPTIONS` is refused by the token or
+method gate like any other method. So a forged form or `fetch` from another site
+arrives without the header and is refused (`403`, `detail.reason:
+"cross_origin"`). `?token=` and `Bearer` open reads only and never stand in for
+the header on a write: a query string rides a plain cross-site form. Pinned in
+`test/ui-auth.test.ts` and `lib/api-write-header.test.ts`.
+
+**One exception.** `POST /api/budget/collection/refresh`, the Usage view's
+Refresh, is gated by the token alone, in any of its transports, and skips the
+Origin check. It takes no input, can only do what the collection schedule
+already does, and asks a provider at most once a minute per account, which is
+why no other write may join it. `test/budget-refresh-http.test.ts` pins that
+every other write still refuses a foreign Origin.
+
+**A forwarder must check the Host it was sent.** Because the forwarder rewrites
+`Host` to loopback, the server cannot tell which name the browser used, and a
+page on a domain that resolves to the forwarder's address (DNS rebinding) would
+be handed the token like the real page — and, with the header rule, could write.
+So the forwarder answers only requests whose `Host` is its own tailnet name or
+address (`100.x.y.z:<port>`, `<machine>.<tailnet>.ts.net:<port>`) and refuses
+every other one (`421 Misdirected Request`) before forwarding anything. That
+check lives in the forwarder, not here: this server only ever sees loopback.
+The app reads the token out of its own URL once, keeps it in `sessionStorage`,
+and strips it from the address bar. Arriving without a valid token renders an
+explanation, not a blank page.
+
 ## Stack
 
 The page is a Vite + React + TypeScript app in `src/ui/app/`, shipped inside the
 package as a prebuilt static bundle that `src/ui/server.ts` reads off disk.
 
 React 19, Tailwind v4, [shadcn/ui](https://ui.shadcn.com) in the *new-york*
-style, `radix-ui` primitives, `lucide-react` icons. All of it is a
-**devDependency** — staple's runtime dependencies are compiled into the
-published bundle, because what ships is the built app, not the toolchain that
-made it.
+style, `radix-ui` primitives, `lucide-react` icons, React Flow (`@xyflow/react`)
+and dagre for the graph, `@dnd-kit/core` for drag. All of it is a
+**devDependency**: what ships is the built app, not the toolchain that made
+it.
 
 ## Theme
 
-`src/ui/app/src/styles/theme-tokens.css` holds 531 CSS custom properties: the
-light and dark scales, the radius and type ladders, motion, and the
-`.status-chip` color-mix recipe. `src/ui/app/src/styles/app.css` is staple's own
-layer on top — the status-to-hue mapping and the SVG chrome for the dependency
-graph, which has no Tailwind equivalent.
+The styles are four layers, imported in this order by `styles/app.css`:
+
+- `theme-tokens.css` holds 531 CSS custom properties: the light and dark
+  scales, the radius and type ladders, motion, the `.status-chip` color-mix
+  recipe, and the plain-language card tones (`--plain-*`) and chart ramp
+  (`--viz-*`).
+- `geist-tokens.css` re-layers colour, type, surfaces and focus onto the Geist
+  palette, including the charcoal dark mode.
+- `system-tokens.css` is the desktop visual system: a seven-step type scale
+  (`text-caption` … `text-display`, each with its own line height, registered
+  with `cn()` in `lib/utils.ts` so a size and a colour class merge correctly), the
+  4px spacing rhythm, named surfaces, one focus ring, and the shell geometry
+  (rail width, top bar and toolbar heights, the gutter, control heights).
+- `app.css` is staple's own layer on top: the status-to-hue mapping and the SVG
+  chrome for the dependency graph, which has no Tailwind equivalent.
 
 The load-bearing family is `--status-task-*`: one hue per built-in status, so a
 status badge is one variable and light/dark both fall out of the same color-mix.
@@ -1514,4 +1885,4 @@ Since the status set became configurable, the mapping that matters is
 the per-id rules so the category wins. Adding a status never needs a new token.
 
 Working on the app itself is a contributor path — dev server, rebuild loop, and
-the rest are in [CONTRIBUTING.md](../CONTRIBUTING.md).
+the rest are in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md).

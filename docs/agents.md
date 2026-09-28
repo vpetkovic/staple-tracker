@@ -1,3 +1,9 @@
+---
+title: Agents
+description: The working protocol that staple init writes for agents, and the MCP tools an agent harness works a tracker through.
+sidebar_position: 3
+---
+
 # Agents
 
 ## The protocol `init` writes
@@ -27,14 +33,27 @@ It covers:
   --owner <who>`, not a held claim), that the inbox's QUEUED section is never
   pickable, and that checkout of it is refused with `gated`;
 - the continuity rules in [continuity.md](continuity.md);
+- **the vocabulary is the workspace's** — read the statuses and kinds
+  (`staple statuses ls`, `staple kinds ls`, MCP `list_statuses` / `list_kinds`)
+  rather than assuming them, remember that all behaviour keys off the status
+  category, and edit the vocabulary only when a human asks;
 - **attempts and lanes** — yield (`release`) or pause (`staple attempt pause
   <ref> --reason awaiting_input`) when a blocker appears mid-work, so the wait
   reads as `blocked` or `paused` rather than as work; and how an orchestrator
   coordinates without claiming: `staple attempt open <epic> --role orchestrator`
   at the start of a coordination session, `staple attempt end <epic> --role
   orchestrator` at handoff (MCP `record_attempt_event` with `event: "open"` /
-  `"end"`). That time is `orchestrationSeconds`, never `workSeconds`
-  ([timing-semantics.md](timing-semantics.md#the-orchestrator-lane)).
+  `"end"` and `role: "orchestrator"`). That time is `orchestrationSeconds`, never `workSeconds`
+  ([timing-semantics.md](timing-semantics.md#the-orchestrator-lane));
+- **autopilot runs** ([runs.md](runs.md)) — after every ticket, ask
+  `staple run continue --json` (MCP `continue_run`) and do what it answers:
+  `take` (the ticket is already checked out to you), `wait` or `stop`. The
+  three ways a run is worked (the `staple run drive` driver, a stop hook, or
+  the agent calling `run continue` itself), and the rules that hold for all
+  three: finish before you ask, record a `review:` comment before you hand a
+  ticket on, never merge or push to master or main, and stop when told to;
+- the **wiring** — `claude mcp add staple … -- staple mcp` and the MCP tools
+  that mirror the loop.
 
 An existing `AGENTS.md` is **never overwritten** — `init` says it kept it.
 `--global` workspaces get no guide: the file exists to be found in a repo, and
@@ -64,13 +83,29 @@ Any MCP client can launch `npx -y staple-cli mcp` the same way, with
 `STAPLE_AGENT` naming the agent. There is no separate MCP binary — `staple mcp`
 is the same entrypoint as the CLI.
 
-Fifty-three stdio tools. The loop they exist for:
+Sixty-five stdio tools. The loop they exist for:
 
 `inbox` (or `next_task`) → `checkout_task` (a conflict means pick another, never
 retry; `out_of_order` means take the one it names) → `put_document` the plan and
 `set_estimate` the estimate → work, `add_comment` progress → `update_task` done →
 `events_since` to see what your completion unblocked. `cross_link` +
 `hub_overview` cover cross-repository dependencies.
+
+Every tool, by area:
+
+| Area | Tools |
+|---|---|
+| Issues and claims | `inbox`, `list_tasks`, `get_task`, `create_task`, `update_task`, `set_estimate`, `checkout_task`, `release_task`, `set_blocked_by`, `record_attempt_event` |
+| Comments, documents, events | `add_comment`, `list_comments`, `put_document`, `get_document`, `events_since` |
+| Approval gates | `gate_task`, `approve_task`, `request_changes` |
+| Pickup queue | `list_queue`, `next_task`, `enqueue_task`, `dequeue_task`, `move_queue_entry`, `reorder_queue`, `prune_queue` |
+| Milestones | `list_milestones`, `get_milestone`, `create_milestone`, `update_milestone`, `mark_milestone_criterion`, `add_milestone_member`, `remove_milestone_member`, `move_milestone_member`, `reorder_milestone_members` |
+| Autopilot runs ([runs.md](runs.md)) | `start_run`, `continue_run`, `run_status`, `pause_run`, `resume_run`, `stop_run` |
+| Vocabulary and settings | `list_statuses`, `list_kinds`, `update_statuses`, `update_kinds`, `get_setting`, `set_setting` |
+| Plans and forecasts | `compare_plans`, `timing_quality`, `calibration_cohorts`, `forecast` |
+| Execution telemetry and budget | `list_attempts`, `get_attempt`, `get_budget`, `list_budget_samples`, `record_budget_sample`, `forget_budget_samples` |
+| Cloud sync ([sync.md](sync.md)) | `cloud_status`, `conflict_list`, `conflict_resolve` |
+| Workspaces and the hub | `init`, `hub_overview`, `cross_link`, `cross_unlink`, `hub_unregister`, `hub_prune` |
 
 ### Changing an estimate
 
@@ -91,27 +126,37 @@ to use.
 
 ### The milestone tools
 
-Eight tools over dated, human-ordered plans ([milestones.md](milestones.md)),
+Nine tools over dated, human-ordered plans ([milestones.md](milestones.md)),
 usable only in a workspace whose vocabulary has the reserved `milestone` kind —
 otherwise every one refuses with `validation` naming `staple kinds add
 milestone`. All of them return **one shape**, the same object `staple milestone
 show --json` prints and `GET /api/milestone` answers:
-`{milestone: {identifier, title, status, kind, assignee, targetDate, startDate,
-state, planPosition}, progress: {total, countable, counts, percent, complete},
-revision, members: [{identifier, title, kind, status, position, rank, parent,
-nestedUnder, addedBy, addedAt, note}], next}`.
+`{milestone: {id, identifier, title, status, kind, assignee, description,
+acceptanceCriteria, targetDate, startDate, state, planPosition}, progress:
+{total, countable, counts, percent, complete}, revision, members: [{issueId,
+identifier, title, kind, status, position, rank, parent, nestedUnder, addedBy,
+addedAt, note}], next, goal: {criteria, counts, met, pace}}`.
 
 - **`list_milestones`** `{all?}` and **`get_milestone`** `{ref}` — read-only.
   A non-milestone `ref` is `validation` naming its kind; unknown is `not_found`.
-- **`create_milestone`** `{title?, description?, target_date?, start_date?,
-  from_epic?, preview?}`. With `from_epic` the epic becomes the ONE member and
+- **`create_milestone`** `{title?, description?, acceptance_criteria?,
+  target_date?, start_date?, from_epic?, preview?}`. With `from_epic` the epic becomes the ONE member and
   its children come along by descent — nothing is re-parented. `preview: true`
   writes nothing and returns `{preview: true, milestone: {title, targetDate,
   startDate}, members: [{identifier, position}], hierarchyChanges: []}`; the
   commit returns the view plus `hierarchyChanges: []`, naming the same changes.
-- **`update_milestone`** `{ref, target_date?, start_date?}` — the two dates
-  only (`YYYY-MM-DD`, UTC calendar days; `null` clears one). Everything else is
-  `update_task`.
+- **`update_milestone`** `{ref, target_date?, start_date?, description?,
+  acceptance_criteria?}` — the two dates (`YYYY-MM-DD`, UTC calendar days;
+  `null` clears one) and the goal: `description` (`null` clears it) and
+  `acceptance_criteria` (the whole list; `[]` clears them). Title, assignee and
+  status are `update_task`.
+- **`mark_milestone_criterion`** `{ref, position, verdict, evidence?, note?,
+  follow_up?, run_id?}` — judge one acceptance criterion `met`, `unmet` or
+  `unknown`, with evidence (a ticket, a document or free text; `met` needs at
+  least one). The tracker records your verdict and never judges a criterion
+  itself; a criterion reworded since, or a `met` one whose cited ticket is not
+  done, reads `unknown` again. `follow_up` (on `unmet`) files a ticket through
+  your live goal run over the milestone ([milestones.md](milestones.md#goal)).
 - **`add_milestone_member`** `{milestone, ref, before? | after? | at?,
   base_revision?, note?}`, **`remove_milestone_member`** `{milestone, ref,
   base_revision?}`, **`move_milestone_member`** `{ref, before? | after? | at? |
@@ -133,7 +178,9 @@ like `update_task`.
   `awaiting_approval`, clears its claim, and queues every open descendant.
   `owner` is required. Refused on an issue with no children (use status
   `in_review` for a leaf awaiting a human) and while a gate is already
-  `pending`; re-gating after `request_changes` is how you resubmit.
+  `pending`; re-gating after `request_changes` is how you resubmit. A milestone
+  with members is gateable too: its gate holds the milestone's own close and
+  queues nothing through membership.
   `destructiveHint: true` — it takes a whole subtree out of circulation.
 - **`approve_task`** — `{ref, children?, comment?}`. Without `children`: the
   gate resolves, the subtree is released, and the parent is re-derived from its
@@ -192,20 +239,26 @@ display grouping.
 containers and milestones included — and `effective` is what you actually
 receive, with every container expanded depth-first to its open leaf work, the
 unqueued band after it in presentation sort, and every row classified
-`resolved | gated | blocked | claimed | eligible` with a reason. Every row also
+`resolved | gated | blocked | claimed | unavailable | eligible` with a reason
+(`unavailable` is a status checkout cannot claim from). Resolved entries are
+hidden unless you pass `all`. Every row also
 says where it is PLANNED — `milestonePath` (the milestone it belongs to) and
 `epicPath` (its ancestor epics), both outermost first and both `[]` when there
 is nothing to say — so you can report what you are working towards without a
 second lookup.
-**`next_task`** `{actor?, ws?}` answers `{revision, next, skipped}`: the one row
-you should take and everything it stepped over. Call it before `checkout_task`
-and you will never see `out_of_order`.
+**`next_task`** `{actor?, scope?, ws?}` answers `{revision, next, skipped}`:
+the one row you should take and everything it stepped over. `scope` (an epic, a
+milestone or any issue with children) limits the answer to the work inside it.
+Call it before `checkout_task` and you will never see `out_of_order`; under
+`strict` a scoped `next` is still checked against the whole plan.
 
 **Five verbs**, all attributed and all answering the same view:
 **`enqueue_task`** `{ref, before?|after?|at?, base_revision?, note?}`,
-**`dequeue_task`** `{ref}`, **`move_queue_entry`** `{ref, before?|after?|at?}`,
-**`reorder_queue`** `{order}` (every entry, once, atomically) and
-**`prune_queue`** (drop the resolved entries). A stale `base_revision` is
+**`dequeue_task`** `{ref, base_revision?}`, **`move_queue_entry`** `{ref,
+before?|after?|at?, base_revision?}`, **`reorder_queue`** `{order,
+base_revision?}` (every entry, once, atomically) and **`prune_queue`**
+`{base_revision?}` (drop the resolved entries). Each also takes `all?`, which
+includes resolved entries in the view it answers. A stale `base_revision` is
 refused with `revision_conflict` — the one retryable code a tracker write returns — and the server order
 stands. **Reordering the plan is a human's job**: a queue mutation is an
 actor-attributed event, so an agent that reorders is visible rather than
@@ -243,7 +296,7 @@ Two tools read and write the registered workspace settings
 someone stores a value and `workspace` after. **`set_setting`**
 `{key, value, actor?, ws?}` validates through the registry, logs a
 `setting_changed` event with actor, previous and new value, and answers the
-same shape with the new value. The first registered control is
+same shape with the new value. The setting an agent most needs to read is
 **`queue.policy`** (`advisory | strict`, default `advisory`): whether the
 pickup queue merely orders work or refuses an out-of-order checkout — read it
 before assuming the inbox's order is optional, and change it only because a
@@ -262,7 +315,7 @@ method:
 |---|---|---|
 | `list_attempts {ref, limit?, cursor?, ws?}` | `staple attempts <ref>` | The issue's attempts, oldest first, each as it reads now: `state`, `outcome` and `endReason` are the effective values, with `storedState` beside them |
 | `get_attempt {attempt_id, limit?, cursor?, ws?}` | `staple attempt <id>` | `{attempt, transitions, chain, burn}` |
-| `get_budget {account?, reserve?}` | `staple budget` | Per account, each limit's current window, latest sample, `status`, high-water `remainingPercent`, `missing`, and its provisional `pressure` (observed and sustainable pace, ratio, `unsafe`/`within` state, exhaustion and reserve reach at the pace; `safeConcurrency` null until the admission policy) |
+| `get_budget {account?, reserve?}` | `staple budget` | Per account, each limit's current window, latest sample, `status`, high-water `remainingPercent`, `missing`, and its provisional `pressure` (observed and sustainable pace, ratio, `unsafe`/`within` state, exhaustion and reserve reach at the pace; `safeConcurrency` always `null` with `missing` reason `policy_not_defined`) |
 | `list_budget_samples {account, since?, limit?, cursor?}` | `staple budget history` | One account's readings, oldest first, each with a derived `regression` flag |
 
 `get_task` carries `attempts: {current, last, count}` beside `claim` and
@@ -377,7 +430,7 @@ The rules are in [cli.md](cli.md#timing-quality-staple-timing-quality).
 
 ### Calibration cohorts
 
-`calibration_cohorts {kind?, priority?, parent?, since?, include?, list?, limit?, cursor?, for?, ws?}`
+`calibration_cohorts {kind?, priority?, parent?, since?, include?, list?, limit?, cursor?, for?, model?, ws?}`
 is `staple calibrate --json`. Use it to see how long a class of work takes
 against its estimate, from trusted samples only:
 
@@ -457,8 +510,12 @@ All in-protocol, so a harness never needs out-of-band setup:
   polluting the audit trail with anonymous writes.
 - **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
   creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 21 read-only, `checkout_task` and `set_estimate` idempotent — and
-  return `structuredContent` (arrays wrap as `{items}`).
+- **Tools declare annotations** — 25 read-only; among the writes, 15 are
+  `idempotentHint: true` (`checkout_task`, `set_estimate`, `set_blocked_by`,
+  `cross_link`, `hub_prune`, `init`, `update_milestone`, `set_setting`,
+  `enqueue_task`, `prune_queue`, `pause_run`, `resume_run`, `stop_run`,
+  `conflict_resolve`, `record_budget_sample`) — and return `structuredContent`
+  (arrays wrap as `{items}`).
 - **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
   The telemetry lists answer `{items, truncated, nextCursor, coverage}` instead
   ([below](#execution-telemetry)).
