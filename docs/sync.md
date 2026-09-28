@@ -246,9 +246,9 @@ holder's claim is the last write of its origin, or its last reopen, else its cre
 read from the snapshot's per-field provenance, not from this device's outbox, which a fresh
 device does not have. The service's fold records a reopen as a write of `reopens` whether
 or not the operation said so (`reopensOrigin`, `worker/src/fold.ts`, and the tail fold): a
-reopen by an older build does not say so, and a device hydrating afterwards gave the origin
-to whichever issue it applied first, while every device reading the tail had given it to
-the earlier claim. A holder that yields this way on a hydrating device is cleared there and
+reopen by an older build does not say so, and without the rule a device hydrating afterwards
+would give the origin to whichever issue it applied first, while every device reading the
+tail gives it to the earlier claim. A holder that yields this way on a hydrating device is cleared there and
 owes nothing — only the device that made a later claim settles it.
 
 **A number that moved under a caller.** A settlement moves this device's issue off a number
@@ -519,9 +519,9 @@ and of a milestone. Beside it and never inside it, because the order is the cont
 value and is compared whole — a note written on one device must not make two identical
 orders disagree. A receiver writes each entry's own facts, and an operation that says
 nothing about an entry (a conflict resolution, which carries only the order, or a build
-from before `entries`) leaves what the receiver already holds for it. Before this a note
-never left the device it was written on, and every device that applied a list wrote the
-applying operation's actor and time over every entry, so a reorder on one machine erased
+from before `entries`) leaves what the receiver already holds for it. Without per-entry facts a note
+would never leave the device it was written on, and every device that applied a list would write the
+applying operation's actor and time over every entry, so a reorder on one machine would erase
 every other machine's record of who queued what (`test/cloud-entry-notes.test.ts`).
 
 **A status or kind added after another is placed there on every device.** A `create`
@@ -682,7 +682,8 @@ is exactly the consent this page promises not to spend on someone's behalf.
 ## The local sync tables
 
 Sync bookkeeping is **additive**: it lives in its own tables in the workspace
-database (workspace migrations 010 to 014). The one domain table it touches is `events`,
+database (the sync parts of workspace migrations 010 to 014; 013 and 014 also add the
+replicated attempt records, which are not bookkeeping). The one domain table it touches is `events`,
 which gains `origin_device` and `origin_seq` (migration 014) so that every device orders two
 events of one issue in the same millisecond alike; events never replicate, so those columns
 are this device's own record too. Nothing here replicates — it is this device's record of its relationship to a shared log.
@@ -1255,8 +1256,8 @@ comment on an issue the repository lacks, an edit of an issue whose create is no
 page of the tail or in a snapshot — is **set aside**, because failing its page whole would
 make every later sync meet the same page and fail again: one device's write would stop every
 other device, and every join, for good (a device that followed a restore under an older
-build and edited a row the restore had rewound produces exactly such an entity). It is **set
-aside** (`src/core/cloud/quarantine.ts`, `sync_quarantine` in `meta`), everything else
+build and edited a row the restore had rewound produces exactly such an entity). The entity is
+stored in `sync_quarantine` in `meta` (`src/core/cloud/quarantine.ts`), everything else
 applies, and the position moves on. Whatever was set aside is tried again after every page
 and every snapshot read, in the order it was set aside:
 
@@ -1310,9 +1311,9 @@ process that dies between pages resumes still holding them. Only when the whole
 snapshot is in hand does a missing referent fail, whole and loudly, exactly as the
 pull loop fails a page. A vocabulary order is parked until then regardless: applied
 before the last status of its class arrives it would silently skip the ids it
-cannot find, and there is no referent check that could catch that. Before this, a
+cannot find, and there is no referent check that could catch that. Without that, a
 fresh device could not hydrate a repository with a single comment in it — the
-comment arrived ahead of its issue on every attempt.
+comment arrives ahead of its issue on every attempt.
 
 **A snapshot entity carries what its create said, beside the fold.** `createdSeq`,
 `createdAt` and `createdBy` are the seq, client time and actor of the `create` its state
@@ -1826,8 +1827,8 @@ tombstone and the entity begins again from its payload, in the service's fold an
 every applier alike. Everything after the delete that is not a create stays turned away.
 To make that true end to end, a set that follows a reset is journaled as a `create`, and
 a delete followed by a re-create inside one mutation (a batched remove-and-add) is sent
-as that create rather than merged into a delete. Before this the fold treated the
-tombstone as final: every device that hydrated from the snapshot kept the entity
+as that create rather than merged into a delete. Without that rule the fold would treat the
+tombstone as final: every device that hydrated from the snapshot would keep the entity
 deleted while every device that read the ordered tail applied the second create
 (`test/cloud-vocabulary-lifecycle.test.ts`, `worker/test/snapshot.test.ts`).
 

@@ -57,7 +57,7 @@ Those six are every registered setting today:
 | `machine.port` | global | integer 1–65535 | `4400` | `staple config set port <value>` |
 | `machine.setupComplete` | global | `true`, `false` | `false` | `staple config set setupComplete <value>` |
 | `kinds.default` | workspace | a configured kind id | `task` | `staple settings set kinds.default <kind>` |
-| `kinds.appearance` | workspace | a map of kind id to glyph (below) | `{}` | the web Settings → Kinds; a map cannot be typed at `settings set` or sent through `set_setting` |
+| `kinds.appearance` | workspace | a map of kind id to glyph (below) | `{}` | the web Settings → Task types; a map cannot be typed at `settings set` or sent through `set_setting` |
 | `queue.policy` | workspace | `advisory`, `strict` | `advisory` | `staple settings set queue.policy <value>` |
 
 A workspace key is refused on the config surface and a global key is refused
