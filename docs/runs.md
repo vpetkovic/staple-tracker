@@ -412,7 +412,7 @@ CLI: `src/commands/run-hook.ts`.
 ```
 staple run hook install <provider> [--print] [--user | --project | --local] [--staple CMD] [--dir DIR]
 staple run hook bind [--run <run-id>] [--session <id>] [--provider <provider>]
-staple run hook unbind [--session <id>] [--provider <provider>]
+staple run hook unbind [--session <id>] [--provider <provider>] | --run <run-id>
 staple run hook <provider>-stop [--max-repeats N] [--max-blocks N]      # run by the CLI, payload on stdin
 ```
 
@@ -435,13 +435,20 @@ else the variable the CLI exports to the agent's shell commands (Claude Code:
 the hook JSON input and is updated on /clear"; Gemini CLI: `GEMINI_SESSION_ID`,
 documented for hooks). A CLI that exports none gets a **pending** binding: the
 directory `bind` ran in, claimed by that provider's next stop whose session
-works there or above it, within ten minutes. The agent that ran `bind` ends its
-turn next, so that stop is almost always its own; the claim is a rename, so two
-sessions stopping at once never both get it. `--session` binds exactly. After
-`/clear` (a new session id) the old binding no longer matches: bind again.
+works there or below it (never above it: a session in `$HOME` is not the one
+that ran `bind` in a project), within ten minutes. The agent that ran `bind`
+ends its turn next, so that stop is almost always its own; the claim is a
+rename, so two sessions stopping at once never both get it. Run `bind` from the
+directory the session works in; `--session` binds exactly. After `/clear` (a
+new session id) the old binding no longer matches: unbind it and bind again.
 
-`bind` is refused for an ended run and for a run a live `run drive` is attached
-to (`conflict`): two adapters never work one run. For the same reason the hook
+**One run, one session.** `bind` is refused (`conflict`) for a run another
+session is bound to, or a pending binding made elsewhere waits for, naming it;
+a pending binding is never claimed for a run a session already works. To move a
+run to another session, `staple run hook unbind --run <id>` removes every
+binding of it first. Rebinding the same session changes nothing. `bind` is also
+refused for an ended run and for a run a live `run drive` is attached to: two
+adapters never work one run. For the same reason the hook
 does nothing in a session `run drive` started (`STAPLE_RUN_TICKET` is set), in
 a sub-agent, and for a run a live driver has since attached to.
 
@@ -461,10 +468,13 @@ tracker read it off the attempt or the status, exactly as a driver loop does.
 **It never traps anyone.** Every CLI with an adapter has a loop signal (this
 stop follows a continuation a hook caused; Cursor's is `loop_count` above 0). While it is set, the same reminder
 (the same kind, the same ticket) is given at most `--max-repeats` times in a
-row (2), and at most `--max-blocks` continuations are asked for in a row (20);
-past either the session may stop with a message and the run is left as it is.
-The continuation guard is read before `continue`, so a take the session would
-not be given the turn for is never claimed. A fresh prompt from the person
+row (2), and at most `--max-blocks` continuations are asked for in a row (20),
+whatever each was for (a ticket flipped between in progress and review changes
+the reminder, not the count); past either the session may stop with a message
+and the run is left as it is. The continuation guard is also read before
+`continue`, so a take the session would not be given the turn for is never
+claimed. For Cursor, whose own `loop_limit` the stanza lifts, it is the only
+cap. A fresh prompt from the person
 resets both. Each CLI has its own cap too (Claude Code: 8 continuations in a
 row unless `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` says otherwise): a run of more
 tickets than that per prompt pauses at the cap until the person says "carry
@@ -478,8 +488,11 @@ most of these CLIs treat as a block whatever the output says.
 use on a machine you care about) or, with `--user`, `--project` or `--local`
 (Claude Code only), adds it to that settings file, every other member kept, a
 copy of the old file under `<staple home>/backups/hooks/` first. A file that is
-not a JSON object is refused and left untouched; installing twice changes
-nothing. `--staple` names the staple command the hook runs (`staple` on the
+not a JSON object, or whose hooks member is not the shape the CLI documents (an
+object holding an array per event), is refused and left untouched. Installing
+twice changes nothing: an entry whose command is exactly the one being
+installed, or any staple followed by exactly `run hook <provider>-stop`, is
+staple's; `run hook claude-stop-old` is not. `--staple` names the staple command the hook runs (`staple` on the
 CLI's PATH by default). Codex and Gemini CLI run a new or changed hook only
 after it is trusted (Codex: `/hooks`).
 
@@ -566,7 +579,9 @@ ordinary gate: it holds the milestone's parented children and it stops the run
 run's pending gate: theirs replaces it (and the run never gates over a pending
 gate), so their review wins. Only the run path writes the marker: an actor named
 `goal-run:…` is refused on the CLI (`$STAPLE_AGENT`, `--actor`, `--agent`,
-`--author`, `--by`), over MCP and by the store's gate itself, and the marker
+`--author`, `--by`, and the `$USER` fallback when none of those is given), over
+MCP, over HTTP (every `actor` field and query parameter) and by the store's gate
+itself, and the marker
 exempts only a milestone's gate, whatever road it arrived by.
 
 The run keeps a gate open from then on, on **every `continue`** (idempotent), before

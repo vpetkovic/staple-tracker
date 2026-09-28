@@ -4,7 +4,7 @@
  *
  *   run hook <provider>-stop [--max-repeats N] [--max-blocks N]   (the hook itself; stdin: the payload)
  *   run hook bind [--run <id>] [--session <id>] [--provider P]
- *   run hook unbind [--session <id>] [--provider P]
+ *   run hook unbind [--session <id>] [--provider P] | --run <id>
  *   run hook install <provider> [--user | --project | --local] [--print] [--staple <cmd>] [--dir <project>]
  *
  * The hook verb is called by the agent CLI, not by a person or an agent, so it follows the
@@ -22,7 +22,7 @@ import { parseArgs } from "node:util";
 import { writeFileAtomic } from "../config/atomic.js";
 import { stapleHome } from "../config/home.js";
 import { openWorkspace } from "../core/open.js";
-import { DEFAULT_MAX_BLOCKS, DEFAULT_MAX_REPEATS, PENDING_BINDING_TTL_SECONDS, type HookVerdict, bindPending, bindSession, bindingPath, stopHook, unbindPending, unbindSession } from "../core/run-hook.js";
+import { DEFAULT_MAX_BLOCKS, DEFAULT_MAX_REPEATS, PENDING_BINDING_TTL_SECONDS, type HookVerdict, bindPending, bindSession, bindingPath, stopHook, unbindPending, unbindRun, unbindSession } from "../core/run-hook.js";
 import { HOOK_INSTALL_SCOPES, HOOK_PROVIDERS, type HookInstallScope, type HookProvider, hookStanza, mergeHook, providerByCommand } from "../core/run-hook-providers.js";
 import { shellQuote } from "../core/run-driver.js";
 import { scopeLabel } from "../core/run-store.js";
@@ -62,12 +62,15 @@ ${Object.values(HOOK_PROVIDERS)
               provider: claude). The session is --session, else
               $${HOOK_PROVIDERS.claude!.sessionEnv} (claude) or $${HOOK_PROVIDERS.gemini!.sessionEnv} (gemini). A CLI that
               exports none gets a PENDING binding: its next stop in this
-              directory (or above it) within ${PENDING_BINDING_TTL_SECONDS / 60} minutes claims it. Then end
+              directory (or below it) within ${PENDING_BINDING_TTL_SECONDS / 60} minutes claims it. Then end
               your turn: the hook hands the session the run's tickets one by
-              one. Refused for an ended run, or one run drive is working
-  run hook unbind [--session <id>] [--provider <provider>]
+              one. One run, one session: refused (conflict) for a run another
+              session is bound to (unbind --run first), an ended run, or one
+              run drive is working
+  run hook unbind [--session <id>] [--provider <provider>] | --run <run-id>
               stop the hook acting for this session (without a session: the
-              pending binding made here); the run is unchanged
+              pending binding made here), or, with --run, for every session
+              bound to that run; the run is unchanged
   run hook <provider>-stop [--max-repeats N] [--max-blocks N]
               the hook itself: reads the provider's payload on stdin, answers in
               the provider's format, always exits 0. The same reminder is given
@@ -112,6 +115,12 @@ export function runHookCommand(rest: string[]): void {
   const provider = providerNamed(values.provider ?? "claude");
   const session = (values.session ?? (provider.sessionEnv === null ? "" : (process.env[provider.sessionEnv] ?? ""))).trim();
 
+  if (sub === "unbind" && values.run !== undefined) {
+    const run = resolveWorkspace({ db: values.db, ws: values.ws }).store.runs().get(values.run);
+    const removed = unbindRun(run.id);
+    if (values.json) return console.log(JSON.stringify({ runId: run.id, unbound: removed }));
+    return console.log(`removed ${removed} binding(s) of run ${run.id}`);
+  }
   if (sub === "unbind") {
     const removed = session === "" ? unbindPending(provider.name, process.cwd()) : unbindSession(provider.name, session);
     if (values.json) return console.log(JSON.stringify({ provider: provider.name, session: session || null, unbound: removed }));

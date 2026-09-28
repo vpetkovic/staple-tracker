@@ -52,7 +52,9 @@ export function mainLineGuardGap(cwd: string): string | null {
   if (common === null) return null;
   const config = existsSync(join(common, "config")) ? readFileSync(join(common, "config"), "utf8") : "";
   const extensions = /^\s*\[extensions\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/im.exec(config)?.[1] ?? "";
-  if (/^\s*refstorage\s*=\s*reftable\s*$/im.test(extensions)) {
+  // The value may be quoted and followed by a comment (`refStorage = "reftable" ; x`); and a
+  // reftable repository keeps its refs in `<commondir>/reftable/`, however its config reads.
+  if (/^\s*refstorage\s*=\s*"?reftable"?\s*(?:[;#].*)?$/im.test(extensions) || existsSync(join(common, "reftable"))) {
     return "cannot guard the main line in a reftable repository (extensions.refStorage = reftable): its refs are not files this guard can read";
   }
   return null;

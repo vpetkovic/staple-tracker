@@ -34,7 +34,7 @@ import type { QueueVerb } from "../core/queue-store.js";
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
-import { MILESTONE_KIND } from "../core/milestones.js";
+import { MILESTONE_KIND, assertNotReservedActor } from "../core/milestones.js";
 import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
@@ -599,6 +599,23 @@ function requiredEstimate(body: Record<string, unknown>): number | null {
     throw new StapleError("validation", "estimateSeconds must be a number of seconds, or null to clear the estimate");
   }
   return value;
+}
+
+/**
+ * Who a write from the page acts as: `body.actor`, else `ui`. The goal-run gate marker is
+ * reserved here as on the CLI and over MCP (`assertNotReservedActor`), so no HTTP field can
+ * name an actor `goal-run:…`.
+ */
+function bodyActor(body: Record<string, unknown>): string {
+  const actor = (body.actor as string) || "ui";
+  assertNotReservedActor(actor);
+  return actor;
+}
+
+/** An `actor` query parameter, refused like {@link bodyActor} when it is reserved. */
+function queryActor(value: string | null): string | undefined {
+  assertNotReservedActor(value);
+  return value ?? undefined;
 }
 
 function stringList(value: unknown): string[] | undefined {
@@ -1911,7 +1928,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             id: body.id as string,
             choice: take ?? "custom",
             value: body.value,
-            actor: (body.actor as string) || "ui",
+            actor: bodyActor(body),
           }),
         );
         return;
@@ -4182,7 +4199,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const ref = body.ref as string;
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
 
         switch (url.pathname) {
           case "/api/gate/request":
@@ -4339,7 +4356,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           throw new StapleError("validation", "settings requires a non-empty ops array");
         }
         const writeHandle = handleFor((body.ws as string) ?? undefined);
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
         // One ordered, all-or-nothing batch — the same store call `update_statuses`
         // and `update_kinds` make, so the two surfaces cannot disagree about what
         // an op means or about which of them is refused. `settings` (R6a) writes
@@ -4357,7 +4374,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const ref = body.ref as string;
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
         const type = body.type as string;
         let result: unknown;
         if (type === "status") {
@@ -4744,7 +4761,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const milestones = handle.store.milestones();
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
         const ref = body.ref as string;
         const position = {
           before: body.before as string | undefined,
@@ -4852,7 +4869,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const projects = handle.store.projects();
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
         /**
          * A missing or non-string `ref` is a validation refusal in the same envelope
          * every other refusal uses — not a TypeError three frames down that arrives as
@@ -4919,7 +4936,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           200,
           handle.store.queue().view({
             all: url.searchParams.get("all") === "1",
-            actor: url.searchParams.get("actor") ?? undefined,
+            actor: queryActor(url.searchParams.get("actor")),
           }),
         );
         return;
@@ -4928,7 +4945,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       if (url.pathname === "/api/queue/next") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
         const { revision, scope, next, skipped } = handle.store.queue().effectiveQueue({
-          actor: url.searchParams.get("actor") ?? undefined,
+          actor: queryActor(url.searchParams.get("actor")),
           scope: url.searchParams.get("scope") ?? undefined,
         });
         json(res, 200, scope ? { revision, scope, next, skipped } : { revision, next, skipped });
@@ -4954,7 +4971,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               note: (body.note as string | undefined) ?? null,
               all: body.all === true,
             },
-            (body.actor as string) || "ui",
+            bodyActor(body),
           ),
         );
         return;

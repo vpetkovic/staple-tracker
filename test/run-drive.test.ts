@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildBrief } from "../src/core/run-brief.js";
 import { DRIVE_PROVIDERS, PLACEHOLDERS, type PlaceholderValues, sessionCommand } from "../src/core/run-driver.js";
-import { mainLineMoves, mainLineSnapshot } from "../src/core/main-line-guard.js";
+import { mainLineGuardGap, mainLineMoves, mainLineSnapshot } from "../src/core/main-line-guard.js";
 import { openWorkspace } from "../src/core/open.js";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, runCliAtAsync, tempDir } from "./fixtures/characterize-support.js";
 import { startMcpClient, toolPayload } from "./fixtures/contract-support.js";
@@ -519,6 +519,25 @@ describe("the main-line guard", () => {
     expect(events.filter((e) => e.event === "main_line_unguarded")).toEqual([{ event: "main_line_unguarded", reason: expect.stringContaining("reftable") }]);
     expect(mainLineSnapshot(dir)).toBeNull();
   }, 60_000);
+
+  it("knows a reftable repository by a quoted, commented setting and by its reftable directory", () => {
+    const quoted = tempDir("run-drive-guard");
+    cleanup.push(quoted);
+    mkdirSync(join(quoted, ".git", "refs", "heads"), { recursive: true });
+    writeFileSync(join(quoted, ".git", "config"), '[core]\n\trepositoryformatversion = 1\n[extensions]\n\trefStorage = "reftable" ; set by init\n');
+    expect(mainLineGuardGap(quoted)).toContain("reftable");
+    expect(mainLineSnapshot(quoted)).toBeNull();
+    const byDirectory = tempDir("run-drive-guard");
+    cleanup.push(byDirectory);
+    mkdirSync(join(byDirectory, ".git", "reftable"), { recursive: true });
+    writeFileSync(join(byDirectory, ".git", "config"), "[core]\n\trepositoryformatversion = 1\n");
+    expect(mainLineGuardGap(byDirectory)).toContain("reftable");
+    const files = tempDir("run-drive-guard");
+    cleanup.push(files);
+    mkdirSync(join(files, ".git", "refs", "heads"), { recursive: true });
+    writeFileSync(join(files, ".git", "config"), "[core]\n\trepositoryformatversion = 0\n");
+    expect(mainLineGuardGap(files)).toBeNull();
+  });
 
   it("reads a linked worktree's shared refs and packed-refs, with no git process", () => {
     const root = tempDir("run-drive-guard");

@@ -907,3 +907,28 @@ describe("KNOWN: logical errors this surface cannot project", () => {
     });
   });
 });
+
+describe("the reserved goal-run actor name", () => {
+  /** Every HTTP field that names who acts refuses `goal-run:…`, as the CLI and MCP do. */
+  async function refused(response: Response): Promise<void> {
+    // A thrown StapleError: the server's catch-all answers 409 with the store's code.
+    expect(response.status).toBe(409);
+    const body = JSON.stringify(await response.json());
+    expect(body).toContain('"validation"');
+    expect(body).toContain("reserved");
+  }
+
+  it("is refused in /api/action, the gate routes, the queue writes and the queue reads", async () => {
+    const actor = "goal-run:mallory";
+    await refused(await post({ type: "comment", ref: "CON-1", body: "sneaky", actor }));
+    await refused(await post({ type: "checkout", ref: "CON-2", actor }));
+    const write = (path: string, body: Record<string, unknown>) =>
+      fetch(`${origin}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-staple-token": token }, body: JSON.stringify(body) });
+    await refused(await write("/api/gate/request", { ref: "CON-1", owner: "VP", actor }));
+    await refused(await write("/api/queue/enqueue", { ref: "CON-2", actor }));
+    await refused(await get(`/api/queue/next?actor=${encodeURIComponent(actor)}`));
+    // Nothing was written under it.
+    const issue = (await (await get("/api/issue?ref=CON-1")).json()) as { comments: Array<{ author: string }> };
+    expect(issue.comments.map((comment) => comment.author)).not.toContain(actor);
+  });
+});
