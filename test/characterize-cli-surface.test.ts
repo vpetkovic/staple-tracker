@@ -205,10 +205,11 @@ const COMMANDS: ReadonlyArray<{
   },
   // `forecast <ref>`: the completion forecast and, apart, the budget forecast of the work.
   { name: "forecast", strings: ["db", "ws", "reserve", "account", "model"], booleans: ["json", "help"], shorts: ["h"] },
-  // `run start|status|stop`: autopilot runs. `-m` is the stop note.
+  // `run start|status|stop|pause|resume|continue`: autopilot runs. `-m` is the stop note;
+  // `--run`, `--outcome` and `--reason` are continue's.
   {
     name: "run",
-    strings: ["db", "ws", "actor", "scope", "max-tickets", "until", "ceiling", "ceiling-account", "message"],
+    strings: ["db", "ws", "actor", "scope", "max-tickets", "until", "ceiling", "ceiling-account", "message", "run", "outcome", "reason"],
     booleans: ["json", "help", "all"],
     shorts: ["h", "m"],
   },

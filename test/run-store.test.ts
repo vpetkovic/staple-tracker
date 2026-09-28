@@ -272,6 +272,206 @@ describe("tickets", () => {
   });
 });
 
+// ------------------------------------------------------------------ run continue
+
+describe("run continue", () => {
+  const cont = (input: Parameters<RunStore["continue"]>[0] = {}) => runs.continue({ actor: BOT, ...input });
+  const holder = (ref: string) => store.getIssue(ref).checkoutAgent;
+
+  it("answers stop no_run, with no run, when the actor has no live run", () => {
+    expect(cont()).toEqual({ action: "stop", reason: "no_run", detail: { actor: BOT }, message: expect.any(String), recorded: null, run: null });
+    const { epic } = epicWithTwo();
+    runs.stop(runs.start({ actor: BOT, scope: epic }).id, "vp");
+    expect(cont()).toMatchObject({ action: "stop", reason: "no_run" });
+  });
+
+  it("takes the scoped queue's next row, claimed for the actor in the same call, and records it as taken", () => {
+    const { epic, a } = epicWithTwo();
+    issue("Outside the epic");
+    const run = runs.start({ actor: BOT, scope: epic });
+    const answer = cont();
+    expect(answer).toMatchObject({ action: "take", ref: a, title: "A", resumed: false, recorded: null, why: expect.stringContaining(a) });
+    expect(holder(a)).toBe(BOT);
+    expect(store.getIssue(a).status).toBe("in_progress");
+    expect(answer.run!.tickets).toEqual([expect.objectContaining({ identifier: a, outcome: null })]);
+    expect(events("run_ticket_taken")).toEqual([expect.objectContaining({ runId: run.id, identifier: a, seq: 1 })]);
+    expect(events("checkout")).toEqual([expect.objectContaining({ identifier: a, actor: BOT })]);
+  });
+
+  it("hands a ticket the actor still holds back to resume it, taking nothing new, and past the ticket budget", () => {
+    const { epic, a } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic, maxTickets: 1 });
+    cont();
+    const again = cont();
+    expect(again).toMatchObject({ action: "take", ref: a, resumed: true, recorded: null });
+    expect(again.run!.counts).toEqual({ taken: 1, done: 0, failed: 0, open: 1 });
+    expect(events("run_ticket_taken")).toHaveLength(1);
+    // Finished, the one-ticket budget is spent.
+    store.updateIssue(a, { status: "in_review" }, BOT);
+    expect(cont()).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets" }, recorded: { ref: a, outcome: "done", source: "attempt" }, run: { state: "stopped" } });
+  });
+
+  it("records the previous ticket off the actor's ended attempt, then takes the next", () => {
+    const { epic, a, b } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic });
+    cont();
+    store.updateIssue(a, { status: "in_review" }, BOT);
+    const answer = cont();
+    expect(answer).toMatchObject({ action: "take", ref: b, recorded: { ref: a, outcome: "done", reason: null, source: "attempt" } });
+    expect(answer.run!.tickets.map((ticket) => [ticket.identifier, ticket.outcome])).toEqual([
+      [a, "done"],
+      [b, null],
+    ]);
+    expect(answer.run!.tickets[0]!.attemptId).not.toBeNull();
+  });
+
+  it("an attempt that failed is failed; a stated outcome wins over the attempt", () => {
+    const { epic, a } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic });
+    cont();
+    store.releaseIssue(a, BOT, { attempt: { outcome: "failed", reason: "flaky rig" } });
+    expect(cont()).toMatchObject({ action: "take", ref: a, recorded: { ref: a, outcome: "failed", reason: "flaky rig", source: "attempt" } });
+    // Its attempt now reads completed; the caller's word is what counts.
+    store.updateIssue(a, { status: "in_review" }, BOT);
+    expect(cont({ outcome: "failed", reason: "reviewer says no" })).toMatchObject({
+      action: "stop",
+      reason: "failure_streak",
+      recorded: { ref: a, outcome: "failed", reason: "reviewer says no", source: "stated" },
+    });
+  });
+
+  it("without an attempt, reads the ticket's status: handed on is done, anything else is failed with why", () => {
+    const { epic, a, b } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    // Taken on the record but never checked out by the actor: no attempt of theirs to read.
+    runs.recordTicketTaken(run.id, a);
+    store.updateIssue(a, { status: "in_review" }, "vp");
+    expect(cont()).toMatchObject({ action: "take", ref: b, recorded: { ref: a, outcome: "done", source: "status" } });
+    // Released with no outcome said: it left the actor's hands unfinished.
+    store.releaseIssue(b, BOT);
+    const answer = cont();
+    expect(answer.recorded).toMatchObject({ ref: b, outcome: "failed", source: "status", reason: expect.stringMatching(/unfinished.*yielded \(released\)/) });
+  });
+
+  it("--outcome failed on a ticket still held releases it, ending the attempt failed; --outcome done on one is refused", () => {
+    const { epic, a } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic });
+    cont();
+    expect(refused(() => cont({ outcome: "done" }), "validation").message).toMatch(/still in_progress/);
+    const answer = cont({ outcome: "failed", reason: "session crashed" });
+    expect(answer.recorded).toEqual({ ref: a, outcome: "failed", reason: "session crashed", source: "stated" });
+    const attempt = store.db.prepare("SELECT outcome, end_reason FROM attempts WHERE agent = ? AND state = 'ended'").get(BOT) as { outcome: string; end_reason: string };
+    expect(attempt).toEqual({ outcome: "failed", end_reason: "session crashed" });
+    // Released, it is the queue's first row again, so the run retries it.
+    expect(answer).toMatchObject({ action: "take", ref: a, resumed: false });
+    expect(holder(a)).toBe(BOT);
+  });
+
+  it("failure_streak: two failures in a row end the run stopped, and the next call answers the same stop", () => {
+    const { epic } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    cont();
+    cont({ outcome: "failed", reason: "one" });
+    const stop = cont({ outcome: "failed", reason: "two" });
+    expect(stop).toMatchObject({ action: "stop", reason: "failure_streak", run: { state: "stopped", stop: { reason: "failure_streak", by: null } } });
+    expect(events("run_stopped")).toEqual([expect.objectContaining({ runId: run.id, reason: "failure_streak" })]);
+    // The loop's exit is stable: asking again answers the stop, by id or by actor.
+    expect(cont({ run: run.id, actor: null })).toMatchObject({ action: "stop", reason: "failure_streak" });
+    expect(cont()).toMatchObject({ action: "stop", reason: "no_run" });
+  });
+
+  it("scope_empty ends the run completed once nothing unresolved is left", () => {
+    const { epic, a, b } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic });
+    cont();
+    store.updateIssue(a, { status: "done" }, BOT);
+    cont();
+    store.updateIssue(b, { status: "done" }, BOT);
+    expect(cont()).toMatchObject({ action: "stop", reason: "scope_empty", recorded: { ref: b, outcome: "done" }, run: { state: "completed", counts: { taken: 2, done: 2 } } });
+  });
+
+  it("waits, and stays live, while the only work left is somebody else's", () => {
+    const { epic, a, b } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    store.checkoutIssue(a, "other");
+    store.setBlockedBy(b, [a], "vp");
+    const answer = cont();
+    expect(answer).toMatchObject({ action: "wait", reason: "waiting_on_others", retryAfterSeconds: 60, run: { state: "active" } });
+    expect(runs.get(run.id).state).toBe("active");
+    expect(events("run_stopped")).toEqual([]);
+  });
+
+  it("a paused run answers wait and takes nothing, but still records a finished ticket; resume takes again", () => {
+    const { epic, a, b } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    cont();
+    store.updateIssue(a, { status: "in_review" }, BOT);
+    runs.setState(run.id, "paused", "vp");
+    const waiting = cont();
+    expect(waiting).toMatchObject({ action: "wait", reason: "paused", recorded: { ref: a, outcome: "done" }, run: { state: "paused", counts: { taken: 1, open: 0 } } });
+    expect(holder(b)).toBeNull();
+    runs.setState(run.id, "active", "vp");
+    expect(cont()).toMatchObject({ action: "take", ref: b });
+  });
+
+  it("finishes the actor's own held work in scope before claiming more", () => {
+    const { epic, b } = epicWithTwo();
+    store.checkoutIssue(b, BOT);
+    runs.start({ actor: BOT, scope: epic });
+    expect(cont()).toMatchObject({ action: "take", ref: b, resumed: false, why: expect.stringContaining("already held by you") });
+  });
+
+  it("gate_pending and vp_blocked end the run through continue", () => {
+    const { epic, a } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    store.gateIssue(epic, { owner: "VP" }, "vp");
+    expect(cont()).toMatchObject({ action: "stop", reason: "gate_pending", run: { id: run.id, state: "stopped" } });
+
+    const second = issue("Second epic", { kind: "epic" });
+    const c = issue("C", { parent: second });
+    issue("D", { parent: second });
+    runs.start({ actor: BOT, scope: second });
+    expect(cont()).toMatchObject({ action: "take", ref: c });
+    store.updateIssue(c, { status: "blocked", unblockOwner: "VP", unblockAction: "pick one" }, BOT);
+    // Blocked on a person, the ticket is a failure of this run AND the reason it stops.
+    expect(cont()).toMatchObject({ action: "stop", reason: "vp_blocked", recorded: { ref: c, outcome: "failed" }, detail: { blocks: [expect.objectContaining({ identifier: c })] } });
+    expect(store.getIssue(a).checkoutAgent).toBeNull();
+  });
+
+  it("two runs over one scope never take the same row", () => {
+    const { epic, a, b } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic });
+    runs.start({ actor: "bot-2", scope: epic });
+    expect(cont()).toMatchObject({ action: "take", ref: a });
+    expect(runs.continue({ actor: "bot-2" })).toMatchObject({ action: "take", ref: b });
+    expect(runs.continue({ actor: "bot-3" })).toMatchObject({ action: "stop", reason: "no_run" });
+  });
+
+  it("only the run's actor continues it, and several live runs need a run id", () => {
+    const { epic } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    refused(() => runs.continue({ actor: "intruder", run: run.id }), "validation");
+    runs.start({ actor: BOT, scope: "queue" });
+    refused(() => cont(), "validation");
+    expect(runs.continue({ run: run.id })).toMatchObject({ action: "take" });
+  });
+
+  it("under queue.policy strict, takes unqueued work inside its scope while a queued row elsewhere is ready", () => {
+    const { epic, a } = epicWithTwo();
+    const queued = issue("Queued elsewhere");
+    store.queue().mutate("add", { ref: queued }, "vp");
+    store.setSetting("queue.policy", "strict", "vp");
+    // A plain checkout is refused: the guard is real.
+    expect(refused(() => store.checkoutIssue(a, "someone"), "out_of_order").detail).toMatchObject({ expected: [queued] });
+    runs.start({ actor: BOT, scope: epic });
+    expect(cont()).toMatchObject({ action: "take", ref: a });
+    expect(events("queue_overridden")).toEqual([]);
+    // A queue run still takes the plan's head first.
+    const other = runs.start({ actor: "bot-2", scope: "queue" });
+    expect(runs.continue({ actor: "bot-2" })).toMatchObject({ action: "take", ref: queued, run: { id: other.id } });
+  });
+});
+
 // ------------------------------------------------------------------ every stop rule, tripped
 
 describe("stop rules over a real store", () => {
@@ -326,9 +526,33 @@ describe("stop rules over a real store", () => {
     store.updateIssue(b, { status: "done" }, "vp");
     store.checkoutIssue(a, BOT);
     expect(decisionOf(run.id)).toEqual({ stop: false });
-    // Somebody else's claim is not this run's work.
+    // Somebody else's claim is not this run's work, and not an empty scope either: it waits.
     const other = runs.start({ actor: "other", scope: epic });
-    expect(decisionOf(other.id)).toMatchObject({ stop: true, reason: "scope_empty" });
+    expect(decisionOf(other.id)).toEqual({
+      stop: false,
+      wait: { reason: "waiting_on_others", detail: { rows: [{ identifier: a, eligibility: "claimed", reason: expect.stringContaining(BOT) }] }, message: expect.any(String) },
+    });
+  });
+
+  it("waiting_on_others, never scope_empty, while unresolved work in scope is claimed, blocked by a dependency or in review", () => {
+    const { epic, a, b } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    const queueRun = runs.start({ actor: BOT, scope: "queue" });
+    store.checkoutIssue(a, "other");
+    store.setBlockedBy(b, [a], "vp");
+    const reasons = (id: string) => {
+      const decision = decisionOf(id);
+      expect(decision.stop).toBe(false);
+      return decision.stop ? [] : ((decision.wait?.detail.rows ?? []) as Array<{ identifier: string; eligibility: string }>).map((row) => `${row.identifier}:${row.eligibility}`);
+    };
+    expect(reasons(run.id)).toEqual([`${a}:claimed`, `${b}:blocked`]);
+    // The queue run sees the epic's rows too; the epic itself is a container, not a row.
+    expect(reasons(queueRun.id)).toEqual([`${a}:claimed`, `${b}:blocked`]);
+    store.updateIssue(a, { status: "in_review" }, "other");
+    expect(reasons(run.id)).toEqual([`${a}:unavailable`, `${b}:blocked`]);
+    store.updateIssue(a, { status: "done" }, "vp");
+    store.updateIssue(b, { status: "done" }, "vp");
+    expect(decisionOf(run.id)).toMatchObject({ stop: true, reason: "scope_empty", state: "completed" });
   });
 
   it("gate_pending: nothing workable and a gate pending in scope", () => {
@@ -396,7 +620,8 @@ describe("stop rules over a real store", () => {
     store.setBlockedBy(b, [blocker], "vp");
     store.updateIssue(a, { status: "todo" }, "vp");
     store.updateIssue(a, { status: "done" }, "vp");
-    expect(decisionOf(run.id)).toMatchObject({ stop: true, reason: "scope_empty" });
+    // b waits on a dependency nobody here owns: the run waits too, it neither stops nor completes.
+    expect(decisionOf(run.id)).toMatchObject({ stop: false, wait: { reason: "waiting_on_others", detail: { rows: [expect.objectContaining({ identifier: b, eligibility: "blocked" })] } } });
   });
 
   it("failure_streak: two failed tickets in a row, and a done in between resets it", () => {
@@ -551,7 +776,7 @@ function baseRun(over: Partial<RunForRules> = {}): RunForRules {
 }
 
 function baseFacts(over: Partial<RunFacts> = {}): RunFacts {
-  return { now: NOW, workable: [{ issueId: "w", identifier: "TST-9" }], pendingGates: [], personBlocks: [], ceiling: null, ...over };
+  return { now: NOW, workable: [{ issueId: "w", identifier: "TST-9", held: false }], waiting: [], pendingGates: [], personBlocks: [], ceiling: null, ...over };
 }
 
 const ticket = (issueId: string, outcome: "done" | "failed" | null) => ({

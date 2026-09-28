@@ -122,6 +122,42 @@ function hasPosition(position: QueuePosition): boolean {
   return position.before !== undefined || position.after !== undefined || position.at !== undefined;
 }
 
+/**
+ * THE definition of "inside a scope", shared by the scoped pickup answer and by
+ * everything that asks it of one issue ({@link QueueStore.scopeMembership}):
+ * what queueing the scope would reach, over the whole tree rather than the open
+ * one — every child at any depth, and every member of any milestone met on the
+ * way (the scope's own, or a milestone parented under it), with their
+ * descendants. The scope is never inside itself.
+ */
+function insideScope(
+  scopeId: string,
+  nodes: ReadonlyMap<string, IssueNode>,
+  membersOf: ReadonlyMap<string, readonly string[]>,
+): (id: string) => boolean {
+  // The expansion rule without the "open" filter, so a resolved parent does
+  // not hide the open work under it.
+  const allChildren = new Map<string, string[]>();
+  for (const node of nodes.values()) {
+    if (node.parent_id === null) continue;
+    const siblings = allChildren.get(node.parent_id) ?? [];
+    siblings.push(node.id);
+    allChildren.set(node.parent_id, siblings);
+  }
+  const reached = new Set<string>([scopeId]);
+  const pending = [scopeId];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    const members = nodes.get(id)?.kind === MILESTONE_KIND ? (membersOf.get(id) ?? []) : [];
+    for (const next of [...(allChildren.get(id) ?? []), ...members]) {
+      if (reached.has(next)) continue;
+      reached.add(next);
+      pending.push(next);
+    }
+  }
+  return (id) => id !== scopeId && reached.has(id);
+}
+
 export class QueueStore {
   constructor(private readonly store: WorkspaceStore) {}
 
@@ -875,11 +911,14 @@ export class QueueStore {
      * eligibility, reason and `position` the unscoped answer gives it — a scope
      * changes which rows are considered, never what a row is.
      *
-     * Membership is STRUCTURAL: a row is inside when the scope is one of its
-     * ancestors, or — for a milestone — when the row or an ancestor is one of its
-     * members (the rollup's "members plus their descendants"), or it sits under
-     * the milestone's own children. The scope itself is never a row of its own
-     * scope: an epic whose children are all resolved has nothing left inside it.
+     * Membership is WHAT QUEUEING THE SCOPE WOULD REACH, over the whole tree
+     * rather than the open one: every child at any depth, and every member of
+     * any milestone met on the way (the scope's own, or a milestone parented
+     * under it), with their descendants. So an open leaf under a resolved parent
+     * is inside its epic, and a member of a child milestone is inside the
+     * parent. The scope itself is never a row of its own scope: an epic whose
+     * children are all resolved has nothing left inside it. `insideScope` is the
+     * one implementation, shared with `scopeMembership`.
      *
      * ORDER inside a scope is the plan first, then the scope's own shape: the
      * rows the plan reaches keep their effective order, and the scope's unqueued
@@ -902,9 +941,7 @@ export class QueueStore {
       const starts = scope.kind === MILESTONE_KIND ? [scope] : (openChildren.get(scope.id) ?? []);
       for (const start of starts) expand(start, null, null, null, 0, seen, walk);
       const scopeRank = new Map(walked.map((id, index) => [id, index]));
-      const inside = (id: string): boolean =>
-        id !== scope.id &&
-        chainOf(id).some((link) => link === scope.id || seam.milestoneOf.get(link) === scope.id);
+      const inside = insideScope(scope.id, nodes, seam.membersOf);
       const scoped = rows.filter((row) => inside(row.issueId));
       const unqueued = scoped
         .filter((row) => row.unqueued)
@@ -933,6 +970,22 @@ export class QueueStore {
               status: scope.status,
             },
           }),
+    };
+  }
+
+  /**
+   * Which issues a scope holds, for a caller that asks it of one issue at a time
+   * (an autopilot run checking that a ticket is its own, or gathering the gates
+   * and blocks under it). The same resolution and the same {@link insideScope}
+   * as `effectiveQueue({scope})`, so "inside" has one definition. `contains`
+   * answers false for the scope itself, as the pickup answer does.
+   */
+  scopeMembership(ref: string): { scope: QueueScope; contains: (issueId: string) => boolean } {
+    const nodes = this.nodes();
+    const node = this.scopeOf(ref, nodes);
+    return {
+      scope: { issueId: node.id, identifier: node.identifier, title: node.title, kind: node.kind, status: node.status },
+      contains: insideScope(node.id, nodes, this.store.milestones().queueSeam().membersOf),
     };
   }
 

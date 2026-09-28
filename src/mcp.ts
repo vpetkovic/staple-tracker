@@ -47,7 +47,7 @@ import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
-import { RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES } from "./core/run-store.js";
+import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
 import {
   COMMENT_AUTHOR_TYPES,
   COMMENT_PAGE_LIMITS,
@@ -229,7 +229,7 @@ const autoSync = new SurfaceAutoSync({
  * as on a disconnected one. And a failed tool fires nothing: `run()` reports
  * failure as `isError` rather than by throwing, so the check is on the value.
  */
-const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "start_run", "stop_run"]);
+const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "start_run", "stop_run", "pause_run", "resume_run"]);
 {
   type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown> };
   type ToolCallback = (...args: unknown[]) => unknown;
@@ -2758,9 +2758,11 @@ server.registerTool(
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * Autopilot runs (`src/core/run-store.ts`). Three tools over one `RunStore`, answering
- * the objects `staple run start|status|stop --json` print. Runs are machine-local and
- * never synchronized, so the two writes are in `MACHINE_LOCAL_WRITES`.
+ * Autopilot runs (`src/core/run-store.ts`). Six tools over one `RunStore`, answering
+ * the objects `staple run start|status|stop|pause|resume|continue --json` print. Runs are
+ * machine-local and never synchronized, so start, stop, pause and resume are in
+ * `MACHINE_LOCAL_WRITES`. `continue_run` is not: a take claims the ticket, a write that
+ * synchronizes like any checkout.
  * ────────────────────────────────────────────────────────────────────────────
  */
 const runScopeShape = z
@@ -2809,20 +2811,28 @@ const runShape = {
   endedAt: z.string().nullable(),
 };
 
+const runWaitShape = z.object({
+  reason: z.enum(RUN_WAIT_REASONS),
+  detail: z.record(z.string(), z.unknown()),
+  message: z.string(),
+});
+
 const stopDecisionShape = z
   .object({
     stop: z.boolean(),
+    wait: runWaitShape.optional().describe("On {stop:false}: nothing is workable now but unresolved work remains (waiting_on_others)"),
     reason: z.enum(RUN_STOP_REASONS).optional(),
     state: z.enum(["stopped", "completed"]).optional(),
     detail: z.record(z.string(), z.unknown()).optional(),
     message: z.string().optional(),
   })
-  .describe("What the stop rules answer now: {stop:false}, or the first reason that trips, the state it ends the run in, its detail and a sentence");
+  .describe("What the stop rules answer now: {stop:false} (with `wait` when nothing is workable yet the scope is not empty), or the first reason that trips, the state it ends the run in, its detail and a sentence");
 
 const runFactsShape = z
   .object({
     now: z.string(),
-    workable: z.array(z.object({ issueId: z.string(), identifier: z.string() })),
+    workable: z.array(z.object({ issueId: z.string(), identifier: z.string(), held: z.boolean() })),
+    waiting: z.array(z.object({ issueId: z.string(), identifier: z.string(), eligibility: z.string(), reason: z.string().nullable() })),
     pendingGates: z.array(z.object({ issueId: z.string(), identifier: z.string(), owner: z.string().nullable() })),
     personBlocks: z.array(z.object({ issueId: z.string(), identifier: z.string(), owner: z.string(), action: z.string().nullable() })),
     ceiling: z
@@ -2903,6 +2913,74 @@ server.registerTool(
       const runs = storeFor(ws).runs();
       return runs.stop(run_id ?? runs.liveRunOf(who).id, who, note ?? null);
     }),
+);
+
+server.registerTool(
+  "pause_run",
+  {
+    description:
+      "Pause a live autopilot run without ending it: continue_run then answers {action:\"wait\", reason:\"paused\"} and takes nothing until resume_run. Without run_id, actor's one live run. Pausing a paused run changes nothing; an ended run is refused with conflict. Same payload as `staple run pause --json`.",
+    inputSchema: { run_id: z.string().optional(), actor: actorSchema, ws: wsSchema },
+    outputSchema: runShape,
+    annotations: { title: "Pause run", ...runWriteAnnotations, idempotentHint: true },
+  },
+  ({ run_id, actor, ws }) =>
+    run(() => {
+      const who = requireActor(actor);
+      const runs = storeFor(ws).runs();
+      return runs.setState(run_id ?? runs.liveRunOf(who).id, "paused", who);
+    }),
+);
+
+server.registerTool(
+  "resume_run",
+  {
+    description:
+      "Resume a paused autopilot run: the next continue_run takes again. Without run_id, actor's one live run. Resuming an active run changes nothing; an ended run is refused with conflict. Same payload as `staple run resume --json`.",
+    inputSchema: { run_id: z.string().optional(), actor: actorSchema, ws: wsSchema },
+    outputSchema: runShape,
+    annotations: { title: "Resume run", ...runWriteAnnotations, idempotentHint: true },
+  },
+  ({ run_id, actor, ws }) =>
+    run(() => {
+      const who = requireActor(actor);
+      const runs = storeFor(ws).runs();
+      return runs.setState(run_id ?? runs.liveRunOf(who).id, "active", who);
+    }),
+);
+
+server.registerTool(
+  "continue_run",
+  {
+    description:
+      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it, then call continue_run again. wait: {reason: paused | waiting_on_others, message, retryAfterSeconds}; take nothing, ask again later or end your session. stop: {reason, detail, message}; the run has ended (stopped_by_human, budget, failure_streak, vp_blocked, gate_pending, scope_empty) or you have no live run (no_run, run null); end your loop. Every answer carries `recorded` (the outcome this call recorded, or null) and `run`. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
+    inputSchema: {
+      run_id: z.string().optional().describe("The run; without it, actor's one live run"),
+      outcome: z.enum(RUN_TICKET_OUTCOMES).optional().describe("How the current ticket ended, when you know"),
+      reason: z.string().optional().describe("Why, for a failed outcome"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: {
+      action: z.enum(["take", "wait", "stop"]),
+      ref: z.string().optional(),
+      issueId: z.string().optional(),
+      title: z.string().optional(),
+      why: z.string().optional(),
+      resumed: z.boolean().optional(),
+      reason: z.union([z.enum(CONTINUE_STOP_REASONS), z.enum(RUN_WAIT_REASONS)]).optional(),
+      detail: z.record(z.string(), z.unknown()).optional(),
+      message: z.string().optional(),
+      retryAfterSeconds: z.number().optional(),
+      recorded: z
+        .object({ ref: z.string(), outcome: z.enum(RUN_TICKET_OUTCOMES), reason: z.string().nullable(), source: z.enum(["stated", "attempt", "status"]) })
+        .nullable(),
+      run: z.object(runShape).nullable(),
+    },
+    annotations: { title: "Continue run", ...runWriteAnnotations, idempotentHint: false },
+  },
+  ({ run_id, outcome, reason, actor, ws }) =>
+    run(() => storeFor(ws).runs().continue({ actor: run_id === undefined ? requireActor(actor) : (actor?.trim() || null), run: run_id ?? null, outcome, reason: reason ?? null })),
 );
 
 /**

@@ -81,11 +81,14 @@ const READS: Record<StoreName, readonly string[]> = {
     "planSummary", "comparePlans", "timingQuality", "calibration", "forecast",
     // The autopilot run service. Its writes touch only `runs` and `run_tickets`, which are
     // machine-local and never journaled (`run-store.ts`); `test/run-store.test.ts` pins
-    // that a run leaves no outbox row on a device that journals.
+    // that a run leaves no outbox row on a device that journals. `run continue`'s take
+    // claims through `checkoutIssue`, and a stated failure releases through
+    // `releaseIssue`: both are this store's own mutations, covered by their scenarios.
     "runs",
   ],
   MilestoneStore: ["queueSeam", "get", "list", "milestoneOf", "effectiveMilestone"],
-  QueueStore: ["revision", "entries", "effectiveQueue", "view"],
+  // `scopeMembership`: which issues a scope holds, the same resolution a scoped `effectiveQueue` reads.
+  QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
 };
 

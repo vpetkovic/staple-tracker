@@ -380,6 +380,25 @@ answering `{revision, next, skipped}` (`{revision, scope, next, skipped}` with
 `--scope`) — see
 [queue.md](queue.md#operations-by-surface).
 
+## Autopilot runs
+
+One agent working the queue, an epic or a milestone ticket after ticket, until
+a stop rule the tracker evaluates says stop. The full contract, with every
+reason code and a driver loop, is [runs.md](runs.md).
+
+```bash
+staple run start --scope STA-66 --max-tickets 5 --until 4h   # also --ceiling P [--ceiling-account A]
+staple run continue --json               # after each ticket: take (already claimed), wait or stop
+staple run continue --outcome failed --reason "tests red" --json
+staple run pause                         # continue answers wait until resume
+staple run resume
+staple run status --all
+staple run stop -m "enough for today"
+```
+
+`run continue` exits 0 for take, wait and stop alike; a driver loops on
+`action` and ends on `stop`.
+
 ## Estimates vs actuals
 
 One stored number and a handful of read-time derivations, so you can say what

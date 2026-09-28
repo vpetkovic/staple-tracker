@@ -1052,6 +1052,10 @@ Autopilot runs
               stopped_by_human, budget, failure_streak, vp_blocked, gate_pending,
               scope_empty (staple run --help)
   run stop [<run-id>] [-m why]          stop a run, recorded as stopped_by_human
+  run pause|resume [<run-id>]           hold a run without ending it, and let it go on
+  run continue [--run <id>] [--outcome done|failed] [--reason R]
+              after each ticket: record how it ended, then take (already claimed),
+              wait (paused, waiting_on_others) or stop (a stop reason, or no_run)
 
 Documents & events
   doc <ref> <key>                       read (latest)

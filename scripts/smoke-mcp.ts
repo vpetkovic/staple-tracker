@@ -864,8 +864,9 @@ try {
   // record_budget_sample, read this machine's hub and take no ws. set_estimate, the
   // explicit estimate write, makes 44, compare_plans, the certified plan read, 45, and
   // timing_quality, the cohort quality read, 46, calibration_cohorts, 47, and forecast, 48.
-  // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51.
-  assert(wsTargetable.length === 51, `51 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51,
+  // and pause_run, resume_run and continue_run, 54.
+  assert(wsTargetable.length === 54, `54 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&
@@ -1062,6 +1063,8 @@ try {
         // S7 (STA-73): settling a conflict emits a NEW operation carrying the
         // choice, so it is a write and is attributed like one.
         "conflict_resolve",
+        // Autopilot runs: continue records an outcome and claims as the run's actor.
+        "continue_run",
         "create_milestone",
         "create_task",
         // STA-168: a queue mutation is an actor-attributed event, which is what
@@ -1071,6 +1074,8 @@ try {
         "gate_task",
         "move_milestone_member",
         "move_queue_entry",
+        // Pausing a run records who paused it, as resuming does.
+        "pause_run",
         "prune_queue",
         "put_document",
         // Execution attempts: a report on an attempt is a write and is attributed like one.
@@ -1080,6 +1085,7 @@ try {
         "reorder_milestone_members",
         "reorder_queue",
         "request_changes",
+        "resume_run",
         "set_blocked_by",
         // The explicit estimate write names who changed the plan.
         "set_estimate",

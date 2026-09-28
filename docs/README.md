@@ -9,6 +9,7 @@ purpose — the content is accurate, the prose is not finished.
 | [agents.md](agents.md) | The protocol `init` writes, the MCP tool surface, harness ergonomics |
 | [continuity.md](continuity.md) | Claims, staleness, takeover, and the takeover drill |
 | [queue.md](queue.md) | The pickup queue: plan vs effective order, the resolver, advisory vs strict, human override, storage — the R2 contract, not yet built |
+| [runs.md](runs.md) | Autopilot runs: scope, budget and stop rules, and the `run continue` take / wait / stop contract every provider's driver loops on |
 | [milestones.md](milestones.md) | Milestones: the `milestone` kind, UTC inclusive dates, ordered membership that never re-parents, count-each-leaf-once progress, queue expansion — the R3 contract, not yet built |
 | [sync.md](sync.md) | Optional cloud sync: what replicates, the operation envelope, ordering, conflicts, leases, the three consents and the zero-network rule — the S contract, not yet built |
 | [execution-telemetry.md](execution-telemetry.md) | Execution attempts, provider limit windows and budget samples: identifiers, lifecycle, units, absolute resets, provenance, missingness — the scheduling-telemetry contract, not yet built |

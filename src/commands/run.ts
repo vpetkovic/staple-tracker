@@ -4,18 +4,21 @@
  *   run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
  *   run status [<run-id>] [--all]
  *   run stop [<run-id>] [-m why]
+ *   run pause|resume [<run-id>]
+ *   run continue [--run <run-id>] [--outcome done|failed] [--reason R]
  *
  * Every verb is one `RunStore` method, the same one the MCP tools call, and `--json`
- * prints the object that method returns: a run for `start` and `stop`, and
- * `{run, decision, facts}` per run for `status`. Errors are thrown as `StapleError` and
+ * prints the object that method returns: a run for `start`, `stop`, `pause` and
+ * `resume`, `{run, decision, facts}` per run for `status`, and the take / wait / stop
+ * answer for `continue` (docs/runs.md). Errors are thrown as `StapleError` and
  * formatted by the top-level catch in cli.ts like every other command's.
  */
 import { parseArgs } from "node:util";
-import { type Run, type RunStatus, scopeLabel } from "../core/run-store.js";
+import { type ContinueAnswer, type Run, type RunStatus, RUN_TICKET_OUTCOMES, type RunTicketOutcome, scopeLabel } from "../core/run-store.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 
-const USAGE = "Use: start, status, stop (staple run --help)";
+const USAGE = "Use: start, status, stop, pause, resume, continue (staple run --help)";
 
 const HELP = `staple run — autopilot runs: one agent working a scope ticket after ticket
 until a stop rule, run by the tracker, says otherwise.
@@ -33,21 +36,38 @@ until a stop rule, run by the tracker, says otherwise.
   run stop [<run-id>] [-m why]
               stop a run (yours when no id is given): stopped_by_human, recorded
               with who and why. Stopping an ended run changes nothing
+  run pause|resume [<run-id>]
+              hold a live run (yours when no id is given) without ending it, and
+              let it take again. A paused run answers continue with wait
+  run continue [--run <run-id>] [--outcome done|failed] [--reason R]
+              THE call a driver makes after each ticket: records how the last
+              ticket ended (stated, else read off your ended attempt, else its
+              status; a ticket you still hold is handed back to resume), runs the
+              stop rules and answers one action:
+                take  {ref, why, resumed}: already claimed for you, work it
+                wait  {reason: paused | waiting_on_others, retryAfterSeconds}
+                stop  {reason}: a stop reason below, or no_run (you have no live
+                      run). Exit 0 for all three; the loop ends on stop
+              --outcome failed on a ticket you still hold also releases it
 
 Stop reasons, first match wins, stable in --json: stopped_by_human, budget
 (detail.budget: tickets | time | ceiling), failure_streak (two failed tickets in
 a row), vp_blocked (a ticket the run took is blocked on a person, or nothing is
 workable and something in scope is), gate_pending (the scope issue awaits
 approval, or nothing is workable and something in scope does), scope_empty
-(nothing left to take; the run ends completed). A gate or a person-owned block
-elsewhere in scope does not stop a run that still has work to take.
+(nothing unresolved left in scope; the run ends completed). A gate or a
+person-owned block elsewhere in scope does not stop a run that still has work to
+take. Work only others can move (claimed, blocked by a dependency, in review)
+is waiting_on_others: the run waits, it does not end. Actors are compared
+exactly, as claims are: "Bot" and "bot" are two actors.
 
 Runs are local to this machine and never synchronized; their events
 (run_started, run_stopped, run_state_changed, run_ticket_taken,
 run_ticket_recorded) show in staple events --follow.
 
   --actor A        who acts; else $STAPLE_AGENT, else $USER
-  --json           the run, or {runs: [{run, decision, facts}]} for status`;
+  --json           the run, {runs: [{run, decision, facts}]} for status, or
+                   {action, ...} for continue (docs/runs.md)`;
 
 function positiveInteger(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;
@@ -108,13 +128,21 @@ export function runRunCommand(rest: string[]): void {
       "ceiling-account": { type: "string" },
       all: { type: "boolean" },
       message: { type: "string", short: "m" },
+      run: { type: "string" },
+      outcome: { type: "string" },
+      reason: { type: "string" },
     },
   });
   const [sub, id] = positionals;
   // Before the workspace is resolved: help answers in a directory with no workspace.
   if (values.help === true || sub === undefined || sub === "help") return console.log(HELP);
-  if (!["start", "status", "stop"].includes(sub)) throw new StapleError("validation", `Unknown run command "${sub}". ${USAGE}`);
+  if (!["start", "status", "stop", "pause", "resume", "continue"].includes(sub)) {
+    throw new StapleError("validation", `Unknown run command "${sub}". ${USAGE}`);
+  }
   const actor = values.actor ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";
+  if (sub !== "continue" && (values.run !== undefined || values.outcome !== undefined || values.reason !== undefined)) {
+    throw new StapleError("validation", `--run, --outcome and --reason apply to "run continue" only, not "run ${sub}".`);
+  }
   const runs = resolveWorkspace({ db: values.db, ws: values.ws }).store.runs();
 
   if (sub === "start") {
@@ -144,7 +172,40 @@ export function runRunCommand(rest: string[]): void {
     return;
   }
 
+  if (sub === "continue") {
+    if (id !== undefined) throw new StapleError("validation", `run continue takes the run as --run <run-id>, not "${id}".`);
+    const outcome = values.outcome;
+    if (outcome !== undefined && !(RUN_TICKET_OUTCOMES as readonly string[]).includes(outcome)) {
+      throw new StapleError("validation", `--outcome is done or failed; got "${outcome}".`);
+    }
+    const answer = runs.continue({
+      // With --run the run names its actor; an --actor given too must match it.
+      actor: values.run !== undefined ? (values.actor ?? null) : actor,
+      run: values.run ?? null,
+      outcome: outcome as RunTicketOutcome | undefined,
+      reason: values.reason ?? null,
+    });
+    if (values.json) return console.log(JSON.stringify(answer));
+    return printAnswer(answer);
+  }
+
+  if (sub === "pause" || sub === "resume") {
+    const run = runs.setState(id ?? runs.liveRunOf(actor).id, sub === "pause" ? "paused" : "active", actor);
+    if (values.json) return console.log(JSON.stringify(run));
+    return printRun(run);
+  }
+
   const run = runs.stop(id ?? runs.liveRunOf(actor).id, actor, values.message ?? null);
   if (values.json) return console.log(JSON.stringify(run));
   printRun(run);
+}
+
+function printAnswer(answer: ContinueAnswer): void {
+  if (answer.recorded) {
+    const { ref, outcome, reason, source } = answer.recorded;
+    console.log(`recorded ${ref} ${outcome} (${source})${reason ? `: ${reason}` : ""}`);
+  }
+  if (answer.action === "take") return console.log(`take     ${answer.ref} ${answer.title}\n  ${answer.why}`);
+  if (answer.action === "wait") return console.log(`wait     ${answer.reason}: ${answer.message} (ask again in ${answer.retryAfterSeconds}s)`);
+  console.log(`stop     ${answer.reason}: ${answer.message}`);
 }

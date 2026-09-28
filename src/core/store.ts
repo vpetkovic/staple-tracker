@@ -6124,8 +6124,9 @@ export class WorkspaceStore {
   private queueOrderCheck(
     issueId: string,
     actor: string,
+    scope?: string,
   ): { expected: string[]; position: number | null; expectedPosition: number | null } {
-    const { rows } = this.queue().effectiveQueue({ actor });
+    const { rows } = this.queue().effectiveQueue({ actor, scope });
     const target = rows.find((row) => row.issueId === issueId) ?? null;
     const earlier = rows.filter(
       (row) =>
@@ -6163,7 +6164,19 @@ export class WorkspaceStore {
      * explicit list are validated against the workspace's own vocabulary.
      */
     expectedStatuses?: readonly IssueStatus[],
-    opts: { stealIfIdleSeconds?: number; overrideReason?: string; attempt?: AttemptOptions } = {},
+    opts: {
+      stealIfIdleSeconds?: number;
+      overrideReason?: string;
+      attempt?: AttemptOptions;
+      /**
+       * The container an autopilot run works (`RunStore.continue`), by issue id. The strict
+       * order guard then reads the plan INSIDE it: the human who scoped the run to an epic or
+       * a milestone ordered that work ahead of the rest of the queue, so a queued row
+       * elsewhere does not refuse it. Rows the plan reaches inside the scope still come
+       * first. Not a CLI or MCP option: only a run's take passes it.
+       */
+      queueScope?: string;
+    } = {},
   ): Issue {
     if (!agent?.trim()) throw new StapleError("validation", "agent is required for checkout");
     assertAttemptOptions(opts.attempt);
@@ -6245,7 +6258,7 @@ export class WorkspaceStore {
       const policy = this.getSetting("queue.policy") as QueuePolicy;
       const order =
         policy === "strict" || overrideReason !== undefined
-          ? this.queueOrderCheck(row.id, agent)
+          ? this.queueOrderCheck(row.id, agent, opts.queueScope)
           : null;
       if (policy === "strict" && overrideReason === undefined && order !== null && order.expected.length > 0) {
         const first = order.expected[0]!;

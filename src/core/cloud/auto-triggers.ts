@@ -95,6 +95,8 @@ export const CLI_COMMAND_TRIGGERS: Readonly<Record<string, AutoSyncTrigger>> = {
   settings: "post-write",
   milestone: "post-write",
   add: "post-write",
+  // `run continue` claims the ticket it hands out; the rest of `run` is machine-local.
+  run: "post-write",
   // reads
   ls: "startup",
   show: "startup",

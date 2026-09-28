@@ -22,13 +22,24 @@
  *                     it is
  *   gate_pending      the scope issue itself holds a pending review gate, or nothing in
  *                     scope is workable and something in it holds one
- *   scope_empty       nothing in scope is workable, and nothing is waiting on a person
+ *   scope_empty       nothing unresolved is left in scope at all
  *
  * `scope_empty` ends the run `completed`; every other reason ends it `stopped`.
  *
- * "Workable" is the pickup queue's own answer (`QueueStore.effectiveQueue`): a row inside
- * the scope that is `eligible`, or that the run's actor already holds. The scope's own
- * issue is never workable: a run works what is under the container, not the container.
+ * "Workable" is the pickup queue's own answer (`QueueStore.effectiveQueue` with the run's
+ * scope): a row inside the scope that is `eligible`, or that the run's actor already
+ * holds. The scope's own issue is never workable: a run works what is under the
+ * container, not the container. "Inside the scope" has one definition, the queue's
+ * (`QueueStore.scopeMembership`).
+ *
+ * ## Waiting is not stopping
+ *
+ * When nothing is workable, no gate or person-owned block explains it, but unresolved rows
+ * remain in scope (claimed by another agent, blocked by a dependency, in review, in a
+ * status nobody can check out), the scope is not empty: somebody else is moving it. The
+ * rules then answer `{stop: false, wait}` with reason `waiting_on_others` and the rows,
+ * and the run stays live. This is the queue's own contract: a null `next` with unresolved
+ * rows skipped is stuck, not empty.
  *
  * A gate or a person-owned block elsewhere in the scope does not stop a run that still has
  * workable rows. The queue already steps over them; stopping on them would let one parked
@@ -51,7 +62,7 @@ import { MILESTONE_KIND } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
 import { normalizeInstant, parseRelativeSeconds } from "./telemetry/formats.js";
 import { readBudget, type BudgetView } from "./telemetry/read-budget.js";
-import { MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
+import { StapleError, nowIso } from "./types.js";
 
 export const RUN_STATES = ["active", "paused", "stopped", "completed"] as const;
 export type RunState = (typeof RUN_STATES)[number];
@@ -69,6 +80,14 @@ export const RUN_STOP_REASONS = [
   "scope_empty",
 ] as const;
 export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
+
+/**
+ * Why a live run takes nothing right now without ending: a public JSON contract, like the
+ * stop reasons. `paused` is a person's pause (`run pause`); `waiting_on_others` is the
+ * rules' answer when the scope still holds unresolved work nobody lets this run take.
+ */
+export const RUN_WAIT_REASONS = ["paused", "waiting_on_others"] as const;
+export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
 
 /** Which budget ran out, in `detail.budget` of a `budget` stop. */
 export type RunBudgetKind = "tickets" | "time" | "ceiling";
@@ -137,8 +156,10 @@ export interface Run {
 /** Facts about the scope and the budget, read off the store at one instant. */
 export interface RunFacts {
   now: string;
-  /** Rows in scope the run could take or already holds, in effective order. */
-  workable: Array<{ issueId: string; identifier: string }>;
+  /** Rows in scope the run could take (`held: false`) or the actor already holds (`held: true`), in scoped order. */
+  workable: Array<{ issueId: string; identifier: string; held: boolean }>;
+  /** Unresolved rows in scope the run cannot take, with the queue's eligibility and reason. */
+  waiting: Array<{ issueId: string; identifier: string; eligibility: string; reason: string | null }>;
   /** Unresolved issues in scope (the scope issue included) holding a pending review gate. */
   pendingGates: Array<{ issueId: string; identifier: string; owner: string | null }>;
   /** Unresolved issues in scope blocked on a named person. */
@@ -156,8 +177,15 @@ export interface RunCeilingFact {
   missing: string | null;
 }
 
+/** Why a live run takes nothing now, without ending. */
+export interface RunWait {
+  reason: RunWaitReason;
+  detail: Record<string, unknown>;
+  message: string;
+}
+
 export type StopDecision =
-  | { stop: false }
+  | { stop: false; wait?: RunWait }
   | { stop: true; reason: RunStopReason; state: "stopped" | "completed"; detail: Record<string, unknown>; message: string };
 
 /** What `run status` answers per run: the run, the stop decision now, and the facts behind it (null once ended). */
@@ -246,6 +274,17 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
       `Nothing in scope is workable: ${facts.personBlocks.map((block) => `${block.identifier} (${block.owner})`).join(", ")} blocked on a person.`,
     );
   }
+  if (facts.waiting.length > 0) {
+    const rows = facts.waiting.map(({ identifier, eligibility, reason }) => ({ identifier, eligibility, reason }));
+    return {
+      stop: false,
+      wait: {
+        reason: "waiting_on_others",
+        detail: { rows },
+        message: `Nothing in scope is workable for this run now; ${rows.map((row) => `${row.identifier} (${row.eligibility})`).join(", ")} still open.`,
+      },
+    };
+  }
   return stop("scope_empty", {}, "Nothing in scope is left to take.");
 }
 
@@ -291,6 +330,67 @@ export interface StartRunInput {
   until?: string;
   ceilingPercent?: number;
   ceilingAccount?: string;
+}
+
+/** The previous ticket's outcome as one `continue` call recorded it; null when it recorded none. */
+export interface ContinueRecorded {
+  ref: string;
+  outcome: RunTicketOutcome;
+  reason: string | null;
+  /** How the outcome was known: `stated`, read off the actor's ended `attempt`, or from the ticket's `status`. */
+  source: "stated" | "attempt" | "status";
+}
+
+/** `no_run` is the one stop reason that ends no run: the actor has none live. */
+export const CONTINUE_STOP_REASONS = [...RUN_STOP_REASONS, "no_run"] as const;
+export type ContinueStopReason = (typeof CONTINUE_STOP_REASONS)[number];
+
+/** What a caller waits for before asking again after a `wait` answer. */
+export const CONTINUE_RETRY_AFTER_SECONDS = 60;
+
+/**
+ * THE answer `run continue` / `continue_run` gives a driver: a public JSON contract
+ * (docs/runs.md). Exactly one of three actions.
+ */
+export type ContinueAnswer =
+  | {
+      action: "take";
+      ref: string;
+      issueId: string;
+      title: string;
+      why: string;
+      /** True when this is the run's current ticket handed back (still held, no outcome yet). */
+      resumed: boolean;
+      recorded: ContinueRecorded | null;
+      run: Run;
+    }
+  | {
+      action: "wait";
+      reason: RunWaitReason;
+      detail: Record<string, unknown>;
+      message: string;
+      retryAfterSeconds: number;
+      recorded: ContinueRecorded | null;
+      run: Run;
+    }
+  | {
+      action: "stop";
+      reason: ContinueStopReason;
+      detail: Record<string, unknown>;
+      message: string;
+      recorded: ContinueRecorded | null;
+      /** Null only for `no_run`. */
+      run: Run | null;
+    };
+
+export interface ContinueInput {
+  /** Whose run; with `run` given it must be that run's actor when stated. */
+  actor?: string | null;
+  /** A run id or prefix; without it, the actor's one live run. */
+  run?: string | null;
+  /** The previous ticket's outcome, when the caller knows it. */
+  outcome?: RunTicketOutcome;
+  reason?: string | null;
 }
 
 /** Reads this machine's budget; injected by tests, `readBudget` over the staple home otherwise. */
@@ -359,7 +459,7 @@ export class RunStore {
 
   private statusOf(run: Run, now: string): RunStatus {
     if (!isLive(run.state)) {
-      return { run, decision: evaluateStopRules(run, { now, workable: [], pendingGates: [], personBlocks: [], ceiling: null }), facts: null };
+      return { run, decision: evaluateStopRules(run, { now, workable: [], waiting: [], pendingGates: [], personBlocks: [], ceiling: null }), facts: null };
     }
     const facts = this.facts(run, now);
     return { run, decision: evaluateStopRules(run, facts), facts };
@@ -368,35 +468,39 @@ export class RunStore {
   /**
    * The facts {@link evaluateStopRules} reads, gathered from the store.
    *
-   * The scope is the issue set a run may work: the whole workspace for `queue`; the scope
-   * issue and its descendants for an epic or parent; the milestone, its members and their
-   * descendants for a milestone (the same membership-then-hierarchy reach the queue
-   * expands a milestone by).
+   * The scope is the queue's: the whole workspace for `queue`, else exactly the rows
+   * `queue next --scope` answers with and the issues `QueueStore.scopeMembership` holds
+   * (for gates and blocks, which sit on containers too), plus the scope issue itself for
+   * a gate on it. One definition of "inside", so the run and the pickup answer never
+   * disagree about what a run may take.
    */
   facts(run: Run, now = nowIso()): RunFacts {
-    const scope = this.scopeIds(run.scope);
-    const inScope = (issueId: string): boolean => scope === null || scope.has(issueId);
     const rootId = run.scope.kind === "queue" ? null : run.scope.issueId;
+    const queue = this.store.queue();
+    const membership = rootId === null ? null : queue.scopeMembership(rootId);
+    const inScope = (issueId: string): boolean => membership === null || issueId === rootId || membership.contains(issueId);
 
-    const workable = this.store
-      .queue()
-      .effectiveQueue({ actor: run.actor })
-      .rows.filter((row) => row.issueId !== rootId && inScope(row.issueId))
-      .filter((row) => row.eligibility === "eligible" || (row.eligibility === "claimed" && row.detail?.heldBy === run.actor))
-      .map((row) => ({ issueId: row.issueId, identifier: row.identifier }));
+    const workable: RunFacts["workable"] = [];
+    const waiting: RunFacts["waiting"] = [];
+    for (const row of queue.effectiveQueue({ actor: run.actor, scope: rootId }).rows) {
+      if (row.issueId === rootId || row.eligibility === "resolved") continue;
+      const held = row.eligibility === "claimed" && row.detail?.heldBy === run.actor;
+      if (row.eligibility === "eligible" || held) workable.push({ issueId: row.issueId, identifier: row.identifier, held });
+      else waiting.push({ issueId: row.issueId, identifier: row.identifier, eligibility: row.eligibility, reason: row.reason });
+    }
 
-    const open = (this.db
+    const unresolved = (this.db
       .prepare("SELECT id, identifier, status, gate_state, gate_owner, unblock_owner, unblock_action FROM issues ORDER BY identifier")
       .all() as Array<{ id: string; identifier: string; status: string; gate_state: string | null; gate_owner: string | null; unblock_owner: string | null; unblock_action: string | null }>)
       .filter((row) => inScope(row.id) && !this.store.isResolvedStatus(row.status));
-    const pendingGates = open
+    const pendingGates = unresolved
       .filter((row) => row.gate_state === "pending")
       .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.gate_owner }));
-    const personBlocks = open
+    const personBlocks = unresolved
       .filter((row) => this.store.categoryOf(row.status) === "blocked" && (row.unblock_owner ?? "").trim() !== "")
       .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.unblock_owner!, action: row.unblock_action }));
 
-    return { now, workable, pendingGates, personBlocks, ceiling: run.budget.ceilingPercent === null ? null : this.ceilingFact(run.budget.ceilingAccount, now) };
+    return { now, workable, waiting, pendingGates, personBlocks, ceiling: run.budget.ceilingPercent === null ? null : this.ceilingFact(run.budget.ceilingAccount, now) };
   }
 
   /**
@@ -505,6 +609,181 @@ export class RunStore {
   }
 
   /**
+   * `run continue`: THE decision point every provider calls after finishing, or failing,
+   * a ticket. One transaction, so two drivers asking at once are serialized and never
+   * both take the same row. In order:
+   *
+   *  1. Resolve the run: `run`, else the actor's one live run. None is not an error but
+   *     `{action: "stop", reason: "no_run"}`, so a driver's loop has one exit, the stop
+   *     answer. Several live runs without `run` are refused (validation): name one.
+   *  2. Record the current ticket (the run's last open one), in any run state, by
+   *     {@link settleCurrent}. A ticket the actor still holds, with no outcome stated, is
+   *     not finished: it is RESUMED below rather than recorded.
+   *  3. Ended run: answer `stop` with the reason it ended with. Paused run: answer `wait`
+   *     (`paused`) and change nothing else: pausing is not stopping, and the run resumes
+   *     where it was on `run resume`.
+   *  4. Evaluate the stop rules. A trip ends the run (`finish`) and answers `stop`; a wait
+   *     answers `wait` (`waiting_on_others`) and leaves the run live.
+   *  5. Take, in this order: the current ticket if it is resumed; another row in scope the
+   *     actor already holds (finish your own work before claiming more); else the scoped
+   *     queue's `next`. The take IS the claim: `checkoutIssue` runs in this same
+   *     transaction, so a take is a held ticket or nothing. Under `queue.policy = strict`
+   *     the order guard reads the plan inside the run's scope (`queueScope`), never an
+   *     override: a run's scope is the human's ordering.
+   *
+   * On a resume the ticket budget is not read: `--max-tickets` caps what a run TAKES, and
+   * handing back the ticket it is still working takes nothing. Every other rule applies.
+   */
+  continue(input: ContinueInput): ContinueAnswer {
+    if (input.outcome !== undefined && !(RUN_TICKET_OUTCOMES as readonly string[]).includes(input.outcome)) {
+      throw new StapleError("validation", `A ticket's outcome is done or failed; got "${String(input.outcome)}".`);
+    }
+    const actor = input.actor?.trim() ? input.actor.trim() : null;
+    if (input.run == null && actor === null) throw new StapleError("validation", "run continue needs an actor (--actor or STAPLE_AGENT) or a run id (--run).");
+    return this.store.journaled(() => {
+      let row: RunRow;
+      if (input.run != null) {
+        row = this.requireRow(input.run);
+        if (actor !== null && actor !== row.actor) {
+          throw new StapleError("validation", `Run ${row.id} is ${row.actor}'s, not ${actor}'s; only its actor continues it.`, { runId: row.id, actor: row.actor });
+        }
+      } else {
+        const live = this.list({ actor });
+        if (live.length === 0) {
+          return {
+            action: "stop",
+            reason: "no_run",
+            detail: { actor },
+            message: `${actor} has no active or paused run (staple run start --scope <queue|ref>).`,
+            recorded: null,
+            run: null,
+          };
+        }
+        row = this.requireRow(this.liveRunOf(actor!).id);
+      }
+
+      const { recorded, resume } = this.settleCurrent(row, input.outcome, input.reason ?? null);
+      let run = this.get(row.id);
+
+      if (!isLive(run.state)) {
+        const ended = run.stop!;
+        return { action: "stop", reason: ended.reason, detail: ended.detail, message: `The run already ended (${ended.reason}).`, recorded, run };
+      }
+      if (run.state === "paused") {
+        return {
+          action: "wait",
+          reason: "paused",
+          detail: {},
+          message: `Run ${run.id} is paused; it takes nothing until it is resumed (staple run resume ${run.id}).`,
+          retryAfterSeconds: CONTINUE_RETRY_AFTER_SECONDS,
+          recorded,
+          run,
+        };
+      }
+
+      const now = nowIso();
+      const facts = this.facts(run, now);
+      const rulesRun = resume === null ? run : { ...run, budget: { ...run.budget, maxTickets: null } };
+      const decision = evaluateStopRules(rulesRun, facts);
+      if (decision.stop) {
+        run = this.finish(run.id, decision);
+        return { action: "stop", reason: decision.reason, detail: decision.detail, message: decision.message, recorded, run };
+      }
+      if (decision.wait) {
+        return { action: "wait", ...decision.wait, retryAfterSeconds: CONTINUE_RETRY_AFTER_SECONDS, recorded, run };
+      }
+
+      const held = facts.workable.find((entry) => entry.held);
+      const pick = resume ?? held ?? facts.workable.find((entry) => !entry.held)!;
+      const why =
+        resume !== null
+          ? `${pick.identifier} is this run's current ticket and you still hold it: carry on with it.`
+          : pick.held
+            ? `${pick.identifier} is in scope and already held by you: finish it before taking more.`
+            : `${pick.identifier} is next in ${scopeLabel(run.scope)} by the pickup queue's order.`;
+      const issue = this.store.checkoutIssue(pick.issueId, run.actor, undefined, {
+        ...(run.scope.kind === "queue" ? {} : { queueScope: run.scope.issueId }),
+      });
+      this.writeTaken(row, issue.id, issue.identifier);
+      return { action: "take", ref: issue.identifier, issueId: issue.id, title: issue.title, why, resumed: resume !== null, recorded, run: this.get(row.id) };
+    });
+  }
+
+  /**
+   * Settle the run's current ticket (its last open one) before anything is decided.
+   *
+   *  - An outcome stated by the caller wins. `failed` on a ticket the actor still holds
+   *    also releases the claim, ending its attempt `failed` with the reason, so a dead
+   *    session's ticket goes back to the queue instead of staying held. `done` on a
+   *    ticket the actor still holds is refused: move it first (review or done).
+   *  - Nothing stated and the actor still holds it, in an active status: not finished.
+   *    Nothing is recorded and the ticket is returned to be resumed.
+   *  - Else the actor's attempt that ended on it after the take: `completed` is done,
+   *    `failed` is failed.
+   *  - Else the ticket's status: done, review or gated means the work was handed on
+   *    (done); anything else means it left the actor's hands unfinished (failed, with
+   *    why). Counting that as a failure is the safe direction: two in a row stop the run
+   *    for a person to look.
+   */
+  private settleCurrent(
+    row: RunRow,
+    stated: RunTicketOutcome | undefined,
+    statedReason: string | null,
+  ): { recorded: ContinueRecorded | null; resume: RunFacts["workable"][number] | null } {
+    const ticket = this.db
+      .prepare("SELECT * FROM run_tickets WHERE run_id = ? AND outcome IS NULL ORDER BY seq DESC LIMIT 1")
+      .get(row.id) as unknown as TicketRow | undefined;
+    if (!ticket) return { recorded: null, resume: null };
+    const issue = this.db.prepare("SELECT id, identifier, status, checkout_agent FROM issues WHERE id = ?").get(ticket.issue_id) as
+      | { id: string; identifier: string; status: string; checkout_agent: string | null }
+      | undefined;
+    const ref = issue?.identifier ?? ticket.identifier;
+    const stillHeld = issue !== undefined && issue.checkout_agent === row.actor && this.store.isActiveStatus(issue.status);
+    const reasonText = statedReason?.trim() ? statedReason.trim() : null;
+    const record = (outcome: RunTicketOutcome, reason: string | null, source: ContinueRecorded["source"], attemptId: string | null = null) => {
+      this.writeOutcome(row, ticket, outcome, reason, attemptId);
+      return { recorded: { ref, outcome, reason, source }, resume: null };
+    };
+
+    if (stated !== undefined) {
+      if (stillHeld && stated === "done") {
+        throw new StapleError(
+          "validation",
+          `${ref} is still ${issue!.status} and held by ${row.actor}; move it to review or done before recording it done (staple status ${ref} in_review).`,
+          { runId: row.id, identifier: ref, status: issue!.status },
+        );
+      }
+      if (stillHeld && stated === "failed") {
+        const why = reasonText ?? "the run's driver reported the ticket failed";
+        this.store.releaseIssue(issue!.id, row.actor, { attempt: { outcome: "failed", reason: why } });
+        return record("failed", why, "stated");
+      }
+      return record(stated, reasonText, "stated");
+    }
+    if (stillHeld && isLive(row.state)) {
+      return { recorded: null, resume: { issueId: issue!.id, identifier: issue!.identifier, held: true } };
+    }
+    if (stillHeld) return { recorded: null, resume: null };
+
+    const attempt = this.db
+      .prepare(
+        `SELECT id, outcome, end_reason FROM attempts
+          WHERE issue_id = ? AND agent = ? AND role = 'worker' AND state = 'ended' AND ended_at >= ?
+          ORDER BY ended_at DESC, id DESC LIMIT 1`,
+      )
+      .get(ticket.issue_id, row.actor, ticket.taken_at) as { id: string; outcome: string | null; end_reason: string | null } | undefined;
+    if (attempt?.outcome === "completed") return record("done", null, "attempt", attempt.id);
+    if (attempt?.outcome === "failed") return record("failed", attempt.end_reason, "attempt", attempt.id);
+
+    if (issue === undefined) return record("failed", `${ref} no longer exists here.`, "status");
+    const category = this.store.categoryOf(issue.status);
+    if (category === "done" || category === "review" || category === "gated") return record("done", null, "status");
+    const ended = attempt ? `, its attempt ended ${attempt.outcome ?? "without an outcome"}${attempt.end_reason ? ` (${attempt.end_reason})` : ""}` : "";
+    const holder = issue.checkout_agent && issue.checkout_agent !== row.actor ? `, now held by ${issue.checkout_agent}` : "";
+    return record("failed", `${ref} left ${row.actor}'s hands unfinished: ${issue.status}${holder}${ended}.`, "status");
+  }
+
+  /**
    * Record that the run took a ticket. The run must be active and the issue inside its
    * scope. Taking a ticket the run already holds open is a replay and writes nothing.
    */
@@ -515,21 +794,25 @@ export class RunStore {
         throw new StapleError("conflict", `Run ${row.id} is ${row.state}; it takes no tickets.`, { runId: row.id, state: row.state });
       }
       const issue = this.store.getIssue(issueRef);
-      const scope = this.scopeIds(this.scopeOf(row));
-      if ((scope !== null && !scope.has(issue.id)) || issue.id === row.scope_issue_id) {
+      const scopeId = row.scope_issue_id;
+      if (scopeId !== null && (issue.id === scopeId || !this.store.queue().scopeMembership(scopeId).contains(issue.id))) {
         throw new StapleError("validation", `${issue.identifier} is not work inside ${scopeLabel(this.scopeOf(row))}.`, { identifier: issue.identifier, runId: row.id });
       }
-      const open = this.db.prepare("SELECT seq FROM run_tickets WHERE run_id = ? AND issue_id = ? AND outcome IS NULL").get(row.id, issue.id);
-      if (open) return this.toRun(row);
-      const seq = ((this.db.prepare("SELECT MAX(seq) AS seq FROM run_tickets WHERE run_id = ?").get(row.id) as { seq: number | null }).seq ?? 0) + 1;
-      const now = nowIso();
-      this.db
-        .prepare("INSERT INTO run_tickets (run_id, seq, issue_id, identifier, taken_at) VALUES (?, ?, ?, ?, ?)")
-        .run(row.id, seq, issue.id, issue.identifier, now);
-      this.db.prepare("UPDATE runs SET updated_at = ? WHERE id = ?").run(now, row.id);
-      this.emit("run_ticket_taken", row.actor, { runId: row.id, actor: row.actor, identifier: issue.identifier, seq });
+      this.writeTaken(row, issue.id, issue.identifier);
       return this.get(row.id);
     });
+  }
+
+  /** Append a taken ticket, unless the run already holds it open (a replay writes nothing). */
+  private writeTaken(row: RunRow, issueId: string, identifier: string): boolean {
+    const open = this.db.prepare("SELECT seq FROM run_tickets WHERE run_id = ? AND issue_id = ? AND outcome IS NULL").get(row.id, issueId);
+    if (open) return false;
+    const seq = ((this.db.prepare("SELECT MAX(seq) AS seq FROM run_tickets WHERE run_id = ?").get(row.id) as { seq: number | null }).seq ?? 0) + 1;
+    const now = nowIso();
+    this.db.prepare("INSERT INTO run_tickets (run_id, seq, issue_id, identifier, taken_at) VALUES (?, ?, ?, ?, ?)").run(row.id, seq, issueId, identifier, now);
+    this.db.prepare("UPDATE runs SET updated_at = ? WHERE id = ?").run(now, row.id);
+    this.emit("run_ticket_taken", row.actor, { runId: row.id, actor: row.actor, identifier, seq });
+    return true;
   }
 
   /**
@@ -575,14 +858,18 @@ export class RunStore {
         attemptId = attempt!.id;
         why ??= resolved === "failed" ? attempt!.end_reason : null;
       }
-      const now = nowIso();
-      this.db
-        .prepare("UPDATE run_tickets SET outcome = ?, reason = ?, attempt_id = ?, recorded_at = ? WHERE run_id = ? AND seq = ?")
-        .run(resolved, why, attemptId, now, row.id, ticket.seq);
-      this.db.prepare("UPDATE runs SET updated_at = ? WHERE id = ?").run(now, row.id);
-      this.emit("run_ticket_recorded", row.actor, { runId: row.id, actor: row.actor, identifier: ticket.identifier, seq: ticket.seq, outcome: resolved, reason: why });
+      this.writeOutcome(row, ticket, resolved, why, attemptId);
       return this.get(row.id);
     });
+  }
+
+  private writeOutcome(row: RunRow, ticket: TicketRow, outcome: RunTicketOutcome, reason: string | null, attemptId: string | null): void {
+    const now = nowIso();
+    this.db
+      .prepare("UPDATE run_tickets SET outcome = ?, reason = ?, attempt_id = ?, recorded_at = ? WHERE run_id = ? AND seq = ?")
+      .run(outcome, reason, attemptId, now, row.id, ticket.seq);
+    this.db.prepare("UPDATE runs SET updated_at = ? WHERE id = ?").run(now, row.id);
+    this.emit("run_ticket_recorded", row.actor, { runId: row.id, actor: row.actor, identifier: ticket.identifier, seq: ticket.seq, outcome, reason });
   }
 
   // ---------- internals ----------
@@ -657,27 +944,6 @@ export class RunStore {
       );
     }
     return { kind: "issue", issueId: issue.id, identifier: issue.identifier };
-  }
-
-  /** The issue ids inside a scope, or null for the whole workspace. */
-  private scopeIds(scope: RunScope): Set<string> | null {
-    if (scope.kind === "queue") return null;
-    const seeds = [scope.issueId];
-    if (scope.kind === "milestone") {
-      const members = this.db.prepare("SELECT issue_id FROM milestone_members WHERE milestone_id = ?").all(scope.issueId) as Array<{ issue_id: string }>;
-      seeds.push(...members.map((member) => member.issue_id));
-    }
-    const ids = new Set<string>();
-    const descendants = this.db.prepare(
-      `WITH RECURSIVE sub(id, depth) AS (
-         SELECT ?, 0
-         UNION SELECT i.id, sub.depth + 1 FROM issues i JOIN sub ON i.parent_id = sub.id WHERE sub.depth < ?
-       ) SELECT id FROM sub`,
-    );
-    for (const seed of seeds) {
-      for (const row of descendants.all(seed, MAX_TREE_DEPTH) as Array<{ id: string }>) ids.add(row.id);
-    }
-    return ids;
   }
 
   private requireRow(ref: string): RunRow {

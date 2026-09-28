@@ -304,8 +304,9 @@ describe("tool inventory", () => {
   // The timing quality read added timing_quality: 54 -> 55. The calibration read added
   // calibration_cohorts: 55 -> 56. The forecast read added forecast: 56 -> 57. Removing
   // wrong budget readings added forget_budget_samples: 57 -> 58. Autopilot runs added
-  // start_run, run_status and stop_run: 58 -> 61.
-  it("exposes exactly these 61 tools with these annotations and output schemas", async () => {
+  // start_run, run_status and stop_run: 58 -> 61. The run's driver loop added pause_run,
+  // resume_run and continue_run: 61 -> 64.
+  it("exposes exactly these 64 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -827,6 +828,22 @@ describe("tool inventory", () => {
       {
         name: "stop_run",
         annotations: { title: "Stop run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // Pausing twice changes nothing; continue takes a new ticket each time it answers take.
+      {
+        name: "pause_run",
+        annotations: { title: "Pause run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "resume_run",
+        annotations: { title: "Resume run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "continue_run",
+        annotations: { title: "Continue run", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
         hasOutputSchema: true,
       },
       /**
@@ -1752,11 +1769,14 @@ describe("tool response shapes (31/31)", () => {
       "move_queue_entry",
       "reorder_queue",
       "prune_queue",
-      // Autopilot runs: the three tools are pinned in test/run-surfaces.test.ts, against
+      // Autopilot runs: the six tools are pinned in test/run-surfaces.test.ts, against
       // the CLI's `staple run ... --json` payloads from the same `RunStore`.
       "start_run",
       "run_status",
       "stop_run",
+      "pause_run",
+      "resume_run",
+      "continue_run",
       // STA-71: the cloud status projection is pinned in test/cloud-connect.test.ts
       // against the same `localCloudStatus` the CLI and HTTP surfaces render.
       //

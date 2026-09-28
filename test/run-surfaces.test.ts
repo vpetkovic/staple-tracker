@@ -6,6 +6,8 @@
  *   - CLI `--json` and MCP answer the same shapes, because both call one `RunStore`.
  *   - A second start is refused with the same conflict envelope, naming the first run.
  *   - `staple events --follow` streams the run's events as they happen.
+ *   - `run continue` reaches every stop reason, a wait and a take through the CLI alone,
+ *     the way a driver loop does, and `continue_run` answers the same shape.
  */
 import { spawn } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -22,9 +24,13 @@ function env(agent: string): Record<string, string> {
 }
 
 async function cli(...args: string[]): Promise<{ status: number; json: Record<string, unknown>; stderr: string }> {
+  return cliAs("agent-cli", ...args);
+}
+
+async function cliAs(agent: string, ...args: string[]): Promise<{ status: number; json: Record<string, unknown>; stderr: string }> {
   const result = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, ...args, "--ws", WS, "--json"], {
     cwd: REPO_ROOT,
-    env: env("agent-cli"),
+    env: env(agent),
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -137,5 +143,120 @@ describe("run start, status and stop", () => {
       .map((line) => JSON.parse(line) as { kind: string; payload: { runId: string } });
     expect(kinds.map((event) => event.kind)).toEqual(["run_started", "run_stopped"]);
     expect(kinds.every((event) => event.payload.runId === run.json.id)).toBe(true);
+  }, 60_000);
+});
+
+/** An epic with open children, titled uniquely (the store refuses duplicate open titles). */
+async function epicWith(name: string, children: number): Promise<{ epic: string; kids: string[] }> {
+  const epicRef = String((await cli("new", `${name} epic`, "--kind", "epic")).json.identifier);
+  const kids: string[] = [];
+  for (let i = 1; i <= children; i += 1) kids.push(String((await cli("new", `${name} ${i}`, "--parent", epicRef)).json.identifier));
+  return { epic: epicRef, kids };
+}
+
+describe("run continue, driven through the CLI as a driver loop drives it", () => {
+  /** One `run continue` as `agent`; exit 0 for take, wait and stop alike. */
+  async function next(agent: string, ...flags: string[]): Promise<Record<string, unknown>> {
+    const result = await cliAs(agent, "run", "continue", ...flags);
+    expect(result.status, result.stderr).toBe(0);
+    return result.json;
+  }
+
+  it("no_run: an actor with no live run gets a stop, exit 0, and no run", async () => {
+    expect(await next("nobody")).toMatchObject({ action: "stop", reason: "no_run", run: null, recorded: null });
+  }, 60_000);
+
+  it("take, resume, record, wait on review, then scope_empty completes the run", async () => {
+    const { epic: scope, kids: [x1, x2] } = await epicWith("Loop", 2);
+    const who = "drv-loop";
+    expect((await cliAs(who, "run", "start", "--scope", scope)).status).toBe(0);
+    expect(await next(who)).toMatchObject({ action: "take", ref: x1, resumed: false });
+    expect((await cli("show", x1!)).json).toMatchObject({ issue: { checkoutAgent: who } });
+    expect(await next(who)).toMatchObject({ action: "take", ref: x1, resumed: true });
+    expect((await cliAs(who, "status", x1!, "in_review")).status).toBe(0);
+    expect(await next(who)).toMatchObject({ action: "take", ref: x2, recorded: { ref: x1, outcome: "done", source: "attempt" } });
+    expect((await cliAs(who, "status", x2!, "in_review")).status).toBe(0);
+    // Both in review: nothing to take, but the scope is not empty.
+    expect(await next(who)).toMatchObject({ action: "wait", reason: "waiting_on_others", retryAfterSeconds: 60, recorded: { ref: x2, outcome: "done" } });
+    expect((await cli("done", x1!)).status).toBe(0);
+    expect((await cli("done", x2!)).status).toBe(0);
+    expect(await next(who)).toMatchObject({ action: "stop", reason: "scope_empty", run: { state: "completed", counts: { taken: 2, done: 2, failed: 0 } } });
+  }, 120_000);
+
+  it("failure_streak: two --outcome failed in a row stop the run", async () => {
+    const { epic: scope } = await epicWith("Streak", 3);
+    const who = "drv-streak";
+    await cliAs(who, "run", "start", "--scope", scope);
+    await next(who);
+    expect(await next(who, "--outcome", "failed", "--reason", "red")).toMatchObject({ action: "take", recorded: { outcome: "failed", reason: "red" } });
+    expect(await next(who, "--outcome", "failed", "--reason", "red again")).toMatchObject({ action: "stop", reason: "failure_streak", run: { state: "stopped" } });
+  }, 120_000);
+
+  it("budget tickets, time and ceiling each stop a run", async () => {
+    const { epic: scope } = await epicWith("Budget", 3);
+    await cliAs("drv-tickets", "run", "start", "--scope", scope, "--max-tickets", "1");
+    await next("drv-tickets");
+    expect(await next("drv-tickets", "--outcome", "failed", "--reason", "x")).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", maxTickets: 1 } });
+
+    await cliAs("drv-time", "run", "start", "--scope", scope, "--until", "1s");
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(await next("drv-time")).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "time" } });
+
+    // Budget readings are machine-level: no --ws.
+    const budget = (...args: string[]) =>
+      spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "budget", ...args, "--json"], { cwd: REPO_ROOT, env: env("agent-cli"), encoding: "utf8", timeout: 30_000 });
+    expect((await budget("capture", "on")).status).toBe(0);
+    const reading = await budget("ingest", "--source", "manual", "--account", "acct", "--provider", "anthropic", "--limit-key", "five_hour", "--used", "95", "--resets-at", new Date(Date.now() + 3_600_000).toISOString());
+    expect(reading.status, reading.stderr).toBe(0);
+    await cliAs("drv-ceiling", "run", "start", "--scope", scope, "--ceiling", "90", "--ceiling-account", "acct");
+    expect(await next("drv-ceiling")).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "ceiling", usedPercent: 95, accountRef: "acct" } });
+  }, 120_000);
+
+  it("stopped_by_human, gate_pending and vp_blocked stop a run; a stop is the same answer when asked again", async () => {
+    const human = await epicWith("Human", 2);
+    const started = await cliAs("drv-human", "run", "start", "--scope", human.epic);
+    await cli("run", "stop", String(started.json.id), "-m", "enough");
+    expect(await next("drv-human", "--run", String(started.json.id))).toMatchObject({ action: "stop", reason: "stopped_by_human", run: { stop: { by: "agent-cli", note: "enough" } } });
+    expect(await next("drv-human")).toMatchObject({ action: "stop", reason: "no_run" });
+
+    const gated = await epicWith("Gated", 2);
+    await cliAs("drv-gate", "run", "start", "--scope", gated.epic);
+    expect((await cli("gate", gated.epic, "--owner", "VP")).status).toBe(0);
+    expect(await next("drv-gate")).toMatchObject({ action: "stop", reason: "gate_pending", detail: { gates: [expect.objectContaining({ identifier: gated.epic, owner: "VP" })] } });
+
+    const blocked = await epicWith("Blocked", 2);
+    await cliAs("drv-block", "run", "start", "--scope", blocked.epic);
+    const taken = await next("drv-block");
+    expect((await cliAs("drv-block", "block", String(taken.ref), "--owner", "VP", "--action", "decide")).status).toBe(0);
+    expect(await next("drv-block")).toMatchObject({ action: "stop", reason: "vp_blocked", recorded: { ref: taken.ref, outcome: "failed" } });
+  }, 120_000);
+
+  it("pause answers wait without taking; resume takes again; CLI and MCP answer one shape", async () => {
+    const { epic: scope, kids: [p1] } = await epicWith("Pause", 2);
+    await cliAs("agent-mcp", "run", "start", "--scope", scope);
+    const paused = await cliAs("agent-mcp", "run", "pause");
+    expect(paused.json).toMatchObject({ state: "paused" });
+    const fromCli = await next("agent-mcp");
+    expect(fromCli).toMatchObject({ action: "wait", reason: "paused", recorded: null });
+    const fromMcp = await tool("continue_run", {});
+    expect(normalize(fromMcp)).toEqual(normalize(fromCli));
+    expect(await tool("resume_run", {})).toMatchObject({ state: "active" });
+    const take = await tool("continue_run", {});
+    expect(take).toMatchObject({ action: "take", ref: p1, resumed: false });
+    // The same call from the CLI now resumes it: one store, one answer.
+    expect(await next("agent-mcp")).toMatchObject({ action: "take", ref: p1, resumed: true });
+    // A stated failure over MCP is recorded and releases the ticket, as on the CLI.
+    const failed = await tool("continue_run", { outcome: "failed", reason: "mcp says no" });
+    expect(failed).toMatchObject({ action: "take", recorded: { ref: p1, outcome: "failed", reason: "mcp says no", source: "stated" } });
+    expect(await tool("pause_run", {})).toMatchObject({ state: "paused" });
+    await tool("stop_run", { note: "done here" });
+  }, 120_000);
+
+  it("refuses a bad outcome and a stray flag before touching anything", async () => {
+    const bad = await cliAs("drv-bad", "run", "continue", "--outcome", "maybe");
+    expect(bad.status).toBe(2);
+    expect(JSON.parse(bad.stderr.trim())).toMatchObject({ code: "validation" });
+    const stray = await cliAs("drv-bad", "run", "status", "--outcome", "done");
+    expect(stray.status).toBe(2);
   }, 60_000);
 });
