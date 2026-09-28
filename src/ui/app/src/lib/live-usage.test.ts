@@ -4,7 +4,7 @@
  * a provider's Retry-After, one blocked by a run in progress, and capture off.
  */
 import { describe, expect, it } from "vitest";
-import { accountLiveLine, idleLimits, providerFor, refreshLines } from "./live-usage";
+import { REFRESH_RESULT_MS, accountLiveLine, idleLimits, providerFor, refreshLines, visibleRefreshLines } from "./live-usage";
 import type { PollOutcome, PollingProviderStatus, PollingStatus, RefreshResult } from "./telemetry-types";
 
 const NOW = Date.parse("2026-09-28T09:00:00.000Z");
@@ -75,6 +75,15 @@ describe("what Refresh says", () => {
   });
 });
 
+describe("how long Refresh's result stays", () => {
+  it("shows the lines for a minute, then drops them, because they say 'just now'", () => {
+    const lines = [{ tone: "ok" as const, text: "Updated just now." }];
+    expect(visibleRefreshLines({ lines, finishedAt: NOW }, NOW + REFRESH_RESULT_MS - 1)).toEqual(lines);
+    expect(visibleRefreshLines({ lines, finishedAt: NOW }, NOW + REFRESH_RESULT_MS)).toBeNull();
+    expect(visibleRefreshLines({ lines: null, finishedAt: null }, NOW)).toBeNull();
+  });
+});
+
 describe("what an account says", () => {
   const polling = (providers: PollingProviderStatus[], active = true): PollingStatus => ({ livePolling: active, active, budgetCapture: true, providers });
 
@@ -91,6 +100,10 @@ describe("what an account says", () => {
     expect(accountLiveLine(failed, NOW)).toEqual({
       tone: "warn",
       text: "We couldn't check Codex just now. We couldn't reach Codex from this computer. The figures below are from the last good check, 2 min ago.",
+    });
+    // The failure's own instant, not "just now": an old failure says how old it is.
+    expect(accountLiveLine({ ...failed, failure: { ...failed.failure!, at: at(12 * 60) } }, NOW)).toMatchObject({
+      text: expect.stringMatching(/^We couldn't check Codex 12 min ago\. /),
     });
     expect([...idleLimits(failed)]).toEqual([]);
     expect(accountLiveLine(status({ lastSuccessAt: null, lastAttemptAt: null }), NOW)).toEqual({ tone: "info", text: "Live checks are on; Codex hasn't been checked yet." });

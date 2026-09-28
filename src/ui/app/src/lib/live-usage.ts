@@ -46,6 +46,15 @@ function outcomeLine(outcome: PollOutcome, nowMs: number): LiveLine {
   }
 }
 
+/** How long a Refresh's result lines stay: they say "just now", so they go before that stops being true. */
+export const REFRESH_RESULT_MS = 60_000;
+
+/** The result lines to show at `nowMs`: none once they are a minute old (the account lines carry the age from then on). */
+export function visibleRefreshLines(state: { readonly lines: readonly LiveLine[] | null; readonly finishedAt: number | null }, nowMs: number = Date.now()): readonly LiveLine[] | null {
+  if (state.lines === null || state.finishedAt === null) return null;
+  return nowMs - state.finishedAt < REFRESH_RESULT_MS ? state.lines : null;
+}
+
 /** What one press of Refresh did, in one or more short lines. */
 export function refreshLines(result: RefreshResult, nowMs: number = Date.now()): LiveLine[] {
   const { poll } = result.collect;
@@ -78,7 +87,7 @@ export function accountLiveLine(status: PollingProviderStatus | null, nowMs: num
   if (status === null) return null;
   if (status.failure !== null) {
     const since = status.lastSuccessAt === null ? "" : ` The figures below are from the last good check, ${agoText(status.lastSuccessAt, nowMs)}.`;
-    return { tone: "warn", text: `We couldn't check ${status.name} just now. ${status.failure.message}${since}` };
+    return { tone: "warn", text: `We couldn't check ${status.name} ${agoText(status.failure.at, nowMs)}. ${status.failure.message}${since}` };
   }
   if (status.lastSuccessAt === null) return { tone: "info", text: `Live checks are on; ${status.name} hasn't been checked yet.` };
   return { tone: "ok", text: `Checked with ${status.name} ${agoText(status.lastSuccessAt, nowMs)}.` };

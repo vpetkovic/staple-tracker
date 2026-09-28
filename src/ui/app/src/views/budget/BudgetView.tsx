@@ -52,7 +52,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, CircleHelp, Info, RefreshCw } from "lucide-react";
 import { AuthError, getBudget, getBudgetPolling, refreshBudget } from "@/lib/api";
-import { accountLiveLine, idleLimits, providerFor, refreshLines, type LiveLine } from "@/lib/live-usage";
+import { REFRESH_RESULT_MS, accountLiveLine, idleLimits, providerFor, refreshLines, visibleRefreshLines, type LiveLine } from "@/lib/live-usage";
 import type { PollingProviderStatus, PollingStatus } from "@/lib/telemetry-types";
 import {
   BUDGET_REFRESH_MS,
@@ -468,10 +468,11 @@ function AccountSection({ account, view, heldSeconds, live }: { account: BudgetA
   );
 }
 
-/** What Refresh is doing: working, or what it did last. */
+/** What Refresh is doing: working, or what it did last and when (`Date.now()`), shown for a minute. */
 export interface RefreshState {
   readonly busy: boolean;
   readonly lines: readonly LiveLine[] | null;
+  readonly finishedAt: number | null;
 }
 
 /** The whole view, from one payload and the seconds the page has held it. */
@@ -480,7 +481,7 @@ export function BudgetReportView({
   heldSeconds,
   onRefresh,
   polling = null,
-  refresh = { busy: false, lines: null },
+  refresh = { busy: false, lines: null, finishedAt: null },
 }: {
   view: BudgetPayload;
   heldSeconds: number;
@@ -521,7 +522,7 @@ export function BudgetReportView({
           ) : null}
         </div>
         <div aria-live="polite" data-testid="budget-refresh-result" className="space-y-1 empty:hidden">
-          {refresh.lines?.map((line, index) => (
+          {visibleRefreshLines(refresh)?.map((line, index) => (
             <LiveNote key={index} line={line} testId="budget-refresh-line" />
           ))}
         </div>
@@ -637,14 +638,14 @@ function useLiveBudget(onAuthError: (error: AuthError) => void): { held: Held | 
  * the page re-reads what is stored either way.
  */
 function useRefresh(reload: () => Promise<void>, onAuthError: (error: AuthError) => void): { state: RefreshState; run: () => void } {
-  const [state, setState] = useState<RefreshState>({ busy: false, lines: null });
+  const [state, setState] = useState<RefreshState>({ busy: false, lines: null, finishedAt: null });
   const busy = useRef(false);
   const authRef = useRef(onAuthError);
   authRef.current = onAuthError;
   const run = useCallback(() => {
     if (busy.current) return;
     busy.current = true;
-    setState((previous) => ({ busy: true, lines: previous.lines }));
+    setState((previous) => ({ ...previous, busy: true }));
     refreshBudget()
       .then((result) => refreshLines(result))
       .catch((caught: unknown): LiveLine[] => {
@@ -654,9 +655,15 @@ function useRefresh(reload: () => Promise<void>, onAuthError: (error: AuthError)
       .then(async (lines) => {
         await reload();
         busy.current = false;
-        setState({ busy: false, lines });
+        setState({ busy: false, lines, finishedAt: Date.now() });
       });
   }, [reload]);
+  // The lines say "just now": gone after a minute, when the account lines carry the age.
+  useEffect(() => {
+    if (state.finishedAt === null) return;
+    const timer = window.setTimeout(() => setState((previous) => (previous.finishedAt === state.finishedAt ? { ...previous, lines: null, finishedAt: null } : previous)), REFRESH_RESULT_MS);
+    return () => window.clearTimeout(timer);
+  }, [state.finishedAt]);
   return { state, run };
 }
 

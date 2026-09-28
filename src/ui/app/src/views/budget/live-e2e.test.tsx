@@ -117,7 +117,7 @@ const text = (html: string): string =>
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"');
 
-const render = (refresh?: { busy: boolean; lines: ReturnType<typeof refreshLines> | null }) =>
+const render = (refresh?: { busy: boolean; lines: ReturnType<typeof refreshLines> | null; finishedAt: number | null }) =>
   renderToStaticMarkup(<BudgetReportView view={view} heldSeconds={0} onRefresh={() => {}} polling={polling} refresh={refresh} />);
 
 function accountHtml(html: string, account: string): string {
@@ -145,7 +145,7 @@ describe("the Usage page with live checks on", () => {
   });
 
   it("Refresh shows it is working, then what it did per provider", () => {
-    const busy = render({ busy: true, lines: null });
+    const busy = render({ busy: true, lines: null, finishedAt: null });
     expect(busy).toMatch(/data-testid="budget-refresh"[^>]*disabled=""|disabled=""[^>]*data-testid="budget-refresh"/);
     expect(text(busy)).toContain("Checking…");
     const lines = refreshLines(refreshed, READ_AT);
@@ -153,9 +153,11 @@ describe("the Usage page with live checks on", () => {
       { tone: "warn", text: expect.stringMatching(/^Claude turned down the sign-in on this computer\. Sign in to Claude Code again/) },
       { tone: "ok", text: "Codex: updated just now." },
     ]);
-    const done = text(render({ busy: false, lines }));
+    const done = text(render({ busy: false, lines, finishedAt: Date.now() }));
     expect(done).toContain("Refresh");
     expect(done).toContain("Codex: updated just now.");
+    // A minute on, "just now" is no longer true, so the lines are gone.
+    expect(text(render({ busy: false, lines, finishedAt: Date.now() - 61_000 }))).not.toContain("Codex: updated just now.");
   });
 
   it("with every provider answering, Refresh says just 'Updated just now'; with live checks off it says what that means", () => {
