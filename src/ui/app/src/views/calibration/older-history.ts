@@ -43,6 +43,15 @@ export function saveIncludeOlderHistory(storage: Writer | undefined, include: bo
   }
 }
 
+/**
+ * The reader flipping the switch: store the choice, then answer the state to show. The hook's
+ * setter is this and nothing else, so what is shown and what is remembered cannot disagree.
+ */
+export function chooseIncludeOlderHistory(storage: Writer | undefined, next: boolean): boolean {
+  saveIncludeOlderHistory(storage, next);
+  return next;
+}
+
 const browserStorage = (): Storage | undefined => (typeof localStorage === "undefined" ? undefined : localStorage);
 
 /**
@@ -51,9 +60,6 @@ const browserStorage = (): Storage | undefined => (typeof localStorage === "unde
  */
 export function useIncludeOlderHistory(): [boolean, (next: boolean) => void] {
   const [include, setInclude] = useState(() => loadIncludeOlderHistory(browserStorage()));
-  const set = useCallback((next: boolean) => {
-    saveIncludeOlderHistory(browserStorage(), next);
-    setInclude(next);
-  }, []);
+  const set = useCallback((next: boolean) => setInclude(chooseIncludeOlderHistory(browserStorage(), next)), []);
   return [include, set];
 }

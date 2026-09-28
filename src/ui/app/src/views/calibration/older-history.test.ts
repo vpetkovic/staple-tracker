@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  chooseIncludeOlderHistory,
   INCLUDE_OLDER_HISTORY_BY_DEFAULT,
   INCLUDE_OLDER_HISTORY_KEY,
   loadIncludeOlderHistory,
@@ -54,9 +55,26 @@ describe("the older-history preference", () => {
     expect(() => saveIncludeOlderHistory(undefined, false)).not.toThrow();
   });
 
+  it("is stored when the reader flips the switch, and the flip shows what was stored", () => {
+    const storage = fakeStorage();
+    expect(chooseIncludeOlderHistory(storage, false)).toBe(false);
+    expect(storage.getItem(INCLUDE_OLDER_HISTORY_KEY)).toBe("off");
+    expect(loadIncludeOlderHistory(storage)).toBe(false);
+    expect(chooseIncludeOlderHistory(storage, true)).toBe(true);
+    expect(storage.getItem(INCLUDE_OLDER_HISTORY_KEY)).toBe("on");
+    expect(chooseIncludeOlderHistory(fakeStorage({}, true), false)).toBe(false);
+  });
+
+  it("is saved by the page's switch: the hook's setter stores through the flip", () => {
+    const hook = readFileSync(new URL("./older-history.ts", import.meta.url), "utf8");
+    expect(hook).toMatch(/useState\(\(\) => loadIncludeOlderHistory\(browserStorage\(\)\)\)/);
+    expect(hook).toMatch(/const set = useCallback\(\(next: boolean\) => setInclude\(chooseIncludeOlderHistory\(browserStorage\(\), next\)\), \[\]\);/);
+  });
+
   it("is what the Estimates page reads, not state local to one visit", () => {
     const source = readFileSync(new URL("./CalibrationView.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/\[includeReconstructed, setIncludeReconstructed\] = useIncludeOlderHistory\(\)/);
     expect(source).not.toMatch(/useState\([^)]*(?:RECONSTRUCTED|false)/);
+    expect(source).toMatch(/onToggleReconstructed=\{setIncludeReconstructed\}/);
   });
 });
