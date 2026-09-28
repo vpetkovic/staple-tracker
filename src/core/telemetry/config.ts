@@ -4,6 +4,7 @@
  *
  *   "telemetry": {
  *     "budgetCapture": false,
+ *     "livePolling": false,
  *     "bindings": [
  *       { "source": "claude_code_statusline", "configDir": "~/.claude", "provider": "anthropic", "accountRef": "personal-max" },
  *       { "source": "codex_rollout", "home": "~/.codex", "provider": "openai", "accountRef": "codex-plus" }
@@ -24,8 +25,16 @@
  * doctor` and `staple budget bindings`. Refusing the whole file instead would break
  * `staple config` and `config set`, the very commands that could repair it.
  *
- * Only the two structural facts are enforced at the read boundary: `telemetry` is an
- * object, `budgetCapture` a boolean and `bindings` an array.
+ * ## Live polling is a consent of its own
+ *
+ * `livePolling` is the one budget setting that lets staple make a network call: when it
+ * is true, `staple budget collect` (and the Usage page's Refresh) asks each bound
+ * provider for the account's current usage with the sign-in its harness already keeps
+ * on this machine (`polling/`). Capture alone never does. It is absent, which reads as
+ * false, on every file nobody opted in on, so a fresh install makes no call.
+ *
+ * Only the structural facts are enforced at the read boundary: `telemetry` is an
+ * object, `budgetCapture` and `livePolling` booleans and `bindings` an array.
  *
  * Pure: no file I/O here, so `config/file.ts` can validate through it without a cycle.
  */
@@ -58,6 +67,8 @@ export type TelemetryBinding = unknown;
 
 export interface TelemetryConfig {
   readonly budgetCapture: boolean;
+  /** Ask each bound provider for current usage on every collect. Absent means false. */
+  readonly livePolling?: boolean;
   readonly bindings: readonly TelemetryBinding[];
   /** Keys a newer build wrote inside `telemetry`, kept for the next write. */
   readonly [key: string]: unknown;
@@ -124,9 +135,17 @@ export function validateTelemetryConfig(value: unknown, where: string): Telemetr
   if (typeof budgetCapture !== "boolean") {
     throw new StapleError("validation", `${where}: "telemetry.budgetCapture" must be true or false`);
   }
+  if (record.livePolling !== undefined && typeof record.livePolling !== "boolean") {
+    throw new StapleError("validation", `${where}: "telemetry.livePolling" must be true or false`);
+  }
   const bindings = record.bindings ?? [];
   if (!Array.isArray(bindings)) {
     throw new StapleError("validation", `${where}: "telemetry.bindings" must be an array`);
   }
   return { ...record, budgetCapture, bindings: [...bindings] };
+}
+
+/** Whether live polling is on: only an explicit `true` counts. */
+export function livePollingOn(config: TelemetryConfig): boolean {
+  return config.livePolling === true;
 }
