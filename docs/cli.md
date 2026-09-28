@@ -387,7 +387,7 @@ a stop rule the tracker evaluates says stop. The full contract, with every
 reason code and a driver loop, is [runs.md](runs.md).
 
 ```bash
-staple run start --scope STA-66 --max-tickets 5 --until 4h   # also --ceiling P [--ceiling-account A]
+staple run start --scope STA-66 --max-tickets 5 --until 4h   # also --ceiling P [--ceiling-account A], --override -m why
 staple run continue --json               # after each ticket: take (already claimed), wait or stop
 staple run continue --outcome failed --reason "tests red" --json
 staple run pause                         # continue answers wait until resume

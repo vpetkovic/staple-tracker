@@ -210,7 +210,7 @@ const COMMANDS: ReadonlyArray<{
   {
     name: "run",
     strings: ["db", "ws", "actor", "scope", "max-tickets", "until", "ceiling", "ceiling-account", "message", "run", "outcome", "reason"],
-    booleans: ["json", "help", "all"],
+    booleans: ["json", "help", "all", "override"],
     shorts: ["h", "m"],
   },
 ];

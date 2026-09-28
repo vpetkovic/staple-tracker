@@ -252,6 +252,21 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
     await tool("stop_run", { note: "done here" });
   }, 120_000);
 
+  it("a run stopped mid-ticket: continue without --run settles the ticket and answers stopped_by_human, not no_run", async () => {
+    const { epic: scope } = await epicWith("Midway", 2);
+    const who = "drv-midway";
+    const started = await cliAs(who, "run", "start", "--scope", scope);
+    const taken = await next(who);
+    await cli("run", "stop", String(started.json.id), "-m", "pulled");
+    expect(await next(who, "--outcome", "failed", "--reason", "run was stopped")).toMatchObject({
+      action: "stop",
+      reason: "stopped_by_human",
+      recorded: { ref: taken.ref, outcome: "failed", reason: "run was stopped" },
+    });
+    expect((await cli("show", String(taken.ref))).json).toMatchObject({ issue: { checkoutAgent: null } });
+    expect(await next(who)).toMatchObject({ action: "stop", reason: "no_run" });
+  }, 120_000);
+
   it("refuses a bad outcome and a stray flag before touching anything", async () => {
     const bad = await cliAs("drv-bad", "run", "continue", "--outcome", "maybe");
     expect(bad.status).toBe(2);
@@ -259,4 +274,40 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
     const stray = await cliAs("drv-bad", "run", "status", "--outcome", "done");
     expect(stray.status).toBe(2);
   }, 60_000);
+
+  // Last: it switches the shared workspace to strict and puts it back.
+  it("under queue.policy strict a scoped run follows the whole plan, unless started with --override -m", async () => {
+    const { epic: scope, kids: [s1] } = await epicWith("Strict", 2);
+    const head = String((await cli("new", "Strict plan head")).json.identifier);
+    expect((await cli("queue", "add", head)).status).toBe(0);
+    expect((await cli("settings", "set", "queue.policy", "strict")).status).toBe(0);
+    try {
+      await cliAs("drv-plain", "run", "start", "--scope", scope);
+      expect(await next("drv-plain")).toMatchObject({ action: "wait", reason: "out_of_order", detail: { expected: [head] } });
+      await cliAs("drv-plain", "run", "stop");
+
+      const bare = await cliAs("drv-over", "run", "start", "--scope", scope, "--override");
+      expect(bare.status).toBe(2);
+      const started = await cliAs("drv-over", "run", "start", "--scope", scope, "--override", "-m", "epic first today");
+      expect(started.json).toMatchObject({ override: "epic first today" });
+      expect(await next("drv-over")).toMatchObject({ action: "take", ref: s1 });
+      const log = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "events", "--ws", WS, "--json"], { cwd: REPO_ROOT, env: env("agent-cli"), encoding: "utf8", timeout: 30_000 });
+      const overridden = log.stdout
+        .trim()
+        .split("\n")
+        .flatMap((line) => {
+          const parsed = JSON.parse(line) as unknown;
+          return (Array.isArray(parsed) ? parsed : ((parsed as { events?: unknown[] }).events ?? [parsed])) as Array<{ kind: string; actor: string; payload: Record<string, unknown> }>;
+        })
+        .filter((event) => event.kind === "queue_overridden");
+      expect(overridden).toEqual([expect.objectContaining({ actor: "drv-over", payload: expect.objectContaining({ identifier: s1, reason: "epic first today", expected: [head] }) })]);
+      await cliAs("drv-over", "run", "stop");
+      // MCP takes the same reason.
+      const viaMcp = await tool("start_run", { scope, override_reason: "from mcp" });
+      expect(viaMcp).toMatchObject({ override: "from mcp" });
+      await tool("stop_run", {});
+    } finally {
+      await cli("settings", "set", "queue.policy", "advisory");
+    }
+  }, 120_000);
 });

@@ -1,7 +1,7 @@
 /**
  * `staple run` — autopilot runs (`src/core/run-store.ts`).
  *
- *   run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
+ *   run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]] [--override -m why]
  *   run status [<run-id>] [--all]
  *   run stop [<run-id>] [-m why]
  *   run pause|resume [<run-id>]
@@ -24,12 +24,15 @@ const USAGE = "Use: start, status, stop, pause, resume, continue, drive (staple 
 const HELP = `staple run — autopilot runs: one agent working a scope ticket after ticket
 until a stop rule, run by the tracker, says otherwise.
 
-  run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
+  run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]] [--override -m why]
               start a run over the whole queue, an epic or parent (<ref>), or a
-              milestone. N caps the tickets it takes; T is an ISO instant with a
-              zone or a duration from now (90m, 2h, 1d); P stops it once a current
-              rate-limit window on this machine reaches P% used (staple budget),
-              over every account or only A. One live run per actor per scope: a
+              milestone. N caps the distinct tickets it takes (a retry is not
+              another); T is an ISO instant with a zone or a duration from now
+              (90m, 2h, 1d); P stops it once a current rate-limit window on this
+              machine reaches P% used (staple budget), over every account or only
+              A. Under queue.policy strict a run follows the whole plan like any
+              agent; --override -m why lets it step over the plan, each such take
+              recorded as queue_overridden. One live run per actor per scope: a
               second start is refused (conflict, exit 4) naming the first
   run status [<run-id>] [--all]
               a run, whether a stop rule trips now and why, and the facts behind
@@ -46,10 +49,13 @@ until a stop rule, run by the tracker, says otherwise.
               status; a ticket you still hold is handed back to resume), runs the
               stop rules and answers one action:
                 take  {ref, why, resumed}: already claimed for you, work it
-                wait  {reason: paused | waiting_on_others, retryAfterSeconds}
+                wait  {reason: paused | waiting_on_others | out_of_order,
+                      retryAfterSeconds}
                 stop  {reason}: a stop reason below, or no_run (you have no live
                       run). Exit 0 for all three; the loop ends on stop
-              --outcome failed on a ticket you still hold also releases it
+              --outcome failed on a ticket you still hold also releases it. With
+              no live run, your last ended run with an unsettled ticket is the
+              one continued: its ticket is settled and its stop reason answered
   run drive [--run <run-id> | --scope <queue|ref> ...] --agent <claude|codex|custom>
               loop continue headless: a fresh agent session per ticket, a
               brief each, logs under .staple/runs/<run-id>/; stoppable
@@ -57,7 +63,8 @@ until a stop rule, run by the tracker, says otherwise.
 
 Stop reasons, first match wins, stable in --json: stopped_by_human, budget
 (detail.budget: tickets | time | ceiling), failure_streak (two failed tickets in
-a row), vp_blocked (a ticket the run took is blocked on a person, or nothing is
+a row), scope_gone (the scope issue was deleted or holds nothing any more),
+vp_blocked (a ticket the run took is blocked on a person, or nothing is
 workable and something in scope is), gate_pending (the scope issue awaits
 approval, or nothing is workable and something in scope does), scope_empty
 (nothing unresolved left in scope; the run ends completed). A gate or a
@@ -100,6 +107,7 @@ function budgetText(run: Run): string {
 function printRun(run: Run): void {
   console.log(`run ${run.id}  ${run.state}  ${run.actor} over ${scopeLabel(run.scope)}`);
   console.log(`  started ${run.startedAt} · ${budgetText(run)} · ${run.counts.done} done, ${run.counts.failed} failed, ${run.counts.open} open`);
+  if (run.override) console.log(`  steps over the plan: ${run.override}`);
   for (const ticket of run.tickets) {
     console.log(`  ${String(ticket.seq).padStart(3)}  ${ticket.identifier.padEnd(9)} ${ticket.outcome ?? "open"}${ticket.reason ? `  ${ticket.reason}` : ""}`);
   }
@@ -118,7 +126,13 @@ function printStatus(status: RunStatus): void {
   }
   if (status.facts === null) return;
   const decision = status.decision;
-  console.log(decision.stop ? `  would stop: ${decision.reason} — ${decision.message}` : `  continues: ${status.facts.workable.length} workable in scope`);
+  console.log(
+    decision.stop
+      ? `  would stop: ${decision.reason} — ${decision.message}`
+      : decision.wait
+        ? `  waits: ${decision.wait.reason} — ${decision.wait.message}`
+        : `  continues: ${status.facts.workable.length} workable in scope`,
+  );
 }
 
 export function runRunCommand(rest: string[]): void {
@@ -141,6 +155,7 @@ export function runRunCommand(rest: string[]): void {
       run: { type: "string" },
       outcome: { type: "string" },
       reason: { type: "string" },
+      override: { type: "boolean" },
     },
   });
   const [sub, id] = positionals;
@@ -153,6 +168,9 @@ export function runRunCommand(rest: string[]): void {
   if (sub !== "continue" && (values.run !== undefined || values.outcome !== undefined || values.reason !== undefined)) {
     throw new StapleError("validation", `--run, --outcome and --reason apply to "run continue" only, not "run ${sub}".`);
   }
+  if (sub !== "start" && values.override !== undefined) {
+    throw new StapleError("validation", `--override applies to "run start" only, not "run ${sub}".`);
+  }
   const runs = resolveWorkspace({ db: values.db, ws: values.ws }).store.runs();
 
   if (sub === "start") {
@@ -164,6 +182,8 @@ export function runRunCommand(rest: string[]): void {
       until: values.until,
       ceilingPercent: percentOption(values.ceiling, "--ceiling"),
       ceilingAccount: values["ceiling-account"],
+      // `--override` alone reaches the store as an empty reason and is refused there, as on checkout.
+      override: values.override === true ? (values.message ?? "") : undefined,
     });
     if (values.json) return console.log(JSON.stringify(run));
     return printRun(run);

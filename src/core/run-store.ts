@@ -14,9 +14,12 @@
  *
  *   stopped_by_human  somebody ran `run stop` (the run records who, and why)
  *   budget            a budget ran out: `detail.budget` is `tickets` (the run took its
- *                     `--max-tickets`), `time` (`--until` has passed) or `ceiling` (a
- *                     current rate-limit window's high-water use reached `--ceiling`)
+ *                     `--max-tickets` distinct tickets; retrying one is not another),
+ *                     `time` (`--until` has passed) or `ceiling` (a current rate-limit
+ *                     window's high-water use reached `--ceiling`)
  *   failure_streak    the last two recorded outcomes are both `failed`
+ *   scope_gone        the scope no longer resolves: its issue was deleted, or it no
+ *                     longer holds anything (a parent that lost every child)
  *   vp_blocked        a ticket this run took is blocked on a named person
  *                     (`unblockOwner`), or nothing in scope is workable and something in
  *                     it is
@@ -44,6 +47,14 @@
  * A gate or a person-owned block elsewhere in the scope does not stop a run that still has
  * workable rows. The queue already steps over them; stopping on them would let one parked
  * row halt every run over the whole queue.
+ *
+ * ## One write path
+ *
+ * `run continue` ({@link RunStore.continue}) is the only way a surface or an adapter
+ * records a ticket taken or finished. {@link RunStore.recordTicketTaken} and
+ * {@link RunStore.recordTicketOutcome} stay public as the low-level record for tests and
+ * for repairing a run by hand; no CLI verb or MCP tool exposes them, and an adapter that
+ * called them would bypass the claim and the stop rules.
  *
  * ## Machine-local, never journaled
  *
@@ -76,6 +87,7 @@ export const RUN_STOP_REASONS = [
   "stopped_by_human",
   "budget",
   "failure_streak",
+  "scope_gone",
   "vp_blocked",
   "gate_pending",
   "scope_empty",
@@ -85,9 +97,12 @@ export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
 /**
  * Why a live run takes nothing right now without ending: a public JSON contract, like the
  * stop reasons. `paused` is a person's pause (`run pause`); `waiting_on_others` is the
- * rules' answer when the scope still holds unresolved work nobody lets this run take.
+ * rules' answer when the scope still holds unresolved work nobody lets this run take;
+ * `out_of_order` is `queue.policy = strict` refusing the run's next row because an
+ * eligible row earlier in the pickup plan lies outside its scope, and the run was not
+ * started with an override.
  */
-export const RUN_WAIT_REASONS = ["paused", "waiting_on_others"] as const;
+export const RUN_WAIT_REASONS = ["paused", "waiting_on_others", "out_of_order"] as const;
 export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
 
 /** Which budget ran out, in `detail.budget` of a `budget` stop. */
@@ -145,6 +160,12 @@ export interface Run {
   scope: RunScope;
   state: RunState;
   budget: RunBudget;
+  /**
+   * Why a person let this run step over the pickup plan (`run start --override -m`), or
+   * null: under `queue.policy = strict` each out-of-order take is then an override checkout
+   * recorded as `queue_overridden`; without one such a take waits (`out_of_order`).
+   */
+  override: string | null;
   tickets: RunTicket[];
   counts: { taken: number; done: number; failed: number; open: number };
   /** Null while the run is live. */
@@ -167,6 +188,11 @@ export interface RunFacts {
   personBlocks: Array<{ issueId: string; identifier: string; owner: string; action: string | null }>;
   /** Null when the run has no ceiling. */
   ceiling: RunCeilingFact | null;
+  /**
+   * Why the scope can no longer be resolved (its issue was deleted, or it no longer holds
+   * anything: a parent that lost every child), or null. Nothing is inside a gone scope.
+   */
+  scopeGone?: string | null;
 }
 
 /** The highest current-window use the ceiling is read against, or why it is unknown. */
@@ -231,7 +257,9 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
     };
   }
 
-  const taken = run.tickets.length;
+  // Distinct tickets: retrying a ticket the run already took (after a failure) is not a
+  // second ticket against the budget.
+  const taken = new Set(run.tickets.map((ticket) => ticket.issueId)).size;
   const { maxTickets, until, ceilingPercent } = run.budget;
   if (maxTickets !== null && taken >= maxTickets) {
     return stop("budget", { budget: "tickets", maxTickets, taken }, `The run took ${taken} of its ${maxTickets} ticket(s).`);
@@ -256,6 +284,10 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
   if (streak.length === FAILURE_STREAK_LIMIT && streak.every((ticket) => ticket.outcome === "failed")) {
     const refs = streak.map((ticket) => ticket.identifier);
     return stop("failure_streak", { tickets: refs, limit: FAILURE_STREAK_LIMIT }, `${refs.join(" and ")} both failed in a row.`);
+  }
+
+  if (facts.scopeGone) {
+    return stop("scope_gone", { why: facts.scopeGone }, `The run's scope ${run.scope.kind === "queue" ? "" : `${run.scope.identifier ?? run.scope.issueId} `}can no longer be worked: ${facts.scopeGone}`);
   }
 
   const takenIds = new Set(run.tickets.map((ticket) => ticket.issueId));
@@ -307,6 +339,7 @@ interface RunRow {
   until_at: string | null;
   ceiling_percent: number | null;
   ceiling_account: string | null;
+  override_reason: string | null;
   stop_reason: string | null;
   stop_detail: string;
   stopped_by: string | null;
@@ -336,6 +369,11 @@ export interface StartRunInput {
   until?: string;
   ceilingPercent?: number;
   ceilingAccount?: string;
+  /**
+   * A person's reason for letting the run step over the pickup plan: under
+   * `queue.policy = strict` each out-of-order take is an override checkout with it.
+   */
+  override?: string;
 }
 
 /** The previous ticket's outcome as one `continue` call recorded it; null when it recorded none. */
@@ -483,15 +521,38 @@ export class RunStore {
    */
   facts(run: Run, now = nowIso()): RunFacts {
     const rootId = run.scope.kind === "queue" ? null : run.scope.issueId;
+    const ceiling = run.budget.ceilingPercent === null ? null : this.ceilingFact(run.budget.ceilingAccount, now);
     const queue = this.store.queue();
-    const membership = rootId === null ? null : queue.scopeMembership(rootId);
+    let membership: ReturnType<typeof queue.scopeMembership> | null = null;
+    if (rootId !== null) {
+      /**
+       * A scope that no longer resolves (its issue deleted, or a parent that lost every
+       * child) holds nothing. That is a fact the rules stop on (`scope_gone`), never an
+       * error: a status listing or a driver's continue must not fail because of it.
+       */
+      try {
+        membership = queue.scopeMembership(rootId);
+      } catch (error) {
+        if (!(error instanceof StapleError) || (error.code !== "not_found" && error.code !== "validation")) throw error;
+        return { now, workable: [], waiting: [], pendingGates: [], personBlocks: [], ceiling, scopeGone: error.message };
+      }
+    }
     const inScope = (issueId: string): boolean => membership === null || issueId === rootId || membership.contains(issueId);
+    // A ticket another live run of the same actor is working is that run's, not this one's.
+    const elsewhere = new Set(
+      (this.db
+        .prepare(
+          `SELECT t.issue_id FROM run_tickets t JOIN runs r ON r.id = t.run_id
+            WHERE r.actor = ? AND r.id <> ? AND t.outcome IS NULL AND r.state IN (${LIVE_RUN_STATES.map(() => "?").join(", ")})`,
+        )
+        .all(run.actor, run.id, ...LIVE_RUN_STATES) as Array<{ issue_id: string }>).map((row) => row.issue_id),
+    );
 
     const workable: RunFacts["workable"] = [];
     const waiting: RunFacts["waiting"] = [];
     for (const row of queue.effectiveQueue({ actor: run.actor, scope: rootId }).rows) {
       if (row.issueId === rootId || row.eligibility === "resolved") continue;
-      const held = row.eligibility === "claimed" && row.detail?.heldBy === run.actor;
+      const held = row.eligibility === "claimed" && row.detail?.heldBy === run.actor && !elsewhere.has(row.issueId);
       if (row.eligibility === "eligible" || held) workable.push({ issueId: row.issueId, identifier: row.identifier, held });
       else waiting.push({ issueId: row.issueId, identifier: row.identifier, eligibility: row.eligibility, reason: row.reason });
     }
@@ -507,7 +568,7 @@ export class RunStore {
       .filter((row) => this.store.categoryOf(row.status) === "blocked" && (row.unblock_owner ?? "").trim() !== "")
       .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.unblock_owner!, action: row.unblock_action }));
 
-    return { now, workable, waiting, pendingGates, personBlocks, ceiling: run.budget.ceilingPercent === null ? null : this.ceilingFact(run.budget.ceilingAccount, now) };
+    return { now, workable, waiting, pendingGates, personBlocks, ceiling, scopeGone: null };
   }
 
   /**
@@ -547,6 +608,11 @@ export class RunStore {
     if (actor === "") throw new StapleError("validation", "A run needs an actor: pass --actor or set STAPLE_AGENT.");
     const now = nowIso();
     const budget = this.parseBudget(input, now);
+    // As on checkout: an override is a person's decision, so it always carries a reason.
+    const override = input.override === undefined ? null : input.override.trim();
+    if (override === "") {
+      throw new StapleError("validation", "An override needs a reason. Pass a non-empty reason (CLI `run start --override -m \"<why>\"`, MCP `override_reason`).");
+    }
     return this.store.journaled(() => {
       const scope = this.resolveScope(input.scope);
       const key = scope.kind === "queue" ? "queue" : scope.issueId;
@@ -563,11 +629,11 @@ export class RunStore {
       const id = newId();
       this.db
         .prepare(
-          `INSERT INTO runs (id, actor, scope_kind, scope_key, scope_issue_id, state, max_tickets, until_at, ceiling_percent, ceiling_account, started_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO runs (id, actor, scope_kind, scope_key, scope_issue_id, state, max_tickets, until_at, ceiling_percent, ceiling_account, override_reason, started_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, actor, scope.kind, key, scope.kind === "queue" ? null : scope.issueId, budget.maxTickets, budget.until, budget.ceilingPercent, budget.ceilingAccount, now, now);
-      this.emit("run_started", actor, { runId: id, actor, scope: scopeJson(scope), budget });
+        .run(id, actor, scope.kind, key, scope.kind === "queue" ? null : scope.issueId, budget.maxTickets, budget.until, budget.ceilingPercent, budget.ceilingAccount, override, now, now);
+      this.emit("run_started", actor, { runId: id, actor, scope: scopeJson(scope), budget, override });
       return this.get(id);
     });
   }
@@ -620,9 +686,12 @@ export class RunStore {
    * a ticket. One transaction, so two drivers asking at once are serialized and never
    * both take the same row. In order:
    *
-   *  1. Resolve the run: `run`, else the actor's one live run. None is not an error but
-   *     `{action: "stop", reason: "no_run"}`, so a driver's loop has one exit, the stop
-   *     answer. Several live runs without `run` are refused (validation): name one.
+   *  1. Resolve the run: `run`, else the actor's one live run. With none live, the
+   *     actor's most recently ended run that still has an unsettled ticket (stopped by a
+   *     person or a budget mid-ticket), so the ticket is settled and the driver hears why
+   *     the run ended. With neither, `{action: "stop", reason: "no_run"}`, not an error: a
+   *     driver's loop has one exit, the stop answer. Several live runs without `run` are
+   *     refused (validation): name one.
    *  2. Record the current ticket (the run's last open one), in any run state, by
    *     {@link settleCurrent}. A ticket the actor still holds, with no outcome stated, is
    *     not finished: it is RESUMED below rather than recorded.
@@ -630,13 +699,18 @@ export class RunStore {
    *     (`paused`) and change nothing else: pausing is not stopping, and the run resumes
    *     where it was on `run resume`.
    *  4. Evaluate the stop rules. A trip ends the run (`finish`) and answers `stop`; a wait
-   *     answers `wait` (`waiting_on_others`) and leaves the run live.
+   *     answers `wait` (`waiting_on_others`) and leaves the run live. Before that, a ticket
+   *     the actor is still working that is no longer inside the scope (the scope is gone,
+   *     or the ticket left it) is failed and released rather than resumed.
    *  5. Take, in this order: the current ticket if it is resumed; another row in scope the
    *     actor already holds (finish your own work before claiming more); else the scoped
    *     queue's `next`. The take IS the claim: `checkoutIssue` runs in this same
    *     transaction, so a take is a held ticket or nothing. Under `queue.policy = strict`
-   *     the order guard reads the plan inside the run's scope (`queueScope`), never an
-   *     override: a run's scope is the human's ordering.
+   *     the checkout's order guard reads the WHOLE plan, as for any agent: a scope is not
+   *     a licence to jump the queue. A run started with an override (`run start --override
+   *     -m <why>`) retakes a refused row as an override checkout with that reason, recorded
+   *     as `queue_overridden` exactly as `checkout --override` records it; a run without
+   *     one answers `wait` (`out_of_order`, with the refusal's detail).
    *
    * On a resume the ticket budget is not read: `--max-tickets` caps what a run TAKES, and
    * handing back the ticket it is still working takes nothing. Every other rule applies.
@@ -654,9 +728,17 @@ export class RunStore {
         if (actor !== null && actor !== row.actor) {
           throw new StapleError("validation", `Run ${row.id} is ${row.actor}'s, not ${actor}'s; only its actor continues it.`, { runId: row.id, actor: row.actor });
         }
+      } else if (this.list({ actor }).length > 0) {
+        row = this.requireRow(this.liveRunOf(actor!).id);
       } else {
-        const live = this.list({ actor });
-        if (live.length === 0) {
+        const unsettled = this.db
+          .prepare(
+            `SELECT * FROM runs r WHERE r.actor = ? AND r.state NOT IN (${LIVE_RUN_STATES.map(() => "?").join(", ")})
+               AND EXISTS (SELECT 1 FROM run_tickets t WHERE t.run_id = r.id AND t.outcome IS NULL)
+             ORDER BY r.ended_at DESC, r.updated_at DESC, r.id DESC LIMIT 1`,
+          )
+          .get(actor, ...LIVE_RUN_STATES) as unknown as RunRow | undefined;
+        if (!unsettled) {
           return {
             action: "stop",
             reason: "no_run",
@@ -666,10 +748,10 @@ export class RunStore {
             run: null,
           };
         }
-        row = this.requireRow(this.liveRunOf(actor!).id);
+        row = unsettled;
       }
 
-      const { recorded, resume } = this.settleCurrent(row, input.outcome, input.reason ?? null);
+      let { recorded, resume } = this.settleCurrent(row, input.outcome, input.reason ?? null);
       let run = this.get(row.id);
 
       if (!isLive(run.state)) {
@@ -690,6 +772,21 @@ export class RunStore {
 
       const now = nowIso();
       const facts = this.facts(run, now);
+      /**
+       * A ticket the actor is still working that is no longer inside the scope (its scope is
+       * gone, or it was moved out) is not this run's to resume, and must not stay claimed by a
+       * run that will never come back to it: it fails and is released, on the record.
+       */
+      if (resume !== null && run.scope.kind !== "queue") {
+        const rootId = run.scope.issueId;
+        const outside = facts.scopeGone ? true : !this.store.queue().scopeMembership(rootId).contains(resume.issueId);
+        if (outside) {
+          const why = `${resume.identifier} is no longer inside ${scopeLabel(run.scope)}${facts.scopeGone ? `: ${facts.scopeGone}` : "."}`;
+          ({ recorded } = this.settleCurrent(row, "failed", why));
+          resume = null;
+          run = this.get(row.id);
+        }
+      }
       const rulesRun = resume === null ? run : { ...run, budget: { ...run.budget, maxTickets: null } };
       const decision = evaluateStopRules(rulesRun, facts);
       if (decision.stop) {
@@ -702,15 +799,32 @@ export class RunStore {
 
       const held = facts.workable.find((entry) => entry.held);
       const pick = resume ?? held ?? facts.workable.find((entry) => !entry.held)!;
-      const why =
+      let why =
         resume !== null
           ? `${pick.identifier} is this run's current ticket and you still hold it: carry on with it.`
           : pick.held
             ? `${pick.identifier} is in scope and already held by you: finish it before taking more.`
             : `${pick.identifier} is next in ${scopeLabel(run.scope)} by the pickup queue's order.`;
-      const issue = this.store.checkoutIssue(pick.issueId, run.actor, undefined, {
-        ...(run.scope.kind === "queue" ? {} : { queueScope: run.scope.issueId }),
-      });
+      let issue;
+      try {
+        issue = this.store.checkoutIssue(pick.issueId, run.actor);
+      } catch (error) {
+        if (!(error instanceof StapleError) || error.code !== "out_of_order") throw error;
+        if (run.override === null) {
+          return {
+            action: "wait",
+            reason: "out_of_order",
+            detail: error.detail ?? {},
+            message: `${error.message} This run follows the plan: queue its scope ahead, or start it with --override -m <why>.`,
+            retryAfterSeconds: CONTINUE_RETRY_AFTER_SECONDS,
+            recorded,
+            run,
+          };
+        }
+        // The refused checkout wrote nothing (its savepoint rolled back): take it again, on the record.
+        issue = this.store.checkoutIssue(pick.issueId, run.actor, undefined, { overrideReason: run.override });
+        why = `${why} It steps over the plan by this run's override: ${run.override}`;
+      }
       this.writeTaken(row, issue.id, issue.identifier);
       return { action: "take", ref: issue.identifier, issueId: issue.id, title: issue.title, why, resumed: resume !== null, recorded, run: this.get(row.id) };
     });
@@ -791,7 +905,8 @@ export class RunStore {
   }
 
   /**
-   * Record that the run took a ticket. The run must be active and the issue inside its
+   * LOW-LEVEL, not an adapter API (module comment, "One write path"): `continue` takes and
+   * claims in one step. Record that the run took a ticket. The run must be active and the issue inside its
    * scope. Taking a ticket the run already holds open is a replay and writes nothing.
    */
   recordTicketTaken(ref: string, issueRef: string): Run {
@@ -823,7 +938,9 @@ export class RunStore {
   }
 
   /**
-   * Record the outcome of the ticket the run took on `issueRef`: `done` or `failed`.
+   * LOW-LEVEL, not an adapter API (module comment, "One write path"): `continue` settles
+   * the current ticket itself. Record the outcome of the ticket the run took on
+   * `issueRef`: `done` or `failed`.
    *
    * Without an outcome it is read from the execution attempt the run's actor ended on that
    * issue after taking it: `failed` (`--outcome failed`) is failed and `completed` is done.
@@ -991,6 +1108,7 @@ export class RunStore {
       scope: this.scopeOf(row),
       state: row.state as RunState,
       budget: { maxTickets: row.max_tickets, until: row.until_at, ceilingPercent: row.ceiling_percent, ceilingAccount: row.ceiling_account },
+      override: row.override_reason,
       tickets,
       counts: {
         taken: tickets.length,
