@@ -720,7 +720,8 @@ export class QueueStore {
      * use, so a parent a human resolved after its children finished is a leaf)
      * is never emitted as itself; it expands in place, depth-first, to its open
      * leaf descendants. An issue reached twice is emitted once, at its FIRST
-     * occurrence, which is what `emitted` enforces.
+     * occurrence, which is what `emitted` enforces. It holds the containers a walk
+     * has entered too, which is what keeps a cycle finite.
      */
     const expand = (
       node: IssueNode,
@@ -737,6 +738,19 @@ export class QueueStore {
       ) => raw.push({ node: leaf, planPosition: position, via: container, dueAt: due, unqueued: false }),
     ): void => {
       if (seen.has(node.id) || depth > MAX_TREE_DEPTH) return;
+      /**
+       * A CONTAINER is expanded once per walk, and marked on the way IN. The
+       * tree and milestone membership together form a graph, not a tree — an
+       * epic can be a member of a milestone parented under itself — and without
+       * this a cycle is walked again at every level, forking wherever two
+       * cycles overlap: exponential, and reachable from a read. The order does
+       * not change for anything that is not a cycle. A container reached again
+       * after it was expanded has nothing left to emit, because every leaf under
+       * it is already in `seen`. One reached again WHILE it is being expanded
+       * (a cycle) is already being walked by the outer call.
+       */
+      const container = node.kind === MILESTONE_KIND || (openChildren.get(node.id) ?? []).length > 0;
+      if (container) seen.add(node.id);
       /**
        * A milestone is a container over its MEMBERSHIP rather than over its
        * children — nothing is ever re-parented into one — so it expands in
