@@ -875,11 +875,13 @@ export class QueueStore {
      * eligibility, reason and `position` the unscoped answer gives it — a scope
      * changes which rows are considered, never what a row is.
      *
-     * Membership is STRUCTURAL: a row is inside when the scope is one of its
-     * ancestors, or — for a milestone — when the row or an ancestor is one of its
-     * members (the rollup's "members plus their descendants"), or it sits under
-     * the milestone's own children. The scope itself is never a row of its own
-     * scope: an epic whose children are all resolved has nothing left inside it.
+     * Membership is WHAT QUEUEING THE SCOPE WOULD REACH, over the whole tree
+     * rather than the open one: every child at any depth, and every member of
+     * any milestone met on the way (the scope's own, or a milestone parented
+     * under it), with their descendants. So an open leaf under a resolved parent
+     * is inside its epic, and a member of a child milestone is inside the
+     * parent. The scope itself is never a row of its own scope: an epic whose
+     * children are all resolved has nothing left inside it.
      *
      * ORDER inside a scope is the plan first, then the scope's own shape: the
      * rows the plan reaches keep their effective order, and the scope's unqueued
@@ -902,9 +904,27 @@ export class QueueStore {
       const starts = scope.kind === MILESTONE_KIND ? [scope] : (openChildren.get(scope.id) ?? []);
       for (const start of starts) expand(start, null, null, null, 0, seen, walk);
       const scopeRank = new Map(walked.map((id, index) => [id, index]));
-      const inside = (id: string): boolean =>
-        id !== scope.id &&
-        chainOf(id).some((link) => link === scope.id || seam.milestoneOf.get(link) === scope.id);
+      // The expansion rule without the "open" filter, so a resolved parent does
+      // not hide the open work under it.
+      const allChildren = new Map<string, string[]>();
+      for (const node of nodes.values()) {
+        if (node.parent_id === null) continue;
+        const siblings = allChildren.get(node.parent_id) ?? [];
+        siblings.push(node.id);
+        allChildren.set(node.parent_id, siblings);
+      }
+      const reached = new Set<string>([scope.id]);
+      const pending = [scope.id];
+      while (pending.length > 0) {
+        const id = pending.pop()!;
+        const members = nodes.get(id)?.kind === MILESTONE_KIND ? (seam.membersOf.get(id) ?? []) : [];
+        for (const next of [...(allChildren.get(id) ?? []), ...members]) {
+          if (reached.has(next)) continue;
+          reached.add(next);
+          pending.push(next);
+        }
+      }
+      const inside = (id: string): boolean => id !== scope.id && reached.has(id);
       const scoped = rows.filter((row) => inside(row.issueId));
       const unqueued = scoped
         .filter((row) => row.unqueued)

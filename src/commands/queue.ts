@@ -71,8 +71,8 @@ blocker, a gate, a live claim or a resolved status.
 
 SCOPED PICKUP. "queue next --scope <ref>" answers the same question inside one
 container: an epic, a milestone, or any issue with children. A row is inside
-when the scope is one of its ancestors or, for a milestone, when the row or an
-ancestor is a member (members plus their descendants). The container does not
+when queueing the scope would reach it: any descendant, and the members (plus
+their descendants) of the scope or of any milestone under it. The container does not
 have to be queued: rows the plan reaches keep their effective order, and the
 scope's unqueued work follows in the order queueing the scope would give it
 (a milestone's membership order, then the tree). Eligibility, reasons and each

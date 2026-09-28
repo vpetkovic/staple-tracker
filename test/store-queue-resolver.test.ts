@@ -742,6 +742,41 @@ describe("scoped pickup", () => {
     expect(scoped(epic)).toEqual([`${leaf}:eligible`]);
   });
 
+  it("a member of a milestone under the scope is inside it", () => {
+    milestoneKind();
+    // A milestone parented under a milestone, and one parented under an epic:
+    // queueing the outer container reaches the inner one's members, so the
+    // scope must too — whatever tree those members live in.
+    const outer = store.createIssue({ title: "Outer", kind: MILESTONE_KIND }).identifier;
+    const inner = store.createIssue({ title: "Inner", kind: MILESTONE_KIND, parent: outer }).identifier;
+    const member = issue("member of inner");
+    store.milestones().addMember(inner, member, {}, "vp");
+    const epic = issue("S", { kind: "epic" });
+    const nested = store.createIssue({ title: "Nested", kind: MILESTONE_KIND, parent: epic }).identifier;
+    const stranger = issue("member outside S");
+    store.milestones().addMember(nested, stranger, {}, "vp");
+
+    expect(scoped(outer)).toEqual([`${member}:eligible`]);
+    expect(scoped(epic)).toEqual([`${stranger}:eligible`]);
+    // The same rows queueing the container would reach.
+    queue.enqueue(outer, {}, "vp");
+    queue.enqueue(epic, {}, "vp");
+    expect(identifiers().slice(0, 2)).toEqual([member, stranger]);
+  });
+
+  it("strict still checks a queued scoped next against the whole plan", () => {
+    const outside = issue("outside");
+    const epic = issue("S", { kind: "epic" });
+    const inner = issue("S1", { parent: epic });
+    queue.enqueue(outside, {}, "vp");
+    queue.enqueue(inner, {}, "vp");
+    strict();
+
+    expect(queue.effectiveQueue({ actor: "me", scope: epic }).next?.identifier).toBe(inner);
+    const error = refused(() => store.checkoutIssue(inner, "me"), "out_of_order");
+    expect(error.message).toContain(`Take ${outside}`);
+  });
+
   it("an empty container is an empty scope, and never offers itself", () => {
     const empty = issue("Empty", { kind: "epic" });
     const finished = issue("Finished");
