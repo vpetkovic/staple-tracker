@@ -4709,7 +4709,9 @@ export function startUiServer(options: UiOptions): UiHandle {
             .map((status) => runEntry(h, status));
         });
         out.sort((a, b) => String((b.run as { startedAt: string }).startedAt).localeCompare(String((a.run as { startedAt: string }).startedAt)));
-        json(res, 200, { runs: out });
+        // `now`: the server's clock, so a page counts "stopped since I first looked" against
+        // the same clock that wrote `endedAt`, not against a phone's skewed one.
+        json(res, 200, { runs: out, now: new Date().toISOString() });
         return;
       }
 

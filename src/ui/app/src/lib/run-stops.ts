@@ -10,9 +10,9 @@
  * same notices until they are dismissed.
  *
  * "Seen" is kept per run in localStorage (`staple:run-stops:v1`), with the moment this
- * browser first kept it (`since`): a stop recorded before that is history, not news, so
- * opening the page for the first time does not greet the reader with every run ever
- * stopped. The app has no service worker, so there is no system notification; the notice
+ * browser first kept it (`since`, on the server's clock): a stop recorded before that is
+ * history, not news, so opening the page for the first time does not greet the reader with
+ * every run ever stopped. Keys of runs the server no longer serves are pruned. The app has no service worker, so there is no system notification; the notice
  * is in the page.
  *
  * Pure and tested (run-stops.test.ts).
@@ -80,6 +80,8 @@ export interface StopNotice {
   runId: string;
   /** "Autopilot finished · ABC-332" or "Autopilot stopped · the queue". */
   title: string;
+  /** "Autopilot · ABC-332": the compact card's title, where the reason says how it ended. */
+  short: string;
   /** Why, in the run history's words (`endedStateText`). */
   reason: string;
   tone: RunTone;
@@ -101,6 +103,7 @@ export function stopNotice(entry: Pick<RunEntry, "workspace" | "run">): StopNoti
     workspace: entry.workspace,
     runId: run.id,
     title: `Autopilot ${run.state === "completed" ? "finished" : "stopped"} · ${scope}`,
+    short: `Autopilot · ${scope}`,
     reason: state.text,
     tone: state.tone,
     attention: stopAttention(run),
@@ -114,6 +117,7 @@ export function stopNotice(entry: Pick<RunEntry, "workspace" | "run">): StopNoti
  * next poll) answers the same list.
  */
 export function pendingStopNotices(entries: readonly Pick<RunEntry, "workspace" | "run">[], seen: StopSeen): StopNotice[] {
+  if (seen.since === null) return [];
   const since = Date.parse(seen.since);
   const known = new Set(seen.seen);
   return entries
@@ -126,33 +130,30 @@ export function pendingStopNotices(entries: readonly Pick<RunEntry, "workspace" 
 
 export const STOP_SEEN_KEY = "staple:run-stops:v1";
 
-/** Enough for months of runs; the oldest keys drop first, and they are long past `since` by then. */
-export const STOP_SEEN_CAP = 500;
-
 export interface StopSeen {
-  /** When this browser started keeping notices; a stop before it is not news. */
-  since: string;
-  /** `stopKey`s dismissed or opened, oldest first. */
+  /**
+   * When this browser started keeping notices, on the SERVER's clock (`/api/runs` `now`, the
+   * clock that writes `endedAt`): a stop before it is not news. Null until the first read.
+   */
+  since: string | null;
+  /** `stopKey`s dismissed, opened, or stopped from this page, oldest first. */
   seen: string[];
 }
 
 type Storage = Pick<globalThis.Storage, "getItem" | "setItem">;
 
-/** Read what was seen; on the first read ever, start keeping from `now` and save that. */
-export function loadStopSeen(storage: Storage | null, now: Date = new Date()): StopSeen {
-  const fresh: StopSeen = { since: now.toISOString(), seen: [] };
-  if (storage === null) return fresh;
+/** Read what was seen; nothing stored (or a corrupt value) reads as a first visit, `since` unknown. */
+export function loadStopSeen(storage: Storage | null): StopSeen {
   try {
-    const raw = storage.getItem(STOP_SEEN_KEY);
+    const raw = storage?.getItem(STOP_SEEN_KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<StopSeen>) : null;
     if (parsed && typeof parsed.since === "string" && !Number.isNaN(Date.parse(parsed.since)) && Array.isArray(parsed.seen)) {
       return { since: parsed.since, seen: parsed.seen.filter((key): key is string => typeof key === "string") };
     }
   } catch {
-    // A corrupt value is replaced below, as a first read.
+    // A corrupt value reads as a first visit and is replaced at the next save.
   }
-  saveStopSeen(storage, fresh);
-  return fresh;
+  return { since: null, seen: [] };
 }
 
 export function saveStopSeen(storage: Storage | null, state: StopSeen): void {
@@ -163,8 +164,27 @@ export function saveStopSeen(storage: Storage | null, state: StopSeen): void {
   }
 }
 
-/** `state` with `keys` seen, capped, oldest dropped first. */
+/** The first read of the server's clock starts the count; a later one changes nothing. */
+export function withBaseline(state: StopSeen, serverNow: string | null): StopSeen {
+  return state.since === null && serverNow !== null ? { ...state, since: serverNow } : state;
+}
+
+/** `state` with `keys` seen, each once. */
 export function withSeen(state: StopSeen, keys: readonly string[]): StopSeen {
-  const seen = [...state.seen.filter((key) => !keys.includes(key)), ...keys];
-  return { since: state.since, seen: seen.slice(-STOP_SEEN_CAP) };
+  return { since: state.since, seen: [...state.seen.filter((key) => !keys.includes(key)), ...keys] };
+}
+
+/**
+ * `state` without the keys of runs the server no longer serves. `/api/runs` serves every
+ * ended run down to its limit per workspace, newest first, so a run that dropped off never
+ * comes back and its key is dead. Only the workspaces this read covers are judged: a key of
+ * a workspace the page is not showing now (one workspace, not All) is kept, or switching to
+ * All would raise its stops again. The same object when nothing changed.
+ */
+export function prunedSeen(state: StopSeen, entries: readonly Pick<RunEntry, "workspace" | "run">[]): StopSeen {
+  if (entries.length === 0) return state;
+  const workspaces = new Set(entries.map((entry) => entry.workspace));
+  const served = new Set(entries.map(stopKey));
+  const seen = state.seen.filter((key) => !workspaces.has(key.slice(0, key.indexOf("/"))) || served.has(key));
+  return seen.length === state.seen.length ? state : { since: state.since, seen };
 }

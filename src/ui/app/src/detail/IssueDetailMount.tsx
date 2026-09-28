@@ -43,6 +43,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog as DialogPrimitive, VisuallyHidden } from "radix-ui";
+import { RunStopNotices } from "@/components/autopilot/RunStopNotices";
 import type { AuthError } from "@/lib/api";
 import { useBackToClose } from "@/lib/back-to-close";
 import { isTyping } from "@/lib/keyboard";
@@ -308,6 +309,8 @@ export function IssueDetailMount() {
               onAuthError={onAuthError}
             />
           ) : null}
+          {/* A run that ended, inside the modal: in its flow and its focus order (RunStopNotices). */}
+          {selection ? <RunStopNotices placement="drawer" /> : null}
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

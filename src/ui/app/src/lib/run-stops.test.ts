@@ -6,7 +6,6 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  STOP_SEEN_CAP,
   STOP_SEEN_KEY,
   attentionLabel,
   loadStopSeen,
@@ -14,6 +13,8 @@ import {
   saveStopSeen,
   stopAttention,
   stopNotice,
+  prunedSeen,
+  withBaseline,
   withSeen,
 } from "./run-stops";
 import { RUN_STOP_REASONS, type Run, type RunStop, type RunStopReason } from "./types";
@@ -113,33 +114,41 @@ describe("what this browser has seen", () => {
     const map = new Map<string, string>();
     return { getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => void map.set(key, value), map };
   };
-  const NOW = new Date("2026-09-28T12:00:00.000Z");
+  const SERVER = "2026-09-28T12:00:00.000Z";
 
-  it("starts keeping from the first visit, and keeps that moment across reloads", () => {
+  it("starts counting at the first read of the SERVER's clock, and keeps that moment across reloads", () => {
     const storage = memory();
-    const first = loadStopSeen(storage, NOW);
-    expect(first).toEqual({ since: NOW.toISOString(), seen: [] });
-    expect(JSON.parse(storage.map.get(STOP_SEEN_KEY)!)).toEqual(first);
-    // A reload an hour later keeps the first moment, and what was seen.
-    saveStopSeen(storage, withSeen(first, ["staple/a"]));
-    expect(loadStopSeen(storage, new Date("2026-09-28T13:00:00.000Z"))).toEqual({ since: NOW.toISOString(), seen: ["staple/a"] });
+    const first = loadStopSeen(storage);
+    // Before the server has answered, the count has not started: nothing is news yet.
+    expect(first).toEqual({ since: null, seen: [] });
+    expect(pendingStopNotices([{ workspace: "staple", run: stopped("goal_met") }], first)).toEqual([]);
+    const started = withBaseline(first, SERVER);
+    expect(started.since).toBe(SERVER);
+    // A later read of the clock does not move it.
+    expect(withBaseline(started, "2026-09-28T13:00:00.000Z")).toBe(started);
+    expect(withBaseline(first, null)).toBe(first);
+    saveStopSeen(storage, withSeen(started, ["staple/a"]));
+    expect(JSON.parse(storage.map.get(STOP_SEEN_KEY)!)).toEqual({ since: SERVER, seen: ["staple/a"] });
+    expect(loadStopSeen(storage)).toEqual({ since: SERVER, seen: ["staple/a"] });
   });
 
-  it("replaces a corrupt value, and works without storage", () => {
+  it("reads a corrupt value or no storage as a first visit", () => {
     const storage = memory();
     storage.setItem(STOP_SEEN_KEY, "{not json");
-    expect(loadStopSeen(storage, NOW)).toEqual({ since: NOW.toISOString(), seen: [] });
+    expect(loadStopSeen(storage)).toEqual({ since: null, seen: [] });
     storage.setItem(STOP_SEEN_KEY, JSON.stringify({ since: "never", seen: [] }));
-    expect(loadStopSeen(storage, NOW).since).toBe(NOW.toISOString());
-    expect(loadStopSeen(null, NOW)).toEqual({ since: NOW.toISOString(), seen: [] });
+    expect(loadStopSeen(storage).since).toBeNull();
+    expect(loadStopSeen(null)).toEqual({ since: null, seen: [] });
   });
 
-  it("adds once and drops the oldest past the cap", () => {
-    const state = withSeen(withSeen({ since: "x", seen: [] }, ["a", "b"]), ["a"]);
-    expect(state.seen).toEqual(["b", "a"]);
-    const full = withSeen({ since: "x", seen: Array.from({ length: STOP_SEEN_CAP }, (_, i) => `k${i}`) }, ["new"]);
-    expect(full.seen).toHaveLength(STOP_SEEN_CAP);
-    expect(full.seen[0]).toBe("k1");
-    expect(full.seen.at(-1)).toBe("new");
+  it("adds once, and prunes only the keys of runs the server no longer serves in the workspaces it read", () => {
+    expect(withSeen(withSeen({ since: "x", seen: [] }, ["a", "b"]), ["a"]).seen).toEqual(["b", "a"]);
+    const state = { since: SERVER, seen: ["staple/gone", "staple/run-1", "other/r"] };
+    const served = [{ workspace: "staple", run: stopped("scope_empty") }];
+    // staple/gone dropped off the served list; other/ is a workspace this read did not cover.
+    expect(prunedSeen(state, served).seen).toEqual(["staple/run-1", "other/r"]);
+    // Nothing read yet (the first load): nothing is judged.
+    expect(prunedSeen(state, [])).toBe(state);
+    expect(prunedSeen({ since: SERVER, seen: ["staple/run-1"] }, served).seen).toEqual(["staple/run-1"]);
   });
 });

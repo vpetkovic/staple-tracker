@@ -34,14 +34,31 @@ import { statusLabel } from "@/lib/settings";
 import { openRunHistory } from "@/lib/shell-events";
 import type { CriterionVerdict, EvidenceItem, GoalCriterion, IssueGate, MilestoneView, RunEntry } from "@/lib/types";
 import { DetailCard, SectionHeading, cn, useNow } from "./parts";
-import { openTabOnArrival } from "./tabs/registry";
+import { openDetailTab, openTabOnArrival } from "./tabs/registry";
 
 const VERDICT_ICON: Record<CriterionVerdict, typeof CircleCheck> = { met: CircleCheck, unmet: CircleX, unknown: CircleHelp };
 
 const statusWord = (status: string) => statusLabel(status as Parameters<typeof statusLabel>[0]);
 
+/**
+ * Follow a piece of evidence. Another ticket opens (on its Documents tab, the document pinned,
+ * for a document). The milestone's own document switches the open panel's tab in place: the
+ * panel does not remount for the issue already open, so an arrival request would wait
+ * unconsumed and later land on the wrong visit.
+ */
+export function openEvidence(item: Pick<EvidenceItem, "kind" | "ref" | "document">, openRef: string, open: (ref: string) => void): void {
+  if (item.ref === null) return;
+  const document = item.kind === "document" ? item.document : null;
+  if (item.ref === openRef) {
+    if (document) openDetailTab("documents", document, item.ref);
+    return;
+  }
+  if (document) openTabOnArrival(item.ref, "documents", document);
+  open(item.ref);
+}
+
 /** One piece of evidence: a ticket or a document as a link, text as a quote. */
-function Evidence({ item, workspace }: { item: EvidenceItem; workspace: string }) {
+function Evidence({ item, workspace, openRef }: { item: EvidenceItem; workspace: string; openRef: string }) {
   const session = useSession();
   if (item.kind === "text" || item.ref === null) {
     return (
@@ -51,10 +68,7 @@ function Evidence({ item, workspace }: { item: EvidenceItem; workspace: string }
     );
   }
   const ref = item.ref;
-  const open = () => {
-    if (item.kind === "document" && item.document) openTabOnArrival(ref, "documents", item.document);
-    session.open(workspace, ref);
-  };
+  const open = () => openEvidence(item, openRef, (target) => session.open(workspace, target));
   const label = item.kind === "document" ? `${ref} · ${item.document}` : ref;
   const state = item.kind === "ticket" && item.status ? statusWord(item.status) : null;
   return (
@@ -75,7 +89,7 @@ function Evidence({ item, workspace }: { item: EvidenceItem; workspace: string }
 }
 
 /** One criterion: the verdict (glyph and word), the text, the evidence, who marked it, why unknown. */
-export function CriterionRow({ criterion, workspace, now }: { criterion: GoalCriterion; workspace: string; now: Date }) {
+export function CriterionRow({ criterion, workspace, openRef, now }: { criterion: GoalCriterion; workspace: string; openRef: string; now: Date }) {
   const Icon = VERDICT_ICON[criterion.verdict];
   const tone = CRITERION_TONE[criterion.verdict];
   const why = unknownText(criterion, statusWord);
@@ -96,7 +110,7 @@ export function CriterionRow({ criterion, workspace, now }: { criterion: GoalCri
         {criterion.evidence.length > 0 ? (
           <ul aria-label="Evidence" className="m-0 flex min-w-0 list-none flex-wrap items-center gap-1.5 p-0">
             {criterion.evidence.map((item, i) => (
-              <Evidence key={i} item={item} workspace={workspace} />
+              <Evidence key={i} item={item} workspace={workspace} openRef={openRef} />
             ))}
           </ul>
         ) : null}
@@ -125,7 +139,7 @@ function GoalRunLine({ entry }: { entry: RunEntry }) {
   return (
     <div data-goal-run={entry.run.id} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-body text-text-secondary">
       <span className="text-foreground">{live ? `${entry.run.actor}'s goal run` : `Last goal run (${entry.run.actor})`}</span>
-      <RunStatePill text={state.text} tone={state.tone} />
+      <RunStatePill text={state.text} tone={state.tone} wrap />
       {children ? <span>created {children.created} of {tickets(children.cap)} it may</span> : null}
       <button
         type="button"
@@ -157,7 +171,7 @@ export function MilestoneGoalSection({ plan, gate, workspace }: { plan: Mileston
       {goal.criteria.length > 0 ? (
         <ul aria-label="Criteria" className="m-0 flex min-w-0 list-none flex-col divide-y divide-border p-0">
           {goal.criteria.map((criterion) => (
-            <CriterionRow key={criterion.position} criterion={criterion} workspace={workspace} now={now} />
+            <CriterionRow key={criterion.position} criterion={criterion} workspace={workspace} openRef={plan.milestone.identifier} now={now} />
           ))}
         </ul>
       ) : null}

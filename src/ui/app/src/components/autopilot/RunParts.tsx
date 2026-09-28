@@ -22,13 +22,16 @@ import { personActor } from "@/detail/parts/person";
 import { pauseRun, resumeRun, stopRun } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { scopeText, type RunTone } from "@/lib/run-text";
+import { stopKey } from "@/lib/run-stops";
 import { useRuns } from "@/lib/runs";
+import { markStopsSeen } from "@/lib/stop-seen-store";
 import type { RunEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/settings/form/ConfirmDialog";
 
 /** A state in a word and a tone: the reserved `--plain-*` pairs, each AA in both themes. */
-export function RunStatePill({ text, tone, className }: { text: string; tone: RunTone; className?: string }) {
+/** `wrap` lets a long state (a stop reason in a notice) wrap instead of being cut short. */
+export function RunStatePill({ text, tone, wrap = false, className }: { text: string; tone: RunTone; wrap?: boolean; className?: string }) {
   return (
     <span
       data-run-state={tone}
@@ -36,7 +39,7 @@ export function RunStatePill({ text, tone, className }: { text: string; tone: Ru
       className={cn("inline-flex max-w-full min-w-0 shrink-0 items-center rounded-full border px-2 py-0.5 text-caption font-medium", className)}
       style={{ color: `var(--plain-${tone}-fg)`, backgroundColor: `var(--plain-${tone}-bg)`, borderColor: `var(--plain-${tone}-border)` }}
     >
-      <span className="truncate">{text}</span>
+      <span className={wrap ? "wrap-anywhere" : "truncate"}>{text}</span>
     </span>
   );
 }
@@ -72,6 +75,8 @@ export function StopRunButton({ entry, touch = false, className }: { entry: RunE
       setConfirming(false);
       setNote("");
       setRefusal(null);
+      // This page did it: no notice for a person's own press.
+      markStopsSeen([stopKey(entry)]);
       refresh();
     } catch (error) {
       setConfirming(false);
@@ -144,6 +149,8 @@ export function PauseResumeButton({ entry, className }: { entry: RunEntry; class
     try {
       await (paused ? resumeRun : pauseRun)({ ws: entry.workspace, id: entry.run.id, actor: personActor() });
       setRefusal(null);
+      // This page did it: no notice for a person's own press.
+      markStopsSeen([stopKey(entry)]);
       refresh();
     } catch (error) {
       setRefusal(describeRefusal(error));

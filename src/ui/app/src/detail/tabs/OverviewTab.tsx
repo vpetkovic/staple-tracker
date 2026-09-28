@@ -159,7 +159,7 @@ function WorklogPanel({
   );
 
   const excerpt = useMemo(() => (body.data ? excerptWorklog(body.data.body) : null), [body.data]);
-  const showAll = () => openDetailTab("documents", WORKLOG_KEY);
+  const showAll = () => openDetailTab("documents", WORKLOG_KEY, issueRef);
 
   return (
     <section aria-label="Worklog" className="mt-8">

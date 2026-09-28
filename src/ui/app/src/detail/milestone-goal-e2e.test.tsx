@@ -18,7 +18,8 @@ import { join } from "node:path";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { RunStopNoticeList } from "@/components/autopilot/RunStopNotices";
+import { RunStopNoticeList, RunStopNotices } from "@/components/autopilot/RunStopNotices";
+import { markStopsSeen, resetStopSeenForTests } from "@/lib/stop-seen-store";
 import { buildFilterContext } from "@/lib/filter-dimensions";
 import { emptyFilters } from "@/lib/filters";
 import { paceText } from "@/lib/goal-text";
@@ -31,6 +32,7 @@ import { MILESTONE_KIND } from "../../../../core/milestones.ts";
 import { initWorkspace, openWorkspace } from "../../../../core/workspace.ts";
 import { startUiServer } from "../../../server.ts";
 import { MADE_BY_RUN_CAPTION } from "./MilestoneParts";
+import { openEvidence } from "./MilestoneGoal";
 import { OverviewTab } from "./tabs/OverviewTab";
 import { openTabOnArrival, takeArrivalTab, takePendingDocumentKey } from "./tabs/registry";
 import { readFileSync } from "node:fs";
@@ -231,7 +233,7 @@ describe("the milestone goal view, from the goal check", () => {
 
   it("says why each unknown one is unknown: evidence not done, reworded, never marked", () => {
     const html = overview(working, workingRuns);
-    expect(criterionHtml(html, 2)).toContain(`Marked met, but its evidence does not hold yet: ${refs.b} is todo, not done.`);
+    expect(criterionHtml(html, 2)).toContain(`Marked met, but its evidence does not hold now: ${refs.b} is todo, not done.`);
     expect(criterionHtml(html, 2)).toContain(`data-evidence-holds="false"`);
     expect(criterionHtml(html, 3)).toContain('Reworded after it was marked met, so it needs judging again. It read: "Works on a phone".');
     expect(criterionHtml(html, 5)).toContain("Nobody has judged this yet.");
@@ -303,44 +305,143 @@ describe("the run-stopped notice, from /api/runs", () => {
     expect(pendingStopNotices(endRuns, { ...all, seen: [`goal/${refs.goalRun}`] }).map((notice) => notice.runId)).toEqual([refs.flakyRun]);
   });
 
-  it("renders each notice with its reason, its link and a dismiss", () => {
+  it("renders the newest notice, compact, with its reason, its link, a dismiss and N more", () => {
     const notices = pendingStopNotices(endRuns, all);
-    const html = render(
-      <RunStopNoticeList notices={notices} placement="corner" onOpenRef={noop} onDetails={noop} onDismiss={noop} onDismissAll={noop} />,
-      endRuns,
-    );
+    const list = (props: { placement: "corner" | "strip" | "drawer"; initiallyExpanded?: boolean }) =>
+      render(<RunStopNoticeList notices={notices} {...props} onOpenRef={noop} onDetails={noop} onDismiss={noop} onDismissAll={noop} />, endRuns);
+    const html = list({ placement: "strip" });
     expect(html).toContain('aria-live="polite"');
+    // One card, the newest; the other waits behind "1 more".
+    expect(html.match(/data-run-stop-notice=/g)).toHaveLength(1);
     expect(html).toContain(`data-run-stop-notice="${refs.goalRun}"`);
-    expect(html).toContain(`data-run-stop-open="${refs.m}"`);
+    expect(html).toContain(`>Autopilot · ${refs.m}<`);
     expect(html).toContain(`>Review ${refs.m}<`);
-    expect(html).toContain(`>Open ${refs.lastFailed}<`);
+    expect(html).toContain('data-run-stop-more="1"');
     expect(html).toContain(`Dismiss: Autopilot finished · ${refs.m}: Goal met: ${refs.m} is waiting for approval`);
-    expect(html).toContain("Dismiss all");
-    // Nothing to say: the region stays, empty and hidden, so the next notice is announced.
-    const empty = render(<RunStopNoticeList notices={[]} placement="strip" onOpenRef={noop} onDetails={noop} onDismiss={noop} onDismissAll={noop} />, endRuns);
-    expect(empty).toContain('data-run-stop-notices="strip"');
-    expect(empty).not.toContain("data-run-stop-notice=");
+    expect(html).not.toContain("Dismiss all");
+    // The reason wraps rather than being cut short.
+    expect(html).toContain('<span class="wrap-anywhere">Goal met:');
+    // Expanded: both, and the way back and the dismiss-all.
+    const open = list({ placement: "corner", initiallyExpanded: true });
+    expect(open.match(/data-run-stop-notice=/g)).toHaveLength(2);
+    expect(open).toContain(`>Open ${refs.lastFailed}<`);
+    expect(open).toContain("Show fewer");
+    expect(open).toContain("Dismiss all");
+    expect(open).not.toContain("data-run-stop-more");
+  });
+
+  it("with nothing to say, keeps the live region and draws no box, so a phone shows no empty bar", () => {
+    for (const placement of ["strip", "drawer", "corner"] as const) {
+      const empty = render(<RunStopNoticeList notices={[]} placement={placement} onOpenRef={noop} onDetails={noop} onDismiss={noop} onDismissAll={noop} />, endRuns);
+      const region = /<section[^>]*>([\s\S]*?)<\/section>/.exec(empty)!;
+      expect(region[0], placement).toContain('aria-live="polite"');
+      expect(region[0], placement).not.toMatch(/border|px-|py-|hidden/);
+      expect(region[1], placement).toBe("");
+    }
   });
 });
 
 describe("the links' landing", () => {
-  it("a document link opens that ticket on its Documents tab with the document pinned, and only that ticket", () => {
-    openTabOnArrival("GOA-2", "documents", "plan");
-    expect(takeArrivalTab("GOA-9")).toBeNull();
+  it("a document link opens that ticket on its Documents tab with the document pinned, and nothing else", () => {
+    const opened: string[] = [];
+    const doc = { kind: "document" as const, ref: "GOA-2", document: "plan" };
+    openEvidence(doc, "GOA-1", (ref) => opened.push(ref));
+    expect(opened).toEqual(["GOA-2"]);
     expect(takeArrivalTab("GOA-2")).toBe("documents");
-    expect(takePendingDocumentKey()).toBe("plan");
+    expect(takePendingDocumentKey("GOA-2")).toBe("plan");
     // Consumed: a later visit to the ticket opens on its default tab.
     expect(takeArrivalTab("GOA-2")).toBeNull();
+    expect(takePendingDocumentKey("GOA-2")).toBeNull();
+    // A request the next panel is not for is dropped, key and all: it never lands later.
+    openTabOnArrival("GOA-2", "documents", "plan");
+    expect(takeArrivalTab("GOA-9")).toBeNull();
+    expect(takeArrivalTab("GOA-2")).toBeNull();
+    expect(takePendingDocumentKey("GOA-2")).toBeNull();
   });
 
-  it("a desk notice sits above the modal detail drawer and a press on it is not a press outside the drawer", () => {
-    const html = render(<RunStopNoticeList notices={pendingStopNotices(endRuns, { since: "2000-01-01T00:00:00.000Z", seen: [] })} placement="corner" onOpenRef={noop} onDetails={noop} onDismiss={noop} onDismissAll={noop} />, endRuns);
-    const region = /<section[^>]*data-run-stop-notices="corner"[^>]*>/.exec(html)![0];
-    // The drawer is `fixed z-50` and makes the page inert; the stack stays clickable above it.
-    expect(region).toMatch(/(^|\s|")pointer-events-auto(\s|")/);
-    expect(region).toMatch(/(^|\s|")z-\[60\](\s|")/);
-    // Static markup has no handlers, so the pointer-down guard is pinned in the source.
+  it("the milestone's own document switches the open panel's tab in place, and queues no arrival", () => {
+    const events: string[] = [];
+    const globals = globalThis as { window?: unknown };
+    const before = globals.window;
+    globals.window = { dispatchEvent: (event: CustomEvent<string>) => void events.push(event.detail) };
+    try {
+      const opened: string[] = [];
+      openEvidence({ kind: "document", ref: "GOA-1", document: "self" }, "GOA-1", (ref) => opened.push(ref));
+      expect(opened).toEqual([]);
+      expect(events).toEqual(["documents"]);
+      // No arrival waits for GOA-1's next visit, and the pin is for GOA-1 only.
+      expect(takeArrivalTab("GOA-1")).toBeNull();
+      expect(takePendingDocumentKey("GOA-3")).toBeNull();
+      openEvidence({ kind: "document", ref: "GOA-1", document: "self" }, "GOA-1", () => {});
+      expect(takePendingDocumentKey("GOA-1")).toBe("self");
+    } finally {
+      globals.window = before;
+    }
+  });
+
+  it("while a task is open, the shell's notices step aside and the modal detail shows them in its own flow", () => {
+    const globals = globalThis as { localStorage?: unknown };
+    const before = globals.localStorage;
+    const stored = JSON.stringify({ since: "2000-01-01T00:00:00.000Z", seen: [] });
+    globals.localStorage = { getItem: () => stored, setItem: noop };
+    resetStopSeenForTests();
+    try {
+      const withDetail = (node: ReactElement) =>
+        renderToStaticMarkup(
+          <SessionContext.Provider value={{ ...session(), selection: { workspace: "goal", ref: refs.m! } as StapleSession["selection"] }}>
+            <RunsContext value={buildRunsState(endRuns)}>{node}</RunsContext>
+          </SessionContext.Provider>,
+        );
+      // The shell's: the live region only, nothing in it.
+      for (const placement of ["corner", "strip"] as const) {
+        const shell = withDetail(<RunStopNotices placement={placement} />);
+        expect(shell, placement).toContain(`data-run-stop-notices="${placement}"`);
+        expect(shell, placement).not.toContain("data-run-stop-notice=");
+      }
+      // The drawer's: the newest notice, in flow (no fixed positioning).
+      const drawer = withDetail(<RunStopNotices placement="drawer" />);
+      expect(drawer).toContain(`data-run-stop-notice="${refs.goalRun}"`);
+      expect(drawer).not.toContain("fixed");
+      // With no task open, the shell's shows it.
+      expect(render(<RunStopNotices placement="strip" />, endRuns)).toContain(`data-run-stop-notice="${refs.goalRun}"`);
+    } finally {
+      globals.localStorage = before;
+      resetStopSeenForTests();
+    }
+    // Mounted inside the dialog's content, so it is in the focus trap; pinned in the source.
+    const mount = readFileSync(fileURLToPath(new URL("./IssueDetailMount.tsx", import.meta.url)), "utf8");
+    const content = mount.slice(mount.indexOf("<DialogPrimitive.Content"), mount.indexOf("</DialogPrimitive.Content>"));
+    expect(content).toContain('<RunStopNotices placement="drawer" />');
+    // A press on a notice is not a press outside a dialog.
     const source = readFileSync(fileURLToPath(new URL("../components/autopilot/RunStopNotices.tsx", import.meta.url)), "utf8");
     expect(source).toContain("onPointerDown={(event) => event.stopPropagation()}");
+  });
+});
+
+describe("a stop this page made", () => {
+  it("is marked seen by Stop itself, after the stop succeeds, so it raises no notice", () => {
+    const source = readFileSync(fileURLToPath(new URL("../components/autopilot/RunParts.tsx", import.meta.url)), "utf8");
+    const stop = source.slice(source.indexOf("const stop = async"), source.indexOf("} catch (error)", source.indexOf("const stop = async")));
+    expect(stop.indexOf("await stopRun(")).toBeGreaterThan(-1);
+    expect(stop.indexOf("markStopsSeen([stopKey(entry)])")).toBeGreaterThan(stop.indexOf("await stopRun("));
+  });
+
+  it("a key marked seen in the tab's store hides that run's notice everywhere in the tab", () => {
+    const globals = globalThis as { localStorage?: unknown };
+    const before = globals.localStorage;
+    const map = new Map<string, string>([["staple:run-stops:v1", JSON.stringify({ since: "2000-01-01T00:00:00.000Z", seen: [] })]]);
+    globals.localStorage = { getItem: (key: string) => map.get(key) ?? null, setItem: (key: string, value: string) => void map.set(key, value) };
+    resetStopSeenForTests();
+    try {
+      expect(render(<RunStopNotices placement="strip" />, endRuns)).toContain(`data-run-stop-notice="${refs.goalRun}"`);
+      markStopsSeen([`goal/${refs.goalRun}`]);
+      const after = render(<RunStopNotices placement="strip" />, endRuns);
+      expect(after).not.toContain(`data-run-stop-notice="${refs.goalRun}"`);
+      expect(after).toContain(`data-run-stop-notice="${refs.flakyRun}"`);
+      expect(JSON.parse(map.get("staple:run-stops:v1")!).seen).toEqual([`goal/${refs.goalRun}`]);
+    } finally {
+      globals.localStorage = before;
+      resetStopSeenForTests();
+    }
   });
 });
