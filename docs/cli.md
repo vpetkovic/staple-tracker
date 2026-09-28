@@ -149,7 +149,7 @@ mismatch it prints ONE repair command under `REPAIRS`, derived from what
 database and where the snapshot goes. Under `--json` the reason is
 `data.code` (`database_newer_than_runtime`, `config_newer_than_runtime`,
 `selected_runtime_older_than_database`, `migration_pending`, or `null`). See
-`docs/migration.md`.
+[migration](migration.md).
 
 ## Workspace vocabulary
 

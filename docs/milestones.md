@@ -564,9 +564,10 @@ All carry `actor`; membership events carry the milestone's resulting
 - `milestone_member_added` — on the milestone: `{identifier, rank, position}`
 - `milestone_member_removed` — on the milestone: `{identifier, position}`
 - `milestone_member_moved` — on the milestone: `{identifier, fromPosition,
-  toPosition, rank}`, also used for a move between milestones, on the
-  destination, with `from` and `to` milestone identifiers; the source then
-  gets a `milestone_member_removed` carrying `movedTo`
+  toPosition, rank}`, also used for a move between milestones: the source
+  first gets a `milestone_member_removed` carrying `movedTo`, then the
+  destination gets `milestone_member_moved` with `from` and `to` milestone
+  identifiers
 - `milestone_members_reordered` — on the milestone: `{order: [identifiers]}`
 - `milestone_joined` — on the **member**: `{milestone}`, so the member's own
   timeline says when and by whom it was planned; `milestone_left` is its twin
@@ -641,8 +642,8 @@ and removal"*.)
 
 ## Worked example
 
-VP has the S epic (STA-66, twelve children, S1–S12) under the R programme
-(STA-156), and a flake ticket (STA-146) with no epic at all. They want both
+VP has an epic, S (STA-66, twelve children S1–S12), under a larger parent
+epic (STA-156), and a flake ticket (STA-146) with no epic at all. They want both
 shipped by the end of October, and S2 done before anything else in S.
 
 ```
