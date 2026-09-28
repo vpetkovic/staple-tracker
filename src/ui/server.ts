@@ -145,7 +145,7 @@ import {
   applyBudgetSetup,
   applyBudgetUnsetup,
   budgetCollectionStatus,
-  collectBudget,
+  collectBudgetNow,
   planBudgetSetup,
   planBudgetUnsetup,
   type SetupOptions,
@@ -157,9 +157,11 @@ import {
   budgetConfig,
   parseBindingSource,
   setBudgetCapture,
+  setLivePolling,
   unbindBudgetSource,
   type BindingHome,
 } from "../core/telemetry/budget-config.js";
+import { usagePollingStatus } from "../core/telemetry/polling/run.js";
 
 interface UiOptions {
   port: number;
@@ -407,6 +409,7 @@ function budgetSetupOptions(body: Record<string, unknown>): SetupOptions {
     statusline: flag("statusline"),
     watcher: flag("watcher"),
     intervalMinutes: typeof interval === "number" ? interval : undefined,
+    livePolling: flag("livePolling"),
   };
 }
 
@@ -430,7 +433,29 @@ const BUDGET_COLLECTION_WRITES = new Set([
  * turning capture on is its own confirmation; the token and the Origin check are what
  * keep a foreign page from doing it.
  */
-const BUDGET_CONFIG_WRITES = new Set(["/api/budget/capture", "/api/budget/bindings/bind", "/api/budget/bindings/unbind"]);
+const BUDGET_CONFIG_WRITES = new Set(["/api/budget/capture", "/api/budget/live", "/api/budget/bindings/bind", "/api/budget/bindings/unbind"]);
+
+/**
+ * The Usage page's Refresh: one collection now (the passive scan, then the live poll when
+ * it is on), the same `collectBudgetNow` `staple budget collect` runs. POST because it
+ * writes readings and, with live polling on, asks the bound providers.
+ *
+ * THE ONE WRITE EXEMPT FROM THE ORIGIN CHECK, on purpose. The operator's phone reaches
+ * this server through a tailnet forwarder that sends the phone's own Origin, so every
+ * other write is refused there by design. Refresh is the one the phone needs, and it is
+ * safe to accept from any page that holds the token: it takes no input at all (the body is
+ * never read), it can only do what the 5-minute schedule already does, and a provider is
+ * asked at most once a minute per account however often it is pressed (`polling/run.ts`).
+ *
+ * So the TOKEN ALONE gates it. It is accepted in any of its transports, `?token=` included,
+ * and a `?token=` POST is a simple request a page can send cross-origin without a
+ * preflight, so the Origin check is the only thing a foreign page lacks here, and this
+ * route waives it. Any page that knows the token can press Refresh; a page that does not
+ * gets 401. That is acceptable only because of what the route can do (above), and is why
+ * no other write may join it. `test/budget-refresh-http.test.ts` pins that every other
+ * write still refuses a foreign Origin.
+ */
+const BUDGET_REFRESH_ROUTE = "/api/budget/collection/refresh";
 
 /** A binding home out of a request body: `source` spelled as at the CLI, and its directory. */
 function bindingHomeOf(body: Record<string, unknown>, what: string): BindingHome {
@@ -1544,6 +1569,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           BUDGET_COLLECTION_WRITES.has(url.pathname) ||
           /** Budget capture and bindings: machine-local config writes, named in one set. */
           BUDGET_CONFIG_WRITES.has(url.pathname) ||
+          /** The Usage page's Refresh: a POST, and the one write exempt from the Origin check (below). */
+          url.pathname === BUDGET_REFRESH_ROUTE ||
           url.pathname === "/api/budget/forget"
             ? ["POST"]
             : url.pathname === "/api/settings"
@@ -1560,7 +1587,7 @@ export function startUiServer(options: UiOptions): UiHandle {
          * wherever it lands, and a GET on a read/write path is not — same guard,
          * same sentence, now stated about the request instead of about the route.
          */
-        if (req.method === "POST" && !writeAllowed(req)) {
+        if (req.method === "POST" && !writeAllowed(req) && url.pathname !== BUDGET_REFRESH_ROUTE) {
           /**
            * `detail.reason` names WHY, so the page can tell this refusal from a dead token:
            * a foreign Origin without the token header (`writeAllowed`). The app's own page
@@ -1604,6 +1631,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           !CLOUD_LIFECYCLE_WRITES.has(url.pathname) &&
           !BUDGET_COLLECTION_WRITES.has(url.pathname) &&
           !BUDGET_CONFIG_WRITES.has(url.pathname) &&
+          url.pathname !== BUDGET_REFRESH_ROUTE &&
           url.pathname !== "/api/budget/forget" &&
           // A run is machine-local and never synchronized (core/run-store.ts): nothing to send.
           !url.pathname.startsWith("/api/run/")
@@ -1630,6 +1658,21 @@ export function startUiServer(options: UiOptions): UiHandle {
        */
       if (url.pathname === "/api/budget/bindings") {
         json(res, 200, budgetConfig(stapleHome()));
+        return;
+      }
+      /**
+       * Live polling: on or off, and per bound account its last check (`staple budget live
+       * --json`). A read of config.json and the poll state file; it asks nobody.
+       */
+      if (url.pathname === "/api/budget/polling") {
+        json(res, 200, usagePollingStatus(stapleHome()));
+        return;
+      }
+      // Spelled out rather than as BUDGET_REFRESH_ROUTE so the route golden (test/contract-http.test.ts) reads it.
+      if (url.pathname === "/api/budget/collection/refresh") {
+        const home = stapleHome();
+        const result = await collectBudgetNow({ manual: true }, { home, attemptLinker: attemptLinkerFor(home) });
+        json(res, 200, { collect: result, polling: usagePollingStatus(home) });
         return;
       }
       let budgetBody: Record<string, unknown> | null = null;
@@ -1662,6 +1705,12 @@ export function startUiServer(options: UiOptions): UiHandle {
         if (url.pathname === "/api/budget/capture") {
           if (typeof body.enabled !== "boolean") throw new StapleError("validation", "enabled must be true or false (budget capture on|off).");
           json(res, 200, setBudgetCapture(home, body.enabled));
+          return;
+        }
+        /** `staple budget live on|off`: the page's toggle, which says what turning it on means before it is pressed. */
+        if (url.pathname === "/api/budget/live") {
+          if (typeof body.enabled !== "boolean") throw new StapleError("validation", "enabled must be true or false (budget live on|off).");
+          json(res, 200, setLivePolling(home, body.enabled));
           return;
         }
         if (url.pathname === "/api/budget/bindings/unbind") {
@@ -1714,7 +1763,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const home = stapleHome();
         if (url.pathname === "/api/budget/collection/collect") {
           const maxFiles = body.maxFiles === undefined ? undefined : Number(body.maxFiles);
-          json(res, 200, collectBudget({ maxFiles }, { home, attemptLinker: attemptLinkerFor(home) }));
+          json(res, 200, await collectBudgetNow({ maxFiles }, { home, attemptLinker: attemptLinkerFor(home) }));
           return;
         }
         const action =

@@ -14,14 +14,16 @@
  * broader class never gets a card of its own: the cohorts sharing a class are ONE card named for
  * the class, "Also used for" them with their own counts, and always a "Rough guess".
  *
- * ## Exact by default, older history only when asked, never pooled
+ * ## Measured history first, older history on by default, never pooled
  *
- * The page reads `GET /api/calibration` with no filter: the `exact` set, captured history. The
- * "Include older history" switch re-reads with `include=reconstructed`, and the store then
- * reports the reconstructed set BESIDE the exact one, with its own samples, coverage and cohorts.
- * The page keeps them apart the same way: the exact section first, unchanged by the switch, and the
- * reconstructed cohorts in their own section under their own heading. The switch is page state,
- * not a saved preference, so every visit opens on exact.
+ * The page reads `GET /api/calibration` for its workspace. With the "Include older history"
+ * switch on, which is the default, it reads with `include=reconstructed`, and the store then
+ * reports the reconstructed set BESIDE the exact one (captured history), with its own samples,
+ * coverage and cohorts. With the switch off it reads with no filter: the `exact` set only. The
+ * page keeps the two apart the same way: the exact section first, unchanged by the switch, and the
+ * reconstructed cohorts in their own section under their own heading. The switch is a remembered
+ * preference (older-history.ts): on until the reader turns it off, and then off on every visit
+ * and reload until they turn it back on.
  *
  * ## Rendered, never recomputed
  *
@@ -31,7 +33,7 @@
  * `CalibrationReportView` takes the payload as a prop and reads no context, so the e2e test renders
  * it from the real server's answer; `CalibrationView` is the fetch and the switch around it.
  */
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { getCalibration, type AuthError } from "@/lib/api";
 import {
   coverageText,
@@ -70,6 +72,7 @@ import { RangeBar } from "@/components/plain/RangeBar";
 import { ConfidencePill, StatusPill } from "@/components/plain/StatusPill";
 import { ChooseWorkspace } from "@/views/ChooseWorkspace";
 import { workspaceScope } from "@/views/workspace-scope";
+import { useIncludeOlderHistory } from "./older-history";
 
 const UNKNOWN = "text-muted-foreground italic";
 
@@ -402,9 +405,6 @@ export function CalibrationReportView({
   );
 }
 
-/** The switch's state on every visit: exact only. Reconstructed history is an explicit opt-in. */
-export const INCLUDE_RECONSTRUCTED_BY_DEFAULT = false;
-
 /** The page cap: the store's maximum, so a workspace's cohorts fit one read. */
 const COHORT_LIMIT = 500;
 
@@ -435,7 +435,7 @@ export function CalibrationView({ onAuthError }: { onAuthError: (error: AuthErro
 
 function WorkspaceCalibration({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
   const session = useSession();
-  const [includeReconstructed, setIncludeReconstructed] = useState(INCLUDE_RECONSTRUCTED_BY_DEFAULT);
+  const [includeReconstructed, setIncludeReconstructed] = useIncludeOlderHistory();
   const load = useCallback(
     () => getCalibration(calibrationRequest(workspace, includeReconstructed)),
     [workspace, includeReconstructed],
