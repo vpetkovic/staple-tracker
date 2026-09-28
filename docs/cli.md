@@ -52,7 +52,8 @@ staple budget ingest --source claude-statusline [--tee] [--account A]   a status
 staple budget ingest --source codex-rollout <file> [--account A]        a Codex rollout's readings
 staple budget ingest --source manual --account A --limit-key K --used P [--resets-at T]
 staple budget capture on|off | bind --source S --account A | unbind | bindings
-staple budget setup [--claude-account A] [--codex-account B] [--yes]   one consent: capture, bindings, wrapper, watcher
+staple budget setup [--claude-account A] [--codex-account B] [--live] [--yes]   one consent: capture, bindings, wrapper, watcher
+staple budget live [on|off] [--yes]                                     live polling: ask each bound provider (opt-in, network)
 staple budget unsetup [--yes] | status | collect [--max-files N]
 staple budget forget <reading-id>... [--yes]       remove wrong readings; without --yes only the preview (exit 2)
 
@@ -1188,6 +1189,9 @@ staple budget setup --claude-account personal-max --codex-account codex-plus --y
 staple budget status                                                              # sources, wrapper, watcher, problems
 staple budget collect                                                             # one watcher run, by hand
 staple budget unsetup --yes                                                       # reverse exactly what setup did
+staple budget live on                                                             # says what it would ask, changes nothing (exit 2)
+staple budget live on --yes                                                       # live polling on (or: setup ... --live --yes)
+staple budget live                                                                # on or off, and each account's last check
 ```
 
 - **`setup`** turns capture on, binds the Claude config directory
@@ -1235,6 +1239,17 @@ staple budget unsetup --yes                                                     
   failures, which is how the agent runs it. The agent's `PATH` is the node
   setup ran under, then `/opt/homebrew/bin` and `/usr/local/bin`. Off macOS, schedule it yourself:
   `*/5 * * * * ~/.local/bin/staple budget collect --quiet` (`crontab -e`).
+- **`live on|off`** is [live polling](execution-telemetry.md#live-polling):
+  with it on (and capture on), every `collect` also asks each bound provider
+  for the account's current usage, at most every 4 minutes per account, with
+  the sign-in Claude Code and Codex keep on this machine (read at call time,
+  sent only to `api.anthropic.com` or `chatgpt.com`, never stored or logged).
+  It is off by default and makes the only network call in `staple budget`.
+  `on` without `--yes` refuses with exit 2 and names the hosts it would ask;
+  `off` needs no `--yes`. `setup --live` makes it one more planned step, which
+  `unsetup` turns back off. `collect --json` reports it as `poll`: per
+  account, `stored`, `failed` (with a plain `failure.message`), `fresh`,
+  `deferred` (a 429's Retry-After), `busy` or `skipped`.
 - **`unsetup`** restores the original `statusLine` byte for byte, unloads and
   deletes the agent, and puts capture and the bindings back as they were before
   setup, unless you changed them since. Capture goes back off even if bindings

@@ -2613,6 +2613,14 @@ Disconnected, on a workspace with no `repository.json` and no credential:
 `doctor` · `migrate` · `hub ls` · an MCP `initialize` handshake plus one call of
 every mutating tool · `staple open` startup plus one authenticated API request.
 
+Budget live polling is the one call out that is not the sync service's, and it
+is outside this list on purpose: off by default, behind its own consent
+(`telemetry.livePolling`, [execution-telemetry.md](execution-telemetry.md#live-polling)),
+and when on, `staple budget collect` and the Usage page's Refresh may ask the
+bound providers' usage hosts (`api.anthropic.com`, `chatgpt.com`) and nobody
+else. With it off (the default), `budget collect` and every page route assert
+zero; with it on, the spy asserts every destination is a bound provider's host.
+
 Connected in manual mode, the same list asserts zero. Only `staple cloud sync`,
 `staple cloud connect`, `staple cloud status --refresh`, `staple cloud lease
 acquire|renew|release` and the explicitly named backup and purge commands may

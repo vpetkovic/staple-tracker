@@ -73,6 +73,8 @@ import type {
   CollectionSetupOptions,
   CollectionStatus,
   PlanConsentTicket,
+  PollingStatus,
+  RefreshResult,
 } from "./telemetry-types";
 // Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
 import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
@@ -1058,6 +1060,18 @@ export const applyBudgetCollection = (action: "setup" | "unsetup", consent: Plan
 
 /** One collect run now (`staple budget collect`). */
 export const collectBudgetNow = () => postJson<CollectResult>("/api/budget/collection/collect", {});
+
+/** `staple budget live --json`: live polling on or off, and each bound account's last check. A read; it asks nobody. */
+export const getBudgetPolling = () => request<PollingStatus>("/api/budget/polling");
+
+/**
+ * The Usage page's Refresh: one collection now, the passive scan and, when live polling is on,
+ * one check with each bound provider. The one write the server accepts from the tailnet too.
+ */
+export const refreshBudget = () => postJson<RefreshResult>("/api/budget/collection/refresh", {});
+
+/** `staple budget live on|off`. */
+export const setLivePolling = (enabled: boolean) => postJson<BudgetConfigView>("/api/budget/live", { enabled });
 
 /** `staple budget capture on|off`. */
 export const setBudgetCapture = (enabled: boolean) => postJson<BudgetConfigView>("/api/budget/capture", { enabled });

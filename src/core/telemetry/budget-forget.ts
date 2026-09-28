@@ -19,7 +19,8 @@ import { Hub } from "../hub.js";
 import { nowIso } from "../types.js";
 import { BudgetStore, type ForgetWindowChange, type LimitKey, type Missing } from "./budget-store.js";
 import { collectLogPath, rotateLog } from "./collection/codex-collect.js";
-import { limitReadingOf } from "./read-budget.js";
+import { readConfig } from "../../config/file.js";
+import { governanceOf, limitReadingOf } from "./read-budget.js";
 
 /** Which surface asked: recorded in the audit line. */
 export type ForgetSurface = "cli" | "mcp" | "http";
@@ -104,7 +105,9 @@ export function forgetBudgetSamples(request: ForgetRequest, deps: ForgetDeps): F
   const hub = Hub.openAt(deps.home);
   let result: ForgetResult;
   try {
-    const outcome = new BudgetStore(hub.db).forget(request.ids, {
+    // Read as the page reads at this instant (live polling's hold-back included), so the
+    // preview's before and after are the figures Usage shows.
+    const outcome = new BudgetStore(hub.db, governanceOf(readConfig(deps.home).config.telemetry, at)).forget(request.ids, {
       apply: request.confirm === true,
       at,
       summarize: (store, limit) => viewOf(store, limit, at),

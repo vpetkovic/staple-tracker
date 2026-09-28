@@ -21,13 +21,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { ApiError, applyBudgetCollection, bindBudgetSource, getBudgetCollection, isCrossOriginRefusal, planBudgetCollection, setBudgetCapture, unbindBudgetSource } from "@/lib/api";
+import {
+  ApiError,
+  applyBudgetCollection,
+  bindBudgetSource,
+  getBudgetCollection,
+  isCrossOriginRefusal,
+  planBudgetCollection,
+  setBudgetCapture,
+  setLivePolling,
+  unbindBudgetSource,
+} from "@/lib/api";
 import { CROSS_ORIGIN_MESSAGE, describeRefusal } from "@/lib/refusal";
 import type { KnownBinding } from "@/lib/telemetry-types";
 import { PAGE_TELEMETRY_API, TelemetryPanel, type TelemetryView } from "./TelemetrySection";
 import { createTelemetryController, type TelemetryController } from "./telemetry-controller";
 import { STALE_PLAN_WHY, confirmPlan, showPlan } from "./telemetry-flow";
-import { PRIVACY_NOTE, TELEMETRY_CATEGORY_ID, bindingHomeInput, remoteFromLocation, viewedFromAnotherDevice, withTelemetryCategory } from "./telemetry-settings";
+import { LIVE_CHECKS_NOTE, LIVE_PRIVACY_NOTE, PRIVACY_NOTE, TELEMETRY_CATEGORY_ID, bindingHomeInput, remoteFromLocation, viewedFromAnotherDevice, withTelemetryCategory } from "./telemetry-settings";
 import { CLOUD_CATEGORY } from "./cloud-settings";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { REPO_ROOT, runCliAtAsync } from "../../../../../test/fixtures/characterize-support.ts";
@@ -129,6 +139,7 @@ beforeEach(async () => {
   const status = await getBudgetCollection();
   for (const binding of status.bindings) await unbindBudgetSource(homeOf(binding));
   if (status.budgetCapture) await setBudgetCapture(false);
+  if (status.polling.livePolling) await setLivePolling(false);
   writeFileSync(SETTINGS(), ORIGINAL);
 });
 
@@ -531,6 +542,33 @@ describe("collect now", () => {
     await page.handlers.onCollect();
     expect(page.get().lastCollect?.ok).toBe(true);
     expect(text(html(page))).toContain("Checked your Codex sessions: nothing new since the last check.");
+  });
+});
+
+describe("live checks", () => {
+  it("read Off by default; turning them on first says what is sent and to whom, then reads On per linked account; off again", async () => {
+    const page = await section();
+    await setBudgetCapture(true);
+    await bindBudgetSource({ source: "codex-rollout", account: "codex-plus" });
+    await page.reload();
+    expect(visible(html(page))).toContain("Off. New readings arrive only while Claude Code or Codex is running.");
+    expect(html(page)).toContain('data-action="live-on"');
+    page.handlers.onLiveAsk();
+    expect(text(html(page))).toContain(`Turn live checks on? ${LIVE_CHECKS_NOTE}`);
+    expect((await getBudgetCollection()).polling.livePolling).toBe(false);
+    await page.handlers.onLiveConfirm();
+    const on = visible(html(page));
+    expect(on).toContain("Every 5 minutes staple asks Claude and Codex how much of your plan is left.");
+    expect(on).toContain("Live checks are on. The next check runs within 5 minutes");
+    expect(on).toContain("asks chatgpt.com");
+    expect(on).toContain("not checked yet");
+    // The privacy line no longer says nothing is sent.
+    expect(on).toContain(LIVE_PRIVACY_NOTE);
+    expect(on).not.toContain(PRIVACY_NOTE);
+    page.handlers.onLiveAsk();
+    await page.handlers.onLiveConfirm();
+    expect((await getBudgetCollection()).polling.livePolling).toBe(false);
+    expect(visible(html(page))).toContain("Live checks are off. Readings already saved are kept.");
   });
 });
 
