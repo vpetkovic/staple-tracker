@@ -439,10 +439,14 @@ const BUDGET_CONFIG_WRITES = new Set(["/api/budget/capture", "/api/budget/live",
  * safe to accept from any page that holds the token: it takes no input at all (the body is
  * never read), it can only do what the 5-minute schedule already does, and a provider is
  * asked at most once a minute per account however often it is pressed (`polling/run.ts`).
- * The token still gates it, and the token's load-bearing transport is a custom header a
- * foreign page cannot send without a CORS preflight this server never answers.
- * `test/budget-refresh-http.test.ts` pins that every other write still refuses a foreign
- * Origin.
+ *
+ * So the TOKEN ALONE gates it. It is accepted in any of its transports, `?token=` included,
+ * and a `?token=` POST is a simple request a page can send cross-origin without a
+ * preflight, so the Origin check is the only thing a foreign page lacks here, and this
+ * route waives it. Any page that knows the token can press Refresh; a page that does not
+ * gets 401. That is acceptable only because of what the route can do (above), and is why
+ * no other write may join it. `test/budget-refresh-http.test.ts` pins that every other
+ * write still refuses a foreign Origin.
  */
 const BUDGET_REFRESH_ROUTE = "/api/budget/collection/refresh";
 
