@@ -59,6 +59,7 @@ import {
 import { InlineKind, InlineLabels, InlinePriority, InlineProject, InlineTitle } from "./InlineProperties";
 import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout } from "./PropertyGrid";
 import { PersonChip, RelativeTime } from "./parts";
+import { MilestoneCrumb, MilestoneDue, MilestoneSentence, MilestoneValue, OpenPlanAction, opensPlan, planOf } from "./MilestoneParts";
 import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
 import { detailFacts } from "./properties";
 import {
@@ -187,8 +188,14 @@ export function IssueDetailPanel({
           {/* A refusal from the bottom bar or the top bar's ⋯ shows here, next to the thumb
               that caused it, never at the top of a long scroll. */}
           <ActionRefusal controller={controller} className="max-h-[40vh] overflow-y-auto" />
-          <PrimaryReason detail={detail} controller={controller} />
-          <PrimaryAction detail={detail} controller={controller} onReview={reviewGate} size="lg" className="w-full" />
+          {opensPlan(detail) ? (
+            <OpenPlanAction workspace={detail.workspace} identifier={detail.issue.identifier} size="lg" className="w-full" />
+          ) : (
+            <>
+              <PrimaryReason detail={detail} controller={controller} />
+              <PrimaryAction detail={detail} controller={controller} onReview={reviewGate} size="lg" className="w-full" />
+            </>
+          )}
         </div>
       ) : null}
     </aside>
@@ -315,8 +322,16 @@ function DetailBar({
 function Breadcrumb({ selection, detail, className }: { selection: Selection; detail: IssueDetail | undefined; className?: string }) {
   const session = useSession();
   const ancestors = detail?.ancestors ?? [];
+  const milestone = detail?.milestone ?? null;
   return (
     <nav aria-label="Ancestry" className={cn("flex min-w-0 items-center gap-1 text-label text-text-tertiary", className)} data-detail-breadcrumb="">
+      {/* Membership is not a parent, but it is where this work sits: the plan comes first. */}
+      {milestone && detail ? (
+        <span className="flex min-w-0 items-center gap-1">
+          <MilestoneCrumb milestone={milestone} workspace={detail.workspace} />
+          <ChevronRight aria-hidden className="size-3.5 shrink-0" />
+        </span>
+      ) : null}
       {ancestors.map((ancestor) => (
         <span key={ancestor.id} className="flex min-w-0 items-center gap-1">
           <button
@@ -446,7 +461,8 @@ export function DetailContent({
         <StatusLine detail={detail} controller={controller} withPill={!sheet} onRequestApproval={onRequestApproval} className="mt-3">
           {sheet ? null : (
             <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
-              <PrimaryAction detail={detail} controller={controller} onReview={onReview} />
+              {/* A milestone is a plan, not work: nobody starts it; its plan is edited on its page. */}
+              {opensPlan(detail) ? <OpenPlanAction workspace={detail.workspace} identifier={issue.identifier} /> : <PrimaryAction detail={detail} controller={controller} onReview={onReview} />}
               <OverflowMenu detail={detail} controller={controller} onRequestApproval={onRequestApproval} />
             </div>
           )}
@@ -512,6 +528,7 @@ function StatusLine({
   className?: string;
   children?: ReactNode;
 }) {
+  const plan = planOf(detail);
   const ctx = contextOf(detail, controller);
   const queuedAncestor = detail.queuedBy ? detail.ancestors.find((a) => a.identifier === detail.queuedBy!.identifier) : undefined;
   const sentence = statusSentence(
@@ -535,12 +552,13 @@ function StatusLine({
       <p
         data-status-sentence=""
         data-tone={sentence.tone}
-        className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary wrap-anywhere", sentence.tone === "attention" && "text-foreground")}
+        className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary wrap-anywhere", !plan && sentence.tone === "attention" && "text-foreground")}
       >
-        {sentence.lead ? <span>{sentence.lead}</span> : null}
-        {sentence.person ? <PersonChip name={sentence.person.name} kind={sentence.person.kind} className="max-w-full font-medium" /> : null}
-        {sentence.tail ? <span>{sentence.tail}</span> : null}
-        {sentence.at ? (
+        {plan ? <MilestoneSentence plan={plan} /> : null}
+        {!plan && sentence.lead ? <span>{sentence.lead}</span> : null}
+        {!plan && sentence.person ? <PersonChip name={sentence.person.name} kind={sentence.person.kind} className="max-w-full font-medium" /> : null}
+        {!plan && sentence.tail ? <span>{sentence.tail}</span> : null}
+        {!plan && sentence.at ? (
           <>
             <span aria-hidden className="text-text-tertiary">
               ·
@@ -581,6 +599,7 @@ function Properties({
 }) {
   const { issue, workspace } = detail;
   const editor = { issue, workspace, refresh };
+  const plan = planOf(detail);
 
   return (
     <div className="flex flex-col gap-3">
@@ -601,6 +620,23 @@ function Properties({
         <PropertyRow label="Project">
           <InlineProject {...editor} />
         </PropertyRow>
+        {detail.milestone ? (
+          <PropertyRow label="Milestone">
+            <MilestoneValue milestone={detail.milestone} workspace={workspace} />
+          </PropertyRow>
+        ) : null}
+        {plan ? (
+          <>
+            <PropertyRow label="Due">
+              <MilestoneDue plan={plan} />
+            </PropertyRow>
+            {plan.milestone.startDate ? (
+              <PropertyRow label="Starts">
+                <span>{plan.milestone.startDate}</span>
+              </PropertyRow>
+            ) : null}
+          </>
+        ) : null}
         {issue.startedAt ? (
           <PropertyRow label="Started">
             <RelativeTime iso={issue.startedAt} inSentence />

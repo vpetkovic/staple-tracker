@@ -129,6 +129,20 @@ interface QueueFacts {
   nextOf: ReadonlyMap<string, { identifier: string; position: number }>;
 }
 
+/**
+ * Which milestone an issue belongs to, for a detail view: its own direct membership,
+ * else the nearest ancestor's. `via` names that ancestor, so a view can say why an
+ * issue that was never added still counts toward the plan; null for a direct member.
+ */
+export interface EffectiveMilestone {
+  id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  targetDate: string | null;
+  via: { identifier: string; title: string } | null;
+}
+
 /** A `milestone ls` row: the view without its members, plus how many there are. */
 export type MilestoneListRow = Omit<MilestoneView, "members"> & { memberCount: number };
 
@@ -659,6 +673,30 @@ export class MilestoneStore {
         nullsLast(a.milestone.targetDate, b.milestone.targetDate) ||
         number(a.milestone.identifier) - number(b.milestone.identifier),
     );
+  }
+
+  /** `milestoneOf` with the names a detail view prints; see `EffectiveMilestone`. */
+  effectiveMilestone(ref: string): EffectiveMilestone | null {
+    const issue = this.requireIssue(ref, false);
+    const titled = (id: string) =>
+      this.db.prepare("SELECT identifier, title FROM issues WHERE id = ?").get(id) as {
+        identifier: string;
+        title: string;
+      };
+    for (const id of [issue.id, ...this.ancestorIds(issue.id)]) {
+      const membership = this.membershipOf(id);
+      if (!membership) continue;
+      const milestone = this.store.getIssue(membership.milestone_id);
+      return {
+        id: membership.milestone_id,
+        identifier: milestone.identifier,
+        title: milestone.title,
+        status: milestone.status,
+        targetDate: this.meta(membership.milestone_id)?.target_date ?? null,
+        via: id === issue.id ? null : titled(id),
+      };
+    }
+    return null;
   }
 
   /** The effective milestone of an issue: its own direct membership, else the nearest ancestor's. */

@@ -456,8 +456,10 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
   const waitingOn = [...detail.blockedBy].sort(
     (a, b) => Number(isResolvedStatus(a.status)) - Number(isResolvedStatus(b.status)),
   );
+  const milestone = detail.milestone ?? null;
   const nothing =
     !parent &&
+    !milestone &&
     detail.children.length === 0 &&
     detail.blockedBy.length === 0 &&
     detail.blocks.length === 0 &&
@@ -477,14 +479,27 @@ export function RelationsTab({ detail, workspace, onAuthError }: TabProps) {
     <div className="w-full max-w-readable space-y-5">
       <Summary detail={detail} graph={resource.data} />
 
-      {parent ? (
+      {parent || milestone ? (
         <Group title="Part of">
-          <TaskRow
-            identifier={parent.identifier}
-            title={parent.title}
-            status={parent.status}
-            onOpen={() => open(parent.identifier, detail.workspace)}
-          />
+          {/* The plan first, as the breadcrumb reads: membership is not a parent, but it is
+              the larger thing this work belongs to. */}
+          {milestone ? (
+            <TaskRow
+              identifier={milestone.identifier}
+              title={milestone.title}
+              status={milestone.status}
+              note={milestone.via ? `Milestone, via ${milestone.via.title}` : "Milestone"}
+              onOpen={() => open(milestone.identifier, detail.workspace)}
+            />
+          ) : null}
+          {parent ? (
+            <TaskRow
+              identifier={parent.identifier}
+              title={parent.title}
+              status={parent.status}
+              onOpen={() => open(parent.identifier, detail.workspace)}
+            />
+          ) : null}
         </Group>
       ) : null}
 

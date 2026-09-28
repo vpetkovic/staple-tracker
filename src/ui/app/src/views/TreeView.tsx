@@ -52,6 +52,7 @@ import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
 import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
+import { placeUnderMilestones } from "./tree/milestone-placement";
 import { useSession } from "@/lib/session";
 import type { InboxRow, IssueStatus, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
@@ -409,8 +410,13 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
    * page whose queue has not landed) pays nothing and re-renders nothing.
    */
   const all = useMemo(
-    () => attachRowCues(session.issues.data ?? [], cueIndex),
-    [session.issues.data, cueIndex],
+    // Then milestones become the top of the tree — see views/tree/milestone-placement.ts —
+    // except when grouped by epic, whose axis IS the epics a milestone would fold together.
+    () => {
+      const cued = attachRowCues(session.issues.data ?? [], cueIndex);
+      return groupBy === "parent" ? cued : placeUnderMilestones(cued);
+    },
+    [session.issues.data, cueIndex, groupBy],
   );
   /*
    * R4b (STA-187). `applyFilterDimensions` is `applyFilters` plus the three dimensions that

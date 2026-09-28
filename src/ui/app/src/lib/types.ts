@@ -838,6 +838,12 @@ export interface IssueRow {
    */
   deps?: IssueDeps;
   /**
+   * The issue id of the milestone this row is a DIRECT member of, or null. Membership is a
+   * relation, not a parent link, so `issue.parentId` never carries it; the list reads this to
+   * nest a parentless member under its milestone. Optional for the reason `deps` is.
+   */
+  milestoneId?: string | null;
+  /**
    * Linked pull requests, newest-first. OPTIONAL and absent today — see `PullRequestRef`.
    *
    * A SIBLING of `issue` rather than a field on it, for the same reason `claim` is one:
@@ -1021,6 +1027,23 @@ export interface IssueDetail {
    * own route — the same line `deps` draws on `/api/issues`.
    */
   childrenQueued: GateQueueEntry[];
+  /**
+   * The milestone this issue counts toward: its own membership, else the nearest
+   * ancestor's, which `via` then names. Optional on the type so fixtures need not care.
+   */
+  milestone?: EffectiveMilestone | null;
+  /** On a milestone's own detail: its plan (dates, state, progress, members). Else null. */
+  milestonePlan?: MilestoneView | null;
+}
+
+/** Mirror of `EffectiveMilestone` in src/core/milestone-store.ts. */
+export interface EffectiveMilestone {
+  id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  targetDate: string | null;
+  via: { identifier: string; title: string } | null;
 }
 
 /**
