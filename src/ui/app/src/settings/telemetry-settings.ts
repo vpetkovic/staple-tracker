@@ -78,6 +78,21 @@ export const PRIVACY_NOTE =
   "Readings stay on this computer; nothing is sent anywhere. Only the percentages your Claude and Codex plans report are kept, " +
   "never what you or your agents typed.";
 
+/** The privacy line once live checks are on: the one thing that is sent, and to whom. */
+export const LIVE_PRIVACY_NOTE =
+  "Readings stay on this computer. With live checks on, staple asks Anthropic and OpenAI for your plan usage with the sign-in already " +
+  "on this computer, and nothing else is sent. Only the percentages are kept, never what you or your agents typed.";
+
+/** What turning live checks on means, said before it is pressed (a network consent). */
+export const LIVE_CHECKS_NOTE =
+  "With live checks on, every 5 minutes staple asks Anthropic and OpenAI how much of each linked plan is left, using the sign-in " +
+  "Claude Code and Codex already keep on this computer. The sign-in is read only to ask, sent only to them, and never saved, " +
+  "logged or renewed by staple. Nothing else is sent.";
+
+export const LIVE_CHECKS_HELP =
+  "Without live checks, a new reading arrives only while Claude Code's status line or a Codex session is running, so the Usage page " +
+  "can be hours old. Live checks ask the providers directly, the same way Claude Code's /usage and Codex's /status do.";
+
 export const WHAT_THIS_MEANS =
   "Claude and Codex plans have limits that reset every few hours and every week. When usage tracking is on, staple writes down " +
   "how much of each limit is left, so it can tell how much work fits before a limit runs out. An account link tells staple which " +
@@ -394,6 +409,10 @@ function setupStepText(step: PlanStep, options: CollectionSetupOptions): string 
       if (step.action === "unchanged") return "Your Codex sessions are already checked in the background.";
       if (step.action === "refuse") return "The background check can't be installed (see details), so nothing will be done.";
       return "Codex sessions won't be checked in the background (see details); Collect now still works.";
+    case "live_polling":
+      return step.action === "change"
+        ? "Ask Claude and Codex for your current usage on each check, with the sign-in they already keep on this computer (never stored)."
+        : "Live checks with Claude and Codex are already on.";
     case "record":
       return "Keep a note of what was changed, so it can be undone.";
   }
@@ -416,6 +435,8 @@ function unsetupStepText(step: PlanStep): string {
     }
     case "capture":
       return step.action === "change" ? "Turn usage tracking off, as it was before. Readings already saved are kept." : "Usage tracking stays as it is.";
+    case "live_polling":
+      return "Stop asking Claude and Codex for your usage, as before. Readings already saved are kept.";
     case "record":
       return step.action === "change" ? "Delete staple's note of what was changed." : "There is no note of an earlier setup, so account links and tracking are left as they are.";
   }

@@ -181,7 +181,7 @@ export function remainingText(limit: BudgetLimitReading): { value: string | null
   return { value: null, absent: reason ? `Unknown: ${reason}` : "Unknown" };
 }
 
-/** How the reading arrived: `status line`, `Codex rollout`, `typed by hand`. */
+/** How the reading arrived: `status line`, `Codex rollout`, `typed by hand`, `live check`. */
 export function sourceText(kind: string): string {
-  return ({ claude_code_statusline: "status line", codex_rollout: "Codex rollout", operator_manual: "typed by hand" } as Record<string, string>)[kind] ?? kind.replace(/_/g, " ");
+  return ({ claude_code_statusline: "status line", codex_rollout: "Codex rollout", operator_manual: "typed by hand", usage_poll: "live check" } as Record<string, string>)[kind] ?? kind.replace(/_/g, " ");
 }
