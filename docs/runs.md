@@ -320,7 +320,8 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   outlives its driver unnamed. In a container, run the driver under an init
   (`docker run --init`, or tini): as PID 1 the driver does not reap the
   session's orphaned children, their zombies keep the group "running" until
-  each grace runs out, and every stop takes about ten seconds instead of five.
+  each grace runs out, and a stop can take up to ten seconds even when the
+  session ended at once.
 - **The brief** tells a session that knows nothing: the ticket and how to read
   it; that it is already checked out (do not check out, release or take
   anything else, do not call `run` commands); to put the work on a branch,
