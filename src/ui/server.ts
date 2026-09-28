@@ -33,6 +33,7 @@ import type { QueueVerb } from "../core/queue-store.js";
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
+import { MILESTONE_KIND } from "../core/milestones.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
 import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
@@ -894,6 +895,16 @@ export function startUiServer(options: UiOptions): UiHandle {
      * `gateQueueOf` is written on top of the very walk `queuedByFor` runs.
      */
     const childrenQueued = handle.store.gateQueueOf(context.issue.id);
+    const milestones = handle.store.milestones();
+    // By id, never by number (a device holding two prefixes refuses a foreign number), and
+    // a milestone read that fails costs the detail its milestone, not the whole detail.
+    const orNull = <T,>(read: () => T): T | null => {
+      try {
+        return read();
+      } catch {
+        return null;
+      }
+    };
     return {
       workspace: handle.slug,
       ...context,
@@ -908,6 +919,15 @@ export function startUiServer(options: UiOptions): UiHandle {
       attempts: handle.store.attemptSummary(context.issue.id),
       orchestration: handle.store.orchestrationSummary(context.issue.id),
       planSummary: handle.store.planSummary(context.issue.id),
+      /**
+       * Membership is a relation, not hierarchy, so `ancestors` never shows it. The
+       * detail names the milestone an issue counts toward (its own, else the nearest
+       * ancestor's, with that ancestor as `via`), and a milestone's own detail carries
+       * its plan: dates, state, progress and ordered members. UI-only, like
+       * `childrenQueued`; `/api/agent-context` stays pinned to get_task.
+       */
+      milestone: orNull(() => milestones.effectiveMilestone(context.issue.id)),
+      milestonePlan: context.issue.kind === MILESTONE_KIND ? orNull(() => milestones.get(context.issue.id)) : null,
     };
   }
 
@@ -3720,6 +3740,9 @@ export function startUiServer(options: UiOptions): UiHandle {
            */
           const gates = h.store.gateFor(ids);
           const queuedBy = h.store.queuedByFor(ids);
+          // The direct milestone of each member, one query for the page: the list nests a
+          // parentless member under its milestone, and membership is not a parent link.
+          const milestoneOf = h.store.milestones().queueSeam().milestoneOf;
           return issues.map((issue) => ({
             workspace: h.slug,
             issue,
@@ -3734,6 +3757,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               blockedBy: blockedBy.get(issue.id) ?? [],
               blocks: blocks.get(issue.id) ?? [],
             },
+            milestoneId: milestoneOf.get(issue.id) ?? null,
           }));
         });
         json(res, 200, out);

@@ -310,6 +310,10 @@ describe("read shapes", () => {
       orchestration: noOrchestrationGolden(),
       // The certified plan, from the store method get_task spreads too: null for a leaf.
       planSummary: null,
+      // Milestone membership, UI-only like childrenQueued: CON-1 belongs to no milestone
+      // and is not one, so both are null.
+      milestone: null,
+      milestonePlan: null,
     });
   });
 
