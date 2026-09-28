@@ -10,6 +10,9 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { listConflicts } from "../src/core/cloud/conflicts.js";
+import { performDisconnect } from "../src/core/cloud/connect.js";
+import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
+import { beginBootstrap } from "../src/core/cloud/sync-state.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
@@ -101,5 +104,62 @@ describe("the milestone repair on a synchronized workspace", () => {
     await sync(b, a);
     expect(status(b, m)).toBe("in_progress");
     expect([statusChanges(a, m) - before[0]!, statusChanges(b, m) - before[1]!]).toEqual([1, 1]);
+  });
+
+  it("repairs at a write once the workspace is disconnected, though it keeps its cursor", async () => {
+    const { b, m } = await staleFleet();
+    upgrade(b);
+    b.use();
+    expect(performDisconnect(b.home, REPO)).toMatchObject({ wasConnected: true, recordRemoved: true });
+    expect(b.db.prepare("SELECT cursor FROM sync_state WHERE id = 1").get()).not.toEqual({ cursor: null });
+    // No sync will run here again: the write is the repair's only door.
+    b.store.addComment(m, "after disconnecting", "b");
+    expect(status(b, m)).toBe("in_progress");
+    expect(b.db.prepare("SELECT value FROM meta WHERE key = ?").get(STAMP)).toBeDefined();
+  });
+
+  it("repairs after a reconcile, from the members the reconcile leaves", async () => {
+    const { a, b, m, t } = await staleFleet();
+    const server = fleet!.server;
+    a.use();
+    a.store.updateIssue(t, { status: "in_review" }, "a");
+    a.store.updateIssue(m, { status: "backlog" }, "a");
+    await sync(a, b);
+    a.use();
+    await setBackupConsent(a.home, REPO, true, { fetchImpl: server.fetch });
+    const backup = await createBackup(a.home, REPO, null, { fetchImpl: server.fetch });
+
+    // After the backup, work starts on a child of M the backup never saw.
+    a.use();
+    const child = a.store.createIssue({ title: "after the backup", parent: m }).id;
+    a.store.updateIssue(child, { assignee: "a" }, "a");
+    a.store.updateIssue(child, { status: "in_progress" }, "a");
+    await sync(a, b);
+
+    // The restore; b follows it on a build that did not rewind, and keeps the child.
+    a.use();
+    await restoreFromBackup(a.db, a.home, REPO, backup.backupId, { fetchImpl: server.fetch });
+    await sync(a);
+    const reconciled = (b.db.prepare("SELECT value FROM meta WHERE key = 'sync_reconciled_epoch'").get() as { value: string } | undefined)?.value ?? null;
+    const setReconciled = (value: string | null): void => {
+      if (value === null) b.db.prepare("DELETE FROM meta WHERE key = 'sync_reconciled_epoch'").run();
+      else b.db.prepare("INSERT INTO meta (key, value) VALUES ('sync_reconciled_epoch', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(value);
+    };
+    beginBootstrap(b.db, server.epoch);
+    b.db.prepare("DELETE FROM meta WHERE key = 'sync_rewind'").run();
+    setReconciled(String(server.epoch));
+    await sync(b);
+    setReconciled(reconciled);
+    expect(b.db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(child)).toBeDefined();
+    expect(status(b, m)).toBe("backlog");
+
+    // b upgrades: its sync reconciles away the child, then repairs from T alone.
+    upgrade(b);
+    await sync(b, a, b);
+    const fresh = fleet!.machine("fresh");
+    await sync(fresh);
+    expect([status(a, m), status(b, m), status(fresh, m)]).toEqual(["in_review", "in_review", "in_review"]);
+    const want = stateOf(fresh.db);
+    expect([...differences("a", want, stateOf(a.db)), ...differences("b", want, stateOf(b.db))]).toEqual([]);
   });
 });

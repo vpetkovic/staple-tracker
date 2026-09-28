@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { EVENT_ORDER, insertEvent } from "./event-log.js";
 import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
+import { connectionPath } from "./cloud/connection.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
 import { type Journal, journalFor, resolveDeviceId } from "./journal.js";
@@ -3126,14 +3128,25 @@ export class WorkspaceStore {
     return members !== undefined;
   }
 
-  /** This workspace has synchronized: it holds a cursor, or an epoch past the first. */
+  /**
+   * A sync will run here: this machine holds a connection to the repository the workspace
+   * names — the record `staple cloud connect` writes and `disconnect` removes, which is what
+   * a sync itself needs. Not `sync_state`: a disconnect keeps the cursor for a later
+   * re-connect, and a copy of a synchronized database keeps it too, and neither syncs again.
+   */
   private synchronizes(): boolean {
     // A database a store was opened on before its migrations ran has no sync state at all.
     if (!this.db.prepare("SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = 'sync_state'").get()) return false;
-    const state = this.db.prepare("SELECT epoch, cursor FROM sync_state WHERE id = 1").get() as
-      | { epoch: number; cursor: string | null }
+    const state = this.db.prepare("SELECT repository_id FROM sync_state WHERE id = 1").get() as
+      | { repository_id: string | null }
       | undefined;
-    return state !== undefined && (state.cursor !== null || state.epoch > 0);
+    if (!state?.repository_id) return false;
+    try {
+      return existsSync(connectionPath(stapleHome(), state.repository_id));
+    } catch {
+      // A home that cannot be read cannot sync either.
+      return false;
+    }
   }
 
   /**

@@ -639,14 +639,6 @@ export async function syncRepository(
    */
   noteServiceOrphanReasons(db, capabilities);
   writeOwnOrphanEnds(db, journal);
-  /**
-   * And the one-shot milestone repair an upgrade owes (`rederiveMilestonesAfterPull`): here,
-   * with the members every other device holds, and never at a write before the pull — a
-   * device that last reached the head a week ago would re-derive from a week-old member and
-   * push the regression. Before the second push, so it goes out in this sync, after any
-   * repair a device that synchronized first has already sent.
-   */
-  rederiveMilestonesAfterPull(db);
 
   /**
    * What the pull made this device owe goes out in the same sync.
@@ -671,6 +663,16 @@ export async function syncRepository(
     const ledger = catchUpOwed ? `applier-${APPLIER_VERSION}` : `reconcile-${requireSyncState(db).epoch}`;
     caughtUp = (await recoverFromSnapshot(db, journal, session, capabilities, options, ledger)).bootstrap;
   }
+  /**
+   * And the one-shot milestone repair an upgrade owes (`rederiveMilestonesAfterPull`): here,
+   * with the members every other device holds, and never at a write before the pull — a
+   * device that last reached the head a week ago would re-derive from a week-old member and
+   * push the regression. After the catch-up and the reconcile, not before: a reconcile owed
+   * rewinds members the repair would otherwise read. Sent in this sync, after any repair a
+   * device that synchronized first has already sent.
+   */
+  rederiveMilestonesAfterPull(db);
+  if (pendingCount(db) > 0) await pushAll();
   /**
    * Recorded only when what this database holds came through the fold this applier needs.
    * A snapshot from the older one — hydrated from, joined on, or re-read — leaves it owed,
