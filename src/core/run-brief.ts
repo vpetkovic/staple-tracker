@@ -24,6 +24,8 @@ export interface BriefInput {
   finish: DriveFinish;
   /** Extra instructions from `--instructions <file>`: this repository's gates, conventions. */
   instructions: string | null;
+  /** An earlier session worked this ticket and ended without finishing it. */
+  resumed?: boolean;
 }
 
 /** The branch a ticket's work goes on. Sessions run one after another in one checkout, so each branches off the last: a stack. */
@@ -40,8 +42,14 @@ export function buildBrief(input: BriefInput): string {
   const extra = input.instructions?.trim()
     ? `\n## This repository's instructions\n\n${input.instructions.trim()}\n`
     : "";
+  const resumed =
+    input.resumed === true
+      ? `
+RESUMING: an earlier session worked ${input.ref} and ended without finishing it. Read its comments, plan and worklog first, check ${branch} for what it already did, and carry on from there rather than starting over. A review recorded before this session does not count: post a fresh one (step 5).
+`
+      : "";
   return `You are one fresh session of a staple autopilot run. Work exactly ONE ticket, ${input.ref}, to a finished, evidenced state, then end your session.
-
+${resumed}
 Ticket:    ${input.ref} "${input.title}"
 Workspace: ${input.workspace}
 Database:  ${input.db}

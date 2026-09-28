@@ -15,12 +15,15 @@
  *   - The driver's code runs no git and names no merge; the brief forbids merging and puts
  *     the adversarial review before the finish.
  */
-import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { hostname } from "node:os";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildBrief } from "../src/core/run-brief.js";
 import { DRIVE_PROVIDERS, PLACEHOLDERS, type PlaceholderValues, sessionCommand } from "../src/core/run-driver.js";
+import { mainLineMoves, mainLineSnapshot } from "../src/core/main-line-guard.js";
+import { openWorkspace } from "../src/core/open.js";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, runCliAtAsync, tempDir } from "./fixtures/characterize-support.js";
 import { startMcpClient, toolPayload } from "./fixtures/contract-support.js";
 
@@ -29,14 +32,28 @@ const ACTOR = "drive-bot";
 let home: string;
 const cleanup: string[] = [];
 /** Drivers started in the background: a failing test must not leave one running. */
-const drivers: ChildProcess[] = [];
+const drivers: Array<{ child: ChildProcess; out: () => string }> = [];
 
 beforeAll(() => {
   home = tempDir("run-drive-home");
 });
 
 afterAll(() => {
-  for (const child of drivers) if (child.exitCode === null) child.kill("SIGKILL");
+  // tsx runs the driver as its own child, and the driver's sessions lead their own groups:
+  // kill each by the pids the driver reported, not only the wrapper.
+  for (const { child, out } of drivers) {
+    for (const event of lines(out())) {
+      for (const pid of [event.event === "attached" ? Number(event.pid) : null, event.event === "session_started" ? -Number(event.pid) : null]) {
+        if (pid === null) continue;
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
   for (const dir of cleanup) removeDir(dir);
   removeDir(home);
 });
@@ -86,6 +103,37 @@ async function showIssue(dir: string, ref: string): Promise<Record<string, any>>
   return (JSON.parse(shown.stdout) as { issue: Record<string, any> }).issue;
 }
 
+/** The one file in `dir` named `<prefix>-<instant>.<suffix>`. */
+function sessionFile(dir: string, prefix: string, suffix: string): string {
+  const found = readdirSync(dir).filter((name) => name.startsWith(`${prefix}-`) && name.endsWith(suffix));
+  expect(found, `${prefix}*${suffix} in ${dir}`).toHaveLength(1);
+  return join(dir, found[0]!);
+}
+
+/** `run drive` as a background child, its stdout collected. */
+function startDriver(dir: string, args: string[]): { child: ChildProcess; out: () => string; err: () => string; exited: Promise<number | null> } {
+  const child = spawn(process.execPath, [TSX_CLI, CLI_ENTRY, "run", "drive", ...args, "--json"], {
+    cwd: dir,
+    env: bareEnv(env()),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  drivers.push({ child, out: () => stdout });
+  child.stdout!.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+  child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+  const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+  return { child, out: () => stdout, err: () => stderr, exited };
+}
+
+async function until(check: () => boolean, ms = 15_000): Promise<void> {
+  for (const end = Date.now() + ms; !check() && Date.now() < end; ) await new Promise((r) => setTimeout(r, 50));
+}
+
+function readPids(dir: string, ref: string): { session: number; grandchild: number } {
+  return JSON.parse(readFileSync(join(dir, `${ref}.pids`), "utf8")) as { session: number; grandchild: number };
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -120,14 +168,14 @@ describe("run drive, end to end", () => {
     const logDir = join(dir, ".staple", "runs", runId);
     expect(String(attached.logDir)).toBe(logDir);
     expect(readFileSync(join(dir, ".staple", "runs", ".gitignore"), "utf8")).toMatch(/^\*$/m);
-    const first = JSON.parse(readFileSync(join(logDir, `001-${refs[0]}.stdout.log`), "utf8").split("\n")[0]!) as Record<string, any>;
+    const first = JSON.parse(readFileSync(sessionFile(logDir, `001-${refs[0]}`, ".stdout.log"), "utf8").split("\n")[0]!) as Record<string, any>;
     expect(first).toMatchObject({
       ref: refs[0],
       briefExists: true,
       cwd: dir,
       env: { STAPLE_AGENT: ACTOR, STAPLE_DB: join(dir, ".staple", "staple.db"), STAPLE_RUN: runId, STAPLE_RUN_TICKET: refs[0] },
     });
-    expect(readFileSync(join(logDir, `002-${refs[1]}.brief.md`), "utf8")).toContain(`ONE ticket, ${refs[1]}`);
+    expect(readFileSync(sessionFile(logDir, `002-${refs[1]}`, ".brief.md"), "utf8")).toContain(`ONE ticket, ${refs[1]}`);
   }, 120_000);
 });
 
@@ -158,12 +206,27 @@ describe("run drive outcomes", () => {
 
   it("a ticket handed on without its review comment is failed as no_review", async () => {
     const { dir } = await workspace(["skips review"]);
-    const drove = await cli(dir, ["run", "drive", "--scope", "queue", ...fake("unreviewed"), "--max-tickets", "1", "--retry-after", "0", "--poll", "0.2", "--json"]);
+    const drove = await cli(dir, ["run", "drive", "--scope", "queue", ...fake("unreviewed"), "--max-tickets", "1", "--retry-after", "0.2", "--poll", "0.2", "--json"]);
     expect(drove.status, drove.stderr).toBe(0);
     const events = lines(drove.stdout);
     const ended = events.filter((e) => e.event === "session_ended");
     expect(ended[0]).toMatchObject({ outcome: "failed" });
     expect(String(ended[0]!.reason)).toMatch(/^no_review: /);
+  }, 60_000);
+
+  it("the review is found however many comments came before the session", async () => {
+    const { dir, refs } = await workspace(["long history"]);
+    const opened = openWorkspace(join(dir, ".staple", "staple.db"));
+    try {
+      opened.store.journaled(() => {
+        for (let i = 0; i < 1001; i++) opened.store.addComment(refs[0]!, `note ${i}`, "vp");
+      });
+    } finally {
+      opened.store.db.close();
+    }
+    const drove = await cli(dir, ["run", "drive", "--scope", "queue", "--max-tickets", "1", ...fake("review"), "--poll", "0.2", "--json"]);
+    expect(drove.status, drove.stderr).toBe(0);
+    expect(lines(drove.stdout).find((e) => e.event === "session_ended")).toMatchObject({ outcome: null, reason: null });
   }, 60_000);
 
   it("a session past --ticket-timeout is ended and failed", async () => {
@@ -186,24 +249,14 @@ describe("run drive outcomes", () => {
 describe("run stop mid-ticket", () => {
   it("kills the session's process group, releases the ticket as failed stopped_by_human, and the driver exits 0", async () => {
     const { dir, refs } = await workspace(["long job"]);
-    const child = spawn(process.execPath, [TSX_CLI, CLI_ENTRY, "run", "drive", "--scope", "queue", ...fake("sleep"), "--poll", "0.2", "--json"], {
-      cwd: dir,
-      env: bareEnv(env()),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    drivers.push(child);
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+    const { out, err, exited } = startDriver(dir, ["--scope", "queue", ...fake("sleep"), "--poll", "0.2"]);
 
     const pidsFile = join(dir, `${refs[0]}.pids`);
     for (let i = 0; i < 150 && !existsSync(pidsFile); i++) await new Promise((r) => setTimeout(r, 100));
-    expect(existsSync(pidsFile), stderr).toBe(true);
+    expect(existsSync(pidsFile), err()).toBe(true);
     const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { session: number; grandchild: number };
-    const runId = String(lines(stdout)[0]!.runId);
-    const driverPid = Number(lines(stdout)[0]!.pid); // the node process tsx starts, not tsx itself
+    const runId = String(lines(out())[0]!.runId);
+    const driverPid = Number(lines(out())[0]!.pid); // the node process tsx starts, not tsx itself
 
     // While the session works, run status shows the driver attached, on this ticket.
     const during = await runOf(dir, runId);
@@ -235,7 +288,7 @@ describe("run stop mid-ticket", () => {
     expect(stopped.status, stopped.stderr).toBe(0);
     expect(await exited).toBe(0);
 
-    const events = lines(stdout);
+    const events = lines(out());
     expect(events.find((e) => e.event === "session_ended")).toMatchObject({ ended: "stopped", outcome: "failed" });
     expect(events.at(-1)).toMatchObject({ event: "stop", reason: "stopped_by_human", recorded: { ref: refs[0], outcome: "failed", source: "stated" } });
     expect(String((events.at(-1)!.recorded as { reason: string }).reason)).toMatch(/^stopped_by_human: /);
@@ -250,22 +303,14 @@ describe("run stop mid-ticket", () => {
 
   it("an interrupted driver ends its session, leaves the ticket held and exits 130; the next driver resumes it", async () => {
     const { dir, refs } = await workspace(["resume me"]);
-    const child = spawn(process.execPath, [TSX_CLI, CLI_ENTRY, "run", "drive", "--scope", "queue", ...fake("sleep"), "--poll", "0.2", "--json"], {
-      cwd: dir,
-      env: bareEnv(env()),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    drivers.push(child);
-    let stdout = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+    const { out, exited } = startDriver(dir, ["--scope", "queue", ...fake("sleep"), "--poll", "0.2"]);
     const pidsFile = join(dir, `${refs[0]}.pids`);
     for (let i = 0; i < 150 && !existsSync(pidsFile); i++) await new Promise((r) => setTimeout(r, 100));
     const pids = JSON.parse(readFileSync(pidsFile, "utf8")) as { session: number; grandchild: number };
-    const attached = lines(stdout)[0]!;
+    const attached = lines(out())[0]!;
     process.kill(Number(attached.pid), "SIGINT");
     expect(await exited).toBe(130);
-    expect(lines(stdout).find((e) => e.event === "session_ended")).toMatchObject({ ended: "interrupted", outcome: null });
+    expect(lines(out()).find((e) => e.event === "session_ended")).toMatchObject({ ended: "interrupted", outcome: null });
     expect(alive(pids.session)).toBe(false);
     expect(alive(pids.grandchild)).toBe(false);
     expect((await showIssue(dir, refs[0]!)).checkoutAgent).toBe(ACTOR);
@@ -281,30 +326,163 @@ describe("run stop mid-ticket", () => {
     const events = lines(again.stdout);
     expect(events.find((e) => e.event === "take")).toMatchObject({ ref: refs[0], resumed: true });
     expect(events.at(-1)).toMatchObject({ event: "stop", reason: "scope_empty" });
+    // Two sessions of one ticket from two drivers: each keeps its own brief and logs, and
+    // the second was told it is resuming.
+    const logDir = String(attached.logDir);
+    const briefs = readdirSync(logDir).filter((name) => name.startsWith(`001-${refs[0]}-`) && name.endsWith(".brief.md")).sort();
+    expect(briefs).toHaveLength(2);
+    expect(readFileSync(join(logDir, briefs[0]!), "utf8")).not.toContain("RESUMING");
+    expect(readFileSync(join(logDir, briefs[1]!), "utf8")).toContain("RESUMING");
   }, 60_000);
 
   it("a wait sleeps and asks again; a stop during the wait ends the driver", async () => {
     const { dir, refs } = await workspace(["someone else's"]);
     expect((await cli(dir, ["checkout", refs[0]!, "--json"], "other-agent")).status).toBe(0);
-    const child = spawn(process.execPath, [TSX_CLI, CLI_ENTRY, "run", "drive", "--scope", "queue", ...fake("review"), "--retry-after", "0.2", "--poll", "0.1", "--json"], {
-      cwd: dir,
-      env: bareEnv(env()),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    drivers.push(child);
-    let stdout = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
-    for (let i = 0; i < 150 && lines(stdout).filter((e) => e.event === "wait").length < 2; i++) await new Promise((r) => setTimeout(r, 100));
-    const waits = lines(stdout).filter((e) => e.event === "wait");
+    const { out, exited } = startDriver(dir, ["--scope", "queue", ...fake("review"), "--retry-after", "0.2", "--poll", "0.1"]);
+    for (let i = 0; i < 150 && lines(out()).filter((e) => e.event === "wait").length < 2; i++) await new Promise((r) => setTimeout(r, 100));
+    const waits = lines(out()).filter((e) => e.event === "wait");
     expect(waits.length).toBeGreaterThanOrEqual(2); // asked again after the retry
     expect(waits[0]).toMatchObject({ reason: "waiting_on_others", retryAfterSeconds: 0.2 });
-    const runId = String(lines(stdout)[0]!.runId);
+    const runId = String(lines(out())[0]!.runId);
     expect((await cli(dir, ["run", "stop", runId, "--json"], "vp")).status).toBe(0);
     expect(await exited).toBe(0);
-    expect(lines(stdout).at(-1)).toMatchObject({ event: "stop", reason: "stopped_by_human" });
-    expect(lines(stdout).some((e) => e.event === "session_started")).toBe(false);
+    expect(lines(out()).at(-1)).toMatchObject({ event: "stop", reason: "stopped_by_human" });
+    expect(lines(out()).some((e) => e.event === "session_started")).toBe(false);
   }, 60_000);
+});
+
+
+describe("nothing outlives its session", () => {
+  it("a session that exits 0 takes the children it left running with it", async () => {
+    const { dir, refs } = await workspace(["leaves a child"]);
+    const drove = await cli(dir, ["run", "drive", "--scope", "queue", "--max-tickets", "1", ...fake("background"), "--poll", "0.2", "--json"]);
+    expect(drove.status, drove.stderr).toBe(0);
+    expect(lines(drove.stdout).find((e) => e.event === "session_ended")).toMatchObject({ ended: "exited", exitCode: 0, outcome: null });
+    const pids = readPids(dir, refs[0]!);
+    await until(() => !alive(pids.grandchild), 3_000);
+    expect(alive(pids.grandchild)).toBe(false);
+  }, 60_000);
+
+  it("a driver killed with -9 leaves its session; the next driver ends it before resuming, so the ticket never has two sessions", async () => {
+    const { dir, refs } = await workspace(["orphaned"]);
+    const first = startDriver(dir, ["--scope", "queue", ...fake("sleep"), "--poll", "0.2"]);
+    await until(() => existsSync(join(dir, `${refs[0]}.pids`)));
+    const pids = readPids(dir, refs[0]!);
+    const attached = lines(first.out())[0]!;
+    process.kill(Number(attached.pid), "SIGKILL");
+    await first.exited;
+    expect(alive(pids.session)).toBe(true); // nobody ended it
+    const runId = String(attached.runId);
+    expect((await runOf(dir, runId)).driver).toMatchObject({ alive: false, sessionPid: expect.any(Number) });
+
+    const second = startDriver(dir, ["--run", runId, ...fake("sleep"), "--poll", "0.2"]);
+    await until(() => lines(second.out()).some((e) => e.event === "session_started"));
+    const events = lines(second.out());
+    const reaped = events.findIndex((e) => e.event === "reaped");
+    expect(reaped, second.err()).toBeGreaterThan(-1);
+    expect(events[reaped]).toMatchObject({ ticket: refs[0], driverPid: Number(attached.pid) });
+    expect(reaped).toBeLessThan(events.findIndex((e) => e.event === "take"));
+    expect(events.find((e) => e.event === "take")).toMatchObject({ ref: refs[0], resumed: true });
+    expect(alive(pids.session)).toBe(false);
+    expect(alive(pids.grandchild)).toBe(false);
+
+    expect((await cli(dir, ["run", "stop", runId, "--json"], "vp")).status).toBe(0);
+    expect(await second.exited).toBe(0);
+  }, 60_000);
+
+  it("a second Ctrl-C KILLs a session that ignores TERM at once, and the driver still cleans up", async () => {
+    const { dir, refs } = await workspace(["stubborn"]);
+    const driver = startDriver(dir, ["--scope", "queue", ...fake("stubborn"), "--poll", "0.2"]);
+    await until(() => existsSync(join(dir, `${refs[0]}.pids`)));
+    const pids = readPids(dir, refs[0]!);
+    const attached = lines(driver.out())[0]!;
+    const began = Date.now();
+    process.kill(Number(attached.pid), "SIGINT");
+    await new Promise((r) => setTimeout(r, 400));
+    expect(alive(pids.session)).toBe(true); // TERM ignored; inside the five-second grace
+    process.kill(Number(attached.pid), "SIGINT");
+    expect(await driver.exited).toBe(130);
+    expect(Date.now() - began).toBeLessThan(4_000); // did not wait out the grace
+    expect(alive(pids.session)).toBe(false);
+    expect(alive(pids.grandchild)).toBe(false);
+    expect((await runOf(dir, String(attached.runId))).driver).toBeNull();
+  }, 60_000);
+
+  it("two drivers started on one run at the same instant: one attaches, the other is refused", async () => {
+    const { dir } = await workspace(["contended"]);
+    const started = await cli(dir, ["run", "start", "--scope", "queue", "--json"]);
+    const runId = String((JSON.parse(started.stdout) as { id: string }).id);
+    const a = startDriver(dir, ["--run", runId, ...fake("sleep"), "--poll", "0.2"]);
+    const b = startDriver(dir, ["--run", runId, ...fake("sleep"), "--poll", "0.2"]);
+    const loser = await Promise.race([a.exited.then(() => a), b.exited.then(() => b)]);
+    const winner = loser === a ? b : a;
+    expect(await loser.exited, loser.err()).toBe(4);
+    expect(loser.err()).toContain("already has a driver");
+    await until(() => lines(winner.out()).some((e) => e.event === "session_started"));
+    expect(lines(winner.out()).filter((e) => e.event === "session_started")).toHaveLength(1);
+    expect((await cli(dir, ["run", "stop", runId, "--json"], "vp")).status).toBe(0);
+    expect(await winner.exited).toBe(0);
+  }, 60_000);
+});
+
+describe("the driver lock", () => {
+  it("a run whose lock a live process holds is refused, even with no driver.json yet; a dead owner's lock is taken over", async () => {
+    const { dir } = await workspace(["locked"]);
+    const started = await cli(dir, ["run", "start", "--scope", "queue", "--json"]);
+    const runId = String((JSON.parse(started.stdout) as { id: string }).id);
+    const runDir = join(dir, ".staple", "runs", runId);
+    mkdirSync(runDir, { recursive: true });
+    // This test's own process: alive on this host, and no driver.json has been written.
+    writeFileSync(join(runDir, "driver.lock"), JSON.stringify({ pid: process.pid, host: hostname() }));
+    const refused = await cli(dir, ["run", "drive", "--run", runId, ...fake("done"), "--poll", "0.2", "--json"]);
+    expect(refused.status).toBe(4);
+    expect(refused.stderr).toContain(`pid ${process.pid}`);
+
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
+    writeFileSync(join(runDir, "driver.lock"), JSON.stringify({ pid: Number(dead.stdout), host: hostname() }));
+    const drove = await cli(dir, ["run", "drive", "--run", runId, ...fake("done"), "--poll", "0.2", "--json"]);
+    expect(drove.status, drove.stderr).toBe(0);
+    expect(lines(drove.stdout).at(-1)).toMatchObject({ event: "stop", reason: "scope_empty" });
+    expect(existsSync(join(runDir, "driver.lock"))).toBe(false); // released on exit
+  }, 60_000);
+});
+
+describe("the main-line guard", () => {
+  it("a session that moves master is failed touched_main_line and the run is stopped", async () => {
+    const { dir, refs } = await workspace(["lands on master", "never reached"]);
+    mkdirSync(join(dir, ".git", "refs", "heads"), { recursive: true });
+    writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/master\n");
+    writeFileSync(join(dir, ".git", "refs", "heads", "master"), "1111111111111111111111111111111111111111\n");
+    const drove = await cli(dir, ["run", "drive", "--scope", "queue", ...fake("mainline"), "--poll", "0.2", "--json"]);
+    expect(drove.status, drove.stderr).toBe(0);
+    const events = lines(drove.stdout);
+    expect(events.find((e) => e.event === "main_line_moved")).toMatchObject({ ref: refs[0], moves: ["master 111111111111 -> 222222222222"] });
+    expect(events.find((e) => e.event === "session_ended")).toMatchObject({ outcome: "failed", reason: expect.stringMatching(/^touched_main_line: /) });
+    expect(events.at(-1)).toMatchObject({ event: "stop", reason: "stopped_by_human", recorded: { ref: refs[0], outcome: "failed" } });
+    expect(events.filter((e) => e.event === "take")).toHaveLength(1); // nothing more ran
+    const { run } = await runOf(dir, String(events[0]!.runId));
+    expect(run.stop).toMatchObject({ by: "staple run drive", note: expect.stringContaining("touched_main_line") });
+  }, 60_000);
+
+  it("reads a linked worktree's shared refs and packed-refs, with no git process", () => {
+    const root = tempDir("run-drive-guard");
+    cleanup.push(root);
+    const common = join(root, "main-checkout", ".git");
+    const worktreeGitDir = join(common, "worktrees", "wt");
+    mkdirSync(worktreeGitDir, { recursive: true });
+    mkdirSync(join(common, "refs", "heads"), { recursive: true });
+    writeFileSync(join(worktreeGitDir, "commondir"), "../..\n");
+    writeFileSync(join(common, "packed-refs"), "# pack-refs with: peeled\naaaa refs/heads/main\nbbbb refs/heads/feature\n");
+    const wt = join(root, "wt");
+    mkdirSync(join(wt, "sub"), { recursive: true });
+    writeFileSync(join(wt, ".git"), `gitdir: ${worktreeGitDir}\n`);
+    expect(mainLineSnapshot(join(wt, "sub"))).toEqual({ master: null, main: "aaaa" });
+    writeFileSync(join(common, "refs", "heads", "master"), "cccc\n");
+    const after = mainLineSnapshot(wt);
+    expect(after).toEqual({ master: "cccc", main: "aaaa" });
+    expect(mainLineMoves({ master: null, main: "aaaa" }, after)).toEqual(["master (none) -> cccc"]);
+    expect(mainLineSnapshot(root)).toBeNull();
+  });
 });
 
 describe("run drive options", () => {
@@ -323,7 +501,7 @@ describe("run drive options", () => {
     expect((await showIssue(dir, refs[0]!)).checkoutAgent).toBeNull();
   }, 60_000);
 
-  it("refuses an unknown agent, a custom agent without a template, --run with --scope and a zero poll, before starting a run", async () => {
+  it("refuses an unknown agent, a custom agent without a template, --run with --scope, a zero poll and a zero retry, before starting a run", async () => {
     const { dir } = await workspace(["x"]);
     const unknown = await cli(dir, ["run", "drive", "--scope", "queue", "--agent", "nope", "--json"]);
     expect(unknown.status).toBe(2);
@@ -334,6 +512,8 @@ describe("run drive options", () => {
     expect(both.status).toBe(2);
     const busy = await cli(dir, ["run", "drive", "--scope", "queue", ...fake("review"), "--poll", "0", "--json"]);
     expect(busy.status).toBe(2);
+    const spin = await cli(dir, ["run", "drive", "--scope", "queue", ...fake("review"), "--retry-after", "0", "--json"]);
+    expect(spin.status).toBe(2);
     const runs = await cli(dir, ["run", "status", "--all", "--json"]);
     expect(JSON.parse(runs.stdout)).toEqual({ runs: [] });
   }, 60_000);
@@ -389,17 +569,31 @@ describe("provider rows", () => {
 });
 
 describe("no merge path", () => {
-  const DRIVER_SOURCES = ["src/core/run-driver.ts", "src/commands/run-drive.ts", "src/core/run-attachment.ts"];
+  const DRIVER_SOURCES = ["src/core/run-driver.ts", "src/commands/run-drive.ts", "src/core/run-attachment.ts", "src/core/main-line-guard.ts"];
 
-  it("the driver's code names no merge and runs no git: its only spawn is the provider's session", () => {
-    for (const file of DRIVER_SOURCES) {
+  /**
+   * A lint, and knowingly only that: the guard test above is what catches a session that
+   * lands work on the main line. This keeps the driver's own code from growing a second
+   * way to start a process: one import of child_process, in one file, of `spawn` alone,
+   * called once, with the provider's command; no dynamic import or require anywhere.
+   */
+  it("the driver's code starts one kind of process, the provider's session, and names no merge", () => {
+    for (const file of [...DRIVER_SOURCES, "src/core/run-brief.ts"]) {
       const text = readFileSync(join(REPO_ROOT, file), "utf8");
-      expect(text, file).not.toMatch(/merge/i);
+      if (file !== "src/core/run-brief.ts") expect(text, file).not.toMatch(/merge/i);
       expect(text, file).not.toMatch(/["'`](git|gh)["'`]/);
-      expect(text, file).not.toMatch(/\b(exec|execSync|execFile|execFileSync|spawnSync)\s*\(/);
+      expect(text, file).not.toMatch(/\b(require|import)\s*\(/);
+      expect(text, file).not.toMatch(/process\.binding|process\.dlopen|worker_threads|node:cluster/);
+      const imports = [...text.matchAll(/import\s+([^;]*?)\s+from\s+["'](node:)?child_process["']/g)].map((m) => m[1]);
+      expect(imports, file).toEqual(file === "src/core/run-driver.ts" ? ["{ spawn }"] : []);
     }
     const driver = readFileSync(join(REPO_ROOT, "src/core/run-driver.ts"), "utf8");
-    expect([...driver.matchAll(/\bspawn\s*\(/g)].map((m) => driver.slice(m.index, m.index + 35))).toEqual(["spawn(command.file, command.args, {"]);
+    // `spawn` used once, as a call, on the provider's command: never passed around or indexed.
+    // (The child's "spawn" event name, quoted, is not the function.)
+    expect([...driver.matchAll(/(?<!")\bspawn\b(?!")/g)].map((m) => driver.slice(m.index, m.index + 20))).toEqual([
+      'spawn } from "node:c',
+      "spawn(command.file, ",
+    ]);
   });
 
   it("the brief forbids merging and puts the adversarial review before the finish", () => {

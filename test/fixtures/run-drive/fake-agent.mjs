@@ -8,9 +8,12 @@
  *   fail    exit 3
  *   idle    exit 0 and touch nothing (the ticket stays held)
  *   sleep   start a grandchild that sleeps, record both pids in <ref>.pids, never finish
+ *   stubborn  the same, but both ignore SIGTERM (only KILL ends them)
+ *   background  leave a sleeping grandchild behind (pids in <ref>.pids), then do `review`
+ *   mainline    move .git/refs/heads/master by writing the file, then do `review`
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -32,7 +35,20 @@ const staple = (...args) =>
     encoding: "utf8",
   });
 
-if (mode === "review" || mode === "done" || mode === "unreviewed") {
+const sleeper = (ignoreTerm) =>
+  spawn(process.execPath, ["-e", `${ignoreTerm ? "process.on('SIGTERM', () => {});" : ""} setTimeout(() => {}, 120000)`], { stdio: "ignore" });
+
+if (mode === "background") {
+  const child = sleeper(false);
+  child.unref();
+  writeFileSync(`${ref}.pids`, JSON.stringify({ session: process.pid, grandchild: child.pid }));
+}
+if (mode === "mainline") {
+  mkdirSync(".git/refs/heads", { recursive: true });
+  writeFileSync(".git/refs/heads/master", "2222222222222222222222222222222222222222\n");
+}
+
+if (["review", "done", "unreviewed", "background", "mainline"].includes(mode)) {
   writeFileSync(`${ref}.txt`, `${ref}\n`);
   if (mode !== "unreviewed") {
     const reviewed = staple("comment", ref, `review: reproduced ${ref}.txt; nothing found`);
@@ -46,9 +62,10 @@ if (mode === "review" || mode === "done" || mode === "unreviewed") {
   process.exit(3);
 } else if (mode === "idle") {
   process.exit(0);
-} else if (mode === "sleep") {
-  const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore" });
-  writeFileSync(`${ref}.pids`, JSON.stringify({ session: process.pid, grandchild: sleeper.pid }));
+} else if (mode === "sleep" || mode === "stubborn") {
+  if (mode === "stubborn") process.on("SIGTERM", () => {});
+  const child = sleeper(mode === "stubborn");
+  writeFileSync(`${ref}.pids`, JSON.stringify({ session: process.pid, grandchild: child.pid }));
   setTimeout(() => {}, 120000);
 } else {
   console.error(`unknown mode ${mode}`);

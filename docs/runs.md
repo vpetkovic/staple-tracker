@@ -64,8 +64,10 @@ outcome) and is printed as the usual error envelope on stderr.
      ticket the actor still holds is refused (`validation`): move it to review
      or done first.
    - Nothing stated and the actor still holds the ticket in an active status:
-     it is **not finished**. Nothing is recorded; step 5 hands it back
-     (`resumed: true`).
+     on a live run it is **not finished**. Nothing is recorded; step 5 hands it
+     back (`resumed: true`). On an ended run nothing will come back to it, so
+     it is recorded `failed` (reason: the run's stop reason) and released,
+     rather than left held for good.
    - Else the actor's attempt that ended on it after it was taken: `completed`
      (review or done) is `done`, `failed` is `failed`.
    - Else the ticket's status: `done`, `review` and `gated` categories mean the
@@ -97,10 +99,13 @@ outcome) and is printed as the usual error envelope on stderr.
    Under `queue.policy = strict` the checkout can refuse the row (below); the
    answer is then `wait` with reason `out_of_order`.
 
-On a resume the ticket budget is not read: `--max-tickets` caps what a run
-takes, and handing back the ticket it is still working takes nothing. Every
-other rule applies, so a time budget or a ceiling can stop a run mid-ticket;
-the ticket stays claimed and shows as open on the run.
+On a resume, or a retry of a ticket the run already took, the ticket budget is
+not read: `--max-tickets` caps the distinct tickets a run takes, and handing
+back or retrying one it has taken takes no new one (so `--max-tickets 1` still
+retries its one ticket once after a failure). Every other rule applies, so a
+time budget or a ceiling can stop a run when a ticket would be handed back;
+that ticket is then recorded `failed` with the stop's reason and released: an
+ended run holds nothing.
 
 ### Strict queue policy
 
@@ -235,12 +240,19 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   options, refused as `run start` refuses them), else the actor's one live run.
 - **The loop.** `take`: write the brief, run the session, record. `wait`: sleep
   `retryAfterSeconds` (or `--retry-after`) and ask again; an ended run cuts the
-  sleep short. `stop`: print the reason and exit 0. Non-zero is a driver error
+  sleep short (`--retry-after` must be above 0, and every wait sleeps at least
+  once). `stop`: print the reason and exit 0. Non-zero is a driver error
   only (a bad flag, a provider not on PATH, the store refusing), as the usual
   error envelope. A driver interrupted (Ctrl-C, SIGTERM) ends its session,
   records nothing and exits 130: the run stays live and the ticket stays held,
   so the next `run drive --run <id>` is handed it back (`resumed`) and starts
-  a fresh session on it.
+  a fresh session on it, whose brief says it is resuming (read what the last
+  session left; post a fresh review). The signal handler stays installed: a
+  second Ctrl-C KILLs the session at once instead of killing the driver
+  mid-grace. A driver killed outright (`kill -9`) cannot end its session; the
+  next driver to attach finds the session's process group in the dead
+  driver's `driver.json`, ends it (TERM, then KILL) and says so (`reaped`)
+  before it resumes the ticket, so a ticket never has two sessions.
 - **Providers are rows** (`DRIVE_PROVIDERS`): the executable, its arguments
   with placeholders, the model flag, variables not to inherit. Adding a
   provider is a row.
@@ -269,8 +281,14 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
 - **The session's world.** It runs in the workspace's directory (`--cwd` to
   change it), in its own process group, with `STAPLE_AGENT` (the run's actor:
   the take already claimed the ticket for it), `STAPLE_DB` (this workspace's
-  database, so its `staple` commands cannot reach another workspace),
-  `STAPLE_RUN` and `STAPLE_RUN_TICKET` set.
+  database: the default for every `staple` command the session runs, over the
+  directory it is in and over `--ws`), `STAPLE_RUN` and `STAPLE_RUN_TICKET`
+  set. `STAPLE_DB` is a default, not a sandbox: an explicit `--db <path>` in
+  the session still opens that database. The brief tells the session to pass
+  neither; nothing enforces it.
+- **Nothing outlives its session.** When the session's leader exits, its
+  process group is ended too (TERM, then KILL after five seconds): a
+  background `sleep &` or dev server it left behind does not keep running.
 - **The brief** tells a session that knows nothing: the ticket and how to read
   it; that it is already checked out (do not check out, release or take
   anything else, do not call `run` commands); to put the work on a branch,
@@ -294,6 +312,7 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   | past `--ticket-timeout` | `failed`, `timed out: …`; the process group is ended |
   | the run ended while it worked | `failed`, `stopped_by_human: …` (or the reason the run ended) |
   | the driver was interrupted | nothing: left held for the next driver to resume |
+  | `master` or `main` moved during the session | `failed`, `touched_main_line: …`, and the run is stopped |
 
   A stated `failed` on a held ticket releases it and ends its attempt, so the
   ticket goes back to the queue; the tracker retries it once, and two failures
@@ -310,14 +329,17 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   a ceiling is read by the next `continue`, so it never cuts a session short;
   bound a session with `--ticket-timeout`.
 - **Logs.** Each session's brief, stdout and stderr go to
-  `<.staple>/runs/<run-id>/NNN-<ref>.{brief.md,stdout.log,stderr.log}`, printed
-  at start. `runs/` carries its own `.gitignore` of `*`.
+  `<.staple>/runs/<run-id>/NNN-<ref>-<UTC instant>.{brief.md,stdout.log,stderr.log}`,
+  printed at start; the instant keeps every session's files its own, across
+  drivers resuming one ticket. `runs/` carries its own `.gitignore` of `*`.
 - **Attached driver.** While it runs, the driver keeps `driver.json` in that
   directory (pid, host, agent, heartbeat every poll, the ticket and session pid)
   and removes it on exit. `run status` (`run_status`) answers it as `driver`,
   with `alive` (is the pid running; null when the driver is on another host),
-  so a UI can show a run is being driven; a second `run drive` on a run whose
-  driver is alive is refused (`conflict`). It is a file rather than a column:
+  so a UI can show a run is being driven. One driver per run: `driver.lock`,
+  created exclusively and holding the owner's pid, makes a second `run drive`
+  on the run refused (`conflict`), even when two start at the same instant; a
+  lock whose owner is no longer running is stale and taken over. It is a file rather than a column:
   no migration, and no write transaction every few seconds against the
   database the session works in.
 - **`--dry-run`** starts nothing and claims nothing: it prints the next
@@ -326,18 +348,27 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
 - **`--json`** prints one object per line: `attached`, `take`,
   `session_started`, `session_ended` (`ended`: `exited`, `timeout`, `stopped`,
   `interrupted`; `exitCode`; the stated `outcome` and `reason`, null when the
-  tracker reads it), `wait`, and `stop` (the stop answer's `reason`, `message`,
-  `detail` and `recorded`).
+  tracker reads it), `wait`, `stop` (the stop answer's `reason`, `message`,
+  `detail` and `recorded`), `reaped` (a dead driver's session group ended:
+  `pid`, `ticket`, `driverPid`) and `main_line_moved` (`ref`, `moves`).
 
 **No MCP tool.** An MCP call answers and returns; a driver is a local process
 that owns child sessions for hours and must outlive any one client. What MCP
 needs of it is there already: `run_status` shows the attached driver and
 `stop_run` stops it.
 
-**It never merges.** The driver spawns exactly one kind of process, the
-provider's session, and runs no git of its own; a test holds that. Landing work
-is a person's decision: the brief forbids it, and the run leaves a stack of
-branches (and pull requests) behind.
+**It never merges, and it checks.** The driver spawns exactly one kind of
+process, the provider's session, and runs no git of its own. Landing work is a
+person's decision: the brief forbids it, and the run leaves a stack of branches
+(and pull requests) behind. Because a brief is only words, the driver also
+reads where `master` and `main` point in the session's repository before and
+after every session (plain reads of the loose refs and `packed-refs` in the
+repository's common directory; no git process). If either moved, the ticket is
+recorded `failed` with reason `touched_main_line: …`, the run is stopped (by
+`staple run drive`, with the moves in the note) and the driver exits: nothing
+more runs until a person looks. It sees the local repository only; a push
+straight to a remote that leaves the local refs alone is the remote's branch
+protection's to refuse.
 
 ## Events
 
