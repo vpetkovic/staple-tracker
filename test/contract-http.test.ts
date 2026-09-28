@@ -39,6 +39,7 @@ import {
   runCliAsync,
 } from "./fixtures/contract-support.js";
 import { ERROR_CONTRACT, httpStatusFor, tripleOf, type ErrorTriple } from "./fixtures/error-contract.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 const WS = "contract";
 
@@ -58,7 +59,7 @@ function get(path: string): Promise<Response> {
 function post(body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<Response> {
   return fetch(`${origin}/api/action`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-staple-token": token, ...headers },
+    headers: asForeignPage({ "content-type": "application/json", "x-staple-token": token, ...headers }, origin),
     body: JSON.stringify(body),
   });
 }
@@ -786,6 +787,16 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/queue/remove",
       "/api/queue/reorder",
       "/api/revisions",
+      /**
+       * Autopilot runs (docs/runs.md): the page watches and stops, nothing more. One read
+       * (plural, GET-only) and three verbs under the singular prefix, the milestone
+       * family's shape; no start and no continue, which only an agent does.
+       * `test/ui-runs.test.ts` pins them.
+       */
+      "/api/run/pause",
+      "/api/run/resume",
+      "/api/run/stop",
+      "/api/runs",
       "/api/settings",
       "/api/timing/quality",
     ]);

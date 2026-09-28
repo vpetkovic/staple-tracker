@@ -5,8 +5,9 @@
  *
  * Loopback is not a security boundary. Any page the user visits can reach
  * 127.0.0.1 on a guessable port, so every /api/* route is gated by a
- * per-process bearer token, the write route additionally checks Origin, and
- * both read and write routes pin their HTTP method.
+ * per-process bearer token; a write must also come from this server's own
+ * loopback Origin or carry the token in the `X-Staple-Token` header (`writeAllowed`),
+ * and both read and write routes pin their HTTP method.
  */
 import { EVENT_ORDER, EVENT_ORDER_DESC } from "../core/event-row.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -139,6 +140,8 @@ import { fetchDevices, performConnect, performDisconnect, performRevoke } from "
 import { readConnection, setConsent } from "../core/cloud/connection.js";
 import { readConfig, stapleHome } from "../config/index.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
+import { readDriver } from "../core/run-attachment.js";
+import { LIVE_RUN_STATES, type RunStatus } from "../core/run-store.js";
 import {
   applyBudgetSetup,
   applyBudgetUnsetup,
@@ -262,6 +265,9 @@ const QUEUE_VERBS: Record<string, QueueVerb> = {
   "/api/queue/prune": "prune",
 };
 const QUEUE_WRITE_PATHS = new Set(Object.keys(QUEUE_VERBS));
+
+/** How many ended runs per workspace `/api/runs` answers besides the live ones, unless `limit` says. */
+const RUN_HISTORY_LIMIT = 50;
 
 /**
  * The cloud writes that must NOT arm the post-write sync trigger (S10).
@@ -738,11 +744,15 @@ export function startUiServer(options: UiOptions): UiHandle {
     return url.searchParams.get("token");
   }
 
-  function authorized(req: IncomingMessage, url: URL): boolean {
-    const presented = presentedToken(req, url);
+  /** THE token comparison, constant-time, for every place a request presents one. */
+  function tokenMatches(presented: string | null | undefined): boolean {
     if (!presented) return false;
     const bytes = Buffer.from(presented);
     return bytes.length === tokenBytes.length && timingSafeEqual(bytes, tokenBytes);
+  }
+
+  function authorized(req: IncomingMessage, url: URL): boolean {
+    return tokenMatches(presentedToken(req, url));
   }
 
   /** Read from the live socket so --port 0 (tests) reports the port it actually got. */
@@ -764,10 +774,31 @@ export function startUiServer(options: UiOptions): UiHandle {
     return [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
   }
 
-  function originAllowed(req: IncomingMessage): boolean {
+  /**
+   * THE WRITE RULE. A write is accepted when EITHER holds:
+   *
+   *   1. its Origin is absent (curl, the CLI) or this server's own loopback page; or
+   *   2. it carries the UI token in the `X-Staple-Token` HEADER.
+   *
+   * (2) is what lets the page write when it is opened through a forwarder that keeps the
+   * browser's own Origin: a phone on the tailnet, whose page holds the token because the
+   * forwarder rewrites Host to loopback and the page is seeded (or because it was opened
+   * with `?token=`). It is safe for the reason the header is load-bearing on reads: a
+   * cross-site page cannot set a custom header without a CORS preflight, and this server
+   * answers no preflight with a grant (it sets no CORS header anywhere; an
+   * OPTIONS is refused by the token gate or the method gate like any other method), so a
+   * forged form or `fetch` from another site arrives without it and is still refused.
+   *
+   * Only the header counts here. `?token=` and `Authorization: Bearer` open the READ gate
+   * for curl and agents, but a query string can ride a plain cross-site form POST with no
+   * preflight, so it must never stand in for the header on a write. The compare is the
+   * same constant-time one the read gate uses.
+   */
+  function writeAllowed(req: IncomingMessage): boolean {
     const origin = req.headers.origin;
-    if (!origin) return true;
-    return writeOrigins().includes(origin);
+    if (!origin || writeOrigins().includes(origin)) return true;
+    const header = req.headers["x-staple-token"];
+    return typeof header === "string" && tokenMatches(header);
   }
 
   /**
@@ -807,9 +838,36 @@ export function startUiServer(options: UiOptions): UiHandle {
           .prepare("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at),'') AS u FROM issues")
           .get() as { c: number; u: string };
         const comments = h.store.db.prepare("SELECT COUNT(*) AS c FROM comments").get() as { c: number };
-        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}`;
+        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}`;
       })
       .join("|");
+  }
+
+  /**
+   * Which live runs have a `staple run drive` process attached, and whether it is still
+   * running. A run's state moves the event seq above (every run write emits an event), but a
+   * driver attaching, exiting or dying writes only its `driver.json` (core/run-attachment.ts),
+   * so without this the page would keep saying "driver attached" about a driver that is gone.
+   * The heartbeat is deliberately left out: it changes every few seconds while a driver
+   * runs, and would refetch the whole page that often for nothing a reader can see.
+   */
+  function driverFingerprint(h: StoreHandle): string {
+    const live = h.store.db
+      .prepare(`SELECT id FROM runs WHERE state IN (${LIVE_RUN_STATES.map(() => "?").join(", ")}) ORDER BY id`)
+      .all(...LIVE_RUN_STATES) as Array<{ id: string }>;
+    const parts = live.flatMap(({ id }) => {
+      const driver = readDriver(h.dbPath, id);
+      return driver === null ? [] : [`${id.slice(0, 8)}=${driver.pid}/${driver.alive === null ? "?" : driver.alive ? 1 : 0}`];
+    });
+    return parts.length === 0 ? "" : `:${parts.join(",")}`;
+  }
+
+  /**
+   * A workspace's runs as `/api/runs` and the run verbs answer them: the `run status --json`
+   * object (`{run, decision, facts, driver}`) with the workspace it lives in.
+   */
+  function runEntry(h: StoreHandle, status: RunStatus): Record<string, unknown> {
+    return { workspace: h.slug, ...status };
   }
 
   /**
@@ -1358,6 +1416,12 @@ export function startUiServer(options: UiOptions): UiHandle {
            */
           url.pathname.startsWith("/api/project/") ||
           /**
+           * The autopilot run verbs: stop, pause, resume. Singular prefix, like the
+           * milestone and project families; the read is `/api/runs` (plural), which
+           * does not share it, so the family admits no read.
+           */
+          url.pathname.startsWith("/api/run/") ||
+          /**
            * The queue's mutating verbs (STA-168). `/api/queue` and
            * `/api/queue/next` are READS and are deliberately NOT in this list, so
            * naming the family by prefix the way the gate routes do would have
@@ -1497,15 +1561,16 @@ export function startUiServer(options: UiOptions): UiHandle {
          * wherever it lands, and a GET on a read/write path is not — same guard,
          * same sentence, now stated about the request instead of about the route.
          */
-        if (req.method === "POST" && !originAllowed(req)) {
+        if (req.method === "POST" && !writeAllowed(req)) {
           /**
            * `detail.reason` names WHY, so the page can tell this refusal from a dead token:
-           * a phone reaching this server through a forwarder (the tailnet) sends its own
-           * Origin, so it can read everything and write nothing, by design. The page says
-           * so ("changes can only be made from this computer's browser") instead of
-           * treating the refusal as a credential failure.
+           * a foreign Origin without the token header (`writeAllowed`). The app's own page
+           * always sends the header, so from a phone on the tailnet it writes; what lands
+           * here is a page that does not hold the token. The page words it
+           * ("changes can only be made from this computer's browser") instead of treating
+           * it as a credential failure.
            */
-          const message = `Cross-origin request rejected (Origin: ${req.headers.origin})`;
+          const message = `Cross-origin request rejected (Origin: ${req.headers.origin}); send the UI token in X-Staple-Token to write from another origin`;
           json(res, 403, { error: message, message, code: "forbidden", detail: { reason: "cross_origin" }, retryable: false });
           return;
         }
@@ -1540,7 +1605,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           !CLOUD_LIFECYCLE_WRITES.has(url.pathname) &&
           !BUDGET_COLLECTION_WRITES.has(url.pathname) &&
           !BUDGET_CONFIG_WRITES.has(url.pathname) &&
-          url.pathname !== "/api/budget/forget"
+          url.pathname !== "/api/budget/forget" &&
+          // A run is machine-local and never synchronized (core/run-store.ts): nothing to send.
+          !url.pathname.startsWith("/api/run/")
         ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
@@ -4599,6 +4666,68 @@ export function startUiServer(options: UiOptions): UiHandle {
        * from a read. `create` with `preview: true` writes nothing and returns
        * the plan; a stale `baseRevision` is the store's own revision_conflict.
        */
+      /**
+       * Autopilot runs (docs/runs.md). The page WATCHES and STOPS runs; it never starts or
+       * continues one, so there is no route for either: a run is started by talking to an
+       * agent, and only its actor's `run continue` takes tickets.
+       *
+       * The read is every live run plus the most recent ended ones (`limit`, default 50,
+       * per workspace), newest first, each the object `staple run status --json` prints.
+       * Hub mode with no `ws` reads every workspace, as `/api/issues` does.
+       */
+      if (url.pathname === "/api/runs") {
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        const limitRaw = url.searchParams.get("limit");
+        const limit = limitRaw === null ? RUN_HISTORY_LIMIT : Number(limitRaw);
+        if (!Number.isInteger(limit) || limit < 0) {
+          throw new StapleError("validation", `limit is a whole number of at least 0; got "${limitRaw}".`);
+        }
+        const out = targets.flatMap((h) => {
+          let ended = 0;
+          return h.store
+            .runs()
+            .statuses({ all: true })
+            .filter((status) => LIVE_RUN_STATES.includes(status.run.state) || ended++ < limit)
+            .map((status) => runEntry(h, status));
+        });
+        out.sort((a, b) => String((b.run as { startedAt: string }).startedAt).localeCompare(String((a.run as { startedAt: string }).startedAt)));
+        json(res, 200, { runs: out });
+        return;
+      }
+
+      /**
+       * A person stops, pauses or resumes a run: `RunStore.stop` / `setState`, the methods
+       * `staple run stop|pause|resume` and MCP `stop_run|pause_run|resume_run` call. `by` is
+       * the page's person (`actor`, else "ui"), so the run records who pressed Stop. Stopping
+       * a run that already ended changes nothing and answers it as it stands, so a second
+       * press is harmless. Every route answers the run's fresh `run status` object.
+       */
+      if (url.pathname.startsWith("/api/run/")) {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) || undefined);
+        const runs = handle.store.runs();
+        const id = typeof body.id === "string" ? body.id.trim() : "";
+        if (id === "") throw new StapleError("validation", "Name the run: id is required.");
+        const by = (typeof body.actor === "string" && body.actor.trim()) || "ui";
+        switch (url.pathname) {
+          case "/api/run/stop":
+            runs.stop(id, by, typeof body.note === "string" ? body.note : null);
+            break;
+          case "/api/run/pause":
+            runs.setState(id, "paused", by);
+            break;
+          case "/api/run/resume":
+            runs.setState(id, "active", by);
+            break;
+          default:
+            json(res, 404, { error: "not found" });
+            return;
+        }
+        json(res, 200, runEntry(handle, runs.status(id)));
+        return;
+      }
+
       if (url.pathname === "/api/milestones") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
         json(res, 200, handle.store.milestones().list({ all: url.searchParams.get("all") === "1" }));

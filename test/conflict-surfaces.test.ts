@@ -31,6 +31,7 @@ import {
   startMcpClient,
   type McpHarness,
 } from "./fixtures/contract-support.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 const WS = "conflictsurf";
 const AGENT = "surface-agent";
@@ -254,11 +255,14 @@ describe("the HTTP API", () => {
   it("rejects a cross-origin resolve, because it is a write", async () => {
     const response = await fetch(`${origin}/api/cloud/conflicts/resolve`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-staple-token": token,
-        origin: "https://evil.example",
-      },
+      headers: asForeignPage(
+        {
+          "content-type": "application/json",
+          "x-staple-token": token,
+          origin: "https://evil.example",
+        },
+        origin,
+      ),
       body: JSON.stringify({ id: "http-conflict", take: "local", ws: WS }),
     });
     expect(response.status).toBe(403);

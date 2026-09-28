@@ -21,6 +21,7 @@ import { budgetConfig } from "../src/core/telemetry/budget-config.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { REPO_ROOT, removeDir, runCliAtAsync, tempDir } from "./fixtures/characterize-support.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 let root: string;
 let httpHome: string;
@@ -35,11 +36,14 @@ async function call(path: string, init: { method?: string; body?: unknown; origi
   const token = init.token === undefined ? ui.token : init.token;
   const res = await fetch(`${origin}${path}`, {
     method: init.method ?? (init.body === undefined ? "GET" : "POST"),
-    headers: {
-      "content-type": "application/json",
-      ...(token === null ? {} : { "x-staple-token": token }),
-      ...(init.origin ? { origin: init.origin } : {}),
-    },
+    headers: asForeignPage(
+      {
+        "content-type": "application/json",
+        ...(token === null ? {} : { "x-staple-token": token }),
+        ...(init.origin ? { origin: init.origin } : {}),
+      },
+      origin,
+    ),
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   return { status: res.status, body: (await res.json()) as Record<string, any> };

@@ -2816,3 +2816,115 @@ export interface BudgetView {
   readonly pressureRule: { readonly provisional: true; readonly unsafeAtRatio: number; readonly note: string };
   readonly accounts: BudgetAccountView[];
 }
+
+// ---------------------------------------------------------------- autopilot runs
+
+/**
+ * An autopilot run, as `staple run status --json` prints it under `run` (core/run-store.ts,
+ * docs/runs.md). The reason codes are a public contract and never renamed; the page words
+ * them in lib/run-text.ts. Pinned against core in test/contract-ui-types.test.ts.
+ */
+export type RunState = "active" | "paused" | "stopped" | "completed";
+
+export const RUN_STOP_REASONS = [
+  "stopped_by_human",
+  "budget",
+  "failure_streak",
+  "scope_gone",
+  "vp_blocked",
+  "gate_pending",
+  "scope_empty",
+] as const;
+export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
+
+export const RUN_WAIT_REASONS = ["paused", "waiting_on_others", "out_of_order"] as const;
+export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
+
+export type RunScope =
+  | { kind: "queue" }
+  | { kind: "issue" | "milestone"; issueId: string; identifier: string | null };
+
+export interface RunTicket {
+  seq: number;
+  issueId: string;
+  identifier: string;
+  takenAt: string;
+  outcome: "done" | "failed" | null;
+  reason: string | null;
+  attemptId: string | null;
+  recordedAt: string | null;
+}
+
+export interface RunBudget {
+  maxTickets: number | null;
+  until: string | null;
+  ceilingPercent: number | null;
+  ceilingAccount: string | null;
+}
+
+export interface RunStop {
+  reason: RunStopReason;
+  detail: Record<string, unknown>;
+  by: string | null;
+  note: string | null;
+  at: string;
+}
+
+export interface Run {
+  id: string;
+  actor: string;
+  scope: RunScope;
+  state: RunState;
+  budget: RunBudget;
+  override: string | null;
+  tickets: RunTicket[];
+  counts: { taken: number; done: number; failed: number; open: number };
+  stop: RunStop | null;
+  startedAt: string;
+  updatedAt: string;
+  endedAt: string | null;
+}
+
+export interface RunWait {
+  reason: RunWaitReason;
+  detail: Record<string, unknown>;
+  message: string;
+}
+
+export type RunDecision =
+  | { stop: false; wait?: RunWait }
+  | { stop: true; reason: RunStopReason; state: "stopped" | "completed"; detail: Record<string, unknown>; message: string };
+
+export interface RunFacts {
+  now: string;
+  workable: Array<{ issueId: string; identifier: string; held: boolean }>;
+  waiting: Array<{ issueId: string; identifier: string; eligibility: string; reason: string | null }>;
+  pendingGates: Array<{ issueId: string; identifier: string; owner: string | null }>;
+  personBlocks: Array<{ issueId: string; identifier: string; owner: string; action: string | null }>;
+  ceiling: { usedPercent: number | null; accountRef: string | null; limitKey: string | null; missing: string | null } | null;
+  scopeGone?: string | null;
+}
+
+/** The `staple run drive` process attached to a run (core/run-attachment.ts). */
+export interface RunDriver {
+  pid: number;
+  host: string;
+  agent: string;
+  startedAt: string;
+  heartbeatAt: string;
+  ticket: string | null;
+  sessionPid: number | null;
+  logDir: string;
+  /** Null when the driver is on another host and this one cannot tell. */
+  alive: boolean | null;
+}
+
+/** One row of `GET /api/runs`, and what each run verb answers: `run status --json` plus the workspace. */
+export interface RunEntry {
+  workspace: string;
+  run: Run;
+  decision: RunDecision;
+  /** Null once the run has ended. */
+  facts: RunFacts | null;
+  driver: RunDriver | null;
+}

@@ -35,6 +35,7 @@ import { STATUSLINE_FIXTURE } from "../../../../../test/fixtures/budget-support.
 import { ingestBudget } from "../../../../core/telemetry/ingest.ts";
 import { initWorkspace } from "../../../../core/workspace.ts";
 import { startUiServer } from "../../../server.ts";
+import { asForeignPage } from "../../../../../test/fixtures/foreign-page.ts";
 
 const PHONE = "http://100.90.235.4:4440";
 
@@ -102,7 +103,9 @@ beforeAll(async () => {
   // The page's fetch, pointed at the server: relative paths resolved, its token attached.
   globalThis.fetch = ((input: string | URL | Request, init: RequestInit = {}) => {
     requests += 1;
-    const headers = { ...(init.headers as Record<string, string>), "x-staple-token": ui.token, ...(sendOrigin ? { origin: sendOrigin } : {}) };
+    // `sendOrigin` models a page on another origin that does NOT hold the token header (the
+    // server's write rule accepts a foreign Origin only with it): the token rides as Bearer.
+    const headers = asForeignPage({ ...(init.headers as Record<string, string>), "x-staple-token": ui.token, ...(sendOrigin ? { origin: sendOrigin } : {}) }, origin);
     return realFetch(`${origin}${String(input)}`, { ...init, headers });
   }) as typeof fetch;
 });
@@ -548,7 +551,7 @@ describe("from another device (the tailnet)", () => {
     expect(requests - sent).toBe(1);
   });
 
-  it("a write the server refuses for its origin is shown as that, not as a dead token", async () => {
+  it("a write the server refuses for its origin (no token header) is shown as that, not as a dead token", async () => {
     const page = await section();
     sendOrigin = PHONE;
     page.handlers.onCaptureAsk();

@@ -42,6 +42,12 @@ import type { ClaimActivity, ClaimLease, ClaimScope, TimingQuality } from "../sr
 import type { TimingQualityReport } from "../src/core/telemetry/cohort.js";
 import type { CalibrationReport } from "../src/core/telemetry/calibration.js";
 import type { ForecastReport } from "../src/core/telemetry/forecast-report.js";
+import { RUN_STOP_REASONS, RUN_WAIT_REASONS, type RunStatus } from "../src/core/run-store.js";
+import {
+  RUN_STOP_REASONS as UI_RUN_STOP_REASONS,
+  RUN_WAIT_REASONS as UI_RUN_WAIT_REASONS,
+  type RunEntry as UiRunEntry,
+} from "../src/ui/app/src/lib/types.js";
 import type { CalibrationReport as UiCalibrationReport, ForecastReport as UiForecastReport } from "../src/ui/app/src/lib/types.js";
 import type { TimingQuality as UiTimingQuality, TimingQualityReport as UiTimingQualityReport } from "../src/ui/app/src/lib/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
@@ -214,6 +220,15 @@ type _TimingQualityReportMatches = Expect<Equals<TimingQualityReport, UiTimingQu
 type _CalibrationReportMatches = Expect<Equals<CalibrationReport, UiCalibrationReport>>;
 type _ForecastReportMatches = Expect<Equals<Omit<ForecastReport, "method">, Omit<UiForecastReport, "method">>>;
 
+/**
+ * Autopilot runs: what `/api/runs` answers per run and every run verb answers, which is
+ * `run status --json` plus the workspace. The page BRANCHES on the state, the decision and
+ * the stop reason (the banner, the Stop button, the plain words for why a run ended), and
+ * those codes are a public contract that is never renamed; a mirror that drifted would put
+ * a reason on screen the server can never send, or miss one it does.
+ */
+type _RunEntryMatches = Expect<Equals<RunStatus, Omit<UiRunEntry, "workspace">>>;
+
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
    * The assertions above are types, and types are erased — so `vitest` would
@@ -244,6 +259,7 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _PublishReportMatches,
       true satisfies _CalibrationReportMatches,
       true satisfies _ForecastReportMatches,
+      true satisfies _RunEntryMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
     // preview and the device row; see the comment above them.
@@ -264,6 +280,12 @@ describe("the browser app's mirror of the wire vocabulary", () => {
     // restore report, backup row and publish report; see the comment above them.
     // GOLDEN, moved by the forecast report: 13 -> 15. The calibration report and
     // the forecast report the Analytics pages render; see the comment above them.
-    expect(proofs).toHaveLength(15);
+    // GOLDEN, moved by autopilot runs: 15 -> 16. The run entry; see the comment above it.
+    expect(proofs).toHaveLength(16);
+  });
+
+  it("words the same stop and wait reasons as core, in the same order", () => {
+    expect([...UI_RUN_STOP_REASONS]).toEqual([...RUN_STOP_REASONS]);
+    expect([...UI_RUN_WAIT_REASONS]).toEqual([...RUN_WAIT_REASONS]);
   });
 });

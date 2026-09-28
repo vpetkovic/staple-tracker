@@ -36,6 +36,7 @@ import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv } from "./fixtures/characterize-
 import { spawnAsync } from "./fixtures/spawn-async.js";
 import { mcpEnvelope, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import { STATUSLINE_SESSION_ID, epoch, sessionMetaLine, statusline, tokenCountLine, writeRollout } from "./fixtures/budget-support.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 /**
  * Ids are random UUIDs, so two sharing an 8-character prefix cannot be arranged by chance.
@@ -437,11 +438,14 @@ describe("CLI, MCP and HTTP call the one method", () => {
   async function http(path: string, init: { method?: string; body?: unknown; origin?: string; token?: boolean } = {}): Promise<{ status: number; body: Record<string, any> }> {
     const res = await fetch(`${origin}${path}`, {
       method: init.method ?? "POST",
-      headers: {
-        ...(init.token === false ? {} : { "x-staple-token": ui.token }),
-        "content-type": "application/json",
-        ...(init.origin ? { origin: init.origin } : {}),
-      },
+      headers: asForeignPage(
+        {
+          ...(init.token === false ? {} : { "x-staple-token": ui.token }),
+          "content-type": "application/json",
+          ...(init.origin ? { origin: init.origin } : {}),
+        },
+        origin,
+      ),
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
     return { status: res.status, body: (await res.json()) as Record<string, any> };

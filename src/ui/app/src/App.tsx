@@ -37,8 +37,11 @@ import {
   getMilestone,
   getMilestones,
   getProjects,
+  getRuns,
   hasToken,
 } from "@/lib/api";
+import { buildRunsState, RunsContext } from "@/lib/runs";
+import { RunHistoryMount } from "@/components/autopilot/RunHistoryMount";
 import { buildFilterContext, type MilestoneFacts, type ProjectFacts } from "@/lib/filter-dimensions";
 import {
   loadFilters,
@@ -399,6 +402,18 @@ export function App() {
   );
 
   /**
+   * THE AUTOPILOT RUNS — one read per fingerprint change, like the projects above, scoped by
+   * the workspace (All workspaces reads every workspace's). The rail banner, the phone strip,
+   * the row badges, the detail's notice and the run history all read this one answer through
+   * `RunsContext` (lib/runs.ts). Every run write emits an event and a driver attaching or
+   * dying is in the fingerprint, so a run shows here within one refresh.
+   */
+  const loadRuns = useCallback(() => getRuns({ ws }), [ws]);
+  const runs = useResource(loadRuns, [ws, version], onAuthError);
+  const runEntries = runs.data?.runs;
+  const runsState = useMemo(() => buildRunsState(runEntries ?? [], bump), [runEntries, bump]);
+
+  /**
    * A DELETED PROJECT LEAVES NO FILTER BEHIND. Its id may still be selected in any saved
    * scope — a Tasks scope last filtered a week ago, the legacy fallback — and would greet
    * the reader with a chip over an empty list. Once the served list has arrived (never on
@@ -655,27 +670,31 @@ export function App() {
 
   return (
     <SessionContext value={session}>
-      {/*
-        All four mounts sit above the shell on purpose. A palette has to outlive view
-        switches, a create dialog has to be triggerable from the header or a keystroke
-        without either owning it, and the detail drawer portals out of the layout
-        entirely. None of them are affected by what the shell does below.
-      */}
-      <CommandPaletteMount />
-      <CreateIssueMount />
-      <IssueDetailMount />
-      {/*
-        O7b (STA-141). A fourth mount for the same reason as the other three: the
-        workspace vocabulary editor has to be openable from the header and from the
-        palette without either owning its open flag, and it must survive a view switch.
-      */}
-      <SettingsMount />
-      {/* The project dialog (migration 009): opened from the rail's `+` and each project's gear. */}
-      <ProjectDialogMount />
+      <RunsContext value={runsState}>
+        {/*
+          All four mounts sit above the shell on purpose. A palette has to outlive view
+          switches, a create dialog has to be triggerable from the header or a keystroke
+          without either owning it, and the detail drawer portals out of the layout
+          entirely. None of them are affected by what the shell does below.
+        */}
+        <CommandPaletteMount />
+        <CreateIssueMount />
+        <IssueDetailMount />
+        {/*
+          O7b (STA-141). A fourth mount for the same reason as the other three: the
+          workspace vocabulary editor has to be openable from the header and from the
+          palette without either owning its open flag, and it must survive a view switch.
+        */}
+        <SettingsMount />
+        {/* The project dialog (migration 009): opened from the rail's `+` and each project's gear. */}
+        <ProjectDialogMount />
+        {/* The autopilot run history: opened from the rail, the phone strip and a task's detail. */}
+        <RunHistoryMount />
 
-      <AppShell>
-        <View onAuthError={onAuthError} />
-      </AppShell>
+        <AppShell>
+          <View onAuthError={onAuthError} />
+        </AppShell>
+      </RunsContext>
     </SessionContext>
   );
 }

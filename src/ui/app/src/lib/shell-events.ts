@@ -85,3 +85,24 @@ export function onOpenProjectDialog(handler: (request: ProjectDialogRequest) => 
   window.addEventListener(PROJECT_DIALOG, listener);
   return () => window.removeEventListener(PROJECT_DIALOG, listener);
 }
+
+/**
+ * The autopilot run history — the fifth verb. The rail's "Run history" row and a banner's
+ * "Details" open it; a banner names the run to scroll to. Same idiom: the mount owns the flag.
+ */
+const RUN_HISTORY = "staple:open-run-history";
+
+export interface RunHistoryRequest {
+  /** The run to bring into view, when a banner asked. */
+  runId?: string;
+}
+
+export function openRunHistory(request: RunHistoryRequest = {}): void {
+  window.dispatchEvent(new CustomEvent<RunHistoryRequest>(RUN_HISTORY, { detail: request }));
+}
+
+export function onOpenRunHistory(handler: (request: RunHistoryRequest) => void): () => void {
+  const listener = (event: Event) => handler((event as CustomEvent<RunHistoryRequest | null>).detail ?? {});
+  window.addEventListener(RUN_HISTORY, listener);
+  return () => window.removeEventListener(RUN_HISTORY, listener);
+}

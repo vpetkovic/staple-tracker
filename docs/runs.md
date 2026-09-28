@@ -682,3 +682,29 @@ preserved field conflict, settled by a decision like any other.
 on its milestone) and `run_goal_child_created`, and a mark writes
 `milestone_criterion_marked`; none names an issue, like the run events. A take also writes the ordinary `checkout` event on
 the ticket, and a stated failure on a held ticket its `release`.
+
+## In the web UI
+
+The page watches and stops runs; it never starts or continues one.
+
+- **Banner.** Each live run is a card in the rail's **Autopilot** section:
+  `Autopilot · <scope> · n/m done · working|next <ref> · <what would stop it>`, the run's
+  state (working, paused, or what it waits on), whether a driver is attached, **Stop** and
+  **Details**. On a phone (below 768px) the first live run is also one line above the tab
+  bar with a 44px Stop. The section is absent until the workspace has had a run.
+- **Badge.** A task a live run holds as its open ticket wears an **Autopilot** badge in the
+  list and a line in its detail naming the run.
+- **Run history.** The section's **Run history** row (and every Details) opens every run:
+  who ran it, over what, started, how long, each ticket with how it went, and how it ended,
+  in plain words (`src/ui/app/src/lib/run-text.ts` words every stop and wait reason).
+- **Stop** asks first and takes an optional note; the run records `stopped_by_human` with
+  the page's person (`staple:me`, else `ui`) as `by`. Pause and Resume are in the history.
+
+HTTP: `GET /api/runs[?ws=&limit=N]` answers `{runs: [{workspace, run, decision, facts,
+driver}]}` (every live run and the `limit` (50) most recent ended ones per workspace, each
+the `run status --json` object); `POST /api/run/stop {ws, id, actor?, note?}`,
+`POST /api/run/pause|resume {ws, id, actor?}` answer the run's fresh entry. They are
+writes like every other (POST only, token, the write rule in docs/web-ui.md "Auth"), so
+the app on a phone through the tailnet forwarder stops a run: its page sends the token
+header. The change fingerprint (`/api/poll`) carries which live runs have a driver attached
+and whether it is running, so the banner follows a driver starting or dying.

@@ -315,7 +315,23 @@ token screen. The token — for curl, agents, and remote tabs — lives in
 
 Every `/api/*` route is gated by the per-process token (`X-Staple-Token`,
 `Authorization: Bearer`, or `?token=`), compared with `timingSafeEqual`; writes
-are `POST`-only and Origin-checked, and every route pins the methods it accepts.
+are `POST`-only and every route pins the methods it accepts.
+
+**The write rule** ("Origin-checked" throughout these docs). A `POST` is accepted
+when its `Origin` is absent (curl, the CLI) or is the server's own loopback page
+(`http://127.0.0.1:<port>`, `http://localhost:<port>`), **or** when it carries the
+token in the `X-Staple-Token` header, compared in constant time. The page sends
+that header on every request (`lib/api.ts`), so the app opened through a forwarder
+that keeps the browser's own Origin (a phone on the tailnet; the forwarder
+rewrites `Host` to loopback, which is what seeds the token into the page) can
+write like the page on this computer. A cross-site page cannot set a custom
+header without a CORS preflight, and the server grants none: it sets no
+`Access-Control-*` header anywhere, and an `OPTIONS` is refused by the token or
+method gate like any other method. So a forged form or `fetch` from another site
+arrives without the header and is refused (`403`, `detail.reason:
+"cross_origin"`). `?token=` and `Bearer` open reads only and never stand in for
+the header on a write: a query string rides a plain cross-site form. Pinned in
+`test/ui-auth.test.ts` and `lib/api-write-header.test.ts`.
 The app reads the token out of its own URL once, keeps it in `sessionStorage`,
 and strips it from the address bar. Arriving without a valid token renders an
 explanation, not a blank page.
@@ -573,10 +589,12 @@ The section is built from the plain-language cards (`components/plain/*`:
 server (with a stub launcher and a stateful fake launchctl in a private HOME,
 so setup really plans, installs, fails and removes the watcher).
 
-**From another device.** The server accepts writes only from its own loopback
-origin, so a page opened through a forwarder (a phone on the tailnet) can read
-everything and change nothing. That refusal carries `detail.reason:
-"cross_origin"`. `lib/api.ts` treats it as an ordinary refusal, not a dead
+**From another device.** The app's own page writes from another device too: it
+sends the token header (see *The write rule* under Auth). A page on another
+origin WITHOUT the header (one that does not hold the token) is refused, and
+that refusal carries `detail.reason: "cross_origin"`. This section still turns
+its own writes off when opened from another device (below), a choice about
+configuring this computer from elsewhere, not a server refusal. `lib/api.ts` treats it as an ordinary refusal, not a dead
 token (no token screen), and `describeRefusal` words it once for every view:
 *"Changes can only be made from this computer's browser …"*, with the server's
 sentence kept as `serverMessage`; the refusal strip (`GuardRefusal`) frames it
