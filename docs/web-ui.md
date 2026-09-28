@@ -1114,8 +1114,8 @@ median and pooled ratio, the ratio a forecast scales by and how it was formed,
 target marked in words), the median interval, the work median and `p10–p90`,
 floors and heavy tails when present, and the warning chips.
 
-**Exact by default; older history only when asked, and apart.** The page opens
-on the `exact` set, *Finished tasks with measured time*, with a plain line
+**Measured history first; older history on by default, and apart.** The page leads
+with the `exact` set, *Finished tasks with measured time*, with a plain line
 (*Based on 9 finished tasks with measured time, out of 138 finished with an
 estimate.*) and what is not used, by the state the payload counts, said for that
 set (*Not used here: 2 have only approximate timing and 127 have timing rebuilt
@@ -1125,8 +1125,9 @@ have only approximate timing and 19 couldn't be rebuilt reliably*. The technical
 switch re-reads with `include=reconstructed`; the reconstructed groups then
 appear in their own section, *Older history (rebuilt from logs, less precise)*,
 *kept separate: never mixed with the history above*, after the exact one. The
-exact section reads the same either way. The switch is page state and every
-visit opens on exact. With no samples a set says *We can't tell yet* and why.
+exact section reads the same either way. The switch is a remembered preference
+(`staple:estimates-include-older-history` in the browser's storage): on until you
+turn it off, and then off on every visit and reload until you turn it back on. With no samples a set says *We can't tell yet* and why.
 
 **How the two are verified.** `detail/forecast-e2e.test.tsx` starts the real
 HTTP server over `test/fixtures/forecast-scenario.ts`, a scenario written through
