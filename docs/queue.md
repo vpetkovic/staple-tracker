@@ -162,12 +162,14 @@ row — the ones inside the scope.
   and "take this one" is `checkout`. A ref from another workspace is
   `validation`, as it is for every plan write; an unknown one is `not_found`
   (exit 3). `--scope` on anything but `queue next` is `validation`.
-- **What is inside.** Membership is STRUCTURAL, not "reached by the walk": a row
-  is inside when the scope is one of its ancestors, or — for a milestone — when
-  the row or one of its ancestors is a member (the progress rollup's "members
-  plus their descendants"), or it sits under the milestone's own children. An
-  open leaf under a resolved parent is therefore still inside its epic. The
-  scope is never a row of its own scope.
+- **What is inside.** Exactly what queueing the scope would reach, over the
+  whole tree rather than the open one: every child at any depth, and every
+  member of any milestone met on the way — the scope's own members (the
+  progress rollup's "members plus their descendants"), and the members of a
+  milestone parented under the scope — with their descendants. An open leaf
+  under a resolved parent is therefore still inside its epic, and a member of a
+  child milestone is inside the parent. The scope is never a row of its own
+  scope.
 - **Order.** The plan first, then the scope's own shape. Rows the plan reaches
   — queued directly or through any queued container — keep their effective
   order. The scope's UNQUEUED work follows in the order queueing the scope would
@@ -183,15 +185,17 @@ row — the ones inside the scope.
   unresolved row in `skipped` means the scope has no open work left; a null
   `next` with unresolved rows means everything inside is held, gated or blocked.
 - **Strict.** The order guard in `checkout` is not scoped: under `queue.policy =
-  strict` a scoped `next` from the unqueued band is refused `out_of_order`
-  while an eligible plan row exists anywhere. Advisory (the default) never
-  refuses it.
+  strict` it compares a scoped `next` against the WHOLE plan, so it is refused
+  `out_of_order` whenever an eligible plan row outside the scope comes before
+  it — whether the scoped row is queued later in the plan or sits in the
+  unqueued band. Advisory (the default) never refuses it.
 
 (Pinned by `store-queue-resolver.test.ts` — *"limits next and skipped to rows
 inside the epic, in queue order"*, *"answers inside an unqueued milestone: its
 members plus their descendants, in membership order"*, *"puts the rows the plan
 reaches before the scope's unqueued work"*, *"reaches an open leaf under a
-resolved parent inside the scope"*, *"an empty container is an empty scope, and
+resolved parent inside the scope"*, *"a member of a milestone under the scope is
+inside it"*, *"an empty container is an empty scope, and
 never offers itself"*, *"refuses an unknown scope as not_found and a leaf or
 foreign ref as validation"*; `queue-surfaces.test.ts` — *"scoped next is one
 shape on CLI, MCP and HTTP, limited to the scope"*, *"an unknown or leaf scope is
