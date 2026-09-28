@@ -15,10 +15,14 @@
  *   - {@link budgetCollectionStatus}: capture, bindings, each source's newest reading,
  *     the wrapper and watcher state, and the problems among them.
  *   - {@link collectBudget}: one watcher run (`codex-collect.ts`).
+ *   - {@link collectBudgetNow}: the same run, then one live poll (`polling/run.ts`) when
+ *     live polling is on. What `staple budget collect` and the Usage page's Refresh run.
  *
  * The consent is the call itself: nothing here is reached without `--yes` at the CLI or
  * `consent: true` in the request body. Everything is machine-local (the staple home, the
- * Claude config directory, `~/Library/LaunchAgents`) and nothing makes a network call.
+ * Claude config directory, `~/Library/LaunchAgents`) and nothing makes a network call,
+ * except the live poll, which only runs after its own consent (`setup --live`,
+ * `budget live on --yes`, or the Settings toggle) and only asks the bound providers.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -27,9 +31,11 @@ import { readConfig } from "../../../config/file.js";
 import { userHome as osUserHome } from "../../../config/home.js";
 import { defaultBinDir, launcherPath } from "../../../install/launcher.js";
 import { StapleError } from "../../types.js";
-import { accountOf, assertHomePath, bindBudgetSource, budgetConfig, setBudgetCapture, unbindBudgetSource } from "../budget-config.js";
+import { accountOf, assertHomePath, bindBudgetSource, budgetConfig, setBudgetCapture, setLivePolling, unbindBudgetSource } from "../budget-config.js";
 import { SOURCE_PROVIDER, claudeConfigDir, codexHome, expandHomePath } from "../bindings.js";
-import { isKnownBinding, type BindingSource, type KnownBinding, type TelemetryConfig } from "../config.js";
+import { isKnownBinding, livePollingOn, type BindingSource, type KnownBinding, type TelemetryConfig } from "../config.js";
+import { USAGE_POLLERS } from "../polling/registry.js";
+import { runUsagePollers, usagePollingStatus, type PollDeps, type PollRun, type PollingStatus } from "../polling/run.js";
 import type { AttemptLinker } from "../ingest.js";
 import { lastReadingsBySource, type SourceLastReading } from "../read-budget.js";
 import { collectCodexRollouts, readCursor, type CollectResult, type CollectRunSummary } from "./codex-collect.js";
@@ -76,6 +82,8 @@ export interface CollectionDeps {
   readonly staple?: string | null;
   readonly nodePath?: string;
   readonly attemptLinker?: AttemptLinker;
+  /** The live poll's own seams (fetch, stored sign-ins); only tests pass these. */
+  readonly poll?: Omit<PollDeps, "home" | "now" | "attemptLinker">;
 }
 
 interface Resolved {
@@ -150,6 +158,8 @@ export interface SetupRecord {
   readonly bindings: readonly BindingChange[];
   readonly statusline: StatuslineInstall | null;
   readonly watcher: { readonly plistPath: string; readonly intervalMinutes: number; readonly installedAt: string } | null;
+  /** Set when setup turned live polling on: what it was before. Absent in a record from an older build. */
+  readonly livePolling?: { readonly before: boolean } | null;
 }
 
 export function setupRecordPath(home: string): string {
@@ -178,7 +188,7 @@ function writeSetupRecord(home: string, record: SetupRecord): void {
 
 // ------------------------------------------------------------------ plans
 
-export type StepPart = "capture" | "claude_binding" | "codex_binding" | "statusline" | "watcher" | "record";
+export type StepPart = "capture" | "claude_binding" | "codex_binding" | "statusline" | "watcher" | "live_polling" | "record";
 /** `change`: will be done. `unchanged`: already so. `skip`: not done, with why. `refuse`: blocks the whole action. */
 export type StepAction = "change" | "unchanged" | "skip" | "refuse";
 
@@ -210,6 +220,8 @@ export interface SetupOptions {
   /** False: install no watcher. */
   readonly watcher?: boolean;
   readonly intervalMinutes?: number;
+  /** True: also turn live polling on (`--live`), a network consent of its own. */
+  readonly livePolling?: boolean;
 }
 
 function plan(action: CollectionPlan["action"], platform: NodeJS.Platform, steps: PlanStep[]): CollectionPlan {
@@ -310,6 +322,26 @@ function watcherStep(r: Resolved, intervalMinutes: number): PlanStep {
   };
 }
 
+/** The hosts live polling would ask for the accounts this setup binds, for the consent sentence. */
+function pollHostsFor(t: SetupTargets): string[] {
+  return USAGE_POLLERS.filter((poller) => (poller.bindingSource === "claude_code_statusline" ? t.claudeAccount : t.codexAccount) !== null).map((poller) => poller.host);
+}
+
+/** The live polling step: a network consent, said as one. */
+function livePollingStep(telemetry: TelemetryConfig, t: SetupTargets): PlanStep {
+  if (livePollingOn(telemetry)) return { part: "live_polling", action: "unchanged", summary: "Live polling is already on.", path: null };
+  const hosts = pollHostsFor(t);
+  return {
+    part: "live_polling",
+    action: "change",
+    summary:
+      `Turn live polling on (\`telemetry.livePolling\` in config.json): on every collect, at most every 4 min, ask ${hosts.join(" and ")} for each bound account's ` +
+      "current usage, with the sign-in Claude Code and Codex already keep on this computer. It is read when asked, sent only there, and never stored or logged. " +
+      "`staple budget live off` turns it off.",
+    path: null,
+  };
+}
+
 /** What `setup` would change, and nothing else. */
 export function planBudgetSetup(options: SetupOptions, deps: CollectionDeps): CollectionPlan {
   const r = resolveDeps(deps);
@@ -355,8 +387,9 @@ export function planBudgetSetup(options: SetupOptions, deps: CollectionDeps): Co
 
   bindingStep("codex_binding", "codex_rollout", t.codexDir, t.codexAccount, "--codex-account");
   if (options.watcher === false) steps.push({ part: "watcher", action: "skip", summary: "--no-watcher: no Codex watcher is installed; `staple budget collect` still runs by hand.", path: null });
-  else if (t.codexAccount === null) steps.push({ part: "watcher", action: "skip", summary: "No Codex account, so no watcher.", path: null });
+  else if (t.codexAccount === null && options.livePolling !== true) steps.push({ part: "watcher", action: "skip", summary: "No Codex account, so no watcher.", path: null });
   else steps.push(watcherStep(r, t.intervalMinutes));
+  if (options.livePolling === true) steps.push(livePollingStep(telemetry, t));
   return plan("setup", r.platform, steps);
 }
 
@@ -447,6 +480,11 @@ export function applyBudgetSetup(options: SetupOptions, deps: CollectionDeps): C
         save({ ...record, watcher: { plistPath: r.plistPath, intervalMinutes: t.intervalMinutes, installedAt: r.now() } });
         break;
       }
+      case "live_polling": {
+        setLivePolling(r.home, true);
+        save({ ...record, livePolling: record.livePolling ?? { before: false } });
+        break;
+      }
       case "record":
         break;
     }
@@ -513,6 +551,9 @@ export function planBudgetUnsetup(deps: CollectionDeps): CollectionPlan {
       steps.push({ part, action: "change", summary: `Bind ${change.dir} back to ${change.before.accountRef}, as before setup.`, path: null, target: change.dir });
     }
   }
+  if (record.livePolling?.before === false && livePollingOn(telemetry)) {
+    steps.push({ part: "live_polling", action: "change", summary: "Turn live polling off, as it was before setup. Readings already stored are kept.", path: null });
+  }
   if (record.capture?.before === false && telemetry.budgetCapture) {
     steps.push({ part: "capture", action: "change", summary: "Turn budget capture off, as it was before setup, even if bindings were added since (they stay, and record nothing until capture is on again). Readings already stored are kept.", path: null });
   } else {
@@ -551,6 +592,9 @@ export function applyBudgetUnsetup(deps: CollectionDeps): CollectionOutcome {
       }
       case "capture":
         setBudgetCapture(r.home, false);
+        break;
+      case "live_polling":
+        setLivePolling(r.home, false);
         break;
       case "record":
         rmSync(setupRecordPath(r.home), { force: true });
@@ -611,6 +655,8 @@ export interface CollectionStatus {
   readonly statusline: readonly StatuslineStatus[];
   readonly watcher: WatcherStatus;
   readonly setup: { readonly recorded: boolean; readonly setupAt: string | null; readonly path: string };
+  /** Live polling: on or off, and per bound home a poller serves, its last check. */
+  readonly polling: PollingStatus;
   readonly problems: readonly CollectionProblem[];
 }
 
@@ -714,6 +760,12 @@ export function budgetCollectionStatus(deps: CollectionDeps): CollectionStatus {
     problems.push({ code: "watcher_stale", message: `The watcher last ran ${Math.round(lastRunAgeSeconds / 60)} min ago, for an interval of ${intervalMinutes} min; see ${agentLogPath(r.home)}.` });
   }
   if (cursor.lastError !== null) problems.push({ code: "collect_error", message: `Last collect (${cursor.lastError.at}): ${cursor.lastError.message}` });
+  const polling = usagePollingStatus(r.home);
+  if (polling.active) {
+    for (const provider of polling.providers) {
+      if (provider.failure !== null) problems.push({ code: "poll_failed", message: `${provider.name} (${provider.accountRef}), ${provider.failure.at}: ${provider.failure.message}` });
+    }
+  }
 
   return {
     budgetCapture: config.budgetCapture,
@@ -723,6 +775,7 @@ export function budgetCollectionStatus(deps: CollectionDeps): CollectionStatus {
     statusline,
     watcher,
     setup: { recorded: record !== null, setupAt: record?.setupAt ?? null, path: setupRecordPath(r.home) },
+    polling,
     problems,
   };
 }
@@ -736,4 +789,21 @@ export function collectBudget(options: { maxFiles?: number }, deps: CollectionDe
     throw new StapleError("validation", `--max-files must be a whole number from 1 to 10000; got ${String(options.maxFiles)}.`);
   }
   return collectCodexRollouts(r.home, { maxFiles: options.maxFiles, now: r.now, attemptLinker: r.attemptLinker, rotate: [agentLogPath(r.home)] });
+}
+
+/** One collect, then one live poll: the passive scan and the pollers, as one run. */
+export interface CollectNowResult extends CollectResult {
+  /** The live poll: `enabled: false` (and nothing asked) unless capture and live polling are on. */
+  readonly poll: PollRun;
+}
+
+/**
+ * What `staple budget collect` and the Usage page's Refresh run: {@link collectBudget}, then
+ * the live poll. `manual` is Refresh, which may ask a provider sooner than the schedule does.
+ */
+export async function collectBudgetNow(options: { maxFiles?: number; manual?: boolean }, deps: CollectionDeps): Promise<CollectNowResult> {
+  const r = resolveDeps(deps);
+  const passive = collectBudget({ maxFiles: options.maxFiles }, deps);
+  const poll = await runUsagePollers({ manual: options.manual }, { ...deps.poll, home: r.home, now: r.now, attemptLinker: r.attemptLinker });
+  return { ...passive, poll };
 }
