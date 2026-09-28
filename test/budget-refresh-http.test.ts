@@ -173,6 +173,9 @@ describe("POST /api/budget/collection/refresh", () => {
     expect(phone.body.collect).toBeDefined();
     const noToken = await realFetch(`${origin}/api/budget/collection/refresh`, { method: "POST", headers: { origin: FOREIGN } });
     expect(noToken.status).toBe(401);
+    // The token alone gates it: `?token=` (no custom header, so no preflight) is accepted too.
+    const queryToken = await realFetch(`${origin}/api/budget/collection/refresh?token=${encodeURIComponent(ui.token)}`, { method: "POST", headers: { origin: FOREIGN } });
+    expect(queryToken.status).toBe(200);
   });
 
   it("is POST-only", async () => {

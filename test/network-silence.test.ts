@@ -1068,6 +1068,16 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
       const port = (ui.server.address() as AddressInfo).port;
       const origin = `http://127.0.0.1:${port}`;
       const token = ui.token;
+      /**
+       * A Codex home that is SIGNED IN (a fake auth.json with an unexpired token), bound
+       * below for the Refresh step: were live polling's gate not there, that Refresh would
+       * ask chatgpt.com and this test would see it. Signed out, the step would pass with
+       * the gate removed and prove nothing.
+       */
+      const signedInCodex = join(uiHome, "codex-signed-in");
+      mkdirSync(signedInCodex, { recursive: true });
+      const fakeToken = `x.${Buffer.from(JSON.stringify({ exp: 4_102_444_800 })).toString("base64url")}.y`;
+      writeFileSync(join(signedInCodex, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: fakeToken, account_id: "acct" } }), { mode: 0o600 });
 
       /**
        * Everything a freshly opened tab asks for, in the order it asks. The poll
@@ -1194,7 +1204,7 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
          * writes, excluded from the post-write sync trigger like the collection routes.
          */
         ["/api/budget/capture", { enabled: true }, 200],
-        ["/api/budget/bindings/bind", { source: "codex-rollout", account: "codex-plus" }, 200],
+        ["/api/budget/bindings/bind", { source: "codex-rollout", account: "codex-plus", codexHome: signedInCodex }, 200],
         /*
          * The Usage page's Refresh with capture on and a home bound but live polling off,
          * which is how every install starts: the passive scan runs and nobody is asked.
@@ -1203,7 +1213,7 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
          */
         ["/api/budget/live", { enabled: false }, 200],
         ["/api/budget/collection/refresh", {}, 200],
-        ["/api/budget/bindings/unbind", { source: "codex-rollout" }, 200],
+        ["/api/budget/bindings/unbind", { source: "codex-rollout", codexHome: signedInCodex }, 200],
         ["/api/budget/capture", { enabled: false }, 200],
         /*
          * Removing budget readings: hub.db only, excluded from the post-write sync
