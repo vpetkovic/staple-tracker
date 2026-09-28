@@ -14,12 +14,13 @@
  * broader class never gets a card of its own: the cohorts sharing a class are ONE card named for
  * the class, "Also used for" them with their own counts, and always a "Rough guess".
  *
- * ## Exact by default, older history only when asked, never pooled
+ * ## Measured history first, older history on by default, never pooled
  *
- * The page reads `GET /api/calibration` with no filter: the `exact` set, captured history. The
- * "Include older history" switch re-reads with `include=reconstructed`, and the store then
- * reports the reconstructed set BESIDE the exact one, with its own samples, coverage and cohorts.
- * The page keeps them apart the same way: the exact section first, unchanged by the switch, and the
+ * The page reads `GET /api/calibration` for its workspace. With the "Include older history"
+ * switch on, which is the default, it reads with `include=reconstructed`, and the store then
+ * reports the reconstructed set BESIDE the exact one (captured history), with its own samples,
+ * coverage and cohorts. With the switch off it reads with no filter: the `exact` set only. The
+ * page keeps the two apart the same way: the exact section first, unchanged by the switch, and the
  * reconstructed cohorts in their own section under their own heading. The switch is a remembered
  * preference (older-history.ts): on until the reader turns it off, and then off on every visit
  * and reload until they turn it back on.
