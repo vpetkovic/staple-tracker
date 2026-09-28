@@ -26,8 +26,8 @@ import { percentOption, positiveInteger } from "./run.js";
 
 export const DRIVE_HELP = `staple run drive — work a run headless: a FRESH agent session per ticket.
 
-  run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P]]
-            --agent <${[...Object.keys(DRIVE_PROVIDERS), "custom"].join("|")}> [--command "<template>"] [--model M]
+  run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P]
+            [--gate-owner W] [--goal-cap N]] --agent <${[...Object.keys(DRIVE_PROVIDERS), "custom"].join("|")}> [--command "<template>"] [--model M]
 
 Loops "run continue" in this process. On take, it writes a brief for the ticket
 and launches one headless session with it, waits for the session, and states
@@ -104,6 +104,8 @@ export function runDriveCommand(rest: string[]): void {
       until: { type: "string" },
       ceiling: { type: "string" },
       "ceiling-account": { type: "string" },
+      "gate-owner": { type: "string" },
+      "goal-cap": { type: "string" },
       agent: { type: "string" },
       command: { type: "string" },
       model: { type: "string" },
@@ -123,9 +125,9 @@ export function runDriveCommand(rest: string[]): void {
   const finish = (values.finish ?? "in_review") as DriveFinish;
   if (finish !== "in_review" && finish !== "done") throw new StapleError("validation", `--finish is in_review or done; got "${values.finish}".`);
   if (values.run !== undefined && values.scope !== undefined) throw new StapleError("validation", "Give --run <id> to drive a run, or --scope to start one, not both.");
-  const startOptions = ["max-tickets", "until", "ceiling", "ceiling-account"] as const;
+  const startOptions = ["max-tickets", "until", "ceiling", "ceiling-account", "gate-owner", "goal-cap"] as const;
   if (values.scope === undefined && startOptions.some((flag) => values[flag] !== undefined)) {
-    throw new StapleError("validation", "--max-tickets, --until and --ceiling start a run; they need --scope.");
+    throw new StapleError("validation", "--max-tickets, --until, --ceiling, --gate-owner and --goal-cap start a run; they need --scope.");
   }
   const timeout = duration(values["ticket-timeout"], "--ticket-timeout");
   const retryAfter = seconds(values["retry-after"], "--retry-after");
@@ -155,6 +157,8 @@ export function runDriveCommand(rest: string[]): void {
       until: values.until,
       ceilingPercent: percentOption(values.ceiling, "--ceiling"),
       ceilingAccount: values["ceiling-account"],
+      gateOwner: values["gate-owner"],
+      goalChildCap: positiveInteger(values["goal-cap"], "--goal-cap"),
     });
   } else {
     run = values.run !== undefined ? runs.get(values.run) : runs.liveRunOf(actor);
@@ -222,7 +226,7 @@ export function runDriveCommand(rest: string[]): void {
     const runId = existing?.id ?? "<new run>";
     const logDir = runDirectory(dbFile, runId);
     const ref = next?.ref ?? "<ref>";
-    const brief = buildBrief({ ref, title: next?.title ?? "<title>", workspace: cwd, db: dbFile, runId, actor: existing?.actor ?? actor, finish, instructions });
+    const brief = buildBrief({ ref, title: next?.title ?? "<title>", workspace: cwd, db: dbFile, runId, actor: existing?.actor ?? actor, finish, instructions, goal: existing ? runs.goalReport(existing) : null });
     const briefFile = `${logDir}/001-${ref}.brief.md`;
     const shown = sessionCommand(values.agent!, command, {
       ref,

@@ -993,7 +993,9 @@ Approval gates
               QUEUED — listed apart in inbox and refused at checkout (exit 9 / gated).
               Resolved work is never queued, and neither is a parent with nothing
               open under it. Refused on a leaf (use in_review) and while a gate is
-              already pending; re-gating after request-changes is how you resubmit
+              already pending; re-gating after request-changes is how you resubmit.
+              A milestone with members is gateable: the gate holds its close for
+              review and queues nothing through membership
   approve <ref> [--children R1,R2] [-m text]
               with no --children: resolve the gate, release the whole subtree and
               re-derive the parent from its children. With --children: release only
@@ -1007,14 +1009,23 @@ Milestones
   milestone ls [--all]                  dated, human-ordered plans (issues of the reserved
               "milestone" kind — run "staple kinds add milestone" once to enable);
               --all includes done and cancelled ones
-  milestone show <ref>                  dates, derived state, progress, ordered members
-  milestone new <title> [--target D] [--start D] [--from-epic <ref>] [--preview]
+  milestone show <ref>                  dates, derived state, progress, ordered members,
+              the goal check (each criterion met/unmet/unknown with its evidence)
+              and the pace against the target date
+  milestone new <title> [-d desc] [--criteria "a;b"] [--target D] [--start D]
+              [--from-epic <ref>] [--preview]
+              --criteria are the milestone's goal (its acceptance criteria);
               --from-epic adds the epic as the ONE member (its children come along
               by descent, nothing is re-parented); --preview prints the exact plan
               and writes nothing; D is a UTC calendar day, YYYY-MM-DD
-  milestone set <ref> [--target D|none] [--start D|none]
-              only the dates; title, description, assignee and status are edited
-              with the ordinary commands
+  milestone set <ref> [-d desc] [--criteria "a;b"] [--target D|none] [--start D|none]
+              the dates and the goal (-d "" and --criteria "" clear); title,
+              assignee and status are edited with the ordinary commands
+  milestone criterion <ref> <n> (--met|--unmet|--unknown) [--evidence E]... [-m note]
+              [--follow-up "<title>" [--follow-up-description D]] [--run <id>]
+              judge criterion n: E is a ticket (ABC-12, counts while done), a
+              document (ABC-12:plan) or text; --met needs evidence. --follow-up
+              (unmet only) files a ticket through your live goal run, capped
   milestone add <milestone> <ref> [--before R|--after R|--at N] [--base N] [-m note]
   milestone rm <milestone> <ref> [--base N]
   milestone mv <ref> (--before R|--after R|--at N|--to <milestone>) [--base N]
@@ -1047,11 +1058,13 @@ The pickup queue
 
 Autopilot runs
   run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
+              [--gate-owner W] [--goal-cap N]
               one agent working the queue, an epic or parent, or a milestone,
-              ticket after ticket; one live run per actor per scope
+              ticket after ticket; one live run per actor per scope. A milestone
+              run is a goal run: it gates the milestone to W and ends goal_met
   run status [<run-id>] [--all]         a run and whether a stop rule trips now:
               stopped_by_human, budget, failure_streak, vp_blocked, gate_pending,
-              scope_empty (staple run --help)
+              goal_met, scope_empty (staple run --help)
   run stop [<run-id>] [-m why]          stop a run, recorded as stopped_by_human
   run pause|resume [<run-id>]           hold a run without ending it, and let it go on
   run continue [--run <id>] [--outcome done|failed] [--reason R]

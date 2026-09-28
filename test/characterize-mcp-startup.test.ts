@@ -130,7 +130,7 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 64 tools", async () => {
+  it("still connects and still lists all 65 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
@@ -147,8 +147,8 @@ describe("a server started with no workspace in reach", () => {
     // timing quality read timing_quality (55), and the calibration read calibration_cohorts (56), and the forecast read forecast (57),
     // and forget_budget_samples, which removes wrong budget readings (58), and the
     // autopilot runs' start_run, run_status and stop_run (61), and pause_run, resume_run
-    // and continue_run (64).
-    expect(tools).toHaveLength(64);
+    // and continue_run (64), and goal mode's mark_milestone_criterion (65).
+    expect(tools).toHaveLength(65);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

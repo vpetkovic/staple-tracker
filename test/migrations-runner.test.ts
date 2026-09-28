@@ -138,8 +138,9 @@ describe("version detection", () => {
     // (007-presence-role, the lane in the presence index). Then hub 7 -> 8
     // (008-budget-forgotten, the removed readings a replay must not restore),
     // workspace still 14. Then workspace 14 -> 15 (015-autopilot-runs, two
-    // machine-local tables), hub still 8.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(15);
+    // machine-local tables), hub still 8. Then workspace 15 -> 16 (016-milestone-goals,
+    // the machine-local criterion marks and three run columns), hub still 8.
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(16);
     expect(latestVersion(HUB_TARGET)).toBe(8);
   });
 });

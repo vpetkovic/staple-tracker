@@ -16,6 +16,7 @@ always did. Code: `src/core/run-store.ts`; CLI: `staple run`; MCP: `start_run`,
 
 ```
 staple run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]]
+                 [--gate-owner W] [--goal-cap N]
 staple run status [<run-id>] [--all]
 staple run stop [<run-id>] [-m why]
 staple run pause [<run-id>]
@@ -119,6 +120,9 @@ ticket, or null.
   "detail": {…}, "message": "…", "recorded": {…} | null, "run": {…} | null }
 ```
 
+Every answer also carries `goal`: on a goal run (a run over a milestone, see
+[Goal mode](#goal-mode)) the goal check now, else `null`.
+
 `run` is the run as `staple run status <id> --json` prints it under `run`.
 `continue_run` over MCP answers the same object.
 
@@ -129,10 +133,11 @@ Stable: never renamed. Stop reasons, first match wins:
 | Reason | When | Run ends |
 |---|---|---|
 | `stopped_by_human` | somebody ran `run stop` (`run.stop.by`, `run.stop.note`) | `stopped` |
-| `budget` | `detail.budget` is `tickets` (the run took `--max-tickets`), `time` (`--until` passed) or `ceiling` (a current rate-limit window's high-water use reached `--ceiling`) | `stopped` |
+| `budget` | `detail.budget` is `tickets` (the run took `--max-tickets`), `time` (`--until` passed), `ceiling` (a current rate-limit window's high-water use reached `--ceiling`) or `goal_children` (a goal run's scope is empty short of its goal and it created its `--goal-cap` tickets) | `stopped` |
 | `failure_streak` | the last two recorded outcomes are both `failed` | `stopped` |
 | `vp_blocked` | a ticket the run took is blocked on a named person, or nothing is workable and something in scope is | `stopped` |
-| `gate_pending` | the scope issue awaits approval, or nothing is workable and something in scope does | `stopped` |
+| `gate_pending` | the scope issue awaits approval, or nothing is workable and something in scope does (a goal run's own gate on its milestone is not one) | `stopped` |
+| `goal_met` | a goal run: nothing unresolved is left in scope and every criterion of the milestone is met; the milestone stays gated to its owner | `completed` |
 | `scope_empty` | nothing unresolved is left in scope | `completed` |
 | `no_run` | the actor has no live run (`continue` only; `run` is null) | — |
 
@@ -298,9 +303,125 @@ provider's session, and runs no git of its own; a test holds that. Landing work
 is a person's decision: the brief forbids it, and the run leaves a stack of
 branches (and pull requests) behind.
 
+## Goal mode
+
+A run over a milestone is a **goal run**: the milestone's own acceptance
+criteria (docs/milestones.md, "Goal") are what it works toward, and the
+milestone is the goal, not a separate document. Code: `src/core/milestone-goal.ts`
+(the pure rules), `run-store.ts` (the run's half), `milestone-store.ts` (marks).
+
+```
+staple milestone new "October" -d "What it is for" --criteria "Docs written;Tests pass"
+staple run start --scope ABC-40 --gate-owner VP [--goal-cap 5]
+staple milestone criterion ABC-40 1 --met --evidence ABC-41
+staple milestone criterion ABC-40 2 --unmet --evidence "no tests" --follow-up "Write the tests"
+```
+
+**Start.** `--gate-owner` names the person the milestone is gated to; without
+it the milestone's assignee, and with neither the start is refused
+(`validation`). `--goal-cap N` (default 5, 0 allowed) caps the tickets the run
+may create itself. Both are refused on any other scope.
+
+**The gate is opened at the start.** A milestone closes itself when its last
+member lands, as a parent does, unless a gate is open on it. So the run gates the
+milestone to its owner as it starts, with a comment saying why. That is the only
+design that holds whoever lands the last member: another agent, a person, or a
+device that syncs the landing in. The gate is an ordinary gate and replicates; a
+run-local rule would not. A milestone's gate queues nothing through membership
+(docs/milestones.md, "Gating a milestone"), so the members stay workable and the
+run keeps taking them. The run records the gate's `gate_requested_at` as
+`run.goal.gatedAt`; that gate is **not** a `gate_pending` stop. A gate a person
+opened (before the run, or after answering the run's) still is.
+
+The run keeps a gate open from then on:
+
+- before it adds a member (a goal check or a follow-up), it gates again if the
+  gate was approved: approved is history, and the new work is unreviewed;
+- a person's `changes_requested` also holds the close, so it is left standing
+  while the run works;
+- at `goal_met` it gates again unless its own gate is still pending, which
+  answers a `changes_requested` the way re-gating always does: the work goes back
+  for a second read.
+
+A milestone with nothing in it yet cannot be gated; the run gates it before the
+first member it adds itself. A milestone a person resolved while the run worked
+is their decision: the run ends `scope_empty`.
+
+**The goal check.** When the scope empties (where a run over an epic would end
+`scope_empty`):
+
+1. every criterion met: stop `goal_met` (ends `completed`), the milestone left
+   gated to its owner, never closed;
+2. else, with room under the cap: the run creates a **goal-check ticket**
+   (`Goal check: <milestone title>`, label `goal-check`), makes it a member and
+   takes it. `run status` shows this as `{stop: false, goalCheck}`;
+3. else: stop `budget`, `detail.budget` `goal_children`, the milestone gated.
+
+A milestone with no criteria has none left to show: its goal is that its
+members land, and the run ends `goal_met` when they have.
+
+**Judging.** The tracker never judges a criterion: there is no model inside it.
+The agent does, with `staple milestone criterion` (MCP
+`mark_milestone_criterion`), and the tracker decides what each mark is still
+worth at every check, deterministically:
+
+| Mark | Reads |
+|---|---|
+| none | `unknown` (the default) |
+| on a criterion reworded since | `unknown` |
+| `met`, a cited ticket not done (or since reopened), or a cited document gone | `unknown`, with why |
+| otherwise | what was marked |
+
+Evidence is a ticket (`ABC-12`, counts while it is done), a document on a ticket
+(`ABC-12:plan`, counts while it exists) or text. `met` needs at least one piece;
+a cited ticket or document must exist. A session may cite its own ticket before
+closing it: the criterion reads `unknown` until the ticket is done.
+
+**Tickets the run creates** are attributed to it: `createdBy` the run's actor,
+`originKind` `run`, `originId` `<run id>/<n>`, a `goal-check` or
+`goal-follow-up` label, and a membership noted `created by goal run <id>`. They
+are members, never children, so the milestone's gate never holds them. A
+follow-up is filed by marking a criterion `unmet` with `--follow-up "<title>"`
+(`--follow-up-description`) from the actor's live goal run over the milestone
+(or `--run`); its acceptance criterion is the criterion it answers. Every one
+counts against the cap, goal checks included; past it the follow-up is refused
+and the run's next empty scope stops `budget`. `run.goal.children` lists them.
+
+**What each answer carries.** `goal` on `take`, `wait`, `stop` and
+`run status`:
+
+```jsonc
+{ "milestone": { "identifier": "ABC-40", "title": "October", "status": "awaiting_approval" },
+  "criteria": [ { "position": 1, "text": "Docs written", "verdict": "met", "marked": "met",
+                  "evidence": [ { "kind": "ticket", "value": "ABC-41", "ref": "ABC-41",
+                                  "document": null, "status": "done", "holds": true, "problem": null } ],
+                  "note": null, "markedBy": "bot", "markedAt": "…", "runId": "…", "why": null } ],
+  "counts": { "met": 1, "unmet": 0, "unknown": 1, "total": 2 },
+  "met": false,
+  "pace": { … },                                   // docs/milestones.md, "Goal"
+  "children": { "cap": 5, "created": 1, "left": 4, "refs": ["ABC-44"] },
+  "gate": { "state": "pending", "owner": "VP", "requestedAt": "…", "ownedByRun": true } }
+```
+
+`run.goal` is `{gateOwner, childCap, children: [{identifier, title, status,
+purpose}], gatedAt}` on a goal run and `null` otherwise.
+
+**`run drive`.** A goal run's brief gains a goal section: the criteria as the
+check reads them and the verb to mark one, with "mark only what your work
+shows". A goal-check ticket's brief says it is the goal check: judge each
+criterion against the evidence, file follow-ups for the unmet ones (and how many
+are left), change no code, and close it with `staple done` whatever `--finish`
+says.
+
+**Local.** Marks are machine-local like runs (workspace migration 016): the
+verdicts are the driving agent's on this machine. The goal itself (description,
+criteria), the evidence, the tickets the run creates and the gate all replicate.
+
 ## Events
 
 `run_started`, `run_stopped` (with `reason`, `detail`, `by`), `run_state_changed`
 (pause and resume), `run_ticket_taken` and `run_ticket_recorded`, all in
-`staple events --follow`. A take also writes the ordinary `checkout` event on
+`staple events --follow`. A goal run adds `run_goal_gated` (the run opened a gate
+on its milestone) and `run_goal_child_created`, and a mark writes
+`milestone_criterion_marked`; none names an issue, like the run events. A take also writes the ordinary `checkout` event on
 the ticket, and a stated failure on a held ticket its `release`.

@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -356,7 +356,7 @@ CREATE TABLE runs (
         started_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL,
         ended_at        TEXT
-      );
+      , goal_gate_owner TEXT, goal_child_cap INTEGER, goal_gated_at TEXT);
 
 CREATE UNIQUE INDEX runs_live_scope_uq ON runs (actor, scope_key) WHERE state IN ('active', 'paused');
 
@@ -373,5 +373,18 @@ CREATE TABLE run_tickets (
         attempt_id  TEXT,
         recorded_at TEXT,
         PRIMARY KEY (run_id, seq)
+      );
+
+CREATE TABLE milestone_criterion_marks (
+        milestone_id TEXT    NOT NULL,
+        position     INTEGER NOT NULL,
+        criterion    TEXT    NOT NULL,
+        verdict      TEXT    NOT NULL,
+        evidence     TEXT    NOT NULL DEFAULT '[]',
+        note         TEXT,
+        marked_by    TEXT    NOT NULL,
+        run_id       TEXT,
+        marked_at    TEXT    NOT NULL,
+        PRIMARY KEY (milestone_id, position)
       );
 `;

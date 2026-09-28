@@ -83,7 +83,8 @@ issue and is reused rather than duplicated:
 | start date | `milestone_meta.start_date` | new; nullable |
 | state | **derived**, never stored | see below |
 | owner | `issues.assignee` | the person who owns the plan is its assignee; a second owner column would be two fields that disagree |
-| details | `issues.description` | what the milestone is for, edited where every description is edited |
+| details | `issues.description` | what the milestone is for; `milestone new`/`set -d`, or wherever a description is edited |
+| goal | `issues.acceptance_criteria` | the milestone's definition of done, see [Goal](#goal); `milestone new`/`set --criteria` |
 | notes | the `notes` document | revisioned, restorable, already keyed per issue ([semantics.md](semantics.md#revisioned-documents)) |
 
 ```sql
@@ -390,6 +391,67 @@ the fixture case in `milestones-e2e.test.ts` (R3e) — *"counts a member epic's
 child that is also a direct member once, and drops the cancelled leaf from the
 denominator"*.)
 
+## Goal
+
+A milestone's **goal** is its own description and acceptance criteria: the
+issue fields every issue has, so they replicate, show on every issue surface,
+and need no new storage. `staple milestone new` and `set` take them
+(`-d`, `--criteria "a;b"`, split and trimmed as `staple new` splits them;
+`-d ""` and `--criteria ""` clear), and so do `create_milestone` /
+`update_milestone` (`description`, `acceptance_criteria`) and
+`POST /api/milestone/create|update`.
+
+**The goal check** is every view's `goal` (`show`, `get_milestone`, every
+mutation's answer; not `ls`, which stays cheap): each criterion with a verdict,
+`met`, `unmet` or `unknown`, and the evidence it rests on. The tracker never
+judges a criterion; an agent marks it and the tracker weighs the mark at every
+read (`src/core/milestone-goal.ts`):
+
+```
+staple milestone criterion <ref> <n> (--met | --unmet | --unknown) [--evidence E]... [-m note]
+                          [--follow-up "<title>" [--follow-up-description D]] [--run <run-id>]
+```
+
+MCP `mark_milestone_criterion`, HTTP `POST /api/milestone/criterion`. An
+unmarked criterion is `unknown`; a criterion reworded after it was marked is
+`unknown` (the mark keeps the text it judged); a `met` mark whose cited ticket is
+not done, or whose cited document is gone, is `unknown` until it holds again.
+Evidence is a ticket (`ABC-12`), a document on one (`ABC-12:plan`) or text; `met`
+needs some, and a cited ticket or document must exist in this workspace. The
+position is 1-based, in the criteria's order. `--follow-up` files the work an
+unmet criterion needs through the marker's live goal run (docs/runs.md,
+"Goal mode"), attributed to it and counted against its cap; without a goal run
+it is refused. Marks are machine-local (workspace migration 016,
+`milestone_criterion_marks`), like the runs that usually make them.
+
+**Pace** is `goal.pace`: done work, the remaining estimate and the days to the
+target date, from the same certified plans `staple compare` reads. One plan per
+member that is not nested under another member; `laborSeconds` adds their
+`labor`, `remainingSeconds` their `remainingPath` (0 for a landed member): the
+members worked one after another, each member's own work as its critical path.
+`partial` says an open member is unplanned or partly planned (the figures are
+lower bounds; `unplannedRefs` names them). `daysToTarget` is whole UTC days, 0
+on the day. The verdict, first match wins: `done` (every countable leaf
+landed), `no_target`, `overdue`, `no_estimate`, `behind` (the remaining
+estimate exceeds the time to the end of the target day even worked around the
+clock: a certain miss, not a forecast) and `on_track` (it fits; that says
+nothing about whether anyone will work it). Every field is a function of the
+UTC day, so two reads a moment apart agree. `show` prints it as the `pace`
+line.
+
+### Gating a milestone
+
+`staple gate` accepts a milestone that has members (or children); one with
+neither is refused naming `milestone add`. Its gate is a person's sign-off on
+the goal and is what keeps the milestone from closing itself when its last
+member lands (the gate immunity above). It **queues nothing through
+membership**: a gate holds the tree beneath its issue by `parent_id`, as every
+gate does, and members are planned, not parented. So a gated milestone's
+members stay eligible, and only issues somebody parented under the milestone
+itself are held. That is what lets a goal run gate its milestone as it starts
+and keep working the members; approving the gate lands the milestone where its
+members say (done when they all landed).
+
 ## Lifecycle
 
 **Deleting a milestone** is deleting an issue: `ON DELETE CASCADE` removes its
@@ -494,8 +556,9 @@ None moves an issue's status, so none joins `STATUS_MOVING_EVENT_KINDS`.
 |---|---|---|
 | `staple milestone ls [--all]` | `list_milestones` | `GET /api/milestones` |
 | `staple milestone show <ref>` | `get_milestone` | `GET /api/milestone?ref=` |
-| `staple milestone new "<title>" [--target D] [--start D] [--from-epic <ref>] [--preview]` | `create_milestone` | `POST /api/milestone/create` |
-| `staple milestone set <ref> [--target D\|none] [--start D\|none]` | `update_milestone` | `POST /api/milestone/update` |
+| `staple milestone new "<title>" [-d D] [--criteria "a;b"] [--target D] [--start D] [--from-epic <ref>] [--preview]` | `create_milestone` | `POST /api/milestone/create` |
+| `staple milestone set <ref> [-d D] [--criteria "a;b"] [--target D\|none] [--start D\|none]` | `update_milestone` | `POST /api/milestone/update` |
+| `staple milestone criterion <ref> <n> (--met\|--unmet\|--unknown) [--evidence E]… [--follow-up T]` | `mark_milestone_criterion` | `POST /api/milestone/criterion` |
 | `staple milestone add <milestone> <ref> [--before R \| --after R \| --at N] [--base N] [-m note]` | `add_milestone_member` | `POST /api/milestone/add` |
 | `staple milestone rm <milestone> <ref> [--base N]` | `remove_milestone_member` | `POST /api/milestone/remove` |
 | `staple milestone mv <ref> (--before R \| --after R \| --at N \| --to <milestone>) [--base N]` | `move_milestone_member` | `POST /api/milestone/move` |
@@ -538,8 +601,10 @@ is `src/core/milestone-store.ts` (`store.milestones()`), and every membership
 mutation returns this same view, so a writer redraws from its result exactly
 as a reader does.
 
-Title, description, assignee and status are edited with the ordinary issue
-commands; `set` takes only what is milestone-specific. A non-milestone
+Title, assignee and status are edited with the ordinary issue commands; `set`
+takes the dates and the goal. The view's `milestone` also carries
+`description` and `acceptanceCriteria`, and the view carries `goal` (see
+[Goal](#goal)). A non-milestone
 identifier given where a milestone is expected is refused with `validation`
 naming its kind (`STA-66 is an epic, not a milestone`); an unknown identifier
 is `not_found`; `--at N` is a 1-based position; `rm` of a non-member is

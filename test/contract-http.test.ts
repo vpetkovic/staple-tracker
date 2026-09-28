@@ -761,6 +761,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/milestone",
       "/api/milestone/add",
       "/api/milestone/create",
+      "/api/milestone/criterion",
       "/api/milestone/move",
       "/api/milestone/remove",
       "/api/milestone/reorder",

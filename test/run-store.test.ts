@@ -84,8 +84,8 @@ describe("workspace migration 015", () => {
         const objects = (): string[] =>
           (db.prepare("SELECT type || ':' || name AS n FROM sqlite_master ORDER BY n").all() as Array<{ n: string }>).map((row) => row.n);
         const before = objects();
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([15]);
-        runMigrations(db, WORKSPACE_TARGET);
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([15, 16]);
+        runMigrations(db, { ...WORKSPACE_TARGET, migrations: WORKSPACE_TARGET.migrations.filter((m) => m.version <= 15) });
         expect(describeSchema(db, WORKSPACE_TARGET).current).toBe(15);
         expect(objects().filter((name) => !before.includes(name))).toEqual([
           "index:runs_live_scope_uq",
@@ -95,7 +95,8 @@ describe("workspace migration 015", () => {
           "table:run_tickets",
           "table:runs",
         ]);
-        // And the upgraded file is a working one: a run starts on it.
+        // And the upgraded file is a working one: a run starts on it (at the latest version).
+        runMigrations(db, WORKSPACE_TARGET);
         const upgraded = new WorkspaceStore(db, "fixture", "FIX");
         expect(upgraded.runs().start({ actor: BOT, scope: "queue" }).state).toBe("active");
       } finally {
@@ -143,7 +144,7 @@ describe("run start", () => {
     const milestone = issue("October", { kind: MILESTONE_KIND });
     expect(runs.start({ actor: BOT, scope: "queue" }).scope).toEqual({ kind: "queue" });
     expect(runs.start({ actor: BOT, scope: epic }).scope).toMatchObject({ kind: "issue", identifier: epic });
-    expect(runs.start({ actor: BOT, scope: milestone }).scope).toMatchObject({ kind: "milestone", identifier: milestone });
+    expect(runs.start({ actor: BOT, scope: milestone, gateOwner: "VP" }).scope).toMatchObject({ kind: "milestone", identifier: milestone });
   });
 
   it("refuses a leaf, a resolved scope, an unknown ref and a malformed budget", () => {
@@ -279,7 +280,7 @@ describe("run continue", () => {
   const holder = (ref: string) => store.getIssue(ref).checkoutAgent;
 
   it("answers stop no_run, with no run, when the actor has no live run", () => {
-    expect(cont()).toEqual({ action: "stop", reason: "no_run", detail: { actor: BOT }, message: expect.any(String), recorded: null, run: null });
+    expect(cont()).toEqual({ action: "stop", reason: "no_run", detail: { actor: BOT }, message: expect.any(String), recorded: null, run: null, goal: null });
     const { epic } = epicWithTwo();
     runs.stop(runs.start({ actor: BOT, scope: epic }).id, "vp");
     expect(cont()).toMatchObject({ action: "stop", reason: "no_run" });
@@ -505,17 +506,18 @@ describe("stop rules over a real store", () => {
     expect(decisionOf(run.id)).toMatchObject({ stop: true, reason: "scope_empty" });
   });
 
-  it("scope_empty: a milestone's members and their descendants are the scope", () => {
+  it("a milestone's members and their descendants are the scope; emptied, a goal run with no criteria is goal_met", () => {
     store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
     const milestone = issue("October", { kind: MILESTONE_KIND });
     const { epic, a, b } = epicWithTwo();
     const outside = issue("Not in the milestone");
     store.milestones().addMember(milestone, epic, {}, "vp");
-    const run = runs.start({ actor: BOT, scope: milestone });
+    const run = runs.start({ actor: BOT, scope: milestone, gateOwner: "VP" });
     expect(runs.status(run.id).facts!.workable.map((row) => row.identifier).sort()).toEqual([a, b].sort());
     store.updateIssue(a, { status: "done" }, "vp");
     store.updateIssue(b, { status: "done" }, "vp");
-    expect(decisionOf(run.id)).toMatchObject({ stop: true, reason: "scope_empty" });
+    // A run over a milestone is a goal run, and a milestone without criteria has met them all.
+    expect(decisionOf(run.id)).toMatchObject({ stop: true, reason: "goal_met", state: "completed" });
     // The queue scope still sees the outside row.
     expect(runs.status(runs.start({ actor: BOT, scope: "queue" }).id).facts!.workable.map((row) => row.identifier)).toContain(outside);
   });
@@ -577,15 +579,16 @@ describe("stop rules over a real store", () => {
     expect(decisionOf(run.id)).toEqual({ stop: false });
   });
 
-  it("gate_pending: a milestone awaiting approval stops the run while its members still have work", () => {
+  it("gate_pending: a milestone a person gated stops the run while its members still have work", () => {
     store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
     const milestone = issue("October", { kind: MILESTONE_KIND });
-    // A child of the milestone is what makes it gateable; its member epic is not under the gate.
-    issue("Goal check", { parent: milestone });
     const { epic } = epicWithTwo();
     store.milestones().addMember(milestone, epic, {}, "vp");
-    const run = runs.start({ actor: BOT, scope: milestone });
-    store.gateIssue(milestone, { owner: "VP" }, BOT);
+    // A person's gate, opened before the run: the run leaves it standing and does not own it.
+    store.gateIssue(milestone, { owner: "VP" }, "vp");
+    const run = runs.start({ actor: BOT, scope: milestone, gateOwner: "VP" });
+    expect(run.goal!.gatedAt).toBeNull();
+    // Its member epic is not under the gate: a gate holds nothing through membership.
     expect(runs.status(run.id).facts!.workable).toHaveLength(2);
     expect(decisionOf(run.id)).toMatchObject({ stop: true, reason: "gate_pending", detail: { gates: [expect.objectContaining({ identifier: milestone, owner: "VP" })] } });
   });
@@ -776,7 +779,7 @@ function baseRun(over: Partial<RunForRules> = {}): RunForRules {
 }
 
 function baseFacts(over: Partial<RunFacts> = {}): RunFacts {
-  return { now: NOW, workable: [{ issueId: "w", identifier: "TST-9", held: false }], waiting: [], pendingGates: [], personBlocks: [], ceiling: null, ...over };
+  return { now: NOW, workable: [{ issueId: "w", identifier: "TST-9", held: false }], waiting: [], pendingGates: [], personBlocks: [], ceiling: null, goal: null, ...over };
 }
 
 const ticket = (issueId: string, outcome: "done" | "failed" | null) => ({

@@ -351,7 +351,7 @@ describe("dates", () => {
     expect(view.milestone).toMatchObject({ targetDate: "2026-10-31", startDate: null });
     expect(refused(() => milestones.update(m, { targetDate: "2026-02-30" }, "vp"), "validation").message).toContain("YYYY-MM-DD");
     expect(refused(() => milestones.update(m, { startDate: "2026-11-01" }, "vp"), "validation").message).toContain("after target");
-    expect(refused(() => milestones.update(m, {}, "vp"), "validation").message).toContain("targetDate or startDate");
+    expect(refused(() => milestones.update(m, {}, "vp"), "validation").message).toContain("requires targetDate, startDate");
     // A refused write leaves the dates as they were.
     expect(milestones.get(m).milestone).toMatchObject({ targetDate: "2026-10-31", startDate: null });
   });

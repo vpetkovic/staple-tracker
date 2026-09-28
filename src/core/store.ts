@@ -3780,6 +3780,14 @@ export class WorkspaceStore {
    *    already ranks READY in the inbox. Two statuses that mean review with no
    *    way to tell which one you need is exactly the confusion this refusal
    *    prevents.
+   *    A MILESTONE with members is not a leaf: its gate is a person's sign-off
+   *    on the goal, and it is what keeps the milestone from closing itself
+   *    when its last member lands (`deriveOneAncestor`). What it queues is
+   *    what any gate queues, the tree beneath it by `parent_id`, and nothing
+   *    through membership: members are other issues' work, planned rather
+   *    than parented (docs/milestones.md), and they stay workable, which is
+   *    what lets a goal run gate its milestone at the start and keep working
+   *    the members (docs/runs.md "Goal mode").
    *  - **A gate that is still PENDING.** Re-gating would move the owner out
    *    from under a reviewer who has not answered yet.
    *
@@ -3829,10 +3837,16 @@ export class WorkspaceStore {
           id: string;
         }>
       ).length;
-      if (children === 0) {
+      const members =
+        row.kind === MILESTONE_KIND
+          ? (this.db.prepare("SELECT COUNT(*) AS n FROM milestone_members WHERE milestone_id = ?").get(row.id) as { n: number }).n
+          : 0;
+      if (children === 0 && members === 0) {
         throw new StapleError(
           "validation",
-          `Cannot gate ${row.identifier}: it has no children, so there is nothing to queue. Use \`staple status ${row.identifier} in_review\` for a leaf awaiting a human.`,
+          row.kind === MILESTONE_KIND
+            ? `Cannot gate ${row.identifier}: it has no members and no children, so there is nothing to review. Add members first (staple milestone add ${row.identifier} <ref>).`
+            : `Cannot gate ${row.identifier}: it has no children, so there is nothing to queue. Use \`staple status ${row.identifier} in_review\` for a leaf awaiting a human.`,
         );
       }
       if (row.gate_state === "pending") {

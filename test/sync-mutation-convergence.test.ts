@@ -86,7 +86,8 @@ const READS: Record<StoreName, readonly string[]> = {
     // `releaseIssue`: both are this store's own mutations, covered by their scenarios.
     "runs",
   ],
-  MilestoneStore: ["queueSeam", "get", "list", "milestoneOf", "effectiveMilestone"],
+  // `criteriaCheck`: the goal check's criteria half, read by a goal run's stop rules.
+  MilestoneStore: ["queueSeam", "get", "list", "milestoneOf", "effectiveMilestone", "criteriaCheck"],
   // `scopeMembership`: which issues a scope holds, the same resolution a scoped `effectiveQueue` reads.
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
@@ -356,6 +357,15 @@ const SCENARIOS: readonly Scenario[] = [
     run: (w) => void (w.ids["M2"] = milestoneIdOf(w, w.a.store.milestones().create({ title: "M2", fromEpic: w.ids["Shipped epic"]! }, "alice"))),
   },
   { method: "MilestoneStore.update", name: "move a milestone's dates", run: (w) => void w.a.store.milestones().update(w.ids["M1"]!, { targetDate: "2026-12-01", startDate: "2026-10-01" }, "alice") },
+  {
+    // The goal (description, criteria) is an issue edit and replicates; the mark itself is
+    // machine-local (migration 016), so what the scenario proves is that it moves nothing
+    // a synchronized column holds.
+    method: "MilestoneStore.markCriterion",
+    name: "judge a milestone criterion",
+    prep: (w) => void w.a.store.milestones().update(w.ids["M1"]!, { description: "Why", acceptanceCriteria: ["It ships", "It is documented"] }, "alice"),
+    run: (w) => void w.a.store.milestones().markCriterion(w.ids["M1"]!, 2, { verdict: "met", evidence: ["the README says so"] }, "alice"),
+  },
   {
     method: "MilestoneStore.addMember",
     name: "add milestone members",

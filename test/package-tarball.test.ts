@@ -348,8 +348,8 @@ describe("the installed binary, run from outside this repository", () => {
       // and the explicit estimate write set_estimate (53), compare_plans (54), and
       // timing_quality (55), calibration_cohorts (56), and forecast (57), and
       // forget_budget_samples (58), start_run, run_status and stop_run (61), and
-      // pause_run, resume_run and continue_run (64).
-      expect(tools).toHaveLength(64);
+      // pause_run, resume_run and continue_run (64), and mark_milestone_criterion (65).
+      expect(tools).toHaveLength(65);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.

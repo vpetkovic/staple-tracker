@@ -120,6 +120,8 @@ describe("every operation has the same shape and refusal on every surface", () =
         status: "backlog",
         kind: "milestone",
         assignee: null,
+        description: null,
+        acceptanceCriteria: [],
         targetDate: "2026-10-31",
         startDate: null,
         state: "planned",
@@ -153,6 +155,23 @@ describe("every operation has the same shape and refusal on every surface", () =
       // still real work in the unqueued band, so `next` names it and the
       // position an agent would see it at (R3d).
       next: { identifier: "CON-4", position: 2 },
+      // No criteria, so nothing is left to show; the pace reads the one unestimated member.
+      goal: {
+        criteria: [],
+        counts: { met: 0, unmet: 0, unknown: 0, total: 0 },
+        met: true,
+        pace: {
+          targetDate: "2026-10-31",
+          daysToTarget: expect.any(Number),
+          leaves: { done: 0, countable: 1, percent: 0 },
+          laborSeconds: null,
+          remainingSeconds: null,
+          partial: true,
+          unplannedRefs: ["CON-4"],
+          verdict: expect.stringMatching(/^(no_estimate|overdue)$/),
+          message: expect.any(String),
+        },
+      },
     });
     expect(fromMcp).toEqual(fromCli);
     expect(fromHttp).toEqual(fromCli);

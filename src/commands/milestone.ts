@@ -3,8 +3,10 @@
  *
  *   milestone ls [--all]
  *   milestone show <ref>
- *   milestone new "<title>" [--target D] [--start D] [--from-epic <ref>] [--preview]
- *   milestone set <ref> [--target D|none] [--start D|none]
+ *   milestone new "<title>" [-d desc] [--criteria "a;b"] [--target D] [--start D] [--from-epic <ref>] [--preview]
+ *   milestone set <ref> [-d desc] [--criteria "a;b"] [--target D|none] [--start D|none]
+ *   milestone criterion <ref> <n> (--met | --unmet | --unknown) [--evidence E]... [-m note]
+ *                       [--follow-up "<title>" [--follow-up-description D]] [--run <run-id>]
  *   milestone add <milestone> <ref> [--before R | --after R | --at N] [--base N] [-m note]
  *   milestone rm <milestone> <ref> [--base N]
  *   milestone mv <ref> (--before R | --after R | --at N | --to <milestone>) [--base N]
@@ -12,17 +14,29 @@
  *
  * Every subcommand answers `--json` with the ONE shape `MilestoneStore` returns
  * — the same object MCP and HTTP hand back — so a script reading `show` and a
- * script reading the result of `add` parse the same thing. Title, description,
- * assignee and status are edited with the ordinary issue commands; `set` takes
- * only what is milestone-specific. Errors are thrown as `StapleError` and
+ * script reading the result of `add` parse the same thing. Title, assignee and
+ * status are edited with the ordinary issue commands; `set` takes the dates and
+ * the goal (description and acceptance criteria, which are the issue's own
+ * fields, edited here too because they are what a goal run works toward). Errors are thrown as `StapleError` and
  * formatted by the top-level catch in cli.ts like every other command's.
  */
 import { parseArgs } from "node:util";
 import type { MilestoneListRow, MilestoneView } from "../core/milestone-store.js";
+import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 
-const USAGE = "Use: ls, show, new, set, add, rm, mv, reorder";
+const USAGE = "Use: ls, show, new, set, criterion, add, rm, mv, reorder";
+
+/** `--criteria "a;b"`, split as `staple new` splits it; absent leaves them alone, "" clears them. */
+function criteriaOption(raw: string | undefined): string[] | undefined {
+  if (raw === undefined) return undefined;
+  return raw.split(";").map((criterion) => criterion.trim()).filter(Boolean);
+}
+
+function hoursText(seconds: number | null): string {
+  return seconds === null ? "—" : `${Math.round((seconds / 3600) * 10) / 10}h`;
+}
 
 /** `none` clears a date on the CLI; absent leaves it alone. */
 function dateOption(raw: string | undefined): string | null | undefined {
@@ -56,6 +70,8 @@ function printView(view: MilestoneView): void {
     `state ${m.state} · status ${m.status}${m.assignee ? ` · @${m.assignee}` : ""} · target ${m.targetDate ?? "none"} · start ${m.startDate ?? "none"} · revision ${view.revision}`,
   );
   console.log(`progress ${progressCell(view)} · ${view.progress.total} leaves${view.progress.complete ? " · complete" : ""}`);
+  if (m.description) console.log(`about    ${m.description.split("\n")[0]}`);
+  printGoal(view);
   if (view.members.length === 0) {
     console.log("members  (none)");
     return;
@@ -67,6 +83,22 @@ function printView(view: MilestoneView): void {
     console.log(`${indent}${String(member.position).padStart(2)}. ${member.identifier.padEnd(9)} ${member.status.padEnd(11)} ${member.title}${kind}`);
   }
   if (view.next) console.log(`next     ${view.next.identifier} (member ${view.next.position})`);
+}
+
+function printGoal(view: MilestoneView): void {
+  const { goal } = view;
+  const pace = goal.pace;
+  console.log(`pace     ${pace.verdict}: ${pace.message} (labor ${hoursText(pace.laborSeconds)}, remaining ${hoursText(pace.remainingSeconds)}${pace.partial ? ", partly planned" : ""})`);
+  if (goal.criteria.length === 0) {
+    console.log("goal     (no criteria: staple milestone set <ref> --criteria \"a;b\")");
+    return;
+  }
+  console.log(`goal     ${goal.counts.met}/${goal.counts.total} met${goal.met ? " · met" : ""}`);
+  for (const criterion of goal.criteria) {
+    const evidence = criterion.evidence.length === 0 ? "" : `  [${criterion.evidence.map((item) => item.value).join(", ")}]`;
+    const why = criterion.why && criterion.marked !== null ? `  (${criterion.why})` : "";
+    console.log(`  ${String(criterion.position).padStart(2)}. ${criterion.verdict.padEnd(7)} ${criterion.text}${evidence}${why}`);
+  }
 }
 
 export function runMilestoneCommand(rest: string[]): void {
@@ -82,6 +114,15 @@ export function runMilestoneCommand(rest: string[]): void {
       target: { type: "string" },
       start: { type: "string" },
       "from-epic": { type: "string" },
+      description: { type: "string", short: "d" },
+      criteria: { type: "string" },
+      met: { type: "boolean" },
+      unmet: { type: "boolean" },
+      unknown: { type: "boolean" },
+      evidence: { type: "string", multiple: true },
+      "follow-up": { type: "string" },
+      "follow-up-description": { type: "string" },
+      run: { type: "string" },
       before: { type: "string" },
       after: { type: "string" },
       at: { type: "string" },
@@ -120,6 +161,8 @@ export function runMilestoneCommand(rest: string[]): void {
       const result = milestones.create(
         {
           title: first,
+          description: values.description ?? null,
+          acceptanceCriteria: criteriaOption(values.criteria),
           targetDate: dateOption(values.target) ?? null,
           startDate: dateOption(values.start) ?? null,
           fromEpic: values["from-epic"] ?? null,
@@ -141,10 +184,36 @@ export function runMilestoneCommand(rest: string[]): void {
     case "set":
       view = milestones.update(
         need(first, "a milestone reference"),
-        { targetDate: dateOption(values.target), startDate: dateOption(values.start) },
+        {
+          targetDate: dateOption(values.target),
+          startDate: dateOption(values.start),
+          description: values.description === undefined ? undefined : values.description.trim() === "" ? null : values.description,
+          acceptanceCriteria: criteriaOption(values.criteria),
+        },
         actor,
       );
       break;
+    case "criterion": {
+      const verdicts = (["met", "unmet", "unknown"] as const).filter((verdict) => values[verdict] === true);
+      if (verdicts.length !== 1) throw new StapleError("validation", "staple milestone criterion needs exactly one of --met, --unmet or --unknown");
+      const position = integerOption(need(second, "the criterion's number (1-based)"), "the criterion number")!;
+      if (values["follow-up-description"] !== undefined && values["follow-up"] === undefined) {
+        throw new StapleError("validation", "--follow-up-description describes a --follow-up; give its title with --follow-up.");
+      }
+      view = milestones.markCriterion(
+        need(first, "a milestone reference"),
+        position,
+        {
+          verdict: verdicts[0] as CriterionVerdict,
+          evidence: values.evidence ?? [],
+          note: values.note ?? null,
+          followUp: values["follow-up"] === undefined ? null : { title: values["follow-up"], description: values["follow-up-description"] ?? null },
+          run: values.run ?? null,
+        },
+        actor,
+      );
+      break;
+    }
     case "add":
       view = milestones.addMember(
         need(first, "a milestone reference"),

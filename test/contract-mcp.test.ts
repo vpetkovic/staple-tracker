@@ -305,8 +305,9 @@ describe("tool inventory", () => {
   // calibration_cohorts: 55 -> 56. The forecast read added forecast: 56 -> 57. Removing
   // wrong budget readings added forget_budget_samples: 57 -> 58. Autopilot runs added
   // start_run, run_status and stop_run: 58 -> 61. The run's driver loop added pause_run,
-  // resume_run and continue_run: 61 -> 64.
-  it("exposes exactly these 64 tools with these annotations and output schemas", async () => {
+  // resume_run and continue_run: 61 -> 64. Milestone goal mode added
+  // mark_milestone_criterion: 64 -> 65.
+  it("exposes exactly these 65 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -667,13 +668,25 @@ describe("tool inventory", () => {
         hasOutputSchema: false,
       },
       {
-        // idempotentHint: setting the same dates twice is the same state.
+        // idempotentHint: setting the same dates (or goal) twice is the same state.
         name: "update_milestone",
         annotations: {
-          title: "Update milestone dates",
+          title: "Update milestone",
           readOnlyHint: false,
           destructiveHint: false,
           idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        // A mark is replaced, not appended, but a follow-up creates a ticket each time.
+        name: "mark_milestone_criterion",
+        annotations: {
+          title: "Mark milestone criterion",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
           openWorldHint: false,
         },
         hasOutputSchema: true,
@@ -1758,6 +1771,8 @@ describe("tool response shapes (31/31)", () => {
       "remove_milestone_member",
       "move_milestone_member",
       "reorder_milestone_members",
+      // Goal mode: pinned in test/milestone-goal-surfaces.test.ts against `milestone criterion --json`.
+      "mark_milestone_criterion",
       "get_setting",
       "set_setting",
       // STA-168: the seven queue tools are pinned in test/queue-surfaces.test.ts,

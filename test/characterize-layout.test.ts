@@ -165,10 +165,11 @@ describe("a fresh repo-local `staple init`", () => {
       // (008-queue-entries), to "9" by 009-projects, to "10" by
       // 010-sync-metadata, to "11" by 011-sync-field-writes, to "12" by
       // 012-host-binding, to "13" by 013-execution-attempts, to "14" by
-      // 014-attempt-role and to "15" by 015-autopilot-runs; the TEXT typing
+      // 014-attempt-role, to "15" by 015-autopilot-runs and to "16" by
+      // 016-milestone-goals; the TEXT typing
       // is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "15" },
+      { key: "schema_version", value: "16" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -223,6 +224,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_issues_1",
       "index:sqlite_autoindex_issues_2",
       "index:sqlite_autoindex_meta_1",
+      // 016-milestone-goals: the criterion marks' (milestone, position) primary key.
+      "index:sqlite_autoindex_milestone_criterion_marks_1",
       "index:sqlite_autoindex_milestone_members_1",
       "index:sqlite_autoindex_milestone_members_2",
       "index:sqlite_autoindex_milestone_meta_1",
@@ -270,6 +273,8 @@ describe("a fresh repo-local `staple init`", () => {
       "table:events",
       "table:issues",
       "table:meta",
+      // 016-milestone-goals: machine-local, never synchronized.
+      "table:milestone_criterion_marks",
       "table:milestone_members",
       "table:milestone_meta",
       "table:projects",
@@ -468,9 +473,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 15 since 015-autopilot-runs. The hub beside it
+      // WORKSPACE_SCHEMA_VERSION — 16 since 016-milestone-goals. The hub beside it
       // is still 2; the two databases version independently.
-      { key: "schema_version", value: "15" },
+      { key: "schema_version", value: "16" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

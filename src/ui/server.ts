@@ -34,6 +34,7 @@ import type { QueueVerb } from "../core/queue-store.js";
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { MILESTONE_KIND } from "../core/milestones.js";
+import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
 import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
@@ -4629,6 +4630,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               {
                 title: body.title as string | undefined,
                 description: body.description as string | null | undefined,
+                acceptanceCriteria: body.acceptanceCriteria as string[] | undefined,
                 targetDate: body.targetDate as string | null | undefined,
                 startDate: body.startDate as string | null | undefined,
                 fromEpic: body.fromEpic as string | null | undefined,
@@ -4643,6 +4645,22 @@ export function startUiServer(options: UiOptions): UiHandle {
               {
                 targetDate: body.targetDate as string | null | undefined,
                 startDate: body.startDate as string | null | undefined,
+                description: body.description as string | null | undefined,
+                acceptanceCriteria: body.acceptanceCriteria as string[] | undefined,
+              },
+              actor,
+            );
+            break;
+          case "/api/milestone/criterion":
+            payload = milestones.markCriterion(
+              ref,
+              body.position as number,
+              {
+                verdict: body.verdict as CriterionVerdict,
+                evidence: (body.evidence as string[] | undefined) ?? [],
+                note: (body.note as string | undefined) ?? null,
+                followUp: (body.followUp as { title: string; description?: string | null } | undefined) ?? null,
+                run: (body.run as string | undefined) ?? null,
               },
               actor,
             );

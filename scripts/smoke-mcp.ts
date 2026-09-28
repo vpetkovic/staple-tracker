@@ -865,8 +865,8 @@ try {
   // explicit estimate write, makes 44, compare_plans, the certified plan read, 45, and
   // timing_quality, the cohort quality read, 46, calibration_cohorts, 47, and forecast, 48.
   // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51,
-  // and pause_run, resume_run and continue_run, 54.
-  assert(wsTargetable.length === 54, `54 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // and pause_run, resume_run and continue_run, 54, and goal mode's mark_milestone_criterion, 55.
+  assert(wsTargetable.length === 55, `55 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&
@@ -1072,6 +1072,8 @@ try {
         "dequeue_task",
         "enqueue_task",
         "gate_task",
+        // Goal mode: a criterion's verdict names who judged it.
+        "mark_milestone_criterion",
         "move_milestone_member",
         "move_queue_entry",
         // Pausing a run records who paused it, as resuming does.

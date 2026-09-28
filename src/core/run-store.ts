@@ -22,9 +22,33 @@
  *                     it is
  *   gate_pending      the scope issue itself holds a pending review gate, or nothing in
  *                     scope is workable and something in it holds one
+ *   goal_met          (a goal run) nothing unresolved is left in scope and every criterion
+ *                     of the milestone is met; the milestone is left gated to its owner
  *   scope_empty       nothing unresolved is left in scope at all
  *
- * `scope_empty` ends the run `completed`; every other reason ends it `stopped`.
+ * `scope_empty` and `goal_met` end the run `completed`; every other reason ends it `stopped`.
+ *
+ * ## Goal mode
+ *
+ * A run over a milestone is a GOAL run: the milestone's acceptance criteria are what it
+ * works toward (`milestone-goal.ts`). Two rules follow from the milestone closing itself
+ * when its last member lands:
+ *
+ *  - The run GATES the milestone to its owner (`goal.gateOwner`) when it starts, and again
+ *    before it adds a member, whenever no gate is open on it. An open gate is the one thing
+ *    that stops the derived close, and it replicates, so the milestone cannot close
+ *    unreviewed while the run works, whoever lands its last member. The run's own gate
+ *    (`gate_requested_at` equal to `goal.gatedAt`) is not a `gate_pending` stop; a gate a
+ *    person opened still is.
+ *  - When the scope empties, the GOAL CHECK replaces `scope_empty`: every criterion met is
+ *    `goal_met` (the gate is reopened if a person answered it meanwhile); otherwise, with
+ *    room under the run's cap, the run creates a goal-check ticket, makes it a member and
+ *    takes it, and the session judges each criterion (`staple milestone criterion`), filing
+ *    follow-ups for unmet ones; with no room left, the run stops `budget` with
+ *    `detail.budget` `goal_children`. Every ticket the run creates counts against the cap.
+ *
+ * A milestone a person resolved while the run worked is their decision: the run ends
+ * `scope_empty` as any run does.
  *
  * "Workable" is the pickup queue's own answer (`QueueStore.effectiveQueue` with the run's
  * scope): a row inside the scope that is `eligible`, or that the run's actor already
@@ -58,12 +82,14 @@ import type { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
 import { insertEvent } from "./event-log.js";
 import { newId } from "./ids.js";
+import type { MilestoneGoal } from "./milestone-store.js";
+import { GOAL_CHILD_CAP_DEFAULT, type GoalCounts, RUN_ORIGIN_KIND } from "./milestone-goal.js";
 import { MILESTONE_KIND } from "./milestones.js";
 import { databaseFile, type DriverAttachment, readDriver } from "./run-attachment.js";
 import type { WorkspaceStore } from "./store.js";
 import { normalizeInstant, parseRelativeSeconds } from "./telemetry/formats.js";
 import { readBudget, type BudgetView } from "./telemetry/read-budget.js";
-import { StapleError, nowIso } from "./types.js";
+import { type Issue, StapleError, nowIso } from "./types.js";
 
 export const RUN_STATES = ["active", "paused", "stopped", "completed"] as const;
 export type RunState = (typeof RUN_STATES)[number];
@@ -78,6 +104,7 @@ export const RUN_STOP_REASONS = [
   "failure_streak",
   "vp_blocked",
   "gate_pending",
+  "goal_met",
   "scope_empty",
 ] as const;
 export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
@@ -90,8 +117,8 @@ export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
 export const RUN_WAIT_REASONS = ["paused", "waiting_on_others"] as const;
 export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
 
-/** Which budget ran out, in `detail.budget` of a `budget` stop. */
-export type RunBudgetKind = "tickets" | "time" | "ceiling";
+/** Which budget ran out, in `detail.budget` of a `budget` stop; `goal_children` is a goal run's cap. */
+export type RunBudgetKind = "tickets" | "time" | "ceiling" | "goal_children";
 
 export const RUN_TICKET_OUTCOMES = ["done", "failed"] as const;
 export type RunTicketOutcome = (typeof RUN_TICKET_OUTCOMES)[number];
@@ -139,12 +166,31 @@ export interface RunStop {
   at: string;
 }
 
+/** What makes a run over a milestone a goal run; null on any other run. */
+export interface RunGoal {
+  /** The person the milestone is gated to. */
+  gateOwner: string;
+  /** How many tickets the run may create itself: goal checks and follow-ups. */
+  childCap: number;
+  /** The tickets it created, oldest first. */
+  children: Array<{ identifier: string; title: string; status: string; purpose: RunGoalChildPurpose }>;
+  /** `gate_requested_at` of the gate the run opened on the milestone; null when it opened none. */
+  gatedAt: string | null;
+}
+
+/** Why a goal run created a ticket; the ticket carries it as its label. */
+export type RunGoalChildPurpose = "goal_check" | "follow_up";
+
+const GOAL_CHILD_LABELS: Record<RunGoalChildPurpose, string> = { goal_check: "goal-check", follow_up: "goal-follow-up" };
+
 export interface Run {
   id: string;
   actor: string;
   scope: RunScope;
   state: RunState;
   budget: RunBudget;
+  /** Null unless the run is over a milestone. */
+  goal: RunGoal | null;
   tickets: RunTicket[];
   counts: { taken: number; done: number; failed: number; open: number };
   /** Null while the run is live. */
@@ -167,6 +213,17 @@ export interface RunFacts {
   personBlocks: Array<{ issueId: string; identifier: string; owner: string; action: string | null }>;
   /** Null when the run has no ceiling. */
   ceiling: RunCeilingFact | null;
+  /** A goal run over an unresolved milestone: its criteria and its cap. Null otherwise. */
+  goal: RunGoalFacts | null;
+}
+
+/** What the goal check reads: the criteria counts and the room left under the cap. */
+export interface RunGoalFacts {
+  milestone: string;
+  counts: GoalCounts;
+  met: boolean;
+  childCap: number;
+  childrenCreated: number;
 }
 
 /** The highest current-window use the ceiling is read against, or why it is unknown. */
@@ -185,8 +242,14 @@ export interface RunWait {
   message: string;
 }
 
+/** A goal run's scope emptied short of its goal: the next take is a new goal-check ticket. */
+export interface RunGoalCheck {
+  counts: GoalCounts;
+  message: string;
+}
+
 export type StopDecision =
-  | { stop: false; wait?: RunWait }
+  | { stop: false; wait?: RunWait; goalCheck?: RunGoalCheck }
   | { stop: true; reason: RunStopReason; state: "stopped" | "completed"; detail: Record<string, unknown>; message: string };
 
 /**
@@ -199,6 +262,19 @@ export interface RunStatus {
   decision: StopDecision;
   facts: RunFacts | null;
   driver: DriverAttachment | null;
+  /** A goal run's goal check now; null on any other run. */
+  goal: RunGoalReport | null;
+}
+
+/**
+ * A goal run's goal, as every answer carries it: the milestone, each criterion's verdict with
+ * its evidence, the pace against the target date, the tickets the run created against its
+ * cap, and the gate on the milestone.
+ */
+export interface RunGoalReport extends MilestoneGoal {
+  milestone: { identifier: string; title: string; status: string };
+  children: { cap: number; created: number; left: number; refs: string[] };
+  gate: { state: string; owner: string; requestedAt: string; ownedByRun: boolean } | null;
 }
 
 /** What `evaluateStopRules` reads of a run. */
@@ -215,7 +291,7 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
   const stop = (reason: RunStopReason, detail: Record<string, unknown>, message: string): StopDecision => ({
     stop: true,
     reason,
-    state: reason === "scope_empty" ? "completed" : "stopped",
+    state: reason === "scope_empty" || reason === "goal_met" ? "completed" : "stopped",
     detail,
     message,
   });
@@ -291,6 +367,21 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
       },
     };
   }
+  const goal = facts.goal;
+  if (goal !== null) {
+    const tally = `${goal.counts.met} of ${goal.counts.total} criteria met`;
+    if (goal.met) {
+      return stop("goal_met", { milestone: goal.milestone, counts: goal.counts }, `${goal.milestone}'s goal is met (${tally}); it waits for its gate.`);
+    }
+    if (goal.childrenCreated < goal.childCap) {
+      return { stop: false, goalCheck: { counts: goal.counts, message: `Nothing in scope is left to take and ${goal.milestone}'s goal is not met (${tally}): check it.` } };
+    }
+    return stop(
+      "budget",
+      { budget: "goal_children", childCap: goal.childCap, created: goal.childrenCreated, milestone: goal.milestone, counts: goal.counts },
+      `${goal.milestone}'s goal is not met (${tally}) and the run created its cap of ${goal.childCap} ticket(s).`,
+    );
+  }
   return stop("scope_empty", {}, "Nothing in scope is left to take.");
 }
 
@@ -307,6 +398,9 @@ interface RunRow {
   until_at: string | null;
   ceiling_percent: number | null;
   ceiling_account: string | null;
+  goal_gate_owner: string | null;
+  goal_child_cap: number | null;
+  goal_gated_at: string | null;
   stop_reason: string | null;
   stop_detail: string;
   stopped_by: string | null;
@@ -336,6 +430,10 @@ export interface StartRunInput {
   until?: string;
   ceilingPercent?: number;
   ceilingAccount?: string;
+  /** A milestone run: who the milestone is gated to. Else the milestone's assignee. */
+  gateOwner?: string;
+  /** A milestone run: how many tickets it may create itself. Default {@link GOAL_CHILD_CAP_DEFAULT}. */
+  goalChildCap?: number;
 }
 
 /** The previous ticket's outcome as one `continue` call recorded it; null when it recorded none. */
@@ -369,6 +467,8 @@ export type ContinueAnswer =
       resumed: boolean;
       recorded: ContinueRecorded | null;
       run: Run;
+      /** A goal run's goal check; null on any other run. */
+      goal: RunGoalReport | null;
     }
   | {
       action: "wait";
@@ -378,6 +478,7 @@ export type ContinueAnswer =
       retryAfterSeconds: number;
       recorded: ContinueRecorded | null;
       run: Run;
+      goal: RunGoalReport | null;
     }
   | {
       action: "stop";
@@ -387,6 +488,7 @@ export type ContinueAnswer =
       recorded: ContinueRecorded | null;
       /** Null only for `no_run`. */
       run: Run | null;
+      goal: RunGoalReport | null;
     };
 
 export interface ContinueInput {
@@ -465,11 +567,12 @@ export class RunStore {
 
   private statusOf(run: Run, now: string): RunStatus {
     const driver = readDriver(databaseFile(this.db), run.id);
+    const goal = this.goalReport(run);
     if (!isLive(run.state)) {
-      return { run, decision: evaluateStopRules(run, { now, workable: [], waiting: [], pendingGates: [], personBlocks: [], ceiling: null }), facts: null, driver };
+      return { run, decision: evaluateStopRules(run, { now, workable: [], waiting: [], pendingGates: [], personBlocks: [], ceiling: null, goal: null }), facts: null, driver, goal };
     }
     const facts = this.facts(run, now);
-    return { run, decision: evaluateStopRules(run, facts), facts, driver };
+    return { run, decision: evaluateStopRules(run, facts), facts, driver, goal };
   }
 
   /**
@@ -497,17 +600,188 @@ export class RunStore {
     }
 
     const unresolved = (this.db
-      .prepare("SELECT id, identifier, status, gate_state, gate_owner, unblock_owner, unblock_action FROM issues ORDER BY identifier")
-      .all() as Array<{ id: string; identifier: string; status: string; gate_state: string | null; gate_owner: string | null; unblock_owner: string | null; unblock_action: string | null }>)
+      .prepare("SELECT id, identifier, status, gate_state, gate_owner, gate_requested_at, unblock_owner, unblock_action FROM issues ORDER BY identifier")
+      .all() as Array<{ id: string; identifier: string; status: string; gate_state: string | null; gate_owner: string | null; gate_requested_at: string | null; unblock_owner: string | null; unblock_action: string | null }>)
       .filter((row) => inScope(row.id) && !this.store.isResolvedStatus(row.status));
+    // The gate a goal run opened on its own milestone holds the close for review; it is not a stop.
+    const ownGoalGate = (row: (typeof unresolved)[number]): boolean =>
+      row.id === rootId && run.goal !== null && run.goal.gatedAt !== null && row.gate_requested_at === run.goal.gatedAt;
     const pendingGates = unresolved
-      .filter((row) => row.gate_state === "pending")
+      .filter((row) => row.gate_state === "pending" && !ownGoalGate(row))
       .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.gate_owner }));
     const personBlocks = unresolved
       .filter((row) => this.store.categoryOf(row.status) === "blocked" && (row.unblock_owner ?? "").trim() !== "")
       .map((row) => ({ issueId: row.id, identifier: row.identifier, owner: row.unblock_owner!, action: row.unblock_action }));
 
-    return { now, workable, waiting, pendingGates, personBlocks, ceiling: run.budget.ceilingPercent === null ? null : this.ceilingFact(run.budget.ceilingAccount, now) };
+    return {
+      now,
+      workable,
+      waiting,
+      pendingGates,
+      personBlocks,
+      ceiling: run.budget.ceilingPercent === null ? null : this.ceilingFact(run.budget.ceilingAccount, now),
+      goal: this.goalFacts(run),
+    };
+  }
+
+  // ---------- goal mode ----------
+
+  /** The goal check's input: null unless the run is a goal run over a milestone nobody resolved. */
+  private goalFacts(run: Run): RunGoalFacts | null {
+    if (run.goal === null || run.scope.kind !== "milestone") return null;
+    const milestone = this.db.prepare("SELECT identifier, status FROM issues WHERE id = ?").get(run.scope.issueId) as
+      | { identifier: string; status: string }
+      | undefined;
+    if (!milestone || this.store.isResolvedStatus(milestone.status)) return null;
+    const check = this.store.milestones().criteriaCheck(run.scope.issueId);
+    return { milestone: milestone.identifier, counts: check.counts, met: check.met, childCap: run.goal.childCap, childrenCreated: run.goal.children.length };
+  }
+
+  /** The goal as every answer carries it; null on a run that is not a goal run, or whose milestone is gone. */
+  goalReport(run: Run): RunGoalReport | null {
+    if (run.goal === null || run.scope.kind !== "milestone") return null;
+    const row = this.db
+      .prepare("SELECT identifier, title, status, gate_state, gate_owner, gate_requested_at FROM issues WHERE id = ?")
+      .get(run.scope.issueId) as
+      | { identifier: string; title: string; status: string; gate_state: string | null; gate_owner: string | null; gate_requested_at: string | null }
+      | undefined;
+    if (!row) return null;
+    const goal = this.store.milestones().get(run.scope.issueId).goal;
+    const created = run.goal.children.length;
+    return {
+      milestone: { identifier: row.identifier, title: row.title, status: row.status },
+      ...goal,
+      children: { cap: run.goal.childCap, created, left: Math.max(0, run.goal.childCap - created), refs: run.goal.children.map((child) => child.identifier) },
+      gate:
+        row.gate_state === null
+          ? null
+          : {
+              state: row.gate_state,
+              owner: row.gate_owner ?? "?",
+              requestedAt: row.gate_requested_at ?? "",
+              ownedByRun: run.goal.gatedAt !== null && row.gate_requested_at === run.goal.gatedAt,
+            },
+    };
+  }
+
+  /** The actor's live goal run over a milestone, if it has one: what a criterion mark is attributed to. */
+  liveGoalRunOf(actor: string, milestoneId: string): Run | null {
+    const row = this.db
+      .prepare(`SELECT * FROM runs WHERE actor = ? AND scope_key = ? AND state IN (${LIVE_RUN_STATES.map(() => "?").join(", ")})`)
+      .get(actor, milestoneId, ...LIVE_RUN_STATES) as unknown as RunRow | undefined;
+    return row ? this.toRun(row) : null;
+  }
+
+  /**
+   * Keep a gate open on a goal run's milestone, so that it cannot close unreviewed.
+   *
+   * Nothing to do when the milestone is resolved, when a gate is pending on it (the run's or
+   * a person's, either one holds the close), or when it holds nothing a gate can accept yet.
+   * A person's `changes_requested` also holds the close and is left standing while the run
+   * works; `final` (the goal is met) answers it by gating again, which is the resubmit loop.
+   * An approved gate is history: the run gates again, since it is about to add or finish work
+   * nobody has reviewed. The run records the gate's `gate_requested_at` as its own.
+   */
+  private ensureGoalGate(row: RunRow, reason: string, final = false): void {
+    if (row.scope_kind !== "milestone" || row.scope_issue_id === null || row.goal_gate_owner === null) return;
+    const milestone = this.db
+      .prepare("SELECT id, identifier, status, gate_state FROM issues WHERE id = ?")
+      .get(row.scope_issue_id) as { id: string; identifier: string; status: string; gate_state: string | null } | undefined;
+    if (!milestone || this.store.isResolvedStatus(milestone.status)) return;
+    if (milestone.gate_state === "pending") return;
+    if (milestone.gate_state === "changes_requested" && !final) return;
+    const holds = this.db
+      .prepare("SELECT 1 AS hit FROM milestone_members WHERE milestone_id = ? UNION ALL SELECT 1 FROM issues WHERE parent_id = ? LIMIT 1")
+      .get(milestone.id, milestone.id);
+    if (!holds) return;
+    this.store.gateIssue(milestone.id, { owner: row.goal_gate_owner, comment: reason }, row.actor);
+    const gatedAt = (this.db.prepare("SELECT gate_requested_at FROM issues WHERE id = ?").get(milestone.id) as { gate_requested_at: string }).gate_requested_at;
+    this.db.prepare("UPDATE runs SET goal_gated_at = ?, updated_at = ? WHERE id = ?").run(gatedAt, nowIso(), row.id);
+    this.emit("run_goal_gated", row.actor, { runId: row.id, actor: row.actor, milestone: milestone.identifier, owner: row.goal_gate_owner, final });
+  }
+
+  /**
+   * Create a ticket for a goal run: a goal check (the run's own, when its scope empties short
+   * of the goal) or a follow-up for an unmet criterion (`milestone criterion --follow-up`). It
+   * is attributed to the run (`createdBy` the run's actor, `originKind` "run", `originId`
+   * `<run id>/<n>`, a `goal-check` or `goal-follow-up` label), made a member of the milestone so it
+   * is inside the run's scope, and counted against the run's cap; past the cap it is refused.
+   * The gate is made sure of first, so the new member can never be the one that closes the
+   * milestone unreviewed.
+   */
+  createGoalChild(
+    runRef: string,
+    purpose: RunGoalChildPurpose,
+    input: { title: string; description?: string | null; criterion?: { position: number; text: string } | null },
+  ): Issue {
+    return this.store.journaled(() => {
+      const row = this.requireRow(runRef);
+      if (row.scope_kind !== "milestone" || row.scope_issue_id === null || row.goal_child_cap === null) {
+        throw new StapleError("validation", `Run ${row.id} is not a goal run; only a run over a milestone creates tickets.`, { runId: row.id });
+      }
+      if (!isLive(row.state)) {
+        throw new StapleError("conflict", `Run ${row.id} already ${row.state}; it creates nothing.`, { runId: row.id, state: row.state });
+      }
+      const created = this.childrenOf(row.id).length;
+      if (created >= row.goal_child_cap) {
+        throw new StapleError(
+          "validation",
+          `Run ${row.id} created its cap of ${row.goal_child_cap} ticket(s); a person decides what else the goal needs.`,
+          { runId: row.id, childCap: row.goal_child_cap, created },
+        );
+      }
+      const milestone = this.store.getIssue(row.scope_issue_id);
+      this.ensureGoalGate(row, `Goal run ${row.id} (${row.actor}) holds ${milestone.identifier} for ${row.goal_gate_owner}'s review while it adds work, so the milestone cannot close unreviewed.`);
+      const criterion = input.criterion ?? null;
+      const issue = this.store.createIssue({
+        title: input.title,
+        description:
+          input.description?.trim() ||
+          (criterion === null ? null : `Follow-up for criterion ${criterion.position} of ${milestone.identifier} ("${milestone.title}"), judged unmet: ${criterion.text}`),
+        createdBy: row.actor,
+        labels: [GOAL_CHILD_LABELS[purpose]],
+        ...(criterion === null ? {} : { acceptanceCriteria: [criterion.text] }),
+        originKind: RUN_ORIGIN_KIND,
+        // `(origin_kind, origin_id)` is unique, so each ticket is the run's id and its number.
+        originId: `${row.id}/${created + 1}`,
+      });
+      this.store.milestones().addMember(milestone.id, issue.id, { note: `created by goal run ${row.id}` }, row.actor);
+      this.emit("run_goal_child_created", row.actor, { runId: row.id, actor: row.actor, milestone: milestone.identifier, identifier: issue.identifier, purpose, criterion: criterion?.position ?? null });
+      return this.store.getIssue(issue.id);
+    });
+  }
+
+  private childrenOf(runId: string): RunGoal["children"] {
+    return (this.db
+      .prepare("SELECT identifier, title, status, labels FROM issues WHERE origin_kind = ? AND substr(origin_id, 1, ?) = ? ORDER BY created_at, identifier")
+      .all(RUN_ORIGIN_KIND, runId.length + 1, `${runId}/`) as Array<{ identifier: string; title: string; status: string; labels: string }>).map((row) => ({
+      identifier: row.identifier,
+      title: row.title,
+      status: row.status,
+      purpose: (JSON.parse(row.labels) as string[]).includes(GOAL_CHILD_LABELS.goal_check) ? "goal_check" : "follow_up",
+    }));
+  }
+
+  /** The goal-check ticket's text: fixed, so the tracker stays deterministic; the session does the judging. */
+  private goalCheckTicket(run: Run, milestoneId: string): { title: string; description: string } {
+    const milestone = this.store.getIssue(milestoneId);
+    const check = this.store.milestones().criteriaCheck(milestoneId);
+    const lines = check.criteria.map((criterion) => `${criterion.position}. [${criterion.verdict}] ${criterion.text}${criterion.why ? ` (${criterion.why})` : ""}`);
+    const left = run.goal!.childCap - run.goal!.children.length - 1;
+    return {
+      title: `Goal check: ${milestone.title}`,
+      description: [
+        `Every ticket in ${milestone.identifier} is resolved, but its goal is not met yet (${check.counts.met} of ${check.counts.total} criteria). Judge each criterion that is not met against the evidence (the members' done comments, documents, the code), and record the verdict:`,
+        "",
+        `  staple milestone criterion ${milestone.identifier} <n> --met --evidence <ticket | ticket:document | text>`,
+        `  staple milestone criterion ${milestone.identifier} <n> --unmet --evidence <why> --follow-up "<title of the work that meets it>"`,
+        "",
+        `The run may create ${Math.max(0, left)} more ticket(s) after this one; every follow-up counts. Then close this ticket: staple done <this ticket>.`,
+        "",
+        "Criteria now:",
+        ...lines,
+      ].join("\n"),
+    };
   }
 
   /**
@@ -560,14 +834,22 @@ export class RunStore {
           { runId: live.id, state: live.state, actor, scope: scopeJson(scope) },
         );
       }
+      const goal = this.parseGoal(input, scope);
       const id = newId();
       this.db
         .prepare(
-          `INSERT INTO runs (id, actor, scope_kind, scope_key, scope_issue_id, state, max_tickets, until_at, ceiling_percent, ceiling_account, started_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO runs (id, actor, scope_kind, scope_key, scope_issue_id, state, max_tickets, until_at, ceiling_percent, ceiling_account,
+                             goal_gate_owner, goal_child_cap, started_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, actor, scope.kind, key, scope.kind === "queue" ? null : scope.issueId, budget.maxTickets, budget.until, budget.ceilingPercent, budget.ceilingAccount, now, now);
-      this.emit("run_started", actor, { runId: id, actor, scope: scopeJson(scope), budget });
+        .run(id, actor, scope.kind, key, scope.kind === "queue" ? null : scope.issueId, budget.maxTickets, budget.until, budget.ceilingPercent, budget.ceilingAccount, goal?.gateOwner ?? null, goal?.childCap ?? null, now, now);
+      this.emit("run_started", actor, { runId: id, actor, scope: scopeJson(scope), budget, goal });
+      if (goal !== null && scope.kind === "milestone") {
+        this.ensureGoalGate(
+          this.requireRow(id),
+          `Goal run ${id} (${actor}) started over ${scope.identifier}: it holds the milestone for ${goal.gateOwner}'s review while it works, so it cannot close unreviewed when its last member lands. The run ends goal_met, leaving this gate for you, once every criterion is met (staple milestone show ${scope.identifier}).`,
+        );
+      }
       return this.get(id);
     });
   }
@@ -664,6 +946,7 @@ export class RunStore {
             message: `${actor} has no active or paused run (staple run start --scope <queue|ref>).`,
             recorded: null,
             run: null,
+            goal: null,
           };
         }
         row = this.requireRow(this.liveRunOf(actor!).id);
@@ -674,7 +957,7 @@ export class RunStore {
 
       if (!isLive(run.state)) {
         const ended = run.stop!;
-        return { action: "stop", reason: ended.reason, detail: ended.detail, message: `The run already ended (${ended.reason}).`, recorded, run };
+        return { action: "stop", reason: ended.reason, detail: ended.detail, message: `The run already ended (${ended.reason}).`, recorded, run, goal: this.goalReport(run) };
       }
       if (run.state === "paused") {
         return {
@@ -685,6 +968,7 @@ export class RunStore {
           retryAfterSeconds: CONTINUE_RETRY_AFTER_SECONDS,
           recorded,
           run,
+          goal: this.goalReport(run),
         };
       }
 
@@ -693,26 +977,45 @@ export class RunStore {
       const rulesRun = resume === null ? run : { ...run, budget: { ...run.budget, maxTickets: null } };
       const decision = evaluateStopRules(rulesRun, facts);
       if (decision.stop) {
+        if (decision.reason === "goal_met") {
+          const identifier = String(decision.detail.milestone);
+          this.ensureGoalGate(
+            row,
+            `Goal run ${run.id} (${run.actor}): every criterion of ${identifier} is met. Review the goal check (staple milestone show ${identifier}) and approve, or request changes.`,
+            true,
+          );
+        }
         run = this.finish(run.id, decision);
-        return { action: "stop", reason: decision.reason, detail: decision.detail, message: decision.message, recorded, run };
+        return { action: "stop", reason: decision.reason, detail: decision.detail, message: decision.message, recorded, run, goal: this.goalReport(run) };
       }
       if (decision.wait) {
-        return { action: "wait", ...decision.wait, retryAfterSeconds: CONTINUE_RETRY_AFTER_SECONDS, recorded, run };
+        return { action: "wait", ...decision.wait, retryAfterSeconds: CONTINUE_RETRY_AFTER_SECONDS, recorded, run, goal: this.goalReport(run) };
       }
 
-      const held = facts.workable.find((entry) => entry.held);
-      const pick = resume ?? held ?? facts.workable.find((entry) => !entry.held)!;
-      const why =
-        resume !== null
-          ? `${pick.identifier} is this run's current ticket and you still hold it: carry on with it.`
-          : pick.held
-            ? `${pick.identifier} is in scope and already held by you: finish it before taking more.`
-            : `${pick.identifier} is next in ${scopeLabel(run.scope)} by the pickup queue's order.`;
+      let pick: RunFacts["workable"][number];
+      let why: string;
+      if (decision.goalCheck) {
+        // The goal check: the scope is empty short of the goal, so the run creates the ticket
+        // that judges it, inside this transaction, and takes it like any other.
+        const ticket = this.createGoalChild(run.id, "goal_check", this.goalCheckTicket(run, row.scope_issue_id!));
+        pick = { issueId: ticket.id, identifier: ticket.identifier, held: false };
+        why = `${ticket.identifier} is the goal check: ${decision.goalCheck.message}`;
+      } else {
+        const held = facts.workable.find((entry) => entry.held);
+        pick = resume ?? held ?? facts.workable.find((entry) => !entry.held)!;
+        why =
+          resume !== null
+            ? `${pick.identifier} is this run's current ticket and you still hold it: carry on with it.`
+            : pick.held
+              ? `${pick.identifier} is in scope and already held by you: finish it before taking more.`
+              : `${pick.identifier} is next in ${scopeLabel(run.scope)} by the pickup queue's order.`;
+      }
       const issue = this.store.checkoutIssue(pick.issueId, run.actor, undefined, {
         ...(run.scope.kind === "queue" ? {} : { queueScope: run.scope.issueId }),
       });
       this.writeTaken(row, issue.id, issue.identifier);
-      return { action: "take", ref: issue.identifier, issueId: issue.id, title: issue.title, why, resumed: resume !== null, recorded, run: this.get(row.id) };
+      const taken = this.get(row.id);
+      return { action: "take", ref: issue.identifier, issueId: issue.id, title: issue.title, why, resumed: resume !== null, recorded, run: taken, goal: this.goalReport(taken) };
     });
   }
 
@@ -903,6 +1206,34 @@ export class RunStore {
     insertEvent(this.db, { kind, issueId: null, actor, payload });
   }
 
+  /**
+   * A milestone run's goal settings: the gate owner (`gateOwner`, else the milestone's
+   * assignee; refused when neither names a person, since the gate needs one) and the cap.
+   * Goal settings on any other scope are refused rather than ignored.
+   */
+  private parseGoal(input: StartRunInput, scope: RunScope): { gateOwner: string; childCap: number } | null {
+    const owner = input.gateOwner?.trim() ? input.gateOwner.trim() : null;
+    if (scope.kind !== "milestone") {
+      if (owner !== null || input.goalChildCap !== undefined) {
+        throw new StapleError("validation", "--gate-owner and --goal-cap set a goal run; they need a milestone --scope.");
+      }
+      return null;
+    }
+    const childCap = input.goalChildCap ?? GOAL_CHILD_CAP_DEFAULT;
+    if (!Number.isInteger(childCap) || childCap < 0) {
+      throw new StapleError("validation", `--goal-cap is a whole number of tickets, 0 or more; got ${childCap}.`);
+    }
+    const gateOwner = owner ?? this.store.getIssue(scope.issueId).assignee?.trim() ?? null;
+    if (!gateOwner) {
+      throw new StapleError(
+        "validation",
+        `A run over milestone ${scope.identifier} is a goal run: it gates the milestone to a person for review. Name them with --gate-owner <who>, or assign the milestone.`,
+        { identifier: scope.identifier },
+      );
+    }
+    return { gateOwner, childCap };
+  }
+
   private parseBudget(input: StartRunInput, now: string): RunBudget {
     const maxTickets = input.maxTickets ?? null;
     if (maxTickets !== null && (!Number.isInteger(maxTickets) || maxTickets < 1)) {
@@ -991,6 +1322,10 @@ export class RunStore {
       scope: this.scopeOf(row),
       state: row.state as RunState,
       budget: { maxTickets: row.max_tickets, until: row.until_at, ceilingPercent: row.ceiling_percent, ceilingAccount: row.ceiling_account },
+      goal:
+        row.goal_gate_owner === null || row.goal_child_cap === null
+          ? null
+          : { gateOwner: row.goal_gate_owner, childCap: row.goal_child_cap, children: this.childrenOf(row.id), gatedAt: row.goal_gated_at },
       tickets,
       counts: {
         taken: tickets.length,

@@ -20,6 +20,7 @@ import { initWorkspace, resolveWorkspace } from "./core/workspace.js";
 import type { OpenedWorkspace } from "./core/workspace.js";
 import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
 import { MILESTONE_STATES } from "./core/milestones.js";
+import { CRITERION_VERDICTS, PACE_VERDICTS } from "./core/milestone-goal.js";
 import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
 import { dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
@@ -229,7 +230,8 @@ const autoSync = new SurfaceAutoSync({
  * as on a disconnected one. And a failed tool fires nothing: `run()` reports
  * failure as `isError` rather than by throwing, so the check is on the value.
  */
-const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "start_run", "stop_run", "pause_run", "resume_run"]);
+// `start_run` is not here: a goal run gates its milestone at start, a write that replicates.
+const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
   type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown> };
   type ToolCallback = (...args: unknown[]) => unknown;
@@ -1601,7 +1603,7 @@ server.registerTool(
   "gate_task",
   {
     description:
-      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. Re-gating after request_changes is how you resubmit for a second read.",
+      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. A milestone with members is gateable: its gate holds the milestone's own close for review and queues nothing through membership (members stay workable; only issues parented under it are queued). Re-gating after request_changes is how you resubmit for a second read.",
     inputSchema: {
       ref: refSchema,
       owner: z
@@ -2296,6 +2298,8 @@ const milestoneSummaryShape = {
   status: statusEnum,
   kind: kindSchema,
   assignee: z.string().nullable(),
+  description: z.string().nullable().describe("The issue's own description: what the milestone is for"),
+  acceptanceCriteria: z.array(z.string()).describe("The issue's own acceptance criteria: the milestone's goal"),
   targetDate: z.string().nullable().describe("YYYY-MM-DD, due by the END of that UTC day"),
   startDate: z.string().nullable(),
   state: z.enum(MILESTONE_STATES).describe("Derived on every read: done | cancelled | overdue | active | planned"),
@@ -2322,6 +2326,49 @@ const milestoneProgressShape = {
   percent: z.number().nullable().describe("floor(done·100/countable); null when nothing is countable"),
   complete: z.boolean(),
 };
+/** The goal check (`milestone-goal.ts`): each criterion's verdict with its evidence, and the pace. */
+const milestoneGoalShape = z
+  .object({
+    criteria: z.array(
+      z.object({
+        position: z.number().describe("1-based"),
+        text: z.string(),
+        verdict: z.enum(CRITERION_VERDICTS).describe("What the check makes of it now; unknown unless a mark stands"),
+        marked: z.enum(CRITERION_VERDICTS).nullable().describe("What was marked; differs from verdict when the mark no longer stands"),
+        evidence: z.array(
+          z.object({
+            kind: z.enum(["ticket", "document", "text"]),
+            value: z.string(),
+            ref: z.string().nullable(),
+            document: z.string().nullable(),
+            status: z.string().nullable(),
+            holds: z.boolean().describe("Text always; a ticket while done; a document while it exists"),
+            problem: z.string().nullable(),
+          }),
+        ),
+        note: z.string().nullable(),
+        markedBy: z.string().nullable(),
+        markedAt: z.string().nullable(),
+        runId: z.string().nullable(),
+        why: z.string().nullable().describe("Why the verdict is unknown over a mark, or that nothing was marked"),
+      }),
+    ),
+    counts: z.object({ met: z.number(), unmet: z.number(), unknown: z.number(), total: z.number() }),
+    met: z.boolean().describe("Every criterion met; true with none"),
+    pace: z.object({
+      targetDate: z.string().nullable(),
+      daysToTarget: z.number().nullable(),
+      leaves: z.object({ done: z.number(), countable: z.number(), percent: z.number().nullable() }),
+      laborSeconds: z.number().nullable(),
+      remainingSeconds: z.number().nullable(),
+      partial: z.boolean(),
+      unplannedRefs: z.array(z.string()),
+      verdict: z.enum(PACE_VERDICTS),
+      message: z.string(),
+    }),
+  })
+  .describe("The goal check: each acceptance criterion's verdict with its evidence, and the pace against the target date");
+
 const milestoneViewShape = {
   milestone: z.object(milestoneSummaryShape),
   progress: z.object(milestoneProgressShape),
@@ -2331,6 +2378,7 @@ const milestoneViewShape = {
     .object({ identifier: z.string(), position: z.number() })
     .nullable()
     .describe("The first eligible row of the effective queue planned under this milestone; null when nothing under it is takeable"),
+  goal: milestoneGoalShape,
 };
 const milestoneRefSchema = z.string().describe("The milestone's reference (an issue of the `milestone` kind)");
 const dateSchema = z
@@ -2400,6 +2448,7 @@ server.registerTool(
     inputSchema: {
       title: z.string().optional(),
       description: z.string().optional(),
+      acceptance_criteria: z.array(z.string()).optional().describe("The milestone's goal: its acceptance criteria"),
       target_date: dateSchema,
       start_date: dateSchema,
       from_epic: refSchema.optional().describe("The epic to plan; it becomes the one member"),
@@ -2409,12 +2458,12 @@ server.registerTool(
     },
     annotations: { title: "Create milestone", ...milestoneWriteAnnotations },
   },
-  ({ title, description, target_date, start_date, from_epic, preview, actor, ws }) =>
+  ({ title, description, acceptance_criteria, target_date, start_date, from_epic, preview, actor, ws }) =>
     run(() =>
       storeFor(ws)
         .milestones()
         .create(
-          { title, description, targetDate: target_date, startDate: start_date, fromEpic: from_epic, preview },
+          { title, description, acceptanceCriteria: acceptance_criteria, targetDate: target_date, startDate: start_date, fromEpic: from_epic, preview },
           requireActor(actor),
         ),
     ),
@@ -2424,13 +2473,60 @@ server.registerTool(
   "update_milestone",
   {
     description:
-      "Set a milestone's target and/or start date (YYYY-MM-DD, UTC calendar days; null clears one). The start may not be after the target. Title, description, assignee and status are edited with update_task like any issue.",
-    inputSchema: { ref: milestoneRefSchema, target_date: dateSchema, start_date: dateSchema, actor: actorSchema, ws: wsSchema },
+      "Set a milestone's target and/or start date (YYYY-MM-DD, UTC calendar days; null clears one; the start may not be after the target) and/or its goal: description (null clears it) and acceptance_criteria (the whole list; [] clears them). The goal is the issue's own description and acceptance criteria, so it replicates like any issue edit; a criterion reworded after it was judged reads unknown again. Title, assignee and status are edited with update_task like any issue.",
+    inputSchema: {
+      ref: milestoneRefSchema,
+      target_date: dateSchema,
+      start_date: dateSchema,
+      description: z.string().nullable().optional().describe("What the milestone is for; null clears it; omit to leave it alone"),
+      acceptance_criteria: z.array(z.string()).optional().describe("The milestone's goal, whole; [] clears it; omit to leave it alone"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
     outputSchema: milestoneViewShape,
-    annotations: { title: "Update milestone dates", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { title: "Update milestone", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
-  ({ ref, target_date, start_date, actor, ws }) =>
-    run(() => storeFor(ws).milestones().update(ref, { targetDate: target_date, startDate: start_date }, requireActor(actor))),
+  ({ ref, target_date, start_date, description, acceptance_criteria, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .milestones()
+        .update(ref, { targetDate: target_date, startDate: start_date, description, acceptanceCriteria: acceptance_criteria }, requireActor(actor)),
+    ),
+);
+
+server.registerTool(
+  "mark_milestone_criterion",
+  {
+    description:
+      "Judge one acceptance criterion of a milestone (its goal; docs/milestones.md \"Goal\"): verdict met, unmet or unknown, with evidence. The tracker never judges a criterion itself; it records yours and decides at each check what it is still worth: unmarked is unknown, a criterion reworded since is unknown, and a met criterion whose cited ticket is not done (or cited document is gone) reads unknown until it is. Evidence items are a ticket (ABC-12), a document (ABC-12:plan) or free text; met needs at least one, and a cited ticket or document must exist. follow_up (unmet only) files a ticket through your live goal run over this milestone (or run_id): attributed to the run, made a member, counted against its cap (refused past it). Marks are machine-local, like runs. Returns the milestone view with its goal. Same payload as `staple milestone criterion --json`.",
+    inputSchema: {
+      ref: milestoneRefSchema,
+      position: z.number().int().min(1).describe("The criterion's 1-based number"),
+      verdict: z.enum(CRITERION_VERDICTS),
+      evidence: z.array(z.string()).optional().describe("Tickets (ABC-12), documents (ABC-12:plan) or text"),
+      note: z.string().optional(),
+      follow_up: z
+        .object({ title: z.string(), description: z.string().optional() })
+        .optional()
+        .describe("For an unmet criterion: the ticket that would meet it, created by your goal run"),
+      run_id: z.string().optional().describe("The goal run; else your live run over this milestone"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: milestoneViewShape,
+    annotations: { title: "Mark milestone criterion", ...milestoneWriteAnnotations },
+  },
+  ({ ref, position, verdict, evidence, note, follow_up, run_id, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .milestones()
+        .markCriterion(
+          ref,
+          position,
+          { verdict, evidence: evidence ?? [], note: note ?? null, followUp: follow_up ?? null, run: run_id ?? null },
+          requireActor(actor),
+        ),
+    ),
 );
 
 server.registerTool(
@@ -2797,6 +2893,15 @@ const runShape = {
     }),
   ),
   counts: z.object({ taken: z.number(), done: z.number(), failed: z.number(), open: z.number() }),
+  goal: z
+    .object({
+      gateOwner: z.string(),
+      childCap: z.number(),
+      children: z.array(z.object({ identifier: z.string(), title: z.string(), status: z.string(), purpose: z.enum(["goal_check", "follow_up"]) })),
+      gatedAt: z.string().nullable().describe("gate_requested_at of the gate the run opened on its milestone"),
+    })
+    .nullable()
+    .describe("A run over a milestone is a goal run; null otherwise"),
   stop: z
     .object({
       reason: z.enum(RUN_STOP_REASONS),
@@ -2821,6 +2926,10 @@ const stopDecisionShape = z
   .object({
     stop: z.boolean(),
     wait: runWaitShape.optional().describe("On {stop:false}: nothing is workable now but unresolved work remains (waiting_on_others)"),
+    goalCheck: z
+      .object({ counts: z.object({ met: z.number(), unmet: z.number(), unknown: z.number(), total: z.number() }), message: z.string() })
+      .optional()
+      .describe("On {stop:false} of a goal run: the scope is empty short of the goal, so the next take is a new goal-check ticket"),
     reason: z.enum(RUN_STOP_REASONS).optional(),
     state: z.enum(["stopped", "completed"]).optional(),
     detail: z.record(z.string(), z.unknown()).optional(),
@@ -2837,6 +2946,15 @@ const runFactsShape = z
     personBlocks: z.array(z.object({ issueId: z.string(), identifier: z.string(), owner: z.string(), action: z.string().nullable() })),
     ceiling: z
       .object({ usedPercent: z.number().nullable(), accountRef: z.string().nullable(), limitKey: z.string().nullable(), missing: z.string().nullable() })
+      .nullable(),
+    goal: z
+      .object({
+        milestone: z.string(),
+        counts: z.object({ met: z.number(), unmet: z.number(), unknown: z.number(), total: z.number() }),
+        met: z.boolean(),
+        childCap: z.number(),
+        childrenCreated: z.number(),
+      })
       .nullable(),
   })
   .nullable()
@@ -2857,7 +2975,17 @@ const runDriverShape = z
   })
   .nullable();
 
-const runStatusShape = { run: z.object(runShape), decision: stopDecisionShape, facts: runFactsShape, driver: runDriverShape };
+/** A goal run's goal, on every run answer: the milestone's goal check, the run's tickets against its cap, and the gate. */
+const runGoalReportShape = milestoneGoalShape
+  .extend({
+    milestone: z.object({ identifier: z.string(), title: z.string(), status: z.string() }),
+    children: z.object({ cap: z.number(), created: z.number(), left: z.number(), refs: z.array(z.string()) }),
+    gate: z.object({ state: z.string(), owner: z.string(), requestedAt: z.string(), ownedByRun: z.boolean() }).nullable(),
+  })
+  .nullable()
+  .describe("A goal run's goal check now; null on any other run");
+
+const runStatusShape = { run: z.object(runShape), decision: stopDecisionShape, facts: runFactsShape, driver: runDriverShape, goal: runGoalReportShape };
 
 const runWriteAnnotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
 
@@ -2865,24 +2993,35 @@ server.registerTool(
   "start_run",
   {
     description:
-      "Start an autopilot run: you (actor) work a scope ticket after ticket until the tracker's stop rules say stop. scope is `queue` (the whole pickup queue) or the ref of an epic, a parent or a milestone; a leaf or a resolved issue is refused with validation. Optional budget: max_tickets, until (ISO instant with a zone, or a duration from now: 90m, 2h, 1d), ceiling_percent (stop once a current rate-limit window on this machine reaches that % used; ceiling_account narrows it to one account). One live run per actor per scope: a second start is refused with `conflict` whose detail.runId names the existing run. Runs are machine-local and never synchronized. Same payload as `staple run start --json`.",
+      "Start an autopilot run: you (actor) work a scope ticket after ticket until the tracker's stop rules say stop. scope is `queue` (the whole pickup queue) or the ref of an epic, a parent or a milestone; a leaf or a resolved issue is refused with validation. Optional budget: max_tickets, until (ISO instant with a zone, or a duration from now: 90m, 2h, 1d), ceiling_percent (stop once a current rate-limit window on this machine reaches that % used; ceiling_account narrows it to one account). One live run per actor per scope: a second start is refused with `conflict` whose detail.runId names the existing run. A run over a milestone is a GOAL run (docs/runs.md \"Goal mode\"): it gates the milestone to gate_owner (default the milestone's assignee; refused when there is neither) so it never closes unreviewed, may create up to goal_cap tickets itself (default 5: goal checks and follow-ups), and ends goal_met once every acceptance criterion is met. Runs are machine-local and never synchronized; the gate a goal run opens is an ordinary gate and replicates. Same payload as `staple run start --json`.",
     inputSchema: {
       scope: z.string().describe("`queue`, or an epic / parent / milestone reference"),
       max_tickets: z.number().optional(),
       until: z.string().optional(),
       ceiling_percent: z.number().optional(),
       ceiling_account: z.string().optional(),
+      gate_owner: z.string().optional().describe("A milestone run: the person the milestone is gated to"),
+      goal_cap: z.number().int().min(0).optional().describe("A milestone run: how many tickets it may create itself (default 5)"),
       actor: actorSchema,
       ws: wsSchema,
     },
     outputSchema: runShape,
     annotations: { title: "Start run", ...runWriteAnnotations, idempotentHint: false },
   },
-  ({ scope, max_tickets, until, ceiling_percent, ceiling_account, actor, ws }) =>
+  ({ scope, max_tickets, until, ceiling_percent, ceiling_account, gate_owner, goal_cap, actor, ws }) =>
     run(() =>
       storeFor(ws)
         .runs()
-        .start({ actor: requireActor(actor), scope, maxTickets: max_tickets, until, ceilingPercent: ceiling_percent, ceilingAccount: ceiling_account }),
+        .start({
+          actor: requireActor(actor),
+          scope,
+          maxTickets: max_tickets,
+          until,
+          ceilingPercent: ceiling_percent,
+          ceilingAccount: ceiling_account,
+          gateOwner: gate_owner,
+          goalChildCap: goal_cap,
+        }),
     ),
 );
 
@@ -2890,7 +3029,7 @@ server.registerTool(
   "run_status",
   {
     description:
-      "Autopilot runs and what the stop rules make of them now, without changing anything. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, budget (detail.budget tickets | time | ceiling), failure_streak (two failed tickets in a row), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue awaits approval, or nothing is workable and something in scope does), scope_empty (nothing left; the run ends completed). driver is the `staple run drive` process working the run ({pid, host, agent, heartbeatAt, ticket, sessionPid, logDir, alive}), or null when none is attached; stop_run stops it mid-ticket. Same payload as `staple run status --json`.",
+      "Autopilot runs and what the stop rules make of them now, without changing anything. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, budget (detail.budget tickets | time | ceiling), failure_streak (two failed tickets in a row), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue awaits approval, or nothing is workable and something in scope does; a goal run's own gate on its milestone is not one), goal_met (a goal run: nothing left and every criterion met; ends completed, the milestone left gated), scope_empty (nothing left; the run ends completed). A goal run with its scope empty short of its goal answers {stop:false, goalCheck}: the next continue_run creates and takes a goal-check ticket; past its cap it stops budget (detail.budget goal_children). goal is the goal run's goal check (criteria with verdicts and evidence, pace, the run's tickets against its cap, the gate), null on any other run. driver is the `staple run drive` process working the run ({pid, host, agent, heartbeatAt, ticket, sessionPid, logDir, alive}), or null when none is attached; stop_run stops it mid-ticket. Same payload as `staple run status --json`.",
     inputSchema: {
       run_id: z.string().optional(),
       all: z.boolean().optional().describe("Every run, any actor or state"),
@@ -2968,7 +3107,7 @@ server.registerTool(
   "continue_run",
   {
     description:
-      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it, then call continue_run again. wait: {reason: paused | waiting_on_others, message, retryAfterSeconds}; take nothing, ask again later or end your session. stop: {reason, detail, message}; the run has ended (stopped_by_human, budget, failure_streak, vp_blocked, gate_pending, scope_empty) or you have no live run (no_run, run null); end your loop. Every answer carries `recorded` (the outcome this call recorded, or null) and `run`. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
+      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it, then call continue_run again. wait: {reason: paused | waiting_on_others, message, retryAfterSeconds}; take nothing, ask again later or end your session. stop: {reason, detail, message}; the run has ended (stopped_by_human, budget, failure_streak, vp_blocked, gate_pending, goal_met, scope_empty) or you have no live run (no_run, run null); end your loop. Every answer carries `recorded` (the outcome this call recorded, or null), `run`, and `goal`: on a goal run (a run over a milestone) the goal check (each criterion met/unmet/unknown with its evidence, the pace, the run's tickets against its cap, the gate), else null. On a goal run whose scope empties short of its goal, the take is a goal-check ticket the run created: judge each criterion with mark_milestone_criterion (follow_up for unmet ones), then close it. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
     inputSchema: {
       run_id: z.string().optional().describe("The run; without it, actor's one live run"),
       outcome: z.enum(RUN_TICKET_OUTCOMES).optional().describe("How the current ticket ended, when you know"),
@@ -2991,6 +3130,7 @@ server.registerTool(
         .object({ ref: z.string(), outcome: z.enum(RUN_TICKET_OUTCOMES), reason: z.string().nullable(), source: z.enum(["stated", "attempt", "status"]) })
         .nullable(),
       run: z.object(runShape).nullable(),
+      goal: runGoalReportShape,
     },
     annotations: { title: "Continue run", ...runWriteAnnotations, idempotentHint: false },
   },
