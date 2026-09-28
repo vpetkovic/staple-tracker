@@ -1,24 +1,52 @@
+---
+title: Cloud sync
+description: How two or more machines share one Staple workspace through a sync service, what travels, what stays local, and what each consent allows.
+sidebar_position: 7
+---
+
 # Cloud sync
 
 Optional, repository-scoped synchronization so two machines share one Staple
 workspace and coordinate agent claims. Local SQLite stays the working database:
 every read and every write a command performs still goes to `.staple/staple.db`,
-and sync moves *operations* between that file and the cloud out of band. Nothing
-on this page changes what a command does when it is not asked to sync.
+and sync moves *operations* between that file and a sync service (a Cloudflare
+Worker backed by D1, under `worker/`) out of band. Nothing on this page changes
+what a command does when it is not asked to sync.
 
-This is the contract the S tickets implement. It was written before any of it was
-built, and most of it now is: the seam, the envelope, identity, the Worker,
-connect, manual sync, conflicts, leases, the surfaces, automatic sync and backup
-all ship. Every rule names the test that pins it, or that will. Where this page
-and [semantics.md](semantics.md) disagree, semantics.md describes today and this
-page the target.
+This page describes the shipped behaviour: the journal seam, the operation
+envelope, identity, the Worker, connect, manual and automatic sync, conflicts,
+leases, backup and restore, and the hub registry. Most rules name the test that
+pins them. Where something is not built, the page says so where it comes up.
 
-**Two parts of this page describe a design that is specified but not yet
-shipped**, and they are marked where they appear rather than only here, because a
-contract that does not distinguish the two is read as a description of the build:
-server-side [identifier allocation](#identity-is-the-uuid-never-the-identifier),
-and honouring `Retry-After` in the [error taxonomy](#error-taxonomy). Everything
-else on this page is implemented.
+## In brief
+
+- **What it is.** Each device keeps its own database and journals every change as an
+  operation. The service puts every operation in one order (the log); each device
+  pushes its own and applies everyone else's in that order. No database file ever
+  travels.
+- **Off until you turn it on.** A workspace that has never been connected makes no
+  network call at all ([the network rule](#the-network-rule--and-the-test-that-proves-it)).
+- **Turning it on.** `staple cloud connect --endpoint <url> --token <secret>` shows what
+  it is about to do and connects once you agree; `staple cloud sync` then synchronizes
+  (the first run uploads what the workspace already holds, or hydrates a fresh clone).
+  `staple cloud connect --all` and `staple cloud sync --all` do the same for every
+  workspace the hub knows. `staple cloud status` reports where things stand without a
+  request.
+- **Three separate consents.** Connecting leaves sync manual. `staple cloud auto on`
+  lets this device sync by itself; `staple cloud backup enable` lets it keep backups.
+  Each is per device and revocable alone ([Three consents](#three-consents)). Publishing
+  the hub registry (`staple hub registry publish --enable`) is a fourth.
+- **Conflicts are kept, never guessed.** Two devices setting one field to different
+  values produce a record with both sides; `staple cloud conflicts` lists them and
+  `staple cloud resolve` settles one. Nothing is last-write-wins.
+- **Claims.** A plain `checkout` is local to this database (`scope: "local"`).
+  `staple cloud lease acquire` takes a fenced server lease that is exclusive across
+  devices (`scope: "lease"`).
+- **Recovery.** `staple cloud backup create` and `staple cloud restore` put the
+  repository back to a point in time; every device follows. `staple cloud disconnect`
+  is local; `staple cloud purge` destroys the remote copy and is separately named.
+- **Not encrypted end to end.** Payloads are plaintext in D1; whoever holds the
+  Cloudflare account can read them ([Trust boundaries](#trust-boundaries)).
 
 ## The support boundary
 
@@ -78,9 +106,8 @@ settles them is the one order every device agrees on — the log — by the rule
 [Identifiers and other unique values](#identifiers-and-other-unique-values): the earlier
 claim keeps the number, and the device that made the later claim renumbers its own issue.
 
-This is the decision **STA-254** asked this page to record, between the two options it
-used to name. Neither a server-side allocator (the push response carrying a canonical
-number) nor per-device number ranges was built. The allocator needs a counter on the
+Two alternatives do not exist, on purpose: a server-side allocator (the push response
+carrying a canonical number) and per-device number ranges. The allocator needs a counter on the
 Worker, a push response that changes shape and a renumber-on-acceptance path on every
 client; ranges need a round trip before the first offline create. The log already orders
 every claim for every device, and a `renumber` already travels, so settling by log order
@@ -230,7 +257,7 @@ So:
   its argument once and waits on that issue by its id, answering with the identifier it
   holds now (and `renumberedWhileWaiting` in `--json`). The UI's open issue is pinned to its
   id once loaded, and its buttons and the palette's commands post the id.
-- **The contract: within a day of a move, or while any issue that left the number is held, a
+- **The guarantee: within a day of a move, or while any issue that left the number is held, a
   write by that number never lands on an issue other than the one the caller meant, however
   many issues have passed through the number. It is refused instead.** Outside the day, with
   nothing held, the write goes through with the notice below.
@@ -281,7 +308,7 @@ So:
   members, a gate's children, a new task's parent and relations — names the id of the row the
   reader acted on; a number typed or pasted is looked up among the rows it holds, and a task
   in another workspace is `<slug>:<id>` (`src/ui/app/src/lib/write-ref.ts`).
-  `test/cloud-learned-writes.test.ts` holds the contract over 20 seeded runs of three devices
+  `test/cloud-learned-writes.test.ts` holds the guarantee over 20 seeded runs of three devices
   and a peer on an older build creating, synchronizing, losing push answers, moving numbers and
   writing through numbers they learned.
 - **Anything else by that number is answered with what happened**: "TRA-2 was renumbered here
@@ -397,7 +424,7 @@ after its delete, and so do the tail fold and the test service
 device's directory layout and, on macOS and Linux, the account name out of
 `/Users/<name>`. That value is replaced with `null` on the way out and the local
 value is preserved on the way in. When `source_kind = 'github'` it is a public URL
-and replicates unchanged. This is the only column-level redaction in the contract,
+and replicates unchanged. This is the only column-level redaction on the wire,
 and it is conditional — stripping it unconditionally would break GitHub-sourced
 projects for no privacy gain.
 
@@ -599,27 +626,28 @@ events --follow --exec` fires on every device for a status move or a blocker cha
 device made, once per event, with the origin's `deviceId` in the payload. A hook that should
 act only on this device's own changes compares it.
 
-**Every event emitter must supply a `dedup_key`.** Three of the four
-(`milestone-store.ts`, `queue-store.ts`, `project-store.ts`) currently hardcode
-`NULL`, so they have no dedup token at all; `store.ts` is the only one that
-supplies one. Re-derivation plus the `sync_applied` ledger already makes double
-emission impossible, so this is belt and braces rather than the primary defence —
-but an at-least-once transport with an unkeyed event table is one retry away from
-a duplicated timeline, and the seam lane is unifying those four emitters anyway.
+**Every event carries a `dedup_key`.** All four stores write events through one
+writer, `insertEvent` in `src/core/event-log.ts`, which takes the key from the caller
+when it has one (the level-triggered `blockers_resolved` and `children_complete`),
+else from the enclosing journal scope: an applied remote operation derives its keys
+from the operation id, so a redelivered operation re-derives the same keys and
+`INSERT OR IGNORE` absorbs the second write. Re-derivation plus the `sync_applied`
+ledger already makes double emission impossible, so this is belt and braces rather
+than the primary defence — but an at-least-once transport with an unkeyed event
+table is one retry away from a duplicated timeline.
 
-This is a deliberate departure from the mutation inventory's classification, which
-reads `events` as synchronizable. Transporting it would mean merging four
-emitters' rows across devices, three of them with no dedup token, into a table
-whose primary key is a local counter and whose unique index is a level-triggered
-wake mechanism. Re-derivation gets the same converged content for free, because
-the operation that caused the event is already being replicated and the event is a
-pure function of it. (Pinned by the S3 lane's echo-suppression tests — an applied
-operation must emit the event and must **not** journal a new outbound operation.)
+`events` is deliberately not a synchronized table. Transporting it would mean
+merging rows across devices into a table whose primary key is a local counter and
+whose unique index is a level-triggered wake mechanism. Re-derivation gets the same
+converged content for free, because the operation that caused the event is already
+being replicated and the event is a pure function of it. (Pinned by the "echo
+suppression" tests in `test/journal-seam.test.ts` — an applied operation emits the
+event and does **not** journal a new outbound operation.)
 
 ## What never leaves the machine
 
 An exhaustive list. Anything not on it and not in the tables above is a bug in
-this contract, not a judgement call for an implementer.
+this page, not a judgement call for an implementer.
 
 | Value | Where it lives | Why it stays |
 |---|---|---|
@@ -633,27 +661,28 @@ this contract, not a judgement call for an implementer.
 | `meta` keys outside `setting:*` | workspace db | Default-deny. A local counter added later must not start synchronizing because nobody updated this page. `slug` and `prefix` are among them: the slug is this machine's name, and the repository's prefix travels as a setting, `setting:repository.prefix`, which a joining workspace adopts once ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)). `identifier_alias:*`, `identifier_holders:*` and `identifier_moves_pending` are this machine's record of the identifiers it moved; `sync_tail_survey` is a tail read part-way through. |
 | `projects.source` where `source_kind = 'local'` | workspace db | An absolute filesystem path; discloses directory layout and the OS account name. Redacted per row, see above. |
 | `events` (whole table) | workspace db | Re-derived on apply, see above. |
+| `runs`, `run_tickets`, and the goal columns on `runs` | workspace db | An autopilot run is a machine-local driver: which agent on which machine is looping over the work (workspace migrations 015 and 016). Another device sees its effect — the claims, statuses and attempts its tickets produce — never the run. |
 | `relations.id` | workspace db | Local `AUTOINCREMENT` surrogate. The natural key is `(blocker_id, blocked_id, type)`, which the `UNIQUE` constraint already declares. |
 | `sqlite_sequence` | workspace db | SQLite's own `AUTOINCREMENT` high-water marks. Rebuilt by SQLite. |
 | `.staple/snapshots/*.db` | workspace directory | Pre-migration snapshots — full copies of an older database. Replicating one would be catastrophic. |
 | `queue_entries.rank`, `milestone_members.rank` | workspace db | Positional, recomputed from list order. |
 | Cloud credentials | staple home, OS keychain or `0600` file | See [Trust boundaries](#trust-boundaries). |
-| Device id and device secret | machine config | A device identifies itself; it is not a property of the repository. |
-| `sync.auto`, `sync.backup`, `sync.registry` consent flags | machine config | Per-device by design, see [Three consents](#three-consents). |
+| Device id and device token | staple home (`cloud/device-id`) and the credential store | A device identifies itself; it is not a property of the repository. |
+| `auto`, `backup`, `registry` consent flags | the connection record, `<home>/cloud/<id>.json` | Per-device by design, see [Three consents](#three-consents). |
 | Sync cursors, outbox rows, applied-op ledger | workspace db, sync tables | Local bookkeeping about a shared log; not part of the shared log. |
 | Absolute paths, hostnames, usernames | anywhere | Staple never *adds* one to a payload. Text a human typed into a title or a comment body is that human's to control. |
 
 **The connection itself is machine-local.** Credentials and consent flags live in
 the staple home, never in `.staple/staple.db` and never in the repository. This is
 not tidiness: the workspace database synchronizes, so a credential stored there
-would replicate itself to every device, and a `sync.auto` flag stored there would
+would replicate itself to every device, and an `auto` flag stored there would
 mean one device enabling automatic sync silently enabled it for everybody — which
 is exactly the consent this page promises not to spend on someone's behalf.
 
 ## The local sync tables
 
-Sync bookkeeping is **additive**: it lands as new tables in the workspace
-database and alters none of the thirteen that already exist. Nothing here
+Sync bookkeeping is **additive**: it lives in its own tables in the workspace
+database (workspace migrations 010 to 013) and alters no domain table. Nothing here
 replicates — it is this device's record of its relationship to a shared log.
 
 | Table | Key | Holds |
@@ -666,7 +695,7 @@ replicates — it is this device's record of its relationship to a shared log.
 | `sync_conflicts` | `id` | `entity`, `entity_id`, `field`, `base_value`, `local_value`, `remote_value`, `local_op_id`, `remote_op_id`, `local_device_id`, `remote_device_id`, `local_at`, `remote_at`, `detected_at`, `resolved_at`, `resolved_by`, `resolution` |
 | `sync_leases` | `entity_id` | `fencing_token`, `holder`, `device_id`, `server_expires_at`, `acquired_at`, `renewed_at` |
 | `sync_devices` | `device_id` | `label`, `last_seen_at`, `revoked_at` — a read cache of the server's device list, never authoritative |
-| `sync_state` | single row | `repository_id`, `epoch`, `cursor`, `head_seq`, `last_sync_at`, `bootstrap_cursor`, `client_seq_high_water`, and `head_reached_cursor` / `head_reached_at` — the cursor at which the last pull reached the head of the log, read as "the cursor has not moved since" by the stored orphan end ([execution telemetry](execution-telemetry.md#orphaned-attempts-are-closed-at-read-time)) |
+| `sync_state` | single row | `repository_id`, `epoch`, `cursor`, `head_seq`, `last_sync_at`, `bootstrap_cursor`, `client_seq_high_water`, `origin_host` ([below](#a-copied-home-is-not-a-second-device)), and `head_reached_cursor` / `head_reached_at` — the cursor at which the last pull reached the head of the log, read as "the cursor has not moved since" by the stored orphan end ([execution telemetry](execution-telemetry.md#orphaned-attempts-are-closed-at-read-time)) |
 
 One piece of sync bookkeeping is deliberately not a table: the record that a
 database has [seeded](#a-workspaces-history-reaches-the-service-when-it-first-synchronizes)
@@ -709,8 +738,8 @@ believes it is, and `staple doctor` compares the two. They disagree exactly when
 directory was copied or a manifest was hand-edited, which is the case worth
 naming.
 
-**Credentials are not in this list and never will be.** They live in the staple
-home. This database synchronizes.
+**Credentials are not in this list.** They live in the staple home. This database
+synchronizes.
 
 ## Repository identity
 
@@ -836,15 +865,14 @@ When the recorded host is not this machine:
 
 ## The journal seam and what it owes
 
-There is **no write chokepoint today**. Mutation is spread across roughly 45
-functions and 52 independent `db.prepare(…).run()` sites, and the only existing
-transaction wrappers are `tx()` in `src/core/db.ts` — which is not re-entrant —
-and `WorkspaceStore.atomically()`, which nests via savepoints. Journalling is
-therefore not a matter of adding a hook to an existing funnel; it is the work of
-building the funnel. This section states what the funnel owes, so the lane doing
-it has a target rather than a theme.
+There was **no write chokepoint to hook**. Mutation is spread across roughly 45
+functions and 52 independent `db.prepare(…).run()` sites, and the only transaction
+wrappers are `tx()` in `src/core/db.ts` — which is not re-entrant — and
+`WorkspaceStore.atomically()`, which nests via savepoints. So the seam is a funnel
+built for the purpose, `src/core/journal.ts`: each logical mutation declares what it
+did, once, and the declaration is what replicates.
 
-Every replicated mutation passes through one seam that guarantees, per logical
+Every replicated mutation passes through that seam, which guarantees, per logical
 mutation:
 
 1. **One transaction.** The domain rows, the `sync_entity_versions` bump, the
@@ -939,8 +967,8 @@ One shape, for every mutation, on the wire and in the outbox.
 {
   "opId":      "sha256-hex-32",
   "repoId":    "0e77fa01-…",
-  "protocol":  1,
-  "schema":    10,
+  "protocol":  3,
+  "schema":    16,
   "entity":    "issue",
   "entityId":  "3f2b…",
   "verb":      "update",
@@ -1034,8 +1062,8 @@ drives every emitter and checks, and `worker/test/push.test.ts` pushes what they
 through the Worker.
 
 `baseVersion` is the entity's local version immediately before the mutation. Each
-synchronized entity row gains a monotonic `version` bumped once per journaled
-mutation (the S2 migration). `baseVersion` is `null` for `create`.
+synchronized entity has a monotonic `version` in `sync_entity_versions`, bumped once
+per journaled mutation. `baseVersion` is `null` for `create`.
 
 **Unknown fields are preserved, never dropped.** A device receiving an entity
 field it has no column for stores it verbatim and re-emits it unchanged on its own
@@ -1070,10 +1098,9 @@ and every request carries `Authorization: Bearer <token>`,
 | `POST` | `/v1/repos/{repoId}/backups/{backupId}/restore` | Restore — resumable; call until `done` |
 | `DELETE` | `/v1/repos/{repoId}` | Purge — body `{ "confirm": "<repoId>" }`, the id typed back; refused without it |
 
-Two of the backup routes were added after this table was first written. `PUT /backup`
-exists because the consent table below grants backup with "a server-side flag" and
-named no route that writes one, and a consent recorded only in a file on the device is
-not the two-sided consent described there. `DELETE /backups/{backupId}` exists because
+`PUT /backup` exists because the backup consent below has a server-side half, and a
+consent recorded only in a file on the device is not the two-sided consent described
+there. `DELETE /backups/{backupId}` exists because
 backup has "its own retention", and retention without a delete is not retention — the
 alternative, an expiry job, would destroy a human's backups on a schedule nobody typed.
 
@@ -1099,7 +1126,7 @@ status, never a bare accepted/rejected split:
 
 ```jsonc
 {
-  "protocol":            1,
+  "protocol":            3,
   "epoch":               7,
   "serverHighWatermark": 1042,
   "results": [
@@ -1125,7 +1152,8 @@ attempt half-succeeded.
 from a constant compiled into the client — the ceilings differ by plan, and a
 client that hardcodes the paid number fails permanently on the free one.
 `/v1/capabilities` returns `{ protocol: {min,max}, maxBatchSize, maxOpBytes,
-maxPullLimit }`.
+maxPullLimit, defaultPullLimit, maxSnapshotPageSize, orphanEndReasons }`
+(`capabilities` in `worker/src/limits.ts`).
 
 | Limit | Value | Why that number |
 |---|---|---|
@@ -1134,9 +1162,8 @@ maxPullLimit }`.
 | Pull page `limit` | default 200, maximum **500** | |
 | Requests per device | 120 per 60 s, answered with `Retry-After: 60` | Policy, not a platform limit — the `SYNC_LIMITER` binding in `worker/wrangler.toml`, keyed on repository and device |
 
-These replace the numbers this page carried before the Cloudflare research
-landed; the earlier batch size of 500 was set without knowing the
-queries-per-invocation ceiling and would have failed outright on the free plan.
+A batch of 500 would exceed the free plan's queries-per-invocation ceiling and fail
+outright, which is why the batch size is advertised rather than fixed.
 
 Body size is checked from `Content-Length` and rejected **before** the body is
 parsed. The free plan allows 10 ms of CPU per request, so a limit enforced after
@@ -1202,7 +1229,7 @@ replays the entire history into a live database.
 recorded, and a re-delivered operation is a no-op. Within a page, operations apply
 in `seq` order; an operation whose referent does not exist yet is deferred to the
 end of the page and retried once. If it is still unresolvable when the page ends, it is
-set aside ([below](#no-entity-can-stop-a-sync)) and the rest of the page commits. Causality across
+set aside (see [No entity can stop a sync](#no-entity-can-stop-a-sync)) and the rest of the page commits. Causality across
 devices is mostly self-enforcing — a device cannot edit an entity it has never
 seen, so the edit necessarily sorts after the create — but "mostly" is not a
 guarantee to build an apply loop on.
@@ -1219,7 +1246,9 @@ values: it is set aside until its create arrives, and then dropped, because the 
 sent by a heal or a seed at the end of the log — is the whole entity as its device holds it,
 the edit included.
 
-**No entity can stop a sync.** An entity that names what this device does not hold — a
+### No entity can stop a sync
+
+An entity that names what this device does not hold — a
 comment on an issue the repository lacks, an edit of an issue whose create is nowhere, in a
 page of the tail or in a snapshot — used to fail its page whole, and every later sync met the
 same page and failed again: one device's write stopped every other device, and every join,
@@ -1251,7 +1280,9 @@ here — that read kept and sent everything unsent work named, so what is still 
 no timeline — or waiting longer than a week (`QUARANTINE_DIVERGENCE_MS`), fails `staple doctor`
 (`divergedQuarantine`), naming what is missing and since when.
 
-**Bootstrap is a snapshot cutoff plus the ordered tail.** A hydrating device reads
+### Bootstrap is a snapshot cutoff plus the ordered tail
+
+A hydrating device reads
 a materialized snapshot taken at `seq = C`, then pulls from cursor `C` forward.
 Writes concurrent with the snapshot are in the tail, so nothing is missed and
 nothing is applied twice. A re-bootstrap — the one an epoch change forces — reads
@@ -1485,7 +1516,8 @@ re-bootstrap killed part-way leaves nothing half-applied, and reads again on the
   holds it, and sends it as a `create`: the same rule as unsent work, because both are work
   a person did that the epoch has no row for, and dropping it would discard it silently on
   every device at once. Until a device that holds it reconciles, other devices set the
-  dangling entities aside ([below](#no-entity-can-stop-a-sync)).
+  dangling entities aside (see
+[No entity can stop a sync](#no-entity-can-stop-a-sync)).
 - **A restore an older build followed is noticed after the upgrade.** The database records
   the epoch this build last reconciled it against (`sync_reconciled_epoch`). A device whose
   epoch is not that one — it followed a restore on c7a49d6, which hydrated the new epoch on
@@ -1502,7 +1534,7 @@ the heal is what sends the first.
 
 ### What the server cannot do
 
-Three platform facts the protocol is shaped around, so that no lane designs
+Three platform facts the protocol is shaped around, so that nothing is designed
 against a capability that does not exist:
 
 - **There is no cross-request transaction.** None. A batched set of statements is
@@ -1519,7 +1551,7 @@ against a capability that does not exist:
   that is the lost update this design exists to avoid.
 - **`RETURNING` is not relied on.** The push response is derived from the
   pre-push watermark plus each statement's own applied/not-applied result, so the
-  contract holds whether or not `RETURNING` is available. Deriving the response
+  response is correct whether or not `RETURNING` is available. Deriving the response
   with `op_id IN (…)` is also forbidden: bound parameters are capped at 100 per
   query and that lookup would break at the batch sizes above.
 
@@ -1748,13 +1780,13 @@ service, and this device's counters never agreeing with anyone's again.
 
 ## Deletion is a tombstone
 
-**For issues and comments, this section designs a capability the tracker does not
-currently have.** No surface deletes an issue today — not CLI, not MCP, not HTTP. Rows leave only by
-`ON DELETE CASCADE` when a parent goes, and `comments.deleted_at` is the schema's
-only soft delete. Nothing below describes existing behaviour; it is the contract
-deletion must meet *if and when* a delete surface is added, and it exists now
-because a replicated system that acquires deletion later without tombstones
-acquires resurrection at the same time.
+**No surface deletes an issue or a comment** — not the CLI, not MCP, not HTTP. Their
+rows leave only by `ON DELETE CASCADE` when a parent goes, or by a restore's rewind
+([A restore rewinds](#a-restore-rewinds)), and `comments.deleted_at` is the schema's
+only soft delete. For them, the rules below are what a delete surface has to meet
+if one is added: a replicated system that acquires deletion without tombstones
+acquires resurrection at the same time. For the entities that are deleted today
+(below), they are how it works.
 
 Nothing synchronized is ever hard-deleted as a replicated act.
 
@@ -1944,8 +1976,8 @@ for local writes, so a bootstrapped device ends up holding field-for-field what 
 device present for the entire log holds, and the two answer detection identically.
 
 `fieldWrites` is a sibling of `state`, not a transformation of it: a collection
-still [arrives identically](#bootstrap-is-a-snapshot-cutoff-plus-the-ordered-tail)
-whichever half of a bootstrap carried it. It is bounded by fields written per
+still arrives identically whichever half of a bootstrap carried it (see
+[Bootstrap is a snapshot cutoff plus the ordered tail](#bootstrap-is-a-snapshot-cutoff-plus-the-ordered-tail)). It is bounded by fields written per
 entity — a subset of the state's own keys — so the fold grows with live data and
 with no term in history, the same bound the field record itself has.
 
@@ -2002,10 +2034,11 @@ both plans are retained and the human picks one, or edits a third.
 
 ## Claims: a local checkout is not a global lease
 
-[continuity.md](continuity.md) describes today's model — an explicit claim, no
+[continuity.md](continuity.md) describes the local model — an explicit claim, no
 sweeper, no TTL, no expiry, takeover only when a human says "continue". None of
-that changes. What changes is that a *connected* repository can make a claim
-globally exclusive, and a disconnected one cannot and must stop implying it does.
+that changes when a repository is connected. What connection adds is a way to make
+a claim globally exclusive; a disconnected repository cannot, and does not imply
+that it does.
 
 **Offline, a checkout is local-only.** It still refuses a fresher holder on this
 machine, it still refuses through gates and blockers, and it still records
@@ -2051,12 +2084,11 @@ no automatic takeover**, on either side of the wire.
 
 ## The hub registry is a set, not a map
 
-The hub used to be on the never-leaves list whole. The reason given was that
-`workspaces.path` is an absolute filesystem path, and that cross-repository
-topology is not a repository's business. Both halves of that are still true, and
-neither is weakened here.
+Two reasons keep the hub machine-local by default: `workspaces.path` is an absolute
+filesystem path, and cross-repository topology is not a repository's business. Both
+hold, and neither is weakened here.
 
-What the rewrite separates is the **paths** from the **set**. Which workspaces
+What the registry separates is the **paths** from the **set**. Which workspaces
 exist, what they are called, what prefix each one holds and which of them block
 each other are facts about the person's work, not about this computer's disk.
 Where each one happens to sit is a fact about the disk and stays on it.
@@ -2077,13 +2109,11 @@ has to say so in those words.
 
 **Topology still does not ride in a repository's channel.** A hub backup is not
 reachable from any workspace's sync or backup; it travels under the hub's own
-identity and its own consent or it does not travel. What genuinely changes is
-that it *can* travel, and the disclosure that buys is real: a machine that
-publishes its registry tells the service the names, prefixes and identities of
-every workspace on it, and that they sit together. Until now the wire could not
-express that and the invariant was free. It is no longer free, so it is paid for
-explicitly — a separate consent, granted by itself, with that sentence in front
-of it.
+identity and its own consent or it does not travel. When it does travel, the
+disclosure is real: a machine that publishes its registry tells the service the
+names, prefixes and identities of every workspace on it, and that they sit
+together. So it is paid for explicitly — a separate consent, granted by itself,
+with that sentence in front of it.
 
 ### The hub is a repository, and that is the whole mechanism
 
@@ -2092,9 +2122,9 @@ The service is repository-scoped end to end: a credential resolves to exactly on
 materialises that fold into a new epoch of the same log. There is no second storage
 shape and no route that accepts a blob.
 
-So the hub becomes a repository, scoped by its own identity, and **its operation log
+So the hub is a repository, scoped by its own identity, and **its operation log
 carries the registry**. Backup is then the existing fold and restore is the existing
-snapshot. This feature adds no persistence mechanism at all, which is why this shape
+snapshot. The registry adds no persistence mechanism at all, which is why this shape
 was chosen over inventing one.
 
 Two entity kinds, at protocol 2:
@@ -2132,7 +2162,7 @@ follows the `document` precedent, whose key is already `"<issueId>/<key>"`. The 
 `type` is deliberately not in the key, so changing an edge's type is an update rather
 than a delete plus an unrelated create.
 
-**The key contains no slug** (STA-287). A slug comes from a directory name, so two
+**The key contains no slug.** A slug comes from a directory name, so two
 machines holding the same repositories under different directory names disagree about
 every slug. Keyed on slugs, their links were unrelated entities, and neither machine
 could adopt the other's. Keyed on the two repositories' identities, a link is the same
@@ -2165,8 +2195,8 @@ its own earlier operations.
 
 **`workspaces.repository_id` is written by `staple init`**, from the manifest that is its
 authority — measured, not assumed: after clearing the column, `staple ls` and
-`staple ls --ws <slug>` both leave it null and `staple init` restores it. It is the adoption key, and until STA-283 nothing on a user-facing
-path wrote it at all: `Hub.register()` runs before the manifest exists and `connect` never
+`staple ls --ws <slug>` both leave it null and `staple init` restores it. It is the adoption key, and before `init` wrote it nothing on a user-facing
+path did: `Hub.register()` runs before the manifest exists and `connect` never
 touched it. So publish uploaded an empty registry and adoption could not recognise a
 workspace this machine already had. A row whose workspace has not been re-inited since is
 reconciled at publish, adopt and restore. A row adopted from the registry and not yet on
@@ -2181,10 +2211,9 @@ publishing both would make the registered name flip between them on every pass.
 ### Publishing is a union: any number of machines, one converged registry
 
 Any number of machines can publish to one registry. They converge on the same set, and
-a machine that is behind can publish safely (STA-287). A publish never refuses a machine
-for lacking something the service holds. Before STA-287 it did, because a publish could
-destroy another machine's data. Every destructive path is gone now, so a publish only
-ever adds:
+a machine that is behind can publish safely. A publish never refuses a machine for
+lacking something the service holds, because no publish path is destructive: a publish
+only ever adds:
 
 - **Names are create-only.** A registration's `slug`, `prefix`, `kind` and `addedAt`
   are sent once, on the `create`, and never updated. That is correct, not merely
@@ -2343,8 +2372,8 @@ re-register from, so the row would be gone for good.
 To keep the removal from being undone by the next adoption, the machine records
 the identity in `registry_optouts`, which never leaves. The entry remains on every
 other machine, and the surface says so rather than implying otherwise. Removing
-an entry from a shared registry is a purge-shaped operation and is **not** offered
-yet; see the note on purge.
+an entry from a shared registry is a purge-shaped operation and is **not** offered:
+no verb does it.
 
 `--with-links` (and `staple hub prune --with-links`) removes the links naming that
 workspace from this hub, and does **not** record them as removals. They go because the
@@ -2392,7 +2421,7 @@ neither category is a bug. Each entry below says which it is.
    adopt as skipped, naming what fixes it: the machine that has the link re-publishes it
    under the repositories' identities on its next publish. Publishing ignores the old
    entity, so it never loops.
-9. **A repository holds a hub's registry or a workspace's data, never both (STA-290).**
+9. **A repository holds a hub's registry or a workspace's data, never both.**
    `repos.vocabulary` is claimed by the repository's first write, or set when it is
    provisioned. After that, a push or a restore of the other vocabulary is *refused* with
    `conflict`, before anything is written, and the client names the remedy: the other
@@ -2413,17 +2442,18 @@ Three decisions, three pieces of state, three revocations. None implies another.
 
 | Consent | Granted by | Writes | Revoked by |
 |---|---|---|---|
-| **Connect** | `staple cloud connect` | credential in OS keychain or `0600` file, plus `sync.connected` and the endpoint in machine config | `staple cloud disconnect` |
-| **Automatic sync** | `staple cloud auto on` | `sync.auto = true` in machine config | `staple cloud auto off` |
-| **Backup** | `staple cloud backup enable` | `sync.backup = true` in machine config, plus a server-side flag | `staple cloud backup disable` |
+| **Connect** | `staple cloud connect` | credential in the OS keychain or a `0600` file, plus the connection record `<home>/cloud/<repositoryId>.json` (endpoint, device id, consents); its presence is what "connected" means | `staple cloud disconnect` |
+| **Automatic sync** | `staple cloud auto on` | `auto: true` in the connection record | `staple cloud auto off` |
+| **Backup** | `staple cloud backup enable` | `backup: true` in the connection record, plus the server-side flag (`PUT /v1/repos/{repoId}/backup`) | `staple cloud backup disable` |
 
 All three are **per-device**. Enabling automatic sync on a laptop does not enable
 it on a build machine, because the flag is machine-local and consent given on one
 machine is not consent given on another.
 
-**Connect shows before it asks.** It prints the endpoint, the `repositoryId` and
-the account it is about to bind, and performs **no remote mutation** before the
-answer. A declined connect leaves no credential, no config key and no server-side
+**Connect shows before it asks.** It prints the service, the `repositoryId`, the
+device id and label, and where the credential will be stored, and performs **no
+remote mutation** before the answer. Without `--yes` and without a terminal it
+prints the preview, exits 2 and sends nothing. A declined connect leaves no credential, no config key and no server-side
 record.
 
 **A successful connection leaves sync manual.** Manual is the default and stays
@@ -2445,14 +2475,13 @@ What a surface may do at each stage:
   timeout. **A tracker command never blocks indefinitely on Cloudflare**; sync
   failure degrades to manual and reports, it does not hang `staple checkout`.
 
-  **There is deliberately no pre-checkout trigger.** An earlier draft of this
-  page listed one. It is not merely unimplemented — it is refused, and the
+  **There is deliberately no pre-checkout trigger.** It is refused, and the
   reason is what it would mean rather than what it would cost. A pull
   immediately before a local claim returns a view already stale by the time the
   claim is written, and it would read to a human as *"checkout is coordinated
   now"* when the only thing that coordinates a checkout across devices is a
-  [lease](#claims-a-local-checkout-is-not-a-global-lease). The leases lane made
-  global exclusivity a separately named `cloud` verb precisely so nothing on the
+  [lease](#claims-a-local-checkout-is-not-a-global-lease). Global exclusivity is
+  a separately named `cloud` verb precisely so nothing on the
   everyday path depends on a service being reachable; a pre-checkout sync is
   that dependency wearing a better name. `checkout` is a mutation, so it fires
   `post-write` — the claim is pushed promptly once it has been taken, which is
@@ -2469,7 +2498,7 @@ in that table.
 
 | Consent | Granted by | Writes | Revoked by |
 |---|---|---|---|
-| **Publish the registry** | `staple hub registry publish --enable` | `sync.registry = true` on the HUB's connection record, keyed by the hub id | `staple hub registry publish --disable` |
+| **Publish the registry** | `staple hub registry publish --enable` | `registry: true` on the HUB's connection record, `<home>/cloud/<hubId>.json` | `staple hub registry publish --disable` |
 
 **Connect, automatic sync and backup do not imply it, and it implies none of them.**
 It is its own consent because it discloses something none of the other three does:
@@ -2484,9 +2513,8 @@ did not read.
 
 Connecting one repository says nothing about any other repository. Automatic sync
 says nothing about *what* is synchronized. Backup says a copy may be **kept**, not
-that the shape of the machine may be **described**. Until this feature the wire could
-not express the last of those at all and the invariant was free; it is no longer
-free, so it is paid for explicitly.
+that the shape of the machine may be **described**. Describing it is a disclosure
+the other three never make, so it is paid for explicitly.
 
 What it does not upload is stated at the same moment, because a person will
 reasonably get it wrong about a thing called "the hub": no filesystem paths, no
@@ -2525,12 +2553,14 @@ reasonably want the registry replicated and no history of it kept.
 
 ## The network rule — and the test that proves it
 
-Today the runtime contains **zero outbound network call sites**. `src/ui/server.ts`
-is an inbound listener bound to `127.0.0.1`; the one `fetch()` in the tree is in
-the browser bundle (`src/ui/app/src/lib/api.ts`) calling its own origin on a
-relative path; the installer stages a local payload and downloads nothing. The
-invariant is therefore not a reduction to be achieved — it is a floor to be held,
-and the assertion is literally zero rather than an allowlist.
+The runtime has exactly two outbound call sites, and both are behind a consent:
+the sync client (`src/core/cloud/client.ts`, which only a connected workspace
+reaches) and budget live polling (`src/core/telemetry/polling/`, off by default,
+below). `src/ui/server.ts` is an inbound listener bound to `127.0.0.1`; the browser
+bundle (`src/ui/app/src/lib/api.ts`) calls its own origin on a relative path; the
+installer stages a local payload and downloads nothing. For a workspace that has
+not been connected the invariant is a floor to be held, and the assertion is
+literally zero rather than an allowlist.
 
 ### What counts as a violation
 
@@ -2567,7 +2597,7 @@ under test is imported**, and patches, at minimum:
 | `globalThis.WebSocket` | the constructor |
 
 The list is a minimum, not a ceiling. It is written as "every egress primitive
-Node exposes", so a lane that reaches for one not named here adds it to the
+Node exposes", so code that reaches for one not named here adds it to the
 harness rather than concluding it is permitted.
 
 Each spy records `(target, member, destination, stack)` and then **throws** rather
@@ -2590,9 +2620,10 @@ and the violation would be invisible: the offending call happens in a `wrangler`
 subprocess, not in the Staple process the spy is watching, so a network-silence
 test could pass at the exact moment the suite was talking to the internet.
 
-Every local invocation passes `--local` explicitly. No exceptions, no
-convenience wrapper that omits it, and the flag is asserted present by whatever
-script starts it rather than trusted to a default that has already changed once.
+Every local invocation passes `--local` explicitly — the Worker package's `dev`
+and `migrate:local` scripts (`worker/package.json`) and the live harness
+(`scripts/hub-registry-live.ts`) all do. No exceptions, and no convenience wrapper
+that omits it, rather than trusting a default that has already changed once.
 
 ### Where the Worker's own tests live
 
@@ -2600,9 +2631,8 @@ The Worker is a self-contained package under `worker/`, with its own
 `package.json` and its own test runner pinned to the version its Cloudflare
 tooling requires. The repository root keeps its existing runner and its existing
 suite, and root `npm test` neither runs nor is affected by the Worker's tests.
-Two runners in one repository is the deliberate cost of not dragging 93 existing
-test files through a major-version upgrade to satisfy a directory that did not
-exist last week.
+Two runners in one repository is the deliberate cost of not dragging the root
+suite through a major-version upgrade to satisfy one package.
 
 ### The scenarios that must assert zero
 
@@ -2647,8 +2677,8 @@ the loopback one it is served from.
 
 **No telemetry, no update check, no discovery request, ever.** Not gated behind a
 flag, not "anonymous", not opt-out. There is no code path to disable, because
-there is no code path. A future feature that needs one adds it to this section
-first, with its own consent, or it does not ship.
+there is no code path. A feature that needs one adds it to this section first,
+with its own consent, or it does not ship.
 
 ## Trust boundaries
 
@@ -2657,8 +2687,8 @@ operations, and arbitrating leases with an authoritative clock. It is trusted fo
 nothing else. Content it returns is schema-validated on arrival like any other
 input, and a client never executes, resolves or path-joins anything it received.
 
-**The server is not trusted for confidentiality against its own operator.** In
-the first release, operation payloads are stored in plaintext in D1. Issue titles,
+**The server is not trusted for confidentiality against its own operator.**
+Operation payloads are stored in plaintext in D1. Issue titles,
 descriptions, comment bodies and document revisions are readable by whoever holds
 the Cloudflare account. There is no client-side encryption, and pretending
 otherwise would be the worst thing this page could do. **If you would not paste an
@@ -2730,7 +2760,8 @@ and `create` alone on a transition. The rules every reader of the log shares for
 — are in `src/core/cloud/attempt-ends.ts`, which the Worker imports as it stands, like
 revision placement.
 
-**`schema`** is the workspace migration number, `010` as of the sync tables. A
+**`schema`** is the workspace migration number, currently 16
+(`WORKSPACE_LATEST_VERSION`). A
 device receiving operations stamped with a schema newer than it understands
 refuses with `schema_ahead` and says which version to upgrade to. It never applies
 part of a page and never guesses at a column it does not have. This mirrors the
@@ -2743,9 +2774,7 @@ a new protocol integer. Unknown fields are preserved and re-emitted
 ([the envelope](#the-operation-envelope)), which is what makes additive change safe
 on a mixed fleet.
 
-**A new entity kind is NOT additive, and this page used to say it was.** That was
-wrong about the client that exists, and the correction matters more than the
-mistake. An unknown *field* is stored verbatim and re-emitted; an unknown *entity*
+**A new entity kind is NOT additive.** An unknown *field* is stored verbatim and re-emitted; an unknown *entity*
 is not ignored — `applyToDatabase` throws `Operation names entity "…", which this
 build does not know`, and the pull loop defers only an unresolvable referent. So an
 older device handed an entity added after its release fails the page and stops
@@ -2801,11 +2830,11 @@ Only `rate_limited`, `unavailable` and `offline` are retried. Everything else is
 decision for a human, and retrying it is how a client turns one bad request into a
 sustained one.
 
-**The client surfaces every one of these as itself (STA-251).** Each code is a
+**The client surfaces every one of these as itself.** Each code is a
 `StapleErrorCode` member. A sync failure's envelope `code` is the service's code,
 its `retryable` is the column above, and the CLI exits with the code's own number:
 `validation` 2, `not_found` 3 and `conflict` 4, shared with the tracker, then 11 to
-21 in this table's order (`docs/cli.md`, "Exit codes"). A refusal the client makes
+21 in this table's order ([cli.md](cli.md#exit-codes)). A refusal the client makes
 before sending has the same shape as the service's. Examples are the handshake's
 `protocol_unsupported`, a pulled operation's `schema_ahead`, an oversized seed row's
 `payload_too_large` and the backup consent's `forbidden`. `src/core/cloud/errors.ts`
@@ -2814,7 +2843,7 @@ bit for `--json` consumers that read them from before this. A code the client do
 know is `unavailable`, and so is an `offline` sent by a server, because `offline` is
 the client's own condition.
 
-**`conflict` also answers a write in the wrong vocabulary (STA-290).** A repository holds
+**`conflict` also answers a write in the wrong vocabulary.** A repository holds
 a hub's registry (`registration`, `crossLink`) or a workspace's data, never both. The
 service records which in `repos.vocabulary` and claims it with the repository's first
 write. After that, a push or a restore of the other vocabulary is refused before anything
@@ -2827,7 +2856,7 @@ other vocabulary needs its own repository, and `isVocabularyRefusal` in
 `src/core/cloud/client.ts` separates this refusal from a lease race. Provisioning and the
 cleanup for a repository contaminated before the rule existed are in `worker/README.md`.
 
-**`Retry-After` is honoured (STA-264).** The Worker sends it with every
+**`Retry-After` is honoured.** The Worker sends it with every
 `rate_limited` (`Retry-After: 60`, at 120 requests a minute per device), and the client
 reads it — delta-seconds or an HTTP date — into `detail.retryAfter` and acts on it:
 
@@ -2900,7 +2929,7 @@ already sends a JSON body on a DELETE with its `Content-Length` (lease release),
 the Worker already reads one there, so nothing new was needed on either side. The
 Worker caps the purge body from `Content-Length` before reading it, with the same cap
 a push gets. A header would have needed a per-call header option on the transport
-that nothing else uses. The contract pins both refusals once, in
+that nothing else uses. Both refusals are pinned once, in
 `worker/test/purge-fixture.ts`, which the Worker's suite and the fake service the
 client is tested against both answer to.
 
@@ -2934,37 +2963,35 @@ The pre-restore snapshot is an ordinary backup with `kind: "pre-restore"`,
 restorable by the same route. That is what "recoverable" has to mean: not a
 record that a restore happened, but a thing you can restore.
 
-## What this is not — the STA-26 boundary
+## What this is not: external tracker sync
 
-This epic replicates **Staple to Staple**. Every device runs the same schema, the
+Cloud sync replicates **Staple to Staple**. Every device runs the same schema, the
 same vocabulary and the same semantics, so an operation means the same thing
 everywhere and the only hard problems are ordering, exclusivity and consent.
 
 External tracker integration — GitHub Issues, ClickUp, TaskLink field ownership —
-is a different problem and stays a different epic. It maps Staple's model onto a
+is a different problem, and cloud sync does not do it. It maps Staple's model onto a
 foreign one that has its own ids, its own statuses, its own permissions and its
 own idea of what a comment is. It needs field ownership rules (which side wins for
 which field), provider mapping, per-provider credentials and per-provider rate
 limits. **None of that is defined here, and nothing here should be read as
 defining it.**
 
-What the two share, at most, is the journal: the S3 mutation seam records every
-local mutation once, and an adapter may *read* that journal instead of
+What the two could share, at most, is the journal: the journal seam records every
+local mutation once, and an adapter could *read* that journal instead of
 re-discovering changes by polling. What they must not share is a second
 reconciliation engine. If an adapter appears to need its own outbox, its own
-conflict table and its own retry loop, that is the signal for the STA-26
-reevaluation to resolve — not a licence to build a parallel one alongside this
-contract.
+conflict table and its own retry loop, that is the signal to generalize this one —
+not a licence to build a parallel one alongside it.
 
-**That sharing is a design intent, not a shipped capability, and the reevaluation
-resolved it as follows.** As built, an adapter cannot read the journal, for two
-reasons that are both small and both load-bearing:
+**No adapter exists, and as built none can read the journal**, for two reasons
+that are both small and both load-bearing:
 
 - **The seam is armed by cloud connection.** `Journal.armed()` requires a device
   id *and* `sync_state.repository_id`, and `flush()` returns early without both —
   so on a machine that has never run `staple cloud connect` there are no outbox
-  rows and no version rows at all. That is the correct privacy posture for this
-  epic and the wrong one for an adapter, because it makes external-tracker sync
+  rows and no version rows at all. That is the correct privacy posture for cloud
+  sync and the wrong one for an adapter, because it makes external-tracker sync
   depend on cloud sync being connected, which is precisely the coupling this
   section exists to prevent. Journalling has to become armed by *any* enabled
   replication consumer, not by this one. And arming alone would not be enough: the
@@ -2977,8 +3004,8 @@ reasons that are both small and both load-bearing:
   the cloud", and `compact()` deletes rows the cloud has acknowledged. A second
   reader has nowhere to record its own progress and would have its queue pruned by
   the first reader's routine housekeeping. Per-consumer delivery state is the
-  missing piece, and no table in migration 010 or 011 carries a provider or remote
-  discriminator to hang it on.
+  missing piece, and no sync table carries a provider or remote discriminator to
+  hang it on.
 
 So the boundary holds in the direction that matters — **the replication
 infrastructure is built and must not be built twice** — while the one thing this
@@ -2988,7 +3015,7 @@ conflict record and its resolution and settle rules, the per-field detection and
 merge engine and its `sync_field_writes` provenance, the credential store's
 keychain / `secret-tool` / `0600` mechanism selection, the retryable-code taxonomy,
 and both backoff mechanisms. What it must add on top: a field-*ownership* policy,
-which does not exist here in any form — arbitration in this epic is version and
+which does not exist here in any form — arbitration in cloud sync is version and
 provenance based and its answer to a genuine collision is to withhold the field and
 escalate, never to declare a winner.
 
@@ -3066,8 +3093,7 @@ Honest gaps, so nobody discovers them the hard way.
   100,000 rows written per day. The operations table writes about two rows per
   operation — one to the table, one to its unique index — plus one per batch for
   the high-water mark. **This is the scale to design for.** A two-machine tracker
-  will not approach it, and nothing in this contract should be optimized as though
-  it might.
+  will not approach it, and nothing here is optimized as though it might.
 - **Ten milliseconds of CPU per request on the free plan.** Enough to parse a
   200-operation batch and hash a token; not enough to parse a multi-megabyte body.
   It is why the size check reads `Content-Length` instead of measuring the parsed

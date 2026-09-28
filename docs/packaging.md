@@ -1,3 +1,9 @@
+---
+title: Packaging and install
+description: What the published staple-cli package contains, how the build proves it, and how staple install keeps a versioned runtime and launcher under your home.
+sidebar_position: 16
+---
+
 # Packaging and install
 
 ## The published package
@@ -5,9 +11,13 @@
 staple publishes as **`staple-cli`**, one npm package exposing one executable
 named `staple`. `npx -y staple-cli` and an installed `staple` run the same
 entrypoint, and that entrypoint serves both surfaces — the CLI, and the MCP
-stdio server under `staple mcp`. There is no second package and no separate MCP
-binary. Releases are cut by CI from version tags — see
-[RELEASING.md](../RELEASING.md).
+stdio server when its first argument is `mcp` (`npx -y staple-cli mcp`). There
+is no second package and no separate MCP binary. The `mcp` argument belongs to
+the packaged entrypoint, `src/package/staple.ts`, which dispatches to
+`src/mcp.ts` or `src/cli.ts`; it is not a CLI verb, so `staple --help` does not
+list it, and a checkout starts the server with `npm run mcp`
+(`tsx src/mcp.ts`) instead. Releases are cut by CI from version tags — see
+[RELEASING.md](https://github.com/vpetkovic/staple-tracker/blob/master/RELEASING.md).
 
 The build bundles the entrypoint with esbuild into one ESM file. Everything
 non-builtin is compiled in — the MCP SDK, Zod, Ajv, all of it — and only Node's
@@ -59,10 +69,12 @@ version is read from the source `package.json`, so there is still one place to
 bump it.
 
 `test/package-tarball.test.ts` is the acceptance: it packs the payload, installs
-the tarball into a temporary prefix with `--offline`, and then
-drives the installed binary from a directory outside this repository with no
-`node_modules` near it — `init`, `new`, `ls --json`, a `staple mcp` handshake
-with a real tool call, and a `staple open` that serves its own bundled assets.
+the tarball into a temporary prefix with `npm install <tarball> --offline`
+(npm's own flag: the install must not reach the registry, which proves the
+artifact needs nothing from it), and then drives the installed binary from a
+directory outside this repository with no `node_modules` near it — `init`,
+`new`, `ls --json`, an MCP handshake through the `mcp` argument with a real
+tool call, and a `staple open` that serves its own bundled assets.
 Nothing in it is skippable: every input is a local file.
 
 The payload that test, `install-real-package` and `install-schema-matrix` use is
@@ -123,7 +135,7 @@ both print where the previous version lives
 (`<home>/runtime/versions/<previous>/`), and `staple install status` repeats it
 on the `previous` line. Nothing under `versions/` is deleted by an upgrade.
 Each of those commands also prints which workspace schema the selected runtime
-understands (`Schema     understands workspace schema 6`), read from the
+understands (`Schema     understands workspace schema 16`), read from the
 payload's declaration; a payload built before the declaration existed is still
 installable and is reported as not declaring one. Note that rolling the runtime
 back does not roll a workspace back: a workspace already migrated by the newer
@@ -152,6 +164,6 @@ code.
 
 **PATH is a separate consent.** `--yes` covers the home and the launcher
 directory. Editing a shell profile additionally requires `--update-path`, and
-writes a marked `# >>> staple >>>` block that a second install will not
+writes a marked `# >>> staple >>>` block that a second install does not
 duplicate. Without it, install prints the exact export line and leaves the
 runtime usable by absolute path.

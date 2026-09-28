@@ -1,16 +1,49 @@
+---
+title: Execution telemetry
+description: How staple records agent attempts on issues, provider usage-limit windows and budget readings, and how each is read back.
+sidebar_position: 13
+---
+
 # Execution telemetry
 
-What agent execution cost, recorded so a scheduler can reason about it. This page
-is the contract for three new records: the **execution attempt** (one tenure of
-one agent on one issue), the **limit window** (one instance of a provider usage
-limit, bounded by an absolute reset instant) and the **budget sample** (one
-reading of how much of that window is used). It specifies identifiers, fields,
-units, timestamps, lifecycle, provenance and missingness. It was written before
-any of it was built: nothing on this page exists yet. Where this page and
-[semantics.md](semantics.md) or [cli.md](cli.md) disagree, those pages describe
-today and this page the target.
+What agent execution costs, recorded so a scheduler can reason about it. Staple
+keeps three records for this: the **execution attempt** (one tenure of one agent
+on one issue), the **limit window** (one instance of a provider usage limit,
+bounded by an absolute reset instant) and the **budget sample** (one reading of
+how much of that window is used). This page describes their identifiers, fields,
+units, timestamps, lifecycle, provenance and missingness, and the surfaces that
+write and read them.
 
-The reason for the page is one separation. A scheduler has to make two
+## In brief
+
+- **Attempts** open and end as side effects of the claim verbs: `checkout`
+  (MCP `checkout_task`), `status`/`done` (`update_task`) and `release`
+  (`release_task`). Pass `--harness`, `--harness-session`, `--model` and
+  `--account` to say which harness and account did the work.
+- An agent reports on the attempt it holds with `staple attempt
+  pause|resume|milestone|interrupt` (MCP `record_attempt_event`). A coordinator
+  opens an orchestrator attempt with `staple attempt open <ref> --role
+  orchestrator`. `staple attempt reconstruct` rebuilds attempts from older events.
+- Read attempts with `staple show` (`attempts: {current, last, count}`),
+  `staple attempts <ref>` (MCP `list_attempts`) and `staple attempt <id>`
+  (MCP `get_attempt`). The web UI's task detail shows them on its Analytics tab.
+- **Limit windows and budget samples** are machine-local, in the staple home's
+  `hub.db`, and never replicate. Capture is off until `staple budget capture on`
+  and `staple budget bind`, or the single consent `staple budget setup --yes`.
+- Readings arrive through `staple budget ingest` (the Claude Code status line, a
+  Codex rollout file, or a typed reading; MCP `record_budget_sample`), through
+  `staple budget collect` (the Codex watcher), and, with its own consent, through
+  live polling of the provider's usage endpoint (`staple budget live on --yes`).
+- Read budget with `staple budget` (MCP `get_budget`, `GET /api/budget`),
+  `staple budget history` (MCP `list_budget_samples`) and `staple budget status`,
+  or the web UI's Usage view. `staple budget forget` removes a bad reading.
+- `staple forecast <ref>` (MCP `forecast`) and `staple calibrate` (MCP
+  `calibration_cohorts`) read attempts and samples to forecast remaining work and
+  what it costs a provider limit.
+- Runtime is never converted into quota, and an unknown value is never shown as
+  `0`: every missing figure is `null` with a reason.
+
+The reason for these records is one separation. A scheduler has to make two
 predictions, and they come from different data:
 
 - **Completion latency**: how long the work will take. That comes from estimates
@@ -21,29 +54,30 @@ predictions, and they come from different data:
   fifteen-minute tasks in fifteen minutes can still exhaust a five-hour window in
   thirty.
 
-This page records both kinds of fact and keeps them apart. It does not decide
-anything: admission policy, reserve, forecasting and the operator panel consume
-this contract and are specified elsewhere.
+Staple records both kinds of fact and keeps them apart. The records decide
+nothing: forecasting, the provisional [pressure](#pressure) read and the Usage
+view consume them. No admission policy exists in staple; nothing refuses or
+admits work on budget.
 
 ## What this builds on
 
-Nothing below is redefined here. Each row is an existing contract this page
+Nothing below is redefined here. Each row is an existing rule the telemetry
 reads, and the column on the right is the whole of what it adds.
 
-| Existing contract | Where it is specified | What this page does with it |
+| Existing rule | Where it is specified | What telemetry does with it |
 |---|---|---|
 | Issue identity: `issues.id` (UUID), `identifier` for display | [sync.md](sync.md#identity-is-the-uuid-never-the-identifier) | An attempt names its issue by `issueId`. `identifier` is copied into read payloads for display only, never used as a key. |
 | The claim: `checkout_agent`, `checkout_at`, and the derived `claim` payload (`heldBy`, `lastActivityAt`, `idleSeconds`, `scope`, `lease`) | [continuity.md](continuity.md), [sync.md](sync.md#claims-a-local-checkout-is-not-a-global-lease) | An attempt is the **history of a claim tenure**. The claim stays the only concurrency mechanism; attempts never grant or refuse anything. |
 | Checkout semantics: atomic claim, idempotent re-claim by the holder, `--steal-if-stale`, `release --if-stale`, no sweeper | [semantics.md](semantics.md#atomic-checkout-and-release), [continuity.md](continuity.md) | Attempt boundaries are placed on exactly these mutations, in the same transaction. No timer, sweeper or TTL opens or closes an attempt. |
 | Status categories (`active`, `review`, `blocked`, `gated`, `done`, `cancelled`, …) and derived parent flips | [semantics.md](semantics.md#categories--why-a-configurable-status-set-is-still-safe) | Attempt outcomes key off the **category** an issue leaves `active` for, never a status id. Derived flips never open an attempt: a parent that is `in_progress` only because a child is has no attempt, as it has no stopwatch. A parent that is itself checked out does. |
-| Timing: `activeSeconds`, `reviewSeconds`, `countedThrough`, `approximate`, replayed from events at read time | [cli.md](cli.md#estimates-vs-actuals) | Unchanged. Attempt durations are derived the same way (clamped at `lastActivityAt`, never stored). This page does not change what `activeSeconds` means. |
+| Timing: `activeSeconds`, `reviewSeconds`, `countedThrough`, `approximate`, replayed from events at read time | [cli.md](cli.md#estimates-vs-actuals) | Unchanged. Attempt durations are derived the same way (clamped at `lastActivityAt`, never stored). Attempts do not change what `activeSeconds` means. |
 | Estimates: `estimatedSeconds`, `subtreePlan`, the duration vocabulary (`90s`, `30m`, `2h`) | [cli.md](cli.md#estimates-vs-actuals) | The only estimate. An attempt records a **reading** of it at start (see [below](#the-estimate-reading)), never a second estimate. |
 | Agent identity: `STAPLE_AGENT` / the `actor` on every write | [agents.md](agents.md) | The attempt's `agent`. Harness details are an optional, self-reported addition, not a new identity. |
 | The events log and its `dedup_key`; events re-derived on apply, never transported | [sync.md](sync.md#events-are-re-derived-never-transported) | Every attempt transition also emits one local event, keyed from the transition id, so `events --follow` hooks keep working. |
 | Idempotency keys on create | [semantics.md](semantics.md#duplicate-and-replay-guards) | Attempt-opening writes accept one; a replay returns the original attempt. |
-| Sync: entity operations, the envelope, deterministic `opId`, protocol integers, "what never leaves the machine" | [sync.md](sync.md) | Attempts become synchronized entities (which needs a protocol integer). Limit windows and budget samples join the never-leaves list. |
+| Sync: entity operations, the envelope, deterministic `opId`, protocol integers, "what never leaves the machine" | [sync.md](sync.md) | Attempts are synchronized entities (protocol 3). Limit windows and budget samples are on the never-leaves list. |
 | The actionable pickup set (`inbox`, `next_task`, the queue resolver) | [queue.md](queue.md) | Not consumed here. The scheduler ranks from that set; telemetry never decides what is actionable. |
-| The error envelope and exit codes | [cli.md](cli.md#machine-readable-output) | Reused as they stand. This page adds no error code. |
+| The error envelope and exit codes | [cli.md](cli.md#machine-readable-output) | Reused as they stand. Telemetry adds no error code. |
 
 ## Terms
 
@@ -61,7 +95,7 @@ Six words, each naming one thing. The rest of the page uses them strictly.
   attempts; staple only ever sees an opaque reference to one.
 - **Limit window**: one instance of a provider usage limit for one account,
   ending at an absolute reset instant: "this account's five-hour limit that
-  resets at 19:00Z". What the scheduling work calls a *provider session* is a
+  resets at 19:00Z". What scheduling discussions call a *provider session* is a
   limit window. It is **not** a harness session, and the two are never joined by
   time alone.
 - **Budget sample**: one reading of a limit window's usage, with its source,
@@ -72,7 +106,7 @@ Six words, each naming one thing. The rest of the page uses them strictly.
 ### An issue has many attempts
 
 Work on one issue can start, die at a usage limit, be resumed by a different
-harness, go to review, come back with changes and be picked up again. Today the
+harness, go to review, come back with changes and be picked up again. The
 issue row records only the latest claim and the event log records the
 transitions; nothing names the tenures. An attempt does.
 
@@ -138,7 +172,7 @@ Stored fields:
 | `outcome` | `null` while open. On `ended`: `completed`, `yielded`, `failed` or `interrupted`. Reads can also show `orphaned`, which is derived and never stored ([below](#orphaned-attempts-are-closed-at-read-time)). |
 | `endReason` | A reason code from the [lifecycle tables](#how-an-attempt-ends), `null` while open. One more code is written only by reconstruction: `capture_began`, on a reconstructed attempt whose tenure went on as the same agent's first recorded attempt ([History before capture](#history-before-capture)). It is `yielded`, never an interruption. The orchestrator lane adds `coordination_ended` (a real end, `yielded`, from `staple attempt end`) and the orphan reasons `issue_resolved` and `superseded_by_newer`. |
 | `endDetection` | Who knew the attempt ended. `reported`: the attempt's own agent made the ending mutation. `by_other`: a different actor made it (another agent, a human, a script calling `status` or `release` with no agent). `inferred`: staple concluded it from a later mutation, such as a steal or a stale release. `reconstructed`: backfilled from the event log. `null` while open. The `derived` value never appears in storage; it exists only on reads ([below](#orphaned-attempts-are-closed-at-read-time)). |
-| `endedBy` | The actor on the ending mutation, or `null` when it had none. `status` and `release` have no holder check today, and `release` skips the ownership check entirely when no agent is given, so the actor is recorded rather than assumed. |
+| `endedBy` | The actor on the ending mutation, or `null` when it had none. `status` and `release` have no holder check, and `release` skips the ownership check entirely when no agent is given, so the actor is recorded rather than assumed. |
 | `openedBy` | `checkout`, `steal`, `reclaim`, `status`, `reconstructed` or `orchestrate` (an orchestrator attempt). Which mutation opened it. |
 | `resumesAttemptId` | The attempt this one continues after an interruption, or `null`. The link that makes an interruption boundary reconstructable. See [the resume rule](#the-resume-rule). |
 | `startedAt`, `endedAt` | UTC instants, written by the device that made the mutation and carried in the attempt operation. `endedAt` is `null` while open. |
@@ -149,7 +183,7 @@ Stored fields:
 | `providerBinding` | Which provider account the attempt spends from: `{provider, accountRef, source}`, where `source` is `flag` (passed explicitly) or `machine_binding` (resolved from the [source binding](#source-bindings-produce-the-account)). `null` when neither applies. The join key to limit windows. |
 | `estimateAtStart` | A reading of the issue's effective plan at open. See [The estimate reading](#the-estimate-reading). |
 | `idempotencyKey` | Optional retry key on the opening write, as on `new`. |
-| `provenance` | `recorded` (written live by this contract) or `reconstructed` (backfilled from events; see [History](#history-before-capture)). |
+| `provenance` | `recorded` (written live by the mutation) or `reconstructed` (backfilled from events; see [History](#history-before-capture)). |
 | `missing` | The [missingness map](#missingness). Empty when every nullable field that should have a value has one. |
 
 Derived at read time and **never stored**, for the reason [cli.md](cli.md#estimates-vs-actuals)
@@ -171,8 +205,8 @@ it is written.
 An attempt's `activeSeconds` and the issue's `timing.activeSeconds` measure
 different things and are **not required to agree**. Timing replays status
 intervals, including an active status nobody claimed. Attempts measure claim
-tenures. How the two reconcile belongs to the timing-semantics work. This page
-only ensures both are derivable.
+tenures. [timing-semantics.md](timing-semantics.md) describes how the two
+relate (`workSeconds` sums worker attempts); both stay derivable.
 
 ### The estimate reading
 
@@ -184,7 +218,7 @@ never written back, never used as the plan and never shown as an estimate.
 It exists because the estimate is overwritten in place. `estimated_seconds`
 keeps only its newest value, and sync keeps only the newest write of a field.
 Calibration needs to compare an attempt against the estimate the agent was
-working to, not the one somebody set afterwards. Every change now emits an
+working to, not the one somebody set afterwards. Every change emits an
 `estimate_changed` event carrying the old and new value, whether it came from
 `staple estimate` (MCP `set_estimate`) or a status write carrying `--estimate`.
 Neither path touches an open attempt's reading. The reading stays anyway,
@@ -192,7 +226,7 @@ because an imported or restored workspace has no event log to replay.
 
 ### How an attempt opens
 
-Every rule is a side effect of a **local** mutation that exists today, in the
+Every rule is a side effect of a **local** claim or status mutation, in the
 same transaction, like `startedAt`. No caller writes an attempt directly, and
 **applying a pulled operation never runs these side effects**. A pulled
 operation applies under a suppressed journal scope, so any attempt row it
@@ -207,7 +241,7 @@ time.
 |---|---|
 | `checkout` succeeds and creates a new claim | A new attempt, `openedBy: "checkout"`. |
 | `checkout --steal-if-stale` succeeds (`claim_stolen`) | If the previous holder has an open attempt, it ends (`interrupted`, `claim_stolen`, `inferred`, `endedAt` = the previous holder's `lastActivityAt`, `endedAtSource: "last_activity"`). Either way a new attempt opens with `openedBy: "steal"`, and [the resume rule](#the-resume-rule) sets `resumesAttemptId`. |
-| The holder re-claims an issue it already holds with an open attempt (the crash-recovery path, which today returns the row and emits nothing), with the same `sessionRef` or none | Nothing. The open attempt is returned. Re-claim stays idempotent. |
+| The holder re-claims an issue it already holds with an open attempt (the crash-recovery path, which returns the row and emits nothing), with the same `sessionRef` or none | Nothing. The open attempt is returned. Re-claim stays idempotent. |
 | The same re-claim with a different `sessionRef` | The open attempt stays open and gains an `attempt_session_added` transition. **No interruption is inferred** (see below). |
 | The holder re-claims an issue it still holds but whose latest attempt has ended (a reported interruption, or an [orphaned](#orphaned-attempts-are-closed-at-read-time) attempt) | A new attempt, `openedBy: "reclaim"`, with `resumesAttemptId` set by the resume rule. |
 | A non-derived `status` write moves an issue into the `active` category without a checkout | A new attempt, `openedBy: "status"`, `claim.scope: "none"`, agent = the actor. |
@@ -221,10 +255,10 @@ under one agent identity would mean the old session died only if every
 identity ran one session at a time. It does not: the MCP setup in
 [agents.md](agents.md#the-mcp-surface) names every Claude Code install
 `STAPLE_AGENT=claude`, and the CLI falls back to `$USER` when no identity is set,
-so two live sessions routinely share one identity. The contract records the
+so two live sessions routinely share one identity. Staple records the
 second session and concludes nothing. Interruptions become visible through a
 per-session identity: a second session under a different name is refused by
-the claim, as it is today, and has to steal. Or the resuming session reports
+the claim and has to steal. Or the resuming session reports
 the old attempt's end first (`staple attempt interrupt <ref> --reason
 harness_exit`) and then re-claims.
 
@@ -232,8 +266,7 @@ The honest limit: **most interruptions are inferred, not reported.** A harness
 killed by a usage limit or a closed terminal cannot say so. The interruption
 becomes visible only when someone steals the claim, releases it as stale, or the
 resuming agent reports it. Until then the attempt reads `running` with a growing
-`idleSeconds`, which is exactly what the claim already says about a dead holder
-today.
+`idleSeconds`, which is exactly what the claim already says about a dead holder.
 
 ### The resume rule
 
@@ -381,11 +414,11 @@ these hold:
   command. Read-only surfaces never write it (`show`, `ls`, `inbox`, `events`,
   MCP `get_task` and the other read tools, HTTP `GET`), so a read never writes
   to the journal;
-- on a connected workspace, its last pull reached the head of the log. Staple
-  does not persist that fact today: `hasMore` is only a loop variable in the
-  pull, and `sync_state` keeps a `cursor` and `last_sync_at`. So the persistence
-  work records it, for example as a head-reached cursor and timestamp in
-  `sync_state`. This narrows the window in which the real end is still in
+- on a connected workspace, its last pull reached the head of the log.
+  `sync_state` records the cursor at which a pull last reached the head, and
+  when (`head_reached_cursor`, `head_reached_at`, workspace migration 013); the
+  condition holds while the cursor has not moved since, so a pull stopped
+  part-way, or a re-bootstrap that resets the cursor, clears it. This narrows the window in which the real end is still in
   flight. It does not close it, because the other device may not have pushed
   yet. The [apply rule](#a-stored-orphan-end-never-overwrites-a-real-end) is
   the actual protection;
@@ -540,7 +573,9 @@ burn rate means nothing without the number of agents producing it:
   "observedAt": "2026-09-24T14:51:00.000Z",
   "scope": "device",
   "openAttemptsInWorkspace": 3,
+  "openAttemptsInWorkspaceByRole": { "worker": 3, "orchestrator": 0 },
   "storedOpenAttemptsStartedHere": 5,
+  "storedOpenAttemptsStartedHereByRole": { "worker": 4, "orchestrator": 1 },
   "storedOpenAttemptsOnAccountStartedHere": 4,
   "workspaceSyncedThrough": "2026-09-24T14:50:12.000Z",
   "missing": {}
@@ -549,7 +584,7 @@ burn rate means nothing without the number of agents producing it:
 
 | Field | Meaning |
 |---|---|
-| `scope` | Always `device` in this contract. The counts are what this machine's databases know, and no field claims otherwise. |
+| `scope` | Always `device`. The counts are what this machine's databases know, and no field claims otherwise. |
 | `openAttemptsInWorkspace` | Effectively open attempts in this workspace database, including any pulled from other devices. Both lanes count, because both spend provider budget. |
 | `openAttemptsInWorkspaceByRole` | The same count split by lane, `{worker, orchestrator}`. |
 | `storedOpenAttemptsStartedHereByRole` | `storedOpenAttemptsStartedHere` split by lane, from the presence index's `role` (hub migration 007); `null` with `source_unavailable` when there is no index. |
@@ -560,8 +595,10 @@ burn rate means nothing without the number of agents producing it:
 **How the machine-wide counts stay cheap.** Computing them by opening every
 registered workspace database on every transition would make one transition
 cost as much as the number of repositories. Instead, `hub.db` keeps a
-machine-local **presence index**: one row per attempt opened on this machine
-(`workspaceId`, `attemptId`, `accountRef`, `startedAt`, `endedAt`). That makes
+machine-local **presence index**, the `attempt_presence` table (hub migrations
+006 and 007): one row per attempt opened on this machine (`workspace`,
+`attempt_id`, `provider`, `account_ref`, `session_refs`, `started_at`,
+`ended_at`, `role`). That makes
 both counts one indexed query on one file. The index is a cache, and its rules
 reflect that:
 
@@ -589,7 +626,7 @@ this machine started through staple, approximately.
 
 ### History before capture
 
-Attempts can be **reconstructed** for work done before this contract ships,
+Attempts can be **reconstructed** for work done before attempts were recorded,
 from the events that already exist: `checkout` opens, `claim_stolen` interrupts
 and reopens, `release` / `claim_released_stale` / a `status_changed` out of the
 active category end. A reconstructed attempt carries `provenance:
@@ -601,8 +638,8 @@ attempts from trusted samples unless asked, as they exclude `approximate`
 timing.
 
 Reconstruction is a command (`staple attempt reconstruct`), because reconstructed
-attempts replicate and a migration never journals. It is idempotent: an attempt's
-id is derived from its issue and the event that opened it. It reads an issue's
+attempts replicate and a migration never journals. It is idempotent: a reconstructed attempt's
+id is a UUID-shaped digest of its issue and the event that opened it. It reads an issue's
 events up to its **first recorded attempt**, where capture began, and writes no
 transitions. A tenure still open at that point is ended by the rule that fits:
 
@@ -653,6 +690,8 @@ as-is, it becomes wrong as soon as it is read again.
   "lastSampleAt": "2026-09-24T14:51:00.310Z",
   "planTier": "plus",
   "supersededBy": null,
+  "supersededReason": null,
+  "status": "current",
   "missing": {}
 }
 ```
@@ -663,14 +702,14 @@ as-is, it becomes wrong as soon as it is read again.
 | `provider` | `anthropic`, `openai`, or another lowercase provider slug. |
 | `accountRef` | The operator's label for the account ([Privacy](#privacy)). |
 | `limitKey` | The provider's own name for the limit, lowercased and dotted: `five_hour`, `seven_day`, `spend_limit` from Claude Code. `<limit_id>.primary` and `<limit_id>.secondary` from Codex. Positional Codex keys are **not** renamed to `five_hour` by assumption. The window length is its own field. |
-| `label` | A display string derived from `windowSeconds` when known (`5h`, `7d`). Never a key. |
+| `label` | A display string derived at read from `windowSeconds` when known (`5h`, `7d`). Never a key, never stored. |
 | `windowSeconds` | The window's length. `windowSecondsSource`: `observed` (the provider reported it, as Codex's `window_minutes` does) or `documented` (taken from the provider's published description, lower confidence). `null` with a reason when neither exists. |
-| `anchor` | How the provider places the window: `first_use` (starts at first activity after the previous reset), `fixed_schedule`, `sliding` or `unknown`. **`unknown` unless the source states it.** Neither verified surface states it today. |
+| `anchor` | How the provider places the window: `first_use` (starts at first activity after the previous reset), `fixed_schedule`, `sliding` or `unknown`. **`unknown` unless the source states it.** No source staple reads states it, so every window this build writes has `anchor: "unknown"`. |
 | `resetsAt` | UTC instant. `resetsAtSource`: `observed_absolute` (the provider gave an instant) or `derived_from_relative` (the provider gave a duration and staple added it to the capture instant; precision is the source's rounding). |
 | `startsAt` | `resetsAt − windowSeconds` **only when** `windowSeconds` is `observed`. Otherwise `null` with reason `not_reported_by_source`. |
-| `firstSampleAt`, `lastSampleAt` | Derived bounds of what was actually observed. `lastSampleAt` is part of the staleness test. |
+| `firstSampleAt`, `lastSampleAt` | Derived at read from the window's samples: the bounds of what was actually observed. `lastSampleAt` is part of the staleness test. |
 | `planTier` | The provider's plan name when the source reports one (Codex `plan_type`), otherwise `null` with reason `not_reported_by_source` (Claude Code reports none). Optional. Explains a limit and identifies nobody ([Privacy](#privacy)). |
-| `supersededBy` | Stored. The id of the window instance that replaced this one before it reset (below), otherwise `null`. Windows are machine-local rows, so this one mutable field is safe to write in place. |
+| `supersededBy`, `supersededReason` | Stored. The id of the window instance that replaced this one before it reset, and why: `reset_moved` or `usage_reset` ([Window identity](#window-identity)); otherwise both `null`. Windows are machine-local rows, so these mutable fields are safe to write in place. |
 
 Derived at read: `status`. It is `superseded` when `supersededBy` is set, otherwise
 `current` (`now < resetsAt`) or `elapsed` (`now ≥ resetsAt`). "Superseded" is
@@ -684,17 +723,18 @@ stored exactly once, as `supersededBy`. `status` only reads it.
   it must treat `unknown` as "the next reset cannot be predicted until the
   first sample after this one".
 - A **sliding** window (usage ages out continuously, with no single reset) has
-  `resetsAt: null` with reason `sliding_window`. Neither verified provider
-  surface reports one today. The encoding exists so that a source which does
-  will not be forced into a fake reset.
+  `resetsAt: null` with reason `sliding_window`. No provider surface staple
+  reads reports one. The encoding exists so that a source which does is not
+  forced into a fake reset.
 
 ### Window identity
 
 Samples join an existing window instance when `provider`, `accountRef` and
 `limitKey` match and `|resetsAt − window.resetsAt| ≤ tolerance`. The default
 tolerance is 120 seconds, to absorb a provider that recomputes or rounds its reset
-between readings. The largest jitter seen in recorded samples so far is 17
-seconds, and the ingestion work keeps checking the figure against new samples.
+between readings (`WINDOW_TOLERANCE_SECONDS` in
+`src/core/telemetry/budget-store.ts`). The largest jitter seen in recorded
+samples is 17 seconds.
 Otherwise:
 
 - A sample whose `resetsAt` is later than a window that has elapsed opens the
@@ -754,8 +794,8 @@ Otherwise:
 
 ### What providers actually expose
 
-The contract only uses fields someone has seen. The table below lists what was
-checked when this page was written and how. Confidence refers to the
+Staple reads only fields that have been observed. The table lists what was
+checked, and how. Confidence refers to the
 *surface's stability*, not to whether the numbers are accurate: staple has no
 means of auditing a provider's arithmetic.
 
@@ -764,16 +804,16 @@ means of auditing a provider's arithmetic.
 | **Claude Code status line input** (JSON on the configured `statusLine` command's stdin) | `rate_limits.five_hour`, `rate_limits.seven_day` and, behind a gateway, `rate_limits.spend_limit`, each `{used_percentage (0–100; spend_limit may exceed 100), resets_at (Unix epoch seconds)}`. Documented as present only for subscribers, only after the first API response, and each window only while its reset has not passed. No window length, no plan tier, no account, no observation timestamp. Values carry one decimal place. | The schema text bundled in Claude Code 2.1.281 | High for that version's shape. Medium across versions. See [the status-line caveats](#status-line-readings-are-cached-re-reads). |
 | Claude Code `/usage` | Session and weekly percentages and reset times, including per-model weekly limits | Interactive screen only | Not a machine source. An operator may type a reading in (`operator_manual`). The endpoint behind it is a live-polling source (below). |
 | **Claude OAuth usage endpoint** (`GET https://api.anthropic.com/api/oauth/usage`, `Authorization: Bearer <Claude Code's OAuth access token>`, `anthropic-beta: oauth-2025-04-20`) | `five_hour` and `seven_day`, each `{utilization (0–100), resets_at (ISO-8601 with microseconds)}`, the same limits the status line reports; `resets_at` is null while no window is running. Also per-model and codenamed limits, spend, and a breakdown, none of which staple reads | The path, the header and the three URL variants in the Claude Code 2.1.283 binary (the `/usage` fetch); one read-only GET with the author's own sign-in, 2026-09-28 | Medium: undocumented. Read only with [live polling](#live-polling) on. |
-| Anthropic `anthropic-ratelimit-unified-*` response headers (`5h-utilization`, `5h-reset`, `7d-…`) | Utilization and reset per window | Header names appear in the Claude Code 2.1.281 binary. Undocumented. | Low. Staple never sees these responses and never makes the request. A harness could forward them as a source. |
-| Codex CLI rollout files (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg` lines with `payload.type = "token_count"`) | `payload.rate_limits.limit_id`, `primary` and `secondary` each `{used_percent, window_minutes, resets_at (Unix epoch seconds)}`, `plan_type`, `credits`. The line's own `timestamp` is ISO-8601 UTC. Observed windows: 300 and 10080 minutes. A second limit id (`premium`) was observed with `primary: null, secondary: null`. Older builds (lines from a 0.45 alpha on the same machine) write `limit_id: null`, `resets_at: null` and windows of 299 and 10079 minutes. **No file on the machine carries a relative `resets_in_seconds`**, so this contract has no relative-reset source today. Values are whole numbers. | codex-cli 0.156.1 files, and every older rollout on the author's machine | Medium. The file format is undocumented. See [Codex rollout rules](#codex-rollout-rules) for forks and old lines. |
+| Anthropic `anthropic-ratelimit-unified-*` response headers (`5h-utilization`, `5h-reset`, `7d-…`) | Utilization and reset per window | Header names appear in the Claude Code 2.1.281 binary. Undocumented. | Low. Staple never sees these responses and never makes the request, and no ingestion path reads them. |
+| Codex CLI rollout files (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg` lines with `payload.type = "token_count"`) | `payload.rate_limits.limit_id`, `primary` and `secondary` each `{used_percent, window_minutes, resets_at (Unix epoch seconds)}`, `plan_type`, `credits`. The line's own `timestamp` is ISO-8601 UTC. Observed windows: 300 and 10080 minutes. A second limit id (`premium`) was observed with `primary: null, secondary: null`. Older builds (lines from a 0.45 alpha on the same machine) write `limit_id: null`, `resets_at: null` and windows of 299 and 10079 minutes. **No file on the machine carries a relative `resets_in_seconds`** (the parser handles one anyway: [Codex rollout rules](#codex-rollout-rules)). Values are whole numbers. | codex-cli 0.156.1 files, and every older rollout on the author's machine | Medium. The file format is undocumented. See [Codex rollout rules](#codex-rollout-rules) for forks and old lines. |
 | Codex `/status` | Same percentages, interactive | Interactive screen only | `operator_manual` only. The endpoint behind it is a live-polling source (below). |
 | **Codex usage endpoint** (`GET https://chatgpt.com/backend-api/wham/usage`, `Authorization: Bearer <tokens.access_token>`, `ChatGPT-Account-Id: <tokens.account_id>`, both from `<codex home>/auth.json`) | `plan_type` and `rate_limit.primary_window` / `secondary_window`, each `{used_percent, limit_window_seconds, reset_after_seconds, reset_at (Unix epoch seconds)}`; `additional_rate_limits` entries `{limit_name, metered_feature, rate_limit}`. Also the account's email and ids, which staple never reads into anything kept. A window not yet started reads `used_percent: 0` with `reset_after_seconds` equal to the window, so its `reset_at` moves on every request | The `/wham/usage` path and the response structs in the codex-cli 0.158.0 binary; one read-only GET with the author's own sign-in, 2026-09-28 | Medium: undocumented. Read only with [live polling](#live-polling) on. |
 | Token counts in harness transcripts (Claude Code session transcripts, Codex `info.total_token_usage`) | Tokens per request or per session | Present in the files | High as token counts. **Not normalizable**: neither provider publishes a subscription limit in tokens. |
-| Other provider usage endpoints reached with the user's OAuth credential | Used by some community tools | Not examined | Excluded until someone adds a poller for one ([Live polling](#live-polling)). |
+| Other provider usage endpoints reached with the user's OAuth credential | Used by some community tools | Not examined | Not read. Staple has pollers for the two endpoints above only ([Live polling](#live-polling)). |
 
 API-key usage without a subscription has request and token rate limits, not
-subscription windows. It is out of scope, and an account that has only those
-reports `not_subscriber`.
+subscription windows. It is out of scope. The reason code `not_subscriber`
+names that case; no source in this build produces it.
 
 ### The sample record
 
@@ -809,7 +849,9 @@ reports `not_subscriber`.
 
 ### Units
 
-`unit` names what the number counts, and only one unit normalizes:
+`unit` names what the number counts, and only one unit normalizes. Every
+source staple reads reports `percent_of_limit`; the other units are the closed
+set a reading can carry, and no ingestion path in this build writes them:
 
 | `unit` | Normalizes to `remainingPercent` | Example |
 |---|---|---|
@@ -823,13 +865,13 @@ Normalization is arithmetic on the reported value and nothing else:
 `usedPercent` is always kept as reported, including values above 100 and
 fractional values. It is never rounded. Resolution differs by source: Claude Code
 values carry one decimal place, and Codex values have all been whole numbers,
-so a Codex burn below one percent between two samples cannot be measured. The
-contract stores what arrives and assumes no resolution. Forecasting has to
+so a Codex burn below one percent between two samples cannot be measured.
+Staple stores what arrives and assumes no resolution. Forecasting has to
 allow for the quantization of each source.
 
 There is no conversion between units. In particular, **no sample ever converts
-runtime or tokens into a percentage**. That conversion is the error this contract
-exists to correct.
+runtime or tokens into a percentage**. That conversion is the error these
+records exist to prevent.
 
 ### Provenance
 
@@ -838,8 +880,8 @@ Every sample says where its number came from:
 | Field | Values | Meaning |
 |---|---|---|
 | `method` | `observed` | The provider reported the value and staple read it verbatim. |
-| | `estimated` | A tool computed it from local evidence (for example, tokens against an assumed limit). Stored for comparison, never used as a measurement. |
-| `source.kind` | `claude_code_statusline`, `codex_rollout`, `usage_poll`, `harness_forwarded_headers`, `operator_manual`, `fixture` | The ingestion path. `usage_poll` is [live polling](#live-polling), the provider's own figure, asked for just before `observedAt`. `fixture` rows are refused outside disposable test databases. |
+| | `estimated` | A value computed from local evidence (for example, tokens against an assumed limit). Reads treat it as approximate and never as a measurement. No ingestion path in this build writes one: every source stores `observed`. |
+| `source.kind` | `claude_code_statusline`, `codex_rollout`, `usage_poll`, `operator_manual` | The ingestion path (`BudgetSourceKind` in `src/core/telemetry/formats.ts`). `usage_poll` is [live polling](#live-polling), the provider's own figure, asked for just before `observedAt`. `operator_manual` is `budget ingest --source manual`. |
 | `source.harnessVersion` | string or `null` | The harness build that produced the input, because field shapes change between builds. |
 | `source.field` | string | The path of the value inside its input. |
 | `confidence` | `high`, `medium`, `low` | Assigned by rule, never by judgement: `high` = observed through a surface its harness documents; `medium` = observed through an undocumented surface, or typed by an operator from a provider screen; `low` = estimated, or `resetsAt` derived from a relative value. |
@@ -980,9 +1022,11 @@ refresh interval is configured. Three consequences are binding on ingestion:
   reported (299 × 60, not rounded to 300), `resetsAt: null` with
   `reset_not_reported`, and `confidence: "low"`. They [join no
   window](#window-identity).
-- **Relative resets.** None has been seen. If a build that writes one appears,
-  its value is converted at the line's own `timestamp` (not at ingestion) and
-  marked `derived_from_relative`.
+- **Relative resets.** None has been seen in a rollout. A line that carries
+  `resets_in_seconds` and no `resets_at` is converted at the line's own
+  `timestamp` (not at ingestion) and marked `derived_from_relative`, with
+  `confidence: "low"`. A typed reading's relative reset
+  (`budget ingest --source manual --resets-at 3h`) is converted at capture.
 
 ### Regressions within a window
 
@@ -996,7 +1040,7 @@ Other copy-detection rules tried during review gave between roughly 60 and 100
 readings, with a maximum of 8 or 9 points, so the figure depends on the rule
 and not on the provider. With the copied lines
 included it is 945 readings, by up to 42 points, so most apparent regressions
-in raw rollouts are fork copies and not provider behaviour. The contract does not
+in raw rollouts are fork copies and not provider behaviour. Staple does not
 pick the right one:
 
 - Every sample is stored as reported. Nothing is clamped or rewritten.
@@ -1019,8 +1063,8 @@ pick the right one:
 - High-water is **undefined for a sliding window** (`resetsAt: null`,
   `sliding_window`), because there is no window instance to take the maximum
   over. For such a limit, current pressure is the latest sample by `observedAt`
-  and burn is `null` with reason `sliding_window`, until a rule for sliding
-  windows is specified with evidence from a source that has one.
+  and burn is `null` with reason `sliding_window`. No rule for sliding windows
+  exists, because no source staple reads has one.
 
 ### Ingestion cadence
 
@@ -1117,9 +1161,11 @@ installed or run, and `staple budget setup` alone only prints its plan.
 Setup does four things, each only when it is not already so, and records what
 it changed in the staple home (`telemetry/collection.json`):
 
-- **Capture on, and the two bindings** (`--claude-account`, `--codex-account`),
-  exactly as `budget capture on` and `budget bind` would.
-- **A status-line wrapper** in the Claude config directory's `settings.json`.
+- **Capture on, and the two bindings** (`--claude-account`, `--codex-account`,
+  for the homes `--claude-config-dir` and `--codex-home` name or their
+  defaults), exactly as `budget capture on` and `budget bind` would.
+- **A status-line wrapper** in the Claude config directory's `settings.json`
+  (skipped with `--no-statusline`).
   The existing `statusLine` command keeps running unchanged, as the tail of a
   plain POSIX command list that first hands staple its own copy of the input in
   the background: the [rollback-safe recipe](cli.md#provider-budget) plus a
@@ -1134,7 +1180,7 @@ it changed in the staple home (`telemetry/collection.json`):
   (or inserting one `statusLine` member when there was none). A status line
   that already runs `staple budget ingest` (the hand-installed recipe or the
   `--tee` pipeline) is left alone.
-- **A Codex watcher**: on macOS a user launch agent
+- **A Codex watcher** (skipped with `--no-watcher`): on macOS a user launch agent
   (`~/Library/LaunchAgents/com.staple.budget-collect.plist`) that runs
   `staple budget collect --quiet` every 5 minutes (`--interval`). Elsewhere
   setup prints the equivalent cron line and installs nothing. A collect run
@@ -1250,7 +1296,9 @@ estimate. The encoding is the same for every record on this page:
    that limit is `null` with reason `window_elapsed` until a new sample arrives.
 
 Reason codes (a closed set; an unknown code from a newer build is preserved and
-shown verbatim):
+shown verbatim). `not_subscriber`, `limit_not_published` and
+`unit_not_normalizable` are in the set and classified by the quality rules, but
+no source in this build writes them, because every source reports a percentage:
 
 | Code | Meaning |
 |---|---|
@@ -1271,7 +1319,7 @@ shown verbatim):
 | `end_not_observed` | An attempt read as `orphaned`: no device recorded when it actually stopped |
 | `no_matching_attempt`, `ambiguous_attempt` | A sample could not be linked to exactly one attempt |
 | `not_connected` | The workspace is not synchronized, so there is no sync horizon |
-| `before_capture_began` | The record predates this contract |
+| `before_capture_began` | The record predates attempt capture (a [reconstructed](#history-before-capture) attempt, or a span before the first recorded one) |
 | `not_supplied` | An optional self-reported field the agent did not send |
 | `parse_error` | The source was read and the field could not be parsed. The raw value is not kept. |
 | `input_missing` | A derived value with at least one missing input. It is accompanied by `missingInputs` |
@@ -1280,7 +1328,7 @@ shown verbatim):
 | `no_worker_attempt` | The issue started and has no worker attempt: work before capture, or a capture gap |
 | `no_orchestrator_attempt` | `orchestrationSeconds` when no issue in the subtree has an orchestrator attempt |
 | `replay_unavailable` | `wall` on a device whose event replay does not reach the row's status |
-| `policy_not_defined` | A figure the admission policy will define (`pressure.safeConcurrency`); it is not built yet |
+| `policy_not_defined` | A figure only an admission policy could define (`pressure.safeConcurrency`). Staple has no admission policy |
 | `reserve_reached` | `pressure.ratio` when the remaining figure is already at or under the reserve: no pace is sustainable, so there is nothing to divide by |
 | `no_eligible_records` | A cohort coverage figure or ratio aggregate over a population with no eligible record ([timing semantics](timing-semantics.md#cohort-coverage)) |
 
@@ -1289,10 +1337,9 @@ shown verbatim):
 is `null` when no member contributed, and otherwise carries `coverage: {known,
 total}` and `partial: true` when `known < total`. This is the rule that already
 makes `childrenEstimatedSeconds` `null` rather than `0`. Consumers must not
-replace a `null` with a default. The scheduling decision record already says
-what missing telemetry means for admission: start with one continuous agent.
-That rule belongs to the policy contract, and this page's job is to keep
-missing values from looking like measurements.
+replace a `null` with a default. What missing telemetry should mean for
+admitting agents is a policy question, and staple has no admission policy. The
+records' job is to keep missing values from looking like measurements.
 
 **Quality states.** Every record on this page that carries a figure also has
 exactly one quality state, `{state, reasons}` ([timing semantics](timing-semantics.md#quality-states)):
@@ -1334,8 +1381,9 @@ coverage gaps apply this one rule.
 ## Where it lives and what synchronizes
 
 **Attempts and their transitions are repository state.** They live in the
-workspace database beside the issues they describe and, when the repository is
-connected, replicate as two new entity kinds:
+workspace database beside the issues they describe (the `attempts` and
+`attempt_transitions` tables) and, when the repository is connected, replicate
+as two entity kinds:
 
 - `attempt`, keyed by `id`, with `create` and `update`. The fields that can
   change after creation are `state`, `outcome`, `endReason`, `endDetection`,
@@ -1344,7 +1392,7 @@ connected, replicate as two new entity kinds:
   like `documentRevision`.
 
 [sync.md](sync.md#protocol-evolution) is explicit that **a new entity kind is not
-additive**. Both kinds go through the journal seam with its existing
+additive**, which is why attempts needed protocol 3. Both kinds go through the journal seam with its existing
 obligations. The seam journals one operation per entity per mutation scope, so a
 local steal journals the `issue.update` it already journals, an `attempt.update`
 for the ended attempt, an `attempt.create` for the new one, and one
@@ -1353,17 +1401,18 @@ them runs none of the attempt side effects ([How an attempt
 opens](#how-an-attempt-opens)). Each applied transition re-emits its local event
 under its transition-derived key, as every applied operation already does.
 
-**What protocol 3 does to a fleet.** It follows the standing decision that no
-release stays compatible with old builds and the new Worker is deployed first:
+**What protocol 3 means for a fleet.** It follows the standing decision that no
+release stays compatible with old builds and the Worker is deployed first:
 
-- The Worker that understands `attempt` and `attemptTransition` is deployed
-  before any client that journals them, and it advertises `{ min: 1, max: 3 }`.
-- The workspace client's `CLIENT_PROTOCOL` moves from 1 to 3. (Today only the
-  hub-registry leg declares 2.)
+- The Worker that understands `attempt` and `attemptTransition` advertises
+  `{ min: 1, max: 3 }` (`PROTOCOL_MAX` in `worker/src/limits.ts`), and is
+  deployed before any client that journals them.
+- The workspace client's `CLIENT_PROTOCOL` is 3 (`src/core/cloud/client.ts`).
+  The hub-registry leg declares 2 (`REGISTRY_PROTOCOL`).
 - A device that has not upgraded **stops converging** on that repository as soon
-  as an upgraded device pushes anything, not only an attempt. The attempts arrive
+  as an upgraded device pushes anything, not only an attempt. The attempts arrived
   with a workspace migration, so every operation an upgraded device journals
-  carries the new `schema`, and an older client refuses a page holding one with
+  carries the newer `schema`, and an older client refuses a page holding one with
   `schema_ahead`. A page or fold that holds an attempt is also refused to it at
   the service, with `protocol_unsupported` and `requiredProtocol: 3`. Both are the
   existing refusals, working as designed: every device upgrades together, the
@@ -1398,37 +1447,52 @@ account sees none of the first machine's samples, and a replicated attempt read
 on another device reports its burn as `null` with `not_on_this_device`.
 
 Ingestion is local and **makes no network call**: it reads stdin (the status-line
-pass-through) and local files (Codex rollouts), and nothing else. The
-zero-network invariant holds unchanged.
+pass-through) and local files (Codex rollouts), and nothing else. The one
+exception is [live polling](#live-polling), which has its own consent.
 
-Storage is additive (new tables, no altered columns), and a new workspace
-migration moves the `schema` number every operation carries. This page contains
-no DDL. The persistence work writes the migration against this contract.
+Storage is additive: new tables and new columns with defaults, nothing altered
+or dropped.
+
+| Migration | What it adds |
+|---|---|
+| Workspace 013 (`execution-attempts`) | `attempts`, `attempt_transitions`; `sync_state.head_reached_cursor` and `head_reached_at` |
+| Workspace 014 (`lifecycle-capture`) | `attempts.role` (default `worker`), plus event ordering and conflict columns used by timing and sync |
+| Hub 005 (`budget-samples`) | `limit_windows`, `budget_samples` |
+| Hub 006 (`attempt-presence`) | `attempt_presence`, the [presence index](#concurrency-context) |
+| Hub 007 (`presence-role`) | `attempt_presence.role` |
+| Hub 008 (`budget-forgotten`) | `budget_forgotten`, the keys of [removed readings](#removing-a-reading) |
+
+Each workspace migration moves the `schema` number every operation carries.
+Stored columns are the snake_case form of the stored fields on this page
+(`issue_id`, `claim_scope`, `source_kind`, `observed_at`, …); derived fields have no column.
 
 ## Surfaces
 
 ### One shape on every surface
 
 Every read and write below is one store method called by the CLI, the MCP tool
-and the HTTP route alike. That rule is what keeps the queue's verbs identical
-across surfaces ([queue.md](queue.md#operations-by-surface)), and it is how
-"CLI and MCP expose equivalent telemetry JSON" is met structurally rather than by
-tests catching drift. The names are proposals. The single-method rule is not.
+and, where one exists, the HTTP route alike. That rule is what keeps the queue's
+verbs identical across surfaces ([queue.md](queue.md#operations-by-surface)), and
+it is how the CLI and MCP give the same telemetry JSON structurally rather than
+by tests catching drift. Attempts have no HTTP route of their own: the web UI
+reads `attempts` from the issue payload (`GET /api/issue`, `GET /api/agent-context`)
+and the attempt a write returns.
 
 | CLI | MCP | Returns |
 |---|---|---|
 | `staple show <ref>` | `get_task` | Adds `attempts: {current, last, count}` beside `timing` and `claim`, derived at read |
 | `staple attempts <ref> [--limit N] [--cursor C]` | `list_attempts` | `{items, truncated, nextCursor, coverage}`. Items carry the effective (read-time) state and `storedState`. |
-| `staple attempt <attempt-id>` | `get_attempt` | The attempt, its transitions, its `chain` and its derived burn |
+| `staple attempt <attempt-id> [--limit N] [--cursor C]` | `get_attempt` | The attempt, its transitions (bounded), its `chain` and its derived burn |
 | `staple attempt pause\|resume\|milestone\|interrupt <ref> [--reason R] [-m label] [--role R \| --attempt ID]` | `record_attempt_event` | The updated attempt. `--role` or `--attempt` is required when the actor holds an attempt in each lane |
 | `staple attempt open\|end <ref> --role orchestrator` | `record_attempt_event` with `event: "open"`/`"end"`, `role: "orchestrator"` | The orchestrator attempt ([timing semantics](timing-semantics.md#the-orchestrator-lane)). The only way to set a role; `checkout`, `status`, `done`, `release` and the MCP claim tools refuse one |
-| `checkout`, `status`, `done` gain optional `--harness-session`, `--harness claude_code\|codex\|other`, `--model`, `--account`, `--attempt-key K` (the attempt's idempotency key), and the claim-clearing verbs (`release`, `status`, `done`) gain `--outcome failed --reason R` | the same fields on `checkout_task`, `release_task`, `update_task` (`harness_session`, `harness`, `model`, `account`, `attempt_idempotency_key`, `outcome`, `reason`) | Unchanged payloads, plus `attempt` |
+| `checkout`, `status`, `done` take optional `--harness-session`, `--harness claude_code\|codex\|other`, `--model`, `--account`, `--attempt-key K` (the attempt's idempotency key), and the claim-clearing verbs (`release`, `status`, `done`) take `--outcome failed --reason R` | the same fields on `checkout_task`, `release_task`, `update_task` (`harness_session`, `harness`, `model`, `account`, `attempt_idempotency_key`, `outcome`, `reason`) | Unchanged payloads, plus `attempt` |
 | `staple budget [--account A] [--reserve P]` (HTTP `GET /api/budget?account=&reserve=`) | `get_budget` | Per account, each current window with its latest sample, `status`, `missing`, and each limit's provisional [pressure](#pressure) |
 | `staple budget history --account A [--since T] [--limit N]` | `list_budget_samples` | `{items, truncated, nextCursor, coverage}` |
 | `staple budget forget <reading-id>... [--yes]` (HTTP `POST /api/budget/forget {ids, confirm?}`) | `forget_budget_samples {ids, confirm?}` | `{applied, asOf, readings, windows, limits, auditLog, warnings, note}`: without consent the [preview](#removing-a-reading), with it what was removed |
-| `staple timing quality [--kind K] [--parent REF] [--since T] [--include S] [--exclude S] [--exclude-reason R]` | `timing_quality` | Counts and coverage of the timing quality states over the eligible population, the ratio aggregates, and the eligible records, bounded ([timing semantics](timing-semantics.md#cohort-coverage)) |
-| `staple calibrate [--kind K] [--priority P] [--parent REF] [--since T] [--include reconstructed] [--samples] [--for REF [--model M]]` | `calibration_cohorts` | Calibration cohorts over exact samples (reconstructed as its own set on request), each with its fallback level, coverage, medians, quantiles, intervals and bounds, heavy-tail test, timing floors, warnings and a snapshot id; or the samples, bounded; `--for` adds per-issue duration forecasts ([timing semantics](timing-semantics.md#calibration-cohorts), [confidence ranges](timing-semantics.md#confidence-ranges)) |
-| `staple budget ingest --source claude-statusline [--tee] [--account A]` (stdin), `--source codex-rollout <file> [--account A]`, `--source manual --account A --limit-key K --used P --resets-at T` | `record_budget_sample` | The stored sample, or `{stored: false, reason: "unchanged" \| "forgotten" \| "fork_copied"}` |
+| `staple forecast <ref> [--reserve P] [--account A] [--model M]` (HTTP `GET /api/forecast?ref=&reserve=&account=&model=`) | `forecast` | `{asOf, subject, filter, snapshot, method, completion, budget}`: remaining work from calibrated durations and, apart from it, what that work costs each provider limit on this machine ([timing semantics](timing-semantics.md#budget)) |
+| `staple timing quality [--kind K] [--parent REF] [--since T] [--include S] [--exclude S] [--exclude-reason R]` | `timing_quality` | Counts and coverage of the timing quality states over the eligible population, the ratio aggregates, and the eligible records, bounded ([timing semantics](timing-semantics.md#cohort-coverage)). HTTP `GET /api/timing/quality` |
+| `staple calibrate [--kind K] [--priority P] [--parent REF] [--since T] [--include reconstructed] [--samples] [--for REF [--model M]]` | `calibration_cohorts` | Calibration cohorts over exact samples (reconstructed as its own set on request), each with its fallback level, coverage, medians, quantiles, intervals and bounds, heavy-tail test, timing floors, warnings and a snapshot id; or the samples, bounded; `--for` adds per-issue duration forecasts ([timing semantics](timing-semantics.md#calibration-cohorts), [confidence ranges](timing-semantics.md#confidence-ranges)). HTTP `GET /api/calibration` |
+| `staple budget ingest --source claude-statusline [--tee] [--account A] [--config-dir D]` (stdin), `--source codex-rollout <file> [--account A]`, `--source manual --account A --limit-key K --used P [--resets-at T] [--provider P]` | `record_budget_sample` | The stored sample, or `{stored: false, reason: "unchanged" \| "forgotten" \| "fork_copied"}` |
 
 `--tee` passes the status-line input through to stdout unchanged, so staple can
 sit in front of a status-line command the operator already uses.
@@ -1436,7 +1500,7 @@ sit in front of a status-line command the operator already uses.
 Field names are the camelCase names on this page on every surface. `--json`
 emits the store objects unformatted, and errors use the existing envelope and
 exit codes: an event on an attempt that is not open is `conflict`, and a
-malformed reading is `validation`. No new code is added.
+malformed reading or report is `validation` (exit 2).
 
 ### Pressure
 
@@ -1447,13 +1511,13 @@ nothing else (no workspace, no attempt), so it is the same on every surface
 and in every workspace, and it never synchronizes.
 
 **Everything here is provisional.** Sustainable burn, pressure and safe
-concurrency belong to the admission policy, which is not built. Until it is,
-the read states one provisional definition of the first two and says so on
-every report (`pressureRule: {provisional: true, unsafeAtRatio: 1, note}`),
+concurrency are an admission policy's to define, and staple has no admission
+policy. The read states one provisional definition of the first two and says so
+on every report (`pressureRule: {provisional: true, unsafeAtRatio: 1, note}`),
 the way the budget forecast states its provisional reserve, and every limit's
-block carries `provisional: true` of its own. The three rules the policy will
-replace (at or under the reserve, the sustainable pace, the unsafe threshold)
-live in one module, `src/core/telemetry/budget-pressure.ts`. The reserve is a
+block carries `provisional: true` of its own. The three provisional rules (at or
+under the reserve, the sustainable pace, the unsafe threshold) live in one
+module, `src/core/telemetry/budget-pressure.ts`. The reserve is a
 parameter (`--reserve P`, MCP `reserve`, HTTP `reserve=`), and without one the
 same provisional 20% as the forecast applies, named on `reserve.source`.
 
@@ -1466,7 +1530,7 @@ same provisional 20% as the forecast applies, named on `reserve.source`.
 | `ratio` | forecast | `observed / sustainable`. Null with `reserve_reached` when the remaining figure is at or under the reserve |
 | `state` | forecast | `unsafe` when the ratio is 1 or over (the pace reaches the reserve before the reset) or the remaining figure is at or under the reserve; `within` otherwise; null with the reason when either side is unknown |
 | `exhaustion`, `reserveReach` | forecast | When the pace uses up what is left, and what is left above the reserve: `before_reset`, `after_reset`, `never` (a pace of 0), or for the reserve `already` |
-| `safeConcurrency` | policy | Always null, `policy_not_defined`. How many agents a pressure admits is the admission policy's decision, and a number here would read as one |
+| `safeConcurrency` | policy | Always null, `policy_not_defined`. How many agents a pressure admits is an admission policy's decision, and a number here would read as one |
 | `confidence` | of `observed` | `low` with any warning, `medium` otherwise (never `high`: the rule is provisional). `small_sample` under 5 readings, `short_span` under 30 minutes, `regressions` when the provider's figure went down inside the window |
 
 Unknown is never 0 and never `within`. A reading that is not current (the
@@ -1513,7 +1577,7 @@ workspace as `before_capture_began`. When a page speaks for no span at all,
 `from` and `to` are `null`, and `coverage.missing` gives the reason, as on
 every other record. For budget history that reason is `no_sample_yet` or
 `source_unavailable`. For an issue with no attempts it is one of the
-[timing contract's](timing-semantics.md#missingness-for-the-new-fields) codes:
+[timing semantics](timing-semantics.md#missingness-for-the-new-fields) codes:
 `never_started`, or `no_worker_attempt` when the issue has a start and no
 attempt.
 
@@ -1564,54 +1628,52 @@ samples, "no change" still does not mean the provider measured again (see
   that nobody finds out later that a model name travelled.
 - **Budget data does not leave the machine** (above).
 
-## What each piece of downstream work takes from this page
+## Which features read which sections
 
-| Work | Sections it implements or reads |
+| Feature | Sections it reads |
 |---|---|
-| Persisting the attempt lifecycle | [The attempt record](#the-attempt-record), [How an attempt opens](#how-an-attempt-opens), [The resume rule](#the-resume-rule), [How an attempt ends](#how-an-attempt-ends), [Orphaned attempts](#orphaned-attempts-are-closed-at-read-time), [Lifecycle](#lifecycle), [Concurrency context](#concurrency-context), [Where it lives](#where-it-lives-and-what-synchronizes) |
-| Ingesting budget samples and reset windows | [Limit windows](#limit-windows), [Budget samples](#budget-samples) (source bindings, status-line caveats, Codex rollout rules, regressions), [Missingness](#missingness), [Privacy](#privacy) |
-| Agent-facing telemetry JSON | [Surfaces](#surfaces), [Bounded reads](#bounded-reads-coverage-and-truncation), [Missingness](#missingness) |
-| Timing semantics, lifecycle gaps, controlled validation, quality states | Attempt `activeSeconds` vs issue `timing` ([The attempt record](#the-attempt-record)), pause vs interruption ([Lifecycle](#lifecycle)), `provenance`/`endDetection` and [History before capture](#history-before-capture) as quality inputs |
-| Calibration and forecasting | `estimateAtStart`, outcomes, `chain`, per-attempt burn and `attribution`, the no-conversion rule ([Units](#units)), resolution caveat |
-| Admission policy, ranking, checkpointing, dry runs | Current windows and `resetsAt`, high-water `remainingPercent` with `missing`, `storedOpenAttemptsOnAccountStartedHere`, `attempt_paused` with `checkpoint_before_reset`, milestone pointers to the worklog |
-| Pressure panel, decision history, guidance | `get_budget` shape and its provisional [`pressure`](#pressure) block (the web UI's Usage view renders it), `missing` reasons to show as unknown, attempt `id` as the join key from a decision to its outcome, the `sessionRef` rule for guidance |
-| Fixtures, policy comparisons, cold-agent trials, release gate | Every record here is plain JSON with explicit instants, so a fixture is a list of records. `source.kind: "fixture"` is refused outside disposable databases. |
+| The attempt lifecycle (`checkout`, `status`, `release`, `staple attempt`) | [The attempt record](#the-attempt-record), [How an attempt opens](#how-an-attempt-opens), [The resume rule](#the-resume-rule), [How an attempt ends](#how-an-attempt-ends), [Orphaned attempts](#orphaned-attempts-are-closed-at-read-time), [Lifecycle](#lifecycle), [Concurrency context](#concurrency-context), [Where it lives](#where-it-lives-and-what-synchronizes) |
+| Budget ingestion and collection (`staple budget ingest`, `collect`, `setup`, `live`) | [Limit windows](#limit-windows), [Budget samples](#budget-samples) (source bindings, status-line caveats, Codex rollout rules, regressions), [Missingness](#missingness), [Privacy](#privacy) |
+| Agent-facing telemetry JSON (CLI `--json`, MCP tools) | [Surfaces](#surfaces), [Bounded reads](#bounded-reads-coverage-and-truncation), [Missingness](#missingness) |
+| Timing semantics and quality states ([timing-semantics.md](timing-semantics.md)) | Attempt `activeSeconds` vs issue `timing` ([The attempt record](#the-attempt-record)), pause vs interruption ([Lifecycle](#lifecycle)), `provenance`/`endDetection` and [History before capture](#history-before-capture) as quality inputs |
+| Calibration and forecasting (`staple calibrate`, `staple forecast`) | `estimateAtStart`, outcomes, `chain`, per-attempt burn and `attribution`, the no-conversion rule ([Units](#units)), resolution caveat |
+| The Usage view and `staple budget` | `get_budget` shape and its provisional [`pressure`](#pressure) block, `missing` reasons shown as unknown, [live polling](#live-polling) failures, [removing a reading](#removing-a-reading) |
 
-## Open questions
+## Design decisions
 
-These need a decision before or during implementation. Each has a recommended
-default, and the contract above is written to that default.
+Each of these had an alternative. The records above follow the choice listed.
 
-1. **Should budget samples ever replicate?** Default: no. They are machine-local,
-   and a second machine on the same subscription is blind to the first. If
-   cross-machine burn matters, the alternative is a separate, opt-in,
-   account-scoped channel (not the repository log), which would be a new consent
-   in the sense of [Three consents](sync.md#three-consents).
-2. **Account identity: operator label or derived fingerprint?** Default: label.
-   It stores nothing identifying, but two machines only agree on an account if the
+1. **Budget samples never replicate.** They are machine-local, and a second
+   machine on the same subscription is blind to the first. Cross-machine burn
+   would need a separate, opt-in, account-scoped channel (not the repository
+   log), which would be a new consent in the sense of
+   [Three consents](sync.md#three-consents). No such channel exists.
+2. **An account is an operator label, not a derived fingerprint.** It stores
+   nothing identifying, but two machines only agree on an account if the
    operator gives it the same name on both.
-3. **Should agent guidance require a per-session agent identity?** A shared
-   identity (`STAPLE_AGENT=claude` on every install, or the `$USER` fallback)
-   means a crashed session's successor re-claims silently, and the interruption
-   is visible only if the successor reports it. Default: guidance recommends a
-   per-session identity (for example `claude-<short session id>`), asks a resuming
-   session to report the previous attempt's interruption, and asks every checkout
-   to pass its harness session. The store accepts all three being absent.
-4. **Does a status write into `active` with no checkout open an attempt?**
-   Default: yes, with `claim.scope: "none"`, so the work is not lost from
-   telemetry. The alternative is to refuse attempts without a claim and leave
-   that work unmeasured.
-5. **Estimate history.** Default: keep `estimateAtStart` and also ask the
-   estimate-mutation work to emit an event with the old and new value. The
-   alternative is the event alone, which does not cover imported workspaces.
-6. **Is budget capture opt-in?** Default: yes, a machine setting that defaults to
-   off. Nothing is read from a harness until the operator enables a source.
-7. **Ship attempts local-only first, or wait for protocol 3?** Journaling a new
-   entity needs the Worker redeployed first. Default: build the local tables and
-   the protocol-3 entities together, and deploy the Worker first, following the
-   support boundary sync already has. The alternative, local-only attempts,
-   leaves a history to seed later.
-8. **Retention.** Heartbeats every five minutes are about 2,000 rows per limit
-   per week for each harness session that stays open all week, plus one row per
-   change. Many sessions multiply that. Default: keep everything until measured. The alternative is to
-   downsample samples of elapsed windows to their first, last and every change.
+3. **Agent guidance recommends a per-session identity.** A shared identity
+   (`STAPLE_AGENT=claude` on every install, or the `$USER` fallback) means a
+   crashed session's successor re-claims silently, and the interruption is
+   visible only if the successor reports it. The agent guidance staple writes
+   recommends a per-session identity (for example `claude-<short session id>`),
+   asks a resuming session to report the previous attempt's interruption, and
+   asks every checkout to pass its harness session. The store accepts all three
+   being absent.
+4. **A status write into `active` with no checkout opens an attempt**, with
+   `claim.scope: "none"`, so the work is not lost from telemetry. The
+   alternative, refusing attempts without a claim, would leave that work
+   unmeasured.
+5. **Estimate history is kept twice.** `estimateAtStart` is recorded on every
+   attempt, and every estimate change also emits `estimate_changed` with the
+   old and new value. The event alone would not cover imported workspaces.
+6. **Budget capture is opt-in**, a machine setting (`telemetry.budgetCapture`)
+   that defaults to off. Nothing is read from a harness until the operator
+   enables it, and live polling needs a second consent.
+7. **Attempts shipped with protocol 3**, local tables and replicated entities
+   together, with the Worker deployed first, following the support boundary
+   sync already has. Local-only attempts would have left a history to seed
+   later.
+8. **Readings are kept until removed.** Heartbeats every five minutes are about
+   2,000 rows per limit per week for each harness session that stays open all
+   week, plus one row per change, and many sessions multiply that. Staple does
+   not downsample or prune samples; only `staple budget forget` removes one.
