@@ -72,9 +72,20 @@ describe("milestoneRisk", () => {
     effective({ identifier: "STA-8", milestonePath: [], eligibility: "gated" }),
   ];
 
+  it("files each waiting row under its own status category, so work in review is not drawn as blocked", () => {
+    const rows = [
+      effective({ identifier: "STA-1", milestonePath: ["STA-190"], eligibility: "blocked", status: "in_review" }),
+      effective({ identifier: "STA-2", milestonePath: ["STA-190"], eligibility: "blocked", status: "in_review" }),
+      effective({ identifier: "STA-3", milestonePath: ["STA-190"], eligibility: "gated", status: "todo" }),
+      effective({ identifier: "STA-4", milestonePath: ["STA-190"], eligibility: "eligible", status: "todo" }),
+    ];
+    expect(milestoneRisk(view(), rows).waitingIn).toEqual({ review: 2, ready: 1 });
+  });
+
   it("reads overdue from the state and blocked/gated from the queue's eligibility", () => {
     const risky = view({ milestone: { identifier: "STA-190", state: "overdue" } });
-    expect(milestoneRisk(risky, queueRows)).toEqual({ overdue: true, blocked: 2, gated: 1 });
+    // Every fixture row is `backlog`, so all three waiting rows sit in the not-started category.
+    expect(milestoneRisk(risky, queueRows)).toEqual({ overdue: true, blocked: 2, gated: 1, waitingIn: { unstarted: 3 } });
     expect(riskLabels(milestoneRisk(risky, queueRows))).toEqual(["! overdue", "⊘ 2 blocked", "◇ 1 gated"]);
   });
 
@@ -87,8 +98,8 @@ describe("milestoneRisk", () => {
   it("ignores the status-category counts, which are zero for genuinely blocked work", () => {
     const counted = progress({ counts: { blocked: 9, gated: 9, ready: 3 } });
     const fromQueue = view({ milestone: { identifier: "STA-190", state: "active" }, progress: counted });
-    expect(milestoneRisk(fromQueue, queueRows)).toEqual({ overdue: false, blocked: 2, gated: 1 });
-    expect(milestoneRisk(fromQueue, [])).toEqual({ overdue: false, blocked: 0, gated: 0 });
+    expect(milestoneRisk(fromQueue, queueRows)).toMatchObject({ overdue: false, blocked: 2, gated: 1 });
+    expect(milestoneRisk(fromQueue, [])).toEqual({ overdue: false, blocked: 0, gated: 0, waitingIn: {} });
   });
 
   it("is silent when there is nothing to warn about", () => {
@@ -97,6 +108,7 @@ describe("milestoneRisk", () => {
       overdue: false,
       blocked: 0,
       gated: 0,
+      waitingIn: {},
     });
     expect(riskLabels(milestoneRisk(calm))).toEqual([]);
   });
@@ -123,7 +135,7 @@ describe("memberListRows", () => {
   const loose = issue({ id: "l1", identifier: "STA-146", title: "flake" });
   const issues = [epic, child1, child2, grandchild, loose].map((i) => ({ ...row(), issue: i }));
 
-  it("keeps member order and lists an epic member's own children indented, read-only", () => {
+  it("keeps member order and lists an epic member's own children under it, read-only", () => {
     const v = view({
       members: [
         member({ identifier: "STA-146", position: 1 }),
@@ -138,8 +150,18 @@ describe("memberListRows", () => {
       ["STA-68", "child", 1],
       ["STA-69", "child", 2],
     ]);
-    // Indent, never a fold: the shared row gets no chevron to draw.
-    expect(rows.every((r) => !r.row.hasChildren)).toBe(true);
+    // The Tasks list's tree shape: a chevron on the epic and on the child that has one, the
+    // guides the connector lines hang from, and the epic's rollup over its descendants.
+    expect(rows.map((r) => [r.row.issue.identifier, r.row.hasChildren, r.row.guides, r.row.isLast])).toEqual([
+      ["STA-146", false, [], false],
+      ["STA-66", true, [], true],
+      ["STA-67", false, [true], false],
+      ["STA-68", true, [false], true],
+      ["STA-69", false, [false, false], true],
+    ]);
+    // Leaves only, as every rollup counts: STA-67 and STA-69 (STA-68 is STA-69's parent).
+    expect(rows[1]!.row.rollup).toMatchObject({ total: 2 });
+    expect(rows[0]!.row.rollup).toBeNull();
     expect(rows[1]!.memberIndex).toBe(1);
     expect(rows[2]!.memberIndex).toBe(-1);
     // Nothing was re-parented: the child still points at the epic.
@@ -160,6 +182,28 @@ describe("memberListRows", () => {
       ["STA-69", "child", 1],
       ["STA-66", "member", 0], // its children are both members, so nothing is drawn under it twice
       ["STA-67", "member", 1], // nests under STA-66, the member it descends from
+    ]);
+  });
+
+  it("folds an epic's children away when the reader collapses it, as the Tasks list's chevron does", () => {
+    const v = view({ members: [member({ identifier: "STA-66", kind: "epic" })] });
+    const rows = memberListRows(v, issues, "staple", { collapsed: new Set(["STA-66"]) });
+    expect(rows.map((r) => [r.row.issue.identifier, r.row.isExpanded, r.row.childCount])).toEqual([["STA-66", false, 2]]);
+  });
+
+  it("hides done and cancelled rows when the done gate says so, and lets their children take their place", () => {
+    const done = { ...child2, status: "cancelled" as const };
+    const withDone = [epic, child1, done, grandchild, loose].map((i) => ({ ...row(), issue: i }));
+    const v = view({ members: [member({ identifier: "STA-66", kind: "epic" })] });
+    const visible = (r: { issue: { status: string } }) => r.issue.status !== "cancelled" && r.issue.status !== "done";
+    // Shown: all four, the cancelled one among them — what the list drew before the gate.
+    expect(memberListRows(v, withDone, "staple").map((r) => r.row.issue.identifier)).toEqual(["STA-66", "STA-67", "STA-68", "STA-69"]);
+    // Hidden: the cancelled child goes; its own open child moves up into its place.
+    const hidden = memberListRows(v, withDone, "staple", { visible });
+    expect(hidden.map((r) => [r.row.issue.identifier, r.row.depth])).toEqual([
+      ["STA-66", 0],
+      ["STA-67", 1],
+      ["STA-69", 1],
     ]);
   });
 

@@ -896,6 +896,13 @@ export const addMilestoneMember = (target: {
 export const removeMilestoneMember = (target: { ws?: string; milestone: string; ref: string; baseRevision: number }) =>
   milestoneWrite("remove", target);
 
+/**
+ * Set or clear a milestone's own dates (`staple milestone set`, MCP `update_milestone`).
+ * `null` clears one; a field left out is left alone. Answers the milestone view.
+ */
+export const updateMilestoneDates = (target: { ws?: string; ref: string; targetDate?: string | null; startDate?: string | null }) =>
+  milestoneWrite("update", target);
+
 export const reorderMilestoneMembers = (target: {
   ws?: string;
   milestone: string;

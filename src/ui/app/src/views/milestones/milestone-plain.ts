@@ -6,7 +6,7 @@
  * (`milestoneRisk`); nothing is re-derived. The raw figures stay on the page under
  * "Show details".
  */
-import type { MilestoneNext, MilestoneProgress, MilestoneState } from "@/lib/types";
+import type { GoalPace, MilestoneNext, MilestoneProgress, MilestoneState } from "@/lib/types";
 import type { ProgressSegment } from "@/views/ProgressStrip";
 import { PROGRESS_COLOR } from "@/views/progress-palette";
 import type { MilestoneRisk } from "./milestones-model";
@@ -60,55 +60,114 @@ export function plainDue(target: string | null, state: MilestoneState, now: Date
 }
 
 /**
- * How far the milestone has got, in one plain word, from its PROGRESS — not from its dates.
- * The date is a separate fact ("Was due 20 Sept, 7 days ago"), so an overdue milestone that
- * is half done reads "In progress" and, beside it, late.
+ * WHEN THE MILESTONE WOULD LAND, from the work still estimated in it — shown only while no
+ * target date is set, and never stored.
+ *
+ * The remaining work is the goal check's own figure, `goal.pace.remainingSeconds`: the store
+ * sums the estimates of the open work under the milestone, and says whether some of it has
+ * none (`partial`, `unplannedRefs`). This only turns it into a day. The pace check reads that
+ * figure against the target "even worked around the clock" (lib/goal-text.ts), and staple has
+ * no calendar of working hours, so the projection is the same reading: now plus the work
+ * left. The page labels it an estimate.
  */
-export type ProgressState = "not_started" | "in_progress" | "blocked" | "done" | "cancelled";
+export interface ProjectedDue {
+  /** The projected moment; the page shows its calendar day. */
+  at: Date;
+  /** The estimated work left, in seconds. */
+  seconds: number;
+  /** Open work with no estimate, which the figure leaves out. */
+  unplanned: number;
+}
 
-export const PROGRESS_WORDS: Readonly<Record<ProgressState, string>> = {
-  not_started: "Not started",
-  in_progress: "In progress",
-  blocked: "Blocked",
-  done: "Done",
-  cancelled: "Cancelled",
-};
+export function projectedDue(pace: Pick<GoalPace, "remainingSeconds" | "partial" | "unplannedRefs"> | null | undefined, now: Date): ProjectedDue | null {
+  if (!pace || pace.remainingSeconds === null || pace.remainingSeconds <= 0) return null;
+  return {
+    at: new Date(now.getTime() + pace.remainingSeconds * 1000),
+    seconds: pace.remainingSeconds,
+    unplanned: pace.partial ? pace.unplannedRefs.length : 0,
+  };
+}
+
+/** A Date as its local calendar day, `YYYY-MM-DD`. */
+export function localIso(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
 
 /**
- * The four bar segments over the COUNTABLE leaves: finished, in progress, waiting, not started.
- *
- * "Waiting" is the QUEUE'S verdict (blocked or waiting for approval, `milestoneRisk`) when the
- * queue has answered, so the bar and the sentence beside it count the same tasks — a task that
- * waits on another is still `backlog` by status. Without a queue reading it falls back to the
- * blocked and gated statuses.
+ * The due date in words, wherever a milestone shows one. A target the person set wins; with
+ * none, the projection, marked as one ("Due ~3 Oct (estimated)"); a finished milestone with no
+ * target says when it finished; with nothing to go on, "No due date".
  */
-export function progressBuckets(progress: MilestoneProgress, risk: MilestoneRisk | null) {
-  const { counts, countable } = progress;
-  const done = counts.done;
-  const active = counts.active + counts.review;
-  const remaining = Math.max(0, countable - done - active);
-  const waitingRaw = risk ? risk.blocked + risk.gated : counts.blocked + counts.gated;
-  const waiting = Math.min(remaining, waitingRaw);
-  return { done, active, waiting, notStarted: remaining - waiting };
+export function dueText(
+  milestone: { targetDate: string | null; state: MilestoneState },
+  projection: ProjectedDue | null,
+  now: Date,
+  completedAt: string | null = null,
+): string {
+  if (milestone.targetDate) return plainDue(milestone.targetDate, milestone.state, now);
+  if (milestone.state === "done" || milestone.state === "cancelled") {
+    const word = milestone.state === "done" ? "Finished" : "Cancelled";
+    return completedAt ? `${word} ${shortDay(localIso(new Date(completedAt)), now)}` : word;
+  }
+  if (projection) return `Due ~${shortDay(localIso(projection.at), now)} (estimated)`;
+  return "No due date";
+}
+
+/** Why the projection says what it says, for its tooltip. */
+export function projectionNote(projection: ProjectedDue): string {
+  const hours = Math.round(projection.seconds / 360) / 10;
+  const n = projection.unplanned;
+  const partial = n > 0 ? ` ${n} open ${n === 1 ? "task has no estimate and is" : "tasks have no estimate and are"} not included.` : "";
+  return `Estimated from ${hours}h of work left, counted from now. Set a date to override it.${partial}`;
+}
+
+/**
+ * The bar's segments over the COUNTABLE leaves, one per status bucket, in the words and the
+ * colours the task rows' status glyphs use: finished, in review, in progress, blocked, to do,
+ * not started. Every countable leaf is in exactly one, so the legend sums to the headline's
+ * denominator; cancelled leaves are in none (see `cancelledSentence`).
+ *
+ * "Blocked" is the status (blocked or waiting for approval) plus the QUEUE'S verdict on work
+ * that has not started: a task that waits on another is still `todo` or `backlog` by status,
+ * and `milestoneRisk` says how many of those the resolver holds back. Work already in review
+ * or in progress keeps its own bucket even when it still waits on something — it is drawn
+ * once, where it is, and the sentence beside the bar names the wait (`riskSentence`).
+ * Without a queue reading only the statuses count.
+ */
+export interface ProgressBuckets {
+  done: number;
+  review: number;
+  active: number;
+  blocked: number;
+  ready: number;
+  notStarted: number;
+}
+
+export function progressBuckets(progress: MilestoneProgress, risk: MilestoneRisk | null): ProgressBuckets {
+  const { counts } = progress;
+  const waitingReady = Math.min(counts.ready, risk?.waitingIn?.ready ?? 0);
+  const waitingUnstarted = Math.min(counts.unstarted, risk?.waitingIn?.unstarted ?? 0);
+  return {
+    done: counts.done,
+    review: counts.review,
+    active: counts.active,
+    blocked: counts.blocked + counts.gated + waitingReady + waitingUnstarted,
+    ready: counts.ready - waitingReady,
+    notStarted: counts.unstarted - waitingUnstarted,
+  };
 }
 
 export function progressSegments(progress: MilestoneProgress, risk: MilestoneRisk | null = null): ProgressSegment[] {
   const b = progressBuckets(progress, risk);
   return [
     { key: "done", count: b.done, word: "finished", color: PROGRESS_COLOR.done },
+    { key: "review", count: b.review, word: "in review", color: PROGRESS_COLOR.review },
     { key: "active", count: b.active, word: "in progress", color: PROGRESS_COLOR.active },
-    { key: "waiting", count: b.waiting, word: "waiting", color: PROGRESS_COLOR.waiting },
+    { key: "blocked", count: b.blocked, word: "blocked", color: PROGRESS_COLOR.waiting },
+    { key: "ready", count: b.ready, word: "to do", color: PROGRESS_COLOR.ready },
     { key: "open", count: b.notStarted, word: "not started", color: PROGRESS_COLOR.notStarted },
   ];
-}
-
-export function progressState(state: MilestoneState, progress: MilestoneProgress, risk: MilestoneRisk | null = null): ProgressState {
-  if (state === "cancelled") return "cancelled";
-  if (progress.complete || state === "done") return "done";
-  const b = progressBuckets(progress, risk);
-  if (b.active === 0 && b.notStarted === 0 && b.waiting > 0) return "blocked";
-  if (b.active > 0 || b.done > 0) return "in_progress";
-  return "not_started";
 }
 
 /** "3 of 4 tasks finished (75%)." — or the honest sentence when nothing is countable. */
@@ -119,14 +178,43 @@ export function progressSentence(progress: MilestoneProgress): string {
   return `${progress.counts.done} of ${progress.countable} ${noun} finished (${progress.percent ?? 0}%).`;
 }
 
-/** What is in the way, from the queue's verdict: "1 is blocked and 2 wait for approval." */
-export function riskSentence(risk: MilestoneRisk): string | null {
-  const parts: string[] = [];
-  if (risk.blocked > 0) parts.push(`${risk.blocked} ${risk.blocked === 1 ? "is" : "are"} blocked`);
-  if (risk.gated > 0) parts.push(`${risk.gated} ${risk.gated === 1 ? "waits" : "wait"} for approval`);
-  if (parts.length === 0) return null;
-  const text = parts.join(" and ");
-  return `${text.charAt(0).toUpperCase()}${text.slice(1)}.`;
+/**
+ * Why the headline's denominator is smaller than the list: cancelled tasks are neither
+ * finished nor work left, so they are left out of the count, and this says so.
+ */
+export function cancelledSentence(progress: MilestoneProgress): string | null {
+  const n = progress.counts.cancelled;
+  if (n === 0) return null;
+  return n === 1 ? "1 cancelled task is not counted." : `${n} cancelled tasks are not counted.`;
+}
+
+/**
+ * What is in the way, in the bar's own numbers: "2 are blocked." for the blocked bucket, then
+ * the work that has started but still waits on another task, by where it is — "7 in review
+ * still wait on other tasks." Null when nothing waits.
+ */
+export function riskSentence(progress: MilestoneProgress, risk: MilestoneRisk | null): string | null {
+  const sentences: string[] = [];
+  const blocked = progressBuckets(progress, risk).blocked;
+  if (blocked > 0) sentences.push(`${blocked} ${blocked === 1 ? "is" : "are"} blocked.`);
+  const review = risk?.waitingIn?.review ?? 0;
+  const active = risk?.waitingIn?.active ?? 0;
+  const started = [active > 0 ? `${active} in progress` : null, review > 0 ? `${review} in review` : null].filter(Boolean);
+  if (started.length > 0) {
+    const one = review + active === 1;
+    sentences.push(`${started.join(" and ")} still ${one ? "waits on another task" : "wait on other tasks"}.`);
+  }
+  return sentences.length > 0 ? sentences.join(" ") : null;
+}
+
+/** The card's sentence under the headline: what waits, what the count leaves out, what is next. */
+export function progressDetailSentence(
+  view: { progress: MilestoneProgress; next: MilestoneNext | null },
+  risk: MilestoneRisk | null,
+): string {
+  return [riskSentence(view.progress, risk), cancelledSentence(view.progress), nextSentence(view.next)]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** What an agent would take next from this milestone. */

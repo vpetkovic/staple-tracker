@@ -17,7 +17,8 @@
  * `next` is the queue resolver's answer and is null until R3d fills it; the view renders
  * the null as "no eligible work" rather than guessing.
  */
-import { flatRow, type TaskRow } from "@/components/task-list";
+import { flatRow, parentRollups, type TaskRow } from "@/components/task-list";
+import { walkPlaced, type PlacedNode } from "@/views/tree/nesting";
 import type {
   EffectiveQueueRow,
   Issue,
@@ -27,7 +28,9 @@ import type {
   MilestoneNext,
   MilestoneState,
   MilestoneView,
+  StatusCategory,
 } from "@/lib/types";
+import { statusCategory } from "@/lib/settings";
 
 // ---------- ordering ----------
 
@@ -79,6 +82,13 @@ export interface MilestoneRisk {
   blocked: number;
   /** Queue rows under this milestone the resolver classified `gated`. */
   gated: number;
+  /**
+   * The same blocked and gated rows, counted by the status CATEGORY each one is in. A task
+   * already in review can still wait on another, and the bar must not file it twice: it is
+   * drawn as in review, and only the waiting work that has not started is drawn as blocked.
+   * Optional so a hand-built reading (a test, an older caller) means "none started".
+   */
+  waitingIn?: Partial<Record<StatusCategory, number>>;
 }
 
 /**
@@ -99,12 +109,16 @@ export function milestoneRisk(
 ): MilestoneRisk {
   let blocked = 0;
   let gated = 0;
+  const waitingIn: Partial<Record<StatusCategory, number>> = {};
   for (const queueRow of effective) {
     if (!queueRow.milestonePath.includes(row.milestone.identifier)) continue;
     if (queueRow.eligibility === "blocked") blocked += 1;
     else if (queueRow.eligibility === "gated") gated += 1;
+    else continue;
+    const category = statusCategory(queueRow.status);
+    waitingIn[category] = (waitingIn[category] ?? 0) + 1;
   }
-  return { overdue: row.milestone.state === "overdue", blocked, gated };
+  return { overdue: row.milestone.state === "overdue", blocked, gated, waitingIn };
 }
 
 /** The risk as words, each with its own glyph. Empty when there is nothing to warn about. */
@@ -137,8 +151,8 @@ export function dateLabel(date: string | null): string {
 
 /**
  * A row in the member list: either a direct member (movable, removable) or one of a
- * member epic's own descendants, shown indented under it so the hierarchy is visible
- * without being editable here — membership never rewrites parentage, and neither does
+ * member epic's own descendants, shown under it so the hierarchy is visible without being
+ * editable here — membership never rewrites parentage, and neither does
  * this list.
  */
 export interface MemberListRow {
@@ -188,21 +202,42 @@ function issueFromMember(member: MilestoneMemberRow, parentId: string | null): I
   };
 }
 
+export interface MemberListOptions {
+  /**
+   * Is this row on the page? The caller passes the Tasks list's own done gate
+   * (`passesDone`), so "Done hidden" hides the same rows here as there. A hidden row's
+   * children take its place, the way the Tasks list re-roots a subtree whose parent is
+   * filtered out. Absent: every row is shown.
+   */
+  visible?: (row: IssueRow) => boolean;
+  /** Identifiers whose children the reader folded away. */
+  collapsed?: ReadonlySet<string>;
+}
+
 /**
- * The ordered member list as `TaskRow`s for the shared row component.
+ * The ordered member list as `TaskRow`s for the shared row component, shaped exactly as the
+ * Tasks list shapes a tree.
  *
- * Members keep the store's order. A member nested under another member (`nestedUnder`)
- * indents one step below it, and an epic member's OWN children — the ones in `issues`
- * whose parent it is and which are not members themselves — follow it indented, so a
- * reader sees the epic's hierarchy exactly as the tree shows it. Descendants recurse;
- * a child that is itself a member is skipped here because it has its own row at its own
- * position, and one issue drawn twice would be two rows disagreeing about where it is.
+ * Members keep the store's order. A member nested under another member (`nestedUnder`) sits
+ * under it, and an epic member's OWN children — the ones in `issues` whose parent it is and
+ * which are not members themselves — sit under it too, so a reader sees the epic's hierarchy
+ * as the Tasks list draws it. A child that is itself a member is skipped here because it has
+ * its own row at its own position, and one issue drawn twice would be two rows disagreeing
+ * about where it is.
  *
- * `hasChildren` is left false on purpose: the hierarchy is shown by INDENT, never folded,
- * so the shared row draws no chevron — a chevron that folded nothing would be a control
- * that lies. A milestone's member epics are few; their children are always in view.
+ * Depth, guides and the elbow come from `walkPlaced`, the tree's one walk, so the connector
+ * lines, the chevron and the indent step are the Tasks list's own rather than a padding
+ * that only resembles them. A parent's rollup ("0/9") is `parentRollups` over the whole,
+ * unfiltered issue list, the number the Tasks list prints on the same row.
  */
-export function memberListRows(view: MilestoneView, issues: readonly IssueRow[], workspace: string): MemberListRow[] {
+export function memberListRows(
+  view: MilestoneView,
+  issues: readonly IssueRow[],
+  workspace: string,
+  options: MemberListOptions = {},
+): MemberListRow[] {
+  const visible = options.visible ?? (() => true);
+  const collapsed = options.collapsed ?? new Set<string>();
   const byIdentifier = new Map(issues.map((row) => [row.issue.identifier, row]));
   const childrenOf = new Map<string, IssueRow[]>();
   for (const row of issues) {
@@ -214,41 +249,63 @@ export function memberListRows(view: MilestoneView, issues: readonly IssueRow[],
   for (const list of childrenOf.values()) list.sort((a, b) => byIdentifier_(a, b));
 
   const memberIds = new Set(view.members.map((m) => m.identifier));
-  const depthOf = new Map<string, number>();
-  const out: MemberListRow[] = [];
+  const memberAt = new Map(view.members.map((member, index) => [member.identifier, { member, index }]));
 
-  const pushChildren = (parent: IssueRow, depth: number) => {
-    const children = (childrenOf.get(parent.issue.id) ?? []).filter((c) => !memberIds.has(c.issue.identifier));
-    children.forEach((child, index) => {
-      out.push({
-        row: flatRow(child, { depth, isLast: index === children.length - 1 }),
-        role: "child",
-        memberIndex: -1,
-        member: null,
-      });
-      pushChildren(child, depth + 1);
-    });
-  };
-
-  view.members.forEach((member, memberIndex) => {
-    const depth = member.nestedUnder ? (depthOf.get(member.nestedUnder) ?? 0) + 1 : 0;
-    depthOf.set(member.identifier, depth);
+  // Every member is a node first, so a member nested under one listed after it still lands.
+  const nodes = new Map<string, PlacedNode>();
+  for (const member of view.members) {
     const known = byIdentifier.get(member.identifier);
-    const source = known ?? {
-      workspace,
-      issue: issueFromMember(member, member.parent),
-      claim: null,
-    };
-    out.push({
-      row: flatRow(source, { depth, isLast: memberIndex === view.members.length - 1 }),
-      role: "member",
-      memberIndex,
-      member,
-    });
-    if (known) pushChildren(known, depth + 1);
+    const source = known ?? { workspace, issue: issueFromMember(member, member.parent), claim: null };
+    nodes.set(member.identifier, { row: source, ghost: false, children: [] });
+  }
+  const descend = (row: IssueRow, seen: Set<string>): PlacedNode[] =>
+    (childrenOf.get(row.issue.id) ?? [])
+      .filter((child) => !memberIds.has(child.issue.identifier) && !seen.has(child.issue.id))
+      .map((child) => {
+        seen.add(child.issue.id);
+        return { row: child, ghost: false, children: descend(child, seen) };
+      });
+  const seen = new Set<string>();
+  for (const member of view.members) {
+    const node = nodes.get(member.identifier)!;
+    if (byIdentifier.has(member.identifier)) node.children.push(...descend(node.row, seen));
+  }
+  // A nested member sits under the member it descends from when that member comes first in
+  // the plan; moved above it, it is a row of its own at its own position, so a move always
+  // shows on the page and a child is never drawn above its parent.
+  const roots: PlacedNode[] = [];
+  view.members.forEach((member, index) => {
+    const node = nodes.get(member.identifier)!;
+    const hostAt = member.nestedUnder ? memberAt.get(member.nestedUnder) : undefined;
+    const host = hostAt && hostAt.index < index ? nodes.get(member.nestedUnder!) : undefined;
+    (host ?? { children: roots }).children.push(node);
   });
 
-  return out;
+  // The done gate: a hidden row gives its place to its children.
+  const prune = (list: readonly PlacedNode[]): PlacedNode[] =>
+    list.flatMap((node) => {
+      const children = prune(node.children);
+      return visible(node.row) ? [{ ...node, children }] : children;
+    });
+
+  const rollups = parentRollups(issues);
+  return walkPlaced(prune(roots), (node) => !collapsed.has(node.row.issue.identifier)).map((nested) => {
+    const at = memberAt.get(nested.row.issue.identifier);
+    return {
+      row: flatRow(nested.row, {
+        depth: nested.depth,
+        guides: nested.guides,
+        isLast: nested.isLast,
+        hasChildren: nested.hasChildren,
+        isExpanded: nested.isExpanded,
+        childCount: nested.childCount,
+        rollup: nested.hasChildren ? (rollups.get(nested.row.issue.id) ?? null) : null,
+      }),
+      role: at ? "member" : "child",
+      memberIndex: at ? at.index : -1,
+      member: at ? at.member : null,
+    };
+  });
 }
 
 function byIdentifier_(a: IssueRow, b: IssueRow): number {

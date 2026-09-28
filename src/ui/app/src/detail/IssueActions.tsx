@@ -482,11 +482,14 @@ export function GateSection({
   controller,
   requestOpen,
   onCloseRequest,
+  showState = false,
 }: {
   detail: IssueDetail;
   controller: IssueActionsController;
   requestOpen: boolean;
   onCloseRequest: () => void;
+  /** Say who it waits for and since when. The detail's status line already does; a page without one asks for it here. */
+  showState?: boolean;
 }) {
   const { issue, gate, childrenQueued } = detail;
   const handlers = gateHandlers({ ws: detail.workspace, issue }, controller.run);
@@ -495,8 +498,8 @@ export function GateSection({
       <GateReview
         identifier={issue.identifier}
         gate={gate}
-        // The status line already says who it waits for and since when; say it once.
-        showState={false}
+        // The detail's status line already says who it waits for and since when; say it once.
+        showState={showState}
         // Straight through from `/api/issue`, unfiltered: eligibility lives in the store.
         queue={childrenQueued}
         busy={controller.busy}
