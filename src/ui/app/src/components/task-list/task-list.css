@@ -1767,6 +1767,9 @@
   max-height: calc(100dvh - max(1rem, env(safe-area-inset-top)) - max(1rem, env(safe-area-inset-bottom)));
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* Keyboard focus scrolls a row into view BELOW the sticky head, never under it (WCAG 2.4.11):
+     the head's measured height (DependenciesDialog publishes it) and a little air. */
+  scroll-padding-top: calc(var(--dep-head-height, 0px) + 4px);
 }
 
 /*

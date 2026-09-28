@@ -61,6 +61,16 @@ describe("the dependencies dialog fits a phone", () => {
     expect(markup.slice(head0, close)).not.toContain("</div>");
   });
 
+  it("brings a keyboard-focused row into view below the sticky head, not under it", () => {
+    // WCAG 2.4.11: Shift+Tab up a long list scrolls each row to the card's top edge, which the
+    // sticky head covers, unless the card's scroll padding is the head's height.
+    expect(declarations(".staple-dep-dialog")["scroll-padding-top"]).toBe("calc(var(--dep-head-height, 0px) + 4px)");
+    const markup = readFileSync(new URL("./DependenciesDialog.tsx", import.meta.url), "utf8");
+    expect(markup).toMatch(/<div className="staple-dep-head" data-dep-head="" ref=\{publishHeadHeight\}>/);
+    expect(markup).toMatch(/card\.style\.setProperty\("--dep-head-height", `\$\{head\.offsetHeight\}px`\)/);
+    expect(markup).toMatch(/observer\.observe\(head\)/);
+  });
+
   it.each([".staple-dep-entry-id", ".staple-dep-subject-id"])("caps %s so the title keeps most of the line", (selector) => {
     const id = declarations(selector);
     expect(id["max-width"]).toBe("30%");
