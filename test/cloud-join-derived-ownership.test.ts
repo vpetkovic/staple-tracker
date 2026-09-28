@@ -180,7 +180,7 @@ describe("a derived move and a person's move of one parent, made apart", () => {
 });
 
 describe("a backfill send that arrives after a person moved the parent", () => {
-  it("is screened with the status, and never leaves the parent owned by a status it no longer holds", async () => {
+  it("is dropped where it no longer fits, with no conflict, and every device converges", async () => {
     const server = new FakeSyncServer({ repositoryId: REPO });
     fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
@@ -202,10 +202,12 @@ describe("a backfill send that arrives after a person moved the parent", () => {
     b.store.updateIssue(epic, { status: "todo" }, "b");
     await sync(b, a, b);
     expectInvariant(a, b);
-    // The send carried the status, so b judged it as a status write made against b's own move.
-    expect(listConflicts(b.db).filter((record) => record.entityId === epic).map((record) => [record.field, record.localValue, record.remoteValue])).toEqual([
-      ["status", "todo", "done"],
+    // A bookkeeping send is nobody's move: dropped where it no longer fits, no record for a person.
+    expect([owner(a, epic), owner(b, epic)]).toEqual([
+      { status: "todo", derived_status: null },
+      { status: "todo", derived_status: null },
     ]);
+    expect([...listConflicts(a.db), ...listConflicts(b.db)]).toEqual([]);
 
     // On b, a second child: finished, E closes; reopened, E reopens — on every device.
     b.use();
@@ -221,6 +223,9 @@ describe("a backfill send that arrives after a person moved the parent", () => {
     await sync(fresh);
     for (const device of [a, b, fresh]) expect([device.label, status(device, epic)]).not.toEqual([device.label, "done"]);
     expect(status(b, child)).toBe("done");
+    expect([...listConflicts(a.db), ...listConflicts(b.db)]).toEqual([]);
+    const want = stateOf(fresh.db);
+    expect([a, b].flatMap((device) => differences(device.label, want, stateOf(device.db)))).toEqual([]);
     expectInvariant(a, b, fresh);
   });
 });
@@ -244,5 +249,42 @@ describe("a derived move written by a build before 017", () => {
     b.store.updateIssue(child, { status: "todo" }, "b");
     expect(status(b, epic)).toBe("backlog");
     expectInvariant(a, b);
+  });
+});
+
+describe("one status record decided twice, offline, to opposite sides", () => {
+  it("lands where the later decision says, with its ownership, on every device", async () => {
+    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+    const a = fleet.machine("a");
+    await sync(a);
+    a.use();
+    const epic = a.store.createIssue({ title: "E", kind: "epic" }).id;
+    const child = a.store.createIssue({ title: "C", parent: epic }).id;
+    await sync(a);
+    const b = fleet.machine("b");
+    await sync(b);
+    a.use();
+    a.store.updateIssue(child, { assignee: "a" }, "a");
+    a.store.updateIssue(child, { status: "in_progress" }, "a");
+    b.use();
+    b.store.updateIssue(epic, { status: "in_review" }, "b");
+    await sync(a, b, a);
+
+    // a keeps b's hand move; b keeps a's derived one. b's decision reaches the log last.
+    const decide = (machine: Machine, value: string): void => {
+      machine.use();
+      const record = listConflicts(machine.db).find((open) => open.entityId === epic)!;
+      resolveConflict(machine.db, { id: record.id, choice: record.localValue === value ? "local" : "remote", actor: machine.label });
+    };
+    decide(a, "in_review");
+    decide(b, "in_progress");
+    await sync(a, b, a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+
+    for (const device of [a, b, fresh]) {
+      expect([device.label, owner(device, epic)]).toEqual([device.label, { status: "in_progress", derived_status: "in_progress" }]);
+    }
+    expectInvariant(a, b, fresh);
   });
 });

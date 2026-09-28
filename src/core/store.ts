@@ -601,11 +601,11 @@ const DERIVED_STATUS_PUBLISH_KEY = "derived_status_publish_owed";
  * once, after a pull reached the head (`sync.ts`). Written before the column existed, nothing
  * in the log carries it, so without this a device that hydrates reads every derived parent as
  * set by hand. After the pull, so a row another device has since moved by hand has already
- * been cleared here and is not sent. Each is an `issue` update carrying the status with it, so
- * the conflict screen judges it as a status write: one that lands after a person moved the
- * row elsewhere is contested there rather than taken, and an applier drops a `derivedStatus`
- * that is not the status the row ends up holding. Two devices that backfilled the same row
- * send the same values, which is no conflict.
+ * been cleared here and is not sent. Each is an ordinary `issue` update of that one field. One
+ * that lands after a person moved the row elsewhere is dropped by the applier, which takes a
+ * `derivedStatus` only when it is the status the row holds, and the schema's triggers would
+ * clear it besides: bookkeeping nobody made is never made a conflict for a person to settle.
+ * Two devices that backfilled the same row send the same value, which is no conflict.
  * A failure is logged and left owed, never thrown: the sync that ran it is the user's.
  */
 export function publishDerivedStatuses(db: DatabaseSync): number {
@@ -619,7 +619,7 @@ export function publishDerivedStatuses(db: DatabaseSync): number {
         derived_status: string;
       }>;
       for (const row of rows) {
-        journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { status: row.status, derivedStatus: row.derived_status }, actor: null });
+        journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { derivedStatus: row.derived_status }, actor: null });
       }
       db.prepare("DELETE FROM meta WHERE key = ?").run(DERIVED_STATUS_PUBLISH_KEY);
       return rows.length;
