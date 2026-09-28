@@ -147,7 +147,9 @@ npm run site:build    # static build into site/build
 
 The docs pages are `docs/*.md`, rendered in place (the docs plugin reads
 `../docs`); never copy them into `site/`. The build fails on a broken link or a
-broken Markdown link. A link from `docs/` to a repository file outside it, such
-as `../CONTRIBUTING.md`, becomes a link to that file on GitHub. The site URL and
+broken Markdown link. A Markdown link from `docs/` to a `.md` file git tracks
+outside `docs/`, such as `../CONTRIBUTING.md`, becomes a link to that file on
+GitHub; link any other repository file by its full GitHub URL, since Docusaurus
+publishes a relative link to a non-Markdown file as a site asset. The site URL and
 base path are the `url` and `baseUrl` constants at the top of
 `site/docusaurus.config.ts`.

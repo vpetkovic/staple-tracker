@@ -1,4 +1,4 @@
-import {existsSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
 import path from 'node:path';
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
@@ -13,18 +13,29 @@ const repo = 'https://github.com/vpetkovic/staple-tracker';
 const repoRoot = path.resolve(__dirname, '..');
 const docsDir = path.join(repoRoot, 'docs');
 
+// True when git tracks exactly this path (same case), so the GitHub link resolves.
+function tracked(relative: string): boolean {
+  try {
+    const out = execFileSync('git', ['ls-files', '--', relative], {cwd: repoRoot, encoding: 'utf8'});
+    return out.split('\n').includes(relative);
+  } catch {
+    return false;
+  }
+}
+
 // docs/*.md is the single source of truth and links to repository files outside
 // docs/ (CONTRIBUTING.md, RELEASING.md). Those links point at the file on GitHub.
 // Any other unresolvable Markdown link fails the build.
 function linkOutsideDocs({sourceFilePath, url: target}: {sourceFilePath: string; url: string}): string {
-  const [filePart = '', hash] = target.split('#');
+  const match = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(target);
+  const filePart = match?.[1] ?? '';
+  const suffix = `${match?.[2] ?? ''}${match?.[3] ?? ''}`;
   const source = path.resolve(__dirname, sourceFilePath);
   const resolved = path.resolve(path.dirname(source), decodeURIComponent(filePart));
-  const inRepo = resolved.startsWith(repoRoot + path.sep);
+  const relative = path.relative(repoRoot, resolved).split(path.sep).join('/');
   const inDocs = resolved.startsWith(docsDir + path.sep);
-  if (inRepo && !inDocs && existsSync(resolved)) {
-    const relative = path.relative(repoRoot, resolved).split(path.sep).join('/');
-    return `${repo}/blob/master/${relative}${hash ? `#${hash}` : ''}`;
+  if (!inDocs && !relative.startsWith('../') && tracked(relative)) {
+    return `${repo}/blob/master/${relative}${suffix}`;
   }
   throw new Error(`Broken Markdown link "${target}" in ${sourceFilePath}`);
 }
@@ -62,7 +73,7 @@ const config: Config = {
           path: '../docs',
           routeBasePath: 'docs',
           sidebarPath: './sidebars.ts',
-          editUrl: `${repo}/edit/master/docs/`,
+          editUrl: ({docPath}) => `${repo}/edit/master/docs/${docPath}`,
         },
         blog: false,
         theme: {
