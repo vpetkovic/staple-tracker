@@ -703,6 +703,48 @@ Otherwise:
   current (a provider-side reset, a changed plan) opens a new instance and sets
   the old one's `supersededBy`, with reason `reset_moved`. Staple does not decide
   which reading was right. It keeps both.
+- **While a window holds authoritative readings** (`usage_poll`: the
+  provider's own account-wide figure), the provider governs it. Which readings
+  COUNT toward the window's high-water mark, pace and burn:
+  - A **passive** reading (status line, rollout, typed) that a later poll
+    **confirms** (reads no more than one point below it) counts.
+  - One that later polls all **contradict** does not: a status line
+    re-rendering an old cache after a reset, a rollout line the provider has
+    since overruled. A reading from before the window's **first** poll needs
+    two contradicting polls, so one outlier first answer (a 0 during a provider
+    hiccup) cannot hide what the status line had been saying.
+  - One taken **after the latest poll and above it** is **held back** while
+    live polling is on and that poll is fresh (at most `POLL_FRESH_SECONDS`,
+    600 s, twice the 5-minute schedule, before the read); the next poll
+    confirms or contradicts it. With live polling off, or the latest poll
+    older than that (every poll failing, the agent unloaded), it counts at
+    once, as it would with no poll at all, so a stopped poller never hides
+    real usage.
+  - A poll stamped more than 60 s after the read's instant (this machine's
+    clock has since stepped back) governs nothing until its stamp is within a
+    minute of now: it neither contradicts nor holds back a reading.
+  - Every read and preview applies the same rule at its own instant: Usage,
+    `staple budget`, history, forecasts and the `forget` preview's before and
+    after.
+  - A window with no poll counts every reading, as before. Every reading stays
+    exactly as stored. `staple budget history` (and `list_budget_samples`)
+    marks each with `counted` and, when a poll overruled it, `contradictedBy`
+    (that poll's id); `regression` is derived among counted readings only, and
+    the human listing says *not counted* in plain words.
+  - **The trade-off:** while polls arrive, genuine fast growth that only the
+    status line has seen shows up one poll late (up to 5 minutes), because the
+    provider's figure is the one trusted while it is fresh. That is the price
+    of never letting a stale cache raise the figure.
+  - A poll **closes the window** (`usage_reset`: the provider reset or refunded
+    usage without moving `resetsAt`) only when it AND the window's previous
+    poll are both more than one point below the counted high-water mark,
+    judged with the new poll counted. One outlier answer (a transient 0, two
+    backends a couple of points apart) never closes a window. The reading
+    opens the successor instance, which the closed one's `supersededBy` points
+    at. A reset that moves `resetsAt` is `reset_moved`, above.
+  - A reading **taken before** the poll that opened a `usage_reset` successor
+    (a rollout scanned late, a status line observed before the reset) goes to
+    the closed instance, never to the successor.
 - A sample with **no `resetsAt`** (older Codex builds, below) joins no window. It
   is stored with `windowId: null` and reason `reset_not_reported`, is usable as
   historical evidence of usage and window length, and never feeds a current
@@ -720,12 +762,14 @@ means of auditing a provider's arithmetic.
 | Provider surface | What it reports | How verified | Confidence |
 |---|---|---|---|
 | **Claude Code status line input** (JSON on the configured `statusLine` command's stdin) | `rate_limits.five_hour`, `rate_limits.seven_day` and, behind a gateway, `rate_limits.spend_limit`, each `{used_percentage (0–100; spend_limit may exceed 100), resets_at (Unix epoch seconds)}`. Documented as present only for subscribers, only after the first API response, and each window only while its reset has not passed. No window length, no plan tier, no account, no observation timestamp. Values carry one decimal place. | The schema text bundled in Claude Code 2.1.281 | High for that version's shape. Medium across versions. See [the status-line caveats](#status-line-readings-are-cached-re-reads). |
-| Claude Code `/usage` | Session and weekly percentages and reset times, including per-model weekly limits | Interactive screen only | Not a machine source. An operator may type a reading in (`operator_manual`). |
+| Claude Code `/usage` | Session and weekly percentages and reset times, including per-model weekly limits | Interactive screen only | Not a machine source. An operator may type a reading in (`operator_manual`). The endpoint behind it is a live-polling source (below). |
+| **Claude OAuth usage endpoint** (`GET https://api.anthropic.com/api/oauth/usage`, `Authorization: Bearer <Claude Code's OAuth access token>`, `anthropic-beta: oauth-2025-04-20`) | `five_hour` and `seven_day`, each `{utilization (0–100), resets_at (ISO-8601 with microseconds)}`, the same limits the status line reports; `resets_at` is null while no window is running. Also per-model and codenamed limits, spend, and a breakdown, none of which staple reads | The path, the header and the three URL variants in the Claude Code 2.1.283 binary (the `/usage` fetch); one read-only GET with the author's own sign-in, 2026-09-28 | Medium: undocumented. Read only with [live polling](#live-polling) on. |
 | Anthropic `anthropic-ratelimit-unified-*` response headers (`5h-utilization`, `5h-reset`, `7d-…`) | Utilization and reset per window | Header names appear in the Claude Code 2.1.281 binary. Undocumented. | Low. Staple never sees these responses and never makes the request. A harness could forward them as a source. |
 | Codex CLI rollout files (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `event_msg` lines with `payload.type = "token_count"`) | `payload.rate_limits.limit_id`, `primary` and `secondary` each `{used_percent, window_minutes, resets_at (Unix epoch seconds)}`, `plan_type`, `credits`. The line's own `timestamp` is ISO-8601 UTC. Observed windows: 300 and 10080 minutes. A second limit id (`premium`) was observed with `primary: null, secondary: null`. Older builds (lines from a 0.45 alpha on the same machine) write `limit_id: null`, `resets_at: null` and windows of 299 and 10079 minutes. **No file on the machine carries a relative `resets_in_seconds`**, so this contract has no relative-reset source today. Values are whole numbers. | codex-cli 0.156.1 files, and every older rollout on the author's machine | Medium. The file format is undocumented. See [Codex rollout rules](#codex-rollout-rules) for forks and old lines. |
-| Codex `/status` | Same percentages, interactive | Interactive screen only | `operator_manual` only |
+| Codex `/status` | Same percentages, interactive | Interactive screen only | `operator_manual` only. The endpoint behind it is a live-polling source (below). |
+| **Codex usage endpoint** (`GET https://chatgpt.com/backend-api/wham/usage`, `Authorization: Bearer <tokens.access_token>`, `ChatGPT-Account-Id: <tokens.account_id>`, both from `<codex home>/auth.json`) | `plan_type` and `rate_limit.primary_window` / `secondary_window`, each `{used_percent, limit_window_seconds, reset_after_seconds, reset_at (Unix epoch seconds)}`; `additional_rate_limits` entries `{limit_name, metered_feature, rate_limit}`. Also the account's email and ids, which staple never reads into anything kept. A window not yet started reads `used_percent: 0` with `reset_after_seconds` equal to the window, so its `reset_at` moves on every request | The `/wham/usage` path and the response structs in the codex-cli 0.158.0 binary; one read-only GET with the author's own sign-in, 2026-09-28 | Medium: undocumented. Read only with [live polling](#live-polling) on. |
 | Token counts in harness transcripts (Claude Code session transcripts, Codex `info.total_token_usage`) | Tokens per request or per session | Present in the files | High as token counts. **Not normalizable**: neither provider publishes a subscription limit in tokens. |
-| Provider usage endpoints reached with the user's OAuth credential | Used by some community tools | Not examined | **Excluded.** They need the credential ([Privacy](#privacy)) and a network call (the [zero-network rule](sync.md#two-invariants-the-rest-of-the-page-serves)). |
+| Other provider usage endpoints reached with the user's OAuth credential | Used by some community tools | Not examined | Excluded until someone adds a poller for one ([Live polling](#live-polling)). |
 
 API-key usage without a subscription has request and token rate limits, not
 subscription windows. It is out of scope, and an account that has only those
@@ -795,7 +839,7 @@ Every sample says where its number came from:
 |---|---|---|
 | `method` | `observed` | The provider reported the value and staple read it verbatim. |
 | | `estimated` | A tool computed it from local evidence (for example, tokens against an assumed limit). Stored for comparison, never used as a measurement. |
-| `source.kind` | `claude_code_statusline`, `codex_rollout`, `harness_forwarded_headers`, `operator_manual`, `fixture` | The ingestion path. `fixture` rows are refused outside disposable test databases. |
+| `source.kind` | `claude_code_statusline`, `codex_rollout`, `usage_poll`, `harness_forwarded_headers`, `operator_manual`, `fixture` | The ingestion path. `usage_poll` is [live polling](#live-polling), the provider's own figure, asked for just before `observedAt`. `fixture` rows are refused outside disposable test databases. |
 | `source.harnessVersion` | string or `null` | The harness build that produced the input, because field shapes change between builds. |
 | `source.field` | string | The path of the value inside its input. |
 | `confidence` | `high`, `medium`, `low` | Assigned by rule, never by judgement: `high` = observed through a surface its harness documents; `medium` = observed through an undocumented surface, or typed by an operator from a provider screen; `low` = estimated, or `resetsAt` derived from a relative value. |
@@ -965,7 +1009,10 @@ pick the right one:
   visible.
 - High-water errs in one direction only. If a provider resets or refunds usage
   **without moving `resetsAt`**, high-water keeps reporting the old, higher
-  figure until the window ends. The scheduler then under-admits, which is the
+  figure until the window ends, unless [live polling](#live-polling) is on: the
+  provider's own readings then govern the window, discount passive readings
+  they contradict, and close it (`usage_reset`) after two lower answers in a
+  row ([Window identity](#window-identity)). The scheduler then under-admits, which is the
   safe failure, and `regressionCount` makes it visible. A window instance that
   closes with a large regression is evidence for that case, and staple does not
   act on it silently.
@@ -1115,7 +1162,73 @@ among them. The web page's consent is a single-use ticket bound to a digest of
 the plan it showed, so what is applied is what was read.
 
 Everything here is machine-local and makes no network call. The UI routes are
-excluded from the post-write sync trigger for that reason.
+excluded from the post-write sync trigger for that reason. The one exception is
+live polling, below, which has a consent of its own.
+
+### Live polling
+
+The passive sources only produce a reading while the harness runs: the status
+line inside a terminal Claude Code session, a rollout while Codex works. On a
+machine where the operator mostly works in other front-ends, readings go hours
+stale. **Live polling** asks each bound provider for the account's current
+usage instead, the same way Claude Code's `/usage` and Codex's `/status` do.
+
+- **Its own consent, off by default.** `telemetry.livePolling` in
+  `config.json`, absent (read as `false`) until the operator opts in with
+  `staple budget live on --yes` (without `--yes` it prints what would be asked
+  and exits 2), `staple budget setup --live --yes` (one more planned step that
+  `unsetup` reverses), or the web Settings' *Live checks* toggle, which says the
+  same before it is pressed. Capture must be on as well. With either off, no
+  sign-in is read and no request is made. `staple budget live off` needs no
+  `--yes` and removes the key.
+- **When.** `staple budget collect` (what the 5-minute launch agent runs, so no
+  second agent) runs the passive scan and then one poll, and the Usage page's
+  Refresh runs the same (`POST /api/budget/collection/refresh`). A bound home is
+  asked at most once per 4 minutes from the schedule and once a minute from
+  Refresh, never before a 429's `Retry-After` has passed, with a 10-second
+  timeout and no redirects. One run at a time (`telemetry/poll.lock`; a second
+  run answers `busy`). What was last asked and how it went is kept per binding
+  in `telemetry/usage-poll.json`, and each run that asked anybody appends one
+  line to `logs/budget-collect.log` (per binding: outcome, readings stored,
+  a failure's code).
+- **What is asked, and with what.** One poller per provider
+  (`src/core/telemetry/polling/`), behind one interface (`id`,
+  `isAvailable(binding)`, `poll(binding) → readings | plain failure`) and a
+  registry; adding a provider is one module and one line. Claude
+  (`claude_code_statusline` bindings, provider `anthropic`): the OAuth usage
+  endpoint above, with the access token Claude Code keeps for that config
+  directory, read in Claude Code's own order: the keychain item in the current
+  keychain search list (service `Claude Code-credentials`; for a non-default
+  directory `Claude Code-credentials-<first 8 hex of sha256(directory)>`, never
+  the default login), then `<config dir>/.credentials.json`. A keychain is never
+  named by path, so a sandbox with its own HOME never reads the user's login. Codex (`codex_rollout` bindings, provider
+  `openai`): the usage endpoint above, with `<codex home>/auth.json`.
+- **Readings like every other.** Each window becomes a reading under the limit
+  key the passive source uses (`five_hour`, `seven_day`; `codex.primary`,
+  `codex.secondary`), with the documented or observed window length and
+  `source.kind: "usage_poll"`, `observedAtSource: "capture"` (the answer
+  carries no timestamp of its own, so `observedAt` is this machine's clock when
+  it arrived), confidence
+  `medium` (undocumented endpoints), stored through the same store method as
+  every source, so Usage, forecasts and pressure read them unchanged. A window
+  with nothing running (Claude: no `resets_at`; Codex: not started) stores
+  nothing, like a passive source with no window, and the page says the
+  allowance is full rather than unknown. The provider's readings govern the
+  window they are in ([Window identity](#window-identity)).
+- **Honest failure.** A failed poll stores nothing, keeps its plain reason
+  (`signed_out`, `expired`, `unsupported_login`, `rejected`, `rate_limited`,
+  `timeout`, `network`, `provider_error`, `unexpected_response`, each with a
+  sentence such as "Sign in to Claude Code again"), and the Usage page shows it
+  above that account's cards, so an old figure never appears without its
+  reason. An expired sign-in is reported and never refreshed: the provider's
+  own tool renews it the next time it runs. `staple budget status` lists a
+  failure as a `poll_failed` problem.
+- **Credentials.** Read at call time into memory, sent only to that provider's
+  usage host, never logged, printed, stored, returned, synced or written back.
+  A failure carries only the poller's own sentence, never a response body or
+  an error message that could echo the token. The keychain is read through
+  `/usr/bin/security`, the tool Claude Code itself uses, so a scheduled run in
+  the user's launchd session reads it without a prompt.
 
 ## Missingness
 
@@ -1415,10 +1528,13 @@ samples, "no change" still does not mean the provider measured again (see
 
 ## Privacy
 
-- **Credentials are never read.** Ingestion does not open `~/.claude/.credentials.json`,
-  the macOS keychain, `~/.codex/auth.json` or any file or endpoint that needs
-  them. No OAuth token, API key, cookie or session secret is stored, logged or
-  echoed, in whole or in part. This matches [sync.md's redaction
+- **Credentials are read only by live polling, and only after its consent.**
+  Ingestion does not open `~/.claude/.credentials.json`, the macOS keychain,
+  `~/.codex/auth.json` or any file or endpoint that needs them. With
+  [live polling](#live-polling) on, a poller reads its provider's sign-in at
+  call time and sends it to that provider's usage host and nowhere else. No
+  OAuth token, API key, cookie or session secret is stored, logged or echoed,
+  in whole or in part, by either. This matches [sync.md's redaction
   rule](sync.md#trust-boundaries).
 - **Inputs are parsed for their rate-limit fields and the rest is discarded.**
   The status-line JSON also carries `cwd`, `transcript_path`, repository

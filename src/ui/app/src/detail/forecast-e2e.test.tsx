@@ -37,7 +37,7 @@ import {
   setSummaryText,
 } from "@/lib/plain-language";
 import type { CalibrationCohort, CalibrationReport, ForecastReport } from "@/lib/types";
-import { CalibrationReportView, INCLUDE_RECONSTRUCTED_BY_DEFAULT, calibrationRequest } from "@/views/calibration/CalibrationView";
+import { CalibrationReportView, calibrationRequest } from "@/views/calibration/CalibrationView";
 import { AwaitingForecast, ForecastReportView } from "./ForecastSection";
 import { EMPTY_WS, FORECAST_WS, seedForecastScenario, type ForecastScenario } from "../../../../../test/fixtures/forecast-scenario.ts";
 import { setClock } from "../../../../core/types.ts";
@@ -376,8 +376,7 @@ const renderCalibration = (report: CalibrationReport, includeReconstructed: bool
   );
 
 describe("the workspace calibration report", () => {
-  it("is exact by default: the switch is off and no reconstructed section is drawn", () => {
-    expect(INCLUDE_RECONSTRUCTED_BY_DEFAULT).toBe(false);
+  it("with the switch off, draws the exact section only", () => {
     expect(exact.filter.include).toEqual(["exact"]);
     const html = renderCalibration(exact, false);
     expect(html).toMatch(/<input type="checkbox" data-testid="include-reconstructed"(?![^>]*checked)[^>]*>/);

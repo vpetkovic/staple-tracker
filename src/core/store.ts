@@ -5853,7 +5853,7 @@ export class WorkspaceStore {
     const view = readBudget(home, { account: query.account, now: asOf });
     const accounts: BudgetAccountInput[] = view.accounts.map((account) => {
       const currentWindows = account.limits.filter((limit) => limit.status === "current" && limit.window !== null).map((limit) => limit.window!.id);
-      const readings = windowReadings(home, currentWindows);
+      const readings = windowReadings(home, currentWindows, asOf);
       const attemptRows = this.db
         .prepare(
           `SELECT id, issue_id FROM attempts
