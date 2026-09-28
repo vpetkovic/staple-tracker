@@ -346,10 +346,24 @@ function sayBudget(view: BudgetView): void {
   }
 }
 
+/** How a reading arrived, in the words the page uses. */
+function sourceWord(kind: string): string {
+  return ({ claude_code_statusline: "status line", codex_rollout: "Codex rollout", operator_manual: "typed", usage_poll: "live check" } as Record<string, string>)[kind] ?? kind;
+}
+
 function sayHistory(page: TelemetryPage<HistorySample>): void {
   if (page.items.length === 0) console.log("no readings");
   for (const s of page.items) {
-    console.log(`${s.observedAt}  ${s.limitKey.padEnd(22)} ${String(s.usedPercent).padStart(5)}% used${s.heartbeat ? "  (heartbeat)" : ""}${s.regression ? "  (regression)" : ""}`);
+    const byId = new Map(page.items.map((item) => [item.id, item]));
+    const overruled = s.contradictedBy === null ? undefined : byId.get(s.contradictedBy);
+    const counting = s.counted
+      ? ""
+      : s.contradictedBy !== null
+        ? `  (not counted: a later live check read ${overruled?.usedPercent === undefined || overruled.usedPercent === null ? "lower" : `${overruled.usedPercent}%`}${overruled ? ` at ${overruled.observedAt}` : ""})`
+        : "  (not counted yet: above the latest live check, until the next one confirms it)";
+    console.log(
+      `${s.observedAt}  ${s.limitKey.padEnd(22)} ${String(s.usedPercent).padStart(5)}% used  ${sourceWord(s.source.kind)}${s.heartbeat ? "  (heartbeat)" : ""}${s.regression ? "  (regression)" : ""}${counting}`,
+    );
   }
   for (const gap of page.coverage.gaps) console.log(`  gap ${gap.from} -> ${gap.to} (${gap.reason})`);
   if (page.truncated) console.log(`more: --cursor ${page.nextCursor}`);

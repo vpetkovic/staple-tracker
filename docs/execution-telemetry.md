@@ -704,23 +704,38 @@ Otherwise:
   the old one's `supersededBy`, with reason `reset_moved`. Staple does not decide
   which reading was right. It keeps both.
 - **While a window holds authoritative readings** (`usage_poll`: the
-  provider's own account-wide figure, asked for at `observedAt`), the provider
-  governs it:
-  - A **passive** reading (status line, rollout, typed) counts toward the
-    window's high-water mark, its pace and its burn only once a poll taken
-    after it confirms it (is no more than one point below it), or, taken after
-    the latest poll, while it is no more than one point above that poll. A
-    status line re-rendering an old cache after a reset, or a rollout line the
-    provider has since contradicted, is kept exactly as stored (history lists
-    it) and simply does not count. A window with no poll counts every reading,
-    as before. One point absorbs the rounding between sources.
+  provider's own account-wide figure), the provider governs it. Which readings
+  COUNT toward the window's high-water mark, pace and burn:
+  - A **passive** reading (status line, rollout, typed) that a later poll
+    **confirms** (reads no more than one point below it) counts.
+  - One that later polls all **contradict** does not: a status line
+    re-rendering an old cache after a reset, a rollout line the provider has
+    since overruled. A reading from before the window's **first** poll needs
+    two contradicting polls, so one outlier first answer (a 0 during a provider
+    hiccup) cannot hide what the status line had been saying.
+  - One taken **after the latest poll and above it** is **held back** while
+    live polling is on and that poll is fresh (at most `POLL_FRESH_SECONDS`,
+    600 s, twice the 5-minute schedule, before the read); the next poll
+    confirms or contradicts it. With live polling off, or the latest poll
+    older than that (every poll failing, the agent unloaded), it counts at
+    once, as it would with no poll at all, so a stopped poller never hides
+    real usage.
+  - A window with no poll counts every reading, as before. Every reading stays
+    exactly as stored. `staple budget history` (and `list_budget_samples`)
+    marks each with `counted` and, when a poll overruled it, `contradictedBy`
+    (that poll's id); `regression` is derived among counted readings only, and
+    the human listing says *not counted* in plain words.
+  - **The trade-off:** while polls arrive, genuine fast growth that only the
+    status line has seen shows up one poll late (up to 5 minutes), because the
+    provider's figure is the one trusted while it is fresh. That is the price
+    of never letting a stale cache raise the figure.
   - A poll **closes the window** (`usage_reset`: the provider reset or refunded
     usage without moving `resetsAt`) only when it AND the window's previous
-    poll are both more than one point below the counted high-water mark. One
-    outlier answer (a transient 0, two backends a couple of points apart)
-    never closes a window. The reading opens the successor instance, which
-    the closed one's `supersededBy` points at. A reset that moves `resetsAt`
-    is `reset_moved`, above.
+    poll are both more than one point below the counted high-water mark,
+    judged with the new poll counted. One outlier answer (a transient 0, two
+    backends a couple of points apart) never closes a window. The reading
+    opens the successor instance, which the closed one's `supersededBy` points
+    at. A reset that moves `resetsAt` is `reset_moved`, above.
   - A reading **taken before** the poll that opened a `usage_reset` successor
     (a rollout scanned late, a status line observed before the reset) goes to
     the closed instance, never to the successor.

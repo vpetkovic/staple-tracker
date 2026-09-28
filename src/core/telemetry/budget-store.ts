@@ -32,6 +32,30 @@ export const HEARTBEAT_SECONDS = 300;
  * not rounding.
  */
 export const USAGE_RESET_TOLERANCE_PERCENT = 1;
+/**
+ * How long the latest authoritative reading (a live poll) keeps holding back a passive
+ * reading above it: twice the 5-minute schedule, so one late or failed poll does not lift
+ * it, and a stopped poller (live polling off, every poll failing, the agent unloaded) lifts
+ * it within ten minutes instead of hiding real usage until the window resets.
+ */
+export const POLL_FRESH_SECONDS = 600;
+
+/**
+ * What a read knows about live polling right now, which decides whether a passive reading
+ * above the latest poll is held back ({@link BudgetStore}): only while polling is on and the
+ * latest poll is fresh at `now`. With none given (the default), polling is taken as off.
+ */
+export interface PollGovernance {
+  readonly livePolling: boolean;
+  readonly now: string;
+}
+
+/** Whether a sample counts, and if not, why: a later poll that contradicted it, or none yet (held back). */
+export interface SampleCounting {
+  readonly counted: boolean;
+  /** The id of the authoritative reading that contradicted it; null when it counts or is only held back. */
+  readonly contradictedBy: string | null;
+}
 
 export type BudgetUnit = "percent_of_limit" | "tokens" | "usd" | "requests";
 export type Confidence = "high" | "medium" | "low";
@@ -330,7 +354,10 @@ export function normalizePercent(usedPercent: number): { remainingPercent: numbe
 }
 
 export class BudgetStore {
-  constructor(readonly db: DatabaseSync) {}
+  constructor(
+    readonly db: DatabaseSync,
+    private readonly governance: PollGovernance = { livePolling: false, now: new Date().toISOString() },
+  ) {}
 
   /**
    * Store one reading, or say why not. In one transaction: find the window instance the
@@ -468,7 +495,12 @@ export class BudgetStore {
    */
   private isUsageReset(windowId: string, reading: BudgetReading): boolean {
     if (!AUTHORITATIVE_SOURCE_KINDS.has(reading.source.kind)) return false;
-    const before = this.countedSamples(windowId, reading.observedAt).filter((sample) => sample.observedAt < reading.observedAt);
+    // As of this reading, with polling on (a poll is arriving) and this reading counted among
+    // the polls, so the decision sees what the window will be once it is stored.
+    const incoming = { id: "\u0000incoming", observedAt: reading.observedAt, usedPercent: reading.usedPercent, source: reading.source } as unknown as BudgetSample;
+    const before = this.countedSamples(windowId, reading.observedAt, { livePolling: true, now: reading.observedAt }, incoming).filter(
+      (sample) => sample.observedAt < reading.observedAt,
+    );
     const known = before.flatMap((sample) => (sample.usedPercent === null ? [] : [sample.usedPercent]));
     if (known.length === 0) return false;
     const floor = Math.max(...known) - USAGE_RESET_TOLERANCE_PERCENT;
@@ -498,27 +530,59 @@ export class BudgetStore {
   }
 
   /**
-   * The samples of a window that COUNT, by `observedAt` (up to `upTo` when given). While a
-   * window holds authoritative readings (live polling), the provider's own figure governs:
-   * a passive reading (status line, rollout, typed) counts only once an authoritative
-   * reading taken after it confirms it (is no more than {@link USAGE_RESET_TOLERANCE_PERCENT}
-   * below it), or, taken after the latest authoritative reading, while it is no more than
-   * that above it. An older status-line cache re-rendered after a reset, or a rollout line
-   * the provider has since contradicted, is kept as stored and read as not counting: it can
-   * neither raise the high-water mark nor feed a pace. A window with no authoritative
-   * reading counts every sample, as before live polling.
+   * Which samples of a window COUNT, by `observedAt` (up to `upTo` when given). While a
+   * window holds authoritative readings (live polling), the provider's own figure governs
+   * (docs/execution-telemetry.md, "Window identity"):
+   *
+   *   - A passive reading (status line, rollout, typed) a later poll CONFIRMS (reads no more
+   *     than {@link USAGE_RESET_TOLERANCE_PERCENT} below it) counts.
+   *   - One later polls all CONTRADICT does not count: an older cache re-rendered after a
+   *     reset, a rollout line the provider has since overruled. A reading from before the
+   *     window's first poll needs two contradicting polls, as closing a window does, so one
+   *     outlier first answer cannot hide what the status line had been saying.
+   *   - One taken after the latest poll and above it is HELD BACK while live polling is on
+   *     and that poll is fresh ({@link POLL_FRESH_SECONDS}); the next poll confirms or
+   *     contradicts it. Otherwise (polling off, failing, stopped) it counts, as before.
+   *
+   * Every sample stays exactly as stored; a window with no authoritative reading counts
+   * every sample.
    */
-  private countedSamples(windowId: string, upTo?: string): BudgetSample[] {
-    const all = this.listSamples({ windowId }).filter((sample) => upTo === undefined || sample.observedAt <= upTo);
+  counting(windowId: string, upTo?: string, governance: PollGovernance = this.governance, incoming?: BudgetSample): Map<string, SampleCounting> {
+    const stored = this.listSamples({ windowId }).filter((sample) => upTo === undefined || sample.observedAt <= upTo);
+    const all = incoming === undefined ? stored : [...stored, incoming];
     const polls = all.filter((sample) => AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) && sample.usedPercent !== null);
-    if (polls.length === 0) return all;
-    const latest = polls[polls.length - 1]!;
-    return all.filter((sample) => {
-      if (AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) || sample.usedPercent === null) return true;
+    const verdicts = new Map<string, SampleCounting>();
+    const counts: SampleCounting = { counted: true, contradictedBy: null };
+    const latest = polls[polls.length - 1];
+    const first = polls[0];
+    for (const sample of all) {
+      if (latest === undefined || first === undefined || AUTHORITATIVE_SOURCE_KINDS.has(sample.source.kind) || sample.usedPercent === null) {
+        verdicts.set(sample.id, counts);
+        continue;
+      }
+      const floor = sample.usedPercent - USAGE_RESET_TOLERANCE_PERCENT;
       const later = polls.filter((poll) => poll.observedAt > sample.observedAt);
-      if (later.length === 0) return sample.usedPercent <= latest.usedPercent! + USAGE_RESET_TOLERANCE_PERCENT;
-      return Math.max(...later.map((poll) => poll.usedPercent!)) >= sample.usedPercent - USAGE_RESET_TOLERANCE_PERCENT;
-    });
+      if (later.length === 0) {
+        const fresh = governance.livePolling && Date.parse(governance.now) - Date.parse(latest.observedAt) <= POLL_FRESH_SECONDS * 1000;
+        const above = sample.usedPercent > latest.usedPercent! + USAGE_RESET_TOLERANCE_PERCENT;
+        verdicts.set(sample.id, above && fresh ? { counted: false, contradictedBy: null } : counts);
+        continue;
+      }
+      if (later.some((poll) => poll.usedPercent! >= floor)) {
+        verdicts.set(sample.id, counts);
+        continue;
+      }
+      const needed = sample.observedAt < first.observedAt ? 2 : 1;
+      verdicts.set(sample.id, later.length >= needed ? { counted: false, contradictedBy: later[needed - 1]!.id } : counts);
+    }
+    return verdicts;
+  }
+
+  private countedSamples(windowId: string, upTo?: string, governance: PollGovernance = this.governance, incoming?: BudgetSample): BudgetSample[] {
+    const verdicts = this.counting(windowId, upTo, governance, incoming);
+    return this.listSamples({ windowId })
+      .filter((sample) => upTo === undefined || sample.observedAt <= upTo)
+      .filter((sample) => verdicts.get(sample.id)?.counted !== false);
   }
 
   /**
@@ -709,17 +773,6 @@ export class BudgetStore {
     return rows.map(toSample);
   }
 
-  /** The highest `usedPercent` in a sample's window before it, by `(observedAt, id)`; null when none. */
-  highWaterBefore(sample: BudgetSample): number | null {
-    if (sample.windowId === null) return null;
-    const row = this.db
-      .prepare(
-        `SELECT MAX(used_percent) AS high FROM budget_samples
-          WHERE window_id = ? AND (observed_at < ? OR (observed_at = ? AND id < ?))`,
-      )
-      .get(sample.windowId, sample.observedAt, sample.observedAt, sample.id) as { high: number | null };
-    return row.high;
-  }
 
   /** Whether the account holds any sample observed before `instant` (any at all when null). */
   hasSampleBefore(accountRef: string, instant: string | null): boolean {

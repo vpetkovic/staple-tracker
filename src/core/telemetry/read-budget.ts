@@ -20,8 +20,17 @@ import type { AttemptTransition } from "./attempt-records.js";
 import type { AttemptView } from "./attempt-derive.js";
 import { PRESSURE_RULE, limitPressure, type LimitPressure, type PressureRule } from "./budget-pressure.js";
 import { PROVISIONAL_RESERVE_NOTE, parseReserve, type ReserveSource } from "./forecast-budget.js";
-import { BudgetStore, WINDOW_TOLERANCE_SECONDS, type BudgetSample, type LimitWindow, type Missing, type WindowSampleView } from "./budget-store.js";
-import { isKnownBinding, type TelemetryConfig } from "./config.js";
+import {
+  BudgetStore,
+  WINDOW_TOLERANCE_SECONDS,
+  type BudgetSample,
+  type LimitWindow,
+  type Missing,
+  type PollGovernance,
+  type SampleCounting,
+  type WindowSampleView,
+} from "./budget-store.js";
+import { isKnownBinding, livePollingOn, type TelemetryConfig } from "./config.js";
 import { assertAccountRef, normalizeInstant, parseRelativeSeconds } from "./formats.js";
 import {
   GAP_SECONDS,
@@ -82,6 +91,11 @@ function withHub<T>(home: string, fn: (hub: DatabaseSync | null) => T): T {
 
 function telemetryOf(home: string): TelemetryConfig {
   return readConfig(home).config.telemetry;
+}
+
+/** Live polling as it stands for a read at `now`: on only with capture on too (`BudgetStore`'s hold-back). */
+function governanceOf(telemetry: TelemetryConfig, now: string): PollGovernance {
+  return { livePolling: telemetry.budgetCapture && livePollingOn(telemetry), now };
 }
 
 interface AccountKey {
@@ -283,7 +297,7 @@ export function readBudget(home: string, query: { account?: string; now?: string
       if (accounts.length === 0) accounts = [{ provider: null, accountRef: account }];
     }
     accounts.sort((a, b) => (a.accountRef === b.accountRef ? ((a.provider ?? "") < (b.provider ?? "") ? -1 : 1) : a.accountRef < b.accountRef ? -1 : 1));
-    const store = hub === null ? null : new BudgetStore(hub);
+    const store = hub === null ? null : new BudgetStore(hub, governanceOf(telemetry, now));
     return {
       asOf: now,
       budgetCapture: telemetry.budgetCapture,
@@ -318,8 +332,13 @@ export function readBudget(home: string, query: { account?: string; now?: string
 
 // ------------------------------------------------------------ list_budget_samples
 
-/** A sample in a history page: `regression` is derived within its window, never stored. */
-export type HistorySample = QualifiedSample & { readonly regression: boolean };
+/**
+ * A sample in a history page. `counted` and `contradictedBy` say whether it counts toward its
+ * window (`BudgetStore.counting`: a passive reading a later live poll contradicted, or one
+ * held back above a fresh poll, does not); `regression` is derived among the counted readings
+ * of its window. All derived, never stored.
+ */
+export type HistorySample = QualifiedSample & SampleCounting & { readonly regression: boolean };
 
 /** `--since`: an ISO instant, or a duration in the existing vocabulary meaning "that long ago". */
 export function parseSince(raw: string | undefined, now: string, name = "--since"): string | null {
@@ -360,12 +379,24 @@ export function listBudgetSamples(
   const since = position === null ? resolved : null;
   const telemetry = telemetryOf(home);
   return withHub(home, (hub) => {
-    const store = hub === null ? null : new BudgetStore(hub);
+    const store = hub === null ? null : new BudgetStore(hub, governanceOf(telemetry, now));
     const rows = store === null ? [] : store.samplesAfter({ accountRef: account, since, after: position, limit: limit + 1 });
     const page = cutPage(rows, limit, "budget_samples", scope, sampleKey);
-    const items = page.items.map((sample) => {
-      const high = store === null || sample.usedPercent === null ? null : store.highWaterBefore(sample);
-      return { ...qualifySample(sample), regression: high !== null && sample.usedPercent! < high };
+    const windows = new Map<string, { counting: Map<string, SampleCounting>; counted: WindowSampleView[] }>();
+    const windowOf = (windowId: string) => {
+      let found = windows.get(windowId);
+      if (found === undefined) {
+        found = { counting: store!.counting(windowId), counted: store!.samplesInWindow(windowId) };
+        windows.set(windowId, found);
+      }
+      return found;
+    };
+    const items = page.items.map((sample): HistorySample => {
+      if (store === null || sample.windowId === null) return { ...qualifySample(sample), counted: true, contradictedBy: null, regression: false };
+      const window = windowOf(sample.windowId);
+      const counting = window.counting.get(sample.id) ?? { counted: true, contradictedBy: null };
+      const regression = counting.counted && window.counted.find((counted) => counted.id === sample.id)?.regression === true;
+      return { ...qualifySample(sample), counted: counting.counted, contradictedBy: counting.contradictedBy, regression };
     });
     const from = position?.at ?? since ?? items[0]?.observedAt ?? null;
     const to = page.truncated ? items[items.length - 1]!.observedAt : from === null ? null : now;
@@ -600,7 +631,7 @@ export function attemptBurn(
   const telemetry = telemetryOf(home);
   return qualifyBurn(withHub(home, (hub): Omit<AttemptBurn, "quality"> => {
     if (hub === null) return empty(absentReason(telemetry, binding.accountRef));
-    const store = new BudgetStore(hub);
+    const store = new BudgetStore(hub, governanceOf(telemetry, now));
     const windows = store
       .listWindows({ accountRef: binding.accountRef }, now)
       .filter((window) => binding.provider === null || window.provider === binding.provider);
@@ -726,7 +757,7 @@ export interface WindowReading {
 export function windowReadings(home: string, windowIds: readonly string[]): Map<string, WindowReading[]> {
   return withHub(home, (hub) => {
     const out = new Map<string, WindowReading[]>();
-    const store = hub === null ? null : new BudgetStore(hub);
+    const store = hub === null ? null : new BudgetStore(hub, governanceOf(telemetryOf(home), nowIso()));
     for (const windowId of windowIds) {
       const samples = store === null ? [] : store.samplesInWindow(windowId);
       out.set(

@@ -12,15 +12,16 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
-import { BudgetStore, type BudgetReading } from "../src/core/telemetry/budget-store.js";
+import { BudgetStore, POLL_FRESH_SECONDS, type BudgetReading, type PollGovernance } from "../src/core/telemetry/budget-store.js";
 import { bindBudgetSource, setBudgetCapture, setLivePolling, budgetConfig } from "../src/core/telemetry/budget-config.js";
-import { readBudget } from "../src/core/telemetry/read-budget.js";
+import { listBudgetSamples, readBudget } from "../src/core/telemetry/read-budget.js";
 import { CLAUDE_OAUTH_BETA, CLAUDE_USAGE_URL, claudeKeychainServices, claudePoller, parseClaudeUsage } from "../src/core/telemetry/polling/claude.js";
 import { CODEX_USAGE_URL, codexPoller, parseCodexUsage } from "../src/core/telemetry/polling/codex.js";
 import { USAGE_POLLERS, createSystemSecrets } from "../src/core/telemetry/polling/registry.js";
 import { MANUAL_MIN_SECONDS, SCHEDULED_MIN_SECONDS, pollStatePath, runUsagePollers, usagePollingStatus, type PollDeps } from "../src/core/telemetry/polling/run.js";
 import type { PollContext, SecretReader, UsagePoller } from "../src/core/telemetry/polling/types.js";
-import { removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { spawnSync } from "node:child_process";
+import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
 
 // ------------------------------------------------------------------ fixtures
 
@@ -595,17 +596,21 @@ describe("an authoritative reading can correct the window", () => {
     missing: {},
   });
 
-  function withStore<T>(fn: (store: BudgetStore) => T): T {
+  function withStore<T>(fn: (store: BudgetStore) => T, governance?: PollGovernance): T {
     const hub = Hub.openAt(home);
     try {
-      return fn(new BudgetStore(hub.db));
+      return fn(new BudgetStore(hub.db, governance));
     } finally {
       hub.close();
     }
   }
 
-  /** Record each step in the given order; answer the windows and the current window's high-water after each. */
-  function replay(steps: Array<[number, Kind, number, string?]>): Array<{ windows: number; resets: number; high: number | null }> {
+  /**
+   * Record each step in the given order; answer the windows and the current window's
+   * high-water after each, read as the page reads it at that instant. `livePolling` is
+   * whether live polling is on for those reads (default: on, polls arriving).
+   */
+  function replay(steps: Array<[number, Kind, number, string?]>, livePolling = true): Array<{ windows: number; resets: number; high: number | null }> {
     return steps.map(([seconds, kind, used, session]) =>
       withStore((store) => {
         const r = reading(used, at(seconds), kind, session ?? null);
@@ -617,22 +622,32 @@ describe("an authoritative reading can correct the window", () => {
           resets: windows.filter((w) => w.supersededReason === "usage_reset").length,
           high: current === undefined ? null : store.windowHighWater(current.id)!.highWaterPercent,
         };
-      }),
+      }, { livePolling, now: at(seconds) }),
     );
   }
 
-  it("VP's case: an old 35% status line, then polls at 2%: one window, 98% left at the first poll, and it stays so across stray re-renders", () => {
+  /** The current window's high-water, read at `seconds` with live polling on or off. */
+  const highAt = (seconds: number, livePolling: boolean): number | null =>
+    withStore((store) => {
+      const current = store.listWindows({ accountRef: "poll-claude", limitKey: "seven_day" }, at(seconds)).find((w) => w.status === "current");
+      return current === undefined ? null : store.windowHighWater(current.id)!.highWaterPercent;
+    }, { livePolling, now: at(seconds) });
+
+  it("VP's case: an old 35% status line, then polls at 2%: one window, 98% left once a second poll agrees, and it stays so across stray re-renders", () => {
     const states = replay([
       [0, "claude_code_statusline", 35],
       [86_400, "usage_poll", 2],
-      [86_700, "usage_poll", 2],
-      [86_880, "claude_code_statusline", 35],
-      [87_000, "usage_poll", 2],
-      [87_480, "claude_code_statusline", 35],
-      [87_600, "usage_poll", 2],
+      [86_710, "usage_poll", 2],
+      [86_890, "claude_code_statusline", 35],
+      [87_020, "usage_poll", 2],
+      [87_200, "claude_code_statusline", 35],
+      [87_330, "usage_poll", 2],
     ]);
     expect(states[0]).toEqual({ windows: 1, resets: 0, high: 35 });
-    expect(states.slice(1)).toEqual(Array.from({ length: 6 }, () => ({ windows: 1, resets: 0, high: 2 })));
+    // The first poll alone does not overrule what the status line had been saying (an outlier
+    // first answer must not); the second agreeing poll does.
+    expect(states[1]).toEqual({ windows: 1, resets: 0, high: 35 });
+    expect(states.slice(2)).toEqual(Array.from({ length: 5 }, () => ({ windows: 1, resets: 0, high: 2 })));
   });
 
   it("a stale status line re-rendering its old cache after a real reset closes the window once, not over and over (case A)", () => {
@@ -674,7 +689,7 @@ describe("an authoritative reading can correct the window", () => {
     expect(withStore((store) => store.listSamples({ windowId: closed!.id }).map((sample) => sample.usedPercent))).toEqual([50, 55, 10, 56]);
   });
 
-  it("a passive reading above the latest poll counts only once a later poll confirms it; genuine growth does", () => {
+  it("while polls keep arriving, a passive reading above the latest poll waits for the next poll; genuine growth is then confirmed", () => {
     const states = replay([
       [0, "usage_poll", 10],
       [120, "claude_code_statusline", 15],
@@ -682,6 +697,77 @@ describe("an authoritative reading can correct the window", () => {
     ]);
     expect(states.map((state) => state.high)).toEqual([10, 10, 15]);
   });
+
+  describe("when polls stop, real usage counts again (no hiding a rising status line)", () => {
+    const rising: Array<[number, Kind, number]> = [
+      [0, "usage_poll", 40],
+      [300, "usage_poll", 41],
+      [400, "claude_code_statusline", 45],
+      [1500, "claude_code_statusline", 49],
+      [2700, "claude_code_statusline", 57],
+      [7500, "claude_code_statusline", 89],
+    ];
+
+    it("live polling turned off: every status-line reading above the last poll counts at once", () => {
+      expect(replay(rising, false).map((state) => state.high)).toEqual([40, 41, 45, 49, 57, 89]);
+    });
+
+    it("live polling on but every poll failing (none arriving): the last poll goes stale and the status line counts", () => {
+      // Held back only while the last poll is fresh (the 45, 100 s after it); then it counts.
+      expect(replay(rising, true).map((state) => state.high)).toEqual([40, 41, 41, 49, 57, 89]);
+    });
+
+    it("the hold-back lasts exactly as long as the latest poll is fresh", () => {
+      replay([[0, "usage_poll", 40], [120, "claude_code_statusline", 55]]);
+      expect(highAt(120, true)).toBe(40);
+      expect(highAt(POLL_FRESH_SECONDS, true)).toBe(40);
+      expect(highAt(POLL_FRESH_SECONDS + 1, true)).toBe(55);
+      expect(highAt(120, false)).toBe(55);
+    });
+  });
+
+  it("an outlier FIRST poll cannot hide what the status line had been saying: a second agreeing poll is needed (N4)", () => {
+    const states = replay([
+      [0, "claude_code_statusline", 35],
+      [600, "claude_code_statusline", 35],
+      [900, "usage_poll", 0],
+      [1200, "usage_poll", 35],
+    ]);
+    expect(states.map((state) => state.high)).toEqual([35, 35, 35, 35]);
+  });
+
+  it("history marks a contradicted reading as not counted, names the poll that overruled it, and flags no regression against it (N2)", () => {
+    replay([
+      [0, "usage_poll", 40],
+      [60, "claude_code_statusline", 70],
+      [310, "usage_poll", 41],
+      [400, "claude_code_statusline", 60, "b1b2c3d4e5f60718"],
+    ]);
+    setLivePolling(home, true);
+    setBudgetCapture(home, true);
+    const page = listBudgetSamples(home, { account: "poll-claude", now: at(420) });
+    const poll41 = page.items.find((item) => item.usedPercent === 41)!;
+    expect(page.items.map((item) => [item.usedPercent, item.counted, item.contradictedBy === null ? null : item.contradictedBy === poll41.id ? "poll41" : "other", item.regression])).toEqual([
+      [40, true, null, false],
+      [70, false, "poll41", false],
+      // Before, this poll was flagged a regression against the 70 it overruled.
+      [41, true, null, false],
+      // Above a fresh poll with live polling on: held back, no poll has contradicted it yet.
+      [60, false, null, false],
+    ]);
+    const human = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, "budget", "history", "--account", "poll-claude"], {
+      cwd: REPO_ROOT,
+      env: bareEnv({ STAPLE_HOME: home, HOME: home }),
+      encoding: "utf8",
+      timeout: 30_000,
+    }).stdout;
+    const line = (percent: number) => human.split("\n").find((text) => new RegExp(`\\s${percent}% used`).test(text)) ?? "";
+    expect(line(70)).toContain(`(not counted: a later live check read 41% at ${poll41.observedAt})`);
+    // Read now, months after that poll: it is stale, so the 60% counts again (polls stopped).
+    expect(line(60)).not.toContain("not counted");
+    expect(line(41)).not.toContain("regression");
+    expect(line(41)).toContain("live check");
+  }, 30_000);
 
   it("keeps the high-water mark for a lower PASSIVE reading in a window with no poll: an older cache is not evidence of a reset", () => {
     expect(replay([[0, "claude_code_statusline", 35], [600, "claude_code_statusline", 2, "b1b2c3d4e5f60718"]]).at(-1)).toEqual({ windows: 1, resets: 0, high: 35 });
