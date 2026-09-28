@@ -9,21 +9,24 @@
  * down to the tab strip is thrown to the top of the task. A tab that is simply short does the
  * same thing more quietly: it clamps, and the strip slides down the screen.
  *
- * THE RULE, in two halves:
+ * THE RULE:
  *
- *  - The tab area always reserves the scroller's height below the strip
- *    (`tabPanelReserve`), so no tab, loading or short, can make the content too short for the
- *    strip to stay where it is. Nothing is clamped, so nothing jumps.
- *  - If the strip was stuck (scrolled to the top of the panel), the new tab starts right under
- *    it: the scroll moves to the point where the strip just sticks, not to wherever the old
- *    tab's scroll happened to be. If the strip was still in view below the top, the scroll is
- *    left exactly where it was (`scrollAfterTabSwitch` returns null).
+ *  - A strip still in view below the top is left alone: the scroll stays exactly where it was
+ *    (`scrollAfterTabSwitch` returns null).
+ *  - A strip that was stuck stays stuck, with the new tab starting right under it: the scroll
+ *    moves to the point where the strip just sticks.
+ *  - Either way, so that position survives a new tab that is loading or short, the switch
+ *    gives the panels a RESERVE: exactly the min-height that keeps that scroll position
+ *    reachable (`reserveFor`) and not a pixel more, so the reader can never scroll past where
+ *    they already were into blank space. Only a switch made while scrolled sets one; a task
+ *    nobody switched tabs on while scrolled never gets one, so a short task fits its screen
+ *    as it always did.
+ *  - The reserve only ever shrinks (`shrinkReserve`): as the reader scrolls back up, or the
+ *    screen gets shorter, it gives back the blank space under the tab, never more than the
+ *    current scroll position needs (so giving it back never jumps the page), and it goes
+ *    entirely once the tab's own content covers the scroll position, and at the latest when
+ *    the reader is back at the top. A new task starts without one.
  */
-
-/** Minimum height of the tab panels, in px: the scroller's height less the strip's own. */
-export function tabPanelReserve(scrollerHeight: number, stripHeight: number): number {
-  return Math.max(0, Math.round(scrollerHeight - stripHeight));
-}
 
 /**
  * The scrollTop to apply after a tab switch, or null to leave the scroll alone.
@@ -35,4 +38,33 @@ export function tabPanelReserve(scrollerHeight: number, stripHeight: number): nu
 export function scrollAfterTabSwitch(scrollTop: number, stickAt: number): number | null {
   // Half a pixel of slack: a strip resting exactly at the top is stuck.
   return scrollTop >= stickAt - 0.5 ? Math.max(0, stickAt) : null;
+}
+
+/** Where the panels sit in the scroller's content, and what follows them. */
+export interface PanelGeometry {
+  /** The scroller's visible height. */
+  clientHeight: number;
+  /** The panels' top, in the scroller's content coordinates. */
+  panelsTop: number;
+  /** Content below the panels: the layout's bottom padding, or a taller side rail. */
+  tail: number;
+}
+
+/**
+ * The panels' min-height, in px, that makes `scrollTop` a reachable scroll position. The top
+ * of the content is reachable whatever its height, so a scroll of 0 needs none.
+ */
+export function reserveFor(scrollTop: number, geometry: PanelGeometry): number {
+  if (scrollTop <= 0) return 0;
+  return Math.max(0, Math.round(scrollTop + geometry.clientHeight - geometry.panelsTop - geometry.tail));
+}
+
+/**
+ * After a scroll or a resize: the reserve never grows, only gives back what the scroll no
+ * longer needs, and is released (null) once the tab's own content is at least as tall.
+ */
+export function shrinkReserve(current: number | null, needed: number, natural: number): number | null {
+  if (current === null) return null;
+  const next = Math.min(current, needed);
+  return next <= natural ? null : next;
 }
