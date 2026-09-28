@@ -252,7 +252,11 @@ export function runDriveCommand(rest: string[]): void {
     const runId = existing?.id ?? "<new run>";
     const logDir = runDirectory(dbFile, runId);
     const ref = next?.ref ?? "<ref>";
-    const brief = buildBrief({ ref, title: next?.title ?? "<title>", workspace: cwd, db: dbFile, runId, actor: existing?.actor ?? actor, finish, instructions, goal: existing ? runs.goalReport(existing) : null });
+    const brief = buildBrief({ ref, title: next?.title ?? "<title>", workspace: cwd, db: dbFile, runId, actor: existing?.actor ?? actor, finish, instructions, goal: existing
+        ? runs.goalReport(existing)
+        : values.scope === undefined
+          ? null
+          : runs.previewGoal({ scope: values.scope, gateOwner: values["gate-owner"], goalChildCap: positiveInteger(values["goal-cap"], "--goal-cap") }) });
     const briefFile = `${logDir}/001-${ref}.brief.md`;
     const shown = sessionCommand(values.agent!, command, {
       ref,

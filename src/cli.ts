@@ -1154,11 +1154,54 @@ Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
             15 cursor_invalid · 16 payload_too_large · 17 schema_ahead · 18 protocol_unsupported
             19 rate_limited · 20 unavailable · 21 offline (19–21 are retryable; try again later)`;
 
+/** Commands whose own module answers `--help` / `-h` with a page of its own. */
+const OWN_HELP: ReadonlySet<string> = new Set(["attempt", "attempts", "budget", "calibrate", "cloud", "compare", "forecast", "queue", "run", "timing"]);
+
+/**
+ * `staple <command> --help` for a command with no page of its own: its entries in HELP (every
+ * line naming it, `start|checkout` style alternatives included, with their continuation
+ * lines), so the answer can never disagree with `staple help`. Null for a word HELP does not
+ * name.
+ */
+function commandHelp(command: string): string | null {
+  // `kinds` is documented as "the same verbs" as `statuses`: its page shows them.
+  const names = command === "kinds" ? ["kinds", "statuses"] : [command];
+  const picked: string[] = [];
+  let taking = false;
+  for (const line of HELP.split("\n")) {
+    const entry = /^  (\S+)/.exec(line);
+    if (entry) {
+      taking = entry[1]!.split("|").some((name) => names.includes(name));
+      if (taking) picked.push(line);
+    } else if (taking && /^ {3,}\S/.test(line)) {
+      picked.push(line);
+    } else {
+      taking = false;
+    }
+  }
+  if (picked.length === 0) return null;
+  return `staple ${command} (from staple help, which lists every command, the global flags and the exit codes)\n\n${picked.join("\n")}`;
+}
+
+/** Whether argv asks for help: `--help` or `-h` anywhere before a `--`. */
+function asksForHelp(args: readonly string[]): boolean {
+  const end = args.indexOf("--");
+  return (end === -1 ? args : args.slice(0, end)).some((arg) => arg === "--help" || arg === "-h");
+}
+
 function main() {
   const [command, ...rest] = process.argv.slice(2);
   if (command === "help" || command === "--help") {
     console.log(HELP);
     return;
+  }
+  // Before any workspace is resolved or anything runs: help answers anywhere, and never acts.
+  if (command !== undefined && !OWN_HELP.has(command) && asksForHelp(rest)) {
+    const page = commandHelp(command);
+    if (page !== null) {
+      console.log(page);
+      return;
+    }
   }
   /**
    * A bare `staple` is no longer help.

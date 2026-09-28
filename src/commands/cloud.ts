@@ -359,7 +359,7 @@ function renderStatus(status: CloudStatus, report: CloudSurfaceReport): string {
 }
 
 export function runCloudCommand(argv: string[]): void {
-  if (argv[0] === "--help" || argv[0] === "help") {
+  if (argv[0] === "--help" || argv[0] === "-h" || argv[0] === "help") {
     console.log(HELP);
     return;
   }

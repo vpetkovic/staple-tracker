@@ -827,22 +827,49 @@ export class MilestoneStore {
     );
   }
 
-  /** Whether one piece of evidence still holds: a ticket while it is done, a document while it exists. */
-  private evidenceItem(value: string): EvidenceItem {
+  /**
+   * Whether one piece of evidence holds: a ticket while it is done, a document while it
+   * exists. `markedAt` is when it was cited, for `lapsed`.
+   */
+  private evidenceItem(value: string, markedAt: string): EvidenceItem {
     const parsed = parseEvidence(value);
-    if (parsed.kind === "text") return { ...parsed, status: null, holds: true, problem: null };
+    if (parsed.kind === "text") return { ...parsed, status: null, holds: true, problem: null, lapsed: false };
     const issue = this.evidenceIssue(parsed.ref!);
-    if (issue === null) return { ...parsed, status: null, holds: false, problem: `${parsed.ref} is not an issue in this workspace` };
+    // A mark cites only what exists, so a cited issue that is gone was there and has lapsed.
+    if (issue === null) return { ...parsed, status: null, holds: false, problem: `${parsed.ref} is not an issue in this workspace`, lapsed: true };
     if (parsed.kind === "document") {
       const exists = this.db
         .prepare("SELECT 1 AS hit FROM documents WHERE issue_id = ? AND key = ?")
         .get(issue.id, parsed.document!.toLowerCase());
       return exists
-        ? { ...parsed, ref: issue.identifier, status: issue.status, holds: true, problem: null }
-        : { ...parsed, ref: issue.identifier, status: issue.status, holds: false, problem: `${issue.identifier} has no document "${parsed.document}"` };
+        ? { ...parsed, ref: issue.identifier, status: issue.status, holds: true, problem: null, lapsed: false }
+        : { ...parsed, ref: issue.identifier, status: issue.status, holds: false, problem: `${issue.identifier} has no document "${parsed.document}"`, lapsed: true };
     }
     const done = this.store.categoryOf(issue.status) === "done";
-    return { ...parsed, ref: issue.identifier, status: issue.status, holds: done, problem: done ? null : `${issue.identifier} is ${issue.status}, not done` };
+    return {
+      ...parsed,
+      ref: issue.identifier,
+      status: issue.status,
+      holds: done,
+      problem: done ? null : `${issue.identifier} is ${issue.status}, not done`,
+      lapsed: !done && this.leftDoneSince(issue.id, markedAt),
+    };
+  }
+
+  /**
+   * Whether a ticket that is not done now was done at some point since `since`: it then left
+   * done after that instant, and every status change writes a `status_changed` event naming
+   * the status it left. A change in the very millisecond of the mark, and a device without
+   * the event (history it never received), read false: the cautious "does not hold yet".
+   */
+  private leftDoneSince(issueId: string, since: string): boolean {
+    const rows = this.db
+      .prepare("SELECT payload FROM events WHERE issue_id = ? AND kind = 'status_changed' AND created_at > ?")
+      .all(issueId, since) as Array<{ payload: string }>;
+    return rows.some((row) => {
+      const from = (JSON.parse(row.payload) as { from?: unknown }).from;
+      return typeof from === "string" && this.store.categoryOf(from) === "done";
+    });
   }
 
   /**
@@ -855,7 +882,7 @@ export class MilestoneStore {
     const marks = this.marksOf(issue.id);
     const criteria = (issue.acceptanceCriteria ?? []).map((text, index) => {
       const mark = marks.get(index + 1) ?? null;
-      return judgeCriterion(index + 1, text, mark, (mark?.evidence ?? []).map((value) => this.evidenceItem(value)));
+      return judgeCriterion(index + 1, text, mark, (mark?.evidence ?? []).map((value) => this.evidenceItem(value, mark!.markedAt)));
     });
     const counts = goalCounts(criteria);
     return { criteria, counts, met: isGoalMet(counts) };

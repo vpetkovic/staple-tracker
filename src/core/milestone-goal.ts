@@ -9,8 +9,11 @@
  *
  *  - no mark is `unknown`: unknown is the default, never met;
  *  - a mark on different words is `unknown`: the criterion was reworded after it was judged;
- *  - a `met` mark whose evidence no longer holds is `unknown`: a cited ticket that is not
- *    done any more, or a cited document that is gone, no longer shows what it showed;
+ *  - a `met` mark whose evidence does not hold is `unknown`: a cited ticket that is not
+ *    done, or a cited document that is gone, does not show what the mark says. The `why`
+ *    says "no longer holds" when a piece held at some point since the mark (it `lapsed`:
+ *    a ticket done since and reopened, a document or ticket deleted) and "does not hold
+ *    yet" when none ever did (a ticket cited while still in review);
  *  - otherwise the mark stands.
  *
  * Everything here is a function of its arguments. The store reads the rows and the
@@ -59,6 +62,12 @@ export interface EvidenceItem {
   holds: boolean;
   /** Why it does not hold; null when it does. */
   problem: string | null;
+  /**
+   * It does not hold now, but did at some point since the mark: a cited ticket that was done
+   * at or after the mark and has left done, or a cited ticket or document that is gone (both
+   * had to exist to be cited). False while it holds, and for a ticket not done since the mark.
+   */
+  lapsed: boolean;
 }
 
 /** One criterion as the goal check reads it. */
@@ -121,7 +130,8 @@ export function judgeCriterion(position: number, text: string, mark: CriterionMa
   if (mark.verdict === "met") {
     const failing = evidence.filter((item) => !item.holds);
     if (failing.length > 0) {
-      return { ...base, verdict: "unknown", why: `marked met, but its evidence no longer holds: ${failing.map((item) => item.problem).join("; ")}` };
+      const state = failing.some((item) => item.lapsed) ? "no longer holds" : "does not hold yet";
+      return { ...base, verdict: "unknown", why: `marked met, but its evidence ${state}: ${failing.map((item) => item.problem).join("; ")}` };
     }
   }
   return { ...base, verdict: mark.verdict, why: null };

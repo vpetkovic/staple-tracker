@@ -415,7 +415,11 @@ staple milestone criterion <ref> <n> (--met | --unmet | --unknown) [--evidence E
 MCP `mark_milestone_criterion`, HTTP `POST /api/milestone/criterion`. An
 unmarked criterion is `unknown`; a criterion reworded after it was marked is
 `unknown` (the mark keeps the text it judged); a `met` mark whose cited ticket is
-not done, or whose cited document is gone, is `unknown` until it holds again.
+not done, or whose cited document is gone, is `unknown` until it holds again. Its `why`
+says which: "does not hold yet" when no piece has held since the mark (a ticket cited
+while still in review), "no longer holds" when one did and lapsed (a ticket done since the
+mark and reopened, a cited ticket or document deleted); each piece says so as `lapsed`.
+A ticket's lapse is read from its `status_changed` events after the mark.
 Evidence is a ticket (`ABC-12`), a document on one (`ABC-12:plan`) or text; `met`
 needs some, and a cited ticket or document must exist in this workspace. The
 position is 1-based, in the criteria's order. `--follow-up` files the work an

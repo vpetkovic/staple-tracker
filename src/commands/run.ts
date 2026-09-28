@@ -128,7 +128,9 @@ function positiveOrZero(raw: string | undefined, flag: string): number | undefin
 
 function budgetText(run: Run): string {
   const parts = [
-    run.budget.maxTickets === null ? null : `${run.counts.taken}/${run.budget.maxTickets} tickets`,
+    run.budget.maxTickets === null
+      ? null
+      : `${run.counts.tickets}/${run.budget.maxTickets} tickets${run.counts.taken > run.counts.tickets ? ` (${run.counts.taken} takes)` : ""}`,
     run.budget.until === null ? null : `until ${run.budget.until}`,
     run.budget.ceilingPercent === null ? null : `ceiling ${run.budget.ceilingPercent}%${run.budget.ceilingAccount ? ` of ${run.budget.ceilingAccount}` : ""}`,
   ].filter((part) => part !== null);

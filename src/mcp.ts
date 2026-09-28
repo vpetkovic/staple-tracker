@@ -2345,6 +2345,7 @@ const milestoneGoalShape = z
             status: z.string().nullable(),
             holds: z.boolean().describe("Text always; a ticket while done; a document while it exists"),
             problem: z.string().nullable(),
+            lapsed: z.boolean().describe("Does not hold now but did since the mark (why says no longer holds); false for evidence that never held (does not hold yet)"),
           }),
         ),
         note: z.string().nullable(),

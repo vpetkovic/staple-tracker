@@ -29,7 +29,7 @@ const run = (over: Partial<Run> = {}): Run => ({
   goal: null,
   override: null,
   tickets: [],
-  counts: { taken: 0, done: 0, failed: 0, open: 0 },
+  counts: { tickets: 0, taken: 0, done: 0, failed: 0, open: 0 },
   stop: null,
   startedAt: "2026-09-28T11:00:00.000Z",
   updatedAt: at,

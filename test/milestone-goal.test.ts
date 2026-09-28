@@ -96,8 +96,9 @@ describe("evidence and verdicts", () => {
     markedAt: NOW,
     ...over,
   });
-  const holds: EvidenceItem = { kind: "ticket", value: "TST-2", ref: "TST-2", document: null, status: "done", holds: true, problem: null };
+  const holds: EvidenceItem = { kind: "ticket", value: "TST-2", ref: "TST-2", document: null, status: "done", holds: true, problem: null, lapsed: false };
   const fails: EvidenceItem = { ...holds, status: "in_review", holds: false, problem: "TST-2 is in_review, not done" };
+  const lapsed: EvidenceItem = { ...holds, status: "todo", holds: false, problem: "TST-2 is todo, not done", lapsed: true };
 
   it("unknown unless a mark stands: unmarked, reworded, or met on evidence that no longer holds", () => {
     expect(judgeCriterion(1, "Docs written", null, [])).toMatchObject({ verdict: "unknown", marked: null, why: "not marked yet" });
@@ -106,6 +107,13 @@ describe("evidence and verdicts", () => {
     expect(judgeCriterion(1, "Docs written", mark(), [holds])).toMatchObject({ verdict: "met", why: null });
     // Unmet stands whatever its evidence says: evidence is what a met verdict rests on.
     expect(judgeCriterion(1, "Docs written", mark({ verdict: "unmet" }), [fails])).toMatchObject({ verdict: "unmet" });
+  });
+
+  it("says evidence that never held does not hold yet, and evidence that held since the mark no longer holds", () => {
+    expect(judgeCriterion(1, "Docs written", mark(), [fails]).why).toBe("marked met, but its evidence does not hold yet: TST-2 is in_review, not done");
+    expect(judgeCriterion(1, "Docs written", mark(), [lapsed]).why).toBe("marked met, but its evidence no longer holds: TST-2 is todo, not done");
+    // One piece that held and lapsed is enough to say the mark once stood.
+    expect(judgeCriterion(1, "Docs written", mark(), [fails, lapsed]).why).toMatch(/^marked met, but its evidence no longer holds: /);
   });
 
   it("a goal is met when every criterion is, and a goal with none has nothing left to show", () => {
@@ -224,6 +232,29 @@ describe("milestone criterion: judging one criterion", () => {
     // Reworded after it was judged: the verdict was about other words.
     view = store.milestones().update(m, { acceptanceCriteria: ["Docs written and linked", "Tests pass"] }, "vp");
     expect(view.goal.criteria[0]).toMatchObject({ verdict: "unknown", why: expect.stringContaining("reworded") });
+  });
+
+  it("says a cited ticket that never held does not hold yet, and one done since the mark and reopened no longer holds", () => {
+    const { m, a, b } = goalMilestone();
+    // Done and reopened BEFORE the mark: at the mark it did not hold, so it has not lapsed.
+    store.updateIssue(b, { status: "done" }, "vp");
+    store.updateIssue(b, { status: "todo" }, "vp");
+    const before = Date.now();
+    while (Date.now() === before) {
+      // The mark lands in a later millisecond than the reopen, as it would in real use.
+    }
+    let view = store.milestones().markCriterion(m, 1, { verdict: "met", evidence: [a] }, BOT);
+    view = store.milestones().markCriterion(m, 2, { verdict: "met", evidence: [b] }, BOT);
+    expect(view.goal.criteria[0]!.why).toBe(`marked met, but its evidence does not hold yet: ${a} is backlog, not done`);
+    expect(view.goal.criteria[0]!.evidence[0]).toMatchObject({ holds: false, lapsed: false });
+    expect(view.goal.criteria[1]!.why).toBe(`marked met, but its evidence does not hold yet: ${b} is todo, not done`);
+    // Done after the mark, then reopened: it held, and no longer does.
+    store.updateIssue(a, { status: "done" }, "vp");
+    expect(store.milestones().get(m).goal.criteria[0]).toMatchObject({ verdict: "met", why: null, evidence: [expect.objectContaining({ holds: true, lapsed: false })] });
+    store.updateIssue(a, { status: "todo" }, "vp");
+    view = store.milestones().get(m);
+    expect(view.goal.criteria[0]!.why).toBe(`marked met, but its evidence no longer holds: ${a} is todo, not done`);
+    expect(view.goal.criteria[0]!.evidence[0]).toMatchObject({ holds: false, lapsed: true });
   });
 
   it("cites a document by ticket:key and refuses what it cannot find", () => {

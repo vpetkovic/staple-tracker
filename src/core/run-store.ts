@@ -223,7 +223,12 @@ export interface Run {
    */
   override: string | null;
   tickets: RunTicket[];
-  counts: { taken: number; done: number; failed: number; open: number };
+  /**
+   * `tickets` is the distinct tickets taken, what `--max-tickets` counts; `taken` counts every
+   * take, so a ticket retried after a failure is one ticket and two takes. `done`, `failed`
+   * and `open` count takes by how each ended.
+   */
+  counts: { tickets: number; taken: number; done: number; failed: number; open: number };
   /** Null while the run is live. */
   stop: RunStop | null;
   startedAt: string;
@@ -739,8 +744,20 @@ export class RunStore {
     return { milestone: milestone.identifier, counts: check.counts, met: check.met, childCap: run.goal.childCap, childrenCreated: run.goal.children.length };
   }
 
+  /**
+   * The goal a run started with these options would carry, for a preview (`run drive --dry-run
+   * --scope`): the scope and the goal options are read and refused exactly as `start` reads
+   * them, and nothing is written. Null when the scope is not a milestone.
+   */
+  previewGoal(input: Pick<StartRunInput, "scope" | "gateOwner" | "goalChildCap">): RunGoalReport | null {
+    const scope = this.resolveScope(input.scope);
+    const goal = this.parseGoal(input, scope);
+    if (goal === null) return null;
+    return this.goalReport({ scope, goal: { gateOwner: goal.gateOwner, childCap: goal.childCap, children: [], gatedAt: null } });
+  }
+
   /** The goal as every answer carries it; null on a run that is not a goal run, or whose milestone is gone. */
-  goalReport(run: Run): RunGoalReport | null {
+  goalReport(run: Pick<Run, "scope" | "goal">): RunGoalReport | null {
     if (run.goal === null || run.scope.kind !== "milestone") return null;
     const row = this.db
       .prepare("SELECT identifier, title, status, gate_state, gate_owner, gate_requested_at, gate_requested_by FROM issues WHERE id = ?")
@@ -1441,7 +1458,7 @@ export class RunStore {
    * {@link DEFAULT_GATE_OWNER}, whatever the milestone's assignee) and the cap. Goal settings
    * on any other scope are refused rather than ignored.
    */
-  private parseGoal(input: StartRunInput, scope: RunScope): { gateOwner: string; childCap: number } | null {
+  private parseGoal(input: Pick<StartRunInput, "gateOwner" | "goalChildCap">, scope: RunScope): { gateOwner: string; childCap: number } | null {
     const owner = input.gateOwner?.trim() ? input.gateOwner.trim() : null;
     if (scope.kind !== "milestone") {
       if (owner !== null || input.goalChildCap !== undefined) {
@@ -1551,6 +1568,7 @@ export class RunStore {
           : { gateOwner: row.goal_gate_owner, childCap: row.goal_child_cap, children: this.childrenOf(row.id), gatedAt: row.goal_gated_at },
       tickets,
       counts: {
+        tickets: new Set(tickets.map((ticket) => ticket.issueId)).size,
         taken: tickets.length,
         done: tickets.filter((ticket) => ticket.outcome === "done").length,
         failed: tickets.filter((ticket) => ticket.outcome === "failed").length,

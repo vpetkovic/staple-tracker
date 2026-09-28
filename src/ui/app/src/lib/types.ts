@@ -1361,6 +1361,8 @@ export interface EvidenceItem {
   holds: boolean;
   /** Why it does not hold; null when it does. */
   problem: string | null;
+  /** It does not hold now but did at some point since the mark; false while it holds. */
+  lapsed: boolean;
 }
 
 export interface GoalCriterion {
@@ -2974,7 +2976,8 @@ export interface Run {
   goal: RunGoal | null;
   override: string | null;
   tickets: RunTicket[];
-  counts: { taken: number; done: number; failed: number; open: number };
+  /** `tickets` distinct tickets taken (what `--max-tickets` counts); `taken` every take, retries included. */
+  counts: { tickets: number; taken: number; done: number; failed: number; open: number };
   stop: RunStop | null;
   startedAt: string;
   updatedAt: string;

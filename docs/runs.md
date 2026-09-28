@@ -156,7 +156,10 @@ ticket, or null.
 Every answer also carries `goal`: on a goal run (a run over a milestone, see
 [Goal mode](#goal-mode)) the goal check now, else `null`.
 
-`run` is the run as `staple run status <id> --json` prints it under `run`.
+`run` is the run as `staple run status <id> --json` prints it under `run`. Its `counts`:
+`tickets` is the distinct tickets taken, the number `--max-tickets` caps; `taken` is every
+take, so a ticket retried after a failure is one ticket and two takes; `done`, `failed`
+and `open` count takes by how each ended. `run status` prints `1/5 tickets (2 takes)`.
 `continue_run` over MCP answers the same object.
 
 ### Reason codes
@@ -367,7 +370,9 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
   database the session works in.
 - **`--dry-run`** starts nothing and claims nothing: it prints the next
   ticket, the environment, the exact command (the brief as
-  `"$(cat <brief_file>)"`) and the brief.
+  `"$(cat <brief_file>)"`) and the brief. With `--scope <milestone>` the brief carries
+  the goal section the goal run's would, and `--gate-owner` and `--goal-cap` are read
+  and refused as `run start` reads them; no gate is opened.
 - **`--json`** prints one object per line: `attached`, `take`,
   `session_started`, `session_ended` (`ended`: `exited`, `timeout`, `stopped`,
   `interrupted`; `exitCode`; the stated `outcome` and `reason`, null when the

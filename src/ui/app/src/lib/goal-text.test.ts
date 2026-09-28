@@ -33,6 +33,7 @@ const ticket = (over: Partial<EvidenceItem> = {}): EvidenceItem => ({
   status: "done",
   holds: true,
   problem: null,
+  lapsed: false,
   ...over,
 });
 
@@ -58,6 +59,9 @@ describe("a criterion's verdict", () => {
     const pending = criterion({ position: 1, marked: "met", evidence: [ticket({ status: "in_review", holds: false }), ticket({ value: "x", kind: "text", ref: null })], why: "…" });
     expect(unknownCause(pending)).toBe("evidence");
     expect(unknownText(pending, (status) => (status === "in_review" ? "In review" : status))).toBe("Marked met, but its evidence does not hold yet: ABC-12 is in review, not done.");
+    // Core's "no longer holds" when a piece held since the mark and has lapsed.
+    const reopened = criterion({ position: 1, marked: "met", evidence: [ticket({ status: "todo", holds: false, lapsed: true })], why: "…" });
+    expect(unknownText(reopened)).toBe("Marked met, but its evidence no longer holds: ABC-12 is todo, not done.");
     const judged = criterion({ position: 1, marked: "unknown", why: null });
     expect(unknownCause(judged)).toBe("judged");
     expect(unknownText(judged)).toBe("Judged unknown: the evidence so far does not settle it.");

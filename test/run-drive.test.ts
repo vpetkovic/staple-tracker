@@ -576,6 +576,29 @@ describe("run drive options", () => {
     expect((await showIssue(dir, refs[0]!)).checkoutAgent).toBeNull();
   }, 60_000);
 
+  it("--dry-run --scope <milestone> shows the goal section the goal run's brief would carry, and opens no gate", async () => {
+    const { dir, refs } = await workspace(["member"]);
+    expect((await cli(dir, ["kinds", "add", "milestone", "--json"], "vp")).status).toBe(0);
+    const made = await cli(dir, ["milestone", "new", "Goal", "--criteria", "Docs written;Tests pass", "--json"], "vp");
+    expect(made.status, made.stderr).toBe(0);
+    const milestone = String((JSON.parse(made.stdout) as { milestone: { identifier: string } }).milestone.identifier);
+    expect((await cli(dir, ["milestone", "add", milestone, refs[0]!, "--json"], "vp")).status).toBe(0);
+    const dry = await cli(dir, ["run", "drive", "--scope", milestone, "--agent", "codex", "--goal-cap", "2", "--dry-run", "--json"]);
+    expect(dry.status, dry.stderr).toBe(0);
+    const shown = JSON.parse(dry.stdout) as Record<string, any>;
+    expect(shown).toMatchObject({ dryRun: true, next: { ref: refs[0] } });
+    expect(shown.brief).toContain(`## The goal: milestone ${milestone} "Goal"`);
+    expect(shown.brief).toContain("1. [unknown] Docs written");
+    expect(shown.brief).toContain(`staple milestone criterion ${milestone} <n> --met`);
+    // A preview: no run, no gate, nothing claimed.
+    expect(JSON.parse((await cli(dir, ["run", "status", "--all", "--json"])).stdout)).toEqual({ runs: [] });
+    expect((JSON.parse((await cli(dir, ["show", milestone, "--json"])).stdout) as { gate: unknown }).gate).toBeNull();
+    expect((await showIssue(dir, refs[0]!)).checkoutAgent).toBeNull();
+    // Goal options are read as run start reads them: refused on a scope that is not a milestone.
+    const epicless = await cli(dir, ["run", "drive", "--scope", "queue", "--agent", "codex", "--gate-owner", "alice", "--dry-run", "--json"]);
+    expect(epicless.status).toBe(2);
+  }, 90_000);
+
   it("refuses an unknown agent, a custom agent without a template, --run with --scope, a zero poll and a zero retry, before starting a run", async () => {
     const { dir } = await workspace(["x"]);
     const unknown = await cli(dir, ["run", "drive", "--scope", "queue", "--agent", "nope", "--json"]);

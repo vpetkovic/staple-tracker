@@ -71,7 +71,9 @@ export function unknownText(criterion: GoalCriterion, statusWord?: (status: stri
     }
     case "evidence": {
       const problems = criterion.evidence.map((item) => evidenceProblemText(item, statusWord)).filter((text): text is string => text !== null);
-      return `Marked met, but its evidence does not hold yet: ${problems.join("; ")}.`;
+      // As core's `why`: "no longer" once a piece held since the mark, "yet" when none ever did.
+      const state = criterion.evidence.some((item) => !item.holds && item.lapsed) ? "no longer holds" : "does not hold yet";
+      return `Marked met, but its evidence ${state}: ${problems.join("; ")}.`;
     }
     case "judged":
       return "Judged unknown: the evidence so far does not settle it.";

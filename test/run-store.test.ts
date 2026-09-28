@@ -129,7 +129,7 @@ describe("run start", () => {
       state: "active",
       budget: { maxTickets: 3, until: "2026-09-28T12:00:00.000Z", ceilingPercent: 90, ceilingAccount: "acct" },
       tickets: [],
-      counts: { taken: 0, done: 0, failed: 0, open: 0 },
+      counts: { tickets: 0, taken: 0, done: 0, failed: 0, open: 0 },
       stop: null,
       endedAt: null,
     });
@@ -227,7 +227,7 @@ describe("tickets", () => {
     const run = runs.start({ actor: BOT, scope: epic });
     runs.recordTicketTaken(run.id, a);
     // Taking the open ticket again is a replay.
-    expect(runs.recordTicketTaken(run.id, a).counts).toEqual({ taken: 1, done: 0, failed: 0, open: 1 });
+    expect(runs.recordTicketTaken(run.id, a).counts).toEqual({ tickets: 1, taken: 1, done: 0, failed: 0, open: 1 });
     const after = runs.recordTicketOutcome(run.id, a, "failed", "tests red");
     expect(after.tickets).toEqual([expect.objectContaining({ seq: 1, identifier: a, outcome: "failed", reason: "tests red", attemptId: null })]);
     expect(events("run_ticket_taken")).toHaveLength(1);
@@ -349,7 +349,7 @@ describe("run continue", () => {
     cont();
     const again = cont();
     expect(again).toMatchObject({ action: "take", ref: a, resumed: true, recorded: null });
-    expect(again.run!.counts).toEqual({ taken: 1, done: 0, failed: 0, open: 1 });
+    expect(again.run!.counts).toEqual({ tickets: 1, taken: 1, done: 0, failed: 0, open: 1 });
     expect(events("run_ticket_taken")).toHaveLength(1);
     // Finished, the one-ticket budget is spent.
     store.updateIssue(a, { status: "in_review" }, BOT);
@@ -631,7 +631,7 @@ describe("run continue", () => {
     const second = cont();
     expect(second).toMatchObject({ action: "take", ref: b });
     store.updateIssue(b, { status: "in_review" }, BOT);
-    expect(cont()).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", maxTickets: 2, taken: 2 }, run: { counts: { taken: 3 } } });
+    expect(cont()).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", maxTickets: 2, taken: 2 }, run: { counts: { tickets: 2, taken: 3 } } });
   });
 });
 

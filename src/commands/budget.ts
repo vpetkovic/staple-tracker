@@ -384,7 +384,7 @@ export function runBudgetCommand(argv: string[]): void {
     allowPositionals: true,
     options: {
       json: { type: "boolean" },
-      help: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
       source: { type: "string" },
       tee: { type: "boolean" },
       account: { type: "string" },

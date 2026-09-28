@@ -192,6 +192,19 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
     expect(await next(who, "--outcome", "failed", "--reason", "red again")).toMatchObject({ action: "stop", reason: "failure_streak", run: { state: "stopped" } });
   }, 120_000);
 
+  it("run status counts a retried ticket once against --max-tickets, in text and JSON", async () => {
+    const { epic: scope } = await epicWith("Retry count", 2);
+    const who = "drv-retry-count";
+    await cliAs(who, "run", "start", "--scope", scope, "--max-tickets", "5");
+    const first = await next(who);
+    expect(await next(who, "--outcome", "failed", "--reason", "build broke")).toMatchObject({ action: "take", ref: first.ref });
+    expect((await cliAs(who, "run", "status")).json).toMatchObject({ runs: [{ run: { counts: { tickets: 1, taken: 2, failed: 1, open: 1 } } }] });
+    const text = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "run", "status", "--ws", WS], { cwd: REPO_ROOT, env: env(who), encoding: "utf8", timeout: 30_000 });
+    expect(text.status, text.stderr).toBe(0);
+    expect(text.stdout).toContain("1/5 tickets (2 takes)");
+    expect(text.stdout).not.toContain("2/5 tickets");
+  }, 120_000);
+
   it("budget tickets, time and ceiling each stop a run", async () => {
     const { epic: scope } = await epicWith("Budget", 3);
     await cliAs("drv-tickets", "run", "start", "--scope", scope, "--max-tickets", "1");
