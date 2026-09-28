@@ -408,6 +408,7 @@ describe("status derived from members", () => {
     store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
     expect(store.rederiveEveryMilestone()).toBe(0); // set by hand: the reversibility law holds
     store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
     expect(store.rederiveEveryMilestone()).toBe(1);
     expect(store.getIssue(m).status).toBe("done");
   });
@@ -442,21 +443,63 @@ describe("status derived from members", () => {
     expect(store.getIssue(sentBack.identifier).status).toBe("in_progress");
   });
 
-  it("an upgrade's repair waits until a synchronized workspace has pulled to the head", () => {
+  it("an upgrade's repair never cancels a milestone whose members were all cancelled", () => {
+    const m = newMilestone();
+    const t = store.createIssue({ title: "t" }).identifier;
+    milestones.addMember(m, t, {}, "vp");
+    store.updateIssue(t, { status: "cancelled" }, "someone");
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    expect(store.rederiveEveryMilestone()).toBe(0);
+    expect(store.getIssue(m).status).toBe("backlog");
+  });
+
+  it("an upgrade's repair names the member that moved last, and its actor, as a member's move does", () => {
+    const m = newMilestone();
+    const a = store.createIssue({ title: "a" }).identifier;
+    const b = store.createIssue({ title: "b" }).identifier;
+    milestones.addMember(m, a, {}, "vp");
+    milestones.addMember(m, b, {}, "vp");
+    start(a);
+    store.updateIssue(b, { assignee: "reviewer" }, "reviewer");
+    store.updateIssue(b, { status: "in_progress" }, "reviewer");
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    store.rederiveEveryMilestone();
+    const flip = eventsOf(m).filter((e) => e.kind === "status_changed").at(-1);
+    expect(flip?.payload).toMatchObject({ from: "backlog", to: "in_progress", derivedFrom: b });
+    const actor = store.listEvents(0, 1000).filter((e) => e.issueId === store.getIssue(m).id && e.kind === "status_changed").at(-1)?.actor;
+    expect(actor).toBe("reviewer");
+  });
+
+  it("an upgrade's repair that throws is logged and skipped, and the write that ran it lands", () => {
     const m = newMilestone();
     const t = store.createIssue({ title: "t" }).identifier;
     milestones.addMember(m, t, {}, "vp");
     start(t);
     store.updateIssue(m, { status: "backlog" }, "vp");
     store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
-    store.db
-      .prepare("INSERT INTO sync_state (id, epoch, cursor, head_reached_cursor) VALUES (1, 1, 'c2', 'c1') ON CONFLICT(id) DO UPDATE SET epoch = 1, cursor = 'c2', head_reached_cursor = 'c1'")
-      .run();
-    store.addComment(t, "behind", "someone");
+    const walk = store as unknown as { deriveOneAncestor: (...args: unknown[]) => boolean };
+    const original = walk.deriveOneAncestor;
+    walk.deriveOneAncestor = () => {
+      throw new Error("forced");
+    };
+    const logged: string[] = [];
+    const error = console.error;
+    console.error = (...args: unknown[]) => void logged.push(args.join(" "));
+    try {
+      const comment = store.addComment(t, "still lands", "someone");
+      expect(store.listComments(t).map((c) => c.id)).toContain(comment.id);
+      store.addComment(t, "and again", "someone");
+    } finally {
+      walk.deriveOneAncestor = original;
+      console.error = error;
+    }
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain("could not re-derive milestone statuses (forced)");
+    // Taken back whole: nothing moved, nothing stamped.
     expect(store.getIssue(m).status).toBe("backlog");
-    store.db.prepare("UPDATE sync_state SET head_reached_cursor = 'c2' WHERE id = 1").run();
-    store.addComment(t, "caught up", "someone");
-    expect(store.getIssue(m).status).toBe("in_progress");
+    expect(store.db.prepare("SELECT 1 FROM meta WHERE key = 'milestone_status_rederived'").get()).toBeUndefined();
   });
 
   it("does not loop when a milestone is filed under its own member", () => {

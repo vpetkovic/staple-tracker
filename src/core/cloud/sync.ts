@@ -61,6 +61,7 @@ import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
+import { rederiveMilestonesAfterPull } from "../store.js";
 import { blockerSets, narrateRewoundSets, reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
@@ -638,6 +639,14 @@ export async function syncRepository(
    */
   noteServiceOrphanReasons(db, capabilities);
   writeOwnOrphanEnds(db, journal);
+  /**
+   * And the one-shot milestone repair an upgrade owes (`rederiveMilestonesAfterPull`): here,
+   * with the members every other device holds, and never at a write before the pull — a
+   * device that last reached the head a week ago would re-derive from a week-old member and
+   * push the regression. Before the second push, so it goes out in this sync, after any
+   * repair a device that synchronized first has already sent.
+   */
+  rederiveMilestonesAfterPull(db);
 
   /**
    * What the pull made this device owe goes out in the same sync.

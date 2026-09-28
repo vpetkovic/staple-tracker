@@ -107,3 +107,63 @@ describe("a restore to a backup taken while an attempt was open", () => {
     }
   }
 });
+
+describe("a restore while an attempt's end is half sent", () => {
+  it("keeps the end when its transition is still to be sent, though the end itself was acknowledged", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO, maxBatchSize: 1 });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    await a.sync();
+    const b = fleet.machine("b");
+    await sync(b);
+
+    a.use();
+    const issue = a.store.createIssue({ title: "Attempted" });
+    a.store.checkoutIssue(issue.id, "agent-a", undefined, {
+      attempt: { harness: "claude_code", harnessSession: "session-1", model: "claude-test", account: "personal-max" },
+    });
+    const attempt = (a.db.prepare("SELECT id FROM attempts WHERE issue_id = ?").get(issue.id) as { id: string }).id;
+    await sync(a, b);
+    a.use();
+    await setBackupConsent(a.home, REPO, true, { fetchImpl: server.fetch });
+    const backup = await createBackup(a.home, REPO, null, { fetchImpl: server.fetch });
+
+    // b ends the attempt; its push lands the `attempt` operation and fails before the transition.
+    b.use();
+    b.store.recordAttemptEvent(issue.id, "interrupt", "agent-a", { reason: "provider_limit" });
+    const pending = b.db.prepare("SELECT entity FROM sync_outbox WHERE acknowledged_seq IS NULL ORDER BY client_seq").all() as Array<{ entity: string }>;
+    expect(pending.map((op) => op.entity)).toContain("attemptTransition");
+    let posted = 0;
+    const partial: typeof fetch = async (input, init) => {
+      if ((init?.method ?? "GET") === "POST" && String(input).endsWith("/ops")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { ops?: Array<{ entity: string }> };
+        if (body.ops?.some((op) => op.entity === "attemptTransition") || posted > 0) {
+          posted += 1;
+          throw new TypeError("fetch failed");
+        }
+      }
+      return server.fetch(input, init);
+    };
+    await b.sync({ fetchImpl: partial, attempts: 1 } as never).catch(() => undefined);
+    const unacked = b.db.prepare("SELECT entity FROM sync_outbox WHERE acknowledged_seq IS NULL").all() as Array<{ entity: string }>;
+    expect(unacked.map((op) => op.entity)).toContain("attemptTransition");
+    expect(unacked.map((op) => op.entity)).not.toContain("attempt");
+
+    a.use();
+    await restoreFromBackup(a.db, a.home, REPO, backup.backupId, { fetchImpl: server.fetch });
+    await sync(a, b, a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+
+    // One end, told once: the attempt ended, with the transition that ended it.
+    const endedWith = (machine: Machine): unknown => ({
+      attempt: attemptState(machine, attempt),
+      interrupted: (machine.db.prepare("SELECT COUNT(*) AS n FROM attempt_transitions WHERE attempt_id = ? AND kind = 'attempt_interrupted'").get(attempt) as { n: number }).n,
+    });
+    expect((attemptState(b, attempt) as { state: string }).state).toBe("ended");
+    expect(endedWith(fresh)).toEqual(endedWith(b));
+    expect((endedWith(fresh) as { interrupted: number }).interrupted).toBe(1);
+    const want = stateOf(fresh.db);
+    expect([...differences("a", want, stateOf(a.db)), ...differences("b", want, stateOf(b.db))]).toEqual([]);
+  });
+});

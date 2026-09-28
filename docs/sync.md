@@ -1448,7 +1448,10 @@ re-bootstrap killed part-way leaves nothing half-applied, and reads again on the
   agree closes (`test/cloud-restore-open-list-record.test.ts`). Kept whole, resolving to the
   side that named a removed issue failed for ever.
   An attempt the epoch holds takes the epoch's end fields, all seven together, unless this
-  device's unsent operation on it is still to be sent. The apply rule keeps an end over a
+  device still has to send an operation on it: its `attempt` update, or the
+  `attemptTransition` that tells the end. When only the transition is left, the update the
+  restore rewound is sent again after the read, so no device reads the transition over an
+  open attempt. The apply rule keeps an end over a
   state that is not an end (a stale pause must not reopen an attempt a steal ended), and
   that is right for the log. For a restore it was wrong: an attempt that ended after the
   backup stayed ended on every device that had pulled the end, while a fresh device read it

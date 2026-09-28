@@ -578,6 +578,17 @@ const DERIVED_MARKERS = {
 /** The `meta` stamp that says every milestone has been re-derived from its members once. */
 const MILESTONE_REDERIVE_KEY = "milestone_status_rederived";
 
+/** Connections whose milestone repair threw in this process: not tried again until a restart. */
+const milestoneRepairFailed = new WeakSet<DatabaseSync>();
+
+/**
+ * The milestone repair a synchronized workspace owes, run by a sync once its pull has reached
+ * the head of the log (`sync.ts`): see `WorkspaceStore.rederiveEveryMilestone`.
+ */
+export function rederiveMilestonesAfterPull(db: DatabaseSync): number {
+  return new WorkspaceStore(db, "", "").rederiveEveryMilestone();
+}
+
 /**
  * What the ladder decided, as a CATEGORY-shaped verdict rather than a status id
  * (STA-140). `workable` is the two-member band {unstarted, ready}; the others
@@ -802,8 +813,12 @@ export class WorkspaceStore {
      * a read never writes to the journal and a refused mutation does not take it back.
      */
     if (this.attempts().mayOweOrphanEnds()) this.journal.run(() => this.attempts().writeOrphanEnds());
-    // Likewise the one-shot milestone re-derivation an upgrade owes (`owesMilestoneRederive`).
-    if (this.owesMilestoneRederive()) this.rederiveEveryMilestone();
+    /**
+     * Likewise the one-shot milestone re-derivation an upgrade owes — on a workspace that does
+     * not synchronize. One that does runs it after a pull reaches the head (`sync.ts`): its own
+     * members may be stale until then, however recently it last reached the head.
+     */
+    if (!this.synchronizes()) this.rederiveEveryMilestone();
     this.attempts().forgetResult();
     try {
       return this.journal.run(fn);
@@ -3090,60 +3105,77 @@ export class WorkspaceStore {
 
   /**
    * True until this workspace has had its milestones brought up to the derivation that
-   * reads their members.
+   * reads their members, and false for the rest of a process in which the repair failed.
    *
    * A build before it left every milestone at whatever status it was given by hand, and
    * derivation only runs when something moves: a milestone whose members had all gone to
    * review before the upgrade would keep reading `backlog` until one of them moved again.
-   * So the first mutating command on the upgraded build re-derives every milestone once
-   * (`journaled`), and stamps `meta` so it never runs again.
-   *
-   * Waits, like the orphan attempt ends, while a synchronized workspace has not pulled to
-   * the head: re-deriving from members this device has not caught up on would publish a
-   * status every other device already knows to be stale.
+   * So the upgraded build re-derives every milestone once and stamps `meta` so it never runs
+   * again: at the first mutating command on a workspace that does not synchronize
+   * (`journaled`), and after the first pull that reaches the head on one that does
+   * (`sync.ts`), so it derives from what every other device already holds.
    */
   private owesMilestoneRederive(): boolean {
+    if (milestoneRepairFailed.has(this.db)) return false;
     const done = this.db.prepare("SELECT 1 AS hit FROM meta WHERE key = ?").get(MILESTONE_REDERIVE_KEY);
     if (done) return false;
     // A database a store was opened on before its migrations ran (a test, a repair path).
     const members = this.db
       .prepare("SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = 'milestone_members'")
       .get();
-    if (!members) return false;
-    const state = this.db
-      .prepare("SELECT epoch, cursor, head_reached_cursor FROM sync_state WHERE id = 1")
-      .get() as { epoch: number; cursor: string | null; head_reached_cursor: string | null } | undefined;
-    const synchronized = state !== undefined && (state.cursor !== null || state.epoch > 0);
-    return !synchronized || (state!.head_reached_cursor !== null && state!.head_reached_cursor === state!.cursor);
+    return members !== undefined;
+  }
+
+  /** This workspace has synchronized: it holds a cursor, or an epoch past the first. */
+  private synchronizes(): boolean {
+    // A database a store was opened on before its migrations ran has no sync state at all.
+    if (!this.db.prepare("SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = 'sync_state'").get()) return false;
+    const state = this.db.prepare("SELECT epoch, cursor FROM sync_state WHERE id = 1").get() as
+      | { epoch: number; cursor: string | null }
+      | undefined;
+    return state !== undefined && (state.cursor !== null || state.epoch > 0);
   }
 
   /**
-   * The one-shot repair `owesMilestoneRederive` asks for: every milestone re-derived by the
-   * same walk a member's transition runs, so each write is an ordinary derived
-   * `status_changed` event and journaled operation, and travels like one. Unlike a
-   * membership edit it may close a milestone: the member it closes on already landed, and
-   * the rules now in force would have closed it then. A milestone set by hand or parked
-   * behind a gate keeps its status, as it would for any member moving. Idempotent: a
-   * second run finds every status already where derivation puts it and writes nothing.
-   * Its own mutation: a scope of its own when called on its own, the caller's otherwise.
+   * The one-shot repair `owesMilestoneRederive` asks for, when it is owed: every milestone
+   * re-derived by the same walk a member's transition runs, so each write is an ordinary
+   * derived `status_changed` event and journaled operation, and travels like one. Returns how
+   * many milestones moved. Idempotent: a second run finds nothing owed, and a run with the
+   * stamp taken away finds every status already where derivation puts it.
+   *
+   * It may close a milestone whose members have all landed, `done` as a parent would have
+   * closed then, but never writes `cancelled`: a milestone whose members were all cancelled
+   * keeps its status until a member moves. The pre-work band is derivation's, as on any
+   * parent, so a hand-set `todo` or `backlog` is re-derived; a status set by hand outside it,
+   * or a gate, is left alone.
+   *
+   * A repair that throws is logged and skipped for the rest of the process, never rethrown:
+   * the command that ran it is somebody's own write, and must not fail for a repair it did
+   * not ask for. Its own mutation, so the throw takes back whatever it wrote.
    */
   rederiveEveryMilestone(): number {
-    return this.journal.run(() => this.rederiveEveryMilestoneInScope());
+    if (!this.owesMilestoneRederive()) return 0;
+    try {
+      return this.journal.run(() => this.rederiveEveryMilestoneInScope());
+    } catch (error) {
+      milestoneRepairFailed.add(this.db);
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`staple: could not re-derive milestone statuses (${detail}); skipped until staple runs again.`);
+      return 0;
+    }
   }
 
   private rederiveEveryMilestoneInScope(): number {
     const milestones = this.db
-      .prepare(
-        `SELECT i.id, i.identifier, i.status,
-                (SELECT j.identifier FROM milestone_members m JOIN issues j ON j.id = m.issue_id
-                  WHERE m.milestone_id = i.id ORDER BY m.rank LIMIT 1) AS first_member
-           FROM issues i WHERE i.kind = ? ORDER BY i.created_at`,
-      )
-      .all(MILESTONE_KIND) as Array<{ id: string; identifier: string; status: string; first_member: string | null }>;
+      .prepare("SELECT id, status FROM issues WHERE kind = ? ORDER BY created_at")
+      .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
     let moved = 0;
     for (const milestone of milestones) {
-      this.deriveHolders([milestone.id], milestone.first_member ?? milestone.identifier, null, new Set([milestone.id]), {
+      const row = this.db.prepare("SELECT id, kind FROM issues WHERE id = ?").get(milestone.id) as Pick<IssueRow, "id" | "kind">;
+      const cause = this.latestInputMove(row);
+      this.deriveHolders([milestone.id], cause.trigger, cause.actor, new Set([milestone.id]), {
         mayCloseStart: true,
+        mayCancel: false,
       });
       const now = this.db.prepare("SELECT status FROM issues WHERE id = ?").get(milestone.id) as { status: string };
       if (now.status !== milestone.status) moved += 1;
@@ -3152,6 +3184,29 @@ export class WorkspaceStore {
       .prepare("INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(MILESTONE_REDERIVE_KEY);
     return moved;
+  }
+
+  /**
+   * What a repaired milestone names as the cause of its move, as a member's transition would:
+   * the input whose status moved last, and the actor who moved it. The first input, and no
+   * actor, when none of them has moved.
+   */
+  private latestInputMove(milestone: Pick<IssueRow, "id" | "kind">): { trigger: string; actor: string | null } {
+    const inputs = this.derivationInputRows(milestone);
+    if (inputs.length === 0) return { trigger: "", actor: null };
+    const byId = new Map(inputs.map((row) => [row.id, row.identifier]));
+    const latest = this.db
+      .prepare(
+        `SELECT issue_id, actor FROM events
+          WHERE kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")})
+            AND issue_id IN (${inputs.map(() => "?").join(",")})
+          ORDER BY seq DESC LIMIT 1`,
+      )
+      .get(...(STATUS_MOVING_EVENT_KINDS as readonly string[]), ...inputs.map((row) => row.id)) as
+      | { issue_id: string; actor: string | null }
+      | undefined;
+    if (!latest) return { trigger: inputs[0]!.identifier, actor: null };
+    return { trigger: byId.get(latest.issue_id)!, actor: latest.actor };
   }
 
   /**
@@ -3174,7 +3229,7 @@ export class WorkspaceStore {
     trigger: string,
     actor: string | null,
     selfDerive: ReadonlySet<string>,
-    options: { mayCloseStart?: boolean } = {},
+    options: { mayCloseStart?: boolean; mayCancel?: boolean } = {},
   ): void {
     const now = this.journal.mutationAt();
     const order: string[] = [];
@@ -3205,7 +3260,7 @@ export class WorkspaceStore {
         const row = read.get(id) as unknown as IssueRow | undefined;
         if (!row) continue;
         const mayClose = !selfDerive.has(id) || options.mayCloseStart === true;
-        if (this.deriveOneAncestor(row, trigger, actor, now, { mayClose })) wrote = true;
+        if (this.deriveOneAncestor(row, trigger, actor, now, { mayClose, mayCancel: options.mayCancel })) wrote = true;
       }
       if (!wrote) break;
     }
@@ -3261,7 +3316,7 @@ export class WorkspaceStore {
     trigger: string,
     actor: string | null,
     now: string,
-    options: { mayClose?: boolean } = {},
+    options: { mayClose?: boolean; mayCancel?: boolean } = {},
   ): boolean {
     /**
      * A PARKED parent is immune, in both directions (STA-143).
@@ -3312,6 +3367,8 @@ export class WorkspaceStore {
     if ((target === "done" || target === "cancelled") && isActiveGate(ancestor.gate_state)) return false;
     // A membership edit reports, it never closes: see `rederiveMilestones`.
     if ((target === "done" || target === "cancelled") && options.mayClose === false) return false;
+    // The upgrade's repair closes as `done` only: see `rederiveEveryMilestone`.
+    if (target === "cancelled" && options.mayCancel === false) return false;
 
     /**
      * Everything below is stated in CATEGORIES (STA-140). The band, the

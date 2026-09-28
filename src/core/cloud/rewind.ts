@@ -129,6 +129,8 @@ export interface ReconcilePlan {
   readonly removed: number;
   readonly restoredBuiltins: number;
   readonly entities: readonly SnapshotEntity[];
+  /** Attempts whose end this device keeps, and sends again, over the epoch's. */
+  readonly resendEnds: readonly string[];
 }
 
 /**
@@ -230,16 +232,31 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
    * over an end the log no longer holds, that rule kept the attempt ended here while a fresh
    * device read it open. The end fields are one unit, so all seven are taken from the epoch.
    */
-  const unsentAttempts = new Set(unsent.filter((op) => op.entity === "attempt").map((op) => op.id));
+  /**
+   * An end travels as an `attempt` operation and the `attemptTransition` that tells it, and a
+   * bounded push can land one without the other: either still to be sent keeps the end. When
+   * only the transition is left to send, the `attempt` operation the log acknowledged is the
+   * one the restore rewound, so the end is sent again after the read (`reconcileAfterRead`):
+   * otherwise every other device would read the transition over an attempt still open.
+   */
+  const unsentEnds = new Set(unsent.filter((op) => op.entity === "attempt").map((op) => op.id));
+  const unsentTransitions = new Set(
+    unsent.flatMap((op) => {
+      const attemptId = op.entity === "attemptTransition" ? parsedPayload(op.payload).attemptId : undefined;
+      return typeof attemptId === "string" ? [attemptId] : [];
+    }),
+  );
+  const resendEnds: string[] = [];
   for (const entity of entities) {
-    if (entity.entity !== "attempt" || unsentAttempts.has(entity.entityId)) continue;
+    if (entity.entity !== "attempt" || unsentEnds.has(entity.entityId)) continue;
     const held = readAttempt(db, entity.entityId);
     if (held === null) continue;
     const epochEnd = epochAttemptEnd(entity.state);
     if (epochEnd === null) continue;
     const heldEnd = endOf(held);
     if (ATTEMPT_END_FIELDS.every((field) => heldEnd[field] === epochEnd[field])) continue;
-    writeEnd(db, held.id, epochEnd);
+    if (unsentTransitions.has(entity.entityId)) resendEnds.push(entity.entityId);
+    else writeEnd(db, held.id, epochEnd);
   }
 
   /**
@@ -259,7 +276,7 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
     if (placed(entity, id)) continue;
     if (reinstall(db, entity, id)) restoredBuiltins += 1;
   }
-  return { kept, removed, restoredBuiltins, entities };
+  return { kept, removed, restoredBuiltins, entities, resendEnds };
 }
 
 /**
@@ -309,6 +326,14 @@ export function reconcileAfterRead(db: DatabaseSync, journal: Journal, plan: Rec
     journal.run(() => {
       for (const local of republish) {
         journal.record({ entity: local.entity, entityId: local.entityId, verb: "create", payload: local.payload, actor: local.actor });
+      }
+    });
+  }
+  const resend = plan.resendEnds.map((id) => readAttempt(db, id)).filter((held) => held !== null);
+  if (resend.length > 0) {
+    journal.run(() => {
+      for (const held of resend) {
+        journal.record({ entity: "attempt", entityId: held.id, verb: "update", payload: { ...endOf(held) }, actor: held.endedBy });
       }
     });
   }
