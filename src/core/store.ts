@@ -3160,7 +3160,24 @@ export class WorkspaceStore {
         : this.db
             .prepare("SELECT id, identifier, status, title FROM issues WHERE parent_id = ?")
             .all(ancestor.id);
-    return rows as Array<{ id: string; identifier: string; status: string; title: string }>;
+    const typed = rows as Array<{ id: string; identifier: string; status: string; title: string }>;
+    if (ancestor.kind !== MILESTONE_KIND) return typed;
+    /**
+     * A milestone filed under an issue it also holds does not read that issue. The
+     * ancestor already reads the milestone as its child, so reading it back would make
+     * the two a loop that keeps each other `active` after the work under them landed.
+     */
+    const above = new Set<string>();
+    let cursor = (this.db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(ancestor.id) as
+      | { parent_id: string | null }
+      | undefined)?.parent_id ?? null;
+    for (let depth = 0; cursor !== null && depth < MAX_TREE_DEPTH && !above.has(cursor); depth += 1) {
+      above.add(cursor);
+      cursor = (this.db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(cursor) as
+        | { parent_id: string | null }
+        | undefined)?.parent_id ?? null;
+    }
+    return above.size === 0 ? typed : typed.filter((row) => !above.has(row.id));
   }
 
   /** One rung of the walk: decide, check permission, CAS, and log. */

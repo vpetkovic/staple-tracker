@@ -157,7 +157,10 @@ between the open rungs only, so a milestone being built out does not close
 between two adds, and descoping is not finishing. Because a milestone can be a
 child of the epic that holds its members, the walk re-derives its whole upward
 closure until nothing changes, so the order it reaches holders in never leaves
-one reading another's old status. (Pinned by *"never closes on a membership
+one reading another's old status. A milestone filed under an issue it also
+holds does not read that issue back: the ancestor already reads the milestone
+as a child, and reading both ways would let the two hold each other `active`
+after the work beneath them landed. (Pinned by *"never closes on a membership
 edit, only when a member lands"*, *"wakes the milestone's owner before it
 closes"* and *"closes a parent whose milestone child is reached at the same
 depth"*.) (Pinned by

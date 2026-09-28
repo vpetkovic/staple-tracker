@@ -329,8 +329,12 @@ describe("status derived from members", () => {
     milestones.addMember(m, epic.identifier, {}, "vp");
     expect(store.getIssue(m).parentId).toBe(epic.id);
     start(task);
-    expect(store.getIssue(m).status).toBe("in_progress");
     expect(store.getIssue(epic.identifier).status).toBe("in_progress");
+    // The milestone does not read the epic it is filed under, so the two cannot hold
+    // each other active once the work under them has landed.
+    land(task);
+    expect(store.getIssue(epic.identifier).status).not.toBe("in_progress");
+    expect(store.getIssue(m).status).not.toBe("in_progress");
   });
 });
 
