@@ -203,6 +203,8 @@ const BOOKKEEPING = new Set(["updated_at"]);
 const DERIVED: Record<string, string> = {
   normalized_title: "title",
   status_version: "status",
+  // Who wrote the status: it means nothing apart from the status it names (migration 017).
+  derived_status: "status",
 };
 
 /** The whole-plan pseudo-field an ordered collection replicates as. */

@@ -361,7 +361,7 @@ entity's own primary key.
 
 | Table | Key | Fields that travel |
 |---|---|---|
-| `issues` | `id` | `identifier`, `title`, `normalized_title`, `description`, `status`, `status_version`, `priority`, `parent_id`, `depth`, `assignee`, `created_by`, `labels`, `acceptance_criteria`, `block_parent_until_done`, `unblock_owner`, `unblock_action`, `origin_kind`, `origin_id`, `idempotency_key`, `estimated_seconds`, `kind`, `project_id`, `gate_state`, `gate_owner`, `gate_requested_by`, `gate_requested_at`, `gate_resolved_by`, `gate_resolved_at`, `gate_released`, `started_at`, `blocked_transition_at`, `completed_at`, `cancelled_at`, `created_at`, `updated_at` |
+| `issues` | `id` | `identifier`, `title`, `normalized_title`, `description`, `status`, `status_version`, `priority`, `parent_id`, `depth`, `assignee`, `created_by`, `labels`, `acceptance_criteria`, `block_parent_until_done`, `unblock_owner`, `unblock_action`, `origin_kind`, `origin_id`, `idempotency_key`, `estimated_seconds`, `kind`, `project_id`, `gate_state`, `gate_owner`, `gate_requested_by`, `gate_requested_at`, `gate_resolved_by`, `gate_resolved_at`, `gate_released`, `started_at`, `blocked_transition_at`, `completed_at`, `cancelled_at`, `created_at`, `updated_at`, `derived_status` |
 | `comments` | `id` | `issue_id`, `author`, `author_type`, `body`, `idempotency_key`, `deleted_at`, `created_at` |
 | `documents` | `(issue_id, key)` | `current_revision`, `title`, `updated_at` |
 | `document_revisions` | `(issue_id, key, revision)` | `body`, `author`, `change_summary`, `created_at` — immutable once written, except that its number is where the log places it ([below](#conflicts-are-preserved-never-resolved-silently)) |
@@ -374,6 +374,16 @@ entity's own primary key.
 | `attempts` | `id` | `issue_id`, `agent`, `role` (workspace migration 014; a create without it is a `worker` attempt), `opened_by`, `resumes_attempt_id`, `started_at`, `device_id`, `claim_scope`, `claim_fencing_token`, `harness`, `provider_binding`, `estimate_at_start`, `idempotency_key`, `provenance`, `missing` on the create; then only the end: `state`, `outcome`, `end_reason`, `end_detection`, `ended_by`, `ended_at`, `ended_at_source`, always all seven together — protocol 3, see [execution telemetry](execution-telemetry.md#where-it-lives-and-what-synchronizes) |
 | `attempt_transitions` | `id` | `attempt_id`, `kind`, `at`, `actor`, `detection`, `reason`, `detail`, `concurrency` — immutable once written, like a document revision; protocol 3 |
 | `meta` | `key` | **only** rows matching `setting:*` — the repository's prefix travels as one of them, `setting:repository.prefix` ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)); `slug` and `prefix` themselves are this workspace's own |
+
+**`derived_status` travels like any other column** (workspace migration 017): it says the
+row's status is one derivation wrote, and the schema clears it when anything else moves the
+status or the claim, so the clear travels too, as a changed column of that mutation. A
+device that migrated from 16 backfilled it from its own event log, which nothing in the log
+carried before; its next sync, once the pull reaches the head, sends each backfilled value as
+an `issue` update of that one field, so a device that hydrates afterwards holds it
+([semantics](semantics.md#a-parents-status-is-derived-from-its-children)). Two devices that
+backfilled one row send one value, which is no conflict. The service stores the field as it
+stores every field, verbatim; nothing about it changed.
 
 `meta` is the one table that cannot take a single classification, so it is an
 allowlist and the default is deny. `setting:*` includes keys this build has no

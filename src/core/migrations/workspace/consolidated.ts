@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -47,7 +47,7 @@ CREATE TABLE issues (
   cancelled_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-, estimated_seconds INTEGER, kind TEXT NOT NULL DEFAULT 'task', gate_state TEXT, gate_owner TEXT, gate_requested_by TEXT, gate_requested_at TEXT, gate_resolved_by TEXT, gate_resolved_at TEXT, gate_released INTEGER NOT NULL DEFAULT 0, project_id TEXT);
+, estimated_seconds INTEGER, kind TEXT NOT NULL DEFAULT 'task', gate_state TEXT, gate_owner TEXT, gate_requested_by TEXT, gate_requested_at TEXT, gate_resolved_by TEXT, gate_resolved_at TEXT, gate_released INTEGER NOT NULL DEFAULT 0, project_id TEXT, derived_status TEXT);
 
 CREATE UNIQUE INDEX issues_idempotency_uq
   ON issues(idempotency_key) WHERE idempotency_key IS NOT NULL;
@@ -388,4 +388,13 @@ CREATE TABLE milestone_criterion_marks (
         marked_at    TEXT    NOT NULL,
         PRIMARY KEY (milestone_id, position)
       );
+
+CREATE TRIGGER issues_derived_status_cleared
+      AFTER UPDATE OF status, checkout_agent, checkout_at ON issues
+      WHEN NEW.derived_status IS NOT NULL
+       AND NEW.derived_status IS OLD.derived_status
+       AND (NEW.status IS NOT OLD.status OR NEW.checkout_agent IS NOT OLD.checkout_agent OR NEW.checkout_at IS NOT OLD.checkout_at)
+      BEGIN
+        UPDATE issues SET derived_status = NULL WHERE id = NEW.id;
+      END;
 `;

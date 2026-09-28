@@ -165,11 +165,11 @@ describe("a fresh repo-local `staple init`", () => {
       // (008-queue-entries), to "9" by 009-projects, to "10" by
       // 010-sync-metadata, to "11" by 011-sync-field-writes, to "12" by
       // 012-host-binding, to "13" by 013-execution-attempts, to "14" by
-      // 014-attempt-role, to "15" by 015-autopilot-runs and to "16" by
-      // 016-milestone-goals; the TEXT typing
+      // 014-attempt-role, to "15" by 015-autopilot-runs, to "16" by
+      // 016-milestone-goals and to "17" by 017-derived-status; the TEXT typing
       // is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "16" },
+      { key: "schema_version", value: "17" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -298,6 +298,8 @@ describe("a fresh repo-local `staple init`", () => {
       "table:sync_tombstones",
       "table:workspace_kinds",
       "table:workspace_statuses",
+      // 017-derived-status: clears the replicated ownership column on any move but derivation's.
+      "trigger:issues_derived_status_cleared",
     ]);
   }, 30_000);
 
@@ -473,9 +475,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 16 since 016-milestone-goals. The hub beside it
+      // WORKSPACE_SCHEMA_VERSION — 17 since 017-derived-status. The hub beside it
       // is still 2; the two databases version independently.
-      { key: "schema_version", value: "16" },
+      { key: "schema_version", value: "17" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

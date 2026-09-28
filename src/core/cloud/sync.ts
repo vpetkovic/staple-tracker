@@ -61,7 +61,7 @@ import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
-import { owedMilestoneRederive, rederiveMilestonesAfterPull } from "../store.js";
+import { owedMilestoneRederive, publishDerivedStatuses, rederiveMilestonesAfterPull } from "../store.js";
 import { blockerSets, narrateRewoundSets, reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
@@ -673,6 +673,8 @@ export async function syncRepository(
    * rewinds members the repair would otherwise read. Sent in this sync, after any repair a
    * device that synchronized first has already sent.
    */
+  // And what migration 017 backfilled, which the service has never been sent.
+  publishDerivedStatuses(db);
   rederiveMilestonesAfterPull(db);
   if (pendingCount(db) > 0) await pushAll();
   /**

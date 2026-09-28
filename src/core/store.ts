@@ -309,6 +309,8 @@ interface IssueRow {
   cancelled_at: string | null;
   created_at: string;
   updated_at: string;
+  /** The status derivation last wrote here; NULL once anything else moved the row (migration 017). */
+  derived_status?: string | null;
 }
 
 function rowToIssue(row: IssueRow): Issue {
@@ -589,6 +591,40 @@ const milestoneRepairFailed = new WeakSet<DatabaseSync>();
  */
 export function rederiveMilestonesAfterPull(db: DatabaseSync): number {
   return new WorkspaceStore(db, "", "").rederiveEveryMilestone();
+}
+
+/** Set by migration 017 on a database it backfilled `derived_status` on. */
+const DERIVED_STATUS_PUBLISH_KEY = "derived_status_publish_owed";
+
+/**
+ * Send the service the `derived_status` migration 017 backfilled from this device's event log,
+ * once, after a pull reached the head (`sync.ts`). Written before the column existed, nothing
+ * in the log carries it, so without this a device that hydrates reads every derived parent as
+ * set by hand. After the pull, so a row another device has since moved by hand has already
+ * been cleared here and is not sent. Each is an ordinary `issue` update of that one field;
+ * two devices that backfilled the same row send the same value, which is no conflict.
+ * A failure is logged and left owed, never thrown: the sync that ran it is the user's.
+ */
+export function publishDerivedStatuses(db: DatabaseSync): number {
+  if (!db.prepare("SELECT 1 AS hit FROM meta WHERE key = ?").get(DERIVED_STATUS_PUBLISH_KEY)) return 0;
+  const journal = new WorkspaceStore(db, "", "").journal;
+  try {
+    return journal.run(() => {
+      const rows = db.prepare("SELECT id, derived_status FROM issues WHERE derived_status IS NOT NULL ORDER BY id").all() as Array<{
+        id: string;
+        derived_status: string;
+      }>;
+      for (const row of rows) {
+        journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { derivedStatus: row.derived_status }, actor: null });
+      }
+      db.prepare("DELETE FROM meta WHERE key = ?").run(DERIVED_STATUS_PUBLISH_KEY);
+      return rows.length;
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`staple: could not send the derived statuses this upgrade backfilled (${detail}); the next sync tries again.`);
+    return 0;
+  }
 }
 
 /**
@@ -2908,43 +2944,22 @@ export class WorkspaceStore {
    * Is this row's CURRENT status something derivation wrote, rather than
    * something a human or an agent asserted?
    *
-   * Read from the event log, not from a column — no schema change, and the
-   * answer stays correct for every row already in every database, because the
-   * log has carried `payload.derived` since STA-79.
+   * Read from the row: `derived_status` is the status derivation last wrote, and
+   * the schema clears it the moment anything else moves the status or the claim
+   * (migration 017). So it answers as the event log used to — a manual
+   * `status_changed`, a checkout, a release, a steal all make the row manual, and
+   * an agent checking an epic out makes it immune — but it replicates, where
+   * events do not: a device that hydrated from a snapshot or a join seed holds no
+   * events for what it pulled, and read every derived parent as set by hand.
    *
-   * Two conditions, both load-bearing:
-   *
-   *  - the NEWEST status-moving event is a `status_changed` carrying a `derived`
-   *    marker. Any other newest kind — a `checkout`, a `release`, a plain manual
-   *    `status_changed` — means somebody acted on this issue last, and their
-   *    statement outranks the derivation that preceded it. This is also what
-   *    makes a claim and a derivation structurally unable to fight: the instant
-   *    an agent checks an epic out, the epic becomes immune.
-   *  - that event's `to` must equal the row's actual status. If the log cannot
-   *    explain the row — a hand-edit, an import, a history written by another
-   *    tool — this returns false and the row is treated as MANUAL, so derivation
-   *    keeps its hands off. Declining beats guessing, the same instinct as
-   *    `reconstructIntervals`.
+   * The row as the caller read it must still be the row as it stands: a status
+   * the caller decided from that has moved since is not derivation's to change.
    */
   private isDerivationOwned(row: Pick<IssueRow, "id" | "status">): boolean {
-    const event = this.db
-      .prepare(
-        `SELECT kind, payload FROM events
-          WHERE issue_id = ?
-            AND kind IN (${STATUS_MOVING_EVENT_KINDS.map(() => "?").join(",")})
-          ORDER BY seq DESC LIMIT 1`,
-      )
-      .get(row.id, ...(STATUS_MOVING_EVENT_KINDS as readonly string[])) as
-      | { kind: string; payload: string }
+    const held = this.db.prepare("SELECT status, derived_status FROM issues WHERE id = ?").get(row.id) as
+      | { status: string; derived_status: string | null }
       | undefined;
-    if (!event || event.kind !== "status_changed") return false;
-    let payload: Record<string, unknown>;
-    try {
-      payload = JSON.parse(event.payload) as Record<string, unknown>;
-    } catch {
-      return false;
-    }
-    return typeof payload.derived === "string" && payload.to === row.status;
+    return held !== undefined && held.derived_status !== null && held.derived_status === row.status && held.status === row.status;
   }
 
   /**
@@ -3449,6 +3464,8 @@ export class WorkspaceStore {
      */
     const columns: Record<string, unknown> = {
       status: next,
+      // Written with the status, so the row says derivation owns it (migration 017).
+      derived_status: next,
       updated_at: now,
     };
     if (target === "active") columns.started_at = ancestor.started_at ?? now;

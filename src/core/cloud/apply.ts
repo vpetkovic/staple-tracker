@@ -144,6 +144,8 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   checkoutAt: col("checkout_at"),
   createdAt: col("created_at"),
   updatedAt: col("updated_at"),
+  // The status derivation last wrote, cleared by any other move (migration 017).
+  derivedStatus: col("derived_status"),
 };
 
 export const COMMENT_FIELDS: Record<string, Column> = {
