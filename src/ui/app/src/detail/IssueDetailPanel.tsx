@@ -32,6 +32,7 @@
  */
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getIssue, getQueue, getSettings } from "@/lib/api";
@@ -60,7 +61,16 @@ import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout
 import { PersonChip, RelativeTime } from "./parts";
 import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
 import { detailFacts } from "./properties";
-import { reserveFor, scrollAfterTabSwitch, shrinkReserve, type PanelGeometry } from "./tab-scroll";
+import {
+  anchorAfterScroll,
+  anchorTarget,
+  reserveFor,
+  restoreAfterResize,
+  scrollAfterTabSwitch,
+  shrinkReserve,
+  type PanelGeometry,
+  type ReserveAnchor,
+} from "./tab-scroll";
 import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
 
 export function IssueDetailPanel({
@@ -688,7 +698,9 @@ function DetailTabs({
   const panelsRef = useRef<HTMLDivElement>(null);
   /** The panels' min-height while a stuck switch needs one, else null (tab-scroll.ts). */
   const [reserve, setReserve] = useState<number | null>(null);
-  useReserveRelease(reserve, setReserve, sentinelRef, panelsRef);
+  /** Where the reserve is holding the scroll: the stuck point, or a position (tab-scroll.ts). */
+  const anchorRef = useRef<ReserveAnchor>({ kind: "at", scrollTop: 0 });
+  useReserveRelease(reserve, setReserve, sentinelRef, panelsRef, anchorRef);
   // A new task starts without one. (The panel is also remounted per task; this does not rely on it.)
   useEffect(() => setReserve(null), [detail.issue.id]);
   /** Where the scroll goes once the new tab has rendered, decided when it was chosen. */
@@ -700,6 +712,7 @@ function DetailTabs({
     const target = sentinel && scroller ? scrollAfterTabSwitch(scroller.scrollTop, stickOffset(sentinel, scroller)) : null;
     pendingScroll.current = target;
     const keep = target ?? scroller?.scrollTop ?? 0;
+    anchorRef.current = target !== null ? { kind: "stuck" } : { kind: "at", scrollTop: keep };
     if (keep > 0 && scroller && panels) setReserve(reserveFor(keep, panelGeometry(scroller, panels)));
     setTab(next);
   }, []);
@@ -780,44 +793,81 @@ function stickOffset(sentinel: HTMLElement, scroller: HTMLElement): number {
   return scroller.scrollTop + sentinel.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
 }
 
-/** Where the panels sit in the scroller's content, measured now. */
+/**
+ * Where the panels sit in the scroller's content, measured now. The tail is measured to the
+ * bottom of the content's own box, not from `scrollHeight`: when the content is shorter than
+ * the scroller, `scrollHeight` reports the scroller's height instead, and a tail read from it
+ * would come out too long by the difference.
+ */
 function panelGeometry(scroller: HTMLElement, panels: HTMLElement): PanelGeometry {
-  const panelsTop = scroller.scrollTop + panels.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-  return { clientHeight: scroller.clientHeight, panelsTop, tail: scroller.scrollHeight - (panelsTop + panels.offsetHeight) };
+  const box = panels.getBoundingClientRect();
+  const panelsTop = scroller.scrollTop + box.top - scroller.getBoundingClientRect().top;
+  const content = panels.closest<HTMLElement>("[data-detail-layout]");
+  const tail = content ? content.getBoundingClientRect().bottom - box.bottom : scroller.scrollHeight - (panelsTop + box.height);
+  return { clientHeight: scroller.clientHeight, panelsTop, tail };
 }
 
 /**
  * While a reserve is held: give back what the scroll no longer needs on every scroll, every
  * resize of the scroller (a phone keyboard, a rotated phone, a resized window) and every change
  * in the panels' height (the new tab's data landing), and let go once the active tab's own
- * content covers it.
+ * content covers it. When the scroller grows again and the browser has pulled the scroll back
+ * to fit, grow the reserve before paint and put the scroll back where it was being held.
  */
 function useReserveRelease(
   reserve: number | null,
-  setReserve: (update: (current: number | null) => number | null) => void,
-  sentinel: RefObject<HTMLElement | null>,
+  setReserve: (update: number | null | ((current: number | null) => number | null)) => void,
+  sentinelRef: RefObject<HTMLElement | null>,
   panelsRef: RefObject<HTMLElement | null>,
+  anchorRef: RefObject<ReserveAnchor>,
 ): void {
   const holding = reserve !== null;
   useEffect(() => {
-    const scroller = sentinel.current ? scrollerOf(sentinel.current) : null;
+    const sentinel = sentinelRef.current;
+    const scroller = sentinel ? scrollerOf(sentinel) : null;
     const panels = panelsRef.current;
-    if (!holding || !scroller || !panels) return;
-    const check = () => {
-      const needed = reserveFor(scroller.scrollTop, panelGeometry(scroller, panels));
-      const natural = panels.querySelector<HTMLElement>('[role="tabpanel"][data-state="active"]')?.offsetHeight ?? 0;
-      setReserve((current) => shrinkReserve(current, needed, natural));
+    if (!holding || !sentinel || !scroller || !panels) return;
+    const natural = () => panels.querySelector<HTMLElement>('[role="tabpanel"][data-state="active"]')?.offsetHeight ?? 0;
+    // The scroller's size when last looked at. A scroll event can be the browser clamping the
+    // scroll after a resize (it may arrive before or after the ResizeObserver does), so a
+    // resize is told apart by the size having changed, not by which event reported it.
+    // Only a change of HEIGHT alone (a keyboard, a window made shorter and taller again) puts
+    // the scroll back: a change of width reflows the whole task, and a pixel position from
+    // the old layout means nothing in the new one.
+    let size = { width: scroller.clientWidth, height: scroller.clientHeight };
+    const sync = () => {
+      const now = { width: scroller.clientWidth, height: scroller.clientHeight };
+      const heightOnly = Math.abs(now.width - size.width) <= 0.5 && Math.abs(now.height - size.height) > 0.5;
+      size = now;
+      const top = scroller.scrollTop;
+      const stickAt = stickOffset(sentinel, scroller);
+      if (heightOnly) {
+        const restore = restoreAfterResize(top, scroller.scrollHeight - now.height, anchorTarget(anchorRef.current, stickAt));
+        const grown = restore === null ? 0 : reserveFor(restore, panelGeometry(scroller, panels));
+        if (restore !== null && grown > natural()) {
+          // Commit the taller reserve now, inside this frame, so the restored scroll fits.
+          flushSync(() => setReserve(grown));
+          scroller.scrollTop = restore;
+          return;
+        }
+      } else {
+        // The reader scrolled (or the task reflowed): hold what is on screen now.
+        anchorRef.current = anchorAfterScroll(anchorRef.current, top, stickAt);
+      }
+      const needed = reserveFor(top, panelGeometry(scroller, panels));
+      const covered = natural();
+      setReserve((current) => shrinkReserve(current, needed, covered));
     };
-    scroller.addEventListener("scroll", check, { passive: true });
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(check) : null;
+    scroller.addEventListener("scroll", sync, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(sync) : null;
     observer?.observe(scroller);
     // And when the tab's content lands: once it covers the scroll, the reserve goes at once.
     observer?.observe(panels);
     return () => {
-      scroller.removeEventListener("scroll", check);
+      scroller.removeEventListener("scroll", sync);
       observer?.disconnect();
     };
-  }, [holding, sentinel, panelsRef, setReserve]);
+  }, [holding, sentinelRef, panelsRef, anchorRef, setReserve]);
 }
 
 /** Whether a horizontal scroller has more content before or after what is showing. */

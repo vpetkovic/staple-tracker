@@ -21,11 +21,17 @@
  *    they already were into blank space. Only a switch made while scrolled sets one; a task
  *    nobody switched tabs on while scrolled never gets one, so a short task fits its screen
  *    as it always did.
- *  - The reserve only ever shrinks (`shrinkReserve`): as the reader scrolls back up, or the
- *    screen gets shorter, it gives back the blank space under the tab, never more than the
+ *  - As the reader scrolls back up, or the screen gets shorter, the reserve shrinks
+ *    (`shrinkReserve`): it gives back the blank space under the tab, never more than the
  *    current scroll position needs (so giving it back never jumps the page), and it goes
  *    entirely once the tab's own content covers the scroll position, and at the latest when
  *    the reader is back at the top. A new task starts without one.
+ *  - It grows back in one case only: the screen got taller again (a phone keyboard closing, a
+ *    window resized back, the page collapsed to the drawer) and the browser pulled the scroll
+ *    back to fit. Then the scroll is put back where the reserve was holding it
+ *    (`restoreAfterResize`): the point where the strip sticks if it was stuck, else the place
+ *    the reader last scrolled to (`anchorAfterScroll`, `anchorTarget`). A scroll the reader
+ *    made is never undone: only a scroll sitting at the new maximum, short of that point.
  */
 
 /**
@@ -67,4 +73,29 @@ export function shrinkReserve(current: number | null, needed: number, natural: n
   if (current === null) return null;
   const next = Math.min(current, needed);
   return next <= natural ? null : next;
+}
+
+/** What a held reserve is keeping the scroll at. */
+export type ReserveAnchor = { kind: "stuck" } | { kind: "at"; scrollTop: number };
+
+/**
+ * After the reader scrolls: a stuck strip stays the anchor while it is still stuck; once they
+ * scroll above it, the anchor is where they scrolled to.
+ */
+export function anchorAfterScroll(anchor: ReserveAnchor, scrollTop: number, stickAt: number): ReserveAnchor {
+  if (anchor.kind === "stuck" && scrollTop >= stickAt - 0.5) return anchor;
+  return { kind: "at", scrollTop: Math.max(0, scrollTop) };
+}
+
+/** The scrollTop the anchor stands for, in the current layout. */
+export function anchorTarget(anchor: ReserveAnchor, stickAt: number): number {
+  return anchor.kind === "stuck" ? Math.max(0, stickAt) : anchor.scrollTop;
+}
+
+/**
+ * After the scroller resized: the scroll to put back, or null. Only a scroll the browser
+ * clamped is restored: one sitting at the new maximum, short of the anchor's target.
+ */
+export function restoreAfterResize(scrollTop: number, maxScroll: number, target: number): number | null {
+  return scrollTop >= maxScroll - 0.5 && scrollTop < target - 0.5 ? target : null;
 }

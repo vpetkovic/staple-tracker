@@ -9,7 +9,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { reserveFor, scrollAfterTabSwitch, shrinkReserve } from "./tab-scroll";
+import { anchorAfterScroll, anchorTarget, reserveFor, restoreAfterResize, scrollAfterTabSwitch, shrinkReserve } from "./tab-scroll";
 
 describe("the scroll after a tab switch", () => {
   it("keeps a stuck strip stuck, with the new tab starting right under it", () => {
@@ -61,7 +61,7 @@ describe("the reserve for a stuck switch", () => {
     expect(shrinkReserve(held, needed, 186)).toBe(held - 100);
   });
 
-  it("never grows back: a taller screen (a keyboard closing) does not add blank space", () => {
+  it("never grows on a scroll: only a resize the browser clamped can grow it (below)", () => {
     expect(shrinkReserve(300, 620, 100)).toBe(300);
   });
 
@@ -69,6 +69,32 @@ describe("the reserve for a stuck switch", () => {
     expect(shrinkReserve(644, 900, 1200)).toBeNull();
     expect(shrinkReserve(644, 150, 186)).toBeNull();
     expect(shrinkReserve(null, 900, 0)).toBeNull();
+  });
+});
+
+describe("after the screen gets taller again", () => {
+  it("puts back a scroll the browser clamped, to the stuck point if the strip was stuck", () => {
+    // Keyboard closed: the scroll was pulled back to the new maximum, 50, short of 374.
+    expect(restoreAfterResize(50, 50, anchorTarget({ kind: "stuck" }, 374))).toBe(374);
+  });
+
+  it("or to where the reader last scrolled", () => {
+    expect(restoreAfterResize(20, 20, anchorTarget({ kind: "at", scrollTop: 180 }, 374))).toBe(180);
+  });
+
+  it("never undoes a scroll the browser did not clamp, or one already at the target", () => {
+    expect(restoreAfterResize(120, 400, 374)).toBeNull(); // not at the maximum: the reader's
+    expect(restoreAfterResize(374, 374, 374)).toBeNull();
+    expect(restoreAfterResize(500, 500, 374)).toBeNull();
+  });
+
+  it("keeps the anchor stuck while the reader stays stuck, and follows them once they scroll above", () => {
+    expect(anchorAfterScroll({ kind: "stuck" }, 374, 374)).toEqual({ kind: "stuck" });
+    expect(anchorAfterScroll({ kind: "stuck" }, 373.7, 374)).toEqual({ kind: "stuck" });
+    expect(anchorAfterScroll({ kind: "stuck" }, 250, 374)).toEqual({ kind: "at", scrollTop: 250 });
+    expect(anchorAfterScroll({ kind: "at", scrollTop: 250 }, 90, 374)).toEqual({ kind: "at", scrollTop: 90 });
+    // The stuck point is read in the current layout, so a reflow cannot strand it.
+    expect(anchorTarget({ kind: "stuck" }, 505)).toBe(505);
   });
 });
 
@@ -89,15 +115,36 @@ describe("the detail panel wires it", () => {
 
   it("holds a reserve only for a switch made while scrolled, sized for where the scroll will be", () => {
     expect(source).toMatch(/useState<number \| null>\(null\)/);
-    expect(source).toMatch(/const keep = target \?\? scroller\?\.scrollTop \?\? 0;\s*if \(keep > 0 && scroller && panels\) setReserve\(reserveFor\(keep, panelGeometry\(scroller, panels\)\)\);/);
+    expect(source).toMatch(/const keep = target \?\? scroller\?\.scrollTop \?\? 0;\s*anchorRef\.current = [^;]*;\s*if \(keep > 0 && scroller && panels\) setReserve\(reserveFor\(keep, panelGeometry\(scroller, panels\)\)\);/);
     expect(source).toMatch(/data-detail-tabpanels="" style=\{reserve !== null \? \{ minHeight: reserve \} : undefined\}/);
   });
 
   it("releases it on scroll, on a resize of the scroller, and on a new task", () => {
-    expect(source).toMatch(/scroller\.addEventListener\("scroll", check, \{ passive: true \}\)/);
+    expect(source).toMatch(/scroller\.addEventListener\("scroll", sync, \{ passive: true \}\)/);
+    expect(source).toMatch(/new ResizeObserver\(sync\)/);
     expect(source).toMatch(/observer\?\.observe\(scroller\);/);
     expect(source).toMatch(/observer\?\.observe\(panels\);/);
-    expect(source).toMatch(/setReserve\(\(current\) => shrinkReserve\(current, needed, natural\)\)/);
+    expect(source).toMatch(/setReserve\(\(current\) => shrinkReserve\(current, needed, covered\)\)/);
     expect(source).toMatch(/useEffect\(\(\) => setReserve\(null\), \[detail\.issue\.id\]\);/);
+  });
+
+  it("anchors the reserve at the switch: the stuck point, or where the reader was", () => {
+    expect(source).toMatch(/anchorRef\.current = target !== null \? \{ kind: "stuck" \} : \{ kind: "at", scrollTop: keep \};/);
+  });
+
+  it("on a height-only resize, grows the reserve before paint and puts a clamped scroll back", () => {
+    expect(source).toMatch(/const heightOnly = Math\.abs\(now\.width - size\.width\) <= 0\.5 && Math\.abs\(now\.height - size\.height\) > 0\.5;/);
+    expect(source).toMatch(
+      /const restore = restoreAfterResize\(top, scroller\.scrollHeight - now\.height, anchorTarget\(anchorRef\.current, stickAt\)\);[\s\S]*?flushSync\(\(\) => setReserve\(grown\)\);\s*scroller\.scrollTop = restore;/,
+    );
+    // Any other scroll or resize is the reader's (or a reflow): the anchor follows it.
+    expect(source).toMatch(/\} else \{[^}]*anchorRef\.current = anchorAfterScroll\(anchorRef\.current, top, stickAt\);/);
+  });
+
+  it("measures what follows the panels from the content's own box, not scrollHeight", () => {
+    // scrollHeight never reports less than the scroller's height, which made a restored
+    // scroll land short by the difference when the content was shorter than the screen.
+    expect(source).toMatch(/const content = panels\.closest<HTMLElement>\("\[data-detail-layout\]"\);/);
+    expect(source).toMatch(/const tail = content \? content\.getBoundingClientRect\(\)\.bottom - box\.bottom :/);
   });
 });
