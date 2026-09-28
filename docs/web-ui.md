@@ -533,10 +533,16 @@ step's `part` and `action`, a wrapper `state`), never parsed out of a message.
 The server's own sentences stay behind *Show details*.
 
 - **At a glance.** On, Off or *Needs attention*, as a word and an icon; the
-  privacy note ("readings stay on this computer; nothing is sent anywhere");
+  privacy note ("readings stay on this computer; nothing is sent anywhere", or
+  with live checks on, what is sent and to whom);
   *Turn usage tracking on/off* (`staple budget capture on|off`) behind an
   inline confirmation; *Collect now* (`staple budget collect`) with what it
   found in words; *Check again*.
+- **Live checks.** On, Off or *Waiting* (on, but tracking is off);
+  *Turn live checks on/off* (`staple budget live on|off`) behind an inline
+  confirmation that says, before it is pressed, what is asked, of whom and
+  with which sign-in; each linked account with the host it asks, when it was
+  last checked, and a failed check's reason.
 - **Where readings come from.** Each bound source with its account, the age of
   its newest reading, and how it is fed: the status-line wrapper's state for
   Claude, the watcher's for Codex. The status's problems follow, in everyday
@@ -1219,10 +1225,25 @@ yet*: it belongs to the admission policy, which is not built.
 limit, a provisional default until an admission policy sets one) and the
 provisional pressure rule (unsafe at ×1.00 or over), both from the payload.
 
-**Live.** The view re-reads every 30 seconds while the page is visible, at
-once when it becomes visible again, and on the Refresh button. It does not
-follow the workspace fingerprint: budget readings live in the hub, not in a
-workspace.
+**Live.** The view re-reads every 30 seconds while the page is visible and at
+once when it becomes visible again. It does not follow the workspace
+fingerprint: budget readings live in the hub, not in a workspace.
+
+**Refresh.** The button runs one real collection
+(`POST /api/budget/collection/refresh`, what `staple budget collect` runs: the
+passive scan, then, with [live polling](execution-telemetry.md#live-polling)
+on, one check with each linked provider, at most once a minute per account),
+reads *Checking…* while it runs, then says per provider what happened:
+*Updated just now*, or the provider's reason in plain words (*Claude Code's
+sign-in on this computer has expired… Sign in to Claude Code again*). With live
+checks off it says so and where to turn them on. It is the one write the server
+accepts from another device, so it works from the phone on the tailnet: it
+takes no input, can only do what the schedule already does, and still needs
+the token. With live checks on, each account says when it was last checked;
+when that check failed, a bordered line above its cards says why and how old
+the figures below are. A limit the provider reports with no window running
+reads *nothing used since it last reset, so the full allowance is there*
+instead of unknown. The last reading's source reads *live check*.
 Between reads, the reset countdown and the last reading's age tick by the
 seconds the page has held the answer, by the page's own clock, so a device
 whose clock is off still counts right; the forecast figures stay as of the

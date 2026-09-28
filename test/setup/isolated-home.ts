@@ -26,9 +26,11 @@
  * runs that did nothing wrong. The guard looks only for what a TEST could have written:
  *
  *   - Budget rows. With capture on, every open Claude Code session writes a heartbeat
- *     row every 300 s, so a row count would fail nearly every run. A new sample counts
- *     only when a live status line could not have written it: its source is not
- *     `claude_code_statusline`, its account is not one the real `config.json` binds, its
+ *     row every 300 s, and with live polling on the launch agent writes a `usage_poll`
+ *     row per bound account every 5 minutes, so a row count would fail nearly every run.
+ *     A new sample counts only when a live status line or live poll could not have
+ *     written it: its source is neither of those, its account is not one the real
+ *     `config.json` binds, its
  *     `recorded_at` lies outside this run's wall-clock window (tests inject fixed
  *     clocks), or its `session_ref` is the hash of any session id the suites use
  *     (`FIXTURE_SESSION_IDS`). A new window counts
@@ -74,6 +76,8 @@ export interface LiveBudgetContext {
 }
 
 const BUDGET_TABLES = ["budget_samples", "limit_windows"] as const;
+/** What this machine writes on its own while a run is going: the status line and the live poll. */
+const LIVE_SOURCES: ReadonlySet<string> = new Set(["claude_code_statusline", "usage_poll"]);
 
 /**
  * The spellings a scratch path can take. On macOS `tmpdir()` is `/var/folders/…` and its
@@ -151,7 +155,7 @@ export function testWrittenBudgetRows(path: string, before: HubSnapshot, live: L
         .all(before.budgetHighWater.budget_samples) as Array<{ source_kind: string; account_ref: string; recorded_at: string; session_ref: string | null }>;
       for (const row of rows) {
         const why =
-          row.source_kind !== "claude_code_statusline"
+          !LIVE_SOURCES.has(row.source_kind)
             ? `source ${row.source_kind}`
             : !bound.has(row.account_ref)
               ? `unbound account ${row.account_ref}`

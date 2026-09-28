@@ -30,7 +30,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, closeSync, linkSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { writeFileAtomic } from "../../../config/atomic.js";
 import { readConfig } from "../../../config/file.js";
 import { expandHomePath } from "../bindings.js";
@@ -186,8 +186,12 @@ function processAlive(pid: number): boolean {
  * pid, or a readable `at` older than {@link LOCK_STALE_MS}, makes it stale.
  */
 export function acquireLock(home: string, nowMs: number, hooks: { readonly beforeMoveAside?: () => void } = {}): boolean {
-  const path = lockPath(home);
-  mkdirSync(join(home, "telemetry"), { recursive: true, mode: 0o700 });
+  return acquireLockFile(lockPath(home), nowMs, hooks);
+}
+
+/** {@link acquireLock} for any lock file: the live poll run keeps its own (`telemetry/poll.lock`). */
+export function acquireLockFile(path: string, nowMs: number, hooks: { readonly beforeMoveAside?: () => void } = {}): boolean {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const fd = openSync(path, "wx", 0o600);

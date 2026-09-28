@@ -113,6 +113,7 @@ describe("staple budget refusals and configuration", () => {
     const listed = JSON.parse(budget(["bindings", "--json"]).stdout.toString());
     expect(listed).toEqual({
       budgetCapture: false,
+      livePolling: false,
       bindings: [{ source: "codex_rollout", home: join(home, "codex"), provider: "openai", accountRef: "codex-plus" }],
       unknownBindings: 0,
       invalidBindings: [],
