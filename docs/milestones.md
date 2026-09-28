@@ -150,7 +150,17 @@ milestones involved in the same transaction. (Pinned by `store-milestones.test.t
 
 That includes the closing rungs: when the last member lands the milestone
 closes itself, and a member reopening reopens it — unless a person moved it by
-hand, or a gate is open on it, exactly as for an epic. (Pinned by
+hand, or a gate is open on it, exactly as for an epic. Its owner gets the same
+`children_complete` wake first. A membership EDIT never closes it, though:
+adding a member that already landed, or removing the last open one, moves it
+between the open rungs only, so a milestone being built out does not close
+between two adds, and descoping is not finishing. Because a milestone can be a
+child of the epic that holds its members, the walk re-derives its whole upward
+closure until nothing changes, so the order it reaches holders in never leaves
+one reading another's old status. (Pinned by *"never closes on a membership
+edit, only when a member lands"*, *"wakes the milestone's owner before it
+closes"* and *"closes a parent whose milestone child is reached at the same
+depth"*.) (Pinned by
 `store-milestones.test.ts` — *"the last member landing closes the milestone,
 and a member reopening reopens it"* and *"lands where its members say when a
 gate on it is approved"*.)
@@ -630,7 +640,7 @@ carries a claim goes through all three at once.
   and are never takeable; `request-changes` keeps them there and `approve`
   releases them, both on the next read with no queue write. A live claim is
   skipped for everyone but its holder. A plan whose work has all landed reads
-  `complete` and stays open until a human closes it; closing it takes it out of
+  `complete` and closes itself with its last member; closing takes it out of
   `milestone ls`, `queue prune` forgets its plan row, and its members keep their
   ranks as the record.
 

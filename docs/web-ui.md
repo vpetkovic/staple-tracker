@@ -1265,7 +1265,8 @@ carries no drag wiring, and the buttons are the keyboard path either way.
 **States without colour.** Planned `○`, active `◐`, overdue `!`, done `✓`,
 cancelled `×` — glyph and word together, so no state is told by hue alone; an
 active milestone whose members have all landed says "all members done" beside
-the badge until a human closes it. Blocked and gated are not milestone states
+the badge — which, now that a milestone closes with its last member, is only
+seen while a gate or a manual status holds it open. Blocked and gated are not milestone states
 (they are facts about members) and appear as `⊘ n blocked` / `◇ n gated` in the
 risk line.
 
