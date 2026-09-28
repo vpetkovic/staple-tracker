@@ -51,13 +51,17 @@ describe("the milestone list", () => {
             memberCount: 3,
             next: { identifier: "STA-67", position: 4 },
           }),
-          listRow({ milestone: { identifier: "STA-191", title: "November", targetDate: null, state: "planned" }, next: null }),
+          listRow({
+            milestone: { identifier: "STA-191", title: "November", targetDate: null, state: "planned" },
+            progress: progress({ counts: { ready: 1 } }),
+            next: null,
+          }),
         ]}
         effective={[
-          effective({ identifier: "STA-68", milestonePath: ["STA-190"], eligibility: "blocked" }),
-          effective({ identifier: "STA-69", milestonePath: ["STA-190"], eligibility: "gated" }),
+          effective({ identifier: "STA-68", milestonePath: ["STA-190"], eligibility: "blocked", status: "todo" }),
+          effective({ identifier: "STA-69", milestonePath: ["STA-190"], eligibility: "gated", status: "todo" }),
           // November's own blocked row must not leak into October's line.
-          effective({ identifier: "STA-70", milestonePath: ["STA-191"], eligibility: "blocked" }),
+          effective({ identifier: "STA-70", milestonePath: ["STA-191"], eligibility: "blocked", status: "todo" }),
         ]}
         selectedRef="STA-190"
         onSelect={noop}
@@ -72,13 +76,13 @@ describe("the milestone list", () => {
     expect(html).toContain("3 members");
     expect(html).toContain('data-milestone-state="overdue"');
     expect(html).toContain("! overdue");
-    expect(html).toContain("⊘ 1 blocked");
-    expect(html).toContain("◇ 1 gated");
+    // The page's own sentence: what the bar calls blocked, and what each waits on.
+    expect(html).toContain("⊘ 2 are blocked: 1 waits on other tasks, 1 on a person.");
     expect(html).toContain('data-milestone-next="queued"');
     expect(html).toContain("next: STA-67 (#4)");
     // The second row: nothing planned yet, and the queue has no answer. Its one blocked
     // row is counted against it and not against October's.
-    expect(html.match(/⊘ 1 blocked/g)).toHaveLength(2);
+    expect(html).toContain("⊘ 1 is blocked, waiting on other tasks.");
     expect(html).toContain("target no date");
     expect(html).toContain('data-milestone-next="none"');
     expect(html).toContain("no eligible work");
@@ -146,7 +150,7 @@ describe("the milestone detail", () => {
     expect(html).toContain("1 of 3 tasks finished (33%).");
     // The grid counts the queue's one blocked row, not the status-category count — which is
     // zero here, as it is for real blocked work — and says it once.
-    expect(html).toMatch(/Tasks waiting on others<\/dt><dd[^>]*>1<\/dd>/);
+    expect(html).toMatch(/Blocked, waiting on other tasks<\/dt><dd[^>]*>1<\/dd>/);
     expect(html).not.toContain("⊘");
     expect(html).toMatch(/Next up<\/dt><dd[^>]*>no eligible work<\/dd>/);
   });
@@ -154,11 +158,17 @@ describe("the milestone detail", () => {
   it("draws members with the shared row and an epic's children under it, read-only", () => {
     const html = renderDetail(data, {}, issues);
     // The shared row component, once per member and once per child — each an option in the
-    // members listbox, so a click or Enter on the row opens it, as on the Queue page.
+    // members treegrid, with the Tasks list's roles: a click, or Enter on the row, opens it.
     expect(html.match(/data-testid="task-row"/g)).toHaveLength(3);
-    expect(html.match(/role="option"/g)).toHaveLength(3);
-    expect(html).toMatch(/<ul role="listbox" aria-label="Members of STA-190"/);
-    expect(html).not.toContain("staple-row-bare");
+    expect(html.match(/data-member-row=/g)).toHaveLength(3);
+    expect(html).toMatch(/<ul role="treegrid" aria-label="Members of STA-190"/);
+    // Level and state: the epic is level 1 and open, its child level 2; no option roles.
+    expect(html).toMatch(/role="row" aria-level="1" aria-expanded="true"[^>]*data-member-row="STA-66"/);
+    expect(html).toMatch(/role="row" aria-level="2"[^>]*data-member-row="STA-67"/);
+    expect(html).not.toContain('role="option"');
+    expect(html).not.toContain('role="listbox"');
+    // The shared row is drawn bare inside the treegrid row, which owns the role, focus and click.
+    expect(html).toContain("staple-row-bare");
     // The Tasks list's tree: a chevron on the epic, a connector on its child.
     expect(html).toContain('aria-label="Collapse STA-66"');
     expect(html).toContain("staple-guide-elbow");
@@ -196,7 +206,11 @@ describe("the milestone detail", () => {
       reviewed,
       {
         desk: true,
-        effective: [effective({ identifier: "STA-67", milestonePath: ["STA-190"], eligibility: "blocked", status: "in_review" })],
+        effective: [
+          effective({ identifier: "STA-67", milestonePath: ["STA-190"], eligibility: "blocked", status: "in_review" }),
+          // Parked by hand for a person's decision: it waits on a person, not on another task.
+          effective({ identifier: "STA-71", milestonePath: ["STA-190"], eligibility: "blocked", status: "blocked" }),
+        ],
       },
       issues,
     );
@@ -210,16 +224,20 @@ describe("the milestone detail", () => {
     // One grid of label/value pairs, two pairs to a line; the old trailing risk line is gone.
     const grid = /<dl data-milestone-rollups[^>]*class="([^"]*)"/.exec(html)![1]!;
     expect(grid).toContain("grid-cols-[max-content_minmax(0,1fr)_max-content_minmax(0,1fr)]");
-    expect(html.match(/<dt /g)).toHaveLength(7); // reference, counted, starts, waiting, target, approval, next
+    // reference, counted, starts, waiting on tasks, target, waiting on a person, started-and-waiting, next
+    expect(html.match(/<dt /g)).toHaveLength(8);
+    expect(html).toMatch(/Started, still waiting on other tasks<\/dt><dd[^>]*>1<\/dd>/);
+    expect(html).toMatch(/Blocked, waiting on a person<\/dt><dd[^>]*>1<\/dd>/);
+    expect(html).toMatch(/Blocked, waiting on other tasks<\/dt><dd[^>]*>0<\/dd>/);
     expect(html).not.toContain("data-milestone-risk");
     expect(html).not.toContain("⊘");
   });
 
   it("keeps the open, move and remove buttons outside the clickable row, so they never also open it", () => {
     const html = renderDetail(data, {}, issues);
-    const li = /<li role="presentation" data-milestone-member="STA-66"[\s\S]*?<\/li>/.exec(html)![0];
-    const rowStart = li.indexOf('role="option"');
-    const controlsStart = li.indexOf('<div class="flex shrink-0 items-center">');
+    const li = /<li role="none" data-milestone-member="STA-66"[\s\S]*?<\/li>/.exec(html)![0];
+    const rowStart = li.indexOf('role="row"');
+    const controlsStart = li.indexOf('<div role="gridcell" class="flex shrink-0 items-center">');
     expect(rowStart).toBeGreaterThan(-1);
     expect(controlsStart).toBeGreaterThan(rowStart);
     // Every control is after the row's own markup, i.e. a sibling of it, never inside it.
@@ -227,7 +245,21 @@ describe("the milestone detail", () => {
       expect(li.indexOf(`aria-label="${label}"`), label).toBeGreaterThan(controlsStart);
     }
     // The row is focusable as one tab stop: the first row, and only it, takes Tab.
-    expect(html.match(/role="option"[^>]*tabindex="0"/g)).toHaveLength(1);
+    // The rows rove: one of them takes Tab, the arrows move between them.
+    expect(html.match(/role="row"[^>]*tabindex="0"/g)).toHaveLength(1);
+  });
+
+  it("says the members are finished, and offers them, when Done hides every one", () => {
+    const html = renderDetail(data, { members: [], hiddenDone: 3, onShowDone: noop, desk: true }, issues);
+    expect(html).toContain('data-hidden-all=""');
+    expect(html).toContain("3 finished items hidden");
+    expect(html).toContain("Show done");
+    expect(html).not.toContain("Nothing is in this milestone yet");
+  });
+
+  it("gives the row's controls a 44px target on a phone", () => {
+    const html = renderDetail(data, {}, issues);
+    expect(html).toMatch(/class="[^"]*max-md:size-11[^"]*"[^>]*aria-label="Open STA-146"/);
   });
 
   it("gives the member list the Tasks list's keyboard: arrows move, Enter and Space open, left and right fold", () => {

@@ -8,8 +8,10 @@ import { issue, row } from "@/components/task-list/fixtures";
 import { effective } from "@/views/queue/fixtures";
 import { listRow, member, progress, view } from "./fixtures";
 import {
+  hiddenMemberCount,
   layoutFor,
   memberListRows,
+  visibleMilestones,
   milestoneRisk,
   movedOrder,
   nextWorkLabel,
@@ -85,7 +87,9 @@ describe("milestoneRisk", () => {
   it("reads overdue from the state and blocked/gated from the queue's eligibility", () => {
     const risky = view({ milestone: { identifier: "STA-190", state: "overdue" } });
     // Every fixture row is `backlog`, so all three waiting rows sit in the not-started category.
-    expect(milestoneRisk(risky, queueRows)).toEqual({ overdue: true, blocked: 2, gated: 1, waitingIn: { unstarted: 3 } });
+    expect(milestoneRisk(risky, queueRows)).toMatchObject({ overdue: true, blocked: 2, gated: 1, waitingIn: { unstarted: 3 } });
+    // Two wait on other tasks (blocked, not started); the gated one waits on a person's approval.
+    expect(milestoneRisk(risky, queueRows).waiting).toEqual({ onTasksNotStarted: 2, onTasksStarted: {}, onPerson: 1 });
     expect(riskLabels(milestoneRisk(risky, queueRows))).toEqual(["! overdue", "⊘ 2 blocked", "◇ 1 gated"]);
   });
 
@@ -99,12 +103,12 @@ describe("milestoneRisk", () => {
     const counted = progress({ counts: { blocked: 9, gated: 9, ready: 3 } });
     const fromQueue = view({ milestone: { identifier: "STA-190", state: "active" }, progress: counted });
     expect(milestoneRisk(fromQueue, queueRows)).toMatchObject({ overdue: false, blocked: 2, gated: 1 });
-    expect(milestoneRisk(fromQueue, [])).toEqual({ overdue: false, blocked: 0, gated: 0, waitingIn: {} });
+    expect(milestoneRisk(fromQueue, [])).toMatchObject({ overdue: false, blocked: 0, gated: 0, waitingIn: {} });
   });
 
   it("is silent when there is nothing to warn about", () => {
     const calm = view({ milestone: { identifier: "STA-190", state: "planned" } });
-    expect(milestoneRisk(calm, [effective({ identifier: "STA-4", milestonePath: ["STA-190"] })])).toEqual({
+    expect(milestoneRisk(calm, [effective({ identifier: "STA-4", milestonePath: ["STA-190"] })])).toMatchObject({
       overdue: false,
       blocked: 0,
       gated: 0,
@@ -207,6 +211,24 @@ describe("memberListRows", () => {
     ]);
   });
 
+  it("gives a row lifted out of a hidden parent that parent's chip, and the hidden member's controls", () => {
+    const doneEpic = { ...epic, status: "done" as const };
+    const rows = [doneEpic, child1, { ...child2, status: "done" as const }, grandchild].map((i) => ({ ...row(), issue: i }));
+    const v = view({ members: [member({ identifier: "STA-66", kind: "epic" })] });
+    const visible = (r: { issue: { status: string } }) => r.issue.status !== "done" && r.issue.status !== "cancelled";
+    const out = memberListRows(v, rows, "staple", { visible });
+    // STA-66 (done) and STA-68 (done) hidden: their open work takes their place.
+    expect(out.map((r) => [r.row.issue.identifier, r.row.breadcrumb?.identifier ?? null])).toEqual([
+      ["STA-67", "STA-66"],
+      ["STA-69", "STA-68"],
+    ]);
+    // The first row lifted out of the hidden MEMBER carries its move and remove; the next does not.
+    expect(out[0]!.standsFor).toMatchObject({ member: { identifier: "STA-66" }, memberIndex: 0 });
+    expect(out[1]!.standsFor).toBeNull();
+    expect(hiddenMemberCount(v, rows, "staple", visible)).toBe(2);
+    expect(hiddenMemberCount(v, rows, "staple", () => true)).toBe(0);
+  });
+
   it("synthesises a row for a member the page's issue list does not carry", () => {
     const v = view({ members: [member({ identifier: "OTHER-1", kind: "bug", status: "in_progress", title: "elsewhere" })] });
     const rows = memberListRows(v, [], "hub-ws");
@@ -240,5 +262,14 @@ describe("layoutFor", () => {
     expect(layoutFor(768)).toBe("stacked");
     expect(layoutFor(1024)).toBe("split");
     expect(layoutFor(1440)).toBe("split");
+  });
+});
+
+describe("visibleMilestones", () => {
+  const open = listRow({ milestone: { identifier: "STA-1", state: "active" } });
+  const done = listRow({ milestone: { identifier: "STA-2", state: "done" } });
+  it("keeps the milestone the page is pointed at listed, finished or not", () => {
+    expect(visibleMilestones([open, done], false).rows.map((r) => r.milestone.identifier)).toEqual(["STA-1"]);
+    expect(visibleMilestones([open, done], false, [null, "STA-2"])).toMatchObject({ rows: [open, done], hiddenFinished: 0 });
   });
 });

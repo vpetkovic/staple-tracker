@@ -10,10 +10,11 @@
  * projection again. The projection itself is never stored.
  */
 import { CalendarDays } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { personActor } from "@/detail/parts/person";
 import { updateMilestoneDates } from "@/lib/api";
 import { useBackToClose } from "@/lib/back-to-close";
 import { describeRefusal } from "@/lib/refusal";
@@ -25,6 +26,7 @@ import { dueText, localIso, projectionNote, type ProjectedDue } from "./mileston
 export interface DueMilestone {
   targetDate: string | null;
   state: MilestoneState;
+  closedAt?: string | null;
 }
 
 /** The write, and what went wrong with the last one. `set(null)` clears the target. */
@@ -32,12 +34,17 @@ export function useSetMilestoneTarget(workspace: string | undefined, milestoneId
   const session = useSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A failed save belongs to the milestone it was for, and to that attempt: another milestone,
+  // or opening the field again, starts clean.
+  useEffect(() => setError(null), [workspace, milestoneId]);
+  const clear = useCallback(() => setError(null), []);
   const set = useCallback(
     async (targetDate: string | null): Promise<boolean> => {
       setBusy(true);
       setError(null);
       try {
-        await updateMilestoneDates({ ws: workspace, ref: milestoneId, targetDate });
+        // Signed by the person, as every detail write is (`detail/parts/person.ts`).
+        await updateMilestoneDates({ ws: workspace, ref: milestoneId, targetDate, actor: personActor() });
         session.refresh();
         return true;
       } catch (caught) {
@@ -49,30 +56,31 @@ export function useSetMilestoneTarget(workspace: string | undefined, milestoneId
     },
     [workspace, milestoneId, session],
   );
-  return { set, busy, error };
+  return { set, busy, error, clear };
 }
 
 export function MilestoneDueControl({
   milestone,
   projection,
   now,
-  completedAt = null,
   editable = true,
   busy = false,
   error = null,
   onSetTarget,
+  onOpen,
   className,
   defaultOpen = false,
 }: {
   milestone: DueMilestone;
   projection: ProjectedDue | null;
   now: Date;
-  completedAt?: string | null;
   /** False on a finished milestone, where a new due date means nothing. */
   editable?: boolean;
   busy?: boolean;
   error?: string | null;
   onSetTarget?: (targetDate: string | null) => Promise<boolean> | void;
+  /** The field opened: the caller clears the last attempt's error. */
+  onOpen?: () => void;
   className?: string;
   /** Tests render the field open; the page opens it on a click. */
   defaultOpen?: boolean;
@@ -81,7 +89,7 @@ export function MilestoneDueControl({
   useBackToClose(open, () => setOpen(false));
   const projected = !milestone.targetDate && projection !== null && milestone.state !== "done" && milestone.state !== "cancelled";
   const [draft, setDraft] = useState(milestone.targetDate ?? (projection ? localIso(projection.at) : ""));
-  const text = dueText(milestone, projection, now, completedAt);
+  const text = dueText(milestone, projection, now);
   const save = async (value: string | null) => {
     const ok = await onSetTarget?.(value);
     if (ok !== false) setOpen(false);
@@ -105,7 +113,10 @@ export function MilestoneDueControl({
       <Popover
         open={open}
         onOpenChange={(next) => {
-          if (next) setDraft(milestone.targetDate ?? (projection ? localIso(projection.at) : ""));
+          if (next) {
+            setDraft(milestone.targetDate ?? (projection ? localIso(projection.at) : ""));
+            onOpen?.();
+          }
           setOpen(next);
         }}
       >
@@ -116,6 +127,8 @@ export function MilestoneDueControl({
             aria-label={milestone.targetDate ? "Change the due date" : "Set a due date"}
             title={milestone.targetDate ? "Change the due date" : "Set a due date"}
             data-milestone-due-button=""
+            // 44px on a phone, where it is a thumb's target.
+            className="max-md:size-11"
             disabled={busy}
           >
             <CalendarDays aria-hidden />
@@ -154,11 +167,11 @@ export function MilestoneDueControl({
             ) : null}
             <div className="flex items-center justify-end gap-2">
               {milestone.targetDate ? (
-                <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void save(null)} data-milestone-due-clear="">
+                <Button type="button" variant="ghost" size="sm" className="max-md:min-h-11" disabled={busy} onClick={() => void save(null)} data-milestone-due-clear="">
                   {projection ? "Use the estimate" : "Clear date"}
                 </Button>
               ) : null}
-              <Button type="submit" size="sm" disabled={busy || !draft || draft === milestone.targetDate} data-milestone-due-save="">
+              <Button type="submit" size="sm" className="max-md:min-h-11" disabled={busy || !draft || draft === milestone.targetDate} data-milestone-due-save="">
                 Save
               </Button>
             </div>

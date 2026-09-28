@@ -89,8 +89,14 @@ export interface MilestoneRisk {
    * Optional so a hand-built reading (a test, an older caller) means "none started".
    */
   waitingIn?: Partial<Record<StatusCategory, number>>;
+  /**
+   * What each waiting row waits ON. A PERSON: parked for a person's action by hand (a status in
+   * the blocked category), waiting for approval (the gated category), or queued behind a
+   * parent's approval gate (`gated`). OTHER TASKS: held by the queue for an unfinished blocker
+   * — split by whether its work has started (in progress or in review) or not.
+   */
+  waiting?: { onTasksNotStarted: number; onTasksStarted: Partial<Record<"active" | "review", number>>; onPerson: number };
 }
-
 /**
  * Overdue comes off the milestone's own state. Blocked and gated come off the QUEUE, not
  * off `progress.counts`: those count leaves whose STATUS is in the blocked or gated
@@ -110,6 +116,7 @@ export function milestoneRisk(
   let blocked = 0;
   let gated = 0;
   const waitingIn: Partial<Record<StatusCategory, number>> = {};
+  const waiting = { onTasksNotStarted: 0, onTasksStarted: {} as Partial<Record<"active" | "review", number>>, onPerson: 0 };
   for (const queueRow of effective) {
     if (!queueRow.milestonePath.includes(row.milestone.identifier)) continue;
     if (queueRow.eligibility === "blocked") blocked += 1;
@@ -117,8 +124,11 @@ export function milestoneRisk(
     else continue;
     const category = statusCategory(queueRow.status);
     waitingIn[category] = (waitingIn[category] ?? 0) + 1;
+    if (queueRow.eligibility === "gated" || category === "blocked" || category === "gated") waiting.onPerson += 1;
+    else if (category === "active" || category === "review") waiting.onTasksStarted[category] = (waiting.onTasksStarted[category] ?? 0) + 1;
+    else waiting.onTasksNotStarted += 1;
   }
-  return { overdue: row.milestone.state === "overdue", blocked, gated, waitingIn };
+  return { overdue: row.milestone.state === "overdue", blocked, gated, waitingIn, waiting };
 }
 
 /** The risk as words, each with its own glyph. Empty when there is nothing to warn about. */
@@ -161,6 +171,25 @@ export interface MemberListRow {
   /** For a member: its index among direct members, which the move buttons act on. */
   memberIndex: number;
   member: MilestoneMemberRow | null;
+  /**
+   * The member this row carries the controls of, when the member itself is hidden by the done
+   * gate and this row is the first of its open work lifted into its place. Without it the
+   * member's move and remove would be unreachable while Done is hidden.
+   */
+  standsFor: { member: MilestoneMemberRow; memberIndex: number } | null;
+}
+
+export interface MemberListOptions {
+  /**
+   * Is this row on the page? The caller passes the Tasks list's own done gate
+   * (`passesDone`), so "Done hidden" hides the same rows here as there. A hidden row's
+   * children take its place, the way the Tasks list re-roots a subtree whose parent is
+   * filtered out, each wearing the Tasks list's parent chip ("STA-354 ›"). Absent: every row
+   * is shown.
+   */
+  visible?: (row: IssueRow) => boolean;
+  /** Identifiers whose children the reader folded away. */
+  collapsed?: ReadonlySet<string>;
 }
 
 /**
@@ -202,42 +231,18 @@ function issueFromMember(member: MilestoneMemberRow, parentId: string | null): I
   };
 }
 
-export interface MemberListOptions {
-  /**
-   * Is this row on the page? The caller passes the Tasks list's own done gate
-   * (`passesDone`), so "Done hidden" hides the same rows here as there. A hidden row's
-   * children take its place, the way the Tasks list re-roots a subtree whose parent is
-   * filtered out. Absent: every row is shown.
-   */
-  visible?: (row: IssueRow) => boolean;
-  /** Identifiers whose children the reader folded away. */
-  collapsed?: ReadonlySet<string>;
+interface MemberForest {
+  roots: PlacedNode[];
+  memberAt: Map<string, { member: MilestoneMemberRow; index: number }>;
 }
 
 /**
- * The ordered member list as `TaskRow`s for the shared row component, shaped exactly as the
- * Tasks list shapes a tree.
- *
- * Members keep the store's order. A member nested under another member (`nestedUnder`) sits
- * under it, and an epic member's OWN children — the ones in `issues` whose parent it is and
- * which are not members themselves — sit under it too, so a reader sees the epic's hierarchy
- * as the Tasks list draws it. A child that is itself a member is skipped here because it has
- * its own row at its own position, and one issue drawn twice would be two rows disagreeing
- * about where it is.
- *
- * Depth, guides and the elbow come from `walkPlaced`, the tree's one walk, so the connector
- * lines, the chevron and the indent step are the Tasks list's own rather than a padding
- * that only resembles them. A parent's rollup ("0/9") is `parentRollups` over the whole,
- * unfiltered issue list, the number the Tasks list prints on the same row.
+ * The members as a forest: each member a node, an epic member's own non-member children under
+ * it, a nested member under the member it descends from when that member comes first in the
+ * plan (moved above it, it is a node of its own at its own position, so a move always shows
+ * and a child is never drawn above its parent).
  */
-export function memberListRows(
-  view: MilestoneView,
-  issues: readonly IssueRow[],
-  workspace: string,
-  options: MemberListOptions = {},
-): MemberListRow[] {
-  const visible = options.visible ?? (() => true);
-  const collapsed = options.collapsed ?? new Set<string>();
+function memberForest(view: MilestoneView, issues: readonly IssueRow[], workspace: string): MemberForest {
   const byIdentifier = new Map(issues.map((row) => [row.issue.identifier, row]));
   const childrenOf = new Map<string, IssueRow[]>();
   for (const row of issues) {
@@ -258,21 +263,18 @@ export function memberListRows(
     const source = known ?? { workspace, issue: issueFromMember(member, member.parent), claim: null };
     nodes.set(member.identifier, { row: source, ghost: false, children: [] });
   }
-  const descend = (row: IssueRow, seen: Set<string>): PlacedNode[] =>
+  const seen = new Set<string>();
+  const descend = (row: IssueRow): PlacedNode[] =>
     (childrenOf.get(row.issue.id) ?? [])
       .filter((child) => !memberIds.has(child.issue.identifier) && !seen.has(child.issue.id))
       .map((child) => {
         seen.add(child.issue.id);
-        return { row: child, ghost: false, children: descend(child, seen) };
+        return { row: child, ghost: false, children: descend(child) };
       });
-  const seen = new Set<string>();
   for (const member of view.members) {
     const node = nodes.get(member.identifier)!;
-    if (byIdentifier.has(member.identifier)) node.children.push(...descend(node.row, seen));
+    if (byIdentifier.has(member.identifier)) node.children.push(...descend(node.row));
   }
-  // A nested member sits under the member it descends from when that member comes first in
-  // the plan; moved above it, it is a row of its own at its own position, so a move always
-  // shows on the page and a child is never drawn above its parent.
   const roots: PlacedNode[] = [];
   view.members.forEach((member, index) => {
     const node = nodes.get(member.identifier)!;
@@ -280,12 +282,65 @@ export function memberListRows(
     const host = hostAt && hostAt.index < index ? nodes.get(member.nestedUnder!) : undefined;
     (host ?? { children: roots }).children.push(node);
   });
+  return { roots, memberAt };
+}
 
-  // The done gate: a hidden row gives its place to its children.
+/**
+ * How many of the milestone's rows the done gate hides: what the page says when a milestone
+ * whose members are all finished would otherwise read as empty.
+ */
+export function hiddenMemberCount(
+  view: MilestoneView,
+  issues: readonly IssueRow[],
+  workspace: string,
+  visible: (row: IssueRow) => boolean,
+): number {
+  const count = (list: readonly PlacedNode[]): number =>
+    list.reduce((n, node) => n + (visible(node.row) ? 0 : 1) + count(node.children), 0);
+  return count(memberForest(view, issues, workspace).roots);
+}
+
+/**
+ * The ordered member list as `TaskRow`s for the shared row component, shaped exactly as the
+ * Tasks list shapes a tree (`memberForest`).
+ *
+ * A child that is itself a member is not drawn under its parent: it has its own row at its own
+ * position, and one issue drawn twice would be two rows disagreeing about where it is.
+ *
+ * Depth, guides and the elbow come from `walkPlaced`, the tree's one walk, so the connector
+ * lines, the chevron and the indent step are the Tasks list's own. A parent's rollup ("0/9")
+ * is `parentRollups` over the whole, unfiltered issue list, the number the Tasks list prints on
+ * the same row.
+ */
+export function memberListRows(
+  view: MilestoneView,
+  issues: readonly IssueRow[],
+  workspace: string,
+  options: MemberListOptions = {},
+): MemberListRow[] {
+  const visible = options.visible ?? (() => true);
+  const collapsed = options.collapsed ?? new Set<string>();
+  const { roots, memberAt } = memberForest(view, issues, workspace);
+
+  // The done gate: a hidden row gives its place to its children, each wearing the hidden
+  // parent's chip; the first of a hidden member's lifted rows carries that member's controls.
+  const breadcrumbOf = new Map<string, { identifier: string; title: string }>();
+  const standsForOf = new Map<string, { member: MilestoneMemberRow; memberIndex: number }>();
   const prune = (list: readonly PlacedNode[]): PlacedNode[] =>
     list.flatMap((node) => {
       const children = prune(node.children);
-      return visible(node.row) ? [{ ...node, children }] : children;
+      if (visible(node.row)) return [{ ...node, children }];
+      for (const child of children) {
+        if (!breadcrumbOf.has(child.row.issue.id)) {
+          breadcrumbOf.set(child.row.issue.id, { identifier: node.row.issue.identifier, title: node.row.issue.title });
+        }
+      }
+      const at = memberAt.get(node.row.issue.identifier);
+      const first = children[0];
+      if (at && first && !memberAt.has(first.row.issue.identifier) && !standsForOf.has(first.row.issue.id)) {
+        standsForOf.set(first.row.issue.id, { member: at.member, memberIndex: at.index });
+      }
+      return children;
     });
 
   const rollups = parentRollups(issues);
@@ -300,10 +355,12 @@ export function memberListRows(
         isExpanded: nested.isExpanded,
         childCount: nested.childCount,
         rollup: nested.hasChildren ? (rollups.get(nested.row.issue.id) ?? null) : null,
+        breadcrumb: breadcrumbOf.get(nested.row.issue.id) ?? null,
       }),
       role: at ? "member" : "child",
       memberIndex: at ? at.index : -1,
       member: at ? at.member : null,
+      standsFor: at ? null : (standsForOf.get(nested.row.issue.id) ?? null),
     };
   });
 }
@@ -343,6 +400,28 @@ export function layoutFor(widthPx: number): MilestonesLayout {
   return widthPx >= SPLIT_MIN_WIDTH_PX ? "split" : "stacked";
 }
 
+// ---------- finished milestones ----------
+
+/** A milestone that is over: finished or cancelled. Read-only on this page. */
+export function isFinishedMilestone(state: MilestoneState): boolean {
+  return state === "done" || state === "cancelled";
+}
+
+/**
+ * The milestones the list shows under the Done toggle, and how many finished ones it hides.
+ * `keep` names ones that stay listed whatever the toggle says: the one the page was pointed
+ * at (a `focus=` link) or has open, so a link to a finished milestone shows that milestone
+ * rather than quietly opening another.
+ */
+export function visibleMilestones<T extends Pick<MilestoneListRow, "milestone">>(
+  all: readonly T[],
+  showDone: boolean,
+  keep: readonly (string | null)[] = [],
+): { rows: T[]; hiddenFinished: number } {
+  const rows = showDone ? [...all] : all.filter((row) => !isFinishedMilestone(row.milestone.state) || keep.includes(row.milestone.identifier));
+  return { rows, hiddenFinished: all.length - rows.length };
+}
+
 // ---------- All workspaces ----------
 
 /**
@@ -360,37 +439,48 @@ export function isMissingMilestoneKind(error: unknown): boolean {
   return code === "validation" && (detail as { kind?: unknown } | undefined)?.kind === "milestone";
 }
 
-/** One workspace's milestone read, as the All-workspaces page receives it. */
+/**
+ * One workspace's milestone read, as the All-workspaces page receives it: every milestone,
+ * finished ones included, and the workspace's queue reading, which is where blocked and gated
+ * are counted from (`milestoneRisk`) — the same two inputs the workspace page reads.
+ */
 export type WorkspaceMilestonesResult =
-  | { workspace: string; ok: true; rows: readonly MilestoneListRow[] }
+  | { workspace: string; ok: true; rows: readonly MilestoneListRow[]; effective?: readonly EffectiveQueueRow[] }
   | { workspace: string; ok: false; error: unknown };
 
 export interface MilestoneGroup {
   workspace: string;
   rows: MilestoneListRow[];
+  effective: readonly EffectiveQueueRow[];
 }
 
 export interface AllMilestones {
-  /** Workspaces that have milestones, in the order given, each list sorted like one workspace's page. */
+  /** Workspaces with milestones to list, in the order given, each list sorted like one workspace's page. */
   groups: MilestoneGroup[];
   /** Workspaces whose read failed for a reason other than "milestones are not turned on". */
   failed: { workspace: string; error: unknown }[];
+  /** Finished milestones the Done toggle hides, over every workspace: what an empty page says. */
+  hiddenFinished: number;
 }
 
 /**
- * Every workspace's milestones, grouped. A workspace with none — including one that has not
- * turned milestones on — is left out rather than shown as an empty heading or an error: the
- * page is about milestones that exist, and "this workspace has none" is not news.
+ * Every workspace's milestones, grouped, under the Done toggle exactly as one workspace's page
+ * lists them. A workspace with none to list — including one that has not turned milestones on
+ * — is left out rather than shown as an empty heading or an error; the finished ones the toggle
+ * hides are counted, so an empty page can say they exist.
  */
-export function groupAllMilestones(results: readonly WorkspaceMilestonesResult[]): AllMilestones {
+export function groupAllMilestones(results: readonly WorkspaceMilestonesResult[], showDone = true): AllMilestones {
   const groups: MilestoneGroup[] = [];
   const failed: { workspace: string; error: unknown }[] = [];
+  let hiddenFinished = 0;
   for (const result of results) {
     if (result.ok) {
-      if (result.rows.length > 0) groups.push({ workspace: result.workspace, rows: sortMilestones(result.rows) });
+      const { rows: shown, hiddenFinished: hidden } = visibleMilestones(sortMilestones(result.rows), showDone);
+      hiddenFinished += hidden;
+      if (shown.length > 0) groups.push({ workspace: result.workspace, rows: shown, effective: result.effective ?? [] });
     } else if (!isMissingMilestoneKind(result.error)) {
       failed.push({ workspace: result.workspace, error: result.error });
     }
   }
-  return { groups, failed };
+  return { groups, failed, hiddenFinished };
 }

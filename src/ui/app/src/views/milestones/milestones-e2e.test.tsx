@@ -472,17 +472,16 @@ describe("reordering members", () => {
 
     // And that is what the page draws — on the list rows and in the detail's rollups.
     const html = renderList(refs.october!, effective);
-    expect(html).toContain("⊘ 1 blocked");
-    expect(html).toContain("◇ 2 gated");
+    expect(html).toContain("⊘ 1 is blocked, waiting on other tasks.");
 
     const detail = renderDetail(november, { effective });
-    expect(detail).toMatch(/Tasks waiting for approval<\/dt><dd[^>]*>2<\/dd>/);
+    expect(detail).toMatch(/Blocked, waiting on a person<\/dt><dd[^>]*>2<\/dd>/);
     // November's blocked cell reads zero: MSC-4 is October's, not November's.
-    expect(detail).toMatch(/Tasks waiting on others<\/dt><dd[^>]*>0<\/dd>/);
+    expect(detail).toMatch(/Blocked, waiting on other tasks<\/dt><dd[^>]*>0<\/dd>/);
     const octoberDetail = renderDetail(october, { effective });
-    expect(octoberDetail).toMatch(/Tasks waiting on others<\/dt><dd[^>]*>1<\/dd>/);
+    expect(octoberDetail).toMatch(/Blocked, waiting on other tasks<\/dt><dd[^>]*>1<\/dd>/);
     // MSC-4 has not started, so the bar files it as blocked and the sentence agrees.
-    expect(octoberDetail).toContain("1 is blocked.");
+    expect(octoberDetail).toContain("1 is blocked, waiting on other tasks.");
   });
 });
 
@@ -511,7 +510,7 @@ function DeskPage({ view, detail }: { view: MilestoneView; detail: IssueDetail |
       onAdd={noop}
       onReload={noop}
       onDismissFailure={noop}
-      projection={projectedDue(view.goal.pace, NOW)}
+      projection={projectedDue(view.remaining, NOW)}
       due={{ busy: false, error: null, onSetTarget: async () => true }}
       decision={detail ? { detail, controller } : null}
       desk
@@ -544,7 +543,7 @@ describe("the due date the calendar sets", () => {
     expect(after.milestone.targetDate).toBeNull();
     // With no target, the page reads the goal check's own remaining work, or says there is none.
     const html = renderDesk(after, null);
-    expect(html).toContain(after.goal.pace.remainingSeconds ? 'data-due-source="estimate"' : "No due date");
+    expect(html).toContain(after.remaining.forecastSeconds ? 'data-due-source="estimate"' : "No due date");
   });
 });
 

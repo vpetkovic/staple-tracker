@@ -558,7 +558,7 @@ function StatusLine({
         data-tone={sentence.tone}
         className={cn("m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary wrap-anywhere", !plan && sentence.tone === "attention" && "text-foreground")}
       >
-        {plan ? <MilestoneSentence plan={plan} completedAt={detail.issue.completedAt ?? detail.issue.cancelledAt} /> : null}
+        {plan ? <MilestoneSentence plan={plan} /> : null}
         {!plan && sentence.lead ? <span>{sentence.lead}</span> : null}
         {!plan && sentence.person ? <PersonChip name={sentence.person.name} kind={sentence.person.kind} className="max-w-full font-medium" /> : null}
         {!plan && sentence.tail ? <span>{sentence.tail}</span> : null}
@@ -632,7 +632,7 @@ function Properties({
         {plan ? (
           <>
             <PropertyRow label="Due">
-              <MilestoneDue plan={plan} workspace={detail.workspace} completedAt={issue.completedAt ?? issue.cancelledAt} />
+              <MilestoneDue plan={plan} workspace={detail.workspace} />
             </PropertyRow>
             {plan.milestone.startDate ? (
               <PropertyRow label="Starts">

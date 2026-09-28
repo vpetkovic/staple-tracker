@@ -45,6 +45,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { personActor } from "@/detail/parts/person";
+import { MILESTONE_KIND } from "@/detail/plain-actions";
 import { ActionRefusal, GateSection, StatusMenu, useIssueActions, type IssueActionsController } from "@/detail/IssueActions";
 import {
   addMilestoneMember,
@@ -62,8 +64,8 @@ import { useBackToClose } from "@/lib/back-to-close";
 import { useSession } from "@/lib/session";
 import type {
   EffectiveQueueRow,
-  GoalPace,
   IssueDetail,
+  IssueRow,
   MilestoneListRow,
   MilestoneState,
   MilestoneView as MilestoneViewData,
@@ -78,13 +80,15 @@ import {
   dateLabel,
   isMissingMilestoneKind,
   layoutFor,
+  hiddenMemberCount,
+  isFinishedMilestone,
   memberListRows,
+  visibleMilestones,
   milestoneRisk,
   movedOrder,
   NOT_QUEUED_LABEL,
   nextWorkLabel,
   progressLabel,
-  riskLabels,
   sortMilestones,
   STATE_PRESENTATION,
   type MemberListRow,
@@ -100,6 +104,7 @@ import {
   type ProjectedDue,
 } from "./milestone-plain";
 import { MilestoneDueControl, useSetMilestoneTarget } from "./MilestoneDue";
+import { HiddenDoneNotice } from "./HiddenDone";
 import { ProgressStrip } from "@/views/ProgressStrip";
 import { EmptyState as PlainEmptyState } from "@/components/plain/States";
 import "./milestones-desk.css";
@@ -146,14 +151,20 @@ export function StateBadge({ state, complete = false }: { state: MilestoneState;
   );
 }
 
+/**
+ * The phone card's risk line: the overdue mark, then the same sentence the desk card and the
+ * page say (`riskSentence`), so "blocked" is one number on every surface.
+ */
 function RiskLine({
   row,
   effective,
 }: {
-  row: Pick<MilestoneViewData, "milestone">;
+  row: Pick<MilestoneViewData, "milestone" | "progress">;
   effective: readonly EffectiveQueueRow[];
 }) {
-  const labels = riskLabels(milestoneRisk(row, effective));
+  const risk = milestoneRisk(row, effective);
+  const sentence = riskSentence(row.progress, effective.length > 0 ? risk : null);
+  const labels = [...(risk.overdue ? ["! overdue"] : []), ...(sentence ? [`⊘ ${sentence}`] : [])];
   if (labels.length === 0) return null;
   return (
     <span data-milestone-risk className="flex flex-wrap gap-x-2 text-[11px] font-medium">
@@ -194,21 +205,11 @@ function NextWork({ next }: { next: MilestoneViewData["next"] }) {
 
 // ---------- the list ----------
 
-/** A milestone that is over: finished or cancelled. Read-only on this page. */
-export function isFinishedMilestone(state: MilestoneState): boolean {
-  return state === "done" || state === "cancelled";
-}
-
-/** The milestones the list shows under the Done toggle, and how many finished ones it hides. */
-export function visibleMilestones<T extends Pick<MilestoneListRow, "milestone">>(all: readonly T[], showDone: boolean): { rows: T[]; hiddenFinished: number } {
-  const rows = showDone ? [...all] : all.filter((row) => !isFinishedMilestone(row.milestone.state));
-  return { rows, hiddenFinished: all.length - rows.length };
-}
+export { isFinishedMilestone, visibleMilestones };
 
 export function MilestoneListPane({
   rows,
   effective = [],
-  paces = null,
   hiddenFinished = 0,
   onShowFinished,
   selectedRef,
@@ -216,12 +217,6 @@ export function MilestoneListPane({
   desk = false,
 }: {
   rows: readonly MilestoneListRow[];
-  /**
-   * The goal check's pace per milestone (by identifier), for a card with no target date to
-   * show its projected one. The list read carries no goal, so the page reads each such
-   * milestone's view; absent, a card says only what it knows.
-   */
-  paces?: ReadonlyMap<string, GoalPace> | null;
   /** Finished milestones the Done toggle is hiding, so an empty list can say they exist. */
   hiddenFinished?: number;
   /** Show them: lifts the same Done toggle the header shows. */
@@ -257,7 +252,7 @@ export function MilestoneListPane({
           A milestone gathers tasks that should be finished by a date. Create one with New task and the Milestone kind, or ask an agent to.
         </PlainEmptyState>
         <div className="mt-3 flex justify-center">
-          <Button variant="outline" size="sm" onClick={openCreateIssue} data-create-milestone="">
+          <Button variant="outline" size="sm" onClick={() => openCreateIssue({ kind: MILESTONE_KIND })} data-create-milestone="">
             <Plus aria-hidden />
             New task
           </Button>
@@ -298,7 +293,7 @@ export function MilestoneListPane({
                     row.milestone.state === "overdue" && "text-[var(--plain-risk-fg)]",
                   )}
                 >
-                  {dueText(row.milestone, projectedDue(paces?.get(row.milestone.identifier), now), now)}
+                  {dueText(row.milestone, projectedDue(row.remaining, now), now)}
                 </span>
                 <ProgressStrip compact label={progressSentence(row.progress)} segments={progressSegments(row.progress, riskFacts)} />
                 <span className="flex flex-wrap items-baseline gap-x-2 text-label text-muted-foreground">
@@ -443,10 +438,16 @@ export function memberRowKey(
 }
 
 /**
- * One member row. The row itself is the Tasks list's row with `list` semantics — an option in
- * the members listbox, one tab stop for the list, and a click or Enter anywhere on it opens
- * the task, as on the Queue page. The open, move and remove buttons are siblings of the row,
- * not inside it, and stop their clicks as well, so pressing one never also opens the row.
+ * One member row: a `row` of the members `treegrid`, with the Tasks list's roles — the row
+ * carries `aria-level` and, for an epic, `aria-expanded`; its two `gridcell`s are the task
+ * (the Tasks list's row, drawn `bare`, with its chevron) and the controls. A click on the row,
+ * or Enter or Space while the row itself has the focus, opens the task, as on the Queue page.
+ * The rows take the arrow keys between them (a roving tab index); the controls are ordinary
+ * buttons, reachable with Tab, and stop their clicks, so pressing one never also opens the row.
+ *
+ * The move and remove controls act on a MEMBER: the row's own, or, when the done gate hides a
+ * member, the member whose open work this row was lifted from (`standsFor`), named in their
+ * labels.
  */
 function MemberRow({
   entry,
@@ -478,9 +479,14 @@ function MemberRow({
   onMove: (from: number, to: number) => void;
   onRemove: (identifier: string) => void;
 }) {
-  const { row, role, memberIndex, member } = entry;
-  const editable = role === "member" && !readOnly;
+  const { row, role, member } = entry;
   const identifier = row.issue.identifier;
+  // The member the controls act on: this row's own, or the hidden one it stands for.
+  const target =
+    role === "member" ? { identifier, memberIndex: entry.memberIndex } : entry.standsFor ? { identifier: entry.standsFor.member.identifier, memberIndex: entry.standsFor.memberIndex } : null;
+  const editable = target !== null && !readOnly;
+  const memberIndex = target?.memberIndex ?? -1;
+  const subject = target?.identifier ?? identifier;
   const config = useMemberRowConfig();
   /*
    * On a phone, and on a desk narrower than 1280px where the split leaves the member list a
@@ -489,144 +495,147 @@ function MemberRow({
    */
   const roomy = useMediaQuery(ROOMY_QUERY, true);
   const compact = config.plan?.layout === "compact" || !roomy;
+  /** 44px on a phone, where these are thumbs' targets; the desk keeps the row's small icons. */
+  const target44 = "max-md:size-11";
   return (
-    <li
-      role="presentation"
-      data-milestone-member={identifier}
-      data-member-role={role}
-      onKeyDown={(event) => {
-        if (!editable || !event.altKey || busy) return;
-        if (event.key === "ArrowUp") {
-          event.preventDefault();
-          onMove(memberIndex, memberIndex - 1);
-        } else if (event.key === "ArrowDown") {
-          event.preventDefault();
-          onMove(memberIndex, memberIndex + 1);
-        }
+    <li role="none" data-milestone-member={identifier} data-member-role={role} data-stands-for={entry.standsFor ? entry.standsFor.member.identifier : undefined}>
+    <div
+      ref={registerRef}
+      role="row"
+      aria-level={row.depth + 1}
+      aria-expanded={row.hasChildren ? row.isExpanded : undefined}
+      tabIndex={focused ? 0 : -1}
+      data-member-row={identifier}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) onFocus?.();
       }}
-      className="flex flex-col"
+      onClick={() => onOpen(row.workspace, identifier)}
+      onKeyDown={(event) => {
+        if (editable && event.altKey && !busy && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+          event.preventDefault();
+          onMove(memberIndex, memberIndex + (event.key === "ArrowUp" ? -1 : 1));
+          return;
+        }
+        // Keys on a control inside the row are the control's own.
+        if (event.target !== event.currentTarget) return;
+        onKeyDown?.(event);
+      }}
+      className="flex cursor-pointer items-center gap-1 rounded-md outline-none hover:bg-surface-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
     >
-      <div className="flex items-center gap-1">
-      <div className="min-w-0 flex-1">
-        <TaskRowLine
-          row={row}
-          config={config}
-          semantics="list"
-          now={now}
-          isExpanded={row.isExpanded}
-          isFocused={focused}
-          onOpen={() => onOpen(row.workspace, identifier)}
-          onFocus={onFocus}
-          onKeyDown={onKeyDown}
-          onToggleExpand={onToggle}
-          registerRef={registerRef}
-        />
-      </div>
-      {compact && editable ? (
-        /* On a phone the four buttons cost the title ~110px. One `⋯` holds the same four
-           acts, with words, and a 44px target. */
-        <MemberMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Actions for ${identifier}`}
-              data-member-actions={identifier}
-              className="shrink-0 text-text-tertiary"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <MoreHorizontal aria-hidden />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            aria-label={`Actions for ${identifier}`}
-            className="pointer-coarse:[&_[role=menuitem]]:min-h-11 pointer-coarse:[&_[role=menuitem]]:text-[15px]"
-          >
-            <DropdownMenuItem data-menu-item="open" onSelect={() => onOpen(row.workspace, identifier)}>
-              <ArrowUpRight aria-hidden />
-              Open details
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={busy || memberIndex === 0} onSelect={() => onMove(memberIndex, memberIndex - 1)}>
-              <ChevronUp aria-hidden />
-              Move up
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={busy || memberIndex === count - 1} onSelect={() => onMove(memberIndex, memberIndex + 1)}>
-              <ChevronDown aria-hidden />
-              Move down
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={busy} onSelect={() => onRemove(identifier)}>
-              <Trash2 aria-hidden />
-              Remove from this milestone
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </MemberMenu>
-      ) : (
-      <div className="flex shrink-0 items-center">
-        <Button
-          variant="ghost"
-          // Folded, a child's lone Open is as wide as a member's `⋯`, so every row ends at one x.
-          size={compact ? "icon-sm" : "icon-xs"}
-          aria-label={`Open ${identifier}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpen(row.workspace, identifier);
-          }}
-        >
-          <ArrowUpRight aria-hidden />
-        </Button>
-        {editable ? (
-          <>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Move ${identifier} up`}
-              disabled={busy || memberIndex === 0}
-              onClick={(event) => {
-                event.stopPropagation();
-                onMove(memberIndex, memberIndex - 1);
-              }}
-            >
-              <ChevronUp aria-hidden />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Move ${identifier} down`}
-              disabled={busy || memberIndex === count - 1}
-              onClick={(event) => {
-                event.stopPropagation();
-                onMove(memberIndex, memberIndex + 1);
-              }}
-            >
-              <ChevronDown aria-hidden />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={`Remove ${identifier} from this milestone`}
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                onRemove(identifier);
-              }}
-            >
-              <Trash2 aria-hidden />
-            </Button>
-          </>
-        ) : compact ? null : (
-          // A child is here for context only: same width as the three buttons it lacks,
-          // so the rows' Open buttons line up.
-          <span aria-hidden className="inline-block w-[4.5rem]" />
-        )}
-      </div>
-      )}
-      </div>
-      {/* Under the row, so the row and its buttons keep one line and one centre. */}
+        <div role="gridcell" className="min-w-0 flex-1">
+          <TaskRowLine row={row} config={config} semantics="bare" now={now} isExpanded={row.isExpanded} onToggleExpand={onToggle} />
+        </div>
+        <div role="gridcell" className="flex shrink-0 items-center">
+          {compact && editable ? (
+            /* One `⋯` holds the same four acts, with words. */
+            <MemberMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Actions for ${subject}`}
+                  data-member-actions={subject}
+                  className={cn("shrink-0 text-text-tertiary", target44)}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <MoreHorizontal aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                aria-label={`Actions for ${subject}`}
+                className="pointer-coarse:[&_[role=menuitem]]:min-h-11 pointer-coarse:[&_[role=menuitem]]:text-[15px]"
+              >
+                <DropdownMenuItem data-menu-item="open" onSelect={() => onOpen(row.workspace, identifier)}>
+                  <ArrowUpRight aria-hidden />
+                  Open details
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem disabled={busy || memberIndex === 0} onSelect={() => onMove(memberIndex, memberIndex - 1)}>
+                  <ChevronUp aria-hidden />
+                  Move {subject} up
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={busy || memberIndex === count - 1} onSelect={() => onMove(memberIndex, memberIndex + 1)}>
+                  <ChevronDown aria-hidden />
+                  Move {subject} down
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={busy} onSelect={() => onRemove(subject)}>
+                  <Trash2 aria-hidden />
+                  Remove {subject} from this milestone
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </MemberMenu>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                // Folded, a child's lone Open is as wide as a member's `⋯`, so every row ends at one x.
+                size={compact ? "icon-sm" : "icon-xs"}
+                className={target44}
+                aria-label={`Open ${identifier}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpen(row.workspace, identifier);
+                }}
+              >
+                <ArrowUpRight aria-hidden />
+              </Button>
+              {editable ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`Move ${subject} up`}
+                    title={subject === identifier ? undefined : `Move ${subject} up`}
+                    disabled={busy || memberIndex === 0}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onMove(memberIndex, memberIndex - 1);
+                    }}
+                  >
+                    <ChevronUp aria-hidden />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`Move ${subject} down`}
+                    title={subject === identifier ? undefined : `Move ${subject} down`}
+                    disabled={busy || memberIndex === count - 1}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onMove(memberIndex, memberIndex + 1);
+                    }}
+                  >
+                    <ChevronDown aria-hidden />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={`Remove ${subject} from this milestone`}
+                    title={subject === identifier ? undefined : `Remove ${subject} from this milestone`}
+                    disabled={busy}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRemove(subject);
+                    }}
+                  >
+                    <Trash2 aria-hidden />
+                  </Button>
+                </>
+              ) : compact ? null : (
+                // Same width as the three buttons this row lacks, so the rows' Open buttons line up.
+                <span aria-hidden className="inline-block w-[4.5rem]" />
+              )}
+            </>
+          )}
+        </div>
+    </div>
+      {/* Its own row under the task, so the task and its buttons keep one line and one centre. */}
       {member?.note ? (
-        <div className="pb-1 pl-8 text-[11px] text-muted-foreground" data-member-note>
-          {member.note}
+        <div role="row" aria-level={row.depth + 1}>
+          <div role="gridcell" className="pb-1 pl-8 text-[11px] text-muted-foreground" data-member-note>
+            {member.note}
+          </div>
         </div>
       ) : null}
     </li>
@@ -640,6 +649,8 @@ function MemberRow({
  * queue's reading (what waits, and what an agent would take next). The bar's buckets are not
  * repeated here.
  */
+type Cell = [key: string, label: string, value: string];
+
 export function Rollups({
   view,
   effective,
@@ -653,31 +664,38 @@ export function Rollups({
   const { milestone, progress, next } = view;
   // Blocked and gated are the QUEUE's verdict, not a status category — see `milestoneRisk`.
   const risk = milestoneRisk(view, effective);
+  // The legend's "blocked" is the first two rows: work not started that waits on other tasks,
+  // and work that waits on a person (parked by hand, or for an approval). Started work that
+  // still waits is in its own bucket (in review, in progress) and gets its own row.
+  const waiting = risk.waiting ?? { onTasksNotStarted: 0, onTasksStarted: {}, onPerson: 0 };
+  const startedWaiting = (waiting.onTasksStarted.active ?? 0) + (waiting.onTasksStarted.review ?? 0);
   const counted =
     progress.counts.cancelled > 0 ? `${progress.countable} (${progress.counts.cancelled} cancelled not counted)` : `${progress.countable}`;
-  type Cell = [key: string, label: string, value: string];
   const dated = (cell: Cell): Cell[] => (withDates ? [cell] : []);
   const cells: Cell[] = [
     ...dated(["reference", "Reference", milestone.identifier]),
     ["counted", "Tasks counted", counted],
     ...dated(["start", "Starts", dateLabel(milestone.startDate)]),
-    ["blocked", "Tasks waiting on others", `${risk.blocked}`],
+    ["blocked-tasks", "Blocked, waiting on other tasks", `${waiting.onTasksNotStarted}`],
     ...dated(["target", "Target", dateLabel(milestone.targetDate)]),
-    ["gated", "Tasks waiting for approval", `${risk.gated}`],
+    ["blocked-person", "Blocked, waiting on a person", `${waiting.onPerson}`],
+    ...(startedWaiting > 0 ? ([["started-waiting", "Started, still waiting on other tasks", `${startedWaiting}`]] as Cell[]) : []),
     ...(milestone.planPosition !== null ? dated(["plan", "Plan position", `#${milestone.planPosition}`]) : []),
     ["next", "Next up", next ? `${next.identifier}, #${next.position} in the pickup order` : NOT_QUEUED_LABEL],
   ];
   return (
     <dl
       data-milestone-rollups
-      className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-4 gap-y-1 text-label sm:grid-cols-[max-content_minmax(0,1fr)_max-content_minmax(0,1fr)]"
+      // Two pairs to a line only where the split pane leaves room for both (from 1280px); below
+      // that one pair a line, so no value is cut short.
+      className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-4 gap-y-1 text-label min-[1280px]:grid-cols-[max-content_minmax(0,1fr)_max-content_minmax(0,1fr)]"
     >
       {cells.map(([key, label, value]) => (
         <Fragment key={key}>
           <dt className="text-text-tertiary" data-rollup={key}>
             {label}
           </dt>
-          <dd className="m-0 min-w-0 truncate text-foreground tabular-nums">{value}</dd>
+          <dd className="m-0 min-w-0 text-foreground tabular-nums wrap-anywhere">{value}</dd>
         </Fragment>
       ))}
     </dl>
@@ -703,6 +721,8 @@ export function MilestoneDetailPane({
   projection = null,
   due,
   decision = null,
+  hiddenDone = 0,
+  onShowDone,
   desk = false,
   exampleRef = null,
 }: {
@@ -726,13 +746,16 @@ export function MilestoneDetailPane({
   /** When the work still estimated in it would land; shown while no target is set. */
   projection?: ProjectedDue | null;
   /** The due-date write, for the calendar button. Absent: the date is read-only. */
-  due?: { busy: boolean; error: string | null; onSetTarget: (targetDate: string | null) => Promise<boolean> };
+  due?: { busy: boolean; error: string | null; onSetTarget: (targetDate: string | null) => Promise<boolean>; onOpen?: () => void };
   /**
    * The milestone as the task detail reads it (`/api/issue`) and the detail's own action
    * controller: the status control, the approval gate and its refusals are the detail's,
    * with the detail's hold-back rules and the detail's signing. Absent until it loads.
    */
   decision?: { detail: IssueDetail; controller: IssueActionsController } | null;
+  /** Rows the Done toggle hides, and how to show them (`HiddenDoneNotice`). */
+  hiddenDone?: number;
+  onShowDone?: () => void;
   /** The desktop pane: a plain header, a progress card, the raw rollups under Show details. */
   desk?: boolean;
   /** A real reference from this workspace, for the add box's example. */
@@ -741,17 +764,18 @@ export function MilestoneDetailPane({
   const { milestone } = view;
   const finished = isFinishedMilestone(milestone.state);
   const [requestOpen, setRequestOpen] = useState(false);
-  const completedAt = decision?.detail.issue.completedAt ?? decision?.detail.issue.cancelledAt ?? null;
   const dueControl = (
     <MilestoneDueControl
+      // Its own state per milestone: switching milestones never carries an open field over.
+      key={milestone.id}
       milestone={milestone}
       projection={projection}
       now={now}
-      completedAt={completedAt}
       editable={!finished && Boolean(due)}
       busy={due?.busy}
       error={due?.error}
       onSetTarget={due?.onSetTarget}
+      onOpen={due?.onOpen}
     />
   );
   const statusControl = decision ? (
@@ -785,7 +809,8 @@ export function MilestoneDetailPane({
   const risk = milestoneRisk(view, effective);
   const riskReading = effective.length > 0 ? risk : null;
 
-  // One tab stop for the whole list, arrows between rows: the Tasks list's contract.
+  // The rows take the arrow keys between them (a roving tab index, the Tasks list's); the
+  // controls in each row are ordinary tab stops after it.
   const keys = useMemo(() => members.map((entry) => entry.row.issue.identifier), [members]);
   const focus = useRovingFocus(keys);
   const onRowKey = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
@@ -938,7 +963,9 @@ export function MilestoneDetailPane({
             <GuardRefusal refusal={failure.refusal} onDismiss={onDismissFailure} className="mb-2" />
           )
         ) : null}
-        {members.length === 0 ? (
+        {members.length === 0 && hiddenDone > 0 ? (
+          <HiddenDoneNotice count={hiddenDone} all onShowDone={onShowDone} />
+        ) : members.length === 0 ? (
           desk ? (
             <PlainEmptyState compact icon={Milestone} title="Nothing is in this milestone yet">
               Add an epic or a task below.
@@ -947,7 +974,7 @@ export function MilestoneDetailPane({
             <EmptyState>no members yet — add an epic or a task below</EmptyState>
           )
         ) : (
-          <ul role="listbox" aria-label={`Members of ${milestone.identifier}`} data-milestone-members className="flex flex-col">
+          <ul role="treegrid" aria-label={`Members of ${milestone.identifier}`} data-milestone-members className="flex flex-col">
             {members.map((entry, index) => {
               const identifier = entry.row.issue.identifier;
               return (
@@ -971,6 +998,7 @@ export function MilestoneDetailPane({
             })}
           </ul>
         )}
+        {members.length > 0 ? <HiddenDoneNotice count={hiddenDone} all={false} onShowDone={onShowDone} /> : null}
         {/* A finished milestone is a record: its members are listed, not edited. */}
         {finished ? null : (
         <form onSubmit={submitAdd} className="mt-2 flex flex-wrap items-center gap-2" data-milestone-add>
@@ -1099,25 +1127,12 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
   const loadList = useCallback(() => getMilestones({ ws, all: true }), [ws]);
   const list = useResource(loadList, [ws, session.version], onAuthError);
   const everything = useMemo(() => (list.data ? sortMilestones(list.data) : []), [list.data]);
-  const { rows: sorted, hiddenFinished } = useMemo(() => visibleMilestones(everything, showDone), [everything, showDone]);
-
-  // The cards with no target date show a projected one from the goal check's pace, which the
-  // list read does not carry: read those milestones' views, one request each, few by nature.
-  const undatedKey = sorted
-    .filter((row) => !row.milestone.targetDate && !isFinishedMilestone(row.milestone.state))
-    .map((row) => row.milestone.identifier)
-    .join(",");
-  const loadPaces = useCallback(
-    () =>
-      Promise.all(
-        undatedKey
-          .split(",")
-          .filter(Boolean)
-          .map((ref) => getMilestone({ ws, ref }).then((view) => [ref, view.goal.pace] as const)),
-      ).then((pairs) => new Map<string, GoalPace>(pairs)),
-    [ws, undatedKey],
+  // The milestone the page is pointed at or has open stays listed even when finished and Done
+  // is hidden: a link to it shows it, never quietly another one.
+  const { rows: sorted, hiddenFinished } = useMemo(
+    () => visibleMilestones(everything, showDone, [selectedRef, session.milestoneFocus]),
+    [everything, showDone, selectedRef, session.milestoneFocus],
   );
-  const paces = useResource(loadPaces, [ws, undatedKey, session.version], onAuthError);
   const onShowFinished = useCallback(() => session.setFilters(withShowDone(session.filters, true)), [session]);
 
   // Blocked and gated are the resolver's verdict, not a status category, so the page reads
@@ -1168,7 +1183,7 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
   const loaded = detail.data && detail.data.milestone.identifier === selectedRef ? detail.data : null;
   const view = written ?? loaded;
   const now = useMemo(() => new Date(), [view]);
-  const projection = useMemo(() => (view ? projectedDue(view.goal?.pace, now) : null), [view, now]);
+  const projection = useMemo(() => (view ? projectedDue(view.remaining, now) : null), [view, now]);
   const dueWrite = useSetMilestoneTarget(ws, view?.milestone.id ?? "");
   // The Tasks list's own done gate and its fold, so "Done hidden" hides the same rows here.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
@@ -1182,16 +1197,17 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
     [],
   );
   const filters = session.filters;
-  const members = useMemo(
-    () =>
-      view
-        ? memberListRows(view, session.issues.data ?? [], workspace, {
-            visible: (row) => passesDone(row, filters),
-            collapsed,
-          })
-        : [],
-    [view, session.issues.data, workspace, filters, collapsed],
+  // This workspace's rows only: two workspaces may share a prefix in hub mode.
+  const wsIssues = useMemo(
+    () => (session.issues.data ?? []).filter((row) => !workspace || row.workspace === workspace),
+    [session.issues.data, workspace],
   );
+  const doneGate = useCallback((row: IssueRow) => passesDone(row, filters), [filters]);
+  const members = useMemo(
+    () => (view ? memberListRows(view, wsIssues, workspace, { visible: doneGate, collapsed }) : []),
+    [view, wsIssues, workspace, doneGate, collapsed],
+  );
+  const hiddenDone = useMemo(() => (view ? hiddenMemberCount(view, wsIssues, workspace, doneGate) : 0), [view, wsIssues, workspace, doneGate]);
 
   const write = useCallback(
     async (run: () => Promise<MilestoneViewData>) => {
@@ -1222,6 +1238,7 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
           milestone: view.milestone.id,
           order: idsOf(view.members.map((member) => ({ identifier: member.identifier, id: member.issueId })), order),
           baseRevision: view.revision,
+          actor: personActor(),
         }),
       );
     },
@@ -1237,6 +1254,7 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
           milestone: view.milestone.id,
           ref: idsOf(view.members.map((member) => ({ identifier: member.identifier, id: member.issueId })), [identifier])[0]!,
           baseRevision: view.revision,
+          actor: personActor(),
         }),
       );
     },
@@ -1252,6 +1270,7 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
           milestone: view.milestone.id,
           ref: pinnedRef(session.issues.data ?? [], workspace, ref),
           baseRevision: view.revision,
+          actor: personActor(),
           ...(note ? { note } : {}),
         }),
       );
@@ -1281,7 +1300,6 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
     <MilestoneListPane
       rows={sorted}
       effective={effective}
-      paces={paces.data ?? null}
       hiddenFinished={hiddenFinished}
       onShowFinished={onShowFinished}
       selectedRef={selectedRef}
@@ -1321,8 +1339,10 @@ function WorkspaceMilestones({ workspace, onAuthError }: { workspace: string; on
       onDismissFailure={() => setFailure(null)}
       onToggle={onToggle}
       projection={projection}
-      due={{ busy: dueWrite.busy, error: dueWrite.error, onSetTarget: dueWrite.set }}
+      due={{ busy: dueWrite.busy, error: dueWrite.error, onSetTarget: dueWrite.set, onOpen: dueWrite.clear }}
       decision={milestoneIssue ? { detail: milestoneIssue, controller } : null}
+      hiddenDone={hiddenDone}
+      onShowDone={onShowFinished}
       desk={desk}
       exampleRef={(session.issues.data ?? []).find((r) => r.workspace === workspace && r.issue.kind !== "milestone")?.issue.identifier ?? null}
     />

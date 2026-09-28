@@ -686,6 +686,14 @@ describe("parent rollup", () => {
     expect(markup).toContain("+2");
   });
 
+  it("still declares its count when the filter hid every child, and reads as folded", () => {
+    // Every child done and Done hidden: nothing is under the row, yet 3 of 3 are there.
+    const markup = renderEpic({ expanded: true, statuses: ["done", "done", "done"] });
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain("3/3");
+    expect(markup).toContain('data-testid="parent-rollup-bar"');
+  });
+
   it("keeps the count and drops the bar when the parent is expanded", () => {
     const markup = renderEpic({ expanded: true });
 

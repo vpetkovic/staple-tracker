@@ -1287,6 +1287,8 @@ export interface MilestoneSummary {
   state: MilestoneState;
   /** The milestone's own row in the pickup plan; null when it is not queued. */
   planPosition: number | null;
+  /** When it was closed: `completedAt` when done, `cancelledAt` when cancelled; else null. */
+  closedAt: string | null;
 }
 
 export interface MilestoneProgress {
@@ -1332,6 +1334,20 @@ export interface MilestoneView {
   next: MilestoneNext | null;
   /** The goal check: each criterion's verdict with its evidence, and the pace against the target date. */
   goal: MilestoneGoal;
+  /** The work still open in it, from its estimates. Mirrors core `MilestoneRemaining`. */
+  remaining: MilestoneRemaining;
+}
+
+/**
+ * The work still open in a milestone, from the estimates of its open leaves (not done, not
+ * cancelled). `forecastSeconds` scales each estimate by its class's calibrated ratio, as
+ * `staple forecast` does; `goal.pace.remainingSeconds` is a different figure, the critical path.
+ */
+export interface MilestoneRemaining {
+  estimated: number;
+  unestimated: number;
+  estimateSeconds: number | null;
+  forecastSeconds: number | null;
 }
 
 /** A `GET /api/milestones` row: the view without its members or goal, plus how many members there are. */

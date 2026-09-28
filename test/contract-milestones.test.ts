@@ -126,6 +126,7 @@ describe("every operation has the same shape and refusal on every surface", () =
         startDate: null,
         state: "planned",
         planPosition: null,
+        closedAt: null,
       },
       progress: {
         total: 1,
@@ -172,6 +173,8 @@ describe("every operation has the same shape and refusal on every surface", () =
           message: expect.any(String),
         },
       },
+      // The work left from estimates: its one open task has none, so neither sum exists.
+      remaining: { estimated: 0, unestimated: 1, estimateSeconds: null, forecastSeconds: null },
     });
     expect(fromMcp).toEqual(fromCli);
     expect(fromHttp).toEqual(fromCli);

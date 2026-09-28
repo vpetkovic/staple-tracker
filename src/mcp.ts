@@ -2338,6 +2338,7 @@ const milestoneSummaryShape = {
   startDate: z.string().nullable(),
   state: z.enum(MILESTONE_STATES).describe("Derived on every read: done | cancelled | overdue | active | planned"),
   planPosition: z.number().nullable().describe("The milestone's own row in the pickup plan; null when it is not queued"),
+  closedAt: z.string().nullable().describe("When it was closed: completedAt when done, cancelledAt when cancelled; else null"),
 };
 const milestoneMemberShape = {
   issueId: z.string().describe("The member's issue id — name it by this in a write"),
@@ -2404,6 +2405,16 @@ const milestoneGoalShape = z
   })
   .describe("The goal check: each acceptance criterion's verdict with its evidence, and the pace against the target date");
 
+/** The open work left in a milestone, from its estimates (`MilestoneRemaining`). */
+const milestoneRemainingShape = z
+  .object({
+    estimated: z.number().describe("Open leaves (not done, not cancelled) with an estimate"),
+    unestimated: z.number().describe("Open leaves without one; their work is in neither sum"),
+    estimateSeconds: z.number().nullable().describe("Their own estimates, summed; null when none has one"),
+    forecastSeconds: z.number().nullable().describe("Their calibrated durations, summed (estimate × class ratio, as forecast scales a unit)"),
+  })
+  .describe("The work still open in the milestone, from its estimates; derived on every read");
+
 const milestoneViewShape = {
   milestone: z.object(milestoneSummaryShape),
   progress: z.object(milestoneProgressShape),
@@ -2414,6 +2425,7 @@ const milestoneViewShape = {
     .nullable()
     .describe("The first eligible row of the effective queue planned under this milestone; null when nothing under it is takeable"),
   goal: milestoneGoalShape,
+  remaining: milestoneRemainingShape,
 };
 const milestoneRefSchema = z.string().describe("The milestone's reference (an issue of the `milestone` kind)");
 const dateSchema = z
@@ -2455,6 +2467,7 @@ server.registerTool(
           revision: z.number(),
           memberCount: z.number(),
           next: z.object({ identifier: z.string(), position: z.number() }).nullable(),
+          remaining: milestoneRemainingShape,
         }),
       ),
     },

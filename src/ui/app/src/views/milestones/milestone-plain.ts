@@ -6,7 +6,7 @@
  * (`milestoneRisk`); nothing is re-derived. The raw figures stay on the page under
  * "Show details".
  */
-import type { GoalPace, MilestoneNext, MilestoneProgress, MilestoneState } from "@/lib/types";
+import type { MilestoneNext, MilestoneProgress, MilestoneRemaining, MilestoneState } from "@/lib/types";
 import type { ProgressSegment } from "@/views/ProgressStrip";
 import { PROGRESS_COLOR } from "@/views/progress-palette";
 import type { MilestoneRisk } from "./milestones-model";
@@ -20,12 +20,20 @@ function calendarDay(date: string): Date | null {
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 }
 
-/** Whole calendar days from `now`'s day to `date`'s day: 0 today, 1 tomorrow, -1 yesterday. */
+/**
+ * Whole calendar days from `now`'s day to `date`'s day: 0 today, 1 tomorrow, -1 yesterday.
+ *
+ * In UTC days, because a milestone's target is a UTC calendar day ("due by the END of that
+ * UTC day") and the store judges `overdue` on the UTC day. Counted on the local day instead,
+ * the hours around midnight read "Due today" beside an Overdue state, or "1 day ago" before
+ * the store calls it late.
+ */
 export function daysFrom(date: string, now: Date): number | null {
-  const day = calendarDay(date);
-  if (!day) return null;
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.round((day.getTime() - today.getTime()) / DAY_MS);
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date);
+  if (!match) return null;
+  const day = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.round((day - today) / DAY_MS);
 }
 
 /** "15 Oct", with the year only when it is not this year: "3 Jan 2027". */
@@ -63,28 +71,32 @@ export function plainDue(target: string | null, state: MilestoneState, now: Date
  * WHEN THE MILESTONE WOULD LAND, from the work still estimated in it — shown only while no
  * target date is set, and never stored.
  *
- * The remaining work is the goal check's own figure, `goal.pace.remainingSeconds`: the store
- * sums the estimates of the open work under the milestone, and says whether some of it has
- * none (`partial`, `unplannedRefs`). This only turns it into a day. The pace check reads that
- * figure against the target "even worked around the clock" (lib/goal-text.ts), and staple has
- * no calendar of working hours, so the projection is the same reading: now plus the work
- * left. The page labels it an estimate.
+ * The work left is the view's `remaining.forecastSeconds`: the SUM, over the milestone's open
+ * tasks (not done, not cancelled), of each estimate scaled by its class's calibrated ratio —
+ * the figure the Estimates view describes as "a forecast scales an estimate by", computed by
+ * the store the way `staple forecast` scales a unit. It is a sum, not the critical path
+ * (`goal.pace.remainingSeconds`): work left whatever order it is done in. staple has no
+ * calendar of working hours and no date forecast, so the day is now plus that much work, and
+ * the page labels it an estimate. Open tasks with no estimate add nothing, so then the day is
+ * a lower bound and the label says "no earlier than".
  */
 export interface ProjectedDue {
   /** The projected moment; the page shows its calendar day. */
   at: Date;
-  /** The estimated work left, in seconds. */
+  /** The calibrated work left, in seconds, and the raw estimates it scales. */
   seconds: number;
-  /** Open work with no estimate, which the figure leaves out. */
-  unplanned: number;
+  estimateSeconds: number;
+  /** Open tasks with no estimate, whose work is not in the figure. */
+  unestimated: number;
 }
 
-export function projectedDue(pace: Pick<GoalPace, "remainingSeconds" | "partial" | "unplannedRefs"> | null | undefined, now: Date): ProjectedDue | null {
-  if (!pace || pace.remainingSeconds === null || pace.remainingSeconds <= 0) return null;
+export function projectedDue(remaining: MilestoneRemaining | null | undefined, now: Date): ProjectedDue | null {
+  if (!remaining || remaining.forecastSeconds === null || remaining.estimateSeconds === null) return null;
   return {
-    at: new Date(now.getTime() + pace.remainingSeconds * 1000),
-    seconds: pace.remainingSeconds,
-    unplanned: pace.partial ? pace.unplannedRefs.length : 0,
+    at: new Date(now.getTime() + remaining.forecastSeconds * 1000),
+    seconds: remaining.forecastSeconds,
+    estimateSeconds: remaining.estimateSeconds,
+    unestimated: remaining.unestimated,
   };
 }
 
@@ -100,26 +112,29 @@ export function localIso(date: Date): string {
  * target says when it finished; with nothing to go on, "No due date".
  */
 export function dueText(
-  milestone: { targetDate: string | null; state: MilestoneState },
+  milestone: { targetDate: string | null; state: MilestoneState; closedAt?: string | null },
   projection: ProjectedDue | null,
   now: Date,
-  completedAt: string | null = null,
 ): string {
   if (milestone.targetDate) return plainDue(milestone.targetDate, milestone.state, now);
   if (milestone.state === "done" || milestone.state === "cancelled") {
-    const word = milestone.state === "done" ? "Finished" : "Cancelled";
-    return completedAt ? `${word} ${shortDay(localIso(new Date(completedAt)), now)}` : word;
+    // "Closed", not "Cancelled": the status pill beside it already says cancelled.
+    const word = milestone.state === "done" ? "Finished" : "Closed";
+    return milestone.closedAt ? `${word} ${shortDay(localIso(new Date(milestone.closedAt)), now)}` : word;
   }
-  if (projection) return `Due ~${shortDay(localIso(projection.at), now)} (estimated)`;
+  if (projection) {
+    const day = shortDay(localIso(projection.at), now);
+    return projection.unestimated > 0 ? `Due no earlier than ~${day} (estimated)` : `Due ~${day} (estimated)`;
+  }
   return "No due date";
 }
 
 /** Why the projection says what it says, for its tooltip. */
 export function projectionNote(projection: ProjectedDue): string {
-  const hours = Math.round(projection.seconds / 360) / 10;
-  const n = projection.unplanned;
-  const partial = n > 0 ? ` ${n} open ${n === 1 ? "task has no estimate and is" : "tasks have no estimate and are"} not included.` : "";
-  return `Estimated from ${hours}h of work left, counted from now. Set a date to override it.${partial}`;
+  const hours = (seconds: number) => `${Math.round(seconds / 360) / 10}h`;
+  const n = projection.unestimated;
+  const partial = n > 0 ? ` ${n} open ${n === 1 ? "task has no estimate and is" : "tasks have no estimate and are"} not included, so it can only be later.` : "";
+  return `${hours(projection.seconds)} of work left (${hours(projection.estimateSeconds)} estimated, scaled by how long estimates have really taken), counted from now. Set a date to override it.${partial}`;
 }
 
 /**
@@ -189,16 +204,31 @@ export function cancelledSentence(progress: MilestoneProgress): string | null {
 }
 
 /**
- * What is in the way, in the bar's own numbers: "2 are blocked." for the blocked bucket, then
- * the work that has started but still waits on another task, by where it is — "7 in review
+ * What is in the way, in the bar's own numbers. The blocked bucket first, saying what it waits
+ * on when the queue has said — "3 are blocked: 2 wait on other tasks, 1 on a person." — then
+ * the work that has started but still waits on another task, by where it is: "7 in review
  * still wait on other tasks." Null when nothing waits.
  */
 export function riskSentence(progress: MilestoneProgress, risk: MilestoneRisk | null): string | null {
   const sentences: string[] = [];
   const blocked = progressBuckets(progress, risk).blocked;
-  if (blocked > 0) sentences.push(`${blocked} ${blocked === 1 ? "is" : "are"} blocked.`);
-  const review = risk?.waitingIn?.review ?? 0;
-  const active = risk?.waitingIn?.active ?? 0;
+  const waiting = risk?.waiting;
+  if (blocked > 0) {
+    const verb = blocked === 1 ? "is" : "are";
+    const tasks = waiting?.onTasksNotStarted ?? 0;
+    const person = waiting?.onPerson ?? 0;
+    if (waiting && tasks + person === blocked && tasks > 0 && person > 0) {
+      sentences.push(`${blocked} ${verb} blocked: ${tasks} ${tasks === 1 ? "waits" : "wait"} on other tasks, ${person} on a person.`);
+    } else if (waiting && tasks === blocked) {
+      sentences.push(`${blocked} ${verb} blocked, waiting on other tasks.`);
+    } else if (waiting && person === blocked) {
+      sentences.push(`${blocked} ${verb} blocked, waiting on a person.`);
+    } else {
+      sentences.push(`${blocked} ${verb} blocked.`);
+    }
+  }
+  const review = waiting?.onTasksStarted.review ?? 0;
+  const active = waiting?.onTasksStarted.active ?? 0;
   const started = [active > 0 ? `${active} in progress` : null, review > 0 ? `${review} in review` : null].filter(Boolean);
   if (started.length > 0) {
     const one = review + active === 1;

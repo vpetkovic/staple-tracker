@@ -891,23 +891,31 @@ export const addMilestoneMember = (target: {
   after?: string;
   at?: number;
   note?: string;
+  actor?: string;
 }) => milestoneWrite("add", target);
 
-export const removeMilestoneMember = (target: { ws?: string; milestone: string; ref: string; baseRevision: number }) =>
+export const removeMilestoneMember = (target: { ws?: string; milestone: string; ref: string; baseRevision: number; actor?: string }) =>
   milestoneWrite("remove", target);
 
 /**
  * Set or clear a milestone's own dates (`staple milestone set`, MCP `update_milestone`).
  * `null` clears one; a field left out is left alone. Answers the milestone view.
  */
-export const updateMilestoneDates = (target: { ws?: string; ref: string; targetDate?: string | null; startDate?: string | null }) =>
-  milestoneWrite("update", target);
+export const updateMilestoneDates = (target: {
+  ws?: string;
+  ref: string;
+  targetDate?: string | null;
+  startDate?: string | null;
+  /** The person, as every detail write names them (`personActor`); absent, the server says "ui". */
+  actor?: string;
+}) => milestoneWrite("update", target);
 
 export const reorderMilestoneMembers = (target: {
   ws?: string;
   milestone: string;
   order: readonly string[];
   baseRevision: number;
+  actor?: string;
 }) => milestoneWrite("reorder", target);
 
 // ---------- the glyph sanitiser (R5d / STA-184) ----------

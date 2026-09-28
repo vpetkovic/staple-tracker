@@ -120,9 +120,9 @@ describe("a milestone's own detail", () => {
     expect(html).toContain('aria-label="Change the due date"');
   });
 
-  it("projects the due date from the goal check's remaining work when no target is set", () => {
-    const plan = view({ milestone: { targetDate: null } });
-    const html = render({ ...PLAN, milestonePlan: { ...plan, goal: { ...plan.goal, pace: { ...plan.goal.pace, remainingSeconds: 3600, partial: false, unplannedRefs: [] } } } });
+  it("projects the due date from the calibrated work left when no target is set", () => {
+    const plan = view({ milestone: { targetDate: null }, remaining: { estimated: 1, unestimated: 0, estimateSeconds: 3600, forecastSeconds: 3600 } });
+    const html = render({ ...PLAN, milestonePlan: plan });
     expect(html).toMatch(/data-milestone-sentence="">[^<]*Due ~\d+ \w+ \(estimated\)\.</);
     expect(html).toContain('data-due-source="estimate"');
   });
@@ -181,5 +181,17 @@ describe("the milestone inside a task detail reads as the Milestones page reads"
     );
     expect(html).toMatch(/data-legend="blocked"[^>]*data-empty=""/);
     expect(html).toContain("7 in review still wait on other tasks. 1 cancelled task is not counted.");
+  });
+
+  it("says every member is finished, with Show done, when Done hides them all", () => {
+    const finished = [epic, { ...open, status: "done" as const }, duplicate].map((i) => ({ workspace: "staple", issue: { ...i, status: i === epic ? ("done" as const) : i.status }, claim: null }));
+    const html = renderToStaticMarkup(
+      <SessionContext.Provider value={fakeSession({ issues: { data: finished, error: undefined, loading: false, reload: noop }, filters: emptyFilters() })}>
+        <MilestoneMembers plan={plan} workspace="staple" />
+      </SessionContext.Provider>,
+    );
+    expect(html).toContain("3 finished items hidden");
+    expect(html).toContain("data-show-done");
+    expect(html).not.toContain("Nothing is planned here yet");
   });
 });

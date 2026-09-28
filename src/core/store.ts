@@ -5836,6 +5836,37 @@ export class WorkspaceStore {
   }
 
   /**
+   * Each issue's calibrated duration, as `forecast` reads a unit's: its own estimate times the
+   * expected ratio of its class (`forecastDuration`, the `exact` set, the unfiltered population
+   * `staple calibrate` reads — the "a forecast scales an estimate by" figure of the Estimates
+   * view). `seconds` falls back to the estimate itself when its class has no samples to scale
+   * by, and is null without an estimate. One calibration read for every id given.
+   */
+  calibratedDurations(ids: readonly string[], asOf: string = nowIso()): Map<string, { estimateSeconds: number | null; seconds: number | null }> {
+    const out = new Map<string, { estimateSeconds: number | null; seconds: number | null }>();
+    if (ids.length === 0) return out;
+    const rows = ids.map((id) => this.requireRow(id));
+    const { members, forecastKey } = this.calibrationBasis(
+      { kinds: null, priorities: null, parentRow: null, since: null, forRows: rows, pinnedModel: null },
+      asOf,
+    );
+    for (const row of rows) {
+      const estimate = row.estimated_seconds ?? null;
+      if (estimate === null || estimate <= 0) {
+        out.set(row.id, { estimateSeconds: null, seconds: null });
+        continue;
+      }
+      const duration = forecastDuration(
+        "exact",
+        { identifier: row.identifier, title: row.title, status: row.status, estimateSeconds: estimate, dimensions: forecastKey(row) },
+        members,
+      );
+      out.set(row.id, { estimateSeconds: estimate, seconds: duration.expected?.seconds ?? estimate });
+    }
+    return out;
+  }
+
+  /**
    * `staple forecast <ref>` / MCP `forecast` / `GET /api/forecast`: the completion forecast of
    * an issue (its remaining labor and the longest dependency chain of remaining work over the
    * certified plan's units, from each unit's calibrated duration, with resampled bands) and,

@@ -17,9 +17,9 @@ import { useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { TaskList } from "@/components/task-list";
 import { getQueue } from "@/lib/api";
-import { passesDone } from "@/lib/filters";
+import { passesDone, withShowDone } from "@/lib/filters";
 import { useSession } from "@/lib/session";
-import type { EffectiveMilestone, EffectiveQueueRow, IssueDetail, MilestoneView } from "@/lib/types";
+import type { EffectiveMilestone, EffectiveQueueRow, IssueDetail, IssueRow, MilestoneView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import {
   dueText,
@@ -30,7 +30,8 @@ import {
   type ProjectedDue,
 } from "@/views/milestones/milestone-plain";
 import { MilestoneDueControl, useSetMilestoneTarget } from "@/views/milestones/MilestoneDue";
-import { memberListRows, milestoneRisk } from "@/views/milestones/milestones-model";
+import { hiddenMemberCount, memberListRows, milestoneRisk } from "@/views/milestones/milestones-model";
+import { HiddenDoneNotice } from "@/views/milestones/HiddenDone";
 import { openMilestoneIn } from "@/views/milestones/AllWorkspacesMilestones";
 import { ProgressStrip } from "@/views/ProgressStrip";
 import { DetailCard, SectionHeading, cn, useNow } from "./parts";
@@ -54,24 +55,24 @@ export function opensPlan(detail: IssueDetail): boolean {
  * with the due date said as the Milestones page says it (`dueText`): the set target, else the
  * projection from the work left, marked as an estimate.
  */
-export function milestoneSentence(plan: MilestoneView, now: Date, projection: ProjectedDue | null = null, completedAt: string | null = null): string {
-  return `${progressSentence(plan.progress)} ${dueText(plan.milestone, projection, now, completedAt)}.`;
+export function milestoneSentence(plan: MilestoneView, now: Date, projection: ProjectedDue | null = null): string {
+  return `${progressSentence(plan.progress)} ${dueText(plan.milestone, projection, now)}.`;
 }
 
 /** The sentence as markup. Its own component so only a milestone's detail reads the clock. */
-export function MilestoneSentence({ plan, completedAt = null }: { plan: MilestoneView; completedAt?: string | null }) {
+export function MilestoneSentence({ plan }: { plan: MilestoneView }) {
   const now = useNow();
-  const projection = projectedDue(plan.goal?.pace, now);
-  return <span data-milestone-sentence="">{milestoneSentence(plan, now, projection, completedAt)}</span>;
+  const projection = projectedDue(plan.remaining, now);
+  return <span data-milestone-sentence="">{milestoneSentence(plan, now, projection)}</span>;
 }
 
 /**
  * The Due property's value: the Milestones page's own due control, calendar and all, so the
  * date is set the same way in both places.
  */
-export function MilestoneDue({ plan, workspace = "", completedAt = null }: { plan: MilestoneView; workspace?: string; completedAt?: string | null }) {
+export function MilestoneDue({ plan, workspace = "" }: { plan: MilestoneView; workspace?: string }) {
   const now = useNow();
-  const projection = projectedDue(plan.goal?.pace, now);
+  const projection = projectedDue(plan.remaining, now);
   const write = useSetMilestoneTarget(workspace || undefined, plan.milestone.id);
   const finished = plan.milestone.state === "done" || plan.milestone.state === "cancelled";
   return (
@@ -80,11 +81,11 @@ export function MilestoneDue({ plan, workspace = "", completedAt = null }: { pla
         milestone={plan.milestone}
         projection={projection}
         now={now}
-        completedAt={completedAt}
         editable={!finished}
         busy={write.busy}
         error={write.error}
         onSetTarget={write.set}
+        onOpen={write.clear}
       />
     </span>
   );
@@ -203,18 +204,16 @@ const ignoreAuthError = () => {};
 export function MilestoneMembers({ plan, workspace }: { plan: MilestoneView; workspace: string }) {
   const session = useSession();
   const filters = session.filters;
+  // This workspace's rows only: two workspaces may share a prefix in hub mode. The Tasks
+  // list's done gate, so "Done hidden" hides the same members here as on the Milestones page.
+  const wsIssues = useMemo(() => (session.issues.data ?? []).filter((row) => row.workspace === workspace), [session.issues.data, workspace]);
+  const doneGate = useCallback((row: IssueRow) => passesDone(row, filters), [filters]);
   const rows = useMemo(
-    // This workspace's rows only: two workspaces may share a prefix in hub mode. The Tasks
-    // list's done gate, so "Done hidden" hides the same members here as on the Milestones page.
-    () =>
-      memberListRows(
-        plan,
-        (session.issues.data ?? []).filter((row) => row.workspace === workspace),
-        workspace,
-        { visible: (row) => passesDone(row, filters) },
-      ).map((entry) => entry.row),
-    [plan, session.issues.data, workspace, filters],
+    () => memberListRows(plan, wsIssues, workspace, { visible: doneGate }).map((entry) => entry.row),
+    [plan, wsIssues, workspace, doneGate],
   );
+  const hidden = useMemo(() => hiddenMemberCount(plan, wsIssues, workspace, doneGate), [plan, wsIssues, workspace, doneGate]);
+  const showDone = () => session.setFilters(withShowDone(filters, true));
   // Blocked and gated are the queue's verdict (see `milestoneRisk`), read as the page reads it.
   const queue = useResource(
     useCallback(() => getQueue({ ws: workspace }), [workspace]),
@@ -225,11 +224,16 @@ export function MilestoneMembers({ plan, workspace }: { plan: MilestoneView; wor
     <section aria-label="Milestone members" className="mt-8" data-milestone-members="">
       <SectionHeading action={<span className="text-text-tertiary">{plan.members.length}</span>}>What is in this milestone</SectionHeading>
       <MilestoneProgressSummary plan={plan} effective={queue.data?.effective ?? []} />
-      {rows.length > 0 ? (
+      {rows.length === 0 && hidden > 0 ? (
+        <HiddenDoneNotice count={hidden} all onShowDone={showDone} />
+      ) : rows.length > 0 ? (
         <DetailCard padded={false} className="overflow-hidden">
           <TaskList label="Milestone members" preset="panel" rows={rows} captionOf={madeByRunCaption} onOpen={session.open} />
         </DetailCard>
-      ) : (
+      ) : null}
+      {rows.length > 0 ? (
+        <HiddenDoneNotice count={hidden} all={false} onShowDone={showDone} />
+      ) : hidden > 0 ? null : (
         <p className="m-0 text-reading text-text-tertiary">Nothing is planned here yet. Add work from the Milestones page.</p>
       )}
     </section>

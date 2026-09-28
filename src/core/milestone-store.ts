@@ -37,6 +37,7 @@ import {
   assertMembershipAllowed,
   assertMilestoneDates,
   assertMilestoneKindConfigured,
+  milestoneLeaves,
   milestoneProgress,
   milestoneState,
   parseMilestoneDate,
@@ -84,6 +85,8 @@ export interface MilestoneSummary {
   state: MilestoneState;
   /** The milestone's own row in the pickup plan; null when it is not queued. */
   planPosition: number | null;
+  /** When it was closed: its `completedAt` when done, its `cancelledAt` when cancelled; else null. */
+  closedAt: string | null;
 }
 
 /** One ordered member, as every surface prints it. */
@@ -121,6 +124,27 @@ export interface MilestoneView {
   next: { identifier: string; position: number } | null;
   /** The goal check: each criterion's verdict with its evidence, and the pace against the target date. */
   goal: MilestoneGoal;
+  /** The work still open in it, from its estimates: what a projected finish date reads. */
+  remaining: MilestoneRemaining;
+}
+
+/**
+ * The work still open in a milestone, from the estimates of its open LEAVES (not done, not
+ * cancelled; the tasks `progress` counts). Derived on every read, never stored. Distinct from
+ * `goal.pace.remainingSeconds`, which is the remaining critical path of each member's plan: this
+ * is the plain sum, the work that is left whatever order it is done in.
+ */
+export interface MilestoneRemaining {
+  /** Open leaves with an estimate, and open leaves without one (whose work is not in the sums). */
+  estimated: number;
+  unestimated: number;
+  /** Their own estimates, summed; null when none has one. */
+  estimateSeconds: number | null;
+  /**
+   * Their calibrated durations, summed: each estimate times its class's expected ratio, as
+   * `staple forecast` scales a unit (`Store.calibratedDurations`); null when none has one.
+   */
+  forecastSeconds: number | null;
 }
 
 /** The milestone's goal as a check reads it now (`milestone-goal.ts`). */
@@ -641,12 +665,46 @@ export class MilestoneStore {
   }
 
   private view(id: string, facts: QueueFacts = this.queueFacts()): MilestoneView {
-    const base = this.baseView(id, facts);
+    const base = this.baseView(id, facts, this.store.calibratedDurations(this.openLeafIds(id)));
     return { ...base, goal: this.goalOf(id, base) };
   }
 
+  /** The open leaves of a milestone (not done, not cancelled): what `remaining` sums over. */
+  private openLeafIds(id: string): string[] {
+    const rows = this.memberRows(id);
+    const nodes: ProgressNode[] = rows.map((row) => ({ id: row.issue_id, parentId: row.parent_id, category: this.category(row.status) }));
+    const descendantsByMember = new Map(rows.map((row) => [row.issue_id, this.descendants(row.issue_id)]));
+    return milestoneLeaves(nodes, descendantsByMember)
+      .filter((node) => node.category !== "done" && node.category !== "cancelled")
+      .map((node) => node.id);
+  }
+
+  /** `remaining` from the open leaves and their calibrated durations. */
+  private remainingOf(openIds: readonly string[], durations: ReadonlyMap<string, { estimateSeconds: number | null; seconds: number | null }>): MilestoneRemaining {
+    let estimated = 0;
+    let estimateSeconds = 0;
+    let forecastSeconds = 0;
+    for (const id of openIds) {
+      const duration = durations.get(id);
+      if (!duration || duration.estimateSeconds === null) continue;
+      estimated += 1;
+      estimateSeconds += duration.estimateSeconds;
+      forecastSeconds += duration.seconds ?? duration.estimateSeconds;
+    }
+    return {
+      estimated,
+      unestimated: openIds.length - estimated,
+      estimateSeconds: estimated === 0 ? null : estimateSeconds,
+      forecastSeconds: estimated === 0 ? null : forecastSeconds,
+    };
+  }
+
   /** The view without its goal: what `list` returns per row, and what the goal's pace reads. */
-  private baseView(id: string, facts: QueueFacts): Omit<MilestoneView, "goal"> {
+  private baseView(
+    id: string,
+    facts: QueueFacts,
+    durations: ReadonlyMap<string, { estimateSeconds: number | null; seconds: number | null }>,
+  ): Omit<MilestoneView, "goal"> {
     const issue = this.store.getIssue(id);
     const meta = this.meta(id);
     const rows = this.memberRows(id);
@@ -684,6 +742,9 @@ export class MilestoneStore {
     }));
     const descendantsByMember = new Map(rows.map((row) => [row.issue_id, this.descendants(row.issue_id)]));
     const progress = milestoneProgress(nodes, descendantsByMember);
+    const openIds = milestoneLeaves(nodes, descendantsByMember)
+      .filter((node) => node.category !== "done" && node.category !== "cancelled")
+      .map((node) => node.id);
 
     const targetDate = meta?.target_date ?? null;
     const startDate = meta?.start_date ?? null;
@@ -701,11 +762,13 @@ export class MilestoneStore {
         startDate,
         state: milestoneState({ category: this.category(issue.status), targetDate, startDate }, progress, nowIso()),
         planPosition: facts.planPositionOf.get(id) ?? null,
+        closedAt: issue.completedAt ?? issue.cancelledAt ?? null,
       },
       progress,
       revision: meta?.members_revision ?? 0,
       members,
       next: facts.nextOf.get(issue.identifier) ?? null,
+      remaining: this.remainingOf(openIds, durations),
     };
   }
 
@@ -727,10 +790,12 @@ export class MilestoneStore {
       .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
     // One resolver read for the whole list, not one per milestone.
     const facts = this.queueFacts();
-    const views = rows
-      .filter((row) => options.all === true || !this.store.isResolvedStatus(row.status))
+    const listed = rows.filter((row) => options.all === true || !this.store.isResolvedStatus(row.status));
+    // One calibration read for every open leaf of every listed milestone.
+    const durations = this.store.calibratedDurations([...new Set(listed.flatMap((row) => this.openLeafIds(row.id)))]);
+    const views = listed
       .map((row) => {
-        const { members, ...rest } = this.baseView(row.id, facts);
+        const { members, ...rest } = this.baseView(row.id, facts, durations);
         return { ...rest, memberCount: members.length };
       });
     const nullsLast = (a: number | string | null, b: number | string | null): number => {

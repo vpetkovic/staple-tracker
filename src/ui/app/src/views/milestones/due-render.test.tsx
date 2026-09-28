@@ -15,7 +15,7 @@ import { projectedDue } from "./milestone-plain";
 
 const NOW = new Date(2026, 8, 27, 15, 30);
 const noop = () => {};
-const PACE = { remainingSeconds: 8 * 3600, partial: false, unplannedRefs: [] };
+const LEFT = { estimated: 2, unestimated: 0, estimateSeconds: 6 * 3600, forecastSeconds: 8 * 3600 };
 
 function due(props: Partial<Parameters<typeof MilestoneDueControl>[0]>): string {
   return renderToStaticMarkup(
@@ -27,20 +27,20 @@ function due(props: Partial<Parameters<typeof MilestoneDueControl>[0]>): string 
 
 describe("the due control", () => {
   it("shows the projection as an estimate, with a calendar that sets the milestone's own date", () => {
-    const html = due({ projection: projectedDue(PACE, NOW), onSetTarget: async () => true });
+    const html = due({ projection: projectedDue(LEFT, NOW), onSetTarget: async () => true });
     expect(html).toMatch(/data-due-source="estimate"[^>]*>Due ~27 Sept? \(estimated\)</);
-    expect(html).toContain('title="Estimated from 8h of work left, counted from now. Set a date to override it."');
+    expect(html).toContain('title="8h of work left (6h estimated, scaled by how long estimates have really taken), counted from now. Set a date to override it."');
     expect(html).toContain('aria-label="Set a due date"');
   });
 
   it("names a set target and offers to change it", () => {
-    const html = due({ milestone: { targetDate: "2026-10-09", state: "active" }, projection: projectedDue(PACE, NOW), onSetTarget: async () => true });
+    const html = due({ milestone: { targetDate: "2026-10-09", state: "active" }, projection: projectedDue(LEFT, NOW), onSetTarget: async () => true });
     expect(html).toMatch(/data-due-source="target"[^>]*>Due 9 Oct, in 12 days</);
     expect(html).toContain('aria-label="Change the due date"');
   });
 
   it("has no calendar on a finished milestone, and says when it finished", () => {
-    const html = due({ milestone: { targetDate: null, state: "done" }, completedAt: "2026-09-26T12:00:00.000Z", editable: false, onSetTarget: async () => true });
+    const html = due({ milestone: { targetDate: null, state: "done", closedAt: "2026-09-26T12:00:00.000Z" }, editable: false, onSetTarget: async () => true });
     expect(html).toMatch(/>Finished 26 Sept?</);
     expect(html).not.toContain("data-milestone-due-button");
   });
