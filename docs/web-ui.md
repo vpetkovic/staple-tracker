@@ -332,6 +332,15 @@ arrives without the header and is refused (`403`, `detail.reason:
 "cross_origin"`). `?token=` and `Bearer` open reads only and never stand in for
 the header on a write: a query string rides a plain cross-site form. Pinned in
 `test/ui-auth.test.ts` and `lib/api-write-header.test.ts`.
+
+**A forwarder must check the Host it was sent.** Because the forwarder rewrites
+`Host` to loopback, the server cannot tell which name the browser used, and a
+page on a domain that resolves to the forwarder's address (DNS rebinding) would
+be handed the token like the real page — and, with the header rule, could write.
+So the forwarder answers only requests whose `Host` is its own tailnet name or
+address (`100.x.y.z:<port>`, `<machine>.<tailnet>.ts.net:<port>`) and refuses
+every other one (`421 Misdirected Request`) before forwarding anything. That
+check lives in the forwarder, not here: this server only ever sees loopback.
 The app reads the token out of its own URL once, keeps it in `sessionStorage`,
 and strips it from the address bar. Arriving without a valid token renders an
 explanation, not a blank page.
