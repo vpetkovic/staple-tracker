@@ -421,6 +421,14 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/budget/collection",
       "/api/budget/collection/collect",
       "/api/budget/collection/plan",
+      /**
+       * The Usage page's Refresh: `collectBudgetNow`, what `staple budget collect` runs
+       * (the passive scan, then one live poll when it is on). POST, input-free, skipped by
+       * the sync trigger, and THE ONE WRITE EXEMPT FROM THE ORIGIN CHECK, so the phone on
+       * the tailnet can press it. `test/budget-refresh-http.test.ts` pins that exemption
+       * and that every other write still refuses a foreign Origin.
+       */
+      "/api/budget/collection/refresh",
       "/api/budget/collection/setup",
       "/api/budget/collection/unsetup",
       /**
@@ -429,6 +437,13 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * `test/budget-forget.test.ts` pins it.
        */
       "/api/budget/forget",
+      /**
+       * Live polling (`staple budget live on|off`, a network consent of its own): the
+       * POST is named in `BUDGET_CONFIG_WRITES` beside capture; the GET reads config.json
+       * and the poll state file and asks nobody. `test/budget-refresh-http.test.ts` pins both.
+       */
+      "/api/budget/live",
+      "/api/budget/polling",
       // `staple calibrate` / MCP `calibration_cohorts`: GET-only, a read.
       "/api/calibration",
       /**

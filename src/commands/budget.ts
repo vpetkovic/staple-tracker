@@ -14,9 +14,10 @@
  *   budget unbind --source claude-statusline|codex-rollout [--config-dir D | --codex-home D]
  *   budget bindings
  *   budget setup [--claude-account A] [--codex-account B] [--claude-config-dir D] [--codex-home D]
- *                [--no-statusline] [--no-watcher] [--interval MIN] [--yes]
+ *                [--no-statusline] [--no-watcher] [--interval MIN] [--live] [--yes]
  *   budget unsetup [--yes]
  *   budget status
+ *   budget live [on|off] [--yes]
  *   budget collect [--max-files N] [--quiet]
  *
  * `ingest` calls the same `ingestBudget` the MCP tool `record_budget_sample` calls; the
@@ -35,6 +36,7 @@ import {
   parseBindingSource,
   budgetConfig,
   setBudgetCapture,
+  setLivePolling,
   unbindBudgetSource,
   type BudgetConfigView,
 } from "../core/telemetry/budget-config.js";
@@ -46,18 +48,21 @@ import {
   applyBudgetSetup,
   applyBudgetUnsetup,
   budgetCollectionStatus,
-  collectBudget,
+  collectBudgetNow,
   planBudgetSetup,
   planBudgetUnsetup,
   type CollectionOutcome,
   type CollectionPlan,
   type CollectionStatus,
+  type CollectNowResult,
 } from "../core/telemetry/collection/service.js";
-import type { CollectResult } from "../core/telemetry/collection/codex-collect.js";
+import { USAGE_POLLERS } from "../core/telemetry/polling/registry.js";
+import { usagePollingStatus, type PollingStatus, type PollRun } from "../core/telemetry/polling/run.js";
+import { settle } from "./cloud.js";
 import type { TelemetryPage } from "../core/telemetry/read-page.js";
 import { limitFlag } from "./attempts.js";
 
-const USAGE = "Use: history, forget, ingest, capture, bind, unbind, bindings, setup, unsetup, status, collect (staple budget --help)";
+const USAGE = "Use: history, forget, ingest, capture, bind, unbind, bindings, setup, unsetup, status, live, collect (staple budget --help)";
 
 const HELP = `staple budget — provider budget telemetry on this machine (docs/execution-telemetry.md)
 
@@ -108,24 +113,34 @@ const HELP = `staple budget — provider budget telemetry on this machine (docs/
 
 Automatic collection (one explicit consent; nothing changes without --yes)
   budget setup [--claude-account A] [--codex-account B] [--claude-config-dir D]
-              [--codex-home D] [--no-statusline] [--no-watcher] [--interval MIN] [--yes]
+              [--codex-home D] [--no-statusline] [--no-watcher] [--interval MIN] [--live] [--yes]
               capture on, the two bindings, a status-line wrapper in front of the
               Claude statusLine command you already have (settings.json backed up
               first), and a launch agent that runs budget collect every MIN minutes
-              (default 5; macOS; elsewhere it prints a cron line). Without --yes it
-              prints what it would change and changes nothing. Re-running is a no-op
+              (default 5; macOS; elsewhere it prints a cron line); --live also turns
+              live polling on (below). Without --yes it prints what it would change
+              and changes nothing. Re-running is a no-op
   budget unsetup [--yes]                reverse exactly what setup changed: the
               original statusLine command back byte for byte, the agent unloaded
               and deleted, capture and bindings back to what they were before
   budget status                         capture, each source's newest reading and
               its age, the wrapper and the watcher (loaded? last run, last error)
               and every problem found
+  budget live [on|off] [--yes]         live polling, off by default: on every collect
+              (at most every 4 min per account) ask each bound provider for the
+              account's current usage (api.anthropic.com for a Claude Code config
+              directory, chatgpt.com for a Codex home) with the sign-in that tool
+              already keeps on this computer: read when asked, sent only to that
+              host, never stored, logged or refreshed. \`on\` without --yes prints what
+              it would do and changes nothing; \`off\` needs no --yes
   budget collect [--max-files N] [--quiet]
               ingest the Codex rollouts that are new or have grown since the last
-              run (newest first, at most N, default 100); what the watcher runs
+              run (newest first, at most N, default 100), then, when live polling is
+              on, ask each bound provider once; what the watcher runs
 
 Samples and limit windows live in this machine's hub.db and never replicate.
-Ingestion reads stdin and local files only and makes no network call.`;
+Ingestion reads stdin and local files only and makes no network call; only live
+polling does, and only after its own consent.`;
 
 const MARK: Record<string, string> = { change: "+", unchanged: "=", skip: "-", refuse: "!" };
 
@@ -170,18 +185,51 @@ function sayStatus(status: CollectionStatus): void {
     console.log(`  last run ${run.at} (${age(w.lastRunAgeSeconds)}): ${run.skippedReason ?? `${run.ingested} read, ${run.storedCount} stored, ${run.deferred} deferred, ${run.errors.length} error(s)`}`);
   } else console.log("  last run never");
   if (w.lastError !== null) console.log(`  last error ${w.lastError.at}: ${w.lastError.message}`);
+  sayPolling(status.polling);
   if (status.problems.length === 0) console.log("problems   none");
   for (const problem of status.problems) console.log(`  ! ${problem.code}: ${problem.message}`);
 }
 
-function sayCollect(result: CollectResult): void {
+function sayCollect(result: CollectNowResult): void {
   if (result.skippedReason !== null) {
     const why = { capture_disabled: "budget capture is off", no_codex_binding: "no codex-rollout binding", locked: "another collect is running" }[result.skippedReason];
     console.log(`collect: nothing read (${why})`);
+  } else {
+    console.log(`collect: ${result.scanned} rollout(s) seen, ${result.changed} new or grown, ${result.ingested} read, ${result.storedCount} reading(s) stored, ${result.deferred} left for the next run`);
+    for (const error of result.errors) console.log(`  ! ${error.file}: ${error.message}`);
+  }
+  sayPoll(result.poll);
+}
+
+const POLL_WORD: Record<string, string> = {
+  stored: "checked",
+  failed: "failed",
+  fresh: "not asked (checked recently)",
+  deferred: "not asked (the provider asked us to wait)",
+  busy: "not asked (another check is running)",
+  skipped: "checked, nothing stored (a setting changed meanwhile)",
+};
+
+function sayPoll(poll: PollRun): void {
+  if (!poll.enabled) {
+    if (poll.skippedReason === "live_polling_off") console.log("live poll: off (staple budget live on)");
     return;
   }
-  console.log(`collect: ${result.scanned} rollout(s) seen, ${result.changed} new or grown, ${result.ingested} read, ${result.storedCount} reading(s) stored, ${result.deferred} left for the next run`);
-  for (const error of result.errors) console.log(`  ! ${error.file}: ${error.message}`);
+  for (const outcome of poll.outcomes) {
+    const stored = outcome.outcome === "stored" ? `, ${outcome.storedCount} reading(s) stored` : "";
+    const idle = outcome.idle.length > 0 && outcome.outcome === "stored" ? `; no window running: ${outcome.idle.join(", ")}` : "";
+    console.log(`live poll: ${outcome.name} (${outcome.accountRef}) ${POLL_WORD[outcome.outcome]}${stored}${idle}`);
+    if (outcome.failure !== null && (outcome.outcome === "failed" || outcome.outcome === "deferred")) console.log(`  ! ${outcome.failure.message}`);
+  }
+}
+
+function sayPolling(polling: PollingStatus): void {
+  console.log(`live poll  ${polling.livePolling ? (polling.active ? "on" : "on, but capture is off") : "off"}`);
+  for (const provider of polling.providers) {
+    const last = provider.lastAttemptAt === null ? "never checked" : `last checked ${provider.lastAttemptAt}`;
+    const state = provider.failure !== null ? `: ${provider.failure.message}` : provider.lastSuccessAt !== null ? ", ok" : "";
+    console.log(`  ${provider.name.padEnd(8)} ${provider.accountRef.padEnd(16)} ${provider.host.padEnd(18)} ${last}${state}`);
+  }
 }
 
 function positiveNumber(raw: string | undefined, flag: string): number | undefined {
@@ -407,6 +455,7 @@ export function runBudgetCommand(argv: string[]): void {
       "no-watcher": { type: "boolean" },
       interval: { type: "string" },
       "max-files": { type: "string" },
+      live: { type: "boolean" },
       yes: { type: "boolean" },
       quiet: { type: "boolean" },
     },
@@ -535,6 +584,7 @@ export function runBudgetCommand(argv: string[]): void {
         statusline: values["no-statusline"] !== true,
         watcher: values["no-watcher"] !== true,
         intervalMinutes: positiveNumber(values.interval, "--interval"),
+        livePolling: values.live === true ? true : undefined,
       };
       const deps = { home, attemptLinker: attemptLinkerFor(home) };
       if (values.yes !== true) {
@@ -561,14 +611,51 @@ export function runBudgetCommand(argv: string[]): void {
       print(status, () => sayStatus(status));
       return;
     }
-    case "collect": {
-      const result = collectBudget({ maxFiles: positiveNumber(values["max-files"], "--max-files") }, { home, attemptLinker: attemptLinkerFor(home) });
-      if (values.quiet === true) {
-        // The watcher's own log line is written by collect; stderr carries only failures.
-        for (const error of result.errors) console.error(`budget collect: ${error.file}: ${error.message}`);
+    case "live": {
+      const [state] = args;
+      if (state === undefined) {
+        const polling = usagePollingStatus(home);
+        print(polling, () => sayPolling(polling));
         return;
       }
-      print(result, () => sayCollect(result));
+      if (state !== "on" && state !== "off") throw new StapleError("validation", `budget live takes on or off; got "${state}".`);
+      if (state === "on" && values.yes !== true) {
+        const config = budgetConfig(home);
+        if (config.livePolling) {
+          print({ livePolling: true }, () => console.log("live poll  already on"));
+          return;
+        }
+        const hosts = USAGE_POLLERS.filter((poller) => config.bindings.some((binding) => poller.isAvailable(binding))).map((poller) => `${poller.name} (${poller.host})`);
+        throw new StapleError(
+          "validation",
+          `Refusing to turn live polling on without --yes. Nothing was changed. With it on, every collect (at most every 4 min per account) asks ${
+            hosts.length > 0 ? hosts.join(" and ") : "each bound provider"
+          } for the bound account's current usage, using the sign-in that tool already keeps on this computer: read when asked, sent only there, never stored or logged.${
+            config.budgetCapture ? "" : " Budget capture is off, so nothing will be asked until it is on."
+          } Re-run with --yes to turn it on.`,
+          { reason: "consent_required", hosts },
+        );
+      }
+      const view = setLivePolling(home, state === "on");
+      print(view, () => console.log(`live poll  ${view.livePolling ? "on" : "off"}${view.livePolling && !view.budgetCapture ? " (capture is off, so nothing is asked yet)" : ""}`));
+      return;
+    }
+    case "collect": {
+      const quiet = values.quiet === true;
+      settle(
+        collectBudgetNow({ maxFiles: positiveNumber(values["max-files"], "--max-files") }, { home, attemptLinker: attemptLinkerFor(home) }).then((result) => {
+          if (quiet) {
+            // The watcher's own log lines are written by collect; stderr carries only failures.
+            for (const error of result.errors) console.error(`budget collect: ${error.file}: ${error.message}`);
+            for (const outcome of result.poll.outcomes) {
+              if (outcome.outcome === "failed" && outcome.failure !== null) console.error(`budget collect: ${outcome.name} (${outcome.accountRef}): ${outcome.failure.message}`);
+            }
+            return;
+          }
+          print(result, () => sayCollect(result));
+        }),
+        json,
+      );
       return;
     }
     default:
