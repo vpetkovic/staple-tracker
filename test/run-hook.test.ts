@@ -17,7 +17,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
 
@@ -206,6 +206,35 @@ describe("claude-stop: a bound session works the run", () => {
   });
 });
 
+describe("claude-stop: --max-blocks caps every kind of block", () => {
+  it("an agent that flips its ticket between in_progress and in_review without a review is let go at the cap", () => {
+    const { dir, epic, refs } = workspace(["one", "two"]);
+    startAndBind(dir, epic);
+    const args = ["--max-blocks", "3", "--max-repeats", "50"];
+    expect(claudeStop(dir, {}, { args }).answer?.decision).toBe("block");
+    const whys: string[] = [];
+    let released: Record<string, any> | null = null;
+    for (let turn = 0; turn < 8; turn++) {
+      // Alternate the reason: unfinished (held, in_progress), then no_review (in_review).
+      if (turn % 2 === 0) ok(dir, ["status", refs[0]!, "in_review"]);
+      else {
+        ok(dir, ["status", refs[0]!, "todo"]);
+        ok(dir, ["checkout", refs[0]!]);
+      }
+      const answer = claudeStop(dir, { stop_hook_active: true }, { args }).answer;
+      if (answer?.decision !== "block") {
+        released = answer;
+        break;
+      }
+      whys.push(/still checked out/.test(answer.reason) ? "unfinished" : /no review/.test(answer.reason) ? "no_review" : "other");
+    }
+    // One take and two reminders make three blocks; the fourth is refused.
+    expect(whys).toEqual(["no_review", "unfinished"]);
+    expect(released?.systemMessage).toContain("after 3 continuations in a row");
+    expect(issue(dir, refs[1]!).checkoutAgent).toBeNull();
+  });
+});
+
 describe("claude-stop: what it never touches, and never fails on", () => {
   it("a session run drive started, a sub-agent, another event, and a run a live driver is attached to", () => {
     const { dir, epic, refs } = workspace(["one"]);
@@ -276,23 +305,63 @@ describe("pending bindings: a CLI that exports no session id", () => {
     return result.stdout.trim() === "" ? null : (JSON.parse(result.stdout) as Record<string, any>);
   }
 
-  it("is claimed by the first stop in the directory it was made in (or below it), and by nobody else", () => {
+  it("is claimed by the first stop in the directory it was made in (or below it), never above it, and once", () => {
     const { dir, epic, refs } = workspace(["one", "two"]);
     ok(dir, ["run", "start", "--scope", epic]);
     const sub = join(dir, "src");
     mkdirSync(sub);
-    const pending = ok(sub, ["run", "hook", "bind", "--provider", "codex"]);
+    const pending = ok(dir, ["run", "hook", "bind", "--provider", "codex"]);
     expect(pending).toMatchObject({ pending: true, session: null, provider: "codex" });
-    // A session somewhere else does not claim it.
+    // A session somewhere else, in a parent directory, or at the root does not claim it.
     const elsewhere = tempDir("run-hook-elsewhere");
     cleanup.push(elsewhere);
     expect(codexStop(dir, elsewhere, "other-session")).toBeNull();
-    // The session working in the project root (above where bind ran) does.
-    expect(codexStop(dir, dir, "codex-1")?.reason).toContain(`next ticket ${refs[0]}`);
+    expect(codexStop(dir, dirname(dir), "parent-session")).toBeNull();
+    expect(codexStop(dir, "/", "root-session")).toBeNull();
+    expect(issue(dir, refs[0]!).checkoutAgent).toBeNull();
+    // The session working below where bind ran does.
+    expect(codexStop(dir, sub, "codex-1")?.reason).toContain(`next ticket ${refs[0]}`);
     expect(bindingFiles()).toEqual(["codex-codex-1.json"]);
     // Claimed once: a second session in the same directory is not bound.
     expect(codexStop(dir, dir, "codex-2")).toBeNull();
     expect(issue(dir, refs[1]!).checkoutAgent).toBeNull();
+  });
+
+  it("one run, one session: a second binding is refused, a pending one is not claimed past a session, unbind --run frees it", () => {
+    const { dir, epic, refs } = workspace(["one", "two"]);
+    const run = ok(dir, ["run", "start", "--scope", epic]);
+    ok(dir, ["run", "hook", "bind", "--session", "first"]);
+    // Rebinding the same session is fine.
+    ok(dir, ["run", "hook", "bind", "--session", "first"]);
+    const second = cli(dir, ["run", "hook", "bind", "--session", "second", "--json"]);
+    expect(second.status).toBe(4);
+    expect(second.stderr).toContain("already bound to claude session first");
+    expect(second.stderr).toContain(`staple run hook unbind --run ${run.id}`);
+    const pendingRefused = cli(dir, ["run", "hook", "bind", "--provider", "codex", "--json"]);
+    expect(pendingRefused.status).toBe(4);
+    expect(ok(dir, ["run", "hook", "unbind", "--run", run.id.slice(0, 8)])).toMatchObject({ runId: run.id, unbound: 1 });
+    // Free again: a pending binding, then the first session binds exactly: the pending one
+    // is refused its claim, since the run is worked.
+    ok(dir, ["run", "hook", "bind", "--provider", "codex"]);
+    const exact = cli(dir, ["run", "hook", "bind", "--session", "first", "--json"]);
+    expect(exact.status).toBe(4);
+    expect(exact.stderr).toContain("a pending codex binding");
+    expect(codexStop(dir, dir, "codex-1")?.reason).toContain(`next ticket ${refs[0]}`);
+    expect(claudeStop(dir, { session_id: "first" }).answer).toBeNull();
+    expect(bindingFiles()).toEqual(["codex-codex-1.json"]);
+  });
+
+  it("never claims a pending binding for a run a session already works, even one written in a race", () => {
+    const { dir, epic, refs } = workspace(["one"]);
+    const run = ok(dir, ["run", "start", "--scope", epic]);
+    const pending = ok(dir, ["run", "hook", "bind", "--provider", "codex"]);
+    const raced = readFileSync(pending.file, "utf8");
+    ok(dir, ["run", "hook", "unbind", "--run", run.id]);
+    ok(dir, ["run", "hook", "bind", "--session", "first"]);
+    writeFileSync(pending.file, raced);
+    expect(codexStop(dir, dir, "codex-1")).toBeNull();
+    expect(bindingFiles().filter((name) => !name.includes("pending"))).toEqual(["claude-first.json"]);
+    expect(claudeStop(dir, { session_id: "first" }).answer?.reason).toContain(`next ticket ${refs[0]}`);
   });
 
   it("expires unclaimed, and unbind without a session removes it", () => {
@@ -457,6 +526,29 @@ describe("install", () => {
     expect(written.hooks.Stop).toEqual([...existing.hooks.Stop, { hooks: [{ type: "command", command: "staple run hook claude-stop", timeout: 60 }] }]);
     expect(ok(dir, ["run", "hook", "install", "claude", "--user"]).action).toBe("already_installed");
     expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual(written);
+  });
+
+  it("refuses a hooks member of the wrong shape, and knows its own hook by the exact command", () => {
+    const dir = tempDir("run-hook-install");
+    cleanup.push(dir);
+    const settings = join(dir, ".claude", "settings.json");
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    for (const wrong of [{ hooks: "none" }, { hooks: { Stop: { hooks: [] } } }, { hooks: [] }]) {
+      writeFileSync(settings, JSON.stringify(wrong));
+      const refused = cli(dir, ["run", "hook", "install", "claude", "--project", "--json"]);
+      expect(refused.status, JSON.stringify(wrong)).toBe(2);
+      expect(refused.stderr).toMatch(/not an (object|array); nothing was written/);
+      expect(JSON.parse(readFileSync(settings, "utf8"))).toEqual(wrong);
+    }
+    // Somebody else's hook whose command merely contains ours is not ours.
+    const lookalike = { hooks: { Stop: [{ hooks: [{ type: "command", command: "staple run hook claude-stop-old" }] }] } };
+    writeFileSync(settings, JSON.stringify(lookalike));
+    expect(ok(dir, ["run", "hook", "install", "claude", "--project"]).action).toBe("installed");
+    expect(JSON.parse(readFileSync(settings, "utf8")).hooks.Stop).toHaveLength(2);
+    // Ours, installed with another staple path, is.
+    const ours = { hooks: { Stop: [{ hooks: [{ type: "command", command: "/usr/local/bin/staple run hook claude-stop", timeout: 60 }] }] } };
+    writeFileSync(settings, JSON.stringify(ours));
+    expect(ok(dir, ["run", "hook", "install", "claude", "--project"]).action).toBe("already_installed");
   });
 
   it("writes a project's settings file, honours CLAUDE_CONFIG_DIR, and refuses a file that is not JSON", () => {

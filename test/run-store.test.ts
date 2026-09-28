@@ -991,6 +991,21 @@ describe("evaluateStopRules", () => {
     expect(order).toEqual(["budget:tickets", "budget:time", "budget:ceiling", "failure_streak", "scope_gone", "vp_blocked", "gate_pending", "scope_empty"]);
   });
 
+  it("when nothing is workable, a person's changes_requested gate is named as that, not as awaiting approval", () => {
+    const decision = evaluateStopRules(
+      baseRun({ scope: { kind: "queue" } }),
+      baseFacts({
+        workable: [],
+        pendingGates: [
+          { issueId: "p", identifier: "TST-2", owner: "VP", state: "changes_requested" },
+          { issueId: "q", identifier: "TST-3", owner: "VP", state: "pending" },
+        ],
+      }),
+    );
+    expect(decision).toMatchObject({ stop: true, reason: "gate_pending" });
+    expect((decision as { message: string }).message).toBe("Nothing in scope is workable: TST-2 has changes requested by VP; TST-3 is awaiting approval by VP.");
+  });
+
   it("when nothing is workable, a gate is named before a person-owned block", () => {
     const decision = evaluateStopRules(
       baseRun({ scope: { kind: "queue" } }),

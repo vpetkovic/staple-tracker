@@ -16,7 +16,8 @@
  * database: the session may `cd` into a worktree the workspace cannot be found from, and a
  * file needs no migration (runs are machine-local already). A CLI that exports no session
  * id to its shells gets a pending binding instead, claimed by its next stop in the same
- * directory ({@link claimPending}). An unbound session is never touched. So is a session `run drive` started (it sets `STAPLE_RUN_TICKET`), and a run a
+ * directory ({@link claimPending}). One run, one session: a second binding is refused. An
+ * unbound session is never touched. So is a session `run drive` started (it sets `STAPLE_RUN_TICKET`), and a run a
  * live driver is attached to: two adapters must never work one run.
  *
  * ## The decision, in order
@@ -151,6 +152,61 @@ function writeBinding(binding: SessionBinding): void {
   writeFileAtomic(bindingPath(binding.provider, binding.session), `${JSON.stringify(binding, null, 2)}\n`);
 }
 
+function bindingFiles(): Array<{ path: string; value: Record<string, unknown> }> {
+  const dir = sessionsDirectory();
+  if (!existsSync(dir)) return [];
+  const files: Array<{ path: string; value: Record<string, unknown> }> = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      files.push({ path: join(dir, name), value: JSON.parse(readFileSync(join(dir, name), "utf8")) as Record<string, unknown> });
+    } catch {
+      /* not a binding */
+    }
+  }
+  return files;
+}
+
+/** The sessions bound to `runId`, any provider. */
+export function sessionsOfRun(runId: string): SessionBinding[] {
+  return bindingFiles()
+    .map((file) => file.value)
+    .filter((value) => value.runId === runId && typeof value.session === "string") as unknown as SessionBinding[];
+}
+
+/** The unexpired pending bindings for `runId`. */
+function pendingOfRun(runId: string, now = new Date()): PendingBinding[] {
+  return bindingFiles()
+    .map((file) => file.value)
+    .filter((value) => value.runId === runId && typeof value.session !== "string" && typeof value.expiresAt === "string" && Date.parse(value.expiresAt) > now.getTime()) as unknown as PendingBinding[];
+}
+
+/**
+ * One run, one session: refused (`conflict`) when another session is bound to the run, or a
+ * pending binding made elsewhere waits for one. `except` is the binding being replaced.
+ */
+function assertRunFree(run: Run, except: { provider: string; session?: string; pendingFile?: string }): void {
+  const other = sessionsOfRun(run.id).find((binding) => !(binding.provider === except.provider && binding.session === except.session));
+  const pending = pendingOfRun(run.id).find((binding) => pendingPath(binding.provider, binding.cwd) !== except.pendingFile);
+  if (other === undefined && pending === undefined) return;
+  const holder = other !== undefined ? `${other.provider} session ${other.session}` : `a pending ${pending!.provider} binding in ${pending!.cwd}`;
+  throw new StapleError("conflict", `Run ${run.id} is already bound to ${holder}; one run is worked by one session. To move it, first: staple run hook unbind --run ${run.id}`, {
+    runId: run.id,
+    boundTo: other !== undefined ? { provider: other.provider, session: other.session } : { provider: pending!.provider, cwd: pending!.cwd },
+  });
+}
+
+/** Remove every binding of `runId`, pending ones included; how many there were. */
+export function unbindRun(runId: string): number {
+  let removed = 0;
+  for (const file of bindingFiles()) {
+    if (file.value.runId !== runId) continue;
+    rmSync(file.path, { force: true });
+    removed += 1;
+  }
+  return removed;
+}
+
 /** True when a binding was there to remove. */
 export function unbindPending(provider: string, cwd: string): boolean {
   const path = pendingPath(provider, physical(cwd));
@@ -193,6 +249,7 @@ export function bindSession(input: { store: WorkspaceStore; run: Run; provider: 
   const db = bindableDb(input.store, input.run);
   const session = input.session.trim();
   if (session === "") throw new StapleError("validation", "The session id is empty.");
+  assertRunFree(input.run, { provider: input.provider, session });
   mkdirSync(sessionsDirectory(), { recursive: true });
   const binding: SessionBinding = { provider: input.provider, session, runId: input.run.id, db, actor: input.run.actor, boundAt: nowIso(), streak: { ...FRESH_STREAK } };
   writeBinding(binding);
@@ -207,7 +264,7 @@ export const PENDING_BINDING_TTL_SECONDS = 600;
 /**
  * A binding waiting for its session. Most CLIs document no variable that tells a shell
  * command its session id, so `bind` without one records the directory it ran in, and the
- * first stop hook of that provider whose session works in that directory (or above it)
+ * first stop hook of that provider whose session works in that directory (or below it)
  * claims it: the agent that ran `bind` ends its turn next, so that stop is almost always
  * its own. `--session <id>` binds exactly, and is the way to be sure.
  */
@@ -241,6 +298,7 @@ export function bindPending(input: { store: WorkspaceStore; run: Run; provider: 
   const db = bindableDb(input.store, input.run);
   const now = input.now ?? new Date();
   const cwd = physical(input.cwd);
+  assertRunFree(input.run, { provider: input.provider, pendingFile: pendingPath(input.provider, cwd) });
   const pending: PendingBinding = {
     provider: input.provider,
     cwd,
@@ -257,8 +315,9 @@ export function bindPending(input: { store: WorkspaceStore; run: Run; provider: 
 }
 
 /**
- * Turn the pending binding for `cwd` (made there or in a directory below it) into this
- * session's binding. The claim is a rename, so of two sessions stopping at once exactly
+ * Turn a pending binding made in `cwd`, or in a directory above it, into this session's
+ * binding: the session works where `bind` ran or below it, never above it. A run another
+ * session is already bound to is not claimed. The claim is a rename, so of two sessions stopping at once exactly
  * one gets it. An expired pending binding is removed, never claimed.
  */
 export function claimPending(provider: string, session: string, cwd: string, now = new Date()): SessionBinding | null {
@@ -280,7 +339,11 @@ export function claimPending(provider: string, session: string, cwd: string, now
       rmSync(path, { force: true });
       continue;
     }
-    if (pending.cwd !== root && !pending.cwd.startsWith(root.endsWith(sep) ? root : `${root}${sep}`)) continue;
+    // The session works where bind ran, or below it; never above it (a session in $HOME is
+    // not the one that ran bind in a project).
+    if (root !== pending.cwd && !root.startsWith(pending.cwd.endsWith(sep) ? pending.cwd : `${pending.cwd}${sep}`)) continue;
+    // A run another session already works is not claimed by a second one.
+    if (sessionsOfRun(pending.runId).some((other) => !(other.provider === provider && other.session === session))) continue;
     const claimed = `${path}.claimed-${process.pid}`;
     try {
       renameSync(path, claimed);
@@ -316,8 +379,18 @@ export function decideStop(input: {
     else writeBinding({ ...binding, streak: { ...FRESH_STREAK } });
     return { action: "allow", why, message };
   };
-  /** A block, unless the loop guard says this one has been given often enough. */
+  /** Past `--max-blocks` continuations in a row, whatever they were for, the session may stop. */
+  const blockLimitReached = (): HookVerdict | null =>
+    event.continuing && streak.blocks >= limits.maxBlocks
+      ? allow(
+          "block_guard",
+          `staple autopilot: letting the session stop after ${limits.maxBlocks} continuations in a row. Run ${short(binding.runId)} is still live; prompt the agent to carry on, or end it: staple run stop ${short(binding.runId)}.`,
+        )
+      : null;
+  /** A block, unless the loop guards say enough: the same one too often, or too many of any kind. */
   const block = (why: HookBlockWhy, ref: string, reason: string): HookVerdict => {
+    const limited = blockLimitReached();
+    if (limited !== null) return limited;
     const key = `${why}:${ref}`;
     const repeats = event.continuing && streak.key === key ? streak.repeats + 1 : 1;
     if (why !== "take" && repeats > limits.maxRepeats) {
@@ -359,14 +432,10 @@ export function decideStop(input: {
     }
   }
 
-  // Asking for another continuation: the block guard is read BEFORE continue, so a take the
-  // session will not be given the turn for is never claimed.
-  if (event.continuing && streak.blocks >= limits.maxBlocks) {
-    return allow(
-      "block_guard",
-      `staple autopilot: letting the session stop after ${limits.maxBlocks} continuations in a row. Run ${short(run.id)} is still live; prompt the agent to carry on, or end it: staple run stop ${short(run.id)}.`,
-    );
-  }
+  // Read again BEFORE continue (block() reads it too): a take the session will not be given
+  // the turn for is never claimed.
+  const limited = blockLimitReached();
+  if (limited !== null) return limited;
 
   const answer = runs.continue({ run: run.id });
   if (answer.action === "take") {

@@ -17,6 +17,7 @@
 import { join } from "node:path";
 import { userHome } from "../config/home.js";
 import type { HookVerdict, StopEvent } from "./run-hook.js";
+import { StapleError } from "./types.js";
 
 export interface HookOutput {
   stdout: string;
@@ -309,23 +310,58 @@ export function hookStanza(provider: HookProvider, command: string): Record<stri
   return mergeHook(provider, {}, command)!;
 }
 
+/** Every string inside `value`, however deep. */
+function strings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(strings);
+  if (isObject(value)) return Object.values(value).flatMap(strings);
+  return [];
+}
+
+/**
+ * Whether a settings entry is this provider's staple hook: a command that is exactly
+ * `command`, or any staple executable followed by exactly `run hook <verb>` (a hook installed
+ * with another `--staple`). `run hook claude-stop-old`, or the verb with arguments after it,
+ * is somebody else's.
+ */
+function isStapleHook(provider: HookProvider, entry: unknown, command: string): boolean {
+  return strings(entry).some((text) => {
+    if (text.trim() === command) return true;
+    const words = text.trim().split(/\s+/);
+    return words.length === 4 && words[1] === "run" && words[2] === "hook" && words[3] === provider.command;
+  });
+}
+
 /**
  * `settings` with the hook added under {@link HookProvider.eventPath}, every other member
- * kept; null when a staple hook for this provider is already there (any entry whose text
- * names `run hook <command>`), so installing twice changes nothing.
+ * kept; null when this provider's staple hook is already there ({@link isStapleHook}), so
+ * installing twice changes nothing. A member on the way that is not what the CLI expects
+ * (an object, then an array of entries) is refused rather than replaced.
  */
 export function mergeHook(provider: HookProvider, settings: Record<string, unknown>, command: string): Record<string, unknown> | null {
-  const marker = `run hook ${provider.command}`;
   const root: Record<string, unknown> = { ...provider.fileBase, ...settings };
   let parent = root;
+  const path: string[] = [];
   for (const key of provider.eventPath.slice(0, -1)) {
-    const next = isObject(parent[key]) ? { ...(parent[key] as Record<string, unknown>) } : {};
+    path.push(key);
+    if (parent[key] !== undefined && !isObject(parent[key])) {
+      throw new StapleError("validation", `"${path.join(".")}" in the settings is ${describe(parent[key])}, not an object; nothing was written. Fix it by hand, or add the hook yourself (staple run hook install ${provider.name} --print).`);
+    }
+    const next = { ...((parent[key] as Record<string, unknown> | undefined) ?? {}) };
     parent[key] = next;
     parent = next;
   }
   const last = provider.eventPath[provider.eventPath.length - 1]!;
-  const entries = Array.isArray(parent[last]) ? (parent[last] as unknown[]) : [];
-  if (entries.some((entry) => JSON.stringify(entry).includes(marker))) return null;
+  path.push(last);
+  if (parent[last] !== undefined && !Array.isArray(parent[last])) {
+    throw new StapleError("validation", `"${path.join(".")}" in the settings is ${describe(parent[last])}, not an array; nothing was written. Fix it by hand, or add the hook yourself (staple run hook install ${provider.name} --print).`);
+  }
+  const entries = (parent[last] as unknown[] | undefined) ?? [];
+  if (entries.some((entry) => isStapleHook(provider, entry, command))) return null;
   parent[last] = [...entries, provider.entry(command)];
   return root;
+}
+
+function describe(value: unknown): string {
+  return value === null ? "null" : Array.isArray(value) ? "an array" : `a ${typeof value}`;
 }

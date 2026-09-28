@@ -1180,14 +1180,21 @@ function main() {
   }
 
   /**
-   * The goal-run gate marker is reserved (`assertNotReservedActor`): refused as $STAPLE_AGENT
-   * and as any flag that names who acts, before any command runs.
+   * The goal-run gate marker is reserved (`assertNotReservedActor`): refused as $STAPLE_AGENT,
+   * as any flag that names who acts, and as the $USER fallback when neither is given, before
+   * any command runs.
    */
   assertNotReservedActor(process.env.STAPLE_AGENT);
+  let named = false;
   for (const [index, arg] of rest.entries()) {
     const flag = /^--(actor|agent|author|by)(?:=(.*))?$/.exec(arg);
-    if (flag) assertNotReservedActor(flag[2] ?? rest[index + 1]);
+    if (flag) {
+      named = true;
+      assertNotReservedActor(flag[2] ?? rest[index + 1]);
+    }
   }
+  // With neither, the actor is $USER (`agentName` and every command's own fallback).
+  if (!named && process.env.STAPLE_AGENT === undefined) assertNotReservedActor(process.env.USER);
 
   const common = {
     db: { type: "string" as const },

@@ -104,7 +104,7 @@ describe("goal mode on the CLI and over MCP", () => {
     expect(viaMcp).toMatchObject({ action: "wait", reason: "waiting_on_others", goal: { gate: { byGoalRun: true, ownedByRun: false } } });
   });
 
-  it("refuses the reserved goal-run actor name on the CLI (env and flag) and over MCP", async () => {
+  it("refuses the reserved goal-run actor name on the CLI (env, flag and the $USER fallback) and over MCP", async () => {
     const epic = String((await cli("new", "Held epic", "--kind", "epic")).json.identifier);
     expect((await cli("new", "Held child", "--parent", epic)).status).toBe(0);
     // Any command, not only a gate: the name is refused before the command runs.
@@ -116,6 +116,23 @@ describe("goal mode on the CLI and over MCP", () => {
     });
     expect(viaEnv.status).toBe(2);
     expect(viaEnv.stderr).toContain("reserved");
+    // With no STAPLE_AGENT and no flag, the actor is $USER: refused the same way.
+    const viaUser = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "comment", epic, "hello", "--ws", WS, "--json"], {
+      cwd: REPO_ROOT,
+      env: bareEnv({ STAPLE_HOME: home, HOME: home, USER: "goal-run:mallory" }),
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(viaUser.status).toBe(2);
+    expect(viaUser.stderr).toContain("reserved");
+    // A flag naming a usable actor makes $USER irrelevant.
+    const named = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, "comment", epic, "hello", "--author", "someone", "--ws", WS, "--json"], {
+      cwd: REPO_ROOT,
+      env: bareEnv({ STAPLE_HOME: home, HOME: home, USER: "goal-run:mallory" }),
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(named.status, named.stderr).toBe(0);
     const viaFlag = await cli("run", "start", "--scope", epic, "--actor", "goal-run:mallory");
     expect(viaFlag.status).toBe(2);
     expect(viaFlag.stderr).toContain("reserved");

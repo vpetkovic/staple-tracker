@@ -403,18 +403,17 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
     return stop("vp_blocked", { blocks: [ownBlock] }, `${ownBlock.identifier}, which this run took, is blocked on ${ownBlock.owner}.`);
   }
   const rootId = run.scope.kind === "queue" ? null : run.scope.issueId;
+  /** What a gate holds the work on: approval, or the changes its owner asked for. */
+  const waitsOn = (gate: RunFacts["pendingGates"][number]): string =>
+    gate.state === "changes_requested"
+      ? `has changes requested${gate.owner ? ` by ${gate.owner}` : ""}`
+      : `is awaiting approval${gate.owner ? ` by ${gate.owner}` : ""}`;
   const rootGate = rootId === null ? undefined : facts.pendingGates.find((gate) => gate.issueId === rootId);
-  if (rootGate) {
-    const waitsOn =
-      rootGate.state === "changes_requested"
-        ? `has changes requested${rootGate.owner ? ` by ${rootGate.owner}` : ""}`
-        : `is awaiting approval${rootGate.owner ? ` by ${rootGate.owner}` : ""}`;
-    return stop("gate_pending", { gates: [rootGate] }, `${rootGate.identifier} ${waitsOn}.`);
-  }
+  if (rootGate) return stop("gate_pending", { gates: [rootGate] }, `${rootGate.identifier} ${waitsOn(rootGate)}.`);
 
   if (facts.workable.length > 0) return { stop: false };
   if (facts.pendingGates.length > 0) {
-    return stop("gate_pending", { gates: facts.pendingGates }, `Nothing in scope is workable: ${facts.pendingGates.map((gate) => gate.identifier).join(", ")} awaiting approval.`);
+    return stop("gate_pending", { gates: facts.pendingGates }, `Nothing in scope is workable: ${facts.pendingGates.map((gate) => `${gate.identifier} ${waitsOn(gate)}`).join("; ")}.`);
   }
   if (facts.personBlocks.length > 0) {
     return stop(
