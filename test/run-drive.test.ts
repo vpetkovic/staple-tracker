@@ -429,6 +429,42 @@ describe("nothing outlives its session", () => {
     expect((await runOf(dir, String(attached.runId))).driver).toBeNull();
   }, 60_000);
 
+  it("a run stop gives a session that ignores TERM its grace, then KILLs it, and the driver still cleans up", async () => {
+    const { dir, refs } = await workspace(["stubborn to a stop"]);
+    const driver = startDriver(dir, ["--scope", "queue", ...fake("stubborn"), "--poll", "0.2"]);
+    await until(() => existsSync(join(dir, `${refs[0]}.pids`)));
+    const pids = readPids(dir, refs[0]!);
+    const runId = String(lines(driver.out())[0]!.runId);
+    expect((await cli(dir, ["run", "stop", runId, "-m", "enough", "--json"], "vp")).status).toBe(0);
+    await until(() => lines(driver.out()).some((e) => e.event === "session_ended"), 1_000);
+    expect(lines(driver.out()).some((e) => e.event === "session_ended")).toBe(false); // still in the grace
+    expect(alive(pids.session)).toBe(true); // TERM ignored; not KILLed with its shell
+    expect(await driver.exited).toBe(0);
+    expect(lines(driver.out()).find((e) => e.event === "session_ended")).toMatchObject({ ended: "stopped", outcome: "failed" });
+    expect(alive(pids.session)).toBe(false);
+    expect(alive(pids.grandchild)).toBe(false);
+    expect((await runOf(dir, runId)).driver).toBeNull();
+  }, 60_000);
+
+  it("a driver that fails mid-session ends the session before it forgets driver.json, so nothing is orphaned", async () => {
+    const { dir, refs } = await workspace(["driver fails"]);
+    const driver = startDriver(dir, ["--scope", "queue", ...fake("sleep"), "--poll", "0.2"]);
+    await until(() => existsSync(join(dir, `${refs[0]}.pids`)));
+    const pids = readPids(dir, refs[0]!);
+    const attached = lines(driver.out())[0]!;
+    // The next heartbeat writes driver.json through this temp name: a directory there makes
+    // it throw inside the poll loop.
+    mkdirSync(join(dir, ".staple", "runs", String(attached.runId), `driver.json.${Number(attached.pid)}.tmp`));
+    // Without the group ended, the live session also keeps the failed driver from exiting.
+    const code = await Promise.race([driver.exited, new Promise<"still running">((r) => setTimeout(() => r("still running"), 15_000))]);
+    expect(alive(pids.session)).toBe(false);
+    expect(code).not.toBe("still running");
+    expect(code).not.toBe(0);
+    expect(driver.err()).toContain("EISDIR");
+    expect(alive(pids.grandchild)).toBe(false);
+    expect(existsSync(join(dir, ".staple", "runs", String(attached.runId), "driver.json"))).toBe(false);
+  }, 60_000);
+
   it("two drivers started on one run at the same instant: one attaches, the other is refused", async () => {
     const { dir } = await workspace(["contended"]);
     const started = await cli(dir, ["run", "start", "--scope", "queue", "--json"]);

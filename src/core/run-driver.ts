@@ -521,32 +521,40 @@ async function runSession(
     },
   );
   const pid = child.pid!;
-  options.report({ event: "session_started", ref: files.ref, pid, command: command.display, brief: files.brief, stdout: files.stdout, stderr: files.stderr });
-  beat({ ticket: files.ref, sessionPid: pid, sessionStartedAt: nowIso() });
-
   let ended: SessionResult["ended"] = "exited";
   let stopReason: string | null = null;
   let finished: { code: number | null; signal: string | null } | null = null;
   void exited.then((value) => (finished = value), () => undefined);
-  if (spawned !== "exited") {
-    while (finished === null) {
-      await Promise.race([exited, sleep(options.pollMs, options.signal, true)]).catch(() => undefined);
-      if (finished !== null) break;
-      beat();
-      if (options.signal?.aborted) ended = "interrupted";
-      else if (options.ticketTimeoutMs !== null && Date.now() - started >= options.ticketTimeoutMs) ended = "timeout";
-      else {
-        const run = options.runs.get(options.runId);
-        if (run.state !== "active" && run.state !== "paused") {
-          ended = "stopped";
-          stopReason = run.stop?.reason ?? null;
+  try {
+    options.report({ event: "session_started", ref: files.ref, pid, command: command.display, brief: files.brief, stdout: files.stdout, stderr: files.stderr });
+    beat({ ticket: files.ref, sessionPid: pid, sessionStartedAt: nowIso() });
+    if (spawned !== "exited") {
+      while (finished === null) {
+        await Promise.race([exited, sleep(options.pollMs, options.signal, true)]).catch(() => undefined);
+        if (finished !== null) break;
+        beat();
+        if (options.signal?.aborted) ended = "interrupted";
+        else if (options.ticketTimeoutMs !== null && Date.now() - started >= options.ticketTimeoutMs) ended = "timeout";
+        else {
+          const run = options.runs.get(options.runId);
+          if (run.state !== "active" && run.state !== "paused") {
+            ended = "stopped";
+            stopReason = run.stop?.reason ?? null;
+          }
+        }
+        if (ended !== "exited") {
+          await endGroup(pid, options.killGraceMs, options.force);
+          break;
         }
       }
-      if (ended !== "exited") {
-        await endGroup(pid, options.killGraceMs, options.force);
-        break;
-      }
     }
+  } catch (error) {
+    // The driver is failing (driver.json unwritable, the store refusing a read): end the
+    // session before the error reaches the caller, whose finally deletes driver.json. Once
+    // that file is gone no later driver can find the group, so a session left running here
+    // would be an orphan nothing names.
+    await endGroup(pid, options.killGraceMs, options.force);
+    throw error;
   }
   const result = await exited;
   // The leader is gone; anything it left running in its group goes with it.
@@ -577,5 +585,5 @@ async function endGroup(pgid: number, graceMs: number, force?: AbortSignal): Pro
   const deadline = Date.now() + graceMs;
   // Referenced timers: once the leader has exited, nothing else keeps this process alive.
   while (groupAlive(pgid) && Date.now() < deadline && !force?.aborted) await sleep(50, force);
-  signalGroup(pgid, "SIGKILL");
+  if (groupAlive(pgid)) signalGroup(pgid, "SIGKILL");
 }
