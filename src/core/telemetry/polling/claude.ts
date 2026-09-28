@@ -6,10 +6,11 @@
  *
  * ## Where the sign-in is
  *
- * Claude Code keeps it, on macOS, in the login keychain as a generic password filed under
- * the OS user name, service `Claude Code-credentials`, and for a non-default config
- * directory (`CLAUDE_CONFIG_DIR`) `Claude Code-credentials-<first 8 hex of sha256(dir)>`;
- * elsewhere (and as its own fallback) in `<config dir>/.credentials.json`. Both hold
+ * Read in Claude Code's own order (its storage is "keychain, with the plaintext file as
+ * fallback"): on macOS, the keychain item filed under the OS user name, service
+ * `Claude Code-credentials`, and for a non-default config directory (`CLAUDE_CONFIG_DIR`)
+ * `Claude Code-credentials-<first 8 hex of sha256(dir)>`; when that finds nothing (or off
+ * macOS), `<config dir>/.credentials.json`. Both hold
  * `{"claudeAiOauth": {"accessToken", "expiresAt" (epoch ms), "scopes", …}}`. Only the access
  * token, its expiry and its scopes are read. A binding for a non-default directory is
  * only ever read from that directory's own item or file: never another account's.

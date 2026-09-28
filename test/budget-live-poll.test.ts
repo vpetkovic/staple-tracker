@@ -17,7 +17,7 @@ import { bindBudgetSource, setBudgetCapture, setLivePolling, budgetConfig } from
 import { readBudget } from "../src/core/telemetry/read-budget.js";
 import { CLAUDE_OAUTH_BETA, CLAUDE_USAGE_URL, claudeKeychainServices, claudePoller, parseClaudeUsage } from "../src/core/telemetry/polling/claude.js";
 import { CODEX_USAGE_URL, codexPoller, parseCodexUsage } from "../src/core/telemetry/polling/codex.js";
-import { USAGE_POLLERS } from "../src/core/telemetry/polling/registry.js";
+import { USAGE_POLLERS, createSystemSecrets } from "../src/core/telemetry/polling/registry.js";
 import { MANUAL_MIN_SECONDS, SCHEDULED_MIN_SECONDS, pollStatePath, runUsagePollers, usagePollingStatus, type PollDeps } from "../src/core/telemetry/polling/run.js";
 import type { PollContext, SecretReader, UsagePoller } from "../src/core/telemetry/polling/types.js";
 import { removeDir, tempDir } from "./fixtures/characterize-support.js";
@@ -231,6 +231,33 @@ describe("the Claude poller", () => {
     const own = fakeSecrets({ keychain: { [services[0]!]: claudeCredentials() } });
     const net = fakeFetch(() => ok(claudeBody(5, 2)));
     expect((await claudePoller.poll(claudeBinding(), context({ secrets: own, fetch: net.fetch }))).ok).toBe(true);
+  });
+
+  it("follows Claude Code's order for a directory: its keychain item first, then its own .credentials.json, never another's login", async () => {
+    // HOME pointed elsewhere (a sandbox): the binding is that HOME's default `.claude`, whose
+    // keychain item the sandbox cannot see. Its own file is the sign-in, as for Claude Code.
+    const sandboxDefault = join(process.env.HOME!, ".claude");
+    const binding = { ...claudeBinding(), configDir: sandboxDefault };
+    const net = fakeFetch(() => ok(claudeBody(5, 2)));
+    const secrets = fakeSecrets({ files: { [join(sandboxDefault, ".credentials.json")]: claudeCredentials({ accessToken: "file-token" }) } });
+    expect((await claudePoller.poll(binding, context({ secrets, fetch: net.fetch }))).ok).toBe(true);
+    expect(secrets.asked).toEqual(["someone/Claude Code-credentials", `someone/${claudeKeychainServices(sandboxDefault)[1]}`]);
+    expect(net.calls[0]!.headers.Authorization).toBe("Bearer file-token");
+    // With the keychain item present, it wins, as it does for Claude Code.
+    const both = fakeSecrets({ keychain: { "Claude Code-credentials": claudeCredentials({ accessToken: "keychain-token" }) }, files: { [join(sandboxDefault, ".credentials.json")]: claudeCredentials({ accessToken: "file-token" }) } });
+    const net2 = fakeFetch(() => ok(claudeBody(5, 2)));
+    await claudePoller.poll(binding, context({ secrets: both, fetch: net2.fetch }));
+    expect(net2.calls[0]!.headers.Authorization).toBe("Bearer keychain-token");
+  });
+
+  it("asks `security` for the item in the current keychain search list only, never a keychain named by path", async () => {
+    const runs: string[][] = [];
+    const secrets = createSystemSecrets(async (args) => {
+      runs.push([...args]);
+      return null;
+    });
+    expect(await secrets.keychain("Claude Code-credentials", "someone")).toBeNull();
+    expect(runs).toEqual([["find-generic-password", "-a", "someone", "-w", "-s", "Claude Code-credentials"]]);
   });
 
   it("falls back to <config dir>/.credentials.json, and off macOS reads only that file", async () => {

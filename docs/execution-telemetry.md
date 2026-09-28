@@ -1176,10 +1176,11 @@ usage instead, the same way Claude Code's `/usage` and Codex's `/status` do.
   registry; adding a provider is one module and one line. Claude
   (`claude_code_statusline` bindings, provider `anthropic`): the OAuth usage
   endpoint above, with the access token Claude Code keeps for that config
-  directory, in the macOS login keychain (service `Claude Code-credentials`;
-  for a non-default directory `Claude Code-credentials-<first 8 hex of
-  sha256(directory)>`, never the default login) or in
-  `<config dir>/.credentials.json`. Codex (`codex_rollout` bindings, provider
+  directory, read in Claude Code's own order: the keychain item in the current
+  keychain search list (service `Claude Code-credentials`; for a non-default
+  directory `Claude Code-credentials-<first 8 hex of sha256(directory)>`, never
+  the default login), then `<config dir>/.credentials.json`. A keychain is never
+  named by path, so a sandbox with its own HOME never reads the user's login. Codex (`codex_rollout` bindings, provider
   `openai`): the usage endpoint above, with `<codex home>/auth.json`.
 - **Readings like every other.** Each window becomes a reading under the limit
   key the passive source uses (`five_hour`, `seven_day`; `codex.primary`,
