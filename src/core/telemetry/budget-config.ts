@@ -14,6 +14,7 @@ import {
   isKnownBinding,
   type BindingSource,
   type KnownBinding,
+  livePollingOn,
   type TelemetryBinding,
   type TelemetryConfig,
 } from "./config.js";
@@ -21,6 +22,8 @@ import { assertAccountRef, assertProvider } from "./formats.js";
 
 export interface BudgetConfigView {
   readonly budgetCapture: boolean;
+  /** Whether collect also asks each bound provider for current usage (a network call, opt-in). */
+  readonly livePolling: boolean;
   readonly bindings: readonly KnownBinding[];
   /** Bindings for sources this build does not know, kept as written and never matched. */
   readonly unknownBindings: number;
@@ -32,6 +35,7 @@ function view(telemetry: TelemetryConfig): BudgetConfigView {
   const known = telemetry.bindings.filter(isKnownBinding);
   return {
     budgetCapture: telemetry.budgetCapture,
+    livePolling: livePollingOn(telemetry),
     bindings: known,
     unknownBindings: telemetry.bindings.filter((b) => bindingProblem(b) === "unknown_source").length,
     invalidBindings: invalidBindings(telemetry),
@@ -45,6 +49,18 @@ export function budgetConfig(home: string): BudgetConfigView {
 export function setBudgetCapture(home: string, enabled: boolean): BudgetConfigView {
   const telemetry = readConfig(home).config.telemetry;
   return view(updateConfig(home, { telemetry: { ...telemetry, budgetCapture: enabled } }).telemetry);
+}
+
+/**
+ * Turn live polling on or off (`staple budget live on|off --yes`, the web Settings'
+ * toggle, and `setup --live`). Off removes the key, so the file reads as it did before
+ * anybody opted in.
+ */
+export function setLivePolling(home: string, enabled: boolean): BudgetConfigView {
+  const telemetry: Record<string, unknown> = { ...readConfig(home).config.telemetry };
+  if (enabled) telemetry.livePolling = true;
+  else delete telemetry.livePolling;
+  return view(updateConfig(home, { telemetry: telemetry as unknown as TelemetryConfig }).telemetry);
 }
 
 /**
