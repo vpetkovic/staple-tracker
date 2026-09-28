@@ -1447,6 +1447,12 @@ re-bootstrap killed part-way leaves nothing half-applied, and reads again on the
   rewind removes: each side loses them, as the list does, and a record whose sides then
   agree closes (`test/cloud-restore-open-list-record.test.ts`). Kept whole, resolving to the
   side that named a removed issue failed for ever.
+  An attempt the epoch holds takes the epoch's end fields, all seven together, unless this
+  device's unsent operation on it is still to be sent. The apply rule keeps an end over a
+  state that is not an end (a stale pause must not reopen an attempt a steal ended), and
+  that is right for the log. For a restore it was wrong: an attempt that ended after the
+  backup stayed ended on every device that had pulled the end, while a fresh device read it
+  running or paused (`test/cloud-restore-attempt-end.test.ts`).
 - **What the rewind removed claims nothing afterwards.** The provenance a re-bootstrap puts
   back is this device's unsent work only: an acknowledged operation is in the log, whose
   snapshot says who wrote each field, and one a restore rewound wrote nothing this device

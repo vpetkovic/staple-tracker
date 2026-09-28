@@ -44,6 +44,8 @@ import { localInventory } from "./seed.js";
 import { recordReconciledEpoch, withheldEntities } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
 import { criterionMarkField, criterionMarkPosition } from "../milestone-goal.js";
+import { endOf, readAttempt, writeEnd, type AttemptEnd } from "../telemetry/attempt-records.js";
+import { ATTEMPT_END_FIELDS } from "./attempt-ends.js";
 
 const QUEUE_PLAN_ID = "@plan";
 const ORDER_ID = "@order";
@@ -222,6 +224,25 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
   }
 
   /**
+   * An attempt the epoch holds takes the epoch's end, unless this device still has to send
+   * one of its own. The apply rule every reader shares keeps an end over a state that is not
+   * one (`attempt-ends.ts`), so a stale pause cannot reopen an attempt a steal ended; read
+   * over an end the log no longer holds, that rule kept the attempt ended here while a fresh
+   * device read it open. The end fields are one unit, so all seven are taken from the epoch.
+   */
+  const unsentAttempts = new Set(unsent.filter((op) => op.entity === "attempt").map((op) => op.id));
+  for (const entity of entities) {
+    if (entity.entity !== "attempt" || unsentAttempts.has(entity.entityId)) continue;
+    const held = readAttempt(db, entity.entityId);
+    if (held === null) continue;
+    const epochEnd = epochAttemptEnd(entity.state);
+    if (epochEnd === null) continue;
+    const heldEnd = endOf(held);
+    if (ATTEMPT_END_FIELDS.every((field) => heldEnd[field] === epochEnd[field])) continue;
+    writeEnd(db, held.id, epochEnd);
+  }
+
+  /**
    * A blocker set the epoch does not hold is not in the log any more: its version goes, so an
    * issue's own create decides its blockers again, as on a fresh device (`applyIssue`,
    * `apply.ts`). Except one this device still has to send, which the log holds as soon as it is
@@ -239,6 +260,28 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
     if (reinstall(db, entity, id)) restoredBuiltins += 1;
   }
   return { kept, removed, restoredBuiltins, entities };
+}
+
+/**
+ * The seven end fields an epoch's folded attempt holds, under either spelling (a fold may hold
+ * an older payload's column name). Null when it names no state: nothing to rewind to.
+ */
+function epochAttemptEnd(state: Readonly<Record<string, unknown>>): AttemptEnd | null {
+  const read = (name: string): string | null => {
+    const value = name in state ? state[name] : state[name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)];
+    return typeof value === "string" ? value : null;
+  };
+  const current = read("state");
+  if (current === null) return null;
+  return {
+    state: current,
+    outcome: read("outcome"),
+    endReason: read("endReason"),
+    endDetection: read("endDetection"),
+    endedBy: read("endedBy"),
+    endedAt: read("endedAt"),
+    endedAtSource: read("endedAtSource"),
+  };
 }
 
 /**
