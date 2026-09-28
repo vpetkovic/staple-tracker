@@ -52,6 +52,7 @@ import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { DetailCard, PersonChip, RelativeTime, SectionHeading, actorLabel } from "../parts";
 import { unreachableBlockers } from "../IssueActions";
 import { openDetailTab, type TabProps } from "./registry";
+import { MilestoneMembers } from "../MilestoneParts";
 
 /**
  * A related task as one quiet row: its status icon, its title, and its reference at the end.
@@ -326,6 +327,8 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
           </ul>
         </section>
       ) : null}
+
+      {detail.milestonePlan ? <MilestoneMembers plan={detail.milestonePlan} workspace={workspace} /> : null}
 
       {detail.children.length > 0 ? (
         <section aria-label="Children" className="mt-8">

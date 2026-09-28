@@ -80,7 +80,7 @@ const READS: Record<StoreName, readonly string[]> = {
     // The certified plan reads (`planSummary` on show/get_task, `staple compare`).
     "planSummary", "comparePlans", "timingQuality", "calibration", "forecast",
   ],
-  MilestoneStore: ["queueSeam", "get", "list", "milestoneOf"],
+  MilestoneStore: ["queueSeam", "get", "list", "milestoneOf", "effectiveMilestone"],
   QueueStore: ["revision", "entries", "effectiveQueue", "view"],
   ProjectStore: ["list", "get", "issueCounts"],
 };
