@@ -1,0 +1,61 @@
+.hero {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* A faint hairline grid behind the hero that fades out towards the edges. */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: linear-gradient(to right, var(--st-border) var(--st-hairline), transparent var(--st-hairline)),
+    linear-gradient(to bottom, var(--st-border) var(--st-hairline), transparent var(--st-hairline));
+  background-size: 48px 48px;
+  background-position: center top;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 30%, transparent 100%);
+  opacity: 0.7;
+}
+
+.heroGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--st-space-16);
+}
+
+.heroCopy,
+.heroTerminal {
+  animation: rise var(--st-duration-slow) var(--st-ease) both;
+}
+
+.heroTerminal {
+  animation-delay: 80ms;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 996px) {
+  .heroGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--st-space-12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heroCopy,
+  .heroTerminal {
+    animation: none;
+  }
+}

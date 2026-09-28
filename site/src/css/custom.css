@@ -1,24 +1,685 @@
 /*
- * Site-wide styles. The design system (type scale, accent colour, light and
- * dark tokens) lands here; until then this only sets the Infima primary colour.
+ * Site chrome: maps Infima (Docusaurus classic) onto the tokens in tokens.css
+ * and restyles the navbar, sidebar, table of contents, content, code, tables,
+ * admonitions and footer. No colour, size or duration is defined here; they all
+ * come from --st-* tokens.
  */
 
-:root {
-  --ifm-color-primary: #2563eb;
-  --ifm-color-primary-dark: #1d4ed8;
-  --ifm-color-primary-darker: #1e40af;
-  --ifm-color-primary-darkest: #1e3a8a;
-  --ifm-color-primary-light: #3b82f6;
-  --ifm-color-primary-lighter: #60a5fa;
-  --ifm-color-primary-lightest: #93c5fd;
+/* ---------- Infima mapping: the tokens switch with the theme, the mapping does not ---------- */
+
+/* html[data-theme] matches Infima's own dark block (html[data-theme='dark']) in
+   specificity, so this later block wins in both themes. */
+:root,
+html[data-theme] {
+  --ifm-font-family-base: var(--st-font-sans);
+  --ifm-font-family-monospace: var(--st-font-mono);
+  --ifm-heading-font-family: var(--st-font-sans);
+  --ifm-font-size-base: var(--st-text-base);
+  --ifm-line-height-base: var(--st-leading-body);
+  --ifm-font-weight-bold: var(--st-weight-semibold);
+  --ifm-heading-font-weight: var(--st-weight-semibold);
+  --ifm-heading-line-height: var(--st-leading-snug);
+  --ifm-h1-font-size: var(--st-text-4xl);
+  --ifm-h2-font-size: var(--st-text-2xl);
+  --ifm-h3-font-size: var(--st-text-xl);
+  --ifm-h4-font-size: var(--st-text-lg);
+  --ifm-h5-font-size: var(--st-text-base);
+  --ifm-h6-font-size: var(--st-text-sm);
+
+  --ifm-background-color: var(--st-bg);
+  --ifm-background-surface-color: var(--st-bg);
+  --ifm-font-color-base: var(--st-fg);
+  --ifm-font-color-secondary: var(--st-fg-muted);
+  --ifm-color-content: var(--st-fg);
+  --ifm-color-content-secondary: var(--st-fg-muted);
+  --ifm-heading-color: var(--st-fg-strong);
+  --ifm-hr-border-color: var(--st-border);
+  --ifm-hr-border-width: var(--st-hairline);
+  --ifm-toc-border-color: var(--st-border);
+  --ifm-color-emphasis-100: var(--st-bg-muted);
+  --ifm-color-emphasis-200: var(--st-border);
+  --ifm-color-emphasis-300: var(--st-border-strong);
+  --ifm-color-emphasis-600: var(--st-fg-muted);
+  --ifm-color-emphasis-700: var(--st-fg);
+  --ifm-color-emphasis-800: var(--st-fg-strong);
+
+  --ifm-color-primary: var(--st-accent-text);
+  --ifm-color-primary-dark: var(--st-accent-hover);
+  --ifm-color-primary-darker: var(--st-accent-hover);
+  --ifm-color-primary-darkest: var(--st-accent-hover);
+  --ifm-color-primary-light: var(--st-accent);
+  --ifm-color-primary-lighter: var(--st-accent);
+  --ifm-color-primary-lightest: var(--st-accent);
+  --ifm-link-color: var(--st-accent-text);
+  --ifm-link-hover-color: var(--st-accent-hover);
+  --ifm-link-hover-decoration: underline;
+
+  --ifm-global-radius: var(--st-radius-md);
+  --ifm-global-shadow-lw: none;
+  --ifm-global-shadow-md: none;
+  --ifm-global-shadow-tl: none;
+  --ifm-global-border-width: var(--st-hairline);
+  --ifm-transition-fast: var(--st-duration-fast);
+  --ifm-transition-slow: var(--st-duration);
+  --ifm-transition-timing-default: var(--st-ease);
+
+  --ifm-container-width-xl: 88rem;
+  --ifm-spacing-horizontal: var(--st-space-6);
+
+  --ifm-code-font-size: 0.875em;
+  --ifm-code-background: var(--st-code-inline-bg);
+  --ifm-code-border-radius: var(--st-radius-sm);
+  --ifm-code-padding-horizontal: 0.35em;
+  --ifm-code-padding-vertical: 0.1em;
+  --ifm-pre-background: var(--st-code-bg);
+  --ifm-pre-color: var(--st-code-fg);
+  --ifm-pre-line-height: 1.65;
+  --ifm-pre-padding: var(--st-space-4);
+  --docusaurus-highlighted-code-line-bg: var(--st-bg-muted);
+
+  --ifm-table-border-color: var(--st-border);
+  --ifm-table-border-width: var(--st-hairline);
+  --ifm-table-head-background: var(--st-bg-subtle);
+  --ifm-table-head-color: var(--st-fg-strong);
+  --ifm-table-head-font-weight: var(--st-weight-medium);
+  --ifm-table-stripe-background: transparent;
+  --ifm-table-background: transparent;
+  --ifm-table-cell-padding: var(--st-space-3);
+
+  --ifm-navbar-height: var(--st-navbar-height);
+  --ifm-navbar-background-color: var(--st-bg-translucent);
+  --ifm-navbar-shadow: none;
+  --ifm-navbar-padding-horizontal: var(--st-space-6);
+  --ifm-navbar-link-color: var(--st-fg-muted);
+  --ifm-navbar-link-hover-color: var(--st-fg-strong);
+  --ifm-navbar-link-active-color: var(--st-fg-strong);
+  --ifm-navbar-item-padding-horizontal: var(--st-space-3);
+
+  --ifm-menu-color: var(--st-fg-muted);
+  --ifm-menu-color-active: var(--st-fg-strong);
+  --ifm-menu-color-background-active: var(--st-bg-muted);
+  --ifm-menu-color-background-hover: var(--st-bg-muted);
+  --ifm-menu-link-padding-horizontal: var(--st-space-3);
+  --ifm-menu-link-padding-vertical: 0.3rem;
+  --ifm-menu-link-sublist-icon-filter: none;
+
+  --ifm-footer-background-color: var(--st-bg);
+  --ifm-footer-color: var(--st-fg-muted);
+  --ifm-footer-link-color: var(--st-fg-muted);
+  --ifm-footer-link-hover-color: var(--st-fg-strong);
+  --ifm-footer-title-color: var(--st-fg-strong);
+  --ifm-footer-padding-vertical: var(--st-space-16);
+
+  --ifm-card-background-color: var(--st-bg);
+  --ifm-button-border-radius: var(--st-radius-md);
+  --ifm-pagination-nav-border-radius: var(--st-radius-lg);
+  --ifm-pagination-nav-color-hover: var(--st-border-strong);
+  --ifm-breadcrumb-border-radius: var(--st-radius-full);
+  --ifm-breadcrumb-item-background-active: var(--st-bg-muted);
+  --ifm-toc-link-color: var(--st-fg-muted);
+  --ifm-toc-padding-vertical: 0;
+
+  --ifm-alert-border-radius: var(--st-radius-lg);
+  --ifm-alert-border-width: var(--st-hairline);
+  --ifm-alert-border-left-width: var(--st-hairline);
+
+  --ifm-scrollbar-track-background-color: transparent;
+  --ifm-scrollbar-thumb-background-color: var(--st-border-strong);
 }
 
-[data-theme='dark'] {
-  --ifm-color-primary: #60a5fa;
-  --ifm-color-primary-dark: #3b82f6;
-  --ifm-color-primary-darker: #2563eb;
-  --ifm-color-primary-darkest: #1d4ed8;
-  --ifm-color-primary-light: #93c5fd;
-  --ifm-color-primary-lighter: #bfdbfe;
-  --ifm-color-primary-lightest: #dbeafe;
+/* ---------- Base ---------- */
+
+html {
+  background: var(--st-bg);
+  color: var(--st-fg);
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--st-accent-ring);
+  color: var(--st-fg-strong);
+}
+
+:focus-visible {
+  outline: var(--st-focus-ring) solid var(--st-accent);
+  outline-offset: var(--st-focus-ring);
+  border-radius: var(--st-radius-sm);
+}
+
+a {
+  transition: color var(--st-duration-fast) var(--st-ease);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: var(--st-tracking-heading);
+}
+
+hr {
+  border: 0;
+  border-top: var(--st-hairline) solid var(--st-border);
+  background: none;
+  height: 0;
+}
+
+/* ---------- Navbar: translucent, sticky, hairline ---------- */
+
+.navbar {
+  border-bottom: var(--st-hairline) solid var(--st-border);
+}
+
+/* The blur only while the mobile menu is closed: a backdrop filter makes the
+   navbar the containing block of the fixed menu panel and would clip it. */
+.navbar:not(.navbar-sidebar--show) {
+  backdrop-filter: saturate(180%) blur(14px);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+}
+
+.navbar__inner {
+  max-width: var(--ifm-container-width-xl);
+  margin: 0 auto;
+}
+
+.navbar__brand {
+  gap: var(--st-space-2);
+  margin-right: var(--st-space-6);
+}
+
+.navbar__logo {
+  height: 1.5rem;
+  margin-right: 0;
+}
+
+.navbar__title {
+  font-size: var(--st-text-lg);
+  font-weight: var(--st-weight-semibold);
+  letter-spacing: var(--st-tracking-heading);
+  color: var(--st-fg-strong);
+}
+
+.navbar__link {
+  font-size: var(--st-text-sm);
+  font-weight: var(--st-weight-medium);
+}
+
+.navbar__link--active {
+  color: var(--st-fg-strong);
+}
+
+.navbar__toggle {
+  color: var(--st-fg-strong);
+}
+
+.navbar-sidebar {
+  background: var(--st-bg);
+  box-shadow: none;
+}
+
+.navbar-sidebar__brand {
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  box-shadow: none;
+}
+
+.navbar-sidebar__back {
+  /* Lines up with the menu links below it (the sidebar menu's inline padding). */
+  width: calc(100% - 2 * var(--st-space-3));
+  margin: 0 var(--st-space-3) var(--st-space-3);
+  background: var(--st-bg-muted);
+  border-radius: var(--st-radius-md);
+  font-size: var(--st-text-sm);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+}
+
+/* With the menu open the navbar reads as solid. */
+.navbar.navbar-sidebar--show {
+  background: var(--st-bg);
+}
+
+[class*='colorModeToggle'] button {
+  border-radius: var(--st-radius-md);
+  color: var(--st-fg-muted);
+  transition: color var(--st-duration-fast) var(--st-ease),
+    background-color var(--st-duration-fast) var(--st-ease);
+}
+
+[class*='colorModeToggle'] button:hover {
+  color: var(--st-fg-strong);
+  background: var(--st-bg-muted);
+}
+
+/* ---------- Docs sidebar ---------- */
+
+.theme-doc-sidebar-container {
+  border-right-color: var(--st-border) !important;
+}
+
+.theme-doc-sidebar-menu {
+  font-size: var(--st-text-sm);
+  padding: var(--st-space-4) var(--st-space-3);
+}
+
+.menu__link {
+  border-radius: var(--st-radius-sm);
+  line-height: 1.45;
+  transition: color var(--st-duration-fast) var(--st-ease),
+    background-color var(--st-duration-fast) var(--st-ease);
+}
+
+.menu__link:hover {
+  color: var(--st-fg-strong);
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  font-weight: var(--st-weight-medium);
+}
+
+.menu__caret::before,
+.menu__link--sublist-caret::after {
+  opacity: 0.55;
+}
+
+/* ---------- Table of contents ---------- */
+
+.table-of-contents {
+  font-size: var(--st-text-sm);
+  border-left: var(--st-hairline) solid var(--st-border);
+  padding-left: 0;
+}
+
+.theme-doc-toc-desktop {
+  padding-top: var(--st-space-2);
+}
+
+.theme-doc-toc-desktop::before {
+  content: 'On this page';
+  display: block;
+  margin: 0 0 var(--st-space-3) var(--st-space-4);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-subtle);
+}
+
+.table-of-contents__link {
+  display: block;
+  margin-left: calc(-1 * var(--st-hairline));
+  padding: 0.2rem 0 0.2rem var(--st-space-4);
+  border-left: var(--st-hairline) solid transparent;
+  line-height: 1.45;
+}
+
+.table-of-contents ul {
+  padding-left: var(--st-space-3);
+}
+
+.table-of-contents li {
+  margin: 0.15rem 0;
+}
+
+.table-of-contents__link:hover {
+  color: var(--st-fg-strong);
+  text-decoration: none;
+}
+
+.table-of-contents__link--active {
+  color: var(--st-fg-strong);
+  border-left-color: var(--st-accent);
+}
+
+.theme-doc-toc-mobile {
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-lg);
+  background: var(--st-bg-subtle);
+}
+
+.theme-doc-toc-mobile button {
+  font-size: var(--st-text-sm);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+}
+
+/* ---------- Docs content ---------- */
+
+/* The reading measure caps the whole doc column: breadcrumbs, mobile TOC,
+   article, and the edit and prev/next row line up on one edge. */
+[class*='docItemContainer'] {
+  max-width: var(--st-measure);
+}
+
+/* Size the docs container so the article at its measure plus the table of
+   contents (the 3/4 and 1/4 columns) fill it, instead of leaving a gap between
+   the text and the TOC on wide screens. */
+@media (min-width: 997px) {
+  main[class*='docMainContainer'] > .container {
+    max-width: calc(var(--st-measure) * 4 / 3 + 2 * var(--ifm-spacing-horizontal));
+  }
+}
+
+.theme-doc-markdown h1 {
+  letter-spacing: var(--st-tracking-display);
+  line-height: var(--st-leading-tight);
+  margin-bottom: var(--st-space-6);
+}
+
+.theme-doc-markdown h2 {
+  margin-top: var(--st-space-12);
+  margin-bottom: var(--st-space-4);
+}
+
+.theme-doc-markdown h3 {
+  margin-top: var(--st-space-8);
+  margin-bottom: var(--st-space-3);
+}
+
+.theme-doc-markdown p,
+.theme-doc-markdown li {
+  text-wrap: pretty;
+}
+
+.theme-doc-markdown strong {
+  color: var(--st-fg-strong);
+}
+
+.theme-doc-markdown a:not(.hash-link) {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--st-accent) 40%, transparent);
+  text-decoration-thickness: var(--st-hairline);
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color var(--st-duration-fast) var(--st-ease),
+    color var(--st-duration-fast) var(--st-ease);
+}
+
+.theme-doc-markdown a:not(.hash-link):hover {
+  text-decoration-color: currentColor;
+}
+
+.hash-link {
+  color: var(--st-fg-subtle);
+}
+
+.theme-doc-markdown blockquote {
+  border-left: 2px solid var(--st-border-strong);
+  color: var(--st-fg-muted);
+  padding: 0 var(--st-space-4);
+}
+
+.breadcrumbs__link {
+  font-size: var(--st-text-sm);
+  color: var(--st-fg-muted);
+}
+
+.breadcrumbs__item--active .breadcrumbs__link {
+  color: var(--st-fg-strong);
+}
+
+/* Footer of a doc: edit link and prev/next. */
+.theme-edit-this-page {
+  font-size: var(--st-text-sm);
+  color: var(--st-fg-muted);
+}
+
+.pagination-nav__link {
+  border-color: var(--st-border);
+  transition: border-color var(--st-duration-fast) var(--st-ease);
+}
+
+.pagination-nav__sublabel {
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-muted);
+  font-weight: var(--st-weight-regular);
+}
+
+.pagination-nav__label {
+  color: var(--st-fg-strong);
+  font-weight: var(--st-weight-medium);
+}
+
+.theme-back-to-top-button.clean-btn {
+  background: var(--st-bg);
+  border: var(--st-hairline) solid var(--st-border);
+  box-shadow: none;
+}
+
+.theme-back-to-top-button.clean-btn::after {
+  background-color: var(--st-fg-muted);
+}
+
+.theme-back-to-top-button.clean-btn:hover {
+  background: var(--st-bg-muted);
+}
+
+/* ---------- Code ---------- */
+
+code {
+  border: 0;
+  color: var(--st-code-fg);
+  font-variant-ligatures: none;
+}
+
+.table-of-contents code {
+  padding: 0;
+  background: none;
+  color: inherit;
+  font-size: 0.95em;
+}
+
+a code {
+  color: inherit;
+}
+
+pre code,
+.prism-code code {
+  border: 0;
+}
+
+.theme-code-block {
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-lg);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.theme-code-block pre {
+  border-radius: 0;
+  font-size: var(--st-text-sm);
+}
+
+.theme-code-block [class*='codeBlockTitle'] {
+  background: var(--st-bg-subtle);
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  color: var(--st-fg-muted);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+}
+
+.theme-code-block [class*='buttonGroup'] button {
+  background: var(--st-bg);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  color: var(--st-fg-muted);
+}
+
+/* ---------- Tables ---------- */
+
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin-bottom: var(--ifm-spacing-vertical);
+  border-radius: var(--st-radius-lg);
+}
+
+.theme-doc-markdown table {
+  /* The .table-scroll wrapper (src/theme/MDXComponents.tsx) scrolls, so the
+     table itself is a real table again and its border hugs its content. */
+  display: table;
+  margin: 0;
+  font-size: var(--st-text-sm);
+  line-height: 1.55;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-lg);
+}
+
+.theme-doc-markdown table thead tr {
+  border-bottom: 0;
+}
+
+.theme-doc-markdown table th,
+.theme-doc-markdown table td {
+  border: 0;
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.theme-doc-markdown table th + th,
+.theme-doc-markdown table td + td {
+  border-left: var(--st-hairline) solid var(--st-border);
+}
+
+.theme-doc-markdown table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.theme-doc-markdown table th {
+  font-weight: var(--st-weight-medium);
+  white-space: nowrap;
+}
+
+.theme-doc-markdown table code {
+  font-size: 0.9em;
+}
+
+/* ---------- Admonitions ---------- */
+
+.theme-admonition {
+  --st-admonition-tone: var(--st-fg-muted);
+  background: var(--st-bg-subtle);
+  border: var(--st-hairline) solid var(--st-border);
+  color: var(--st-fg);
+  font-size: var(--st-text-sm);
+  padding: var(--st-space-4) var(--st-space-5);
+}
+
+.theme-admonition a {
+  color: var(--st-accent-text);
+  text-decoration-color: currentColor;
+}
+
+.theme-admonition code {
+  background: var(--st-bg-muted);
+}
+
+.theme-admonition [class*='admonitionHeading'] {
+  color: var(--st-admonition-tone);
+  font-size: var(--st-text-xs);
+  letter-spacing: var(--st-tracking-eyebrow);
+}
+
+.theme-admonition [class*='admonitionIcon'] svg {
+  fill: var(--st-admonition-tone);
+}
+
+.theme-admonition-tip {
+  --st-admonition-tone: var(--st-accent-text);
+}
+
+.theme-admonition-info {
+  --st-admonition-tone: var(--st-info);
+}
+
+.theme-admonition-warning,
+.theme-admonition-caution {
+  --st-admonition-tone: var(--st-warning);
+}
+
+.theme-admonition-danger {
+  --st-admonition-tone: var(--st-danger);
+}
+
+/* ---------- Footer ---------- */
+
+.footer {
+  border-top: var(--st-hairline) solid var(--st-border);
+  font-size: var(--st-text-sm);
+}
+
+.footer .container {
+  max-width: var(--st-container);
+}
+
+.footer__title {
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-subtle);
+  margin-bottom: var(--st-space-3);
+}
+
+.footer__item {
+  padding: 0.2rem 0;
+}
+
+.footer__link-item {
+  transition: color var(--st-duration-fast) var(--st-ease);
+}
+
+.footer__link-item:hover {
+  text-decoration: none;
+}
+
+.footer__link-item svg {
+  display: none;
+}
+
+.footer__bottom {
+  margin-top: var(--st-space-12);
+  padding-top: var(--st-space-6);
+  border-top: var(--st-hairline) solid var(--st-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-4);
+  text-align: left;
+}
+
+.footer__logo {
+  height: 1.25rem;
+  margin: 0;
+}
+
+.footer__bottom a[class*='footerLogoLink'] {
+  display: flex;
+  opacity: 1;
+}
+
+.footer__bottom > div {
+  margin: 0 !important;
+}
+
+.footer__copyright {
+  color: var(--st-fg-subtle);
+  font-size: var(--st-text-sm);
+}
+
+/* ---------- Motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

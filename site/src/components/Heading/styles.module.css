@@ -1,0 +1,44 @@
+.heading {
+  margin: 0 0 var(--st-space-4);
+  color: var(--st-fg-strong);
+  font-weight: var(--st-weight-semibold);
+  text-wrap: balance;
+}
+
+.display {
+  font-size: var(--st-text-display);
+  line-height: var(--st-leading-tight);
+  letter-spacing: var(--st-tracking-display);
+}
+
+.xl {
+  font-size: var(--st-text-4xl);
+  line-height: var(--st-leading-tight);
+  letter-spacing: var(--st-tracking-display);
+}
+
+.lg {
+  font-size: var(--st-text-2xl);
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-heading);
+}
+
+.md {
+  font-size: var(--st-text-lg);
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-heading);
+}
+
+.lead {
+  max-width: 38rem;
+  margin: 0 0 var(--st-space-8);
+  font-size: var(--st-text-lg);
+  line-height: 1.6;
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.center {
+  margin-inline: auto;
+  text-align: center;
+}

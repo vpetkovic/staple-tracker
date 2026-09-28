@@ -1,0 +1,155 @@
+/*
+ * Design tokens: the only place colours, type, spacing, radii and motion are
+ * defined. Everything else (the Infima mapping in custom.css, the components in
+ * src/components) reads these custom properties and never hard-codes a value.
+ *
+ * Neutrals are a cool grey ramp; the one accent is green. Dark mode has its own
+ * tuned values rather than an inversion of light. Contrast ratios of the text
+ * pairs are measured and recorded with the design-system work (WCAG AA).
+ */
+
+:root {
+  /* Type */
+  --st-font-sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --st-font-mono: 'Geist Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --st-text-xs: 0.75rem;
+  --st-text-sm: 0.875rem;
+  --st-text-base: 1rem;
+  --st-text-lg: 1.125rem;
+  --st-text-xl: 1.25rem;
+  --st-text-2xl: 1.5rem;
+  --st-text-3xl: 2rem;
+  --st-text-4xl: clamp(2rem, 1.4rem + 2.4vw, 2.75rem);
+  --st-text-display: clamp(2.5rem, 1.6rem + 4.2vw, 4.25rem);
+
+  --st-leading-tight: 1.1;
+  --st-leading-snug: 1.3;
+  --st-leading-body: 1.7;
+
+  --st-tracking-display: -0.045em;
+  --st-tracking-heading: -0.025em;
+  --st-tracking-eyebrow: 0.08em;
+
+  --st-weight-regular: 400;
+  --st-weight-medium: 500;
+  --st-weight-semibold: 600;
+
+  --st-measure: 44rem;
+
+  /* Spacing (4 px base) */
+  --st-space-1: 0.25rem;
+  --st-space-2: 0.5rem;
+  --st-space-3: 0.75rem;
+  --st-space-4: 1rem;
+  --st-space-5: 1.25rem;
+  --st-space-6: 1.5rem;
+  --st-space-8: 2rem;
+  --st-space-10: 2.5rem;
+  --st-space-12: 3rem;
+  --st-space-16: 4rem;
+  --st-space-24: 6rem;
+  --st-space-32: 8rem;
+
+  /* Radii */
+  --st-radius-sm: 6px;
+  --st-radius-md: 8px;
+  --st-radius-lg: 12px;
+  --st-radius-full: 999px;
+
+  /* Lines */
+  --st-hairline: 1px;
+  --st-focus-ring: 2px;
+
+  /* Controls */
+  --st-control-sm: 2.25rem;
+  --st-control-md: 2.5rem;
+  --st-control-lg: 2.875rem;
+
+  /* Motion */
+  --st-ease: cubic-bezier(0.2, 0, 0, 1);
+  --st-duration-fast: 120ms;
+  --st-duration: 180ms;
+  --st-duration-slow: 480ms;
+
+  /* Layout */
+  --st-navbar-height: 3.5rem;
+  --st-container: 72rem;
+
+  /* Light theme colours */
+  --st-bg: #ffffff;
+  --st-bg-subtle: #fafafa;
+  --st-bg-muted: #f4f4f5;
+  --st-bg-translucent: rgb(255 255 255 / 0.78);
+  --st-border: #e8e8eb;
+  --st-border-strong: #d4d4d8;
+
+  --st-fg-strong: #09090b;
+  --st-fg: #3f3f46;
+  --st-fg-muted: #52525b;
+  --st-fg-subtle: #6b6b74;
+
+  --st-accent: #059669;
+  --st-accent-text: #047857;
+  --st-accent-hover: #065f46;
+  --st-accent-soft: #ecfdf5;
+  --st-accent-ring: rgb(5 150 105 / 0.35);
+  --st-on-accent: #ffffff;
+  --st-accent-bg: #047857;
+  --st-accent-bg-hover: #065f46;
+
+  --st-code-bg: #fafafa;
+  --st-code-fg: #18181b;
+  --st-code-inline-bg: #f4f4f5;
+
+  --st-syntax-comment: #6b6b74;
+  --st-syntax-punctuation: #52525b;
+  --st-syntax-keyword: #7c3aed;
+  --st-syntax-string: #047857;
+  --st-syntax-function: #1d4ed8;
+  --st-syntax-number: #b45309;
+  --st-syntax-property: #0e7490;
+
+  --st-info: #1d4ed8;
+  --st-warning: #a16207;
+  --st-danger: #b91c1c;
+}
+
+[data-theme='dark'] {
+  --st-bg: #09090b;
+  --st-bg-subtle: #0f0f12;
+  --st-bg-muted: #18181b;
+  --st-bg-translucent: rgb(9 9 11 / 0.72);
+  --st-border: #222227;
+  --st-border-strong: #313138;
+
+  --st-fg-strong: #fafafa;
+  --st-fg: #d4d4d8;
+  --st-fg-muted: #a1a1aa;
+  --st-fg-subtle: #8c8c96;
+
+  --st-accent: #34d399;
+  --st-accent-text: #34d399;
+  --st-accent-hover: #6ee7b7;
+  --st-accent-soft: rgb(52 211 153 / 0.1);
+  --st-accent-ring: rgb(52 211 153 / 0.4);
+  --st-on-accent: #04130d;
+  --st-accent-bg: #34d399;
+  --st-accent-bg-hover: #6ee7b7;
+
+  --st-code-bg: #0f0f12;
+  --st-code-fg: #e4e4e7;
+  --st-code-inline-bg: #18181b;
+
+  --st-syntax-comment: #8c8c96;
+  --st-syntax-punctuation: #a1a1aa;
+  --st-syntax-keyword: #c4b5fd;
+  --st-syntax-string: #6ee7b7;
+  --st-syntax-function: #93c5fd;
+  --st-syntax-number: #fcd34d;
+  --st-syntax-property: #67e8f9;
+
+  --st-info: #93c5fd;
+  --st-warning: #fcd34d;
+  --st-danger: #fca5a5;
+}

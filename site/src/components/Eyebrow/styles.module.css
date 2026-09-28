@@ -1,0 +1,20 @@
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  margin: 0 0 var(--st-space-4);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-accent-text);
+}
+
+.eyebrow::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--st-radius-full);
+  background: var(--st-accent);
+}

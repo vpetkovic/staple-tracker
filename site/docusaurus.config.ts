@@ -1,8 +1,8 @@
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
-import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import {syntaxTheme} from './src/css/prism';
 
 // Where the site lives: the only two values to change when it moves. `url` is a
 // placeholder until the production domain is set up with the Cloudflare deploy.
@@ -43,6 +43,10 @@ function linkOutsideDocs({sourceFilePath, url: target}: {sourceFilePath: string;
 const config: Config = {
   title: 'staple',
   tagline: 'Local-first task tracking for coding agents.',
+  favicon: 'img/favicon.svg',
+  headTags: [
+    {tagName: 'link', attributes: {rel: 'apple-touch-icon', href: `${baseUrl}img/apple-touch-icon.png`}},
+  ],
   url,
   baseUrl,
   trailingSlash: false,
@@ -77,7 +81,13 @@ const config: Config = {
         },
         blog: false,
         theme: {
-          customCss: './src/css/custom.css',
+          // Fonts first, then the tokens, then the chrome that reads them.
+          customCss: [
+            require.resolve('@fontsource-variable/geist/wght.css'),
+            require.resolve('@fontsource-variable/geist-mono/wght.css'),
+            './src/css/tokens.css',
+            './src/css/custom.css',
+          ],
         },
       } satisfies Preset.Options,
     ],
@@ -89,6 +99,7 @@ const config: Config = {
     },
     navbar: {
       title: 'staple',
+      logo: {src: 'img/logo.svg', alt: 'staple logo', width: 24, height: 24},
       items: [
         {type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs'},
         {href: repo, label: 'GitHub', position: 'right'},
@@ -96,11 +107,40 @@ const config: Config = {
     },
     footer: {
       style: 'light',
+      logo: {src: 'img/logo.svg', alt: 'staple', width: 20, height: 20, href: '/'},
+      links: [
+        {
+          title: 'Docs',
+          items: [
+            {label: 'Overview', to: '/docs'},
+            {label: 'CLI', to: '/docs/cli'},
+            {label: 'Web UI', to: '/docs/web-ui'},
+            {label: 'Cloud sync', to: '/docs/sync'},
+          ],
+        },
+        {
+          title: 'Work',
+          items: [
+            {label: 'Pickup queue', to: '/docs/queue'},
+            {label: 'Milestones', to: '/docs/milestones'},
+            {label: 'Autopilot runs', to: '/docs/runs'},
+            {label: 'Agents', to: '/docs/agents'},
+          ],
+        },
+        {
+          title: 'Project',
+          items: [
+            {label: 'GitHub', href: repo},
+            {label: 'Contributing', href: `${repo}/blob/master/CONTRIBUTING.md`},
+            {label: 'License', href: `${repo}/blob/master/LICENSE`},
+          ],
+        },
+      ],
       copyright: 'staple is MIT licensed.',
     },
     prism: {
-      theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
+      theme: syntaxTheme,
+      darkTheme: syntaxTheme,
       additionalLanguages: ['bash', 'json'],
     },
   } satisfies Preset.ThemeConfig,

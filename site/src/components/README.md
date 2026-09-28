@@ -1,0 +1,40 @@
+# Site primitives
+
+The building blocks for marketing pages (`src/pages`). Docs pages do not use
+them: they are Markdown from `../docs`, styled by `src/css/custom.css`.
+
+Every colour, size, radius, duration and font comes from the tokens in
+`src/css/tokens.css`. Components read `var(--st-*)` and never hard-code a value,
+so both themes work without per-component dark rules.
+
+| Component | Import | Use it for |
+| --- | --- | --- |
+| `Section` | `@site/src/components/Section` | A full-width band with a centred container. `tone="subtle"` for an alternate surface with hairlines, `width="narrow"` for the reading measure, `spacing="tight"` for half the vertical padding. |
+| `Eyebrow` | `@site/src/components/Eyebrow` | The small mono label above a heading. |
+| `Heading`, `Lead` | `@site/src/components/Heading` | The type scale. `as` picks the element for the outline (`h1` to `h4`, `p`), `size` picks the look (`display`, `xl`, `lg`, `md`); they are independent. `Lead` is the paragraph under a heading. Both take `align="center"`. |
+| `Button`, `ButtonRow` | `@site/src/components/Button` | A link styled as a button: `variant="primary"` for the one main action in a view, `secondary` for the rest; `size="lg"` in heroes. `ButtonRow` wraps a group. |
+| `Card`, `CardGrid` | `@site/src/components/Card` | A hairline panel with `title`, optional `eyebrow` and body; `to` makes the whole card a link, `titleAs` picks the title element for the outline (default `h3`). `CardGrid` lays cards out 1 / 2 / 3 columns (`columns={2}` for two). |
+| `Terminal` | `@site/src/components/Terminal` | A short shell session. `lines` is an array: `$ ` starts a command (the prompt is not selectable), `# ` a comment, anything else output. |
+
+A page composes them:
+
+```tsx
+<Section>
+  <Eyebrow>Queue</Eyebrow>
+  <Heading>Set the order once.</Heading>
+  <Lead>Agents take the next ticket from the queue you ordered.</Lead>
+  <ButtonRow>
+    <Button to="/docs/queue">Read about the queue</Button>
+  </ButtonRow>
+</Section>
+```
+
+## Rules
+
+- One accent: `--st-accent` (and its text, hover and background variants). Use
+  it for the primary action, links and small markers, not for large areas.
+- Hairline borders (`--st-hairline` with `--st-border`), no shadows.
+- Motion is short (`--st-duration-*`, `--st-ease`) and `custom.css` turns
+  animations and transitions off under `prefers-reduced-motion`.
+- Text pairs meet WCAG AA in both themes. A new text colour has to be a token and
+  measured against the surfaces it sits on.
