@@ -364,6 +364,17 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "MilestoneStore.moveMember", name: "move a member", run: (w) => void w.a.store.milestones().moveMember(w.ids["Member two"]!, { at: 1 }, "alice") },
   { method: "MilestoneStore.reorderMembers", name: "reorder members", run: (w) => void w.a.store.milestones().reorderMembers(w.ids["M1"]!, [w.ids["Member one"]!, w.ids["Member two"]!], {}, "alice") },
   { method: "MilestoneStore.removeMember", name: "remove a member", run: (w) => void w.a.store.milestones().removeMember(w.ids["M1"]!, w.ids["Member one"]!, {}, "alice") },
+  {
+    // The derived milestone status is its own journaled operation, like a derived parent's:
+    // a member starting moves M1 on every device, and re-deriving again changes nothing.
+    method: "WorkspaceStore.rederiveMilestones",
+    name: "a member starting moves its milestone",
+    run: (w) => {
+      w.a.store.updateIssue(w.ids["Member two"]!, { assignee: "alice" }, "alice");
+      w.a.store.updateIssue(w.ids["Member two"]!, { status: "in_progress" }, "alice");
+      w.a.store.rederiveMilestones([w.ids["M1"]!], "Member two", "alice");
+    },
+  },
 
   // ---- the plan
   {

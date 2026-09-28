@@ -801,6 +801,8 @@ export class MilestoneStore {
       // Declared only on the write path: the idempotent replay above returns
       // before reaching here, so a repeated add mints no second operation.
       this.recordMembership(milestone.id, actor ?? null);
+      // A member reports upward like a child, so joining can move the milestone's status.
+      this.store.rederiveMilestones([milestone.id], member.identifier, actor ?? null);
       return { ...this.view(milestone.id), replayed: false };
     });
   }
@@ -858,6 +860,7 @@ export class MilestoneStore {
       this.emit("milestone_member_removed", milestone.id, actor, { identifier: member.identifier, position, revision });
       this.emit("milestone_left", member.id, actor, { milestone: milestone.identifier, revision });
       this.recordMembership(milestone.id, actor ?? null);
+      this.store.rederiveMilestones([milestone.id], member.identifier, actor ?? null);
       return this.view(milestone.id);
     });
   }
@@ -925,6 +928,7 @@ export class MilestoneStore {
       // would show the member in both places.
       this.recordMembership(from.id, actor ?? null);
       this.recordMembership(target.id, actor ?? null);
+      this.store.rederiveMilestones([from.id, target.id], member.identifier, actor ?? null);
       return this.view(target.id);
     });
   }

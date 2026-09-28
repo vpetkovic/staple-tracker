@@ -777,7 +777,7 @@ describe("a gate over a member epic", () => {
 // ================================================ landing the whole plan
 
 describe("work landing under a milestone", () => {
-  it("keeps resolved members at their rank, reaches complete without closing the milestone, and prunes on done", { timeout: 30_000 }, async () => {
+  it("keeps resolved members at their rank, closes the milestone with its last member, and prunes on done", { timeout: 30_000 }, async () => {
     // Land everything November counts: the gated epic's two children and the
     // cross-epic member. (MSC-6 derives `done` from its own children, as any parent does.)
     for (const ref of [SCENARIO.m1, SCENARIO.m2, SCENARIO.q3]) {
@@ -787,9 +787,9 @@ describe("work landing under a milestone", () => {
 
     const november = await milestoneHttp(SCENARIO.november);
     expect(november.progress).toMatchObject({ total: 3, countable: 3, percent: 100, complete: true });
-    // Complete, and still open: a human closes a plan, a rollup never does.
-    expect(november.milestone.state).toBe("active");
-    expect(november.milestone.status).not.toBe("done");
+    // Complete, and closed with its last member, as any parent is.
+    expect(november.milestone.state).toBe("done");
+    expect(november.milestone.status).toBe("done");
     // Every member is still at its rank — the plan is also the record of the plan.
     expect(november.members.map((member) => [member.identifier, member.position])).toEqual([
       [SCENARIO.milestonesEpic, 1],
@@ -798,9 +798,6 @@ describe("work landing under a milestone", () => {
     // Nothing under it is takeable any more, so the queue has no next work for it.
     expect(november.next).toBeNull();
 
-    await ok("status", SCENARIO.november, "done");
-    const closed = await milestoneHttp(SCENARIO.november);
-    expect(closed.milestone.state).toBe("done");
     // A resolved milestone leaves the default listing but keeps its members.
     expect((await cliJson<MilestoneListRow[]>("milestone", "ls")).map((row) => row.milestone.identifier)).toEqual([
       SCENARIO.october,

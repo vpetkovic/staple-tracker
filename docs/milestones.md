@@ -124,27 +124,36 @@ match wins:
 | `active` | the start date has arrived, or any counted leaf has left the pre-work band (`active`, `review` or `done`) |
 | `planned` | otherwise |
 
-A milestone whose members have all landed but that nobody closed is `active`
-with `progress.complete: true`; the view says so and a human runs
-`staple done`. Blocked and gated are not milestone states — they are facts
-about members, which the view shows per row from the queue's eligibility —
-never from a status category, because staple moves no status for either: a
-blocker lives in the blocker table and a gate queues descendants through
-`queuedBy`. (Pinned by `milestones.test.ts` — *"milestoneState: resolved first,
-then overdue, then active, then planned"*; by
+A milestone whose last member lands closes itself, as a parent does (below),
+unless a gate is open on it. Blocked and gated are not
+milestone states — they are facts about members, which the view shows per row
+from the queue's eligibility. (Pinned by `milestones.test.ts` — *"milestoneState:
+resolved first, then overdue, then active, then planned"*; by
 `views/milestones/milestones-model.test.ts` — *"reads overdue from the state and
 blocked/gated from the queue's eligibility"*; and end to end by
 `views/milestones/milestones-e2e.test.tsx` — *"counts blocked and gated members
 from the queue's eligibility, not from status categories"*.)
 
-**Milestone status is not derived from members.** The derived ladder in
+**Milestone status is derived from its members, like any parent's.** The
+derived ladder in
 [semantics.md](semantics.md#a-parents-status-is-derived-from-its-children)
-walks `parent_id`, and membership is not `parent_id`. A milestone with
-hierarchical children derives from *them* as any parent does; its members
-change its progress, never its status. Two ladders writing one column would be
-two answers to "why is this `in_progress`", and the timing replay reads that
-column. (Pinned by `store-milestones.test.ts` — *"a member landing does
-not move the milestone's status"*.)
+reads a milestone's members as well as its children: a member's status reports
+upward exactly as a child's does, with the same reversibility law and the same
+gate immunity. So a milestone goes `in_progress` when work starts anywhere
+under a member, `in_review` or `blocked` when that is where its open members
+stand, and back to `backlog` when nothing is in flight. The walk reaches a
+milestone through `milestone_members`, after the whole parent chain of the
+issue that moved, so a milestone that holds an epic and a task under it reads
+the epic's fresh status. Joining, leaving and moving a member re-derive the
+milestones involved in the same transaction. (Pinned by `store-milestones.test.ts`
+— *"status derived from members"*.)
+
+That includes the closing rungs: when the last member lands the milestone
+closes itself, and a member reopening reopens it — unless a person moved it by
+hand, or a gate is open on it, exactly as for an epic. (Pinned by
+`store-milestones.test.ts` — *"the last member landing closes the milestone,
+and a member reopening reopens it"* and *"lands where its members say when a
+gate on it is approved"*.)
 
 ## Dates: calendar days, UTC, inclusive
 

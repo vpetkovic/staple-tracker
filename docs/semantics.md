@@ -99,6 +99,9 @@ children reports what its children are doing, recomputed on every child
 transition, in the same transaction as the transition itself — there is no
 window where a child has moved and its epic still says the old thing.
 
+A milestone reads its **members** the same way it reads its children, whatever
+their kind, every rung included ([milestones.md](milestones.md)).
+
 The ladder, stated in categories (so it survives any renaming):
 
 | # | children | the parent reads |

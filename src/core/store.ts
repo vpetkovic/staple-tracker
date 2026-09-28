@@ -3063,9 +3063,48 @@ export class WorkspaceStore {
     child: Pick<IssueRow, "id" | "identifier" | "parent_id">,
     actor: string | null,
   ): void {
+    this.deriveUpward(child, child.identifier, actor, this.journal.mutationAt(), new Set<string>([child.id]));
+  }
+
+  /**
+   * Re-derive the milestones named, and everything above them, after their membership
+   * changed. `MilestoneStore` calls this inside its own mutation, so the status moves in
+   * the same transaction as the membership that caused it.
+   */
+  rederiveMilestones(milestoneIds: readonly string[], trigger: string, actor: string | null): void {
     const now = this.journal.mutationAt();
-    const seen = new Set<string>([child.id]);
-    let cursor = child.parent_id;
+    const seen = new Set<string>();
+    for (const id of milestoneIds) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const milestone = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(id) as unknown as
+        | IssueRow
+        | undefined;
+      if (!milestone) continue;
+      this.deriveOneAncestor(milestone, trigger, actor, now);
+      this.deriveUpward(milestone, trigger, actor, now, seen);
+    }
+  }
+
+  /**
+   * The walk itself: the parent chain first, nearest first, then every milestone that
+   * holds anything on that chain, then each of those milestones' own chains.
+   *
+   * Membership is a relation, not `parent_id`, so a milestone is reached through
+   * `milestone_members` rather than the parent walk. It is derived only AFTER the whole
+   * chain, because a milestone may hold both a task and the epic above it, and the epic's
+   * fresh status is one of its inputs. `seen` is shared across the recursion, so a
+   * milestone filed under its own member cannot loop.
+   */
+  private deriveUpward(
+    start: Pick<IssueRow, "id" | "parent_id">,
+    trigger: string,
+    actor: string | null,
+    now: string,
+    seen: Set<string>,
+  ): void {
+    const chain = [start.id];
+    let cursor = start.parent_id;
     let hops = 0;
     while (cursor && hops < MAX_TREE_DEPTH && !seen.has(cursor)) {
       seen.add(cursor);
@@ -3073,10 +3112,45 @@ export class WorkspaceStore {
         | IssueRow
         | undefined;
       if (!ancestor) break;
-      this.deriveOneAncestor(ancestor, child.identifier, actor, now);
+      this.deriveOneAncestor(ancestor, trigger, actor, now);
+      chain.push(ancestor.id);
       cursor = ancestor.parent_id;
       hops += 1;
     }
+    const holders = this.db
+      .prepare(
+        `SELECT DISTINCT milestone_id FROM milestone_members
+          WHERE issue_id IN (${chain.map(() => "?").join(", ")})`,
+      )
+      .all(...chain) as Array<{ milestone_id: string }>;
+    for (const { milestone_id: id } of holders) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const milestone = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(id) as unknown as
+        | IssueRow
+        | undefined;
+      if (!milestone) continue;
+      this.deriveOneAncestor(milestone, trigger, actor, now);
+      this.deriveUpward(milestone, trigger, actor, now, seen);
+    }
+  }
+
+  /**
+   * What a parent's status is derived from: its children, and for a milestone its
+   * members as well. A member is counted once even when it is also a child.
+   */
+  private derivationInputs(ancestor: Pick<IssueRow, "id" | "kind">): string[] {
+    const rows =
+      ancestor.kind === MILESTONE_KIND
+        ? this.db
+            .prepare(
+              `SELECT status FROM issues
+                WHERE parent_id = ?
+                   OR id IN (SELECT issue_id FROM milestone_members WHERE milestone_id = ?)`,
+            )
+            .all(ancestor.id, ancestor.id)
+        : this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(ancestor.id);
+    return (rows as Array<{ status: string }>).map((row) => row.status);
   }
 
   /** One rung of the walk: decide, check permission, CAS, and log. */
@@ -3107,12 +3181,7 @@ export class WorkspaceStore {
      */
     if (this.categoryOf(ancestor.status) === "gated") return;
 
-    const childStatuses = (
-      this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(ancestor.id) as Array<{
-        status: string;
-      }>
-    ).map((row) => row.status);
-    const target = this.deriveStatusFromChildren(childStatuses);
+    const target = this.deriveStatusFromChildren(this.derivationInputs(ancestor));
     if (target === null) return; // rung 0: no children, so nothing to report
 
     /**
@@ -3902,12 +3971,7 @@ export class WorkspaceStore {
           .run(now, ...(descendants as never[]));
       }
 
-      const childStatuses = (
-        this.db.prepare("SELECT status FROM issues WHERE parent_id = ?").all(row.id) as Array<{
-          status: string;
-        }>
-      ).map((r) => r.status);
-      const derived = this.deriveStatusFromChildren(childStatuses);
+      const derived = this.deriveStatusFromChildren(this.derivationInputs(row));
       /**
        * WHERE AN APPROVED PARENT LANDS.
        *
