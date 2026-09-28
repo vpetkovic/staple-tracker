@@ -23,6 +23,7 @@ staple run pause [<run-id>]
 staple run resume [<run-id>]
 staple run continue [--run <run-id>] [--outcome done|failed] [--reason R]
 staple run drive [--run <run-id> | --scope <queue|ref> [start options]] --agent <claude|codex|custom> [...]
+staple run hook install|bind|unbind|<provider>-stop [...]
 ```
 
 `--actor A` (else `$STAPLE_AGENT`, else `$USER`) says who acts. Without a run
@@ -397,6 +398,126 @@ attach, that it cannot guard the main line there (`main_line_unguarded`) and
 reads nothing, rather than reporting that nothing moved. It sees the local repository only; a push
 straight to a remote that leaves the local refs alone is the remote's branch
 protection's to refuse.
+
+## Interactive sessions: stop hooks
+
+`run drive` (tier A) starts a fresh session per ticket. A session a person is
+**already in** keeps working a run through its agent CLI's stop hook (tier B):
+a command the CLI runs whenever the agent is about to end its turn, and whose
+answer can keep the turn going with a new prompt. Where a CLI has no such hook,
+the instructions are the adapter (tier C, below). Code: `src/core/run-hook.ts`
+(the decision, bindings), `src/core/run-hook-providers.ts` (one row per CLI);
+CLI: `src/commands/run-hook.ts`.
+
+```
+staple run hook install <provider> [--print] [--user | --project | --local] [--staple CMD] [--dir DIR]
+staple run hook bind [--run <run-id>] [--session <id>] [--provider <provider>]
+staple run hook unbind [--session <id>] [--provider <provider>]
+staple run hook <provider>-stop [--max-repeats N] [--max-blocks N]      # run by the CLI, payload on stdin
+```
+
+In a Claude Code session, for example:
+
+```sh
+staple run hook install claude --print     # the stanza for ~/.claude/settings.json; paste it once
+staple run start --scope ABC-40 --max-tickets 5
+staple run hook bind                       # this session now works that run
+# end the turn: the hook hands the session ABC-41, already checked out
+```
+
+**Binding.** A hook fires for every session of the CLI it is installed in, so
+it acts only for a session bound to a run. `bind` writes
+`<staple home>/run-sessions/<provider>-<session>.json` (the run, its workspace
+database, the actor): the session may `cd` into a worktree the workspace cannot
+be found from, and a file needs no migration. The session id is `--session`,
+else the variable the CLI exports to the agent's shell commands (Claude Code:
+`CLAUDE_CODE_SESSION_ID`, which the docs say "matches the session_id field in
+the hook JSON input and is updated on /clear"; Gemini CLI: `GEMINI_SESSION_ID`,
+documented for hooks). A CLI that exports none gets a **pending** binding: the
+directory `bind` ran in, claimed by that provider's next stop whose session
+works there or above it, within ten minutes. The agent that ran `bind` ends its
+turn next, so that stop is almost always its own; the claim is a rename, so two
+sessions stopping at once never both get it. `--session` binds exactly. After
+`/clear` (a new session id) the old binding no longer matches: bind again.
+
+`bind` is refused for an ended run and for a run a live `run drive` is attached
+to (`conflict`): two adapters never work one run. For the same reason the hook
+does nothing in a session `run drive` started (`STAPLE_RUN_TICKET` is set), in
+a sub-agent, and for a run a live driver has since attached to.
+
+**The decision**, for a bound session, in order:
+
+| Situation | Answer |
+|---|---|
+| the run's current ticket is still held by its actor, in an active status | keep going: finish it, or state the failure (`run continue --outcome failed --reason …`); nothing is recorded |
+| it was handed on (review, done, gated) with no `review: …` comment since the run took it | keep going: review it adversarially and record the review. The rule `run drive` enforces as `no_review`, reached the interactive way: the session is asked to do it, not failed |
+| otherwise, `run continue` answers `take` | keep going: "next ticket REF "title"", already checked out to the run's actor, with the steps (read it, branch, plan and worklog, gates, adversarial review, `in_review`), the environment to act as the actor (`STAPLE_AGENT=… STAPLE_DB=…`), never merge to master or main. A goal check gets the goal-check steps instead |
+| `wait` | the session may stop, with the reason shown: a wait can last hours, and a session held in a loop burns its turn budget for nothing. Ask again later, or bind again |
+| `stop` | the session may stop, with the stop reason (and who stopped it, and why) shown; the binding is removed |
+
+The hook never changes `run continue`: it states no outcome and lets the
+tracker read it off the attempt or the status, exactly as a driver loop does.
+
+**It never traps anyone.** Every CLI with an adapter has a loop signal (this
+stop follows a continuation a hook caused; Cursor's is `loop_count` above 0). While it is set, the same reminder
+(the same kind, the same ticket) is given at most `--max-repeats` times in a
+row (2), and at most `--max-blocks` continuations are asked for in a row (20);
+past either the session may stop with a message and the run is left as it is.
+The continuation guard is read before `continue`, so a take the session would
+not be given the turn for is never claimed. A fresh prompt from the person
+resets both. Each CLI has its own cap too (Claude Code: 8 continuations in a
+row unless `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` says otherwise): a run of more
+tickets than that per prompt pauses at the cap until the person says "carry
+on". A person ends the run at any time with `staple run stop` (or the UI's
+Stop): the next stop lets the session stop. Interrupting Claude Code runs no Stop
+hook at all ("does not run if the stoppage occurred due to a user interrupt"). And the hook command **always exits 0**: an error
+of any kind is an allow with the error as the message, never the exit 2 that
+most of these CLIs treat as a block whatever the output says.
+
+**Install.** `install <provider>` prints the stanza (the default, and what to
+use on a machine you care about) or, with `--user`, `--project` or `--local`
+(Claude Code only), adds it to that settings file, every other member kept, a
+copy of the old file under `<staple home>/backups/hooks/` first. A file that is
+not a JSON object is refused and left untouched; installing twice changes
+nothing. `--staple` names the staple command the hook runs (`staple` on the
+CLI's PATH by default). Codex and Gemini CLI run a new or changed hook only
+after it is trusted (Codex: `/hooks`).
+
+### Which CLIs have a stop hook
+
+Surveyed 2026-09-28 from each CLI's own documentation. "Yes" means a
+documented hook that runs when the agent ends its turn and can keep it going
+with a prompt of the hook's choosing.
+
+| CLI | Hook | Can keep the turn going | Adapter | Evidence |
+|---|---|---|---|---|
+| Claude Code | `Stop` | Yes: `{"decision":"block","reason":…}`; loop signal `stop_hook_active`; cap 8 | `claude-stop` | [hooks](https://code.claude.com/docs/en/hooks#stop): "`"block"` prevents Claude from stopping"; "`stop_hook_active` … is `true` when Claude Code is already continuing as a result of a stop hook"; "after stop hooks have continued the turn eight times in a row, Claude Code overrides the next block" |
+| Codex CLI | `Stop` | Yes: same answer; `stop_hook_active`; hooks must be trusted | `codex-stop` | [hooks](https://developers.openai.com/codex/hooks): "To keep Codex going, return … `"decision": "block"`"; "`decision: "block"` … automatically creates a new continuation prompt that acts as a new user prompt, using your `reason`"; "`stop_hook_active` … Whether this turn was already continued by `Stop`" |
+| Gemini CLI | `AfterAgent` | Yes: `{"decision":"deny","reason":…}`; `stop_hook_active` | `gemini-stop` | [hooks reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md): "`decision`: Set to `"deny"` to reject the response and force a retry"; "`reason` … This text is sent to the agent as a new prompt"; "`stop_hook_active` … already running as part of a retry sequence" |
+| Cursor (editor and CLI) | `stop` | Yes: `{"followup_message":…}`; `loop_count`; `loop_limit` (default 5, lifted by the stanza) | `cursor-stop` | [hooks](https://cursor.com/docs/hooks): "`followup_message` … Cursor will automatically submit it as the next user message"; "`loop_count` … how many times the stop hook has already triggered an automatic follow-up for this conversation"; [CLI changelog](https://cursor.com/docs/cli/changelog): "stop hooks with follow-up loops" |
+| GitHub Copilot CLI | `agentStop` | Yes: `{"decision":"block","reason":…}` (exit 2 does not block); `stop_hook_active`; cap 8 | `copilot-stop` | [hooks configuration](https://docs.github.com/en/copilot/reference/hooks-configuration): "`agentStop` … Yes — can block and force continuation"; "`"block"` forces another agent turn using `reason` as the prompt" |
+| Factory Droid | `Stop` | Yes: Claude Code's answer; `stop_hook_active` | `droid-stop` | [hooks reference](https://docs.factory.ai/reference/hooks-reference): "`decision: "block"` prevents stopping. Include `reason` so Droid knows what to do next" |
+| Qwen Code | `Stop` | Yes: Claude Code's answer; `stop_hook_active`; cap 8 | `qwen-stop` | [hooks](https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/hooks.md): Stop `{"decision": "block", "reason": …}`; "ends the turn after `stopHookBlockingCap` blocks (default 8)" |
+| Kiro | Agent Stop | Contradictory: [hook types](https://kiro.dev/docs/hooks/types) says "`"decision": "block"`, the `reason` is sent as a new user message"; [hooks](https://kiro.dev/docs/hooks) lists Agent Stop as "Can block? No"; no loop signal documented | none | tier A or C until the docs agree |
+| Amp | `agent.end` (TypeScript plugin) | Yes, but in-process: `{ action: 'continue', userMessage }`, no command hook | none | [plugins](https://ampcode.com/docs/markdown/customize/plugins): "`agent.end` fires when the agent finishes a turn. Return `continue` to append a follow-up user message and start another turn". A plugin could call `staple run continue`; tier A (`--agent custom`) or C |
+| OpenCode | `session.idle` plugin event | No: the event handler returns nothing; a plugin can only send a prompt of its own | none | [plugins](https://opencode.ai/docs/plugins): `session.idle` under Session Events; tier A or C |
+| Cline | `TaskComplete` | No: the extension's is "TaskComplete Hook (coming soon!)"; the SDK maps it to `afterRun`, which wraps a run and does not continue it | none | [extension hooks](https://github.com/cline/cline/blob/main/.clinerules/hooks/README.md), [SDK hooks](https://github.com/cline/cline/blob/main/sdk/examples/hooks/README.md): "`TaskComplete` \| `agent_end` \| `afterRun` when completed"; tier A or C |
+| Aider | `--notifications-command` | No: a notification, no payload, cannot block | none | [options](https://aider.chat/docs/config/options.html): "Specify a command to run for notifications instead of the terminal bell"; tier A or C |
+| Windsurf (Cascade) | `post_cascade_response` | No: "Post-hooks cannot block since the action has already occurred" | none | [Cascade hooks](https://docs.devin.ai/desktop/cascade/hooks); tier C |
+
+Cursor and Copilot CLI also read Claude Code's settings files; a Claude Code
+hook they run gets their own payload and session ids, finds no binding, and
+does nothing.
+
+### Tier C: the instructions
+
+With no driver and no hook, the agent is the loop: `.staple/AGENTS.md`
+("Autopilot runs", written by `staple init`) tells it to call
+`staple run continue --json` after every ticket it hands on and do what the
+answer says: `take` is already checked out, `wait` takes nothing, `stop` ends
+the loop. The same rules hold in every tier: finish (or state the failure)
+before asking, an adversarial review recorded as `review: …` before handing
+on, never merge to master or main, and stop means stop.
 
 ## Goal mode
 

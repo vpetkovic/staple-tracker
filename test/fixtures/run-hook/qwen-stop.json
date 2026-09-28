@@ -1,0 +1,12 @@
+{
+  "session_id": "qwen-session-1",
+  "transcript_path": "/Users/me/.qwen/tmp/project/chats/qwen-session-1.jsonl",
+  "cwd": "/Users/me/project",
+  "hook_event_name": "Stop",
+  "timestamp": "2026-09-28T10:00:00.000Z",
+  "permission_mode": "default",
+  "stop_hook_active": false,
+  "last_assistant_message": "Done: the tests pass.",
+  "background_tasks": [],
+  "crons": []
+}

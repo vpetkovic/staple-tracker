@@ -1,0 +1,14 @@
+{
+  "conversation_id": "conv-123",
+  "generation_id": "gen-456",
+  "model": "claude-sonnet",
+  "model_id": "claude-sonnet",
+  "model_params": [],
+  "hook_event_name": "stop",
+  "cursor_version": "2.4.0",
+  "workspace_roots": ["/Users/me/project"],
+  "user_email": null,
+  "transcript_path": null,
+  "status": "completed",
+  "loop_count": 0
+}

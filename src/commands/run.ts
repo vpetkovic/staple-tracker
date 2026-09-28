@@ -8,6 +8,7 @@
  *   run pause|resume [<run-id>]
  *   run continue [--run <run-id>] [--outcome done|failed] [--reason R]
  *   run drive ...   (src/commands/run-drive.ts, dispatched from cli.ts: the one async verb)
+ *   run hook ...    (src/commands/run-hook.ts, dispatched from cli.ts: stop-hook adapters)
  *
  * Every verb is one `RunStore` method, the same one the MCP tools call, and `--json`
  * prints the object that method returns: a run for `start`, `stop`, `pause` and
@@ -20,7 +21,7 @@ import { type ContinueAnswer, type Run, type RunGoalReport, type RunStatus, RUN_
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 
-const USAGE = "Use: start, status, stop, pause, resume, continue, drive (staple run --help)";
+const USAGE = "Use: start, status, stop, pause, resume, continue, drive, hook (staple run --help)";
 
 const HELP = `staple run — autopilot runs: one agent working a scope ticket after ticket
 until a stop rule, run by the tracker, says otherwise.
@@ -65,6 +66,10 @@ until a stop rule, run by the tracker, says otherwise.
               loop continue headless: a fresh agent session per ticket, a
               brief each, logs under .staple/runs/<run-id>/; stoppable
               mid-ticket with run stop (staple run drive --help)
+  run hook install|bind|unbind|<provider>-stop
+              keep a session you are already in working a run: a stop hook
+              asks continue whenever the agent would end its turn and hands it
+              the next ticket (staple run hook --help)
 
 Stop reasons, first match wins, stable in --json: stopped_by_human,
 touched_main_line (run drive saw a session move master or main), budget

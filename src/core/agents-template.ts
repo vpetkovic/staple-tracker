@@ -425,6 +425,59 @@ The rules, and they do not bend:
 When you do resume someone's task, read their \`worklog\` and their branch pointer
 comment first. That is what they left you. Leave the same for the next one.
 
+## Autopilot runs — the tracker says what is next
+
+A person can set you to work a scope ticket after ticket: the whole queue, an
+epic, or a milestone (a goal run over its acceptance criteria). That is a
+**run**, and **the tracker decides whether it goes on, never you.** After every
+ticket you ask one question and do what the answer says:
+
+\`\`\`bash
+staple run continue --json      # MCP: continue_run
+\`\`\`
+
+- \`take\` — the ticket in \`ref\` is **already checked out to you**. Do not check
+  it out again. Work it the way this guide says, then ask again.
+- \`wait\` — nothing to take now (the run is paused, or what is left is held by
+  others). Take nothing: end your session, or ask again after
+  \`retryAfterSeconds\`.
+- \`stop\` — the run is over and \`reason\` says why (\`scope_empty\`, \`goal_met\`,
+  \`budget\`, \`failure_streak\`, \`gate_pending\`, \`vp_blocked\`,
+  \`stopped_by_human\`, …). Stop, and tell the person the reason.
+
+It exits 0 for all three: read \`action\`, not the exit code.
+
+A run is worked in one of three ways:
+
+1. **A: \`staple run drive\`** (the default). A driver starts one fresh headless
+   session per ticket (\`--agent claude|codex|custom\`) with a brief. If
+   \`STAPLE_RUN_TICKET\` is set, you are one of those sessions: work that one
+   ticket, then exit. Do not call any \`staple run\` command; the driver does.
+2. **B: a stop hook**, for a session a person is already in, where the agent
+   CLI has one. \`staple run hook install claude --print\` prints the settings
+   stanza; \`staple run hook bind\` binds this session to the live run. From then
+   on, each time you end your turn the hook asks \`run continue\` for you: it
+   hands you the next ticket, or holds you to the one you have not finished.
+3. **C: these instructions.** No driver and no hook: call
+   \`staple run continue --json\` yourself after every ticket you hand on.
+
+The rules, whichever way the run is worked:
+
+- **Finish before you ask.** Hand the ticket on (\`staple status ${ref} in_review\`
+  with the evidence in a comment), or say why you cannot:
+  \`staple run continue --outcome failed --reason "…" --json\`. Two failures in
+  a row stop the run.
+- **Review before you hand on.** An adversarial review, reproduced rather than
+  read, by a separate reviewer if you can start one, recorded as a comment that
+  starts with \`review:\`. The driver fails a ticket handed on without one
+  (\`no_review\`), and the hook sends you back to write it. Green gates are not
+  evidence.
+- **Never merge to master or main**, and never push to them. A merge is a
+  deploy and a person's decision: leave your work on a branch (and a draft pull
+  request), stacked on the last one.
+- **Stop means stop.** On a \`stop\` answer, or a person's \`staple run stop\`, end
+  the loop. Never start a new run to keep going.
+
 ## Wiring
 
 \`\`\`bash

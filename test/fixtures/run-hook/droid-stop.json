@@ -1,0 +1,10 @@
+{
+  "session_id": "droid-session-1",
+  "transcript_path": "/Users/me/.factory/projects/project/droid-session-1.jsonl",
+  "cwd": "/Users/me/project",
+  "permission_mode": "default",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "tool_execution_count": 12,
+  "elapsed_time": 93
+}

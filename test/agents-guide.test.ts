@@ -303,6 +303,25 @@ describe("the guide teaches the whole protocol", () => {
     expect(line).not.toContain("npx tsx");
   });
 
+  it("teaches autopilot runs: the three tiers, the one question, and the rules they share", () => {
+    const section = guide.slice(guide.indexOf("## Autopilot runs"), guide.indexOf("## Wiring"));
+    expect(section).toContain("staple run continue --json");
+    for (const action of ["`take`", "`wait`", "`stop`"]) expect(section, action).toContain(action);
+    expect(section).toMatch(/already checked out to you/);
+    // The three tiers: headless driver, stop hook, instructions only.
+    expect(section).toContain("staple run drive");
+    expect(section).toContain("STAPLE_RUN_TICKET");
+    expect(section).toContain("staple run hook install claude --print");
+    expect(section).toContain("staple run hook bind");
+    expect(section).toMatch(/C: these instructions/);
+    // The rules: finish or state the failure, review first, never merge, stop means stop.
+    expect(section).toContain("staple status DEM-42 in_review");
+    expect(section).toContain("--outcome failed");
+    expect(section).toContain("`review:`");
+    expect(section).toMatch(/Never merge to master or main/);
+    expect(section).toMatch(/Stop means stop/);
+  });
+
   it("tells the reader their edits are safe", () => {
     expect(guide).toMatch(/will not\s+overwrite your changes/i);
   });

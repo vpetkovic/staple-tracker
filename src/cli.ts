@@ -21,6 +21,7 @@ import { assertNotReservedActor } from "./core/milestones.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runRunCommand } from "./commands/run.js";
 import { runDriveCommand } from "./commands/run-drive.js";
+import { runHookCommand } from "./commands/run-hook.js";
 import { runBudgetCommand } from "./commands/budget.js";
 import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
 import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
@@ -2573,6 +2574,8 @@ function main() {
     case "run": {
       // `drive` is async and long-lived; it parses its own options (src/commands/run-drive.ts).
       if (rest[0] === "drive") runDriveCommand(rest.slice(1));
+      // `hook` is called by agent CLIs and answers in their format (src/commands/run-hook.ts).
+      else if (rest[0] === "hook") runHookCommand(rest.slice(1));
       else runRunCommand(rest);
       break;
     }
