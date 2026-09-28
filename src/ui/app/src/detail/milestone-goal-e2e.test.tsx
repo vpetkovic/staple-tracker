@@ -233,7 +233,7 @@ describe("the milestone goal view, from the goal check", () => {
 
   it("says why each unknown one is unknown: evidence not done, reworded, never marked", () => {
     const html = overview(working, workingRuns);
-    expect(criterionHtml(html, 2)).toContain(`Marked met, but its evidence does not hold now: ${refs.b} is todo, not done.`);
+    expect(criterionHtml(html, 2)).toContain(`Marked met, but its evidence does not hold yet: ${refs.b} is todo, not done.`);
     expect(criterionHtml(html, 2)).toContain(`data-evidence-holds="false"`);
     expect(criterionHtml(html, 3)).toContain('Reworded after it was marked met, so it needs judging again. It read: "Works on a phone".');
     expect(criterionHtml(html, 5)).toContain("Nobody has judged this yet.");
