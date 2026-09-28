@@ -110,11 +110,15 @@ export function visibleTabs(detail: IssueDetail): TabDefinition[] {
  */
 const OPEN_TAB = "staple:detail-open-tab";
 
-let pendingDocumentKey: string | null = null;
+/** The document key a Documents tab should open on, and the issue it is for (null: whichever mounts next). */
+let pendingDocument: { ref: string | null; key: string } | null = null;
 
-/** Ask the detail panel to show `tabId`, optionally pinning a document key on arrival. */
-export function openDetailTab(tabId: string, documentKey?: string): void {
-  pendingDocumentKey = documentKey ?? null;
+/**
+ * Ask the detail panel to show `tabId`, optionally pinning a document key on arrival. `ref`
+ * ties the key to that issue, so a Documents tab of any other issue drops it unread.
+ */
+export function openDetailTab(tabId: string, documentKey?: string, ref: string | null = null): void {
+  pendingDocument = documentKey ? { ref, key: documentKey } : null;
   window.dispatchEvent(new CustomEvent(OPEN_TAB, { detail: tabId }));
 }
 
@@ -129,33 +133,37 @@ export function onOpenDetailTab(handler: (tabId: string) => void): () => void {
 }
 
 /**
- * The key a tab was asked to open on, or null. CONSUMES it: a reader who later returns
- * to Documents on their own should get their own default, not last week's pin.
+ * The key a tab was asked to open on for issue `ref`, or null. CONSUMES it whichever issue
+ * asks: a reader who later returns to Documents on their own should get their own default,
+ * not last week's pin, and a pin meant for one issue must never open another's.
  */
-export function takePendingDocumentKey(): string | null {
-  const key = pendingDocumentKey;
-  pendingDocumentKey = null;
-  return key;
+export function takePendingDocumentKey(ref: string): string | null {
+  const pending = pendingDocument;
+  pendingDocument = null;
+  return pending !== null && (pending.ref === null || pending.ref === ref) ? pending.key : null;
 }
 
 /**
  * A tab to open on ANOTHER issue once its detail mounts: a goal's evidence citing
  * `ABC-12:plan` opens ABC-12 on its Documents tab with `plan` pinned. The event above cannot
- * do it (the new panel is not mounted when the link is pressed), so the request waits here,
- * keyed by the reference, and the panel for that reference takes it in its first render.
- * Any other issue's panel leaves it alone; the next request replaces it.
+ * do it (the new panel is not mounted when the link is pressed), so the request waits here
+ * for the next panel to mount, which takes it if it is for that issue and drops it either
+ * way. Evidence on the issue already open is not an arrival: `openDetailTab` switches in place.
  */
 let arrival: { ref: string; tabId: string } | null = null;
 
 export function openTabOnArrival(ref: string, tabId: string, documentKey?: string): void {
   arrival = { ref, tabId };
-  pendingDocumentKey = documentKey ?? null;
+  pendingDocument = documentKey ? { ref, key: documentKey } : null;
 }
 
-/** The tab asked for this issue, consumed; null when none was. */
+/** The tab asked for this issue, or null; consumed by whichever panel mounts first. */
 export function takeArrivalTab(ref: string): string | null {
-  if (arrival === null || arrival.ref !== ref) return null;
-  const { tabId } = arrival;
+  const pending = arrival;
   arrival = null;
-  return tabId;
+  if (pending === null) return null;
+  if (pending.ref === ref) return pending.tabId;
+  // Another issue mounted first: the request and its pinned document go together.
+  if (pendingDocument?.ref === pending.ref) pendingDocument = null;
+  return null;
 }

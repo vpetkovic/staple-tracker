@@ -176,6 +176,14 @@ describe("GET /api/runs", () => {
     expect(detail.gate.requestedBy).toBe("goal-run:goal-reader");
   });
 
+  it("answers the server's clock as now, the baseline a page counts new stops from", async () => {
+    const before = Date.now();
+    const { body } = await get("/api/runs");
+    const now = Date.parse(body.now as string);
+    expect(now).toBeGreaterThanOrEqual(before - 1000);
+    expect(now).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+
   it("is a read: a POST is refused", async () => {
     expect((await post("/api/runs", {})).status).toBe(405);
   });

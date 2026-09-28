@@ -155,7 +155,7 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
    * every other visit to this tab still gets `PREFERRED_KEYS`.
    */
   const [key, setKey] = useState<string | undefined>(
-    () => takePendingDocumentKey() ?? defaultKey(detail.documents.map((doc) => doc.key)),
+    () => takePendingDocumentKey(ref) ?? defaultKey(detail.documents.map((doc) => doc.key)),
   );
   const [mode, setMode] = useState<"read" | "history">("read");
   /** null = "whatever is current". A number pins the view to one revision. */

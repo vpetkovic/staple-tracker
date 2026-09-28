@@ -411,7 +411,8 @@ export function App() {
   const loadRuns = useCallback(() => getRuns({ ws }), [ws]);
   const runs = useResource(loadRuns, [ws, version], onAuthError);
   const runEntries = runs.data?.runs;
-  const runsState = useMemo(() => buildRunsState(runEntries ?? [], bump), [runEntries, bump]);
+  const runsNow = runs.data?.now ?? null;
+  const runsState = useMemo(() => buildRunsState(runEntries ?? [], bump, runsNow), [runEntries, bump, runsNow]);
 
   /**
    * A DELETED PROJECT LEAVES NO FILTER BEHIND. Its id may still be selected in any saved

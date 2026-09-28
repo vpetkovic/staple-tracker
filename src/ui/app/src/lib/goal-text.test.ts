@@ -57,7 +57,7 @@ describe("a criterion's verdict", () => {
     expect(unknownText(reworded)).toBe('Reworded after it was marked met, so it needs judging again. It read: "Docs written".');
     const pending = criterion({ position: 1, marked: "met", evidence: [ticket({ status: "in_review", holds: false }), ticket({ value: "x", kind: "text", ref: null })], why: "…" });
     expect(unknownCause(pending)).toBe("evidence");
-    expect(unknownText(pending, (status) => (status === "in_review" ? "In review" : status))).toBe("Marked met, but its evidence does not hold yet: ABC-12 is in review, not done.");
+    expect(unknownText(pending, (status) => (status === "in_review" ? "In review" : status))).toBe("Marked met, but its evidence does not hold now: ABC-12 is in review, not done.");
     const judged = criterion({ position: 1, marked: "unknown", why: null });
     expect(unknownCause(judged)).toBe("judged");
     expect(unknownText(judged)).toBe("Judged unknown: the evidence so far does not settle it.");

@@ -718,10 +718,13 @@ The page watches and stops runs; it never starts or continues one.
   `vp_blocked`: the blocked ticket; `failure_streak`: the last ticket that failed;
   `touched_main_line`: the ticket whose session moved the main line; otherwise the scope).
   One notice per stop: they are derived from `/api/runs` minus the runs this browser has
-  dismissed or opened (localStorage `staple:run-stops:v1`), counted from the browser's first
-  visit, so a reload shows the same notices and an old stop is not news. A corner stack on a
-  desk (above the detail drawer), in the flow above the run strip on a phone. The app has no
-  service worker, so there is no system notification (`src/ui/app/src/lib/run-stops.ts`).
+  dismissed, opened or stopped itself (localStorage `staple:run-stops:v1`), counted from the
+  browser's first read of the server's clock (`now`), so a reload shows the same notices and
+  an old stop is not news; keys of runs no longer served are pruned. One compact card shows
+  the newest ("N more" expands to three): in the desk's corner, in the flow above the run
+  strip on a phone, and, while a task is open, as the detail's last row (inside the modal, so
+  it covers nothing and is in the focus order). The app has no service worker, so there is
+  no system notification (`src/ui/app/src/lib/run-stops.ts`).
 - **Goal view.** A milestone's detail shows its goal in place of "Done when": each criterion
   with the check's verdict, its evidence as links (a ticket opens it, `ABC-12:plan` opens that
   document), who marked it and when, and why an unknown one is unknown (not marked, reworded,
@@ -733,7 +736,7 @@ The page watches and stops runs; it never starts or continues one.
   the page's person (`staple:me`, else `ui`) as `by`. Pause and Resume are in the history.
 
 HTTP: `GET /api/runs[?ws=&limit=N]` answers `{runs: [{workspace, run, decision, facts,
-driver}]}` (every live run and the `limit` (50) most recent ended ones per workspace, each
+driver, goal}], now}` (`now`: the server's clock) (every live run and the `limit` (50) most recent ended ones per workspace, each
 the `run status --json` object); `POST /api/run/stop {ws, id, actor?, note?}`,
 `POST /api/run/pause|resume {ws, id, actor?}` answer the run's fresh entry. They are
 writes like every other (POST only, token, the write rule in docs/web-ui.md "Auth"), so

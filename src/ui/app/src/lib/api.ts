@@ -1014,7 +1014,7 @@ export const assignProject = (target: { ws?: string; ref: string; project: strin
  * prints plus its workspace. With no `ws` in hub mode, every workspace's.
  */
 export const getRuns = (params: { ws?: string; limit?: number } = {}) =>
-  request<{ runs: RunEntry[] }>(`/api/runs${qs(params)}`);
+  request<{ runs: RunEntry[]; now: string }>(`/api/runs${qs(params)}`);
 
 /**
  * The page's run verbs. It watches and stops runs and never starts or continues one: only
