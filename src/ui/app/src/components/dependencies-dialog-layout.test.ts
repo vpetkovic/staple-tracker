@@ -37,6 +37,38 @@ describe("the dependencies dialog fits a phone", () => {
     expect(dialog["max-width"]).toBe("min(34rem, calc(100% - 2rem))");
   });
 
+  it("scrolls a long list inside the card, which stops short of the notch and the home indicator", () => {
+    const dialog = declarations(".staple-dep-dialog");
+    expect(dialog["overflow-y"]).toBe("auto");
+    expect(dialog["max-height"]).toBe("calc(100dvh - max(1rem, env(safe-area-inset-top)) - max(1rem, env(safe-area-inset-bottom)))");
+  });
+
+  it("keeps its title, subject and close control in view while the list scrolls", () => {
+    const head = declarations(".staple-dep-head");
+    expect(head["position"]).toBe("sticky");
+    // The card's 24px padding: a sticky offset counts from inside it.
+    expect(head["top"]).toBe("-24px");
+    expect(head["background-color"]).toBe("inherit");
+    // The close control lives in the sticky head, not in DialogContent's own slot, which
+    // scrolls away with the card.
+    const markup = readFileSync(new URL("./DependenciesDialog.tsx", import.meta.url), "utf8");
+    expect(markup).toMatch(/<DialogContent className="staple-dep-dialog"[^>]*showCloseButton=\{false\}>/);
+    const head0 = markup.indexOf('<div className="staple-dep-head"');
+    const close = markup.indexOf("<DialogClose");
+    expect(head0).toBeGreaterThan(-1);
+    expect(close).toBeGreaterThan(head0);
+    // Nothing closes the head between its opening and the close control.
+    expect(markup.slice(head0, close)).not.toContain("</div>");
+  });
+
+  it.each([".staple-dep-entry-id", ".staple-dep-subject-id"])("caps %s so the title keeps most of the line", (selector) => {
+    const id = declarations(selector);
+    expect(id["max-width"]).toBe("30%");
+    expect(id["overflow"]).toBe("hidden");
+    expect(id["text-overflow"]).toBe("ellipsis");
+    expect(id["white-space"]).toBe("nowrap");
+  });
+
   it("lets its sections shrink below their longest title", () => {
     expect(declarations(".staple-dep-sections")["grid-template-columns"]).toBe("minmax(0, 1fr)");
     expect(declarations(".staple-dep-section")["min-width"]).toBe("0");

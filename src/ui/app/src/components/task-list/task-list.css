@@ -1758,12 +1758,36 @@
 /*
  * The cap is written WITH the phone's margin, not instead of it: this rule is unlayered, so it
  * beats DialogContent's `max-w-[calc(100%-2rem)]` utility, and a bare `34rem` made the dialog
- * edge to edge on a 390px phone. Tall lists scroll inside the card rather than off the screen.
+ * edge to edge on a 390px phone. Tall lists scroll inside the card rather than off the screen:
+ * the card is capped at the screen less the gap DialogContent keeps above it (the notch's inset
+ * or 1rem) and the same below it (the home indicator's inset or 1rem).
  */
 .staple-dep-dialog {
   max-width: min(34rem, calc(100% - 2rem));
-  max-height: calc(100dvh - 2rem);
+  max-height: calc(100dvh - max(1rem, env(safe-area-inset-top)) - max(1rem, env(safe-area-inset-bottom)));
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/*
+ * The title, the subject and the close control, sticky at the top of the scrolling card. It
+ * reaches over the card's 24px padding (negative margin, the same padding back inside) so the
+ * lists scroll under an opaque band edge to edge, and it is the close control's containing
+ * block, so the X sits where DialogContent would have put it.
+ */
+.staple-dep-head {
+  position: sticky;
+  /* Sticky offsets count from the card's content edge, inside its 24px padding: -24px is the
+     card's top edge, where the band starts. */
+  top: -24px;
+  z-index: 1;
+  display: grid;
+  gap: 16px;
+  /* The band below the subject is opaque too, and costs no space at rest: its padding is
+     given back by the negative bottom margin. */
+  margin: -24px -24px -12px;
+  padding: 24px 24px 12px;
+  background-color: inherit;
 }
 
 /*
@@ -1793,6 +1817,20 @@
   align-items: flex-start;
   gap: 8px;
   margin: -4px 0 0;
+}
+
+/*
+ * An identifier never takes more than 30% of its line, so the title keeps about 60% even beside
+ * the status glyph: a long unbroken workspace prefix used to squeeze the title to nothing. Past
+ * that it ends in an ellipsis, with the whole identifier in `title`. Real identifiers (EXE-43)
+ * are far narrower and never reach the cap.
+ */
+.staple-dep-subject-id,
+.staple-dep-entry-id {
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .staple-dep-subject-id {
