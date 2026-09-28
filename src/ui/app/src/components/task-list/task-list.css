@@ -1755,8 +1755,34 @@
  * Geometry only. Every colour is a token role, as everywhere else in this file.
  */
 
+/*
+ * The cap is written WITH the phone's margin, not instead of it: this rule is unlayered, so it
+ * beats DialogContent's `max-w-[calc(100%-2rem)]` utility, and a bare `34rem` made the dialog
+ * edge to edge on a 390px phone. Tall lists scroll inside the card rather than off the screen.
+ */
 .staple-dep-dialog {
-  max-width: 34rem;
+  max-width: min(34rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
+/*
+ * A long title WRAPS to two lines and then ends in an ellipsis, inside the card. One line was
+ * the row's bargain, but in a dialog the title is what the reader came to read, and on a phone
+ * one line leaves room for about four words. Two lines still cannot make the card outgrow the
+ * screen; the full text stays in `title`.
+ */
+.staple-dep-subject-title,
+.staple-dep-entry-title {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* Which task this is about. A badge can be clicked from any row in a list of sixty, and a
@@ -1764,7 +1790,7 @@
 .staple-dep-subject {
   display: flex;
   min-width: 0;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 8px;
   margin: -4px 0 0;
 }
@@ -1774,19 +1800,25 @@
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   font-size: 11px;
+  line-height: 20px;
 }
 
 .staple-dep-subject-title {
-  overflow: hidden;
   color: var(--foreground);
   font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
+/* One track that may shrink below its content: an `auto` track (and a grid item's default
+   `min-width: auto`) sized itself to the longest unbreakable title and pushed the list past
+   the card's right edge. */
 .staple-dep-sections {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
+}
+
+.staple-dep-section {
+  min-width: 0;
 }
 
 .staple-dep-section-head {
@@ -1831,7 +1863,8 @@
   display: flex;
   width: 100%;
   min-width: 0;
-  align-items: center;
+  /* Top, not centre: on a two-line title the glyph and the id sit on its first line. */
+  align-items: flex-start;
   gap: 8px;
   padding: 5px 6px;
   border: none;
@@ -1859,6 +1892,8 @@
 
 .staple-dep-entry-status {
   flex-shrink: 0;
+  /* Centred on the title's first 20px line. */
+  margin-top: 2px;
 }
 
 .staple-dep-entry-id {
@@ -1866,16 +1901,12 @@
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   font-size: 11px;
+  line-height: 20px;
 }
 
 .staple-dep-entry-title {
-  overflow: hidden;
   color: var(--foreground);
   font-size: 13px;
-  /* One line and an ellipsis, with the full text in `title` — the same bargain the task row
-     makes, so a long epic title cannot make this dialog taller than the viewport. */
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .staple-dep-empty {

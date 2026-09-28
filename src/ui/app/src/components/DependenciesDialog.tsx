@@ -172,7 +172,7 @@ export function DependenciesDialog({
       <DialogContent className="staple-dep-dialog" data-testid="dependencies-dialog">
         <DialogHeader>
           <DialogTitle>Dependencies</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="text-balance">
             What this task depends on and what depends on it.
           </DialogDescription>
         </DialogHeader>
