@@ -29,9 +29,9 @@ nobody reconciles. Everything below exists to make that impossible.
 
 **A write barrier, held throughout.** The migration takes SQLite's write lock on
 the source (`BEGIN IMMEDIATE`) before it copies anything and holds it until the
-legacy file has been moved aside. If another process is writing — a `staple
-open` server, an MCP server, another agent — it waits a bounded five seconds and
-then refuses, having copied nothing.
+legacy file has been moved aside. If another process is writing — a
+`staple open` server, an MCP server, another agent — it waits a bounded five
+seconds and then refuses, having copied nothing.
 
 **A WAL-safe snapshot.** The copy is `VACUUM INTO` from a second connection
 while the barrier is held, so it reads *through* the write-ahead log. Work
@@ -117,8 +117,8 @@ The snapshot lives beside the database and is named for what it holds:
 ```
 
 The open prints one line to stderr naming it —
-`staple: upgrading workspace <db> from schema 5 to 16; pre-upgrade snapshot
-retained at <path>` — before the migration runs, so the path is on your
+`staple: upgrading workspace <db> from schema 5 to 16; pre-upgrade snapshot retained at <path>`
+— before the migration runs, so the path is on your
 terminal even if the migration fails. Snapshots are never deleted by staple.
 
 **Rolling back a schema upgrade.** Roll the runtime back first, then, with
@@ -180,16 +180,16 @@ REPAIRS
     staple install --from <dir|tarball> --yes
 ```
 
-The command is derived from what `staple install` accepts — `--from
-<dir|tarball> --yes`, `--rollback --yes`, or the launcher itself — never from
-a flag that does not exist. Which one you get:
+The command is derived from what `staple install` accepts —
+`--from <dir|tarball> --yes`, `--rollback --yes`, or the launcher itself — never
+from a flag that does not exist. Which one you get:
 
 | situation | `--json` `data.code` | command |
 |---|---|---|
 | database newer than the running build; the **selected** runtime understands it | `database_newer_than_runtime` | `<launcher> doctor` — use the installed runtime, not this checkout |
 | database newer than the running build; the **retained previous** runtime understands it | `database_newer_than_runtime` | `staple install --rollback --yes` |
-| database newer than every runtime on the machine | `database_newer_than_runtime` | `staple install --from <dir|tarball> --yes`, with a payload that declares the schema |
-| `config.json` newer than this build | `config_newer_than_runtime` | `staple install --from <dir|tarball> --yes` |
+| database newer than every runtime on the machine | `database_newer_than_runtime` | `staple install --from <dir\|tarball> --yes`, with a payload that declares the schema |
+| `config.json` newer than this build | `config_newer_than_runtime` | `staple install --from <dir\|tarball> --yes` |
 | the selected runtime is older than the database this build opens | `selected_runtime_older_than_database` | `staple install --from <checkout>/dist-package --yes` (from a bundle, its own directory) |
 | the database is behind the running build | `migration_pending` | none — the next open upgrades it |
 | everything agrees | `null` | none |
@@ -201,24 +201,25 @@ repair: `doctor --fix --only schema` is refused.
 running build does — whether the database changes (`migrates 5 -> 16`) and
 where the pre-upgrade snapshot goes, from the same naming function the open
 uses — and what `install --rollback` would restore. Under `--json` they are
-`data.repair`: `{ command, changesDatabase, migration: { from, to } | null,
-snapshotPath, rollback }`, beside `data.database`, `data.running` (with its
+`data.repair`:
+`{ command, changesDatabase, migration: { from, to } | null, snapshotPath, rollback }`,
+beside `data.database`, `data.running` (with its
 `source`: `checkout`, `bundle` or `installed`), `data.selected` (null when
 nothing is installed) and `data.config`. Doctor writes nothing: the preview
 does not create the snapshot directory, and a newer config file is read raw
 rather than rewritten.
 
 **The open refusal names the same command.** A command that opens a newer
-workspace still exits 4 with the pinned sentence — `… was created by a newer
-version of staple (schema version 99; this build understands 16). Upgrade
-staple to open it — an older build must not write to it.` — and then appends
-only the command doctor would name: `Repair: staple install --from
-<dir|tarball> --yes — `staple doctor` explains the mismatch in full.` The
-explanation stays in doctor; the error stays one line. They agree because
+workspace still exits 4 with the pinned sentence ("… was created by a newer
+version of staple (schema version 99; this build understands 16). Upgrade staple
+to open it — an older build must not write to it.") and then appends only the
+command doctor would name:
+``Repair: staple install --from <dir|tarball> --yes — `staple doctor` explains the mismatch in full.``
+The explanation stays in doctor; the error stays one line. They agree because
 they run the same planner.
 
-**Rollback switches the runtime, not the data.** `staple install --rollback
---yes` rewrites `current.json` and the launcher only; no workspace file is
+**Rollback switches the runtime, not the data.** `staple install --rollback --yes`
+rewrites `current.json` and the launcher only; no workspace file is
 opened. A workspace the newer runtime already migrated stays at the newer
 schema, byte for byte, and the rolled-back runtime refuses it read-only until
 you roll forward again — the output says so. Restoring the *database* to its

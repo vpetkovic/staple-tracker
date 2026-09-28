@@ -118,7 +118,7 @@ The registry also lists the **categories** — Statuses, Kinds, Workflow, This
 machine — with the editor each one needs, so the settings UI enumerates those
 sections from the registry rather than hard-coding tabs. The web Settings sheet
 adds its own sections beside them for things that are not registry settings
-(Cloud, Workspaces on this computer, Usage & budget, Cloud sync; see
+(Cloud account, Workspaces on this computer, Usage, Cloud sync; see
 `src/ui/app/src/settings/settings-shell.ts`). Adding a setting or a registry
 category is a registry entry (plus a field on `StapleConfig` for a global one);
 no shell component changes.
@@ -223,8 +223,9 @@ already exist.
 ## `config.json`
 
 `<home>/config.json` holds durable preferences only — never per-project state,
-which belongs in the workspace database. Its known fields are exactly the
-registry's global definitions.
+which belongs in the workspace database. Its known fields are the registry's
+global definitions plus `schemaVersion`, `connectors` and `telemetry`
+(`KNOWN_KEYS` in `src/config/file.ts`).
 
 ```jsonc
 {
@@ -333,7 +334,7 @@ staple budget status
 staple budget unsetup --yes                                                         # reverse exactly what setup did
 ```
 
-The web app does the same from **Settings → Usage & budget**
+The web app does the same from **Settings → Usage**
 ([web-ui.md](web-ui.md#usage--budget)): capture on and off, bindings listed,
 added, edited and removed, and automatic collection turned on and off after
 its plan is shown. It calls the same store methods through

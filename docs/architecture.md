@@ -31,7 +31,7 @@ sidebar_position: 17
 | Setup | `src/onboarding/` | The setup service `staple init` and bare `staple` share |
 | Agent guide | `src/core/agents-template.ts` | The working protocol `init` writes to `.staple/AGENTS.md` |
 | Web UI server | `src/ui/server.ts` | `staple open`: token-gated JSON API + serves the built app; per-workspace or `--hub` |
-| Web UI app | `src/ui/app/` | Vite + React + Tailwind with Radix primitives — Tasks, Queue, Graph, Milestones, Estimate accuracy and Budget views, the detail panel and Settings — see [web-ui.md](web-ui.md) |
+| Web UI app | `src/ui/app/` | Vite + React + Tailwind with Radix primitives — Tasks, Queue, Graph, Milestones, Estimates and Usage views, the detail panel and Settings — see [web-ui.md](web-ui.md) |
 | Tests | `test/`, `*.test.ts(x)` beside the UI code | Store semantics, CLI and MCP surfaces, migrations and crash drills, the packed runtime, sync, telemetry, UI |
 | Smoke | `scripts/smoke-mcp.ts` | Full JSON-RPC agent workflow over stdio |
 
@@ -73,8 +73,8 @@ Gaps in the current build, so nobody discovers them the hard way:
   `ATTACH` union.
 - There are no connectors to other trackers (GitHub Issues, ClickUp) and no
   harness connectors: `staple doctor` reports its `harnesses` check as `skip`
-  for that reason. Cloud sync between staple workspaces is built; two parts of
-  its design are not, and [sync.md](sync.md) marks them where they appear.
+  for that reason. Cloud sync between staple workspaces is built; see
+  [sync.md](sync.md).
 - A dependency cycle that mixes workspace-local and cross-workspace edges is
   not detected: the hub checks cycles over its own edges, and each workspace
   over its own.

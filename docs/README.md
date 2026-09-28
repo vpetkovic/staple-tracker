@@ -50,8 +50,8 @@ MCP tools they use. [cli.md](cli.md) documents every command.
 
 | Page | What it covers |
 |---|---|
-| [Continuity](continuity.md) | Claims, staleness, taking over a dead agent's work |
 | [Cloud sync](sync.md) | Sharing a workspace between machines: what travels, ordering, conflicts, leases, consents, backups, the hub registry |
+| [Continuity](continuity.md) | Claims, staleness, taking over a dead agent's work |
 
 ## Reference
 

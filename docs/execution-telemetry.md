@@ -1410,8 +1410,8 @@ release stays compatible with old builds and the Worker is deployed first:
 - The workspace client's `CLIENT_PROTOCOL` is 3 (`src/core/cloud/client.ts`).
   The hub-registry leg declares 2 (`REGISTRY_PROTOCOL`).
 - A device that has not upgraded **stops converging** on that repository as soon
-  as an upgraded device pushes anything, not only an attempt. The attempts arrived
-  with a workspace migration, so every operation an upgraded device journals
+  as an upgraded device pushes anything, not only an attempt. Attempts are stored
+  by a workspace migration (013), so every operation an upgraded device journals
   carries the newer `schema`, and an older client refuses a page holding one with
   `schema_ahead`. A page or fold that holds an attempt is also refused to it at
   the service, with `protocol_unsupported` and `requiredProtocol: 3`. Both are the
