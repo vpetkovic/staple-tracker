@@ -32,6 +32,7 @@
  */
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getIssue, getQueue, getSettings } from "@/lib/api";
@@ -61,6 +62,16 @@ import { PersonChip, RelativeTime } from "./parts";
 import { MilestoneCrumb, MilestoneDue, MilestoneSentence, MilestoneValue, OpenPlanAction, opensPlan, planOf } from "./MilestoneParts";
 import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
 import { detailFacts } from "./properties";
+import {
+  anchorAfterScroll,
+  anchorTarget,
+  reserveFor,
+  restoreAfterResize,
+  scrollAfterTabSwitch,
+  shrinkReserve,
+  type PanelGeometry,
+  type ReserveAnchor,
+} from "./tab-scroll";
 import { onOpenDetailTab, visibleTabs } from "./tabs/registry";
 
 export function IssueDetailPanel({
@@ -700,6 +711,11 @@ function SummaryChips({
  * a desk it is an underlined strip; on the phone a scrollable segmented control that never
  * clips a label mid-word: the edges fade while there is more to scroll, and the active tab
  * is scrolled into view.
+ *
+ * Switching tabs never moves the strip (tab-scroll.ts): a strip in view is left alone, and a
+ * strip that was stuck stays stuck with the new tab starting right under it. A switch made
+ * while scrolled gives the panels just enough reserve that a loading or short tab cannot clamp
+ * the scroll; it shrinks away as the reader scrolls back up.
  */
 function DetailTabs({
   detail,
@@ -713,18 +729,47 @@ function DetailTabs({
   onAuthError: (error: AuthError) => void;
 }) {
   const [tab, setTab] = useState("overview");
+  const stripRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const panelsRef = useRef<HTMLDivElement>(null);
+  /** The panels' min-height while a stuck switch needs one, else null (tab-scroll.ts). */
+  const [reserve, setReserve] = useState<number | null>(null);
+  /** Where the reserve is holding the scroll: the stuck point, or a position (tab-scroll.ts). */
+  const anchorRef = useRef<ReserveAnchor>({ kind: "at", scrollTop: 0 });
+  useReserveRelease(reserve, setReserve, sentinelRef, panelsRef, anchorRef);
+  // A new task starts without one. (The panel is also remounted per task; this does not rely on it.)
+  useEffect(() => setReserve(null), [detail.issue.id]);
+  /** Where the scroll goes once the new tab has rendered, decided when it was chosen. */
+  const pendingScroll = useRef<number | null>(null);
+  const selectTab = useCallback((next: string) => {
+    const sentinel = sentinelRef.current;
+    const panels = panelsRef.current;
+    const scroller = sentinel ? scrollerOf(sentinel) : null;
+    const target = sentinel && scroller ? scrollAfterTabSwitch(scroller.scrollTop, stickOffset(sentinel, scroller)) : null;
+    pendingScroll.current = target;
+    const keep = target ?? scroller?.scrollTop ?? 0;
+    anchorRef.current = target !== null ? { kind: "stuck" } : { kind: "at", scrollTop: keep };
+    if (keep > 0 && scroller && panels) setReserve(reserveFor(keep, panelGeometry(scroller, panels)));
+    setTab(next);
+  }, []);
   /**
    * A tab asking to hand the reader to another tab (Details' worklog "Show all" lands on
    * Documents). This file subscribes to a verb and sets its own state; see
    * `onOpenDetailTab` in tabs/registry.ts for why it is an event and not a prop.
    */
-  useEffect(() => onOpenDetailTab(setTab), []);
+  useEffect(() => onOpenDetailTab(selectTab), [selectTab]);
   const tabs = visibleTabs(detail);
   const active = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? "overview");
-  const stripRef = useRef<HTMLDivElement>(null);
   const edges = useScrollEdges(stripRef, tabs.length);
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const stuck = useStuck(sentinelRef);
+
+  // Before paint: a stuck strip stays stuck, and the new tab starts right under it.
+  useLayoutEffect(() => {
+    const target = pendingScroll.current;
+    pendingScroll.current = null;
+    const scroller = sentinelRef.current ? scrollerOf(sentinelRef.current) : null;
+    if (target !== null && scroller) scroller.scrollTop = target;
+  }, [active]);
 
   // Bring the active tab into view inside the strip, horizontally only: scrollIntoView
   // would also scroll the panel to the strip, which is not what choosing a tab means.
@@ -737,7 +782,7 @@ function DetailTabs({
   }, [active]);
 
   return (
-    <Tabs value={active} onValueChange={setTab} className={cn("gap-0", sheet ? "mt-5" : "mt-8")}>
+    <Tabs value={active} onValueChange={selectTab} className={cn("gap-0", sheet ? "mt-5" : "mt-8")}>
       {/* Zero-height marker just above the strip: once it scrolls out, the strip is stuck
           and content runs under it, so the strip grows a hairline to separate the two. */}
       <div ref={sentinelRef} aria-hidden className="h-0" />
@@ -760,16 +805,105 @@ function DetailTabs({
           </TabsList>
         </div>
       </div>
-      {tabs.map((definition) => {
-        const Tab = definition.component;
-        return (
-          <TabsContent key={definition.id} value={definition.id} className="pt-5">
-            <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} />
-          </TabsContent>
-        );
-      })}
+      <div ref={panelsRef} data-detail-tabpanels="" style={reserve !== null ? { minHeight: reserve } : undefined}>
+        {tabs.map((definition) => {
+          const Tab = definition.component;
+          return (
+            <TabsContent key={definition.id} value={definition.id} className="pt-5">
+              <Tab detail={detail} workspace={detail.workspace} onAuthError={onAuthError} refresh={refresh} />
+            </TabsContent>
+          );
+        })}
+      </div>
     </Tabs>
   );
+}
+
+/** The panel's one scroll container (see IssueDetailPanel). */
+function scrollerOf(element: HTMLElement): HTMLElement | null {
+  return element.closest<HTMLElement>(".staple-detail-scroll");
+}
+
+/** The scroller's scrollTop at which the strip just sticks: where its sentinel sits in the content. */
+function stickOffset(sentinel: HTMLElement, scroller: HTMLElement): number {
+  return scroller.scrollTop + sentinel.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+}
+
+/**
+ * Where the panels sit in the scroller's content, measured now. The tail is measured to the
+ * bottom of the content's own box, not from `scrollHeight`: when the content is shorter than
+ * the scroller, `scrollHeight` reports the scroller's height instead, and a tail read from it
+ * would come out too long by the difference.
+ */
+function panelGeometry(scroller: HTMLElement, panels: HTMLElement): PanelGeometry {
+  const box = panels.getBoundingClientRect();
+  const panelsTop = scroller.scrollTop + box.top - scroller.getBoundingClientRect().top;
+  const content = panels.closest<HTMLElement>("[data-detail-layout]");
+  const tail = content ? content.getBoundingClientRect().bottom - box.bottom : scroller.scrollHeight - (panelsTop + box.height);
+  return { clientHeight: scroller.clientHeight, panelsTop, tail };
+}
+
+/**
+ * While a reserve is held: give back what the scroll no longer needs on every scroll, every
+ * resize of the scroller (a phone keyboard, a rotated phone, a resized window) and every change
+ * in the panels' height (the new tab's data landing), and let go once the active tab's own
+ * content covers it. When the scroller grows again and the browser has pulled the scroll back
+ * to fit, grow the reserve before paint and put the scroll back where it was being held.
+ */
+function useReserveRelease(
+  reserve: number | null,
+  setReserve: (update: number | null | ((current: number | null) => number | null)) => void,
+  sentinelRef: RefObject<HTMLElement | null>,
+  panelsRef: RefObject<HTMLElement | null>,
+  anchorRef: RefObject<ReserveAnchor>,
+): void {
+  const holding = reserve !== null;
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const scroller = sentinel ? scrollerOf(sentinel) : null;
+    const panels = panelsRef.current;
+    if (!holding || !sentinel || !scroller || !panels) return;
+    const natural = () => panels.querySelector<HTMLElement>('[role="tabpanel"][data-state="active"]')?.offsetHeight ?? 0;
+    // The scroller's size when last looked at. A scroll event can be the browser clamping the
+    // scroll after a resize (it may arrive before or after the ResizeObserver does), so a
+    // resize is told apart by the size having changed, not by which event reported it.
+    // Only a change of HEIGHT alone (a keyboard, a window made shorter and taller again) puts
+    // the scroll back: a change of width reflows the whole task, and a pixel position from
+    // the old layout means nothing in the new one.
+    let size = { width: scroller.clientWidth, height: scroller.clientHeight };
+    const sync = () => {
+      const now = { width: scroller.clientWidth, height: scroller.clientHeight };
+      const heightOnly = Math.abs(now.width - size.width) <= 0.5 && Math.abs(now.height - size.height) > 0.5;
+      size = now;
+      const top = scroller.scrollTop;
+      const stickAt = stickOffset(sentinel, scroller);
+      if (heightOnly) {
+        const restore = restoreAfterResize(top, scroller.scrollHeight - now.height, anchorTarget(anchorRef.current, stickAt));
+        const grown = restore === null ? 0 : reserveFor(restore, panelGeometry(scroller, panels));
+        if (restore !== null && grown > natural()) {
+          // Commit the taller reserve now, inside this frame, so the restored scroll fits.
+          flushSync(() => setReserve(grown));
+          scroller.scrollTop = restore;
+          return;
+        }
+      } else {
+        // The reader scrolled (or the task reflowed): hold what is on screen now.
+        anchorRef.current = anchorAfterScroll(anchorRef.current, top, stickAt);
+      }
+      const needed = reserveFor(top, panelGeometry(scroller, panels));
+      const covered = natural();
+      setReserve((current) => shrinkReserve(current, needed, covered));
+    };
+    scroller.addEventListener("scroll", sync, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(sync) : null;
+    observer?.observe(scroller);
+    // And when the tab's content lands: once it covers the scroll, the reserve goes at once.
+    observer?.observe(panels);
+    return () => {
+      scroller.removeEventListener("scroll", sync);
+      observer?.disconnect();
+    };
+  }, [holding, sentinelRef, panelsRef, anchorRef, setReserve]);
 }
 
 /** Whether a horizontal scroller has more content before or after what is showing. */

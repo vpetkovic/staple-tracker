@@ -44,7 +44,7 @@ import {
   type PlainRefusal,
 } from "./telemetry-settings";
 
-export type TelemetryBusy = null | "refresh" | "plan" | "confirm" | "capture" | "bind" | "unbind" | "collect";
+export type TelemetryBusy = null | "refresh" | "plan" | "confirm" | "capture" | "live" | "bind" | "unbind" | "collect";
 
 /** The outcome line under the section's actions. `cross_origin` is its own tone: nothing about the change was wrong. */
 export interface TelemetryNotice {
@@ -79,6 +79,8 @@ export interface TelemetryState {
   plan: ShownPlan | null;
   planWhy: string | null;
   captureConfirm: boolean;
+  /** Asking to confirm turning live checks on or off. */
+  liveConfirm: boolean;
   editor: BindingEditor | null;
   removing: KnownBinding | null;
   lastCollect: CollectResult | null;
@@ -94,6 +96,9 @@ export interface TelemetryHandlers {
   onCaptureAsk(): void;
   onCaptureConfirm(): Promise<void>;
   onCaptureCancel(): void;
+  onLiveAsk(): void;
+  onLiveConfirm(): Promise<void>;
+  onLiveCancel(): void;
   onCollect(): Promise<void>;
   onEditorOpen(binding: KnownBinding | null): void;
   onEditorDraft(draft: BindingDraft): void;
@@ -113,6 +118,8 @@ export interface TelemetryApi {
   apply(action: "setup" | "unsetup", consent: PlanConsentTicket): Promise<CollectionOutcome>;
   collect(): Promise<CollectResult>;
   capture(enabled: boolean): Promise<BudgetConfigView>;
+  /** `staple budget live on|off`. */
+  live(enabled: boolean): Promise<BudgetConfigView>;
   bind(input: BindInput): Promise<BudgetConfigView>;
   unbind(input: BindingHomeInput): Promise<BudgetConfigView>;
   /** The origins the server accepts writes from (`/api/bootstrap` `writeOrigins`). */
@@ -157,6 +164,7 @@ export function createTelemetryController(api: TelemetryApi, options: { remote: 
     plan: null,
     planWhy: null,
     captureConfirm: false,
+    liveConfirm: false,
     editor: null,
     removing: null,
     lastCollect: null,
@@ -286,6 +294,27 @@ export function createTelemetryController(api: TelemetryApi, options: { remote: 
           set({ notice: noticeOf(error) });
         } finally {
           set({ captureConfirm: false });
+        }
+      }),
+    onLiveAsk: () => set({ notice: null, liveConfirm: true }),
+    onLiveCancel: () => set({ liveConfirm: false }),
+    onLiveConfirm: () =>
+      write("live", async () => {
+        const enable = !(state.status?.polling.livePolling ?? false);
+        try {
+          await api.live(enable);
+          set({
+            notice: {
+              tone: "ok",
+              text: enable
+                ? "Live checks are on. The next check runs within 5 minutes, or press Refresh on the Usage page."
+                : "Live checks are off. Readings already saved are kept.",
+            },
+          });
+        } catch (error) {
+          set({ notice: noticeOf(error) });
+        } finally {
+          set({ liveConfirm: false });
         }
       }),
     onCollect: () =>

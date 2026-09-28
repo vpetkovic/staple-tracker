@@ -25,11 +25,13 @@
  * whole graph and can refuse), which needs a refusal surface, an optimistic-update story and
  * its own tests. That is a ticket. This one replaces a caption.
  */
-import { useCallback } from "react";
+import { useCallback, type RefCallback } from "react";
 import { useBackToClose } from "@/lib/back-to-close";
-import { OctagonX, TriangleAlert } from "lucide-react";
+import { OctagonX, TriangleAlert, XIcon } from "lucide-react";
 import {
+  DIALOG_CLOSE_CLASS,
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -82,7 +84,9 @@ function Entry({ entry, muted = false, onOpen }: EntryProps) {
         onClick={() => onOpen(entry.identifier)}
       >
         <StatusIcon status={entry.status} className="staple-dep-entry-status" />
-        <span className="staple-dep-entry-id">{entry.identifier}</span>
+        <span className="staple-dep-entry-id" title={entry.identifier}>
+          {entry.identifier}
+        </span>
         <span className="staple-dep-entry-title" title={entry.title}>
           {entry.title}
         </span>
@@ -132,6 +136,23 @@ function Section({ id, label, kind, entries, resolved = [], empty, onOpen }: Sec
   );
 }
 
+/**
+ * The sticky head's height, published on the card as `--dep-head-height`. The card's
+ * `scroll-padding-top` reads it (task-list.css), so a row brought into view by the keyboard
+ * (Shift+Tab up a long list) stops BELOW the head instead of sliding under it. It is measured
+ * because the head's height is the title, the description and a subject of one or two lines.
+ */
+const publishHeadHeight: RefCallback<HTMLDivElement> = (head) => {
+  const card = head?.parentElement;
+  if (!head || !card) return;
+  const measure = () => card.style.setProperty("--dep-head-height", `${head.offsetHeight}px`);
+  measure();
+  if (typeof ResizeObserver !== "function") return;
+  const observer = new ResizeObserver(measure);
+  observer.observe(head);
+  return () => observer.disconnect();
+};
+
 export function DependenciesDialog({
   workspace,
   identifier,
@@ -169,20 +190,33 @@ export function DependenciesDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="staple-dep-dialog" data-testid="dependencies-dialog">
-        <DialogHeader>
-          <DialogTitle>Dependencies</DialogTitle>
-          <DialogDescription>
-            What this task depends on and what depends on it.
-          </DialogDescription>
-        </DialogHeader>
+      {/* The close control is drawn here rather than by DialogContent: DialogContent pins it
+          to the card, and a long list scrolls the card, taking the only way out with it. */}
+      <DialogContent className="staple-dep-dialog" data-testid="dependencies-dialog" showCloseButton={false}>
+        {/* Sticky inside the card: what the dialog is about, and the way out, stay in view
+            however long the lists below get. */}
+        <div className="staple-dep-head" data-dep-head="" ref={publishHeadHeight}>
+          <DialogHeader>
+            <DialogTitle>Dependencies</DialogTitle>
+            <DialogDescription className="text-balance">
+              What this task depends on and what depends on it.
+            </DialogDescription>
+          </DialogHeader>
 
-        {/* The subject, so the dialog is never ambiguous about which task it is describing —
-            it can be opened from any row in a list of sixty. */}
-        <p className="staple-dep-subject">
-          <span className="staple-dep-subject-id">{identifier}</span>
-          <span className="staple-dep-subject-title">{title}</span>
-        </p>
+          {/* The subject, so the dialog is never ambiguous about which task it is describing —
+              it can be opened from any row in a list of sixty. */}
+          <p className="staple-dep-subject">
+            <span className="staple-dep-subject-id" title={identifier}>
+              {identifier}
+            </span>
+            <span className="staple-dep-subject-title">{title}</span>
+          </p>
+
+          <DialogClose data-slot="dialog-close" className={DIALOG_CLOSE_CLASS}>
+            <XIcon />
+            <span className="sr-only">Close</span>
+          </DialogClose>
+        </div>
 
         {detail.error ? (
           <p className="staple-dep-empty" role="alert">

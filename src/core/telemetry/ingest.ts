@@ -13,7 +13,9 @@
  *   3. The source parser reads only its rate-limit fields.
  *   4. Each reading goes through {@link BudgetStore.record}.
  *
- * Local only: stdin, local files and `hub.db`. No network call is made or triggered.
+ * Local only: stdin, local files and `hub.db`. No network call is made or triggered;
+ * live polling (`polling/`) makes its request first and hands the readings to
+ * {@link ingestPolledReadings}, which stores them through the same tail.
  */
 import { join } from "node:path";
 import { Hub } from "../hub.js";
@@ -30,6 +32,7 @@ import {
   resolveAccount,
   type AccountSource,
 } from "./bindings.js";
+import { livePollingOn, type KnownBinding } from "./config.js";
 import { assertAccountRef, assertProvider, type BudgetSourceKind } from "./formats.js";
 import { parseClaudeStatusline } from "./sources/claude-statusline.js";
 import { scanCodexRollout, type RolloutScan, type SessionMeta } from "./sources/codex-rollout.js";
@@ -197,6 +200,17 @@ export function ingestBudget(request: IngestRequest, deps: IngestDeps): IngestRe
     }
   }
 
+  return storeItems(kind, account, items, deps, now);
+}
+
+/** Offer each parsed item to the store, in order: the one tail every ingestion shares. */
+function storeItems(
+  kind: BudgetSourceKind,
+  account: ReturnType<typeof resolveAccount>,
+  items: readonly ParsedItem[],
+  deps: IngestDeps,
+  now: () => string,
+): IngestResult {
   const link = deps.attemptLinker ?? noAttempt;
   const hub = Hub.openAt(deps.home);
   try {
@@ -225,4 +239,32 @@ export function ingestBudget(request: IngestRequest, deps: IngestDeps): IngestRe
   } finally {
     hub.close();
   }
+}
+
+/**
+ * Store what a live poll read (`polling/run.ts`), through the same store tail every other
+ * source goes through. Not an {@link IngestSource}: nothing typed at the CLI or sent by an
+ * agent can claim to be a poll. The account is the binding's, the one the poll was made
+ * for, and capture and live polling must both still be on when the answer arrives (either
+ * may have been turned off while the request was in flight).
+ */
+export function ingestPolledReadings(request: { readonly binding: KnownBinding; readonly items: readonly ParsedItem[] }, deps: IngestDeps): IngestResult {
+  const now = deps.now ?? (() => new Date().toISOString());
+  const telemetry = readConfig(deps.home).config.telemetry;
+  if (!telemetry.budgetCapture || !livePollingOn(telemetry)) {
+    throw new StapleError("validation", "Budget capture or live polling was turned off while the provider was being asked, so nothing was stored.", {
+      reason: telemetry.budgetCapture ? "live_polling_disabled" : "capture_disabled",
+      source: "usage_poll",
+    });
+  }
+  const { binding } = request;
+  const stillBound = telemetry.bindings.some((candidate) => JSON.stringify(candidate) === JSON.stringify(binding));
+  if (!stillBound) {
+    throw new StapleError("validation", "The binding this poll was made for changed while the provider was being asked, so nothing was stored.", {
+      reason: "no_binding_configured",
+      source: "usage_poll",
+    });
+  }
+  const account = { provider: assertProvider(binding.provider, "provider"), accountRef: binding.accountRef, accountSource: "machine_binding" as const };
+  return storeItems("usage_poll", account, request.items, deps, now);
 }
