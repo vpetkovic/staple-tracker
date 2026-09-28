@@ -169,6 +169,17 @@ depth"*.) (Pinned by
 and a member reopening reopens it"* and *"lands where its members say when a
 gate on it is approved"*.)
 
+A workspace upgraded from a build that did not derive milestones gets them
+re-derived once, by the first mutating command the new build runs (never by a
+read). The `meta` key `milestone_status_rederived` records that the repair has
+run. On a synchronized workspace it waits until the device has pulled to the
+head. Every move is an ordinary derived `status_changed` and a journaled
+operation, so it syncs like any other derived move. The usual rules still hold:
+a status set by hand stays, a gate stays, and a milestone whose members have
+all landed closes. (Pinned by *"an upgraded workspace re-derives every
+milestone once, at its first mutation"* and *"an upgrade's repair leaves a
+gate on the milestone as it stands, pending or sent back"*.)
+
 ## Dates: calendar days, UTC, inclusive
 
 A milestone date is a **calendar day**, written and stored as `YYYY-MM-DD`,

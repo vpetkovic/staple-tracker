@@ -322,6 +322,143 @@ describe("status derived from members", () => {
     expect(store.getIssue(m).status).not.toBe("done");
   });
 
+  /** Put a leaf at a status the way the guards allow. */
+  function put(ref: string, status: string): void {
+    if (status === "backlog") return;
+    if (status === "cancelled") return void store.updateIssue(ref, { status }, "someone");
+    if (status === "blocked") {
+      return void store.updateIssue(ref, { status, unblockOwner: "vp", unblockAction: "decide" }, "someone");
+    }
+    start(ref);
+    if (status !== "in_progress") store.updateIssue(ref, { status }, "someone");
+  }
+
+  it("reads an epic member in review, with a cancelled task under it", () => {
+    const m = newMilestone();
+    const epic = store.createIssue({ title: "e", kind: "epic" });
+    const tasks = ["a", "b", "c"].map((title) => store.createIssue({ title, parent: epic.id }).identifier);
+    milestones.addMember(m, epic.identifier, {}, "vp");
+    put(tasks[0]!, "in_review");
+    put(tasks[1]!, "cancelled");
+    put(tasks[2]!, "in_review");
+    expect(store.getIssue(epic.identifier).status).toBe("in_review");
+    expect(store.getIssue(m).status).toBe("in_review");
+  });
+
+  it("reads its members exactly as an epic reads the same children", () => {
+    const cases: string[][] = [
+      ["in_progress", "in_review"],
+      ["in_review", "cancelled"],
+      ["blocked", "blocked"],
+      ["blocked", "backlog"],
+      ["done", "cancelled"],
+      ["cancelled", "cancelled"],
+      ["in_review", "done"],
+    ];
+    for (const statuses of cases) {
+      const m = newMilestone(statuses.join("+"));
+      const epic = store.createIssue({ title: `${statuses.join("+")} epic`, kind: "epic" });
+      for (const [index, status] of statuses.entries()) {
+        const member = store.createIssue({ title: `${statuses.join("+")} member ${index}` }).identifier;
+        milestones.addMember(m, member, {}, "vp");
+        put(member, status);
+        put(store.createIssue({ title: `${statuses.join("+")} child ${index}`, parent: epic.id }).identifier, status);
+      }
+      expect([statuses.join("+"), store.getIssue(m).status]).toEqual([statuses.join("+"), store.getIssue(epic.identifier).status]);
+    }
+  });
+
+  it("an upgraded workspace re-derives every milestone once, at its first mutation", () => {
+    // A milestone as a build before this one left it: its member went to review, and it
+    // still reads what it was given.
+    const m = newMilestone();
+    const epic = store.createIssue({ title: "e", kind: "epic" });
+    const task = store.createIssue({ title: "t", parent: epic.id }).identifier;
+    milestones.addMember(m, epic.identifier, {}, "vp");
+    put(task, "in_review");
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+
+    // A read writes nothing.
+    milestones.get(m);
+    store.getIssue(m);
+    expect(store.getIssue(m).status).toBe("backlog");
+
+    // The first mutation, on anything, repairs it with an ordinary derived move.
+    store.addComment(task, "unrelated", "someone");
+    expect(store.getIssue(m).status).toBe("in_review");
+    const flips = eventsOf(m).filter((e) => e.kind === "status_changed");
+    expect(flips.at(-1)?.payload).toMatchObject({ from: "backlog", to: "in_review", derived: "child_in_review", derivedFrom: epic.identifier });
+
+    // Once: set back by hand, it stays where the person put it.
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.addComment(task, "again", "someone");
+    expect(store.getIssue(m).status).toBe("backlog");
+    // And idempotent when run again: nothing is left to move.
+    store.updateIssue(m, { status: "in_review" }, "vp");
+    expect(store.rederiveEveryMilestone()).toBe(0);
+  });
+
+  it("an upgrade's repair closes a milestone whose members all landed", () => {
+    const m = newMilestone();
+    const t = store.createIssue({ title: "t" }).identifier;
+    milestones.addMember(m, t, {}, "vp");
+    land(t);
+    store.updateIssue(m, { status: "in_review" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    expect(store.rederiveEveryMilestone()).toBe(0); // set by hand: the reversibility law holds
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    expect(store.rederiveEveryMilestone()).toBe(1);
+    expect(store.getIssue(m).status).toBe("done");
+  });
+
+  it("an upgrade's repair leaves a gate on the milestone as it stands, pending or sent back", () => {
+    // A gate needs something to queue, so each carries a child as well as its member.
+    const pending = store.createIssue({ title: "pending cut", kind: MILESTONE_KIND });
+    store.createIssue({ title: "pending child", parent: pending.id });
+    const busy = store.createIssue({ title: "busy" }).identifier;
+    milestones.addMember(pending.identifier, busy, {}, "vp");
+    store.gateIssue(pending.id, { owner: "VP" }, "runner");
+    start(busy);
+
+    const sentBack = store.createIssue({ title: "sent-back cut", kind: MILESTONE_KIND });
+    const child = store.createIssue({ title: "sent-back child", parent: sentBack.id }).identifier;
+    const landed = store.createIssue({ title: "landed" }).identifier;
+    milestones.addMember(sentBack.identifier, landed, {}, "vp");
+    store.gateIssue(sentBack.id, { owner: "VP" }, "runner");
+    store.requestChanges(sentBack.id, { comment: "not yet" }, "VP");
+    land(landed);
+    land(child);
+    const before = [store.getIssue(pending.identifier), store.getIssue(sentBack.identifier)];
+    // Sent back, it did not close when its work landed: the review is the remaining work.
+    expect(before.map((row) => row.status)).toEqual(["awaiting_approval", "in_progress"]);
+
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    expect(store.rederiveEveryMilestone()).toBe(0);
+    expect(store.gate(pending.id)?.state).toBe("pending");
+    expect(store.getIssue(pending.identifier).status).toBe("awaiting_approval");
+    // Nor does the repair close it.
+    expect(store.gate(sentBack.id)?.state).toBe("changes_requested");
+    expect(store.getIssue(sentBack.identifier).status).toBe("in_progress");
+  });
+
+  it("an upgrade's repair waits until a synchronized workspace has pulled to the head", () => {
+    const m = newMilestone();
+    const t = store.createIssue({ title: "t" }).identifier;
+    milestones.addMember(m, t, {}, "vp");
+    start(t);
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    store.db
+      .prepare("INSERT INTO sync_state (id, epoch, cursor, head_reached_cursor) VALUES (1, 1, 'c2', 'c1') ON CONFLICT(id) DO UPDATE SET epoch = 1, cursor = 'c2', head_reached_cursor = 'c1'")
+      .run();
+    store.addComment(t, "behind", "someone");
+    expect(store.getIssue(m).status).toBe("backlog");
+    store.db.prepare("UPDATE sync_state SET head_reached_cursor = 'c2' WHERE id = 1").run();
+    store.addComment(t, "caught up", "someone");
+    expect(store.getIssue(m).status).toBe("in_progress");
+  });
+
   it("does not loop when a milestone is filed under its own member", () => {
     const epic = store.createIssue({ title: "e", kind: "epic" });
     const task = store.createIssue({ title: "t", parent: epic.id }).identifier;
