@@ -18,7 +18,7 @@
  * driver is attached. A driver that exits removes it; one that crashes leaves it, and the
  * pid check ({@link DriverAttachment.alive}) says it is gone.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -65,11 +65,72 @@ export function ensureRunDirectory(dbFile: string, runId: string): string {
   return dir;
 }
 
-/** Written whole and renamed into place, so a reader never sees half a heartbeat. */
+/**
+ * Written whole and renamed into place, so a reader never sees half a heartbeat. The
+ * temporary name carries the pid: two processes writing at once never share one.
+ */
 export function writeDriver(dbFile: string, runId: string, record: DriverRecord): void {
   const path = join(ensureRunDirectory(dbFile, runId), "driver.json");
-  writeFileSync(`${path}.tmp`, `${JSON.stringify(record, null, 2)}\n`);
-  renameSync(`${path}.tmp`, path);
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`);
+  renameSync(tmp, path);
+}
+
+/**
+ * One driver per run: `driver.lock`, created with O_EXCL and holding the owner's pid and
+ * host. Two `run drive` processes starting at once cannot both create it, so they cannot
+ * both read "no live driver" and go on. A lock whose owner is gone (its pid is not
+ * running on this host) is stale: it is removed and taken. Returns the release function,
+ * or the owner that holds it.
+ */
+export function acquireDriverLock(dbFile: string, runId: string): { release: () => void } | { heldBy: { pid: number; host: string } } {
+  const path = join(ensureRunDirectory(dbFile, runId), "driver.lock");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(path, "wx");
+      try {
+        writeSync(fd, JSON.stringify({ pid: process.pid, host: hostname() }));
+      } finally {
+        closeSync(fd);
+      }
+      return {
+        release: () => {
+          if (lockOwner(path)?.pid === process.pid) rmSync(path, { force: true });
+        },
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const owner = lockOwner(path);
+      if (owner === null) {
+        // A lock being written this instant has no owner yet: held. One left unwritten for
+        // seconds belongs to a process that died between creating and writing it: stale.
+        if (Date.now() - statSync(path).mtimeMs < 10_000) return { heldBy: { pid: 0, host: "unknown" } };
+      } else if (owner.host !== hostname() || pidAlive(owner.pid)) {
+        return { heldBy: owner };
+      }
+      rmSync(path, { force: true });
+    }
+  }
+  return { heldBy: lockOwner(path) ?? { pid: 0, host: "unknown" } };
+}
+
+function lockOwner(path: string): { pid: number; host: string } | null {
+  try {
+    const owner = JSON.parse(readFileSync(path, "utf8")) as { pid: number; host: string };
+    return typeof owner.pid === "number" && typeof owner.host === "string" ? owner : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether any process of the group `pgid` is still running. */
+export function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 export function clearDriver(dbFile: string, runId: string): void {

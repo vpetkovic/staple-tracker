@@ -503,4 +503,16 @@ describe("a run over a milestone is a goal run", () => {
     expect(runs.continue({ actor: BOT, run: first.id })).toMatchObject({ action: "take", ref: a });
     expect(runs.continue({ actor: "other-bot", run: second.id })).toMatchObject({ action: "take", ref: b, goal: { gate: { byGoalRun: true, ownedByRun: false } } });
   });
+
+  it("a goal-check ticket is a new ticket against --max-tickets: at the budget the run stops before creating one", () => {
+    const { m, a, b } = goalMilestone();
+    const run = runs.start({ actor: BOT, scope: m, maxTickets: 2 });
+    expect(cont()).toMatchObject({ action: "take", ref: a });
+    store.updateIssue(a, { status: "done" }, BOT);
+    expect(cont()).toMatchObject({ action: "take", ref: b });
+    store.updateIssue(b, { status: "done" }, BOT);
+    expect(cont()).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", maxTickets: 2 } });
+    expect(runs.get(run.id).goal!.children).toEqual([]);
+    expect(store.categoryOf(status(m))).toBe("gated");
+  });
 });

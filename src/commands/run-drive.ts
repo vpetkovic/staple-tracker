@@ -51,7 +51,7 @@ prints the reason and exits 0. Non-zero only for a driver error.
   --finish F          where the brief tells a session to move its ticket:
                       in_review (default; a person closes it) or done
   --ticket-timeout D  end a session after D (90m, 2h); the ticket fails
-  --retry-after S     seconds to sleep on a wait (default: the answer's)
+  --retry-after S     seconds to sleep on a wait, above 0 (default: the answer's)
   --poll S            seconds between reads of the run while a session works (5)
   --instructions F    append this file to every brief (gates, conventions)
   --cwd DIR           where sessions run (default: the workspace's directory)
@@ -138,6 +138,8 @@ export function runDriveCommand(rest: string[]): void {
   }
   const timeout = duration(values["ticket-timeout"], "--ticket-timeout");
   const retryAfter = seconds(values["retry-after"], "--retry-after");
+  // Zero would ask again in a tight loop, starving everything else the process does.
+  if (retryAfter !== null && retryAfter <= 0) throw new StapleError("validation", `--retry-after takes a number of seconds above 0; got "${values["retry-after"]}".`);
   const poll = seconds(values.poll, "--poll") ?? 5;
   if (poll <= 0) throw new StapleError("validation", `--poll takes a number of seconds above 0; got "${values.poll}".`);
   const instructions = values.instructions === undefined ? null : readFileSync(values.instructions, "utf8");
@@ -176,10 +178,17 @@ export function runDriveCommand(rest: string[]): void {
   }
   assertNoLiveDriver(dbFile, run.id);
 
+  /**
+   * The handler stays installed for the driver's whole life: the first SIGINT or SIGTERM
+   * ends the session (TERM, then KILL after the grace) and the driver; a second one KILLs
+   * the session at once. Were it removed after the first, the second would take Node's
+   * default action and kill the driver mid-grace, leaving the session running.
+   */
   const controller = new AbortController();
-  const interrupt = (): void => controller.abort();
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", interrupt);
+  const force = new AbortController();
+  const interrupt = (): void => (controller.signal.aborted ? force.abort() : controller.abort());
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
 
   settle(
     (async () => {
@@ -202,6 +211,7 @@ export function runDriveCommand(rest: string[]): void {
           killGraceMs: 5000,
           env: process.env,
           signal: controller.signal,
+          force: force.signal,
           report: (event) => (json ? console.log(JSON.stringify(event)) : printEvent(event)),
         });
         if (result.interrupted) {
@@ -267,6 +277,10 @@ function printEvent(event: DriveEvent): void {
   switch (event.event) {
     case "attached":
       return console.log(`driving run ${event.runId} with ${event.agent} (pid ${event.pid} on ${event.host})\nlogs     ${event.logDir}`);
+    case "reaped":
+      return console.log(`reaped   the session a dead driver (pid ${event.driverPid}) left running: process group ${event.pid}${event.ticket ? ` on ${event.ticket}` : ""}`);
+    case "main_line_moved":
+      return console.log(`STOPPING ${event.ref}'s session moved the main line (${event.moves.join(", ")}): recorded failed, run stopped for a person to look`);
     case "take":
       if (event.recorded) console.log(`recorded ${event.recorded.ref} ${event.recorded.outcome}${event.recorded.reason ? `: ${event.recorded.reason}` : ""}`);
       return console.log(`take     ${event.ref} ${event.title}${event.resumed ? " (resumed)" : ""}`);

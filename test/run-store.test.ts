@@ -286,6 +286,52 @@ describe("run continue", () => {
     expect(cont()).toMatchObject({ action: "stop", reason: "no_run" });
   });
 
+  it("an ended run holds nothing: a continue with no outcome after a stop mid-ticket fails the held ticket and releases it", () => {
+    const { epic, a } = epicWithTwo();
+    const run = runs.start({ actor: BOT, scope: epic });
+    expect(cont()).toMatchObject({ action: "take", ref: a });
+    runs.stop(run.id, "vp", "enough");
+    const answer = cont({ run: run.id });
+    expect(answer).toMatchObject({
+      action: "stop",
+      reason: "stopped_by_human",
+      recorded: { ref: a, outcome: "failed", reason: expect.stringMatching(/^stopped_by_human: /), source: "status" },
+    });
+    expect(holder(a)).toBeNull();
+    expect(runs.get(run.id).tickets).toEqual([expect.objectContaining({ identifier: a, outcome: "failed" })]);
+    // A later run takes it with the old row settled: nothing left open to record twice.
+    const next = runs.start({ actor: BOT, scope: epic });
+    expect(cont({ run: next.id })).toMatchObject({ action: "take", ref: a });
+    expect(runs.get(run.id).counts.open).toBe(0);
+  });
+
+  it("a budget stop that would hand back a held ticket fails and releases it in the same call", () => {
+    const { epic, a } = epicWithTwo();
+    setClock(() => Date.parse("2026-01-01T00:00:00.000Z"));
+    const run = runs.start({ actor: BOT, scope: epic, until: "1h" });
+    expect(cont()).toMatchObject({ action: "take", ref: a });
+    setClock(() => Date.parse("2026-01-01T02:00:00.000Z"));
+    expect(cont()).toMatchObject({ action: "stop", reason: "budget", recorded: { ref: a, outcome: "failed", reason: expect.stringMatching(/^budget: /) } });
+    expect(holder(a)).toBeNull();
+    expect(runs.get(run.id).counts.open).toBe(0);
+  });
+
+  it("--max-tickets 1 still retries its one ticket once after a failure; the second failure is the streak", () => {
+    const { epic, a } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic, maxTickets: 1 });
+    expect(cont()).toMatchObject({ action: "take", ref: a });
+    expect(cont({ outcome: "failed", reason: "first" })).toMatchObject({ action: "take", ref: a, resumed: false });
+    expect(cont({ outcome: "failed", reason: "second" })).toMatchObject({ action: "stop", reason: "failure_streak" });
+  });
+
+  it("--max-tickets 1 stops on the budget once its one ticket is done", () => {
+    const { epic, a } = epicWithTwo();
+    runs.start({ actor: BOT, scope: epic, maxTickets: 1 });
+    expect(cont()).toMatchObject({ action: "take", ref: a });
+    store.updateIssue(a, { status: "in_review" }, BOT);
+    expect(cont()).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", taken: 1 } });
+  });
+
   it("takes the scoped queue's next row, claimed for the actor in the same call, and records it as taken", () => {
     const { epic, a } = epicWithTwo();
     issue("Outside the epic");
@@ -503,10 +549,9 @@ describe("run continue", () => {
     const run = runs.start({ actor: BOT, scope: epic });
     cont();
     runs.stop(run.id, "vp", "enough");
-    // Still held and nothing stated: nothing to record, but the driver hears the real stop.
-    expect(cont()).toMatchObject({ action: "stop", reason: "stopped_by_human", recorded: null, run: { id: run.id } });
+    // Stated, the outcome wins.
     const answer = cont({ outcome: "failed", reason: "stopped mid-ticket" });
-    expect(answer).toMatchObject({ action: "stop", reason: "stopped_by_human", recorded: { ref: a, outcome: "failed", reason: "stopped mid-ticket", source: "stated" } });
+    expect(answer).toMatchObject({ action: "stop", reason: "stopped_by_human", recorded: { ref: a, outcome: "failed", reason: "stopped mid-ticket", source: "stated" }, run: { id: run.id } });
     expect(holder(a)).toBeNull();
     // Settled, there is nothing left to continue.
     expect(cont()).toMatchObject({ action: "stop", reason: "no_run" });

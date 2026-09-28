@@ -195,8 +195,11 @@ describe("run continue, driven through the CLI as a driver loop drives it", () =
   it("budget tickets, time and ceiling each stop a run", async () => {
     const { epic: scope } = await epicWith("Budget", 3);
     await cliAs("drv-tickets", "run", "start", "--scope", scope, "--max-tickets", "1");
-    await next("drv-tickets");
-    expect(await next("drv-tickets", "--outcome", "failed", "--reason", "x")).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", maxTickets: 1 } });
+    const first = await next("drv-tickets");
+    // A failed ticket is retried once without spending the budget; a finished one spends it.
+    expect(await next("drv-tickets", "--outcome", "failed", "--reason", "x")).toMatchObject({ action: "take", ref: first.ref });
+    expect((await cliAs("drv-tickets", "status", String(first.ref), "in_review")).status).toBe(0);
+    expect(await next("drv-tickets")).toMatchObject({ action: "stop", reason: "budget", detail: { budget: "tickets", maxTickets: 1 } });
 
     await cliAs("drv-time", "run", "start", "--scope", scope, "--until", "1s");
     await new Promise((resolve) => setTimeout(resolve, 1_500));

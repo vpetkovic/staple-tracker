@@ -32,6 +32,15 @@
  *   exit 0, no review        failed, `no_review`: the brief's review comment is missing
  *   exit 0, handed on        nothing stated: the tracker reads the ended attempt or the
  *                            status (review or done is done) and records it
+ *   master or main moved     failed, `touched_main_line: …`, and the run is stopped
+ *
+ * ## Nothing outlives its session
+ *
+ * When the leader exits, whatever it left running in its group (a background `sleep &`,
+ * a dev server) is signalled too. A driver killed outright (`kill -9`) cannot do that, so
+ * the next driver to attach to the run ends the group its `driver.json` names before it
+ * resumes the ticket: one session per ticket, never two. A second Ctrl-C (or SIGTERM)
+ * skips the grace and KILLs the session at once.
  *
  * ## No git
  *
@@ -43,7 +52,8 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { clearDriver, ensureRunDirectory, readDriver, writeDriver, type DriverRecord } from "./run-attachment.js";
+import { mainLineMoves, mainLineSnapshot } from "./main-line-guard.js";
+import { acquireDriverLock, clearDriver, ensureRunDirectory, groupAlive, readDriver, writeDriver, type DriverRecord } from "./run-attachment.js";
 import { buildBrief, type DriveFinish } from "./run-brief.js";
 import type { ContinueAnswer, RunStore, RunTicketOutcome } from "./run-store.js";
 import type { WorkspaceStore } from "./store.js";
@@ -167,6 +177,8 @@ export interface SessionResult {
 /** What the driver reports as it goes: one JSON line each under `--json`. */
 export type DriveEvent =
   | { event: "attached"; runId: string; pid: number; host: string; agent: string; logDir: string }
+  | { event: "reaped"; pid: number; ticket: string | null; driverPid: number }
+  | { event: "main_line_moved"; ref: string; moves: string[] }
   | { event: "take"; ref: string; title: string; resumed: boolean; why: string; recorded: ContinueAnswer["recorded"] }
   | { event: "session_started"; ref: string; pid: number; command: string; brief: string; stdout: string; stderr: string }
   | { event: "session_ended"; ref: string; ended: SessionResult["ended"]; exitCode: number | null; signal: string | null; seconds: number; outcome: RunTicketOutcome | null; reason: string | null }
@@ -198,6 +210,8 @@ export interface DriveOptions {
   env: NodeJS.ProcessEnv;
   /** Aborted when the driver itself is interrupted (SIGINT, SIGTERM). */
   signal?: AbortSignal;
+  /** Aborted on a second interruption: KILL the session now, no grace. */
+  force?: AbortSignal;
   report: (event: DriveEvent) => void;
 }
 
@@ -228,7 +242,37 @@ export function assertNoLiveDriver(dbFile: string, runId: string): void {
  */
 export async function drive(options: DriveOptions): Promise<DriveResult> {
   const { runs, store, dbFile, runId } = options;
-  assertNoLiveDriver(dbFile, runId);
+  const lock = acquireDriverLock(dbFile, runId);
+  if ("heldBy" in lock) {
+    throw new StapleError("conflict", `Run ${runId} already has a driver: pid ${lock.heldBy.pid} on ${lock.heldBy.host}. Stop it first (staple run stop ${runId}).`, {
+      runId,
+      driver: lock.heldBy,
+    });
+  }
+  try {
+    assertNoLiveDriver(dbFile, runId);
+    await reapStaleSession(options);
+    return await driveLocked(options);
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * A driver that died without cleaning up (`kill -9`, a crash) leaves `driver.json` behind,
+ * naming the session it was running. That session's process group may still be working
+ * the ticket; resuming now would start a second session on it. End the group first.
+ */
+async function reapStaleSession(options: DriveOptions): Promise<void> {
+  const stale = readDriver(options.dbFile, options.runId);
+  if (stale === null || stale.sessionPid === null || stale.host !== hostname() || stale.alive === true) return;
+  if (!groupAlive(stale.sessionPid)) return;
+  options.report({ event: "reaped", pid: stale.sessionPid, ticket: stale.ticket, driverPid: stale.pid });
+  await endGroup(stale.sessionPid, options.killGraceMs, options.force);
+}
+
+async function driveLocked(options: DriveOptions): Promise<DriveResult> {
+  const { runs, store, dbFile, runId } = options;
   const logDir = ensureRunDirectory(dbFile, runId);
   const record: DriverRecord = {
     pid: process.pid,
@@ -269,7 +313,9 @@ export async function drive(options: DriveOptions): Promise<DriveResult> {
       options.report({ event: "take", ref: answer.ref, title: answer.title, resumed: answer.resumed, why: answer.why, recorded: answer.recorded });
       sessions += 1;
       const seq = answer.run.tickets.at(-1)?.seq ?? sessions;
-      const stem = join(logDir, `${String(seq).padStart(3, "0")}-${answer.ref}${answer.resumed ? `-resumed-${sessions}` : ""}`);
+      // The instant makes each session's files its own, across drivers resuming the same ticket.
+      const stamp = nowIso().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+      const stem = join(logDir, `${String(seq).padStart(3, "0")}-${answer.ref}-${stamp}`);
       const values: PlaceholderValues = {
         ref: answer.ref,
         title: answer.title,
@@ -284,6 +330,7 @@ export async function drive(options: DriveOptions): Promise<DriveResult> {
           instructions: options.instructions,
           goal: answer.goal,
           goalCheck: answer.run.goal?.children.some((child) => child.identifier === answer.ref && child.purpose === "goal_check") ?? false,
+          resumed: answer.resumed,
         }),
         brief_file: `${stem}.brief.md`,
         workspace: options.cwd,
@@ -299,8 +346,17 @@ export async function drive(options: DriveOptions): Promise<DriveResult> {
       for (const name of command.unsetEnv) delete env[name];
 
       const sessionStartedAt = nowIso();
+      const mainLineBefore = mainLineSnapshot(options.cwd);
       const result = await runSession(options, command, env, { stdout: `${stem}.stdout.log`, stderr: `${stem}.stderr.log`, ref: answer.ref, brief: values.brief_file }, beat);
-      stated = outcomeOf(store, answer.run.actor, answer.ref, result, options.ticketTimeoutMs, sessionStartedAt);
+      const moves = mainLineMoves(mainLineBefore, mainLineSnapshot(options.cwd));
+      if (moves.length > 0) {
+        const why = `touched_main_line: the session on ${answer.ref} moved ${moves.join(", ")}`;
+        stated = { outcome: "failed", reason: why };
+        options.report({ event: "main_line_moved", ref: answer.ref, moves });
+        runs.stop(runId, "staple run drive", `${why}. Nothing more runs until a person looks.`);
+      } else {
+        stated = outcomeOf(store, answer.run.actor, answer.ref, result, options.ticketTimeoutMs, sessionStartedAt);
+      }
       options.report({
         event: "session_ended",
         ref: answer.ref,
@@ -348,10 +404,12 @@ function outcomeOf(
    * handed its ticket on without recording its review (`review: ...`) did not finish the
    * job it was given, whatever state it left the ticket in. Green gates are not evidence.
    */
-  const reviewed = store
-    .listComments(ref, 1000)
-    // Anyone's: the brief lets the session hand the review to a separate reviewer.
-    .some((comment) => comment.createdAt >= sessionStartedAt && /^\s*review:/i.test(comment.body));
+  const bodies = store.db
+    // Anyone's: the brief lets the session hand the review to a separate reviewer. Only this
+    // session's, read in SQL, however many comments came before it.
+    .prepare("SELECT body FROM comments WHERE issue_id = ? AND deleted_at IS NULL AND created_at >= ?")
+    .all(issue.id, sessionStartedAt) as Array<{ body: string }>;
+  const reviewed = bodies.some((comment) => /^\s*review:/i.test(comment.body));
   if (!reviewed) {
     return { outcome: "failed", reason: `no_review: the session handed ${ref} on without a "review: ..." comment` };
   }
@@ -361,11 +419,12 @@ function outcomeOf(
 /** Sleep up to `ms`, reading the run each poll: an ended run cuts the wait short (the next continue says why). */
 async function waitWhileLive(options: DriveOptions, ms: number, beat: () => void): Promise<void> {
   const until = Date.now() + ms;
-  while (Date.now() < until) {
+  // At least one real sleep per wait, whatever the numbers say: a wait never spins.
+  do {
     if (options.signal?.aborted || !isLive(options.runs, options.runId)) return;
-    await sleep(Math.min(options.pollMs, until - Date.now()), options.signal);
+    await sleep(Math.max(10, Math.min(options.pollMs, until - Date.now())), options.signal);
     beat();
-  }
+  } while (Date.now() < until);
 }
 
 function isLive(runs: RunStore, runId: string): boolean {
@@ -447,26 +506,51 @@ async function runSession(
         }
       }
       if (ended !== "exited") {
-        await killGroup(pid, exited, options.killGraceMs);
+        await killGroup(pid, exited, options.killGraceMs, options.force);
         break;
       }
     }
   }
   const result = await exited;
+  // The leader is gone; anything it left running in its group goes with it.
+  await endGroup(pid, options.killGraceMs, options.force);
   return { ended, exitCode: result.code, signal: result.signal, seconds: Math.round((Date.now() - started) / 1000), stopReason };
 }
 
-/** TERM the session's process group, then KILL it if it outlives the grace. */
-async function killGroup(pid: number, exited: Promise<unknown>, graceMs: number): Promise<void> {
-  const signalGroup = (signal: NodeJS.Signals): void => {
-    try {
-      process.kill(-pid, signal);
-    } catch {
-      /* the group is already gone */
-    }
-  };
-  signalGroup("SIGTERM");
-  await Promise.race([exited.then(() => undefined, () => undefined), sleep(graceMs, undefined, true)]);
+function signalGroup(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, signal);
+  } catch {
+    /* the group is already gone */
+  }
+}
+
+/** A promise that settles when `signal` aborts (never, without one). */
+function aborted(signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal === undefined) return;
+    if (signal.aborted) return resolve();
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+/** TERM the session's process group, then KILL it once the leader exits, the grace ends, or a second interruption forces it. */
+async function killGroup(pid: number, exited: Promise<unknown>, graceMs: number, force?: AbortSignal): Promise<void> {
+  signalGroup(pid, "SIGTERM");
+  await Promise.race([exited.then(() => undefined, () => undefined), sleep(graceMs, undefined, true), aborted(force)]);
   // Whether or not the leader went on TERM: anything it left behind in its group goes too.
-  signalGroup("SIGKILL");
+  signalGroup(pid, "SIGKILL");
+}
+
+/**
+ * End a process group whose leader may already be gone: TERM, wait for it to empty for
+ * up to the grace (or until forced), then KILL what is left. Nothing to do when it is empty.
+ */
+async function endGroup(pgid: number, graceMs: number, force?: AbortSignal): Promise<void> {
+  if (!groupAlive(pgid)) return;
+  signalGroup(pgid, "SIGTERM");
+  const deadline = Date.now() + graceMs;
+  // Referenced timers: once the leader has exited, nothing else keeps this process alive.
+  while (groupAlive(pgid) && Date.now() < deadline && !force?.aborted) await sleep(50, force);
+  signalGroup(pgid, "SIGKILL");
 }

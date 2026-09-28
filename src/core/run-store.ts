@@ -347,10 +347,17 @@ export function evaluateStopRules(run: RunForRules, facts: RunFacts): StopDecisi
   }
 
   // Distinct tickets: retrying a ticket the run already took (after a failure) is not a
-  // second ticket against the budget.
+  // second ticket against the budget, so the budget stops only a take of a NEW ticket. The
+  // next take is what `continue` would pick: a held row first, else the first workable one.
   const taken = new Set(run.tickets.map((ticket) => ticket.issueId)).size;
+  const next = facts.workable.find((entry) => entry.held) ?? facts.workable.find((entry) => !entry.held);
+  // (One the run took and recorded: an OPEN row is the ticket being worked, not a retry.)
+  const retry =
+    next !== undefined &&
+    run.tickets.some((ticket) => ticket.issueId === next.issueId) &&
+    !run.tickets.some((ticket) => ticket.issueId === next.issueId && ticket.outcome === null);
   const { maxTickets, until, ceilingPercent } = run.budget;
-  if (maxTickets !== null && taken >= maxTickets) {
+  if (maxTickets !== null && taken >= maxTickets && !retry) {
     return stop("budget", { budget: "tickets", maxTickets, taken }, `The run took ${taken} of its ${maxTickets} ticket(s).`);
   }
   if (until !== null && Date.parse(facts.now) >= Date.parse(until)) {
@@ -1124,6 +1131,11 @@ export class RunStore {
           );
         }
         run = this.finish(run.id, decision);
+        // An ended run holds nothing: the ticket it would have handed back fails for the stop's reason.
+        if (resume !== null) {
+          ({ recorded } = this.settleCurrent(this.requireRow(row.id), undefined, null));
+          run = this.get(row.id);
+        }
         return { action: "stop", reason: decision.reason, detail: decision.detail, message: decision.message, recorded, run, goal: this.goalReport(run) };
       }
       if (decision.wait) {
@@ -1234,7 +1246,17 @@ export class RunStore {
     if (stillHeld && isLive(row.state)) {
       return { recorded: null, resume: { issueId: issue!.id, identifier: issue!.identifier, held: true } };
     }
-    if (stillHeld) return { recorded: null, resume: null };
+    /**
+     * The run ended while its actor still holds the ticket, and nobody said how it went. No
+     * run will ever come back to it, so leaving it held would park it for good (and a later
+     * run could take it while this row stays open). It failed for the reason the run ended,
+     * and goes back to the queue: what the driver states when a stop ends its session.
+     */
+    if (stillHeld) {
+      const why = `${row.stop_reason ?? row.state}: the run ended while ${ref} was still held`;
+      this.store.releaseIssue(issue!.id, row.actor, { attempt: { outcome: "failed", reason: why } });
+      return record("failed", why, "status");
+    }
 
     const attempt = this.db
       .prepare(
