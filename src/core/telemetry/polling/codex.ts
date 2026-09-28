@@ -126,7 +126,8 @@ function windowItem(
     confidence: "medium",
     source: { kind: "usage_poll", harnessVersion: null, field: `wham/usage.${limitId === "codex" ? "rate_limit" : limitId}.${position}_window` },
     observedAt,
-    observedAtSource: "provider",
+    // The answer carries no timestamp of its own: observedAt is this machine's clock when it arrived.
+    observedAtSource: "capture",
     sessionRef: null,
     missing,
   };

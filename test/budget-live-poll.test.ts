@@ -188,7 +188,8 @@ describe("the Claude poller", () => {
       confidence: "medium",
       source: { kind: "usage_poll", harnessVersion: null, field: "oauth/usage.five_hour" },
       observedAt: T0,
-      observedAtSource: "provider",
+      // No timestamp in the answer: the local clock, said as such.
+      observedAtSource: "capture",
       sessionRef: null,
       missing: { planTier: "not_reported_by_source", sessionRef: "not_reported_by_source" },
     });
@@ -297,9 +298,9 @@ describe("the Codex poller", () => {
       T0,
     )!;
     const readings = parsed.items.flatMap((item) => (item.kind === "reading" ? [item.reading] : []));
-    expect(readings.map((r) => [r.limitKey, r.usedPercent, r.resetsAt, r.windowSeconds, r.windowSecondsSource, r.planTier, r.source.field])).toEqual([
-      ["codex.primary", 12, "2026-01-10T12:00:00.000Z", 18_000, "observed", "plus", "wham/usage.rate_limit.primary_window"],
-      ["codex.secondary", 40, "2026-01-15T08:00:00.000Z", 604_800, "observed", "plus", "wham/usage.rate_limit.secondary_window"],
+    expect(readings.map((r) => [r.limitKey, r.usedPercent, r.resetsAt, r.windowSeconds, r.windowSecondsSource, r.planTier, r.source.field, r.observedAtSource])).toEqual([
+      ["codex.primary", 12, "2026-01-10T12:00:00.000Z", 18_000, "observed", "plus", "wham/usage.rate_limit.primary_window", "capture"],
+      ["codex.secondary", 40, "2026-01-15T08:00:00.000Z", 604_800, "observed", "plus", "wham/usage.rate_limit.secondary_window", "capture"],
     ]);
     // The account's email and ids are in the answer and in no reading.
     expect(JSON.stringify(parsed)).not.toContain("SECRET");
@@ -494,7 +495,7 @@ describe("a poll run", () => {
           confidence: "medium",
           source: { kind: "usage_poll", harnessVersion: null, field: "acme.daily" },
           observedAt: ctx.now(),
-          observedAtSource: "provider",
+          observedAtSource: "capture",
           sessionRef: null,
           missing: {},
         };

@@ -818,7 +818,7 @@ Every sample says where its number came from:
 |---|---|---|
 | `method` | `observed` | The provider reported the value and staple read it verbatim. |
 | | `estimated` | A tool computed it from local evidence (for example, tokens against an assumed limit). Stored for comparison, never used as a measurement. |
-| `source.kind` | `claude_code_statusline`, `codex_rollout`, `usage_poll`, `harness_forwarded_headers`, `operator_manual`, `fixture` | The ingestion path. `usage_poll` is [live polling](#live-polling), the provider's own figure asked for at `observedAt`. `fixture` rows are refused outside disposable test databases. |
+| `source.kind` | `claude_code_statusline`, `codex_rollout`, `usage_poll`, `harness_forwarded_headers`, `operator_manual`, `fixture` | The ingestion path. `usage_poll` is [live polling](#live-polling), the provider's own figure, asked for just before `observedAt`. `fixture` rows are refused outside disposable test databases. |
 | `source.harnessVersion` | string or `null` | The harness build that produced the input, because field shapes change between builds. |
 | `source.field` | string | The path of the value inside its input. |
 | `confidence` | `high`, `medium`, `low` | Assigned by rule, never by judgement: `high` = observed through a surface its harness documents; `medium` = observed through an undocumented surface, or typed by an operator from a provider screen; `low` = estimated, or `resetsAt` derived from a relative value. |
@@ -1184,7 +1184,9 @@ usage instead, the same way Claude Code's `/usage` and Codex's `/status` do.
 - **Readings like every other.** Each window becomes a reading under the limit
   key the passive source uses (`five_hour`, `seven_day`; `codex.primary`,
   `codex.secondary`), with the documented or observed window length and
-  `source.kind: "usage_poll"`, `observedAtSource: "provider"`, confidence
+  `source.kind: "usage_poll"`, `observedAtSource: "capture"` (the answer
+  carries no timestamp of its own, so `observedAt` is this machine's clock when
+  it arrived), confidence
   `medium` (undocumented endpoints), stored through the same store method as
   every source, so Usage, forecasts and pressure read them unchanged. A window
   with nothing running (Claude: no `resets_at`; Codex: not started) stores

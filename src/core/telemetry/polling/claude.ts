@@ -145,7 +145,8 @@ export function parseClaudeUsage(body: unknown, observedAt: string): { items: Pa
       confidence: "medium",
       source: { kind: "usage_poll", harnessVersion: null, field: `oauth/usage.${limitKey}` },
       observedAt,
-      observedAtSource: "provider",
+      // The answer carries no timestamp of its own: observedAt is this machine's clock when it arrived.
+      observedAtSource: "capture",
       sessionRef: null,
       missing,
     };
