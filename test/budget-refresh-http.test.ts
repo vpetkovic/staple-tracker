@@ -26,6 +26,7 @@ import { CODEX_USAGE_URL } from "../src/core/telemetry/polling/codex.js";
 import { pollStatePath } from "../src/core/telemetry/polling/run.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { CLI_ENTRY, REPO_ROOT, TSX_CLI, bareEnv, removeDir, tempDir } from "./fixtures/characterize-support.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 const FOREIGN = "http://100.90.235.4:4440";
 const TOKEN_MARKER = "SECRET-codex-token";
@@ -66,7 +67,9 @@ const realFetch = globalThis.fetch;
 async function call(path: string, init: { body?: unknown; origin?: string; method?: string } = {}): Promise<{ status: number; body: Record<string, any> }> {
   const res = await realFetch(`${origin}${path}`, {
     method: init.method ?? (init.body === undefined ? "GET" : "POST"),
-    headers: { "x-staple-token": ui.token, "content-type": "application/json", ...(init.origin ? { origin: init.origin } : {}) },
+    // A foreign page never carries the token header (fixtures/foreign-page.ts); the token rides
+    // as Bearer, which opens reads and this route but no other write.
+    headers: asForeignPage({ "x-staple-token": ui.token, "content-type": "application/json", ...(init.origin ? { origin: init.origin } : {}) }, origin),
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, any> };
