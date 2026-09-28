@@ -45,6 +45,8 @@ export interface PollDeps {
   readonly pollers?: readonly UsagePoller[];
   readonly attemptLinker?: AttemptLinker;
   readonly timeoutMs?: number;
+  /** Tests only: runs just before the lock is taken (where another run could finish). */
+  readonly beforeLock?: () => void;
 }
 
 export interface PollFailureView {
@@ -165,11 +167,15 @@ export async function runUsagePollers(options: { readonly manual?: boolean }, de
   const due = targets(telemetry.bindings, pollers);
   if (due.length === 0) return { at, enabled: true, skippedReason: null, outcomes: [] };
 
-  const state = readState(deps.home);
+  deps.beforeLock?.();
   if (!acquireLockFile(pollLockPath(deps.home), Date.parse(at))) {
-    return { at, enabled: true, skippedReason: null, outcomes: due.map(({ poller, binding }) => outcomeOf(poller, binding, state.entries[keyOf(poller, binding)], "busy")) };
+    const held = readState(deps.home);
+    return { at, enabled: true, skippedReason: null, outcomes: due.map(({ poller, binding }) => outcomeOf(poller, binding, held.entries[keyOf(poller, binding)], "busy")) };
   }
   try {
+    // Read under the lock: a run that finished just before this one took it has written
+    // what it asked, and this run must not ask again or write its older view back.
+    const state = readState(deps.home);
     const context = {
       fetch: deps.fetch ?? globalThis.fetch,
       now,

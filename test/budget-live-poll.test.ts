@@ -8,7 +8,7 @@
  * The response bodies copy the shape of real answers from the two endpoints (2026-09-28),
  * with the account's identifiers and every value that is not a limit replaced.
  */
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
@@ -481,6 +481,39 @@ describe("a poll run", () => {
     expect(net.calls).toEqual([]);
     release();
     await first;
+  });
+
+  it("reads what was last asked under the lock: a run that finished just before this one took it is not asked again or overwritten", async () => {
+    setBudgetCapture(home, true);
+    setLivePolling(home, true);
+    // Another run finishes between this run's start and its taking the lock.
+    let finished = false;
+    const run = await runUsagePollers(
+      {},
+      deps(at(1), {
+        beforeLock: () => {
+          if (finished) return;
+          finished = true;
+          // Synchronously simulated: the other run's state write, as it lands on disk.
+          mkdirSync(join(home, "telemetry"), { recursive: true });
+          writeFileSync(
+            pollStatePath(home),
+            JSON.stringify({
+              version: 1,
+              entries: Object.fromEntries(
+                ["claude", "codex"].map((id) => {
+                  const dir = id === "claude" ? claudeDir : codexDir;
+                  const accountRef = id === "claude" ? "poll-claude" : "poll-codex";
+                  return [`${id}:${dir}:${accountRef}`, { poller: id, provider: id === "claude" ? "anthropic" : "openai", accountRef, dir, lastAttemptAt: T0, lastSuccessAt: T0, failure: null, retryAt: null, idle: [] }];
+                }),
+              ),
+            }),
+          );
+        },
+      }),
+    );
+    expect(run.outcomes.map((o) => o.outcome)).toEqual(["fresh", "fresh"]);
+    expect(net.calls).toEqual([]);
   });
 
   it("stores nothing when live polling is turned off while the provider is being asked", async () => {
