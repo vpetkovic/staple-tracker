@@ -94,7 +94,7 @@ function telemetryOf(home: string): TelemetryConfig {
 }
 
 /** Live polling as it stands for a read at `now`: on only with capture on too (`BudgetStore`'s hold-back). */
-function governanceOf(telemetry: TelemetryConfig, now: string): PollGovernance {
+export function governanceOf(telemetry: TelemetryConfig, now: string): PollGovernance {
   return { livePolling: telemetry.budgetCapture && livePollingOn(telemetry), now };
 }
 
@@ -228,7 +228,7 @@ export function limitReadingOf(
   }
   const samples = store.samplesInWindow(current.id);
   const latest = samples[samples.length - 1] ?? null;
-  const high = store.windowHighWater(current.id)!;
+  const high = store.windowHighWater(current.id, samples)!;
   let highWaterPercent = high.highWaterPercent;
   let remainingPercent = high.remainingPercent;
   if (current.resetsAt === null) {
@@ -754,10 +754,10 @@ export interface WindowReading {
  * forecast measures its pace over (`forecast-budget.ts`). A pure read of this machine's hub; a
  * window with no reading, or a machine with no hub, reads an empty list.
  */
-export function windowReadings(home: string, windowIds: readonly string[]): Map<string, WindowReading[]> {
+export function windowReadings(home: string, windowIds: readonly string[], asOf: string = nowIso()): Map<string, WindowReading[]> {
   return withHub(home, (hub) => {
     const out = new Map<string, WindowReading[]>();
-    const store = hub === null ? null : new BudgetStore(hub, governanceOf(telemetryOf(home), nowIso()));
+    const store = hub === null ? null : new BudgetStore(hub, governanceOf(telemetryOf(home), asOf));
     for (const windowId of windowIds) {
       const samples = store === null ? [] : store.samplesInWindow(windowId);
       out.set(

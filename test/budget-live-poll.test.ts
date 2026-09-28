@@ -12,9 +12,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hub } from "../src/core/hub.js";
-import { BudgetStore, POLL_FRESH_SECONDS, type BudgetReading, type PollGovernance } from "../src/core/telemetry/budget-store.js";
+import { BudgetStore, POLL_CLOCK_SKEW_SECONDS, POLL_FRESH_SECONDS, type BudgetReading, type BudgetSample, type PollGovernance } from "../src/core/telemetry/budget-store.js";
+import { forgetBudgetSamples } from "../src/core/telemetry/budget-forget.js";
 import { bindBudgetSource, setBudgetCapture, setLivePolling, budgetConfig } from "../src/core/telemetry/budget-config.js";
-import { listBudgetSamples, readBudget } from "../src/core/telemetry/read-budget.js";
+import { listBudgetSamples, readBudget, windowReadings } from "../src/core/telemetry/read-budget.js";
 import { CLAUDE_OAUTH_BETA, CLAUDE_USAGE_URL, claudeKeychainServices, claudePoller, parseClaudeUsage } from "../src/core/telemetry/polling/claude.js";
 import { CODEX_USAGE_URL, codexPoller, parseCodexUsage } from "../src/core/telemetry/polling/codex.js";
 import { USAGE_POLLERS, createSystemSecrets } from "../src/core/telemetry/polling/registry.js";
@@ -772,4 +773,101 @@ describe("an authoritative reading can correct the window", () => {
   it("keeps the high-water mark for a lower PASSIVE reading in a window with no poll: an older cache is not evidence of a reset", () => {
     expect(replay([[0, "claude_code_statusline", 35], [600, "claude_code_statusline", 2, "b1b2c3d4e5f60718"]]).at(-1)).toEqual({ windows: 1, resets: 0, high: 35 });
   });
+
+  it("a poll stamped in the future (the clock stepped back) governs nothing until its stamp is within a minute of now", () => {
+    replay([[3600, "usage_poll", 40], [3700, "usage_poll", 41], [200, "claude_code_statusline", 60], [400, "claude_code_statusline", 62, "b1b2c3d4e5f60718"]]);
+    // Read at t+500: the polls are stamped an hour ahead, so they neither contradict nor hold back.
+    expect(highAt(500, true)).toBe(62);
+    expect(highAt(3700 - POLL_CLOCK_SKEW_SECONDS - 1, true)).toBe(62);
+    // Within the tolerance of now they govern again, as ordinary polls.
+    expect(highAt(3700, true)).toBe(41);
+  });
+
+  it("the preview of a removal reads its limits the way the page does (live polling's hold-back included)", () => {
+    setBudgetCapture(home, true);
+    setLivePolling(home, true);
+    replay([[0, "usage_poll", 40], [60, "claude_code_statusline", 30, "c1b2c3d4e5f60718"], [120, "claude_code_statusline", 55]]);
+    const page = readBudget(home, { now: at(180) }).accounts[0]!.limits[0]!;
+    expect(page.remainingPercent).toBe(60);
+    const toForget = withStore((store) => store.listSamples({ accountRef: "poll-claude" }).find((sample) => sample.usedPercent === 30)!.id);
+    const preview = forgetBudgetSamples({ ids: [toForget], confirm: false, via: "cli" }, { home, now: () => at(180) });
+    expect(preview.limits.map((limit) => [limit.before.remainingPercent, limit.after.remainingPercent])).toEqual([[60, 60]]);
+  });
+
+  it("windowReadings reads as of the instant it is asked for", () => {
+    setBudgetCapture(home, true);
+    setLivePolling(home, true);
+    replay([[0, "usage_poll", 40], [120, "claude_code_statusline", 55]]);
+    const windowId = withStore((store) => store.listWindows({ accountRef: "poll-claude" }, at(120))[0]!.id);
+    expect(windowReadings(home, [windowId], at(180)).get(windowId)!.map((r) => r.usedPercent)).toEqual([40]);
+    expect(windowReadings(home, [windowId], at(POLL_FRESH_SECONDS + 1)).get(windowId)!.map((r) => r.usedPercent)).toEqual([40, 55]);
+  });
+
+  /**
+   * The counting rule is one pass over the window; this pins it to the plain statement of the
+   * rule (every later poll looked at, per reading) on random windows, verdict for verdict.
+   */
+  it("the one-pass counting gives exactly the verdicts of the rule stated plainly, on random windows", () => {
+    let seed = 11;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    let compared = 0;
+    for (let run = 0; run < 60; run += 1) {
+      removeDir(home);
+      home = tempDir("live-poll");
+      let t = 0;
+      let level = rnd() * 60;
+      const steps: Array<[number, Kind, number, string?]> = [];
+      for (let i = 0; i < 40; i += 1) {
+        // Sometimes the same instant: a poll and a status line stamped together are not "later".
+        t += rnd() < 0.15 ? 0 : 1 + Math.floor(rnd() * 400);
+        const poll = rnd() < 0.45;
+        if (rnd() < 0.05) level = rnd() * 10;
+        level += rnd() * 3;
+        const used = Math.max(0, Math.round((poll ? level : level + (rnd() < 0.3 ? rnd() * 40 - 10 : 0)) * 10) / 10);
+        steps.push([t, poll ? "usage_poll" : "claude_code_statusline", used, poll ? undefined : `${"abcdef0123456789".slice(0, 15)}${Math.floor(rnd() * 3)}`]);
+      }
+      replay(steps);
+      for (const offset of [0, 599, 600, 601, 5000]) {
+        for (const livePolling of [true, false]) {
+          const governance = { livePolling, now: at(t + offset) };
+          withStore((store) => {
+            for (const window of store.listWindows({ accountRef: "poll-claude" }, at(t))) {
+              const samples = store.listSamples({ windowId: window.id });
+              const expected = plainCounting(samples, governance);
+              const actual = store.counting(window.id);
+              for (const sample of samples) {
+                compared += 1;
+                expect(actual.get(sample.id), `${sample.id} at +${offset} live=${livePolling}`).toEqual(expected.get(sample.id));
+              }
+            }
+          }, governance);
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(5000);
+  });
 });
+
+/** The counting rule as docs/execution-telemetry.md states it, reading by reading: the reference the one-pass version is held to. */
+function plainCounting(samples: readonly BudgetSample[], governance: PollGovernance): Map<string, { counted: boolean; contradictedBy: string | null }> {
+  const polls = samples.filter((s) => s.source.kind === "usage_poll" && s.usedPercent !== null && Date.parse(s.observedAt) <= Date.parse(governance.now) + POLL_CLOCK_SKEW_SECONDS * 1000);
+  const out = new Map<string, { counted: boolean; contradictedBy: string | null }>();
+  for (const sample of samples) {
+    if (polls.length === 0 || sample.source.kind === "usage_poll" || sample.usedPercent === null) {
+      out.set(sample.id, { counted: true, contradictedBy: null });
+      continue;
+    }
+    const latest = polls[polls.length - 1]!;
+    const later = polls.filter((poll) => poll.observedAt > sample.observedAt);
+    if (later.length === 0) {
+      const fresh = governance.livePolling && Date.parse(governance.now) - Date.parse(latest.observedAt) <= POLL_FRESH_SECONDS * 1000;
+      out.set(sample.id, fresh && sample.usedPercent > latest.usedPercent! + 1 ? { counted: false, contradictedBy: null } : { counted: true, contradictedBy: null });
+    } else if (later.some((poll) => poll.usedPercent! >= sample.usedPercent! - 1)) {
+      out.set(sample.id, { counted: true, contradictedBy: null });
+    } else {
+      const needed = sample.observedAt < polls[0]!.observedAt ? 2 : 1;
+      out.set(sample.id, later.length >= needed ? { counted: false, contradictedBy: later[needed - 1]!.id } : { counted: true, contradictedBy: null });
+    }
+  }
+  return out;
+}
