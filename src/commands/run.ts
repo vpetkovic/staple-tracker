@@ -6,6 +6,7 @@
  *   run stop [<run-id>] [-m why]
  *   run pause|resume [<run-id>]
  *   run continue [--run <run-id>] [--outcome done|failed] [--reason R]
+ *   run drive ...   (src/commands/run-drive.ts, dispatched from cli.ts: the one async verb)
  *
  * Every verb is one `RunStore` method, the same one the MCP tools call, and `--json`
  * prints the object that method returns: a run for `start`, `stop`, `pause` and
@@ -18,7 +19,7 @@ import { type ContinueAnswer, type Run, type RunStatus, RUN_TICKET_OUTCOMES, typ
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 
-const USAGE = "Use: start, status, stop, pause, resume, continue (staple run --help)";
+const USAGE = "Use: start, status, stop, pause, resume, continue, drive (staple run --help)";
 
 const HELP = `staple run — autopilot runs: one agent working a scope ticket after ticket
 until a stop rule, run by the tracker, says otherwise.
@@ -49,6 +50,10 @@ until a stop rule, run by the tracker, says otherwise.
                 stop  {reason}: a stop reason below, or no_run (you have no live
                       run). Exit 0 for all three; the loop ends on stop
               --outcome failed on a ticket you still hold also releases it
+  run drive [--run <run-id> | --scope <queue|ref> ...] --agent <claude|codex|custom>
+              loop continue headless: a fresh agent session per ticket, a
+              brief each, logs under .staple/runs/<run-id>/; stoppable
+              mid-ticket with run stop (staple run drive --help)
 
 Stop reasons, first match wins, stable in --json: stopped_by_human, budget
 (detail.budget: tickets | time | ceiling), failure_streak (two failed tickets in
@@ -66,17 +71,17 @@ Runs are local to this machine and never synchronized; their events
 run_ticket_recorded) show in staple events --follow.
 
   --actor A        who acts; else $STAPLE_AGENT, else $USER
-  --json           the run, {runs: [{run, decision, facts}]} for status, or
+  --json           the run, {runs: [{run, decision, facts, driver}]} for status, or
                    {action, ...} for continue (docs/runs.md)`;
 
-function positiveInteger(raw: string | undefined, flag: string): number | undefined {
+export function positiveInteger(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;
   const value = Number(raw);
   if (raw.trim() === "" || !Number.isInteger(value)) throw new StapleError("validation", `${flag} takes a whole number; got "${raw}".`);
   return value;
 }
 
-function percentOption(raw: string | undefined, flag: string): number | undefined {
+export function percentOption(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;
   const value = Number(raw.trim().replace(/%$/, ""));
   if (raw.trim() === "" || !Number.isFinite(value)) throw new StapleError("validation", `${flag} takes a percentage; got "${raw}".`);
@@ -106,6 +111,11 @@ function printRun(run: Run): void {
 
 function printStatus(status: RunStatus): void {
   printRun(status.run);
+  const driver = status.driver;
+  if (driver !== null) {
+    const state = driver.alive === true ? "attached" : driver.alive === false ? "gone (its process is not running)" : "on another host";
+    console.log(`  driver ${driver.agent} pid ${driver.pid} on ${driver.host}: ${state}, heartbeat ${driver.heartbeatAt}${driver.ticket ? `, working ${driver.ticket}` : ""}`);
+  }
   if (status.facts === null) return;
   const decision = status.decision;
   console.log(decision.stop ? `  would stop: ${decision.reason} — ${decision.message}` : `  continues: ${status.facts.workable.length} workable in scope`);

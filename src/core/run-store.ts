@@ -59,6 +59,7 @@ import { stapleHome } from "../config/home.js";
 import { insertEvent } from "./event-log.js";
 import { newId } from "./ids.js";
 import { MILESTONE_KIND } from "./milestones.js";
+import { databaseFile, type DriverAttachment, readDriver } from "./run-attachment.js";
 import type { WorkspaceStore } from "./store.js";
 import { normalizeInstant, parseRelativeSeconds } from "./telemetry/formats.js";
 import { readBudget, type BudgetView } from "./telemetry/read-budget.js";
@@ -188,11 +189,16 @@ export type StopDecision =
   | { stop: false; wait?: RunWait }
   | { stop: true; reason: RunStopReason; state: "stopped" | "completed"; detail: Record<string, unknown>; message: string };
 
-/** What `run status` answers per run: the run, the stop decision now, and the facts behind it (null once ended). */
+/**
+ * What `run status` answers per run: the run, the stop decision now, the facts behind it
+ * (null once ended), and the `staple run drive` process attached to it, if any
+ * (`run-attachment.ts`; null when no driver is attached).
+ */
 export interface RunStatus {
   run: Run;
   decision: StopDecision;
   facts: RunFacts | null;
+  driver: DriverAttachment | null;
 }
 
 /** What `evaluateStopRules` reads of a run. */
@@ -458,11 +464,12 @@ export class RunStore {
   }
 
   private statusOf(run: Run, now: string): RunStatus {
+    const driver = readDriver(databaseFile(this.db), run.id);
     if (!isLive(run.state)) {
-      return { run, decision: evaluateStopRules(run, { now, workable: [], waiting: [], pendingGates: [], personBlocks: [], ceiling: null }), facts: null };
+      return { run, decision: evaluateStopRules(run, { now, workable: [], waiting: [], pendingGates: [], personBlocks: [], ceiling: null }), facts: null, driver };
     }
     const facts = this.facts(run, now);
-    return { run, decision: evaluateStopRules(run, facts), facts };
+    return { run, decision: evaluateStopRules(run, facts), facts, driver };
   }
 
   /**

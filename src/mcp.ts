@@ -2842,7 +2842,22 @@ const runFactsShape = z
   .nullable()
   .describe("The facts the decision was read from; null once the run has ended");
 
-const runStatusShape = { run: z.object(runShape), decision: stopDecisionShape, facts: runFactsShape };
+/** The `staple run drive` process attached to a run (`run-attachment.ts`), or null. */
+const runDriverShape = z
+  .object({
+    pid: z.number(),
+    host: z.string(),
+    agent: z.string(),
+    startedAt: z.string(),
+    heartbeatAt: z.string(),
+    ticket: z.string().nullable(),
+    sessionPid: z.number().nullable(),
+    logDir: z.string(),
+    alive: z.boolean().nullable(),
+  })
+  .nullable();
+
+const runStatusShape = { run: z.object(runShape), decision: stopDecisionShape, facts: runFactsShape, driver: runDriverShape };
 
 const runWriteAnnotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
 
@@ -2875,7 +2890,7 @@ server.registerTool(
   "run_status",
   {
     description:
-      "Autopilot runs and what the stop rules make of them now, without changing anything. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, budget (detail.budget tickets | time | ceiling), failure_streak (two failed tickets in a row), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue awaits approval, or nothing is workable and something in scope does), scope_empty (nothing left; the run ends completed). Same payload as `staple run status --json`.",
+      "Autopilot runs and what the stop rules make of them now, without changing anything. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, budget (detail.budget tickets | time | ceiling), failure_streak (two failed tickets in a row), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue awaits approval, or nothing is workable and something in scope does), scope_empty (nothing left; the run ends completed). driver is the `staple run drive` process working the run ({pid, host, agent, heartbeatAt, ticket, sessionPid, logDir, alive}), or null when none is attached; stop_run stops it mid-ticket. Same payload as `staple run status --json`.",
     inputSchema: {
       run_id: z.string().optional(),
       all: z.boolean().optional().describe("Every run, any actor or state"),

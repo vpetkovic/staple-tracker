@@ -19,6 +19,7 @@ import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runRunCommand } from "./commands/run.js";
+import { runDriveCommand } from "./commands/run-drive.js";
 import { runBudgetCommand } from "./commands/budget.js";
 import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
 import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
@@ -1056,6 +1057,9 @@ Autopilot runs
   run continue [--run <id>] [--outcome done|failed] [--reason R]
               after each ticket: record how it ended, then take (already claimed),
               wait (paused, waiting_on_others) or stop (a stop reason, or no_run)
+  run drive [--run <id> | --scope <ref> ...] --agent <claude|codex|custom>
+              loop continue with a fresh headless agent session per ticket
+              (staple run drive --help)
 
 Documents & events
   doc <ref> <key>                       read (latest)
@@ -2541,7 +2545,9 @@ function main() {
 
     /** `staple run` — autopilot runs over the queue, an epic or a milestone (src/commands/run.ts). */
     case "run": {
-      runRunCommand(rest);
+      // `drive` is async and long-lived; it parses its own options (src/commands/run-drive.ts).
+      if (rest[0] === "drive") runDriveCommand(rest.slice(1));
+      else runRunCommand(rest);
       break;
     }
 
