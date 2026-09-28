@@ -36,8 +36,7 @@ until a stop rule, run by the tracker, says otherwise.
               recorded as queue_overridden. One live run per actor per scope: a
               second start is refused (conflict, exit 4) naming the first.
               A milestone run is a GOAL run (below): --gate-owner W is the
-              person it gates the milestone to (default: the milestone's
-              assignee; refused when there is neither), --goal-cap N how many
+              person it gates the milestone to (default VP), --goal-cap N how many
               tickets it may create itself (default 5)
   run status [<run-id>] [--all]
               a run, whether a stop rule trips now and why, and the facts behind

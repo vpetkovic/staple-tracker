@@ -89,14 +89,11 @@ describe("goal mode on the CLI and over MCP", () => {
     const task = String((await cli("new", "The work")).json.identifier);
     expect((await cli("milestone", "add", m, task)).status).toBe(0);
 
-    const withoutOwner = await cli("run", "start", "--scope", m);
-    expect(withoutOwner.status).toBe(2);
-    expect(withoutOwner.stderr).toContain("--gate-owner");
-
-    const fromCli = await cli("run", "start", "--scope", m, "--gate-owner", "VP", "--goal-cap", "3");
+    // No --gate-owner: the milestone is gated to VP.
+    const fromCli = await cli("run", "start", "--scope", m, "--goal-cap", "3");
     expect(fromCli.status, fromCli.stderr).toBe(0);
     expect(fromCli.json.goal).toMatchObject({ gateOwner: "VP", childCap: 3, children: [], gatedAt: expect.any(String) });
-    const fromMcp = await tool("start_run", { scope: m, gate_owner: "VP", goal_cap: 3, actor: "agent-mcp" });
+    const fromMcp = await tool("start_run", { scope: m, goal_cap: 3, actor: "agent-mcp" });
     // The CLI's run already gated the milestone; the MCP run found that gate pending and opened none.
     expect(fromMcp.goal).toMatchObject({ gateOwner: "VP", childCap: 3, gatedAt: null });
 

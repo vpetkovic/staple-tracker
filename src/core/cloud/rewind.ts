@@ -43,6 +43,7 @@ import { forgetRemovedIssueLease } from "./lease-store.js";
 import { localInventory } from "./seed.js";
 import { recordReconciledEpoch, withheldEntities } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
+import { criterionMarkField, criterionMarkPosition } from "../milestone-goal.js";
 
 const QUEUE_PLAN_ID = "@plan";
 const ORDER_ID = "@order";
@@ -198,6 +199,26 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
     if (Number(db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(entity.entityId).changes) === 0) continue;
     // An open editor's check notices, as it does for a membership applied (`applyMilestone`).
     db.prepare("UPDATE milestone_meta SET members_revision = members_revision + 1 WHERE issue_id = ?").run(entity.entityId);
+  }
+
+  /**
+   * A criterion mark the epoch's milestone does not carry was made after the backup: the log
+   * no longer holds it, and a fresh device reading the epoch holds none. Applying the epoch
+   * names only the marks it has (`applyMilestone`), so the others go here, unless this device
+   * still has to send one.
+   */
+  const unsentMarks = new Set(
+    unsent
+      .filter((op) => op.entity === "milestone")
+      .flatMap((op) => Object.keys(parsedPayload(op.payload)).filter((key) => criterionMarkPosition(key) !== null).map((key) => `${op.id} ${key}`)),
+  );
+  for (const entity of entities) {
+    if (entity.entity !== "milestone") continue;
+    for (const { position } of db.prepare("SELECT position FROM milestone_criterion_marks WHERE milestone_id = ?").all(entity.entityId) as Array<{ position: number }>) {
+      const field = criterionMarkField(position);
+      if (field in entity.state || unsentMarks.has(`${entity.entityId} ${field}`)) continue;
+      db.prepare("DELETE FROM milestone_criterion_marks WHERE milestone_id = ? AND position = ?").run(entity.entityId, position);
+    }
   }
 
   /**
@@ -434,7 +455,9 @@ function heldEntities(db: DatabaseSync): Array<readonly [SyncEntity, string]> {
   for (const id of ids("SELECT id FROM issues")) out.push(["issue", id]);
   for (const id of ids("SELECT id FROM comments")) out.push(["comment", id]);
   for (const id of ids("SELECT DISTINCT blocked_id AS id FROM relations WHERE type = 'blocks'")) out.push(["relation", id]);
-  for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members")) out.push(["milestone", id]);
+  for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members UNION SELECT milestone_id AS id FROM milestone_criterion_marks")) {
+    out.push(["milestone", id]);
+  }
   if (ids("SELECT issue_id AS id FROM queue_entries LIMIT 1").length > 0) out.push(["queue", QUEUE_PLAN_ID]);
   // An attempt outlives its issue by design; it is rewound as an entity of its own.
   for (const id of ids("SELECT id FROM attempts")) out.push(["attempt", id]);
@@ -461,7 +484,12 @@ function holds(db: DatabaseSync, entity: string, id: string): boolean {
     case "relation":
       return hit("SELECT 1 FROM relations WHERE blocked_id = ? AND type = 'blocks'", id);
     case "milestone":
-      return hit("SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ?", id, id);
+      return hit(
+        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ?",
+        id,
+        id,
+        id,
+      );
     case "queue":
       return hit("SELECT 1 FROM queue_entries LIMIT 1");
     case "attempt":
@@ -550,7 +578,8 @@ function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
     case "milestone": {
       const members = db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(id).changes;
       const meta = db.prepare("DELETE FROM milestone_meta WHERE issue_id = ?").run(id).changes;
-      return gone(Number(members) + Number(meta));
+      const marks = db.prepare("DELETE FROM milestone_criterion_marks WHERE milestone_id = ?").run(id).changes;
+      return gone(Number(members) + Number(meta) + Number(marks));
     }
     case "queue":
       return gone(db.prepare("DELETE FROM queue_entries").run().changes);

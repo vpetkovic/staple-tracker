@@ -358,9 +358,8 @@ const SCENARIOS: readonly Scenario[] = [
   },
   { method: "MilestoneStore.update", name: "move a milestone's dates", run: (w) => void w.a.store.milestones().update(w.ids["M1"]!, { targetDate: "2026-12-01", startDate: "2026-10-01" }, "alice") },
   {
-    // The goal (description, criteria) is an issue edit and replicates; the mark itself is
-    // machine-local (migration 016), so what the scenario proves is that it moves nothing
-    // a synchronized column holds.
+    // The goal (description, criteria) is an issue edit; the mark is the milestone field
+    // `criterion<n>`, and every device holds it.
     method: "MilestoneStore.markCriterion",
     name: "judge a milestone criterion",
     prep: (w) => void w.a.store.milestones().update(w.ids["M1"]!, { description: "Why", acceptanceCriteria: ["It ships", "It is documented"] }, "alice"),
@@ -635,6 +634,20 @@ const CONFLICTS: readonly ConflictKind[] = [
       return { milestone: a.store.getIssue(view.milestone.identifier).id };
     },
     edit: (m, x, which) => void m.store.milestones().update(x.milestone!, { targetDate: which === "a" ? "2026-10-01" : "2026-12-01" }, which),
+  },
+  {
+    // A criterion's mark is one milestone field: judged differently on two devices at once,
+    // it is preserved as a conflict and settled by a decision, like any field.
+    name: "milestone criterion mark",
+    entity: "milestone",
+    field: "criterion1",
+    setup: (a) => {
+      a.store.addKind({ id: "milestone", label: "Milestone" });
+      const view = a.store.milestones().create({ title: "M3", acceptanceCriteria: ["It ships"] }, "alice") as { milestone: { identifier: string } };
+      return { milestone: a.store.getIssue(view.milestone.identifier).id };
+    },
+    edit: (m, x, which) =>
+      void m.store.milestones().markCriterion(x.milestone!, 1, which === "a" ? { verdict: "met", evidence: ["a saw it ship"] } : { verdict: "unmet", evidence: ["b did not"] }, which),
   },
   {
     name: "status label",

@@ -353,14 +353,15 @@ milestone is the goal, not a separate document. Code: `src/core/milestone-goal.t
 
 ```
 staple milestone new "October" -d "What it is for" --criteria "Docs written;Tests pass"
-staple run start --scope ABC-40 --gate-owner VP [--goal-cap 5]
+staple run start --scope ABC-40 [--gate-owner VP] [--goal-cap 5]
 staple milestone criterion ABC-40 1 --met --evidence ABC-41
 staple milestone criterion ABC-40 2 --unmet --evidence "no tests" --follow-up "Write the tests"
 ```
 
 **Start.** `--gate-owner` names the person the milestone is gated to; without
-it the milestone's assignee, and with neither the start is refused
-(`validation`). `--goal-cap N` (default 5, 0 allowed) caps the tickets the run
+it, `VP` (`DEFAULT_GATE_OWNER`), whoever the milestone's assignee is: the
+assignee owns the plan, and the reviewer of a goal is one fixed person unless a
+run says otherwise. `--goal-cap N` (default 5, 0 allowed) caps the tickets the run
 may create itself. Both are refused on any other scope.
 
 **The gate is opened at the start.** A milestone closes itself when its last
@@ -468,9 +469,12 @@ out_of_order` and leaves the ticket created, in scope and counted once; the next
 the last ticket of an ended goal run (no live run), it answers that run's stop
 reason with its `goal`.
 
-**Local.** Marks are machine-local like runs (workspace migration 016): the
-verdicts are the driving agent's on this machine. The goal itself (description,
-criteria), the evidence, the tickets the run creates and the gate all replicate.
+**What replicates.** The goal itself (description, criteria), every criterion's
+mark, the evidence, the tickets the run creates and the gate all replicate; the
+run itself stays machine-local. A mark travels as the milestone field
+`criterion<n>` ([sync](sync.md#what-synchronizes)): two devices judging
+different criteria never meet, and two judging the same one at once are a
+preserved field conflict, settled by a decision like any other.
 
 ## Events
 

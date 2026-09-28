@@ -37,6 +37,11 @@ export const TABLES: Record<string, { readonly key: readonly string[]; readonly 
   workspace_statuses: { key: ["id"], ordered: true, sql: "SELECT id, label, category, is_builtin FROM workspace_statuses ORDER BY sort_order, id" },
   workspace_kinds: { key: ["id"], ordered: true, sql: "SELECT id, label, is_builtin FROM workspace_kinds ORDER BY sort_order, id" },
   milestone_meta: { key: ["issue_id"], sql: "SELECT issue_id, target_date, start_date, updated_at FROM milestone_meta ORDER BY issue_id" },
+  // Milestone goal mode: each criterion's mark, the milestone field `criterion<n>`.
+  milestone_criterion_marks: {
+    key: ["milestone_id", "position"],
+    sql: "SELECT milestone_id, position, criterion, verdict, evidence, note, marked_by, run_id, marked_at FROM milestone_criterion_marks ORDER BY milestone_id, position",
+  },
   settings: { key: ["key"], sql: "SELECT key, value FROM meta WHERE key LIKE 'setting:%' ORDER BY key" },
   queue_entries: { key: ["issue_id"], ordered: true, sql: "SELECT issue_id, added_by, added_at, note FROM queue_entries ORDER BY rank" },
   milestone_members: {

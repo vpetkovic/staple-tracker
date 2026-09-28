@@ -260,11 +260,14 @@ describe("milestone criterion: judging one criterion", () => {
 // ------------------------------------------------------------------ goal runs
 
 describe("a run over a milestone is a goal run", () => {
-  it("needs a person to gate to: --gate-owner, else the milestone's assignee", () => {
+  it("gates to --gate-owner, else to VP, whoever the milestone's assignee is", () => {
     const { m } = goalMilestone();
-    expect(refused(() => runs.start({ actor: BOT, scope: m }), "validation").message).toContain("--gate-owner");
-    store.updateIssue(m, { assignee: "VP" }, "vp");
-    expect(runs.start({ actor: BOT, scope: m }).goal).toMatchObject({ gateOwner: "VP", childCap: 5, children: [] });
+    store.updateIssue(m, { assignee: "someone-else" }, "vp");
+    const byDefault = runs.start({ actor: BOT, scope: m });
+    expect(byDefault.goal).toMatchObject({ gateOwner: "VP", childCap: 5, children: [] });
+    expect(gateOf(m)).toMatchObject({ state: "pending", owner: "VP" });
+    runs.stop(byDefault.id, "vp");
+    expect(runs.start({ actor: "other-bot", scope: m, gateOwner: "  Alice " }).goal).toMatchObject({ gateOwner: "Alice" });
   });
 
   it("refuses goal settings on any other scope, and a negative cap", () => {

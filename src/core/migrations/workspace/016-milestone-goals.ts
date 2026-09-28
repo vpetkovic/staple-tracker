@@ -23,12 +23,11 @@ import type { Migration } from "../types.js";
  * opened, which is how the stop rules tell the run's own gate from one a person opened.
  * All three are null on a queue or epic run.
  *
- * ## Never replicated
+ * ## What replicates
  *
- * Like the run tables of 015, neither the marks nor the run columns are sync entities: a
- * mark is the verdict of the agent driving a run on this machine. What another device sees
- * is the evidence itself (tickets, comments, documents) and the gate the run opened, which
- * replicate as they always did.
+ * The marks do: each is the milestone entity's field `criterion<n>` on the wire (docs/sync.md,
+ * "What synchronizes"), so no new sync entity and no protocol change. The run columns do not:
+ * like the run tables of 015, they describe which agent loops on this machine.
  *
  * ## Why a migration
  *

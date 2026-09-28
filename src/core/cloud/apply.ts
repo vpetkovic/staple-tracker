@@ -46,6 +46,8 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { renumberedRanks } from "../milestones.js";
+import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } from "../milestone-goal.js";
+import { writeCriterionMark } from "../milestone-marks.js";
 import {
   SETTING_DEFINITIONS,
   encodeStoredSetting,
@@ -2130,9 +2132,24 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const hasTarget = "targetDate" in input.payload;
   const hasStart = "startDate" in input.payload;
   const hasUpdated = typeof input.payload.updatedAt === "string";
-  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated) return false;
+  /**
+   * Criterion marks (`criterion<n>`, `milestone-goal.ts`): each key is one criterion's mark,
+   * applied only when named, like every other facet; a null value clears it. A value that is
+   * not a mark is ignored rather than written half-formed.
+   */
+  const marks = Object.keys(input.payload)
+    .map((key) => ({ key, position: criterionMarkPosition(key) }))
+    .filter((entry): entry is { key: string; position: number } => entry.position !== null);
+  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated && marks.length === 0) return false;
 
   if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
+  for (const { key, position } of marks) {
+    const value = input.payload[key];
+    const mark = value === null ? null : criterionMarkFromValue(position, value);
+    if (value !== null && mark === null) continue;
+    writeCriterionMark(db, input.entityId, position, mark === null ? null : criterionMarkValue(mark));
+  }
+  if (marks.length > 0 && !hasMembers && !hasTarget && !hasStart && !hasUpdated) return true;
   /**
    * When the milestone last changed, as the device that changed it wrote it: the payload's
    * `updatedAt`, which every build since this one sends (`journal.ts`, the row diff). An

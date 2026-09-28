@@ -47,6 +47,8 @@ import {
   CRITERION_VERDICTS,
   type CriterionMark,
   type CriterionVerdict,
+  criterionMarkField,
+  criterionMarkValue,
   type EvidenceItem,
   type GoalCounts,
   type GoalCriterion,
@@ -59,6 +61,7 @@ import {
   parseEvidence,
 } from "./milestone-goal.js";
 import { COMPARE_MAX_REFS } from "./plan-rollup.js";
+import { writeCriterionMark } from "./milestone-marks.js";
 import type { WorkspaceStore } from "./store.js";
 import { type Issue, MAX_TREE_DEPTH, StapleError, type StatusCategory, nowIso } from "./types.js";
 
@@ -893,9 +896,10 @@ export class MilestoneStore {
    * workspace; a ticket that is not done yet may be cited, and the criterion reads `unknown`
    * until it is.
    *
-   * A mark is machine-local, like the run that usually makes it (migration 016): it is never
-   * journaled. A follow-up is not: it is an ordinary issue and membership, created by the goal
-   * run (`RunStore.createGoalChild`), which enforces the run's cap.
+   * A mark replicates, as the milestone field `criterion<n>`; two devices judging the same
+   * criterion concurrently are a field conflict, preserved until someone picks a side. A
+   * follow-up is an ordinary issue and membership, created by the goal run
+   * (`RunStore.createGoalChild`), which enforces the run's cap. The run stays machine-local.
    */
   markCriterion(ref: string, position: number, input: MarkCriterionInput, actor: string | null): MilestoneView {
     this.assertKindConfigured();
@@ -960,17 +964,34 @@ export class MilestoneStore {
         });
         evidence.push(child.identifier);
       }
-      const now = nowIso();
-      this.db
-        .prepare(
-          `INSERT INTO milestone_criterion_marks (milestone_id, position, criterion, verdict, evidence, note, marked_by, run_id, marked_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (milestone_id, position) DO UPDATE SET
-             criterion = excluded.criterion, verdict = excluded.verdict, evidence = excluded.evidence,
-             note = excluded.note, marked_by = excluded.marked_by, run_id = excluded.run_id, marked_at = excluded.marked_at`,
-        )
-        .run(milestone.id, position, text, input.verdict, JSON.stringify(evidence), input.note?.trim() ? input.note.trim() : null, actor ?? "user", run?.id ?? null, now);
-      // Machine-local, like the run events: it names no issue, so no operation carries it.
+      const mark = criterionMarkValue({
+        criterion: text,
+        verdict: input.verdict,
+        evidence,
+        note: input.note?.trim() ? input.note.trim() : null,
+        markedBy: actor ?? "user",
+        runId: run?.id ?? null,
+        markedAt: this.journal.mutationAt(),
+      });
+      writeCriterionMark(this.db, milestone.id, position, mark);
+      // A mark is a change to the milestone, and says when, as a date edit does: the row diff
+      // carries `updatedAt` with it, so a device hydrating from the log holds the same time.
+      this.ensureMeta(milestone.id, mark.markedAt);
+      this.db.prepare("UPDATE milestone_meta SET updated_at = ? WHERE issue_id = ?").run(mark.markedAt, milestone.id);
+      /**
+       * The mark replicates as one field of the milestone (`criterion<n>`, see
+       * `criterionMarkField`): a field of an entity the protocol already carries, so no new
+       * entity and no protocol change. The run it names is this machine's; the id travels as
+       * a label and is never looked up elsewhere.
+       */
+      this.journal.record({
+        entity: "milestone",
+        entityId: milestone.id,
+        verb: "update",
+        payload: { [criterionMarkField(position)]: mark },
+        actor: actor ?? null,
+      });
+      // The event names no issue: it is this device's note of the judgement, never transported.
       insertEvent(this.db, {
         kind: "milestone_criterion_marked",
         issueId: null,

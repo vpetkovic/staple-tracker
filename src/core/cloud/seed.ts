@@ -48,6 +48,8 @@ import { VOCABULARY_ORDER_ID, hydrate } from "./hydrate.js";
 import { completeSnapshot, recordReconciledEpoch } from "./sync-state.js";
 import { attemptPayload, noteAttemptsSeededHere, readAttempt, readTransition, transitionPayload } from "../telemetry/attempt-records.js";
 import type { SnapshotEntity } from "./wire.js";
+import { criterionMarkPosition } from "../milestone-goal.js";
+import { criterionMarkFields } from "../milestone-marks.js";
 
 /** The plan's singleton entity id. Mirrors `queue-store.ts`. */
 const QUEUE_PLAN_ID = "@plan";
@@ -704,6 +706,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       .prepare(
         `SELECT issue_id AS id FROM milestone_meta
           UNION SELECT milestone_id AS id FROM milestone_members
+          UNION SELECT milestone_id AS id FROM milestone_criterion_marks
           ORDER BY id`,
       )
       .all() as Array<{ id: string }>
@@ -725,6 +728,8 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       // When it last changed, as this device holds it (`applyMilestone`).
       payload.updatedAt = meta.updated_at;
     }
+    // Its criterion marks, one field each (`criterion<n>`), as a mark is journaled.
+    Object.assign(payload, criterionMarkFields(db, milestoneId));
     out.push({
       entity: "milestone",
       entityId: milestoneId,
@@ -1152,6 +1157,12 @@ function replacedValues(db: DatabaseSync, index: SurveyIndex): SeedReplaced[] {
           if (!(field in entity.state)) continue;
           if (canonical(meta[column]) === canonical(entity.state[field])) continue;
           out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field: column, local: meta[column], repository: entity.state[field] });
+        }
+        const marks = criterionMarkFields(db, entity.entityId);
+        for (const field of Object.keys(entity.state).filter((key) => criterionMarkPosition(key) !== null)) {
+          const local = marks[field] ?? null;
+          if (canonical(local) === canonical(entity.state[field])) continue;
+          out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field, local, repository: entity.state[field] });
         }
         break;
       }

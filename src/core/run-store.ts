@@ -138,6 +138,13 @@ export type RunBudgetKind = "tickets" | "time" | "ceiling" | "goal_children";
 export const RUN_TICKET_OUTCOMES = ["done", "failed"] as const;
 export type RunTicketOutcome = (typeof RUN_TICKET_OUTCOMES)[number];
 
+/**
+ * Who a goal run gates its milestone to when `--gate-owner` names nobody: the person who
+ * reviews goals in this tracker. The milestone's assignee is not consulted: an assignee owns
+ * the plan, and the reviewer of a goal is one fixed person unless a run says otherwise.
+ */
+export const DEFAULT_GATE_OWNER = "VP";
+
 /** Consecutive failed outcomes that stop a run. */
 export const FAILURE_STREAK_LIMIT = 2;
 
@@ -463,7 +470,7 @@ export interface StartRunInput {
   until?: string;
   ceilingPercent?: number;
   ceilingAccount?: string;
-  /** A milestone run: who the milestone is gated to. Else the milestone's assignee. */
+  /** A milestone run: who the milestone is gated to. Else {@link DEFAULT_GATE_OWNER}. */
   gateOwner?: string;
   /** A milestone run: how many tickets it may create itself. Default {@link GOAL_CHILD_CAP_DEFAULT}. */
   goalChildCap?: number;
@@ -1349,9 +1356,9 @@ export class RunStore {
   }
 
   /**
-   * A milestone run's goal settings: the gate owner (`gateOwner`, else the milestone's
-   * assignee; refused when neither names a person, since the gate needs one) and the cap.
-   * Goal settings on any other scope are refused rather than ignored.
+   * A milestone run's goal settings: the gate owner (`gateOwner`, else
+   * {@link DEFAULT_GATE_OWNER}, whatever the milestone's assignee) and the cap. Goal settings
+   * on any other scope are refused rather than ignored.
    */
   private parseGoal(input: StartRunInput, scope: RunScope): { gateOwner: string; childCap: number } | null {
     const owner = input.gateOwner?.trim() ? input.gateOwner.trim() : null;
@@ -1365,15 +1372,7 @@ export class RunStore {
     if (!Number.isInteger(childCap) || childCap < 0) {
       throw new StapleError("validation", `--goal-cap is a whole number of tickets, 0 or more; got ${childCap}.`);
     }
-    const gateOwner = owner ?? this.store.getIssue(scope.issueId).assignee?.trim() ?? null;
-    if (!gateOwner) {
-      throw new StapleError(
-        "validation",
-        `A run over milestone ${scope.identifier} is a goal run: it gates the milestone to a person for review. Name them with --gate-owner <who>, or assign the milestone.`,
-        { identifier: scope.identifier },
-      );
-    }
-    return { gateOwner, childCap };
+    return { gateOwner: owner ?? DEFAULT_GATE_OWNER, childCap };
   }
 
   private parseBudget(input: StartRunInput, now: string): RunBudget {

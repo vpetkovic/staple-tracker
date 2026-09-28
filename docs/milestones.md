@@ -421,8 +421,11 @@ needs some, and a cited ticket or document must exist in this workspace. The
 position is 1-based, in the criteria's order. `--follow-up` files the work an
 unmet criterion needs through the marker's live goal run (docs/runs.md,
 "Goal mode"), attributed to it and counted against its cap; without a goal run
-it is refused. Marks are machine-local (workspace migration 016,
-`milestone_criterion_marks`), like the runs that usually make them.
+it is refused. Marks replicate (workspace migration 016 stores them in
+`milestone_criterion_marks`): each is the milestone's field `criterion<n>` on the
+wire, so concurrent marks of one criterion are a field conflict, preserved until
+someone decides, and marks of two criteria never collide (docs/sync.md). The runs
+that usually make them stay machine-local; a mark's `runId` is a label.
 
 **Pace** is `goal.pace`: done work, the remaining estimate and the days to the
 target date, from the same certified plans `staple compare` reads. One plan per

@@ -234,3 +234,66 @@ export function goalPace(input: {
   // Every field is a function of the UTC day, not the second, so two reads a moment apart agree.
   return { targetDate: target, daysToTarget, leaves, laborSeconds, remainingSeconds, partial, unplannedRefs, verdict, message };
 }
+
+// ---------- a mark on the wire (docs/sync.md; `cloud/apply.ts`) ----------
+
+/**
+ * A mark replicates as ONE field of the milestone entity, keyed by the criterion's position:
+ * `{ criterion2: {…} }`. The service folds a payload key by key, so each criterion is its own
+ * field: two devices judging different criteria never touch each other, and two judging the
+ * same one are a field conflict like any other (`cloud/conflicts.ts`), preserved, not settled
+ * by arrival order. A null value clears the mark. No new entity, so no protocol change.
+ */
+export const CRITERION_MARK_FIELD = /^criterion([1-9][0-9]*)$/;
+
+export function criterionMarkField(position: number): string {
+  return `criterion${position}`;
+}
+
+/** The position a payload key names, or null when it is not a mark's key. */
+export function criterionMarkPosition(field: string): number | null {
+  const match = CRITERION_MARK_FIELD.exec(field);
+  return match ? Number(match[1]) : null;
+}
+
+/** A mark's value on the wire. One builder, one key order: a conflict compares it as JSON. */
+export interface CriterionMarkValue {
+  criterion: string;
+  verdict: CriterionVerdict;
+  evidence: string[];
+  note: string | null;
+  markedBy: string;
+  runId: string | null;
+  markedAt: string;
+}
+
+export function criterionMarkValue(mark: Omit<CriterionMark, "position">): CriterionMarkValue {
+  return {
+    criterion: mark.criterion,
+    verdict: mark.verdict,
+    evidence: [...mark.evidence],
+    note: mark.note,
+    markedBy: mark.markedBy,
+    runId: mark.runId,
+    markedAt: mark.markedAt,
+  };
+}
+
+/** A wire value read back as a mark; null for a cleared mark or a value that is not one. */
+export function criterionMarkFromValue(position: number, value: unknown): CriterionMark | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.criterion !== "string" || typeof v.markedBy !== "string" || typeof v.markedAt !== "string") return null;
+  if (!(CRITERION_VERDICTS as readonly unknown[]).includes(v.verdict)) return null;
+  const evidence = Array.isArray(v.evidence) ? v.evidence.filter((item): item is string => typeof item === "string") : [];
+  return {
+    position,
+    criterion: v.criterion,
+    verdict: v.verdict as CriterionVerdict,
+    evidence,
+    note: typeof v.note === "string" ? v.note : null,
+    markedBy: v.markedBy,
+    runId: typeof v.runId === "string" ? v.runId : null,
+    markedAt: v.markedAt,
+  };
+}
