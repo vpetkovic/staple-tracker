@@ -665,6 +665,8 @@ export async function syncRepository(
     const ledger = catchUpOwed ? `applier-${APPLIER_VERSION}` : `reconcile-${requireSyncState(db).epoch}`;
     caughtUp = (await recoverFromSnapshot(db, journal, session, capabilities, options, ledger)).bootstrap;
   }
+  // And what migration 017 backfilled, which the service has never been sent (`publishDerivedStatuses`).
+  publishDerivedStatuses(db);
   /**
    * And the one-shot milestone repair an upgrade owes (`rederiveMilestonesAfterPull`): here,
    * with the members every other device holds, and never at a write before the pull — a
@@ -673,8 +675,6 @@ export async function syncRepository(
    * rewinds members the repair would otherwise read. Sent in this sync, after any repair a
    * device that synchronized first has already sent.
    */
-  // And what migration 017 backfilled, which the service has never been sent.
-  publishDerivedStatuses(db);
   rederiveMilestonesAfterPull(db);
   if (pendingCount(db) > 0) await pushAll();
   /**

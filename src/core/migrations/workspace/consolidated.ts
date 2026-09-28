@@ -390,10 +390,21 @@ CREATE TABLE milestone_criterion_marks (
       );
 
 CREATE TRIGGER issues_derived_status_cleared
-      AFTER UPDATE OF status, checkout_agent, checkout_at ON issues
+      AFTER UPDATE OF status, derived_status, checkout_agent, checkout_at ON issues
       WHEN NEW.derived_status IS NOT NULL
-       AND NEW.derived_status IS OLD.derived_status
-       AND (NEW.status IS NOT OLD.status OR NEW.checkout_agent IS NOT OLD.checkout_agent OR NEW.checkout_at IS NOT OLD.checkout_at)
+       AND (
+             NEW.derived_status IS NOT NEW.status
+          OR (    NEW.derived_status IS OLD.derived_status
+              AND OLD.derived_status IS OLD.status
+              AND (NEW.status IS NOT OLD.status OR NEW.checkout_agent IS NOT OLD.checkout_agent OR NEW.checkout_at IS NOT OLD.checkout_at))
+           )
+      BEGIN
+        UPDATE issues SET derived_status = NULL WHERE id = NEW.id;
+      END;
+
+CREATE TRIGGER issues_derived_status_created
+      AFTER INSERT ON issues
+      WHEN NEW.derived_status IS NOT NULL AND NEW.derived_status IS NOT NEW.status
       BEGIN
         UPDATE issues SET derived_status = NULL WHERE id = NEW.id;
       END;

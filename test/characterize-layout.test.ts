@@ -298,8 +298,9 @@ describe("a fresh repo-local `staple init`", () => {
       "table:sync_tombstones",
       "table:workspace_kinds",
       "table:workspace_statuses",
-      // 017-derived-status: clears the replicated ownership column on any move but derivation's.
+      // 017-derived-status: hold the replicated ownership column to null or the row's status.
       "trigger:issues_derived_status_cleared",
+      "trigger:issues_derived_status_created",
     ]);
   }, 30_000);
 

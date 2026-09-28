@@ -690,6 +690,33 @@ export function settingsMoved(db: DatabaseSync, applied: boolean): boolean {
   return applied;
 }
 
+/**
+ * What an issue operation may say about who wrote its status (`derived_status`, migration 017).
+ *
+ * A `derivedStatus` that is not the status the row will hold is dropped: it names a status
+ * derivation wrote once, and the row has since moved on, so taking it would claim for
+ * derivation a status somebody else set. (The schema's trigger would null it too; dropping it
+ * here keeps a stale value from being written at all.)
+ *
+ * A derived move from a build before 017 carries its `derived` marker and its `status` but no
+ * `derivedStatus`. It is still derivation's write, so the row says so, as it would have had
+ * the sender known the column; left as it was, the trigger would clear it.
+ */
+function settleDerivedStatus(db: DatabaseSync, entityId: string, payload: Record<string, unknown>, pairs: Array<[string, unknown]>): void {
+  const statusPair = pairs.find(([column]) => column === "status");
+  const held = db.prepare("SELECT status FROM issues WHERE id = ?").get(entityId) as { status: string } | undefined;
+  const resulting = statusPair !== undefined ? statusPair[1] : (held?.status ?? null);
+  const index = pairs.findIndex(([column]) => column === "derived_status");
+  if (index >= 0) {
+    const value = pairs[index]![1];
+    if (value !== null && value !== resulting) pairs.splice(index, 1);
+    return;
+  }
+  if (typeof payload.derived === "string" && statusPair !== undefined && typeof statusPair[1] === "string") {
+    pairs.push(["derived_status", statusPair[1]]);
+  }
+}
+
 function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   if (input.verb === "delete") return tombstone(db, input, "issues", "id");
 
@@ -697,6 +724,7 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   // A derived column is computed here from what is written, never taken from the operation.
   const pairs = project(payload, ISSUE_COLUMNS).filter(([column]) => !DERIVED_ISSUE_COLUMNS.has(column));
   redirectRemoved(db, input, pairs);
+  settleDerivedStatus(db, input.entityId, payload, pairs);
 
   const exists = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(input.entityId) as
     | { hit: number }

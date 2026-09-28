@@ -10,7 +10,7 @@
  * travels with the row.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { listConflicts } from "../src/core/cloud/conflicts.js";
+import { listConflicts, resolveConflict } from "../src/core/cloud/conflicts.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
 import { differences, stateOf } from "./fixtures/synchronized-state.js";
@@ -32,6 +32,29 @@ async function sync(...machines: Machine[]): Promise<void> {
 
 const status = (machine: Machine, id: string): string =>
   (machine.db.prepare("SELECT status FROM issues WHERE id = ?").get(id) as { status: string }).status;
+
+const owner = (machine: Machine, id: string): unknown =>
+  machine.db.prepare("SELECT status, derived_status FROM issues WHERE id = ?").get(id);
+
+/** The column's invariant on every row of every device: null, or the status the row holds. */
+function expectInvariant(...machines: Machine[]): void {
+  for (const machine of machines) {
+    const broken = machine.db.prepare("SELECT identifier, status, derived_status FROM issues WHERE derived_status IS NOT NULL AND derived_status IS NOT status").all();
+    expect(broken, `${machine.label} holds a derived_status that is not its status`).toEqual([]);
+  }
+}
+
+/** An epic with one child, which lands, so derivation closes the epic. */
+function closedEpic(machine: Machine): { epic: string; child: string } {
+  machine.use();
+  const epic = machine.store.createIssue({ title: "E", kind: "epic" }).id;
+  const child = machine.store.createIssue({ title: "C", parent: epic }).id;
+  machine.store.updateIssue(child, { assignee: machine.label }, machine.label);
+  machine.store.updateIssue(child, { status: "in_progress" }, machine.label);
+  machine.store.updateIssue(child, { status: "done" }, machine.label);
+  expect(owner(machine, epic)).toEqual({ status: "done", derived_status: "done" });
+  return { epic, child };
+}
 
 describe("a derived status travels as derivation's", () => {
   // `join`: j works before it ever connects, and joins with a seed. `hydrate`: j is connected
@@ -78,6 +101,7 @@ describe("a derived status travels as derivation's", () => {
         }
         const want = stateOf(fresh.db);
         expect([a, j, later].flatMap((machine) => differences(machine.label, want, stateOf(machine.db)))).toEqual([]);
+        expectInvariant(a, j, later, fresh);
       });
     }
   }
@@ -109,35 +133,116 @@ describe("an upgraded device sends the ownership it backfilled", () => {
     later.store.updateIssue(child, { status: "done" }, "later");
     await sync(later, a);
     expect([status(later, epic), status(a, epic)]).toEqual(["done", "done"]);
+    expectInvariant(a, later);
   });
 });
 
 describe("a derived move and a person's move of one parent, made apart", () => {
-  it("record one conflict, about the status, and whichever side wins decides ownership with it", async () => {
-    fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+  for (const [side, chosen] of [["the derived", "in_progress"], ["the person's", "in_review"]] as const) {
+    for (const resolver of ["a", "b"] as const) {
+      it(`record one conflict about the status; resolved on ${resolver} to ${side} side, ownership goes with it everywhere`, async () => {
+        fleet = new Fleet(new FakeSyncServer({ repositoryId: REPO }), REPO);
+        const a = fleet.machine("a");
+        await sync(a);
+        a.use();
+        const epic = a.store.createIssue({ title: "E", kind: "epic" }).id;
+        const child = a.store.createIssue({ title: "C", parent: epic }).id;
+        await sync(a);
+        const b = fleet.machine("b");
+        await sync(b);
+
+        // a's child starts, so derivation moves E; b parks E in review by hand, not having pulled it.
+        a.use();
+        a.store.updateIssue(child, { assignee: "a" }, "a");
+        a.store.updateIssue(child, { status: "in_progress" }, "a");
+        b.use();
+        b.store.updateIssue(epic, { status: "in_review" }, "b");
+        await sync(a, b, a);
+
+        const machine = { a, b }[resolver];
+        const records = listConflicts(machine.db).filter((record) => record.entityId === epic);
+        expect(records.map((record) => record.field)).toEqual(["status"]);
+        expectInvariant(a, b);
+        const record = records[0]!;
+        machine.use();
+        resolveConflict(machine.db, { id: record.id, choice: record.localValue === chosen ? "local" : "remote", actor: resolver });
+        await sync(machine, a, b, a, b);
+        const fresh = fleet.machine("fresh");
+        await sync(fresh);
+
+        const want = { status: chosen, derived_status: chosen === "in_progress" ? "in_progress" : null };
+        for (const device of [a, b, fresh]) expect([device.label, owner(device, epic)]).toEqual([device.label, want]);
+        expect([...listConflicts(a.db), ...listConflicts(b.db)].filter((open) => open.entityId === epic)).toEqual([]);
+        expectInvariant(a, b, fresh);
+      });
+    }
+  }
+});
+
+describe("a backfill send that arrives after a person moved the parent", () => {
+  it("is screened with the status, and never leaves the parent owned by a status it no longer holds", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
     const a = fleet.machine("a");
     await sync(a);
-    a.use();
-    const epic = a.store.createIssue({ title: "E", kind: "epic" }).id;
-    const child = a.store.createIssue({ title: "C", parent: epic }).id;
+    const { epic, child } = closedEpic(a);
     await sync(a);
     const b = fleet.machine("b");
     await sync(b);
 
-    // a's child starts, so derivation moves E; b parks E in review by hand, not having pulled it.
+    // a owes the send, and its push fails after the send is journaled.
+    a.db.prepare("INSERT INTO meta (key, value) VALUES ('derived_status_publish_owed', '1')").run();
+    server.failNext = { route: "POST /v1/repos/:id/ops", times: 100, status: 503, code: "unavailable" };
     a.use();
-    a.store.updateIssue(child, { assignee: "a" }, "a");
-    a.store.updateIssue(child, { status: "in_progress" }, "a");
+    await a.sync().catch(() => undefined);
+    expect(a.db.prepare("SELECT COUNT(*) AS n FROM sync_outbox WHERE acknowledged_seq IS NULL").get()).toEqual({ n: 1 });
+    server.failNext = null;
+    // b reopens E by hand, and only then does a's send arrive.
     b.use();
-    b.store.updateIssue(epic, { status: "in_review" }, "b");
-    await sync(a, b, a);
+    b.store.updateIssue(epic, { status: "todo" }, "b");
+    await sync(b, a, b);
+    expectInvariant(a, b);
+    // The send carried the status, so b judged it as a status write made against b's own move.
+    expect(listConflicts(b.db).filter((record) => record.entityId === epic).map((record) => [record.field, record.localValue, record.remoteValue])).toEqual([
+      ["status", "todo", "done"],
+    ]);
 
-    const records = [...listConflicts(a.db), ...listConflicts(b.db)].filter((record) => record.entityId === epic);
-    expect(records.map((record) => record.field)).toEqual(records.map(() => "status"));
-    for (const machine of [a, b]) {
-      const row = machine.db.prepare("SELECT status, derived_status FROM issues WHERE id = ?").get(epic) as { status: string; derived_status: string | null };
-      // Never a stale claim: the column is null or names the status the row holds.
-      expect(row.derived_status === null || row.derived_status === row.status, `${machine.label} ${JSON.stringify(row)}`).toBe(true);
-    }
+    // On b, a second child: finished, E closes; reopened, E reopens — on every device.
+    b.use();
+    const second = b.store.createIssue({ title: "C2", parent: epic }).id;
+    b.store.updateIssue(second, { assignee: "b" }, "b");
+    b.store.updateIssue(second, { status: "in_progress" }, "b");
+    b.store.updateIssue(second, { status: "done" }, "b");
+    await sync(b, a, b);
+    b.use();
+    b.store.updateIssue(second, { status: "todo" }, "b");
+    await sync(b, a, b);
+    const fresh = fleet.machine("fresh");
+    await sync(fresh);
+    for (const device of [a, b, fresh]) expect([device.label, status(device, epic)]).not.toEqual([device.label, "done"]);
+    expect(status(b, child)).toBe("done");
+    expectInvariant(a, b, fresh);
+  });
+});
+
+describe("a derived move written by a build before 017", () => {
+  it("still belongs to derivation where it is applied, so the parent reopens", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    await sync(a);
+    const b = fleet.machine("b");
+    await sync(b);
+    const { epic, child } = closedEpic(a);
+    await sync(a);
+    // As that build sent it: `status` and `derived`, no `derivedStatus`.
+    for (const op of server.ops) delete (op.payload as Record<string, unknown>).derivedStatus;
+    await sync(b);
+    expect(owner(b, epic)).toEqual({ status: "done", derived_status: "done" });
+
+    b.use();
+    b.store.updateIssue(child, { status: "todo" }, "b");
+    expect(status(b, epic)).toBe("backlog");
+    expectInvariant(a, b);
   });
 });

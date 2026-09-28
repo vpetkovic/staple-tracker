@@ -601,8 +601,11 @@ const DERIVED_STATUS_PUBLISH_KEY = "derived_status_publish_owed";
  * once, after a pull reached the head (`sync.ts`). Written before the column existed, nothing
  * in the log carries it, so without this a device that hydrates reads every derived parent as
  * set by hand. After the pull, so a row another device has since moved by hand has already
- * been cleared here and is not sent. Each is an ordinary `issue` update of that one field;
- * two devices that backfilled the same row send the same value, which is no conflict.
+ * been cleared here and is not sent. Each is an `issue` update carrying the status with it, so
+ * the conflict screen judges it as a status write: one that lands after a person moved the
+ * row elsewhere is contested there rather than taken, and an applier drops a `derivedStatus`
+ * that is not the status the row ends up holding. Two devices that backfilled the same row
+ * send the same values, which is no conflict.
  * A failure is logged and left owed, never thrown: the sync that ran it is the user's.
  */
 export function publishDerivedStatuses(db: DatabaseSync): number {
@@ -610,12 +613,13 @@ export function publishDerivedStatuses(db: DatabaseSync): number {
   const journal = new WorkspaceStore(db, "", "").journal;
   try {
     return journal.run(() => {
-      const rows = db.prepare("SELECT id, derived_status FROM issues WHERE derived_status IS NOT NULL ORDER BY id").all() as Array<{
+      const rows = db.prepare("SELECT id, status, derived_status FROM issues WHERE derived_status IS NOT NULL ORDER BY id").all() as Array<{
         id: string;
+        status: string;
         derived_status: string;
       }>;
       for (const row of rows) {
-        journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { derivedStatus: row.derived_status }, actor: null });
+        journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { status: row.status, derivedStatus: row.derived_status }, actor: null });
       }
       db.prepare("DELETE FROM meta WHERE key = ?").run(DERIVED_STATUS_PUBLISH_KEY);
       return rows.length;
@@ -3496,16 +3500,17 @@ export class WorkspaceStore {
     // `expectedStatusVersion` for this epic must be forced to re-read.
     // `RETURNING *` because a close has to hand the FRESH row to
     // `afterResolution` below — the row as it now is, not as it was decided from.
+    // `RETURNING` reports the row before any trigger ran on it (migration 017's), so the row
+    // handed on is read again once the statement is done.
     const assignments = Object.keys(columns).map((c) => `${c} = ?`).join(", ");
-    const written = this.db
+    const landed = this.db
       .prepare(
         `UPDATE issues SET ${assignments}, status_version = status_version + 1
-          WHERE id = ? AND status = ? RETURNING *`,
+          WHERE id = ? AND status = ? RETURNING id`,
       )
-      .get(...(Object.values(columns) as never[]), ancestor.id, ancestor.status) as unknown as
-      | IssueRow
-      | undefined;
-    if (!written) return false;
+      .get(...(Object.values(columns) as never[]), ancestor.id, ancestor.status) as { id: string } | undefined;
+    if (!landed) return false;
+    const written = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(landed.id) as unknown as IssueRow;
 
     /**
      * Reuses `status_changed` rather than minting a kind, for a concrete reason:

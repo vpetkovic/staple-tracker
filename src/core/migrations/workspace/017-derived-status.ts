@@ -22,8 +22,20 @@ import type { Migration } from "../types.js";
  *
  * ## Cleared by any other move, whichever path makes it
  *
- * The trigger clears the column when the status or the claim moves without the column moving
- * with it. Derivation's own write sets both in one statement, so only it keeps the column;
+ * The invariant is `derived_status IS NULL OR derived_status = status`, held by two triggers.
+ * After an update of the status, the column or the claim, the column is cleared when
+ *
+ *  - it names a status the row does not hold — whatever wrote it, an operation from a device
+ *    that has not caught up included; or
+ *  - it did not move while the status or the claim did, and it was valid before. That is
+ *    somebody else's move: derivation's own write sets both in one statement.
+ *
+ * The "valid before" half is what keeps derivation's write when the old value was stale: a row
+ * `{todo, done}` that derivation closes to `{done, done}` leaves the column unchanged, and
+ * without it that write would be read as a hand move and cleared. With the invariant held,
+ * that row cannot arise any more; the clause makes the trigger right on it all the same. A new
+ * row whose column names another status is cleared the same way. Derivation's own write sets
+ * both in one statement, so only it keeps the column;
  * every other door — a status write from the CLI, MCP or the UI, a gate, a checkout, a steal,
  * a release, a vocabulary migration, an applied operation from a device that is not on this
  * build — clears it, as a manual event made the log's answer "manual" before. Stated once, in
@@ -70,10 +82,21 @@ export const migration: Migration = {
        WHERE EXISTS (SELECT 1 FROM issues WHERE derived_status IS NOT NULL);
 
       CREATE TRIGGER issues_derived_status_cleared
-      AFTER UPDATE OF status, checkout_agent, checkout_at ON issues
+      AFTER UPDATE OF status, derived_status, checkout_agent, checkout_at ON issues
       WHEN NEW.derived_status IS NOT NULL
-       AND NEW.derived_status IS OLD.derived_status
-       AND (NEW.status IS NOT OLD.status OR NEW.checkout_agent IS NOT OLD.checkout_agent OR NEW.checkout_at IS NOT OLD.checkout_at)
+       AND (
+             NEW.derived_status IS NOT NEW.status
+          OR (    NEW.derived_status IS OLD.derived_status
+              AND OLD.derived_status IS OLD.status
+              AND (NEW.status IS NOT OLD.status OR NEW.checkout_agent IS NOT OLD.checkout_agent OR NEW.checkout_at IS NOT OLD.checkout_at))
+           )
+      BEGIN
+        UPDATE issues SET derived_status = NULL WHERE id = NEW.id;
+      END;
+
+      CREATE TRIGGER issues_derived_status_created
+      AFTER INSERT ON issues
+      WHEN NEW.derived_status IS NOT NULL AND NEW.derived_status IS NOT NEW.status
       BEGIN
         UPDATE issues SET derived_status = NULL WHERE id = NEW.id;
       END;

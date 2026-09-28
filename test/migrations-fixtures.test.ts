@@ -164,8 +164,8 @@ const RUN_SCHEMA_OBJECTS = [
 /** Everything migration 016 (milestone goal mode) adds: the criterion marks table and its primary key. */
 const GOAL_SCHEMA_OBJECTS = ["index:sqlite_autoindex_milestone_criterion_marks_1", "table:milestone_criterion_marks"];
 
-/** Everything migration 017 (derived status) adds besides its column: the trigger that clears it. */
-const DERIVED_STATUS_SCHEMA_OBJECTS = ["trigger:issues_derived_status_cleared"];
+/** Everything migration 017 (derived status) adds besides its column: the triggers that hold it to the status. */
+const DERIVED_STATUS_SCHEMA_OBJECTS = ["trigger:issues_derived_status_cleared", "trigger:issues_derived_status_created"];
 
 /** The schema a database created today has — the target every upgrade converges on. */
 function freshWorkspaceSchema(): string {
