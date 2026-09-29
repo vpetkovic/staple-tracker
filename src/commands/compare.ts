@@ -1,7 +1,7 @@
 /**
  * `staple compare <ref> <ref> [...]`: the certified plan of each named issue side by side —
  * total labor, estimate coverage and the critical path — with no tree in the output
- * (docs/cli.md, "Comparing plans"). One store method, `WorkspaceStore.comparePlans`, which MCP
+ * (design/cli.md, "Comparing plans"). One store method, `WorkspaceStore.comparePlans`, which MCP
  * `compare_plans` and HTTP `/api/compare` call too, so `--json` and the tools answer one shape.
  */
 import { parseArgs } from "node:util";

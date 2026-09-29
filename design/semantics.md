@@ -22,7 +22,7 @@ automatically as a side effect of the transition, never by a caller.
 
 Every issue carries a `kind` (`issues.kind`, NOT NULL, default `task`). The
 default is the registered workspace setting `kinds.default` (see
-[configuration.md](../docs/configuration.md#the-settings-registry)): `task` until a
+[configuration.md](configuration.md#the-settings-registry)): `task` until a
 workspace chooses otherwise, and a chosen kind that is later removed resets it.
 Like statuses, the vocabulary is data: it lives in `workspace_kinds` and is edited
 with `staple kinds` or MCP `update_kinds`, so validation asks the workspace what
@@ -167,7 +167,7 @@ contributions** — never both. That one rule is what lets a middle epic nobody
 estimated pass its children's plan up to its parent while a parent's plan and
 its descendants' are never counted twice in one ancestor total. The depth-1
 `childrenEstimatedSeconds` keeps its meaning beside it; the recursive figure is
-`subtreePlan` (see [Estimates vs actuals](../docs/cli.md#estimates-vs-actuals)).
+`subtreePlan` (see [Estimates vs actuals](cli.md#estimates-vs-actuals)).
 
 The automatic close does not replace the summary. `children_complete` still
 fires when the last child lands (before the close, so the wake is never

@@ -155,5 +155,5 @@ machine can adopt it. That is a separate consent, off until you grant it with
 
 - [Cloud sync](cloud-sync.md): share a workspace between machines.
 - [Web UI tour](web-ui.md): the views `open --hub` serves.
-- [CLI reference](cli.md#the-machine-registry): tidying the hub; `staple help`
+- [CLI reference](cli.md#several-repositories): tidying the hub; `staple help`
   lists every hub command.

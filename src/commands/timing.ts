@@ -1,6 +1,6 @@
 /**
  * `staple timing quality`: the quality states of a filtered population's timing records and
- * their coverage over the eligible population (docs/cli.md, "Timing quality"). One store
+ * their coverage over the eligible population (design/cli.md, "Timing quality"). One store
  * method, `WorkspaceStore.timingQuality`, which MCP `timing_quality` and HTTP
  * `/api/timing/quality` call too, so `--json` and the tools answer one shape.
  */

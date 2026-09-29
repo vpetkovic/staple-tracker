@@ -1,6 +1,6 @@
 /**
  * `staple forecast <ref>`: the completion forecast of an issue and, apart from it, the budget
- * forecast of that work on this machine (docs/cli.md, "Forecasts"). One store method,
+ * forecast of that work on this machine (design/cli.md, "Forecasts"). One store method,
  * `WorkspaceStore.forecast`, which MCP `forecast` and HTTP `/api/forecast` call too, so `--json`
  * and the tools answer one shape.
  */

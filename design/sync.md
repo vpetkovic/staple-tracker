@@ -2848,7 +2848,7 @@ sustained one.
 `StapleErrorCode` member. A sync failure's envelope `code` is the service's code,
 its `retryable` is the column above, and the CLI exits with the code's own number:
 `validation` 2, `not_found` 3 and `conflict` 4, shared with the tracker, then 11 to
-21 in this table's order ([cli.md](../docs/cli.md#exit-codes)). A refusal the client makes
+21 in this table's order ([cli.md](cli.md#exit-codes)). A refusal the client makes
 before sending has the same shape as the service's. Examples are the handshake's
 `protocol_unsupported`, a pulled operation's `schema_ahead`, an oversized seed row's
 `payload_too_large` and the backup consent's `forbidden`. `src/core/cloud/errors.ts`

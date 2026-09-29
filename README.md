@@ -63,7 +63,7 @@ the MCP wiring and the loop your agents follow, one ticket from created to done.
   task detail, autopilot runs and settings, on localhost ([web UI](https://github.com/vpetkovic/staple-tracker/blob/master/docs/web-ui.md)).
 - **Budget and estimates.** Estimates against measured agent work, calibrated
   forecasts, and the Claude and Codex rate-limit windows the work will cost
-  ([timing](https://github.com/vpetkovic/staple-tracker/blob/master/docs/budget-and-estimates.md), [provider budget](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md#provider-budget)).
+  ([timing](https://github.com/vpetkovic/staple-tracker/blob/master/docs/budget-and-estimates.md), [provider budget](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md#budget-and-estimates)).
 - **The hub.** Every workspace on the machine registers in one hub, with unique
   prefixes, cross-repository `blocks` links and a hub-wide inbox
   ([several repositories](https://github.com/vpetkovic/staple-tracker/blob/master/docs/hub.md)).

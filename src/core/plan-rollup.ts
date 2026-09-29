@@ -1,6 +1,6 @@
 /**
  * The certified plan of a subtree: its LABOR, its estimate COVERAGE, its PLANNED path and its
- * REMAINING path (`docs/cli.md`, "Comparing plans"). Pure: the store reads the rows and hands
+ * REMAINING path (`design/cli.md`, "Comparing plans"). Pure: the store reads the rows and hands
  * them in.
  *
  * ## Plan units

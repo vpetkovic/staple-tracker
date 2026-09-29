@@ -121,7 +121,7 @@ it holds a whole epic until you approve it.
 
 `staple statuses ls` prints your workspace's list. You can rename, add and reorder
 statuses; each belongs to a fixed category, which is what staple reads, so renaming
-`done` changes nothing about how it behaves. The [CLI reference](cli.md#kinds) has
+`done` changes nothing about how it behaves. The [CLI reference](cli.md#set-up-and-diagnose) has
 the commands.
 
 ## Next

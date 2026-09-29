@@ -185,7 +185,7 @@ they will do and want the repository id typed back.
 
 - [Several repositories](hub.md): one machine, many workspaces.
 - [Handoff](handoff.md): hand a ticket from one session or machine to another.
-- [CLI reference](cli.md#at-a-glance): the `staple cloud` commands at a glance;
+- [CLI reference](cli.md#cloud-sync): the `staple cloud` commands at a glance;
   `staple cloud --help` lists every one.
 
 Going deeper: [the sync design](../design/sync.md) covers the service, self-hosting

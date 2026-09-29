@@ -11,7 +11,7 @@ choices behind the rules are under [Design decisions](#design-decisions).
 
 Two pages already define time numbers, and this one does not redefine either:
 
-- [cli.md](../docs/cli.md#estimates-vs-actuals) and `IssueTiming` in `src/core/types.ts`
+- [cli.md](cli.md#estimates-vs-actuals) and `IssueTiming` in `src/core/types.ts`
   define the issue's `timing`: `activeSeconds`, `ownActiveSeconds`,
   `reviewSeconds`, `countedThrough`, `approximate`, and the estimate fields
   `estimatedSeconds`, `childrenEstimatedSeconds` and `subtreePlan`.
@@ -26,7 +26,7 @@ out of agent work, and which measure the estimate ratio uses.
 
 Why a separate page rather than a section of [semantics.md](semantics.md): that page
 states what the store guarantees about an issue (statuses, claims, the graph,
-gates). The timing numbers are specified in docs/cli.md and the attempt numbers in
+gates). The timing numbers are specified in design/cli.md and the attempt numbers in
 execution-telemetry.md. Putting the reconciliation in semantics.md would make it a
 third place defining `activeSeconds`. Here it is referenced and not restated.
 
@@ -87,15 +87,15 @@ The complete list. A field not in this table is not a timing field.
 
 | Field | Axis | One meaning | Defined in | Null means |
 |---|---|---|---|---|
-| `timing.estimatedSeconds` | plan | The issue's own recorded estimate. | docs/cli.md | none recorded |
-| `timing.subtreePlan.estimatedSeconds` | plan | The effective plan: own estimate, else the sum of the children's contributions. A cancelled issue's own estimate contributes nothing, while live work beneath it still does. Certified never to count a parent's estimate and its descendants' together. Coverage over plan units is `contributingCount` of `contributingCount + unplannedCount`. | docs/cli.md | no plan anywhere below |
-| `planSummary.criticalPath.seconds` | plan | The planned path: the longest in-subtree `blockedBy` chain of plan units, every unit at its estimate, parallel branches taking the max. Also on `staple compare` / `compare_plans`. Not a forecast. | docs/cli.md | no unit planned |
-| `planSummary.remainingPath.seconds` | plan | The longest chain over the same graph, with `done` units weighing 0: what is left of the plan. It can follow a different chain from the planned path. A unit in progress weighs its full estimate. | docs/cli.md | open units remain and none is planned |
-| `timing.childrenEstimatedSeconds` | plan | Sum of direct children's own estimates. | docs/cli.md | no child estimated |
+| `timing.estimatedSeconds` | plan | The issue's own recorded estimate. | design/cli.md | none recorded |
+| `timing.subtreePlan.estimatedSeconds` | plan | The effective plan: own estimate, else the sum of the children's contributions. A cancelled issue's own estimate contributes nothing, while live work beneath it still does. Certified never to count a parent's estimate and its descendants' together. Coverage over plan units is `contributingCount` of `contributingCount + unplannedCount`. | design/cli.md | no plan anywhere below |
+| `planSummary.criticalPath.seconds` | plan | The planned path: the longest in-subtree `blockedBy` chain of plan units, every unit at its estimate, parallel branches taking the max. Also on `staple compare` / `compare_plans`. Not a forecast. | design/cli.md | no unit planned |
+| `planSummary.remainingPath.seconds` | plan | The longest chain over the same graph, with `done` units weighing 0: what is left of the plan. It can follow a different chain from the planned path. A unit in progress weighs its full estimate. | design/cli.md | open units remain and none is planned |
+| `timing.childrenEstimatedSeconds` | plan | Sum of direct children's own estimates. | design/cli.md | no child estimated |
 | `attempt.estimateAtStart` | plan | A reading of `subtreePlan` at the moment the attempt opened, stored with the attempt. For a parent whose plan is built from descendants, readings taken since the rollup was certified leave out cancelled work (a cancelled issue's own estimate). Readings stored before that include it, so an older and a newer record of the same tree can differ by exactly that amount. | execution-telemetry.md | never null |
-| `timing.ownActiveSeconds` | elapsed | Seconds this issue itself sat in the `active` category, summed over intervals not opened by a derived flip, with an open interval ending at `countedThrough`. | docs/cli.md | never active |
-| `timing.activeSeconds` | elapsed | The comparable form of `ownActiveSeconds`: a leaf's own, a parent's sum over direct children, `null` when cancelled. The number surfaces print as "ran". | docs/cli.md | never active, or cancelled |
-| `timing.reviewSeconds` | elapsed | Seconds in the `review` category, non-derived intervals only. An open interval ends at the read's `asOf` ([decision 3](#design-decisions)). | docs/cli.md | never in review |
+| `timing.ownActiveSeconds` | elapsed | Seconds this issue itself sat in the `active` category, summed over intervals not opened by a derived flip, with an open interval ending at `countedThrough`. | design/cli.md | never active |
+| `timing.activeSeconds` | elapsed | The comparable form of `ownActiveSeconds`: a leaf's own, a parent's sum over direct children, `null` when cancelled. The number surfaces print as "ran". | design/cli.md | never active, or cancelled |
+| `timing.reviewSeconds` | elapsed | Seconds in the `review` category, non-derived intervals only. An open interval ends at the read's `asOf` ([decision 3](#design-decisions)). | design/cli.md | never in review |
 | `timing.countedThrough` | instant | Where a leaf's open active interval stopped counting. Held issue: the holder's `lastActivityAt`. Unheld issue (a status write into `active` with no checkout): the newest event, comment or document revision by **any** actor on the issue. Comments and revisions count because they replicate and their events do not, so a device that read the tail stops the interval where the writer does. A comment deleted later still counts, as its event on the writer does. | cli.md, `store.ts` `timingFor` | no open active interval, or a parent |
 | `timing.approximate` | quality | The event log could not be replayed, so the numbers came from the fallback: `completedAt − startedAt` for `done`, `now − startedAt` for `active` and `review`, `null` otherwise. A parent is also `approximate` when any child is (the flags are ORed up). | cli.md, `store.ts` `approximateActiveOf` | never null |
 | `claim.lastActivityAt` | instant | The newest event, comment or document revision by the holder on the issue, floored at `checkoutAt`. A comment deleted later still counts. | semantics.md | not held |
@@ -1336,7 +1336,7 @@ and `src/core/telemetry/forecast-budget.ts`, and `method` in every report states
 
 ### Completion
 
-**Units.** The units are the certified plan's ([Comparing plans](../docs/cli.md#comparing-plans-staple-compare)):
+**Units.** The units are the certified plan's ([Comparing plans](cli.md#comparing-plans-staple-compare)):
 every unit once, a parent's own estimate shadowing the estimates beneath it, a
 cancelled issue no unit. An issue with no child carrying live work is its own single
 unit (`subject.scope: "unit"`); otherwise its units are beneath it (`"subtree"`).
@@ -1761,7 +1761,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
 ## Where the numbers appear
 
 `timing` on every detail surface (`staple show --json`, MCP `get_task`, HTTP
-`/api/issue` and `/api/agent-context`) carries, beside the fields docs/cli.md defines:
+`/api/issue` and `/api/agent-context`) carries, beside the fields design/cli.md defines:
 
 ```json
 {

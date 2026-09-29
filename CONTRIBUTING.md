@@ -109,7 +109,7 @@ Adding a setting to *Work Workspace Settings* needs no change to the app: the
 navigation, the control and the validation all come from the registry entry.
 The checklist — definition fields, choosing the scope, when a workspace
 migration is required, which pinned inventories move, which tests to add — is
-[docs/configuration.md → Adding a setting](docs/configuration.md#adding-a-setting).
+[design/configuration.md → Adding a setting](design/configuration.md#adding-a-setting).
 
 ## Building and drilling the package
 

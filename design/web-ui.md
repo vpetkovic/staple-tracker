@@ -977,7 +977,7 @@ row's dependency badge: *Blocked by* and *Blocks*, read-only.
 
 The **Time** tab (`detail/tabs/AnalyticsTab.tsx`; the tab id stays `analytics`)
 is estimate versus actual for one issue, drawn from the `timing` and
-`childrenTiming` the issue payload already carries (see [cli.md](../docs/cli.md),
+`childrenTiming` the issue payload already carries (see [cli.md](cli.md),
 "Estimates vs actuals"). The page adds nothing up itself, so it can never
 disagree with `staple show` or with MCP `get_task`, and it runs no stopwatch of
 its own: figures move on the 1.5s poll.
@@ -1372,7 +1372,7 @@ envelope, so the page re-derives from one response rather than merging. It is
 the only route that both reads and writes.
 
 The same envelope carries the **settings registry**
-(see [configuration.md](../docs/configuration.md#the-settings-registry)): `registry`
+(see [configuration.md](configuration.md#the-settings-registry)): `registry`
 lists every category with its scope and editor and every typed definition;
 `values` holds this workspace's registered values, each with its `source`
 (`default` or `workspace`) and version; `unknownKeys` names stored keys this
@@ -1401,7 +1401,7 @@ it to the page: nothing in the form names a setting.
 
 **Picking up work** (the registry's *Workflow* category, id `queue`) is the
 first such section in workspace scope, and its control is the queue policy
-([configuration.md](../docs/configuration.md#queuepolicy)): a select over `advisory`
+([configuration.md](configuration.md#queuepolicy)): a select over `advisory`
 and `strict`, with the registry's description stating before you save what
 `strict` changes for agents, and the scope tag beside it saying *Workspace ·
 default* until a value is stored and *Workspace · workspace* after. The
@@ -1416,7 +1416,7 @@ the sentence naming `staple config set`.
 
 Adding a setting or a category of your own is a registry entry and nothing
 else — the checklist is
-[configuration.md → Adding a setting](../docs/configuration.md#adding-a-setting). That
+[configuration.md → Adding a setting](configuration.md#adding-a-setting). That
 the claim holds end to end is asserted rather than assumed:
 `test/settings-verification.test.ts` registers a category no build has ever
 had, serves it through the real HTTP server and renders this shell from that
@@ -1586,7 +1586,7 @@ Every kind wears one **appearance** record — `{ source, value, label, fallback
 — resolved by the server and served on each row of `/api/settings` `kinds[]`,
 the same record `staple kinds ls --json` and MCP `list_kinds` answer. The
 operator's choices live in the `kinds.appearance` workspace setting (see
-[configuration.md](../docs/configuration.md#the-settings-registry)); a kind with no
+[configuration.md](configuration.md#the-settings-registry)); a kind with no
 entry wears the built-in mark, and a kind that has none wears a generic one.
 `lib/kind-appearance.ts` mirrors the built-in table so the first paint, before
 the fetch lands, already shows the right marks, and `kindAppearance(id)` in

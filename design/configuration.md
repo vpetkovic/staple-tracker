@@ -1,0 +1,420 @@
+# Configuration in detail
+
+How staple resolves its home, how the settings registry defines, stores and validates every setting, how to add one, and what `config.json` and the budget collection state hold, for people working on staple. The user reference is [docs/configuration.md](../docs/configuration.md).
+
+Everything staple keeps per-machine — `hub.db`, the UI token, `config.json`,
+and global workspaces — lives in one directory, the **staple home**. It is
+resolved in exactly one place (`src/config/`), in this order:
+
+| # | Source | Notes |
+|---|---|---|
+| 1 | `--home <path>` | Configuration and diagnostic commands only, not a global flag |
+| 2 | `STAPLE_HOME` | Wins over the locator; handy for tests and portable setups |
+| 3 | Bootstrap locator | Written by `staple config home`; see the table below |
+| 4 | `~/.staple` | The default when nothing else says otherwise |
+
+The **bootstrap locator** deliberately lives *outside* the home, because a file
+that says where the home is cannot live inside it:
+
+| Platform | Locator |
+|---|---|
+| macOS | `~/Library/Application Support/Staple/bootstrap.json` |
+| Linux | `$XDG_CONFIG_HOME/staple/bootstrap.json`, else `~/.config/staple/bootstrap.json` |
+| Windows | `%APPDATA%\Staple\bootstrap.json` |
+
+Schema v1 is `{ "schemaVersion": 1, "home": "<absolute-path>" }`, written 0600
+in a 0700 directory. A relative path, a filesystem root, or an unknown
+`schemaVersion` is refused rather than guessed at; an *absent* locator is not an
+error, it just means `~/.staple`.
+
+## The settings registry
+
+Every setting staple has — machine preference or workspace setting — has one
+typed definition in `src/core/settings-registry.ts`: a namespaced key
+(`category.name`), a category, a value schema, a default, a **scope**, a
+version with an optional migrate hook, a sensitivity flag, and the label,
+description and control the UI renders it with. Nothing else carries a second
+copy of a default or a value check; the config file, the workspace store, the
+CLI and `/api/settings` all validate through the registry, on read *and* on
+write, and refuse with a sentence that names the key.
+
+Scope is physical, not a label:
+
+| Scope | Lives in | Written by | Examples |
+|---|---|---|---|
+| `global` | `<home>/config.json`, under the field the definition names | `staple config set` | `machine.browser`, `machine.port`, `machine.setupComplete` |
+| `workspace` | the workspace database (`meta` rows keyed `setting:<key>`) | `staple settings set`, `set_setting`, `POST /api/settings` with `target: "settings"` | `kinds.default`, `kinds.appearance`, `queue.policy` |
+
+Those six are every registered setting today:
+
+| Key | Scope | Values | Default | Set with |
+|---|---|---|---|---|
+| `machine.browser` | global | `auto`, `always`, `never` | `auto` | `staple config set browser <value>` |
+| `machine.port` | global | integer 1–65535 | `4400` | `staple config set port <value>` |
+| `machine.setupComplete` | global | `true`, `false` | `false` | `staple config set setupComplete <value>` |
+| `kinds.default` | workspace | a configured kind id | `task` | `staple settings set kinds.default <kind>` |
+| `kinds.appearance` | workspace | a map of kind id to glyph (below) | `{}` | the web Settings → Task types; a map cannot be typed at `settings set` or sent through `set_setting` |
+| `queue.policy` | workspace | `advisory`, `strict` | `advisory` | `staple settings set queue.policy <value>` |
+
+A workspace key is refused on the config surface and a global key is refused
+on the workspace surface, each refusal naming the surface that does own it.
+
+### `queue.policy`
+
+A feature control in the **Workflow** category (registry id `queue`, because a
+key is namespaced by its category). It is defined as
+[queue.md](../docs/queue.md#5-choose-advisory-or-strict) names it: workspace scope,
+`advisory | strict`, default `advisory`.
+
+- `advisory` — the queue orders and explains; a checkout is never refused for
+  order. Upgrading a workspace changes nothing an agent can observe until a
+  human sets `strict`.
+- `strict` — an agent's checkout of a later item is refused (`out_of_order`,
+  exit 10) while an earlier eligible item exists, and the refusal names what to
+  take instead. Dependencies, approval gates and live claims stay hard
+  constraints under both values.
+
+The registry defines, stores and exposes the value; the checkout resolver in
+the store reads it, and the set of values is `QUEUE_POLICIES` in the registry
+rather than a second copy. The definition's description carries
+the side effect, so every surface can show what `strict` changes *before* a
+save, and every change is a `setting_changed` event with actor, previous and
+new value. The same `{ value, source }` pair is answered by `staple settings
+get queue.policy`, the `get_setting` tool, `/api/settings` `values`, and the
+UI's `settingValue()` — pinned by `test/contract-settings-surfaces.test.ts`.
+
+Workspace values are stored as `{ "v": <version>, "value": … }`. Reading a
+value written at an **older** version runs the definition's migrate hook
+(deterministic, no clock, no I/O) or falls back to the default when there is
+none; reading one written at a **newer** version is refused rather than
+reinterpreted, exactly as `config.json` refuses a newer `schemaVersion`. A
+`setting:*` row this build has no definition for is preserved byte for byte
+and reported as an unknown key — downgrading never truncates configuration.
+Every change logs a `setting_changed` event with the actor, the previous
+value and the new one.
+
+`kinds.appearance` is the one structured value: a map from kind id to
+`{ source, value, fallback, label? }`, holding only the kinds somebody
+customised. `source` is `lucide` (a canonical key, `triangle-alert`), `emoji`,
+or `none` (an empty value: draw the built-in mark); `svg` is accepted only as
+the sanitiser's canonical output — the exact string `sanitizeSvg` writes, which
+the settings page obtains from `POST /api/glyph/sanitize` and stores verbatim,
+never the raw document somebody pasted. `fallback` is what a terminal prints, one to four
+characters; `label` overrides the kind's own label for assistive tech and may
+be omitted. Any other field — a colour, say — is refused: hue belongs to a
+status category, never to a kind. A key must name a configured kind, and
+`kinds rm` drops the kind's entry in the same transaction. A kind with no
+entry resolves to staple's built-in mark (`epic` → `layers` ◆, `task` →
+`square-check` ◇, `bug` → `bug` ✱, `chore` → `wrench` ↻, `spike` → `zap` ↯,
+`milestone` → `milestone` ⚑) or, for any other id, to a generic `•`; the
+built-in marks are code, not rows, which is why an existing database needs no
+migration to wear them and custom kinds keep their order.
+
+The registry also lists the **categories** — Statuses, Kinds, Workflow, This
+machine — with the editor each one needs, so the settings UI enumerates those
+sections from the registry rather than hard-coding tabs. The web Settings sheet
+adds its own sections beside them for things that are not registry settings
+(Cloud account, Workspaces on this computer, Usage, Cloud sync; see
+`src/ui/app/src/settings/settings-shell.ts`). Adding a setting or a registry
+category is a registry entry (plus a field on `StapleConfig` for a global one);
+no shell component changes.
+
+Workspace values have their own commands, the workspace twin of `config`:
+
+```bash
+staple settings                       # every registered workspace setting: key = value  (source)
+staple settings get queue.policy      # one, e.g.  queue.policy = advisory  (default)
+staple settings set queue.policy strict
+staple settings get queue.policy --json
+# {"key":"queue.policy","scope":"workspace","source":"workspace","version":1,"value":"strict"}
+```
+
+`source` is `default` (nothing stored) or `workspace` (someone set it). The
+value is coerced and validated through the registry — `queue.policy` takes
+only `advisory` or `strict`, exit 2 otherwise — and the write is attributed to
+`STAPLE_AGENT` (or `$USER`). A global key such as `machine.port` is refused
+here with the sentence naming `staple config set`.
+
+## Adding a setting
+
+A setting is added by *registering* it. There is no shell component to edit, no
+tab to add and no client-side copy of the default to keep in step — the
+navigation, the control, the scope tag and every surface's validation are all
+derived from the definition. Registration is process-local, so put the entry in
+`SETTING_DEFINITIONS` — that array is evaluated at import in every process, while
+`registerSettingDefinition()` (the runtime way in, used by tests and embedders)
+registers only the process that calls it, and must be called before that process
+reads or writes the key. Work down this list.
+
+**1. Write the definition** in `src/core/settings-registry.ts`, in
+`SETTING_DEFINITIONS`:
+
+| Field | What to put there |
+|---|---|
+| `key` | `category.name`. **Stable forever** — it is the persistence key. Must be namespaced by an existing category id. |
+| `category` | An id in `SETTING_CATEGORIES`. Add one there if the setting is not about anything that already exists. |
+| `scope` | `workspace` or `global`. See below; it must match the category's scope. |
+| `schema` | One of `boolean`, `integer` (with `min`/`max`), `string` (with `pattern` + `patternHint`), `enum` (with `values`). A new shape is a new arm of `SettingSchema`, never `unknown`. |
+| `default` | The value when nothing is stored. It is validated against its own schema at import, so a bad default fails the process rather than the first user. |
+| `version` | Starts at `1`. Bump only when the persisted value's **meaning** changes. |
+| `migrate` | Optional, and only alongside a `version` bump. Deterministic: same input, same output, no clock, no I/O. |
+| `sensitivity` | `normal`, or `sensitive` for a value that must never leave the process on a read surface (the wire view then carries `redacted: true` and no value). |
+| `ui` | `label`, `description`, `control` (`toggle`/`number`/`text`/`select`) and `order` within the category. The description is the only place a **side effect** can be stated before Save — say what changes, as `queue.policy` does. |
+| `configKey` | Global scope **only**: the top-level `config.json` field the value is stored under. Required for a global setting, forbidden for a workspace one. |
+
+**2. Choose the scope by where the value belongs, not by who edits it.**
+A `workspace` setting is a fact about *this project's work* and travels with the
+database — every clone and every agent sees it. A `global` setting is a
+preference of *this computer* and never leaves it. Ask: would a teammate
+opening the same workspace want this value? Yes → `workspace`. Would it be
+wrong on somebody else's machine (a port, a browser choice) → `global`. A
+global setting also needs its field added to `StapleConfig` in
+`src/config/file.ts`; a workspace setting needs nothing outside the registry.
+
+**3. Versioning, and when a workspace migration is required.**
+
+- **Never**, for a new setting. A key with no stored row simply reads its
+  default, on every existing workspace, at every schema version. Adding a
+  setting is not a schema change: workspace values live in `meta` rows keyed
+  `setting:<key>` that the `meta` table has always been able to hold.
+- **Never**, for changing a default. Only workspaces that *stored* a value keep
+  it; the rest pick the new default up.
+- **A `version` bump plus a `migrate` hook**, when the meaning of an existing
+  stored value changes (an enum member is renamed, a number changes unit). The
+  hook is what reads the old value; without one, an older value is discarded for
+  the default. A stored value written at a *newer* version is refused, never
+  reinterpreted.
+- **A real workspace migration** (`src/core/migrations/workspace/00N-*.ts`),
+  only when the *shape of the database* has to change — a new table or column.
+  Moving a value into or out of `meta` is such a change; adding a setting is not.
+
+**4. Which pinned inventories change.** Each of these deliberately restates the
+whole registered set, so a new entry shows up as a failing test rather than as a
+surprise months later. Update them in the same commit:
+
+- `test/settings-registry.test.ts` — "registers the three machine preferences as
+  global and three workspace field settings", and, for a new category, "lists
+  statuses, kinds and the Workflow category…".
+- `test/store-settings.test.ts` — the workspace list read (`settingValues()`).
+- `test/characterize-cli-surface.test.ts` — the `staple settings` output.
+- `docs/cli.md` and this file, when the setting is one a user is told about.
+
+**5. Which tests to add.** Follow the neighbouring file's style; the harnesses
+already exist.
+
+- The definition itself — `test/settings-registry.test.ts`: schema, default,
+  scope, and the sentence the description owes the user.
+- The value through the store — `test/store-settings.test.ts`: default, set,
+  reset, refusal, and the `setting_changed` event.
+- All four surfaces agreeing — `test/contract-settings-surfaces.test.ts`, if the
+  setting is one agents read.
+- The render — nothing, usually. `src/ui/app/src/settings/fields-form.test.tsx`
+  already proves that each *schema* renders its control, so a new definition of
+  an existing shape needs no UI test. A new `SettingCategoryEditor` does: it is a
+  new arm of `CategoryContent`.
+- The scope guarantee and the shell as a whole are covered once, for every
+  setting, by `test/settings-verification.test.ts` and
+  `src/ui/app/src/settings/settings-verification.test.tsx`.
+
+## `config.json`
+
+`<home>/config.json` holds durable preferences only — never per-project state,
+which belongs in the workspace database. Its known fields are the registry's
+global definitions plus `schemaVersion`, `connectors` and `telemetry`
+(`KNOWN_KEYS` in `src/config/file.ts`).
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "browser": "auto",        // auto | always | never
+  "port": 4400,             // preferred UI port
+  "setupComplete": false,
+  "connectors": {},         // connector receipts; no connector is implemented, doctor lists them unverified
+  "telemetry": {            // provider budget capture: opt-in, off by default
+    "budgetCapture": false,
+    "livePolling": false,   // absent means false; see "Budget capture and source bindings" below
+    "bindings": []
+  }
+}
+```
+
+Three properties are load-bearing:
+
+- **Sparse.** Only keys you actually set are written. Defaults stay live, so
+  changing a default later still reaches machines that ran `config set` once.
+- **Forward-compatible.** Keys written by a newer staple are preserved untouched
+  across a rewrite by an older one, instead of being silently dropped.
+- **Refused, not replaced.** A corrupt file or a newer `schemaVersion` is a hard
+  validation error naming the path. Falling back to defaults would read as
+  robustness and behave as data loss — the next write would overwrite the file.
+
+Both files are written through a validated temporary file in the same directory
+and then `rename(2)`d over the target, so a reader sees the old bytes or the new
+bytes, never half of each.
+
+### Budget capture and source bindings
+
+`telemetry` holds the machine's consent to read provider usage from a harness
+and the account each harness home spends from
+([execution-telemetry.md](execution-telemetry.md#source-bindings-produce-the-account)).
+It is a structured field like `connectors`, not a registered setting, because
+a list of bindings is not a shape the settings registry has.
+
+```jsonc
+"telemetry": {
+  "budgetCapture": true,
+  "bindings": [
+    { "source": "claude_code_statusline", "configDir": "~/.claude", "provider": "anthropic", "accountRef": "personal-max" },
+    { "source": "codex_rollout", "home": "~/.codex", "provider": "openai", "accountRef": "codex-plus" }
+  ]
+}
+```
+
+- **Live polling is a separate consent.** `livePolling` (set by
+  `staple budget live on --yes`, or `budget setup --live`) is the one budget
+  setting that makes a network call: each collect asks each bound provider for
+  the account's current usage. It is off by default, and absent means off.
+- **Off until you turn it on.** With `budgetCapture` false (the default), a
+  harness source is refused and nothing is read from it, and so is any reading an
+  agent sends through the MCP tool. The one exception is a reading you type
+  yourself, `staple budget ingest --source manual` at the CLI.
+- **The account is a label you choose**, `[a-z0-9][a-z0-9-]{0,63}`. Neither
+  source says which account it measures, so a Claude Code binding is keyed by
+  its config directory (`CLAUDE_CONFIG_DIR`, or `~/.claude`) and a Codex binding
+  by the home that contains the rollout (`CODEX_HOME`, or `~/.codex`). With no
+  binding and no `--account`, ingestion is refused (`validation`,
+  `detail.reason: "no_binding_configured"`).
+- **A folder given to `bind`** (`--config-dir`, `--codex-home`, or the same
+  fields from the web Settings) must be an absolute path or start with `~`.
+  A relative path would name a different folder depending on where staple
+  runs next, so it is refused (`detail.reason: "invalid_path"`), at the CLI and
+  in the web Settings alike. Finding an existing binding (`unbind`, or the
+  binding an edit replaces) is not checked, so a binding an older staple
+  stored with a relative folder can still be removed or edited.
+- **Editing a binding** (`bind … --replace-source S [--replace-dir D]`, or
+  *Edit* in the web Settings) swaps that binding for the new one in one write,
+  in its place in the list. It is refused, with nothing written, when the
+  binding is gone (`not_found`) or when the new folder already has a binding
+  of its own (`conflict`, `home_taken`): an edit never removes a binding it
+  was not asked to.
+- A binding for a source this build does not know is kept as written and never
+  used for matching, like any other key from a newer staple.
+- **One bad binding does not break the file.** An entry with an invalid field
+  (a hand-typed `"accountRef": "Personal-Max"`) is kept as written and never
+  matched, so readings from that home are refused rather than stored under a
+  bad label. `staple config` and `config set` keep working, `staple doctor`
+  warns on the `config` check, `staple budget bindings` lists it, and
+  `staple budget bind` for the same home replaces it.
+- **The structure itself is still enforced, deliberately.** `telemetry` that is
+  not an object, a `budgetCapture` that is not `true` or `false` (say
+  `"yes"`), or a `bindings` that is not an array refuses the file like any
+  other malformed field. A consent that cannot be read must not be guessed
+  in either direction: reading `"yes"` as on would capture without a clear
+  opt-in, and reading it as off would silently drop what the operator meant.
+
+```bash
+staple budget capture on
+staple budget bind --source claude-statusline --account personal-max   # binds $CLAUDE_CONFIG_DIR or ~/.claude
+staple budget bind --source codex-rollout --account codex-plus         # binds $CODEX_HOME or ~/.codex
+staple budget bindings
+```
+
+Or all of it, plus the status-line wrapper and the Codex watcher, as one
+explicit consent
+([execution-telemetry.md](execution-telemetry.md#automatic-collection)):
+
+```bash
+staple budget setup --claude-account personal-max --codex-account codex-plus        # the plan; changes nothing
+staple budget setup --claude-account personal-max --codex-account codex-plus --yes  # apply it
+staple budget status
+staple budget unsetup --yes                                                         # reverse exactly what setup did
+```
+
+The web app does the same from **Settings → Usage**
+([web-ui.md](web-ui.md#usage--budget)): capture on and off, bindings listed,
+added, edited and removed, and automatic collection turned on and off after
+its plan is shown. It calls the same store methods through
+`POST /api/budget/capture`, `POST /api/budget/live` and
+`POST /api/budget/bindings/{bind,unbind}`, with
+the CLI's validation, and writes the same `config.json`. Those writes are
+accepted only from this computer's browser.
+
+Automatic collection keeps its own machine-local state in the staple home, none
+of it in `config.json` and none of it replicated:
+
+| Path | What |
+|---|---|
+| `telemetry/collection.json` | what setup changed, so `unsetup` can reverse exactly that |
+| `telemetry/codex-cursor.json` | each rollout's size, mtime and where its last read stopped, and the last run's summary and error |
+| `telemetry/collect.lock` | held while a collect runs, so the agent and a hand-run collect never overlap |
+| `telemetry/usage-poll.json`, `telemetry/poll.lock` | live polling: what each binding was last asked and how it went (no credential, no response body), and the lock that keeps one poll at a time |
+| `logs/budget-collect.log`, `logs/budget-collect.agent.log` | one line per collect run, and the launch agent's own output; each rotated at 256 KiB |
+| `backups/claude-settings/` | a copy of `settings.json` before each edit; the newest 10 are kept |
+
+## Commands
+
+```bash
+staple config                       # effective settings and where each came from
+staple config --json                # the same, machine-readable
+staple config set port 4500         # browser | port | setupComplete — the three global settings
+staple config home /vol/staple --move --yes
+```
+
+`config` prints one setting per line with the key in a fixed 14-column field:
+
+```
+home          /Users/you/.staple  (default)
+config        /Users/you/.staple/config.json  (absent)
+locator       /Users/you/Library/Application Support/Staple/bootstrap.json  (absent)
+browser       auto  (default)
+port          4400  (default)
+setup         incomplete  (default)
+```
+
+The source label is the point. A setting's is `default` or `config`; the home's
+is `default`, `env`, `locator` or `flag`; the `config` and `locator` lines say
+whether the file is `present` or `absent`. A `4400` you chose and a `4400` you
+inherited are different facts. Workspace settings are not on this list; they
+are `staple settings` (above).
+
+## Moving the home
+
+Changing the home once data exists is a migration, not a key assignment:
+
+```bash
+staple config home /Volumes/work/staple --move --yes
+```
+
+It requires an absolute path, refuses a filesystem root, refuses a non-empty
+destination rather than merging into it, and refuses a destination nested inside
+the source. It checkpoints the databases, copies, **verifies the destination,
+and only then** updates the bootstrap locator — so a failure anywhere leaves the
+old home live and untouched. The old home is *retained* afterwards; delete it
+once you have confirmed the new one works.
+
+Two things it tells you about rather than silently paper over:
+
+- If `STAPLE_HOME` is set, it outranks the locator, so the move you just made
+  will not take effect until you unset it. You get a warning.
+- Hub registrations that point *inside* the old home are reported, not rewritten
+  — repointing them is `staple init` in the affected workspace.
+
+## Diagnosis
+
+```bash
+staple doctor                       # read-only: every check below
+staple doctor --json
+staple doctor --fix --only <check> --yes
+```
+
+The checks, by id: `node-runtime`, `home`, `home-space`, `config`, `locator`,
+`hub-database`, `hub-registrations`, `workspace`, `schema`,
+`workspace-hub-link`, `migration-journal`, `orphan-workspaces`, `queue`,
+`repository-prefix`, `sync-quarantine`, `ui-port`, `runtime`, `ui-assets` and
+`harnesses` (`src/commands/doctor.ts`). `harnesses` always reports `skip`: no
+harness connector is implemented, so it only lists any receipts already in
+`config.json`.
+
+`doctor` exits 1 when a check fails and prints the exact repair command. A bare
+`--fix` is refused with or without `--yes`; `--only` without `--yes` previews.
+A failed migration additionally needs `--keep legacy|new`.

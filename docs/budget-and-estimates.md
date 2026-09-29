@@ -171,8 +171,8 @@ the web UI shows the same per limit, with a gauge and a plain verdict.
 ## Next
 
 - [Web UI tour](web-ui.md): the Estimates and Usage views, and the Time tab.
-- [CLI reference](cli.md#estimates-vs-actuals): estimates and timing in full, and
-  [provider budget](cli.md#provider-budget).
+- [CLI reference](cli.md#budget-and-estimates): every estimate, timing and budget
+  command.
 - [Configuration](configuration.md): budget capture settings.
 
 Going deeper: [timing semantics](../design/timing-semantics.md) defines every time

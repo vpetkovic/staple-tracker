@@ -5,7 +5,7 @@
  *
  * ## The wrapper
  *
- * The recipe docs/cli.md documents, as a plain POSIX command list that the shell Claude
+ * The recipe design/cli.md documents, as a plain POSIX command list that the shell Claude
  * Code already uses runs directly (no nested `bash -c`):
  *
  *     : staple-statusline-wrapper/v2; __stf=$(mktemp); cat >| "$__stf"; exec 3<"$__stf" 4<"$__stf"; rm -f "$__stf"; unset __stf;

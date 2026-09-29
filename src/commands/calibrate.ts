@@ -1,6 +1,6 @@
 /**
  * `staple calibrate`: calibration cohorts over the trusted samples of a population
- * (docs/cli.md, "Calibration"). One store method, `WorkspaceStore.calibration`, which MCP
+ * (design/cli.md, "Calibration"). One store method, `WorkspaceStore.calibration`, which MCP
  * `calibration_cohorts` and HTTP `/api/calibration` call too, so `--json` and the tools answer
  * one shape.
  */

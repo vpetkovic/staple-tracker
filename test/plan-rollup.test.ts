@@ -7,7 +7,7 @@ import type { Issue } from "../src/core/types.js";
 import { PLANNED_WEIGHTS, REMAINING_WEIGHTS, planGraphOf, planStructureOf, walkPlanGraph, type PlanNode } from "../src/core/plan-rollup.js";
 
 /**
- * The certified plan (`core/plan-rollup.ts`, `docs/cli.md` "Comparing plans"): total labor,
+ * The certified plan (`core/plan-rollup.ts`, `design/cli.md` "Comparing plans"): total labor,
  * estimate coverage and the critical path, audited against adversarial trees. Every tree is
  * built by real store calls: estimates, cancellations and edges go through the same mutations
  * an agent makes, so the rollup is tested against the rows the tracker actually writes.
