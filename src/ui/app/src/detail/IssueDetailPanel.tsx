@@ -632,7 +632,7 @@ function Properties({
         {plan ? (
           <>
             <PropertyRow label="Due">
-              <MilestoneDue plan={plan} />
+              <MilestoneDue plan={plan} workspace={detail.workspace} />
             </PropertyRow>
             {plan.milestone.startDate ? (
               <PropertyRow label="Starts">

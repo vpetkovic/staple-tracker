@@ -203,6 +203,7 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "checkoutAt": null,
       "createdAt": "2026-09-10T00:00:00.000Z",
       "updatedAt": "2026-09-10T00:00:00.000Z",
+      "derivedStatus": null,
       "originEvents": []
     }
   },

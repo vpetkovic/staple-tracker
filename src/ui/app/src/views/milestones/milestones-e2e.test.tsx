@@ -40,6 +40,7 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { describeRefusal } from "@/lib/refusal";
+import { plainDue } from "./milestone-plain";
 import type {
   EffectiveQueueRow,
   IssueRow,
@@ -48,6 +49,13 @@ import type {
   MilestoneView,
   QueueView,
 } from "@/lib/types";
+import { useIssueActions } from "@/detail/IssueActions";
+import { gateCalls, toRequest } from "@/detail/plain-actions";
+import { SessionContext } from "@/lib/session";
+import { statusLabel } from "@/lib/settings";
+import type { IssueDetail } from "@/lib/types";
+import { fakeSession } from "@/views/fake-session";
+import { projectedDue } from "./milestone-plain";
 import {
   MilestoneDetailPane,
   MilestoneListPane,
@@ -218,13 +226,18 @@ describe("the page draws what the server sent", () => {
     const html = renderDetail(october);
     expect(html).toContain(`data-milestone-detail="${refs.october}"`);
     expect(html).toContain(`start ${october.milestone.startDate}`);
-    expect(html).toContain(`target ${october.milestone.targetDate}`);
+    expect(html).toContain(`data-due-source="target"`);
+    expect(html).toContain(plainDue(october.milestone.targetDate, october.milestone.state, NOW));
     // The note the member was added with, verbatim from the store.
     expect(html).toContain("pull the surfaces forward");
     // The rollups are the store's counts, and the blocked/gated cells are the ones
     // `docs/milestones.md` records as under-reporting (see the `it.todo` below).
     expect(html).toContain("data-milestone-rollups");
-    expect(html).toContain("1/4 done · 25%");
+    expect(html).toContain("1 of 4 tasks finished (25%).");
+    // The store counted five leaves and left the cancelled one out; the page says so, in the
+    // sentence and in the grid, rather than leaving a reader to wonder where it went.
+    expect(html).toContain("1 cancelled task is not counted.");
+    expect(html).toMatch(/Tasks counted<\/dt><dd[^>]*>4 \(1 cancelled not counted\)<\/dd>/);
 
     // Four direct members, and the member epic's own remaining child indented under it.
     expect(html.match(/data-member-role="member"/g)).toHaveLength(october.members.length);
@@ -459,15 +472,16 @@ describe("reordering members", () => {
 
     // And that is what the page draws — on the list rows and in the detail's rollups.
     const html = renderList(refs.october!, effective);
-    expect(html).toContain("⊘ 1 blocked");
-    expect(html).toContain("◇ 2 gated");
+    expect(html).toContain("⊘ 1 is blocked, waiting on other tasks.");
 
     const detail = renderDetail(november, { effective });
-    expect(detail).toContain("◇ 2");
-    expect(detail).toContain("◇ 2 gated");
-    // November's blocked line stays silent: MSC-4 is October's, not November's.
-    expect(detail).not.toContain("⊘ 1");
-    expect(renderDetail(october, { effective })).toContain("⊘ 1 blocked");
+    expect(detail).toMatch(/Blocked, waiting on a person<\/dt><dd[^>]*>2<\/dd>/);
+    // November's blocked cell reads zero: MSC-4 is October's, not November's.
+    expect(detail).toMatch(/Blocked, waiting on other tasks<\/dt><dd[^>]*>0<\/dd>/);
+    const octoberDetail = renderDetail(october, { effective });
+    expect(octoberDetail).toMatch(/Blocked, waiting on other tasks<\/dt><dd[^>]*>1<\/dd>/);
+    // MSC-4 has not started, so the bar files it as blocked and the sentence agrees.
+    expect(octoberDetail).toContain("1 is blocked, waiting on other tasks.");
   });
 });
 
@@ -475,3 +489,100 @@ describe("reordering members", () => {
 function rowsInOrder(html: string): string[] {
   return [...html.matchAll(/data-milestone-row="([^"]+)"/g)].map((match) => match[1]!);
 }
+
+// -------------------------------------------------------------- the due date and the gate, on the page
+
+/** The desk page for a milestone, with the detail's own action controller, as the page wires it. */
+function DeskPage({ view, detail }: { view: MilestoneView; detail: IssueDetail | null }) {
+  const controller = useIssueActions(noop);
+  return (
+    <MilestoneDetailPane
+      view={view}
+      members={memberListRows(view, issues, ws)}
+      now={NOW}
+      busy={false}
+      failure={null}
+      fullScreen={false}
+      onToggleFullScreen={noop}
+      onOpen={noop}
+      onMove={noop}
+      onRemove={noop}
+      onAdd={noop}
+      onReload={noop}
+      onDismissFailure={noop}
+      projection={projectedDue(view.remaining, NOW)}
+      due={{ busy: false, error: null, onSetTarget: async () => true }}
+      decision={detail ? { detail, controller } : null}
+      desk
+    />
+  );
+}
+
+const renderDesk = (view: MilestoneView, detail: IssueDetail | null) =>
+  renderToStaticMarkup(
+    <SessionContext.Provider value={fakeSession({ ws })}>
+      <DeskPage view={view} detail={detail} />
+    </SessionContext.Provider>,
+  );
+
+describe("the due date the calendar sets", () => {
+  it("sets the milestone's own target through the store's update route, and clearing it falls back", async () => {
+    const set = await post("/api/milestone/update", { ref: november.milestone.id, targetDate: "2026-12-01" });
+    expect(set.status).toBe(200);
+    expect((set.body as MilestoneView).milestone.targetDate).toBe("2026-12-01");
+    // The read agrees: the value persisted, and the page says it as the due date.
+    const read = await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`);
+    expect(read.milestone.targetDate).toBe("2026-12-01");
+    expect(renderDesk(read, null)).toMatch(/data-due-source="target"[^>]*>Due 1 Dec, in 88 days</);
+    // And the calendar is there to change it, on an open milestone.
+    expect(renderDesk(read, null)).toContain('aria-label="Change the due date"');
+
+    const cleared = await post("/api/milestone/update", { ref: november.milestone.id, targetDate: null });
+    expect(cleared.status).toBe(200);
+    const after = await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`);
+    expect(after.milestone.targetDate).toBeNull();
+    // With no target, the page reads the goal check's own remaining work, or says there is none.
+    const html = renderDesk(after, null);
+    expect(html).toContain(after.remaining.forecastSeconds ? 'data-due-source="estimate"' : "No due date");
+  });
+});
+
+describe("the milestone's status and approval, on the Milestones page", () => {
+  it("shows the stored status and the detail's approve action, and approving it lands where the Tasks list reads", async () => {
+    const asked = await post("/api/gate/request", { ref: refs.november, owner: "VP", actor: "autopilot" });
+    expect(asked.status).toBe(200);
+    const detail = await get<IssueDetail>(`/api/issue?ws=${ws}&ref=${refs.november}`);
+    expect(detail.issue.status).toBe("awaiting_approval");
+    const view = await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`);
+
+    const before = renderDesk(view, detail);
+    // The detail's status control, reading the stored status, not a guess from progress.
+    expect(before).toMatch(/data-status-menu=""[^>]*data-status-category="gated"/);
+    expect(before).toContain("Awaiting Approval");
+    // The detail's own approval block, with its two decisions.
+    // November's members are not finished, so approving continues it rather than closing it.
+    expect(before).toMatch(/data-milestone-gate=""[\s\S]*>Approve and continue</);
+    expect(before).toMatch(/\d+ tasks? (is|are) still open\. Approving lifts the hold; the milestone closes on its own when/);
+    expect(before).toContain("Send back");
+    // Without the detail read the page shows the stored status alone, still not a guess.
+    expect(renderDesk(view, null)).toMatch(/data-milestone-status="awaiting_approval"/);
+
+    // Approve exactly as the button does: the detail's call, signed by the person.
+    const request = toRequest(gateCalls.approveAll({ ws, issue: detail.issue }), "VP");
+    if (request.fn !== "approveGate") throw new Error(`approve sent ${request.fn}`);
+    const approved = await post("/api/gate/approve", request.body);
+    expect(approved.status).toBe(200);
+
+    const after = await get<IssueDetail>(`/api/issue?ws=${ws}&ref=${refs.november}`);
+    expect(after.gate).toMatchObject({ state: "approved", resolvedBy: "VP" });
+    expect(after.issue.status).not.toBe("awaiting_approval");
+    // The page's pill, the list's pill and the Tasks list's row all read the one stored status.
+    const listed = (await get<MilestoneListRow[]>(`/api/milestones?ws=${ws}&all=1`)).find((row) => row.milestone.identifier === refs.november)!;
+    const row = (await get<IssueRow[]>(`/api/issues?ws=${ws}`)).find((r) => r.issue.identifier === refs.november)!;
+    expect(listed.milestone.status).toBe(after.issue.status);
+    expect(row.issue.status).toBe(after.issue.status);
+    const page = renderDesk(await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`), after);
+    expect(page).not.toContain("Approve and continue");
+    expect(page).toContain(`aria-label="Status: ${statusLabel(after.issue.status)}. Change status"`);
+  });
+});

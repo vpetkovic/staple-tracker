@@ -102,7 +102,16 @@ export const PHONE_SHEET_CLASS = [
 /** Radix Select forbids an empty item value; this stands for "no project". */
 const NO_PROJECT = "__none__";
 
-export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function CreateIssueDialog({
+  open,
+  onOpenChange,
+  initialKind,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Start on this kind when the workspace has it (the Milestones page asks for `milestone`). */
+  initialKind?: string;
+}) {
   const session = useSession();
   /**
    * The workspace's kind vocabulary, read at render — O1b (STA-125). A plain accessor
@@ -133,7 +142,7 @@ export function CreateIssueDialog({ open, onOpenChange }: { open: boolean; onOpe
   const labelOfKind = (id: string) => targetKinds?.find((kind) => kind.id === id)?.label ?? kindLabel(id);
   const freshForm = (): CreateFormState => ({
     ...EMPTY_CREATE_FORM,
-    kind: createFormDefaultKind(configuredKindOrder()),
+    kind: initialKind && configuredKindOrder().includes(initialKind) ? initialKind : createFormDefaultKind(configuredKindOrder()),
   });
   const [form, setForm] = useState<CreateFormState>(freshForm);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
