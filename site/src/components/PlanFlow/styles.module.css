@@ -1,0 +1,307 @@
+/* Three columns from 997 px up, with a connector in each gap; one column below,
+   with the connector turned to point down. */
+.flow {
+  --flow-gap: var(--st-space-12);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--flow-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.connector {
+  position: absolute;
+  top: calc((1.6rem - var(--st-space-8)) / 2);
+  left: calc(var(--flow-gap) / -2);
+  display: grid;
+  place-items: center;
+  width: var(--st-space-8);
+  height: var(--st-space-8);
+  transform: translateX(-50%);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg);
+  color: var(--st-accent-text);
+}
+
+.head {
+  margin-bottom: var(--st-space-5);
+}
+
+.number {
+  display: inline-block;
+  margin-bottom: var(--st-space-3);
+  padding: 0 var(--st-space-2);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-full);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  line-height: 1.6rem;
+  color: var(--st-accent-text);
+  background: var(--st-accent-soft);
+}
+
+.title {
+  margin: 0 0 var(--st-space-2);
+  font-size: var(--st-text-lg);
+  font-weight: var(--st-weight-semibold);
+  letter-spacing: -0.01em;
+  line-height: var(--st-leading-snug);
+  color: var(--st-fg-strong);
+}
+
+.text {
+  margin: 0;
+  font-size: var(--st-text-sm);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.visual {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* ---------- Panels ---------- */
+
+.panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--st-bg);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-lg);
+}
+
+.panelBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-3);
+  min-height: var(--st-control-sm);
+  padding: 0 var(--st-space-4);
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  background: var(--st-bg-subtle);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+}
+
+.panelTitle {
+  overflow: hidden;
+  color: var(--st-fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panelMeta {
+  flex-shrink: 0;
+  color: var(--st-fg-subtle);
+}
+
+.panelBody {
+  flex: 1;
+  padding: var(--st-space-4);
+}
+
+/* A Markdown file */
+
+.file {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  line-height: var(--st-leading-code);
+  color: var(--st-fg-muted);
+}
+
+.fileLine {
+  white-space: pre-wrap;
+}
+
+.fileHeading {
+  color: var(--st-fg-strong);
+  font-weight: var(--st-weight-medium);
+}
+
+/* An epic and its tickets */
+
+.tickets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--st-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ticket {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--st-space-2);
+  margin-left: var(--st-space-5);
+  padding: var(--st-space-1) var(--st-space-2);
+  border-radius: var(--st-radius-sm);
+  font-size: var(--st-text-sm);
+  line-height: var(--st-leading-ui);
+}
+
+.epic {
+  margin-left: 0;
+  font-weight: var(--st-weight-medium);
+}
+
+.epic .ticketTitle {
+  color: var(--st-fg-strong);
+}
+
+.added {
+  outline: var(--st-hairline) dashed var(--st-accent);
+  outline-offset: -1px;
+  background: var(--st-accent-soft);
+}
+
+.mark {
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--st-fg-subtle);
+  border-radius: var(--st-radius-full);
+}
+
+.done {
+  border-color: var(--st-accent);
+  background: var(--st-accent);
+}
+
+.active {
+  border-color: var(--st-accent);
+  background: linear-gradient(90deg, var(--st-accent) 50%, transparent 50%);
+}
+
+.ready {
+  border-color: var(--st-accent);
+}
+
+.waiting {
+  border-style: dashed;
+}
+
+.ticketId {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.ticketTitle {
+  min-width: 0;
+  color: var(--st-fg);
+}
+
+.note {
+  grid-column: 3;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+/* A timeline */
+
+.events {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--st-space-3);
+  margin: 0;
+  padding: 0 0 0 var(--st-space-5);
+  list-style: none;
+}
+
+/* The rail */
+.events::before {
+  content: '';
+  position: absolute;
+  top: 0.55em;
+  bottom: 0.55em;
+  left: 4px;
+  border-left: var(--st-hairline) solid var(--st-border-strong);
+}
+
+.event {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  font-size: var(--st-text-sm);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg);
+}
+
+.event::before {
+  content: '';
+  position: absolute;
+  top: 0.4em;
+  left: calc(-1 * var(--st-space-5));
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--st-fg-subtle);
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg);
+}
+
+.who {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.eventText {
+  text-wrap: pretty;
+}
+
+.warn::before {
+  border-color: var(--st-warning);
+  border-style: dashed;
+}
+
+.warn .eventText {
+  color: var(--st-warning);
+}
+
+.accent::before {
+  border-color: var(--st-accent);
+  background: var(--st-accent);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 996px) {
+  .flow {
+    --flow-gap: var(--st-space-16);
+    grid-template-columns: minmax(0, 1fr);
+    max-width: var(--st-measure);
+  }
+
+  .connector {
+    top: calc(var(--flow-gap) / -2);
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+}

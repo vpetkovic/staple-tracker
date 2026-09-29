@@ -1,6 +1,6 @@
 # Site primitives
 
-The building blocks for marketing pages (`src/pages`). Docs pages do not use
+The building blocks for marketing pages (`src/pages`, and the two landing pages in `landing/`: see "Choosing the landing page" in CONTRIBUTING.md). Docs pages do not use
 them: they are Markdown from `../docs`, styled by `src/css/custom.css`.
 
 Colours, type, spacing, radii, control sizes, durations and fonts come from
@@ -18,6 +18,7 @@ size, a hover nudge) is literal.
 | `Terminal` | `@site/src/components/Terminal` | A short shell session. `lines` is an array: `$ ` starts a command (the prompt is not selectable; a long command wraps under itself), `# ` a comment, anything else output. |
 | `CopyCommand` | `@site/src/components/CopyCommand` | A shell command with a copy button, for when the call to action is a command (`npx staple-cli`). `variant` as on `Button`; it sits in a `ButtonRow` beside `size="lg"` buttons at the same height. |
 | `Screenshot` | `@site/src/components/Screenshot` | A web UI capture in a hairline frame, switching with the theme. `name` is the stem under `static/img/screens` (`<name>-light.webp`, `<name>-dark.webp`, 1280 x 800 at 2x); `alt` says what it shows; `priority` for the one above the fold. Below 768 px, `phone` swaps in the web UI's own phone layout (`<name>-phone-light.webp`, `<name>-phone-dark.webp`, 390 x 560 at 2x); without one, `focus` picks the top-left corner of a zoomed crop of the desk capture. |
+| `PlanFlow`, `FlowFile`, `FlowTickets`, `FlowEvents` | `@site/src/components/PlanFlow` | A numbered flow of steps (`steps`: `title`, `text`, `visual`), three across from 997 px and stacked below, with a connector between steps; `label` names the list. The step visuals are text in hairline panels, so they switch with the theme: `FlowFile` a Markdown file (`name`, `lines`), `FlowTickets` an epic and its tickets with a status mark each (`done`, `active`, `ready`, `waiting`; `added` outlines one filed later), `FlowEvents` a short timeline (`tone="warn"` for an interruption, `"accent"` for the outcome). |
 
 A page composes them:
 

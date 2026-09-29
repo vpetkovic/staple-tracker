@@ -13,6 +13,17 @@ import preloadFonts from './src/plugins/preloadFonts';
 const url = (process.env.SITE_URL || 'https://example.com').replace(/\/+$/, '');
 const baseUrl = '/';
 
+// Which landing page `/` serves: `story` (the default) leads with why staple
+// exists; `classic` is the first landing page. LANDING_VARIANT picks one at build
+// time, and the deploy workflow passes the LANDING_VARIANT repository variable
+// through, so switching needs no code change. Both stay reachable at /story and
+// /classic, marked noindex, for comparison.
+const landingVariants = ['story', 'classic'] as const;
+const landingVariant = process.env.LANDING_VARIANT || 'story';
+if (!(landingVariants as readonly string[]).includes(landingVariant)) {
+  throw new Error(`LANDING_VARIANT must be one of ${landingVariants.join(', ')}; got "${landingVariant}"`);
+}
+
 const repo = 'https://github.com/vpetkovic/staple-tracker';
 const repoRoot = path.resolve(__dirname, '..');
 const docsDir = path.join(repoRoot, 'docs');
@@ -60,6 +71,7 @@ const config: Config = {
   url,
   baseUrl,
   trailingSlash: false,
+  customFields: {landingVariant},
 
   onBrokenLinks: 'throw',
   onBrokenAnchors: 'throw',
@@ -93,6 +105,8 @@ const config: Config = {
           beforeDefaultRemarkPlugins: [githubAlerts],
         },
         blog: false,
+        // The comparison copies of the landing page are noindex, so they stay out of the sitemap.
+        sitemap: {ignorePatterns: ['/story', '/classic']},
         theme: {
           // Fonts first, then the tokens, then the chrome that reads them.
           customCss: [
