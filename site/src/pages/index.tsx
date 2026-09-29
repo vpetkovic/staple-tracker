@@ -130,7 +130,7 @@ export default function Home(): ReactNode {
           <Screenshot
             className={styles.heroShot}
             name="tasks"
-            focus={{x: 18.5, y: 0}}
+            phone
             priority
             alt="The Tasks view of the staple web UI: epics for checkout, onboarding and search with their tasks, two being worked on by claude and codex, four waiting on other work and three done."
           />
@@ -164,7 +164,7 @@ export default function Home(): ReactNode {
             visual={
               <Screenshot
                 name="graph"
-                focus={{x: 36, y: 22}}
+                focus={{x: 36, y: 28}}
                 alt="The Graph view: each epic is a container, and arrows run from a task to the work that waits for it."
               />
             }>
@@ -191,7 +191,7 @@ export default function Home(): ReactNode {
             visual={
               <Screenshot
                 name="queue"
-                focus={{x: 19, y: 6}}
+                phone
                 alt="The Queue view: the pickup order, how many tasks are ready, being worked on or waiting, and the task an agent would get next."
               />
             }>
@@ -212,7 +212,7 @@ export default function Home(): ReactNode {
             visual={
               <Screenshot
                 name="milestones"
-                focus={{x: 46, y: 4}}
+                phone
                 alt="The Milestones view: the Public beta milestone with its due date, progress bar, and the epics and tasks in it, in order."
               />
             }>
@@ -255,7 +255,7 @@ export default function Home(): ReactNode {
             visual={
               <Screenshot
                 name="detail"
-                focus={{x: 43, y: 0}}
+                phone
                 alt="A task's detail open over the Tasks view: Saved cards at checkout, in progress and held by claude, with its properties and the latest worklog."
               />
             }>

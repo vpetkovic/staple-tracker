@@ -17,7 +17,7 @@ size, a hover nudge) is literal.
 | `Card`, `CardGrid` | `@site/src/components/Card` | A hairline panel with `title`, optional `eyebrow` and body; `to` makes the whole card a link, `titleAs` picks the title element for the outline (default `h3`). `CardGrid` lays cards out in one column on phones and `columns` (3 by default, or 2) from 768 px up. |
 | `Terminal` | `@site/src/components/Terminal` | A short shell session. `lines` is an array: `$ ` starts a command (the prompt is not selectable; a long command wraps under itself), `# ` a comment, anything else output. |
 | `CopyCommand` | `@site/src/components/CopyCommand` | A shell command with a copy button, for when the call to action is a command (`npx staple-cli`). `variant` as on `Button`; it sits in a `ButtonRow` beside `size="lg"` buttons at the same height. |
-| `Screenshot` | `@site/src/components/Screenshot` | A web UI capture in a hairline frame, switching with the theme. `name` is the stem under `static/img/screens` (`<name>-light.webp`, `<name>-dark.webp`, 1280 x 800 at 2x); `alt` says what it shows; `priority` for the one above the fold. |
+| `Screenshot` | `@site/src/components/Screenshot` | A web UI capture in a hairline frame, switching with the theme. `name` is the stem under `static/img/screens` (`<name>-light.webp`, `<name>-dark.webp`, 1280 x 800 at 2x); `alt` says what it shows; `priority` for the one above the fold. Below 768 px, `phone` swaps in the web UI's own phone layout (`<name>-phone-light.webp`, `<name>-phone-dark.webp`, 390 x 560 at 2x); without one, `focus` picks the top-left corner of a zoomed crop of the desk capture. |
 
 A page composes them:
 

@@ -37,15 +37,25 @@
     border-radius: calc(var(--st-radius-md) + var(--st-space-1));
   }
 
-  /* A phone shows a legible crop, not the whole desk shrunk to a thumbnail. */
-  .crop {
+  /* Without a phone capture: a legible crop of the desk capture, not the whole desk shrunk to a thumbnail. */
+  .figure:not(.hasPhone) .crop {
     aspect-ratio: 5 / 4;
     border-radius: var(--st-radius-md);
   }
 
-  .image {
+  .figure:not(.hasPhone) .image {
     width: 250%;
     max-width: none;
     transform: translate(var(--focus-x), var(--focus-y));
+  }
+
+  /* With one: the web UI's own phone layout, at about the size of a phone. */
+  .hasPhone .frame {
+    max-width: 22rem;
+    margin-inline: auto;
+  }
+
+  .hasPhone .crop {
+    border-radius: var(--st-radius-md);
   }
 }
