@@ -61,6 +61,9 @@ jobs:
 
       # Throws on a broken link, anchor or Markdown link.
       - name: Build
+        env:
+          # Which landing page / serves (story or classic); unset means story.
+          LANDING_VARIANT: ${{ vars.LANDING_VARIANT }}
         run: npm --prefix site run build
 
       # Checks site/wrangler.jsonc against the build output. Uploads nothing and
@@ -139,6 +142,7 @@ jobs:
         if: steps.creds.outputs.ready == 'true'
         env:
           SITE_URL: ${{ steps.url.outputs.site_url }}
+          LANDING_VARIANT: ${{ vars.LANDING_VARIANT }}
         run: npm --prefix site run build
 
       - name: Deploy

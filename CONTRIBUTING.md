@@ -158,6 +158,26 @@ the `baseUrl` constant at the top of `site/docusaurus.config.ts`; the site URL
 comes from the `SITE_URL` environment variable (see below), and local builds use a
 placeholder.
 
+### Choosing the landing page
+
+The site has two landing pages, both in `site/src/components/landing/`:
+`Story.tsx` leads with why staple exists and how a plan becomes tickets, and
+`Classic.tsx` is the first landing page, a tour of the features. The
+`LANDING_VARIANT` environment variable decides which one `/` serves: `story` (the
+default when it is unset) or `classic`. Any other value fails the build. The
+other variant stays reachable for comparison: `/story` and `/classic` always
+serve their variant, marked `noindex` and left out of the sitemap.
+
+```bash
+npm run site:build                          # / serves the story page
+LANDING_VARIANT=classic npm run site:build  # / serves the classic page
+```
+
+To switch the deployed site, set the repository variable `LANDING_VARIANT`
+(Settings, Secrets and variables, Actions) to `story` or `classic` and run the
+Site workflow again. The workflow passes it to the build the way it passes
+`SITE_URL`; no code change is needed.
+
 ### Deploying the website
 
 `.github/workflows/site.yml` builds the site on every pull request that touches
