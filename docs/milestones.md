@@ -640,7 +640,9 @@ when no open task can be weighed. It is a SUM, not the critical path
 `goal.pace.remainingSeconds` reads. The web UI projects a due date from it while
 no target is set (now plus `forecastSeconds`, labelled an estimate, "no earlier
 than" when `unknown` is not 0); the projection is never stored. The calibration
-population behind it is read once and reused until finished work changes it. A non-milestone
+population behind it is read once per store and reused while nothing at all is
+written to the workspace file (SQLite's own write counters, so no write path can
+leave it stale). A non-milestone
 identifier given where a milestone is expected is refused with `validation`
 naming its kind (`STA-66 is an epic, not a milestone`); an unknown identifier
 is `not_found`; `--at N` is a 1-based position; `rm` of a non-member is

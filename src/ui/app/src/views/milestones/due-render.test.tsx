@@ -30,7 +30,7 @@ describe("the due control", () => {
     const html = due({ projection: projectedDue(LEFT, NOW), onSetTarget: async () => true });
     expect(html).toMatch(/data-due-source="estimate"[^>]*>Due ~27 Sept? \(estimated\)</);
     expect(html).toContain(
-      'title="8h of work left (6h estimated, scaled by how long estimates have really taken; work in review counts as done), counted from now, as staple forecast reads it. Set a date to override it."',
+      'title="All open work: 6h estimated, ~8h by the forecast (estimates scaled by how long they have really taken; work in review counts as done), counted from now. Set a date to override it."',
     );
     expect(html).toContain('aria-label="Set a due date"');
   });

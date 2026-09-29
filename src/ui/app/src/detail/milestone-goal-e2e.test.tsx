@@ -261,7 +261,7 @@ describe("the milestone goal view, from the goal check", () => {
     expect(html).toContain(paceText(pace));
     // At least: the follow-up the run filed has no estimate yet.
     expect(pace.partial).toBe(true);
-    expect(paceText(pace)).toMatch(/^At least \d+h of estimated work left, \d+ days to 31 Jan 2027: it fits\. 1 of 3 tasks done\.$/);
+    expect(paceText(pace)).toMatch(/^The longest chain of open work is at least \d+h estimated, \d+ days to 31 Jan 2027: it fits\. 1 of 3 tasks done\.$/);
   });
 
   it("shows the gate a goal run asked for, and the run working it", () => {
