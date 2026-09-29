@@ -24,11 +24,10 @@ export default function DocSidebarItemCategory(props: Props): ReactNode {
         'menu__list-item',
         item.className,
       )}>
-      <div className="menu__list-item-collapsible">
-        <span className={clsx('menu__link', styles.group, isActiveSidebarItem(item, activePath) && styles.active)}>
-          {item.label}
-        </span>
-      </div>
+      {/* No .menu__list-item-collapsible wrapper: Infima gives it a hover background. */}
+      <span className={clsx('menu__link', styles.group, isActiveSidebarItem(item, activePath) && styles.active)}>
+        {item.label}
+      </span>
       <ul className="menu__list">
         <DocSidebarItems items={item.items} tabIndex={0} onItemClick={onItemClick} activePath={activePath} level={level + 1} />
       </ul>

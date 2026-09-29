@@ -26,7 +26,12 @@ export default function preloadFonts(): Plugin {
           const html = await fs.readFile(page, 'utf8');
           if (!html.includes('</title>')) return;
           // Straight after the title, ahead of the stylesheet that would discover them.
-          await fs.writeFile(page, html.replace('</title>', `</title>${links}`));
+          // Other plugins read these files in their own postBuild at the same time (the
+          // search index does), so the new file replaces the old one in a single rename
+          // and a reader never sees it half-written.
+          const next = `${page}.preload-fonts.tmp`;
+          await fs.writeFile(next, html.replace('</title>', `</title>${links}`));
+          await fs.rename(next, page);
         }),
       );
     },
