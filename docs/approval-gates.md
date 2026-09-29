@@ -126,4 +126,5 @@ later, for the next review.
 ## Next
 
 - [Epics and dependencies](epics-and-dependencies.md): blocks, statuses and what is ready.
+- [The pickup queue](queue.md): set the order agents take work in.
 - [Autopilot runs](runs.md): let an agent work an epic until your review is needed.

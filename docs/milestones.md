@@ -12,8 +12,8 @@ the tree without moving them, gives them an order, a target date and a goal, and
 you how far along it is and whether the goal is met.
 
 The example turns the password reset epic from
-[Plans become tickets](plans-to-tickets.md) (APP-1) and a flaky test (APP-10) into an
-"Account recovery beta" due on 30 October.
+[Plans become tickets](plans-to-tickets.md) (APP-1) and the flaky test filed on
+[The pickup queue](queue.md) (APP-10) into an "Account recovery beta" due on 30 October.
 
 ## 1. Turn milestones on
 
@@ -132,7 +132,7 @@ the members: agents keep working them.
 > [!NOTE]
 > Leave this step out if you plan an [autopilot goal run](runs.md#goal-runs-over-a-milestone)
 > over the milestone: the run opens its own gate for you. A gate you open yourself
-> stops a goal run until you approve it.
+> stops a goal run; approve it, then start a new run.
 
 ## Next
 

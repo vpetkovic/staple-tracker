@@ -126,6 +126,6 @@ the commands.
 
 ## Next
 
+- [Approval gates](approval-gates.md): hold an epic for your review.
 - [The pickup queue](queue.md): decide which epic agents take first.
 - [Milestones and goals](milestones.md): put a date and a goal on one or more epics.
-- [Approval gates](approval-gates.md): hold an epic for your review.
