@@ -48,9 +48,8 @@ holds the search field and **New task**.
 | `j` / `k` | next or previous task while one is open |
 | Escape | close what is open |
 
-Below 768 px the UI becomes a phone app: a menu button for the rail, a tab bar
-for the views, and full-screen task pages. The address always describes the page,
-filters included, so you can bookmark or share a view.
+Below 768 px the UI becomes a phone app with a tab bar for the views. The address
+always describes the page, filters included, so you can bookmark or share a view.
 
 ## 3. Tasks: the whole tree
 
@@ -77,10 +76,9 @@ task, epic or milestone…* adds work, and a row's `⋯` menu removes it.
 
 ![The Graph view: tickets as nodes inside their epics, with arrows from each ticket to the work waiting on it](../site/static/img/screens/graph-light.webp)
 
-Only tickets that take part in a dependency are drawn, epics as boxes around
-their tickets. An arrow runs from a ticket to the work that waits on it. Hover a
-ticket to light up the chain it waits on, click it to open it, and use the
-**Epics** picker to narrow the canvas to the part of the plan you care about.
+Tickets that take part in a dependency, inside boxes for their epics, with an arrow
+from each ticket to the work that waits on it. Hover a ticket to light up the chain
+it waits on, and use the **Epics** picker to narrow the canvas.
 
 ## 6. Milestones: dated plans
 
@@ -96,10 +94,9 @@ milestone is on pace for its date.
 
 ![Task detail: the title, status and primary action at the top, the tabs, and the properties on the right](../site/static/img/screens/detail-light.webp)
 
-A task opens in a drawer on the right; *Expand to full screen* makes it a page.
-The top holds the status, a plain sentence about where it stands, and one primary
-action: *Start work*, *Mark done*, *Reopen*, or *Take it over* when the holder has
-gone quiet for 30 minutes. The tabs:
+A task opens in a drawer on the right. The top holds its status, a sentence about
+where it stands, and one primary action: *Start work*, *Mark done*, *Reopen*, or
+*Take it over* when the holder has gone quiet for 30 minutes. The tabs:
 
 | Tab | What it is for |
 | --- | --- |

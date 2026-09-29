@@ -26,7 +26,7 @@ To look something up from the terminal:
 | `--db <path>` | Use this workspace database instead of the one found by walking up from the current directory. |
 | `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. `STAPLE_DB`, when set, wins over it. |
 
-Writes are recorded under `STAPLE_AGENT`, else `$USER`. `checkout`, `done`, `cancel`,
+Writes are recorded under `STAPLE_AGENT`, else `$USER`. `start`, `done`, `cancel`,
 `status`, `estimate` and `release` also take `--agent <name>` to say who acts.
 
 Durations (`--estimate`, `--if-stale`, `--steal-if-stale`) are `90s`, `30m`, `2h`,
@@ -81,7 +81,7 @@ Guides: [How an agent works a ticket](working-a-ticket.md),
 | `staple tree [ref]` | Tickets as a tree under their epics. |
 | `staple board` | A kanban board in the terminal. |
 | `staple inbox` | What is ready to take, what waits on a person, and what is blocked, in pickup order. `--hub` covers every workspace. |
-| `staple checkout <ref>` | Claim a ticket and move it to `in_progress`. `start` is the same command. |
+| `staple start <ref>` | Claim a ticket and move it to `in_progress`. `checkout` is the same command. |
 | `staple done <ref> [-m text]` | Finish it. `cancel` drops it. |
 | `staple release <ref>` | Give the claim back; the ticket returns to `todo`. |
 | `staple status <ref> <status>` | Move a ticket to any status the rules allow. |
@@ -92,7 +92,7 @@ Guides: [How an agent works a ticket](working-a-ticket.md),
 
 ```bash
 staple new "Reset email" --parent APP-1 --blocked-by APP-2 --estimate 90m
-staple checkout APP-2
+staple start APP-2
 staple doc APP-2 plan --put plan.md
 staple done APP-2 -m "merged"
 ```
@@ -100,7 +100,7 @@ staple done APP-2 -m "merged"
 Taking over from an agent that died:
 
 ```bash
-staple checkout APP-3 --steal-if-stale 30m     # take over a silent claim
+staple start APP-3 --steal-if-stale 30m        # take over a silent claim
 staple release APP-3 --if-stale 2h             # or just free it
 ```
 
@@ -139,7 +139,7 @@ Guide: [The pickup queue](queue.md).
 | `staple queue add <ref>` | Queue a ticket, an epic or a milestone. `--before R`, `--after R`, `--at N` place it. |
 | `staple queue mv <ref> --at N` | Move an entry. `queue reorder r1,r2,…` sets the whole order. |
 | `staple queue rm <ref>` | Take an entry out. `queue prune` drops the finished ones. |
-| `staple checkout <ref> --override -m <why>` | Take a ticket out of turn when `queue.policy` is `strict`. Recorded with your reason. |
+| `staple start <ref> --override -m <why>` | Take a ticket out of turn when `queue.policy` is `strict`. Recorded with your reason. |
 
 `--base N` on a queue change refuses it if someone changed the queue since you
 last listed it.

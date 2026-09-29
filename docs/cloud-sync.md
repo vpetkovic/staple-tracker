@@ -47,8 +47,8 @@ not connected — no credential, no endpoint and no cloud state on this machine
 ```
 
 `status` reads local files only; `--refresh` asks the service. Once connected,
-`pending` counts the changes waiting to be sent. `--all` lists every workspace on
-this machine.
+`pending` counts the changes waiting to be sent, and `cursor` and `epoch` show how far
+this machine has caught up. `--all` lists every workspace on this machine.
 
 ## 2. Connect: the first consent
 

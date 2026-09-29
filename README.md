@@ -2,12 +2,11 @@
 
 **A local-first task tracker for coding agents: the execution layer next to your team's board.**
 
-Implementation plans kept in Markdown files point at each other, drift, and die with
-the session that held them. staple turns a plan into an epic and tickets that carry
-the whole context, so agents know what comes next, a new session resumes where a dead
-one stopped, and new work is filed under the same epic. It runs on your machine, one
-file per repository, next to Linear, GitHub or ClickUp (integrations planned).
-[Why staple](https://github.com/vpetkovic/staple-tracker/blob/master/docs/why-staple.md) tells the whole story.
+Markdown plans point at each other, drift, and die with the session that held them.
+staple turns a plan into an epic and tickets that carry the whole context: agents know
+what comes next, a new session resumes where a dead one stopped, and new work lands
+under the same epic. Local-first, one file per repository, next to Linear, GitHub or
+ClickUp (integrations planned). [Why staple](https://github.com/vpetkovic/staple-tracker/blob/master/docs/why-staple.md) tells the whole story.
 
 ## Quick start
 
@@ -45,7 +44,7 @@ loop your agents follow.
 ## What you get
 
 - **Plans become tickets.** An epic per feature, a ticket per step, dependencies
-  that decide what is ready, and the plan stored on the ticket
+  that decide what is ready, and the plan stored on the epic
   ([plans become tickets](https://github.com/vpetkovic/staple-tracker/blob/master/docs/plans-to-tickets.md),
   [epics and dependencies](https://github.com/vpetkovic/staple-tracker/blob/master/docs/epics-and-dependencies.md)).
 - **Handoff and resume.** Atomic claims, a worklog after each step, and a
@@ -76,8 +75,8 @@ staple comment APP-1 "route added, tests next"
 staple done APP-1                           # finish it; the inbox shows what it unblocked
 
 staple open                                 # the web UI; Ctrl-C stops it
-staple queue add APP-1 --at 1               # say what gets picked up next
-staple start APP-1 --steal-if-stale 1h      # take over a dead agent's claim
+staple queue add APP-2 --at 1               # say what gets picked up next
+staple start APP-2 --steal-if-stale 1h      # take over a dead agent's claim
 ```
 
 `staple help` lists every command; the [CLI reference](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md) documents them.
@@ -92,7 +91,7 @@ its own branch for a person to review.
 
 ```bash
 staple run start --scope queue --max-tickets 5 --until 4h
-staple run drive --scope queue --agent claude     # a fresh headless session per ticket
+staple run drive --agent claude                   # drive it: a fresh headless session per ticket
 staple run status                                 # your live run, and what would stop it now
 staple run stop -m "enough for today"
 ```

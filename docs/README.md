@@ -20,6 +20,9 @@ npx staple-cli
 claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
 ```
 
+Until `staple-cli`'s first npm release, build the package from a checkout first;
+[Install and first workspace](getting-started.md) says how.
+
 **Already set up?** Find what you want to do below. Guides walk you through a task;
 the reference pages at the end are for looking things up.
 

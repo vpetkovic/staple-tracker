@@ -44,15 +44,15 @@ for large features such as integrating multi-tenancy."
 ## What staple does about it
 
 **Tickets carry the whole context.** A feature becomes an epic, and its steps become
-tickets with dependencies between them. The plan is stored on the ticket as a
-document, next to the worklog, the comments and the tickets it waits on. An agent
-that opens a ticket finds everything it needs there.
+tickets with dependencies between them. The plan is stored on the epic as a
+document, and each ticket keeps its own plan, worklog and comments next to the
+tickets it waits on. An agent that opens a ticket finds everything it needs there.
 
 ```bash
 staple new "Multi-tenancy" --kind epic                                # APP-1
 staple new "Tenant id on every table" --parent APP-1                   # APP-2
 staple new "Scope queries by tenant" --parent APP-1 --blocked-by APP-2 # APP-3
-staple doc APP-2 plan --put plan.md
+staple doc APP-1 plan --put plan.md
 ```
 
 **New work goes under the same epic.** When something turns up that the plan did not

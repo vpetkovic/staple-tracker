@@ -38,7 +38,7 @@ The loop an agent follows, described in
 | `get_task` | One ticket in full: claim, time, gate, blockers, attempts | `staple show` | no |
 | `create_task` | File a ticket, with parent, blockers and estimate | `staple new` | yes |
 | `update_task` | Change status or fields; `status: "done"` finishes it | `staple status`, `staple done` | yes |
-| `checkout_task` | Claim a ticket and start it | `staple checkout` | yes |
+| `checkout_task` | Claim a ticket and start it | `staple start` | yes |
 | `release_task` | Give a claim back | `staple release` | yes |
 | `add_comment` | Add a comment | `staple comment` | yes |
 | `list_comments` | A ticket's comments, oldest first | `staple show` | no |
