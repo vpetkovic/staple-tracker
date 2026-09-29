@@ -30,7 +30,7 @@ surfaces that open on top of any of them.
 | [Tasks](#tasks) | Every issue as one tree, parents over children, with grouping, sorting, filters, search and the pickup cues | Rail and tab bar *Tasks*; "Go to Tasks"; a project row under it; `?view=tasks` |
 | [Queue](#queue) | The pickup order as one tree: the plan, what each queued epic or milestone expands to, what comes next, and the editor for it | *Queue*; "Go to Queue"; `?view=queue` |
 | [Graph](#graph) | Issues as a node graph: epics as containers, dependencies as edges | *Graph*; "Go to Graph"; `?view=graph` |
-| [Milestones](#milestones) | Milestones in plan order, each with progress, risk, members and its goal | *Milestones*; "Go to Milestones"; a row's milestone marker; `?view=milestones` |
+| [Milestones](#milestones) | Milestones in plan order, each with progress, risk and members; **Open** leads to its goal | *Milestones*; "Go to Milestones"; a row's milestone marker; `?view=milestones` |
 | [Estimates](#estimates) | How long work took against its estimate, per group of similar work | *Estimates*; "Go to Estimates"; `?view=estimate-accuracy` |
 | [Usage](#usage) | This computer's provider limits and the pace against each one | *Usage* under *This computer*; "Go to Usage"; `?view=budget` |
 | [Task detail](#task-detail) | One issue: details, connections, documents, activity, the agent payload and time | Click or Enter on any row, node or reference |
@@ -587,8 +587,9 @@ progress bar with `done/countable` and the percent, the state, the risk, and the
 queue's answer, `next: STA-67 (#4)`, or "no eligible work". With Done hidden
 and nothing open, the list says *No open milestones* (*All 3 milestones are
 finished and hidden while Done is hidden.*) with a **Show finished milestones**
-button; a workspace with no milestones at all says *No milestones here yet* with
-a **New task** button that opens the create dialog on the Milestone kind. A
+button; a workspace with no milestones at all says *No milestones here yet*
+and how to create one, with, on a desk, a **New task** button that opens the
+create dialog on the Milestone kind. A
 milestone the address points at (`?focus=`) or that is open stays listed even
 when it is finished and Done is hidden.
 
@@ -613,7 +614,8 @@ rather than the critical path, and it is never stored; its tooltip gives the
 estimated and forecast hours and how many open tasks it leaves out. Overdue is
 judged on the reader's local calendar day, so the words, the red and the risk
 line agree. Beside an open milestone's date a calendar button (*Set a due date*,
-or *Change the due date*) opens a date field pre-filled from the projection;
+or *Change the due date*) opens a date field holding the set target, or
+pre-filled from the projection when there is none;
 **Save** writes the milestone's own target through `POST /api/milestone/update`,
 the same write as `staple milestone set --target`, and a set target has a
 **Use the estimate** (or **Clear date**) button that removes it. The milestone's
@@ -630,8 +632,8 @@ started, in the colours the task rows' status glyphs use; every counted task is
 in exactly one, and cancelled ones are in none. *Show details* opens a grid of
 *Reference*, *Tasks counted* (with the cancelled ones it leaves out), *Starts*,
 *Target*, *Blocked, waiting on other tasks*, *Blocked, waiting on a person*,
-*Started, still waiting on other tasks* and *Started, waiting for an approval*
-(each only when not 0), *Plan position* (when queued) and *Next up*. The two
+then *Started, still waiting on other tasks* and *Started, waiting for an
+approval* (each only when not 0), *Plan position* (when queued) and *Next up*. The two
 *Blocked* rows add up to the strip's blocked count.
 
 Then *What is in this milestone* (*4 items, in order*): the ordered members,
@@ -646,13 +648,15 @@ member's controls. The list ends with *3 finished items hidden* and a **Show
 done** button; when every member is finished and hidden it says so (*Everything
 in this milestone is finished; Done is hidden.*) instead of calling the
 milestone empty (`views/milestones/HiddenDone.tsx`). A milestone with no members
-says *Nothing is in this milestone yet*.
+says *Nothing is in this milestone yet* (on a phone, *no members yet — add an
+epic or a task below*).
 
 **Editing membership.** Each member has *Open*, *Move up*, *Move down* and
 *Remove*, plus Alt-↑ / Alt-↓ on the row. Below 1280px, and on a phone, the four
-fold into one `⋯` menu (*Open details*, *Move up*, *Move down*, *Remove from
-this milestone*). The form under the list adds a task by reference with an
-optional note (*Add to milestone*). Writes go to `POST /api/milestone/add`,
+fold into one `⋯` menu (*Open details*, then *Move STA-67 up*, *Move STA-67
+down* and *Remove STA-67 from this milestone*, each naming the member). The form
+under the list adds a task by reference with an optional note (*Add to
+milestone*; *Add member* on a phone). Writes go to `POST /api/milestone/add`,
 `/remove` and `/reorder`, each carrying the view's `revision` as
 `baseRevision`; the store refuses a stale one with `revision_conflict` and the
 page shows *Member order changed elsewhere.* with the store's sentence and a
@@ -668,8 +672,8 @@ whose members have all landed (seen only while a gate or a manual status holds
 it open). Blocked and gated are facts about members, not milestone states, and
 appear in the risk line.
 
-**Layout.** Below 1024px (`SPLIT_MIN_WIDTH_PX`) the two panes stack: the list,
-then the detail with a "Back to milestones" button. From 1024px they split:
+**Layout.** Below 1024px (`SPLIT_MIN_WIDTH_PX`) one pane shows at a time: the
+list, or the chosen milestone's detail with a "Back to milestones" button. From 1024px they split:
 wider than the shell's 768px because the rail takes its share of the window
 first. The expand button in the detail header gives it the whole content box at
 any width; press it again to return.
