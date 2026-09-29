@@ -42,10 +42,13 @@ run sets the repository up and then opens the web UI:
 
 - `.staple/staple.db` is the workspace: one SQLite file with every ticket,
   comment, document and event. Its ticket prefix comes from the directory name
-  (its first three letters: `my-app` gets `MYA-1`, `MYA-2`, …).
+  (its first three letters: `my-app` gets `MYA-1`, `MYA-2`, …, unless another
+  workspace on this machine holds `MYA`); the first run prints it.
 - `.staple/AGENTS.md` is the protocol your agents follow, written with this
   workspace's slug and prefix. Commit it. An existing one is never
   overwritten.
+- `.staple/repository.json` holds the repository's identity, which cloud sync
+  uses to recognise it on another machine. Commit it.
 - `.staple/.gitignore` keeps the database out of git.
 - The workspace is registered in the hub, so `staple open --hub` and
   cross-repository links can find it.

@@ -7,7 +7,10 @@
 
 type Node = {type: string; value?: string; name?: string; attributes?: Record<string, string>; children?: Node[]};
 
-const MARKER = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][^\S\n]*(?:\n|$)/;
+// GitHub accepts the marker in any case. CAUTION is its red callout, which is
+// Docusaurus' `danger`; the other four share their names.
+const MARKER = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][^\S\n]*(?:\n|$)/i;
+const TYPE: Record<string, string> = {caution: 'danger'};
 
 function toAdmonition(node: Node): void {
   const paragraph = node.children?.[0];
@@ -16,14 +19,24 @@ function toAdmonition(node: Node): void {
   const match = MARKER.exec(first.value);
   if (!match) return;
 
+  const inline = paragraph!.children!;
   first.value = first.value.slice(match[0].length);
-  if (first.value === '') paragraph!.children!.shift();
-  // A soft line break after the marker leaves the paragraph's text starting
-  // on the next line; drop the paragraph when the marker was all it held.
-  if (paragraph!.children!.length === 0) node.children!.shift();
+  if (first.value === '') inline.shift();
+  // A hard break after the marker (two trailing spaces or a backslash) would
+  // open the admonition with an empty line.
+  while (inline[0]?.type === 'break') inline.shift();
+  // Drop the paragraph when the marker was all it held.
+  if (inline.length === 0) node.children!.shift();
+  // A marker with no body stays a blockquote, as GitHub shows it.
+  if (node.children!.length === 0) {
+    node.children = [paragraph!];
+    paragraph!.children = [{type: 'text', value: match[0].trim()}];
+    return;
+  }
 
+  const type = match[1]!.toLowerCase();
   node.type = 'containerDirective';
-  node.name = match[1]!.toLowerCase();
+  node.name = TYPE[type] ?? type;
   node.attributes = {};
 }
 

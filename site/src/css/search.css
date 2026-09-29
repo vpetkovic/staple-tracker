@@ -3,7 +3,8 @@
  * suggestion panel and the /search page, on the tokens. The plugin exposes
  * --search-local-* custom properties for most of its look; its class names
  * are CSS-module hashed, so the few rules it has no property for match on the
- * stable prefix ([class*='suggestion_']).
+ * stable prefix ([class*='suggestion_']), under `html` so they outrank the
+ * plugin's own rules, which load later at the same specificity.
  */
 
 :root,
@@ -63,79 +64,79 @@ html[data-theme] {
 
 /* ---------- Suggestions ---------- */
 
-.navbar__search [class*='dropdownMenu_'] {
+html .navbar__search [class*='dropdownMenu_'] {
   border-radius: var(--st-radius-lg);
   margin-top: var(--st-space-2);
 }
 
-.navbar__search [class*='suggestion_'] {
+html .navbar__search [class*='suggestion_'] {
   border-radius: var(--st-radius-md);
   transition: background-color var(--st-duration-fast) var(--st-ease);
 }
 
-.navbar__search [class*='suggestion_'] mark {
+html .navbar__search [class*='suggestion_'] mark {
   color: var(--st-accent-text);
 }
 
 /* The plugin paints every part of the selected row in one colour; keep the
    match in the accent and the path muted, as in the other rows. */
-.navbar__search [class*='suggestion_'][class*='cursor_'] mark {
+html .navbar__search [class*='suggestion_'][class*='cursor_'] mark {
   color: var(--st-accent-text) !important;
   text-decoration: none;
 }
 
-.navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitPath_'],
-.navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitTree_'],
-.navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitIcon_'] {
+html .navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitPath_'],
+html .navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitTree_'],
+html .navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitIcon_'] {
   color: var(--st-fg-muted) !important;
 }
 
-.navbar__search [class*='hitTitle_'] {
+html .navbar__search [class*='hitTitle_'] {
   color: var(--st-fg-strong);
   font-size: var(--st-text-sm);
   font-weight: var(--st-weight-medium);
 }
 
-.navbar__search [class*='hitPath_'] {
+html .navbar__search [class*='hitPath_'] {
   font-size: var(--st-text-xs);
   font-weight: var(--st-weight-regular);
 }
 
-.navbar__search [class*='hitFooter_'] {
+html .navbar__search [class*='hitFooter_'] {
   font-size: var(--st-text-sm);
 }
 
-.navbar__search [class*='hitFooter_'] a {
+html .navbar__search [class*='hitFooter_'] a {
   color: var(--st-accent-text);
   text-underline-offset: 0.2em;
 }
 
-.navbar__search [class*='noResults_'] {
+html .navbar__search [class*='noResults_'] {
   color: var(--st-fg-muted);
   font-size: var(--st-text-sm);
 }
 
 /* ---------- The /search page ---------- */
 
-.container:has([class*='searchQueryInput_']) {
+html .container:has([class*='searchQueryInput_']) {
   max-width: var(--st-measure);
   padding-top: var(--st-space-8);
   padding-bottom: var(--st-space-16);
 }
 
-.container:has([class*='searchQueryInput_']) h1 {
+html .container:has([class*='searchQueryInput_']) h1 {
   font-size: var(--st-text-3xl);
   letter-spacing: var(--st-tracking-heading);
   margin-bottom: var(--st-space-6);
 }
 
-.container:has([class*='searchQueryInput_']) > p {
+html .container:has([class*='searchQueryInput_']) > p {
   color: var(--st-fg-muted);
   font-size: var(--st-text-sm);
 }
 
-[class*='searchQueryInput_'],
-[class*='searchContextInput_'] {
+html [class*='searchQueryInput_'],
+html [class*='searchContextInput_'] {
   height: var(--st-control-md);
   padding: 0 var(--st-space-3);
   border: var(--st-hairline) solid var(--st-border-strong);
@@ -146,39 +147,39 @@ html[data-theme] {
   transition: border-color var(--st-duration-fast) var(--st-ease);
 }
 
-[class*='searchQueryInput_']:focus,
-[class*='searchContextInput_']:focus {
+html [class*='searchQueryInput_']:focus,
+html [class*='searchContextInput_']:focus {
   outline: var(--st-focus-ring) solid var(--st-accent-ring);
   outline-offset: 0;
   border-color: var(--st-accent);
 }
 
-[class*='searchResultItem_'] {
+html [class*='searchResultItem_'] {
   padding: var(--st-space-5) 0;
   border-bottom: var(--st-hairline) solid var(--st-border);
 }
 
-[class*='searchResultItem_'] > h2 {
+html [class*='searchResultItem_'] > h2 {
   font-size: var(--st-text-lg);
   letter-spacing: normal;
 }
 
-[class*='searchResultItem_'] > h2 a {
+html [class*='searchResultItem_'] > h2 a {
   color: var(--st-fg-strong);
 }
 
-[class*='searchResultItem_'] > h2 a:hover {
+html [class*='searchResultItem_'] > h2 a:hover {
   color: var(--st-accent-text);
   text-decoration: none;
 }
 
-[class*='searchResultItem_'] > [class*='searchResultItemPath_'] {
+html [class*='searchResultItem_'] > [class*='searchResultItemPath_'] {
   margin-top: var(--st-space-1);
   color: var(--st-fg-subtle);
   font-size: var(--st-text-xs);
 }
 
-[class*='searchResultItem_'] > [class*='searchResultItemSummary_'] {
+html [class*='searchResultItem_'] > [class*='searchResultItemSummary_'] {
   margin-top: var(--st-space-2);
   color: var(--st-fg-muted);
   font-size: var(--st-text-sm);
@@ -186,12 +187,12 @@ html[data-theme] {
   line-height: var(--st-leading-relaxed);
 }
 
-[class*='searchResultItem_'] mark {
+html [class*='searchResultItem_'] mark {
   background: var(--st-accent-soft);
   color: inherit;
   border-radius: 2px;
 }
 
-[class*='searchResultItem_'] > h2 mark {
+html [class*='searchResultItem_'] > h2 mark {
   color: var(--st-accent-text);
 }

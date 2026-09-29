@@ -26,7 +26,8 @@ npx staple-cli                      # set this repository up, then open the web 
 
 The first run creates `.staple/staple.db` and `.staple/AGENTS.md` (the protocol
 your agents follow) and opens the web UI. The one question it can ask is whether
-to move a legacy `.tasks` workspace (`--yes` takes the default). Then connect your agent harness to the MCP server:
+to move a legacy `.tasks` workspace (`--yes` takes the default). Then connect
+your agent harness to the MCP server:
 
 ```bash
 claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
