@@ -22,15 +22,16 @@ import { action, approveGate, requestGate, requestGateChanges } from "@/lib/api"
 import { isStaleClaim } from "@/lib/claim";
 import { isActiveGate } from "@/lib/derived-queued";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
-import { configuredStatusOrder, statusCategory, statusLabel } from "@/lib/settings";
+import { configuredStatusOrder, isResolvedStatus, kindLabel, statusCategory, statusLabel } from "@/lib/settings";
 import { ISSUE_STATUSES, type IssueDetail } from "@/lib/types";
 import { idsOf } from "@/lib/write-ref";
-import { GateReview } from "./GateReview";
+import { GateReview, type GateOutcome } from "./GateReview";
 import { cn } from "./parts/cn";
 import { readPersonName, rememberPersonName } from "./parts/person";
 import { createActionController, gateHandlers, overflowEntries, primaryEntry, statusEntries, type Names } from "./action-controller";
 import {
   ACTION_WORDS,
+  MILESTONE_KIND,
   overflowItems,
   plainRefusal,
   primaryItem,
@@ -473,6 +474,28 @@ export function RefusalNotice({ feedback, onDismiss, className }: { feedback: Fe
 // ─────────────────────────────────────────────────────────────────── gate
 
 /**
+ * What approving this gate does when nothing is queued, read from the store's own inputs for
+ * re-deriving the parent (`approveGate` → `derivationInputs`): the milestone's open TASKS by
+ * its own rollup (`milestonePlan.progress`, the leaves that are not done or cancelled — the
+ * same figure its progress bar shows); for any other parent, its direct children that are not
+ * resolved, which is exactly what the store reads to decide whether it closes. They are
+ * counted as "tasks" unless one of them holds work of its own (`childrenTiming`'s
+ * `childCount`), then as "items".
+ */
+export function gateOutcomeOf(detail: Pick<IssueDetail, "issue" | "children" | "childrenTiming" | "milestonePlan">): GateOutcome {
+  const { issue } = detail;
+  const kind = issue.kind === MILESTONE_KIND ? "milestone" : kindLabel(issue.kind).toLowerCase();
+  const plan = detail.milestonePlan;
+  if (plan) {
+    const { progress } = plan;
+    return { open: Math.max(0, progress.countable - progress.counts.done), noun: "task", kind };
+  }
+  const open = detail.children.filter((child) => !isResolvedStatus(child.status));
+  const container = open.some((child) => (detail.childrenTiming?.[child.identifier]?.childCount ?? 0) > 0);
+  return { open: open.length, noun: container ? "item" : "task", kind };
+}
+
+/**
  * The approval surface: the reviewer's block while a gate is active, or the "ask for
  * approval" form once it has been opened. A different person's verbs from the ones above, so
  * they get their own card rather than joining the action row.
@@ -493,6 +516,7 @@ export function GateSection({
 }) {
   const { issue, gate, childrenQueued } = detail;
   const handlers = gateHandlers({ ws: detail.workspace, issue }, controller.run);
+  const outcome = gateOutcomeOf(detail);
   if (isActiveGate(gate)) {
     return (
       <GateReview
@@ -502,6 +526,7 @@ export function GateSection({
         showState={showState}
         // Straight through from `/api/issue`, unfiltered: eligibility lives in the store.
         queue={childrenQueued}
+        outcome={outcome}
         busy={controller.busy}
         onApproveAll={(comment) => void handlers.approveAll(comment)}
         // The ticked rows by id, never by number (`lib/write-ref.ts`).
