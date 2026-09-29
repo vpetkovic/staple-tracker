@@ -35,7 +35,9 @@ import {
   gateStateSummary,
   indentSteps,
   sendBackContract,
+  type GateOutcome,
 } from "./GateReview";
+import { gateOutcomeOf } from "./IssueActions";
 
 const NOW = new Date("2026-09-02T12:00:00.000Z");
 
@@ -68,12 +70,13 @@ const LONG =
   "Reconcile sweep for orphaned TaskLink rows after a workspace file is moved, renamed " +
   "or restored from backup, including the hub prefix reallocation path";
 
-function render(gate: IssueGate, queue: readonly GateQueueEntry[]): string {
+function render(gate: IssueGate, queue: readonly GateQueueEntry[], outcome?: GateOutcome): string {
   return renderToStaticMarkup(
     <GateReview
       identifier="STA-142"
       gate={gate}
       queue={queue}
+      outcome={outcome}
       busy={false}
       now={NOW}
       onApproveAll={() => {}}
@@ -252,23 +255,59 @@ describe("the Send back contract sentence", () => {
   });
 });
 
-describe("the empty state", () => {
-  it("says so in a sentence and drops the button that would have no subject", () => {
-    const html = render(PENDING, []);
-    expect(html).toContain("Nothing left to release — no open work is queued behind this gate.");
-    expect(html).not.toContain("<fieldset");
-    expect(html).not.toContain("Approve selected");
+/**
+ * WHAT APPROVING DOES, said by its outcome. The store's approval re-derives the parent: it
+ * closes only when everything under it has landed, and otherwise follows its work. VP read the
+ * old "Approve and close gate" beside open work as "close this unfinished milestone".
+ */
+describe("the empty queue, by outcome", () => {
+  it("with queued work, keeps Approve all and Approve selected", () => {
+    const html = render(PENDING, [row("STA-150", "queued work")], { open: 5, noun: "task", kind: "milestone" });
+    expect(html).toContain(">Approve all<");
+    expect(html).toContain("Approve selected");
+    expect(html).not.toContain("Approve and continue");
   });
 
-  /**
-   * Rule (d). The store call is the same one "Approve all" makes, but the DECISION is a
-   * different one — closing a review rather than releasing a queue — so the label is the
-   * decision and not the mechanism. "Approve all" with nothing listed is a button whose
-   * noun is not on the screen.
-   */
-  it("offers closing the gate instead of approving a list that is not there", () => {
-    const html = render(PENDING, []);
-    expect(html).toContain("Approve and close gate");
+  it("with open work past the queue, says it stays open and approving continues it", () => {
+    const html = render(PENDING, [], { open: 5, noun: "task", kind: "milestone" });
+    expect(html).toContain("5 tasks are still open. Approving lifts the hold; the milestone closes on its own when they are done.");
+    expect(html).toContain(">Approve and continue<");
+    expect(html).not.toContain("close milestone");
+    expect(html).not.toContain("<fieldset");
+    expect(html).not.toContain("Approve selected");
+    // Singular, and an epic.
+    expect(render(PENDING, [], { open: 1, noun: "task", kind: "epic" })).toContain(
+      "1 task is still open. Approving lifts the hold; the epic closes on its own when it is done.",
+    );
+    expect(render(PENDING, [], { open: 2, noun: "item", kind: "epic" })).toContain("2 items are still open.");
+  });
+
+  it("with nothing open, says it is finished and approving closes it", () => {
+    const html = render(PENDING, [], { open: 0, noun: "task", kind: "milestone" });
+    expect(html).toContain("All work here is finished.");
+    expect(html).toContain(">Approve and close milestone<");
+    expect(render(PENDING, [], { open: 0, noun: "task", kind: "epic" })).toContain(">Approve and close epic<");
     expect(html).not.toContain(">Approve all<");
+  });
+});
+
+describe("the outcome, from the store's own inputs", () => {
+  const base = { childrenTiming: {}, milestonePlan: null };
+  it("counts a milestone's open tasks by its own rollup", () => {
+    const outcome = gateOutcomeOf({
+      ...base,
+      issue: { kind: "milestone" } as never,
+      children: [],
+      milestonePlan: { progress: { total: 10, countable: 9, percent: 55, complete: false, counts: { unstarted: 0, ready: 1, active: 1, review: 2, gated: 0, blocked: 0, done: 5, cancelled: 1 } } } as never,
+    });
+    expect(outcome).toEqual({ open: 4, noun: "task", kind: "milestone" });
+  });
+
+  it("counts an epic's unresolved children, as items when one holds work of its own", () => {
+    const child = (identifier: string, status: string) => ({ identifier, status, kind: "task" }) as never;
+    const epic = { ...base, issue: { kind: "epic" } as never, children: [child("A-1", "done"), child("A-2", "in_review"), child("A-3", "cancelled"), child("A-4", "todo")] };
+    expect(gateOutcomeOf(epic)).toEqual({ open: 2, noun: "task", kind: "epic" });
+    expect(gateOutcomeOf({ ...epic, childrenTiming: { "A-4": { childCount: 3 } as never } })).toMatchObject({ noun: "item" });
+    expect(gateOutcomeOf({ ...epic, children: [child("A-1", "done")] })).toMatchObject({ open: 0 });
   });
 });

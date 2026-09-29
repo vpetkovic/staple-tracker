@@ -560,7 +560,9 @@ describe("the milestone's status and approval, on the Milestones page", () => {
     expect(before).toMatch(/data-status-menu=""[^>]*data-status-category="gated"/);
     expect(before).toContain("Awaiting Approval");
     // The detail's own approval block, with its two decisions.
-    expect(before).toMatch(/data-milestone-gate=""[\s\S]*Approve and close gate/);
+    // November's members are not finished, so approving continues it rather than closing it.
+    expect(before).toMatch(/data-milestone-gate=""[\s\S]*>Approve and continue</);
+    expect(before).toMatch(/\d+ tasks? (is|are) still open\. Approving lifts the hold; the milestone closes on its own when/);
     expect(before).toContain("Send back");
     // Without the detail read the page shows the stored status alone, still not a guess.
     expect(renderDesk(view, null)).toMatch(/data-milestone-status="awaiting_approval"/);
@@ -580,7 +582,7 @@ describe("the milestone's status and approval, on the Milestones page", () => {
     expect(listed.milestone.status).toBe(after.issue.status);
     expect(row.issue.status).toBe(after.issue.status);
     const page = renderDesk(await get<MilestoneView>(`/api/milestone?ws=${ws}&ref=${refs.november}`), after);
-    expect(page).not.toContain("Approve and close gate");
+    expect(page).not.toContain("Approve and continue");
     expect(page).toContain(`aria-label="Status: ${statusLabel(after.issue.status)}. Change status"`);
   });
 });

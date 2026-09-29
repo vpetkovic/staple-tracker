@@ -108,6 +108,14 @@ beforeAll(async () => {
     const gated = store.milestones().create({ title: "Review me" }, null) as MilestoneCreateResult;
     for (const issue of [a, b]) store.milestones().addMember(gated.milestone.id, issue.id, {}, null);
     store.gateIssue(gated.milestone.id, { owner: PERSON }, "autopilot");
+    // A gated milestone whose work is still going: nothing queued (membership queues nothing),
+    // two tasks open — approving lifts the hold and the milestone follows its work.
+    const going = store.milestones().create({ title: "Still going" }, null) as MilestoneCreateResult;
+    const busy = store.createIssue({ title: "In hand" });
+    store.checkoutIssue(busy.id, "w", undefined, {});
+    const waiting = store.createIssue({ title: "Next up" });
+    for (const issue of [busy, waiting]) store.milestones().addMember(going.milestone.id, issue.id, {}, null);
+    store.gateIssue(going.milestone.id, { owner: PERSON }, "autopilot");
     // A done epic with an open child: the child is lifted into its place, wearing its chip.
     const doneEpic = store.createIssue({ title: "Shipped epic", kind: "epic" });
     const late = store.createIssue({ title: "Late child", parent: doneEpic.id });
@@ -115,6 +123,7 @@ beforeAll(async () => {
     const carried = store.milestones().create({ title: "Carried" }, null) as MilestoneCreateResult;
     store.milestones().addMember(carried.milestone.id, doneEpic.id, {}, null);
     Object.assign(refs, {
+      going: going.milestone.identifier,
       carried: carried.milestone.identifier,
       late: late.identifier,
       epic: epic.identifier,
@@ -269,10 +278,14 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     const { page, context } = await open(refs.gated!);
     expect(await page.locator("[data-milestone-detail] [data-status-menu]").getAttribute("data-status-category")).toBe("gated");
     page.on("dialog", (dialog) => void dialog.accept(PERSON));
-    await page.getByRole("button", { name: "Approve and close gate" }).click();
+    // Everything under it is finished, so the button says approving closes it.
+    expect(await page.locator("[data-milestone-gate]").innerText()).toContain("All work here is finished.");
+    await page.getByRole("button", { name: "Approve and close milestone" }).click();
     await page.waitForTimeout(1200);
     const detail = await get<{ issue: { status: string }; gate: { state: string; resolvedBy: string | null } | null }>(`/api/issue?ws=${WS}&ref=${refs.gated}`);
     expect(detail.gate).toMatchObject({ state: "approved", resolvedBy: PERSON });
+    // Everything had landed, so approving closed it, as the button said.
+    expect(detail.issue.status).toBe("done");
     expect(lastEventActor("gate_approved")).toBe(PERSON);
     expect(await page.locator("[data-milestone-detail] [data-status-menu]").getAttribute("aria-label")).not.toContain("Awaiting");
     await context.close();
@@ -316,6 +329,21 @@ describe.skipIf(Boolean(reason))("the Milestones page, pressed in a real browser
     const chip = page.locator(`[data-member-row="${refs.late}"] .staple-row-breadcrumb`);
     const target = await chip.evaluate((element) => parseFloat(getComputedStyle(element, "::before").height));
     expect(target).toBeGreaterThanOrEqual(44);
+    await context.close();
+  });
+
+  it("says approving a gated milestone with open work continues it, and it does not close", async () => {
+    const { page, context } = await open(refs.going!);
+    const block = page.locator("[data-milestone-gate]");
+    expect(await block.innerText()).toContain("2 tasks are still open. Approving lifts the hold; the milestone closes on its own when they are done.");
+    expect(await page.getByRole("button", { name: "Approve and close milestone" }).count()).toBe(0);
+    page.on("dialog", (dialog) => void dialog.accept(PERSON));
+    await page.getByRole("button", { name: "Approve and continue" }).click();
+    await page.waitForTimeout(1200);
+    const detail = await get<{ issue: { status: string }; gate: { state: string } | null }>(`/api/issue?ws=${WS}&ref=${refs.going}`);
+    expect(detail.gate).toMatchObject({ state: "approved" });
+    // The store re-derived it from its work: open, not closed.
+    expect(["done", "cancelled"]).not.toContain(detail.issue.status);
     await context.close();
   });
 });
