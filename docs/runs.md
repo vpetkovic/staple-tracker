@@ -1,7 +1,6 @@
 ---
 title: Autopilot runs
 description: How an autopilot run works a scope ticket after ticket, and how the tracker decides whether it takes, waits or stops.
-sidebar_position: 6
 ---
 
 # Autopilot runs

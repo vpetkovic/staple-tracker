@@ -1,7 +1,6 @@
 ---
 title: Milestones
 description: Dated, human-ordered plans over epics and tasks from anywhere in the tree, with derived state, progress, a goal check and a place in the pickup queue.
-sidebar_position: 5
 ---
 
 # Milestones

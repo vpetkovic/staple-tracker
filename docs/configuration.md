@@ -1,7 +1,6 @@
 ---
 title: Configuration
 description: Where staple keeps per-machine state, how the home is resolved, and how machine preferences and workspace settings are defined, stored and changed.
-sidebar_position: 12
 ---
 
 # Configuration

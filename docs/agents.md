@@ -1,7 +1,6 @@
 ---
 title: Agents
 description: The working protocol that staple init writes for agents, and the MCP tools an agent harness works a tracker through.
-sidebar_position: 3
 ---
 
 # Agents

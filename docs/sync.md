@@ -1,7 +1,6 @@
 ---
 title: Cloud sync
 description: How two or more machines share one Staple workspace through a sync service, what travels, what stays local, and what each consent allows.
-sidebar_position: 7
 ---
 
 # Cloud sync

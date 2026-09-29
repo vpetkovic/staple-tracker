@@ -1,0 +1,197 @@
+/*
+ * Local search (@easyops-cn/docusaurus-search-local): the navbar field, the
+ * suggestion panel and the /search page, on the tokens. The plugin exposes
+ * --search-local-* custom properties for most of its look; its class names
+ * are CSS-module hashed, so the few rules it has no property for match on the
+ * stable prefix ([class*='suggestion_']).
+ */
+
+:root,
+html[data-theme] {
+  --search-local-modal-background: var(--st-bg);
+  /* A hairline ring instead of a drop shadow. */
+  --search-local-modal-shadow: 0 0 0 var(--st-hairline) var(--st-border);
+  --search-local-modal-width: 36rem;
+  --search-local-modal-width-sm: 22rem;
+  --search-local-spacing: var(--st-space-2);
+  --search-local-hit-background: transparent;
+  --search-local-hit-shadow: none;
+  --search-local-hit-color: var(--st-fg);
+  --search-local-hit-height: 3.25rem;
+  --search-local-hit-active-color: var(--st-fg-strong);
+  /* The plugin paints the selected row with this colour and the matches
+     with it too; the matches get the accent below. */
+  --search-local-highlight-color: var(--st-bg-muted);
+  --search-local-muted-color: var(--st-fg-subtle);
+  --search-local-icon-stroke-width: 1.4;
+  --search-local-input-active-border-color: var(--st-accent);
+
+  --ifm-navbar-search-input-background-color: var(--st-bg-muted);
+  --ifm-navbar-search-input-color: var(--st-fg-strong);
+  --ifm-navbar-search-input-placeholder-color: var(--st-fg-subtle);
+}
+
+/* ---------- Navbar field ---------- */
+
+.navbar__search-input {
+  height: var(--st-control-sm);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  font-size: var(--st-text-sm);
+  transition: border-color var(--st-duration-fast) var(--st-ease);
+}
+
+.navbar__search-input:hover {
+  border-color: var(--st-border-strong);
+}
+
+.navbar__search-input:focus {
+  outline: var(--st-focus-ring) solid var(--st-accent-ring);
+  outline-offset: 0;
+  border-color: var(--st-accent);
+}
+
+.navbar__search kbd {
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-sm);
+  background: var(--st-bg);
+  box-shadow: none;
+  color: var(--st-fg-subtle);
+  font-family: var(--st-font-sans);
+  font-size: var(--st-text-xs);
+}
+
+/* ---------- Suggestions ---------- */
+
+.navbar__search [class*='dropdownMenu_'] {
+  border-radius: var(--st-radius-lg);
+  margin-top: var(--st-space-2);
+}
+
+.navbar__search [class*='suggestion_'] {
+  border-radius: var(--st-radius-md);
+  transition: background-color var(--st-duration-fast) var(--st-ease);
+}
+
+.navbar__search [class*='suggestion_'] mark {
+  color: var(--st-accent-text);
+}
+
+/* The plugin paints every part of the selected row in one colour; keep the
+   match in the accent and the path muted, as in the other rows. */
+.navbar__search [class*='suggestion_'][class*='cursor_'] mark {
+  color: var(--st-accent-text) !important;
+  text-decoration: none;
+}
+
+.navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitPath_'],
+.navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitTree_'],
+.navbar__search [class*='suggestion_'][class*='cursor_'] [class*='hitIcon_'] {
+  color: var(--st-fg-muted) !important;
+}
+
+.navbar__search [class*='hitTitle_'] {
+  color: var(--st-fg-strong);
+  font-size: var(--st-text-sm);
+  font-weight: var(--st-weight-medium);
+}
+
+.navbar__search [class*='hitPath_'] {
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-regular);
+}
+
+.navbar__search [class*='hitFooter_'] {
+  font-size: var(--st-text-sm);
+}
+
+.navbar__search [class*='hitFooter_'] a {
+  color: var(--st-accent-text);
+  text-underline-offset: 0.2em;
+}
+
+.navbar__search [class*='noResults_'] {
+  color: var(--st-fg-muted);
+  font-size: var(--st-text-sm);
+}
+
+/* ---------- The /search page ---------- */
+
+.container:has([class*='searchQueryInput_']) {
+  max-width: var(--st-measure);
+  padding-top: var(--st-space-8);
+  padding-bottom: var(--st-space-16);
+}
+
+.container:has([class*='searchQueryInput_']) h1 {
+  font-size: var(--st-text-3xl);
+  letter-spacing: var(--st-tracking-heading);
+  margin-bottom: var(--st-space-6);
+}
+
+.container:has([class*='searchQueryInput_']) > p {
+  color: var(--st-fg-muted);
+  font-size: var(--st-text-sm);
+}
+
+[class*='searchQueryInput_'],
+[class*='searchContextInput_'] {
+  height: var(--st-control-md);
+  padding: 0 var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg-subtle);
+  color: var(--st-fg-strong);
+  font-size: var(--st-text-base);
+  transition: border-color var(--st-duration-fast) var(--st-ease);
+}
+
+[class*='searchQueryInput_']:focus,
+[class*='searchContextInput_']:focus {
+  outline: var(--st-focus-ring) solid var(--st-accent-ring);
+  outline-offset: 0;
+  border-color: var(--st-accent);
+}
+
+[class*='searchResultItem_'] {
+  padding: var(--st-space-5) 0;
+  border-bottom: var(--st-hairline) solid var(--st-border);
+}
+
+[class*='searchResultItem_'] > h2 {
+  font-size: var(--st-text-lg);
+  letter-spacing: normal;
+}
+
+[class*='searchResultItem_'] > h2 a {
+  color: var(--st-fg-strong);
+}
+
+[class*='searchResultItem_'] > h2 a:hover {
+  color: var(--st-accent-text);
+  text-decoration: none;
+}
+
+[class*='searchResultItem_'] > [class*='searchResultItemPath_'] {
+  margin-top: var(--st-space-1);
+  color: var(--st-fg-subtle);
+  font-size: var(--st-text-xs);
+}
+
+[class*='searchResultItem_'] > [class*='searchResultItemSummary_'] {
+  margin-top: var(--st-space-2);
+  color: var(--st-fg-muted);
+  font-size: var(--st-text-sm);
+  font-style: normal;
+  line-height: var(--st-leading-relaxed);
+}
+
+[class*='searchResultItem_'] mark {
+  background: var(--st-accent-soft);
+  color: inherit;
+  border-radius: 2px;
+}
+
+[class*='searchResultItem_'] > h2 mark {
+  color: var(--st-accent-text);
+}

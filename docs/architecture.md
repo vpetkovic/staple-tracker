@@ -1,7 +1,6 @@
 ---
 title: Architecture
 description: Where each part of staple lives in the source tree, how workspaces and the hub fit together, and the known limits of the current build.
-sidebar_position: 17
 ---
 
 # Architecture

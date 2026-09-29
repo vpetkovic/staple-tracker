@@ -1,7 +1,6 @@
 ---
 title: Documentation
 description: What staple is, where to start, and every reference page grouped by what you want to do.
-sidebar_position: 1
 ---
 
 # staple documentation
@@ -20,13 +19,16 @@ claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
 npx staple-cli install --yes        # optional: put `staple` on your PATH
 ```
 
-Read [agents.md](agents.md) next. It covers the protocol your agents follow and the
-MCP tools they use. [cli.md](cli.md) documents every command.
+[Getting started](getting-started.md) walks through these three lines: the first
+workspace, the MCP wiring and the agent loop. Read [agents.md](agents.md) next. It
+covers the protocol your agents follow and the MCP tools they use.
+[cli.md](cli.md) documents every command.
 
 ## Getting started
 
 | Page | What it covers |
 |---|---|
+| [Getting started](getting-started.md) | Install, the first workspace, MCP wiring for Claude Code and Codex, one ticket through the agent loop |
 | [Packaging and install](packaging.md) | The `staple-cli` package, `npx` versus `staple install`, the versioned runtime and launcher |
 | [Web UI](web-ui.md) | `staple open` and every view: tasks, queue, graph, milestones, estimates, usage, task detail, autopilot runs, settings |
 | [Configuration](configuration.md) | The staple home, `config.json`, machine and workspace settings, `doctor` |

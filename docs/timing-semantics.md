@@ -1,7 +1,6 @@
 ---
 title: Timing semantics
 description: What each time number staple reports means, how an issue's elapsed time and its agent work are measured, and which number an estimate is compared against.
-sidebar_position: 14
 ---
 
 # Timing semantics

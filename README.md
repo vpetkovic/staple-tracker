@@ -25,8 +25,8 @@ npx staple-cli                      # set this repository up, then open the web 
 ```
 
 The first run creates `.staple/staple.db` and `.staple/AGENTS.md` (the protocol
-your agents follow), asks a couple of questions (`--yes` takes the defaults)
-and opens the web UI. Then connect your agent harness to the MCP server:
+your agents follow) and opens the web UI. The one question it can ask is whether
+to move a legacy `.tasks` workspace (`--yes` takes the default). Then connect your agent harness to the MCP server:
 
 ```bash
 claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
@@ -37,6 +37,9 @@ To have `staple` on your `PATH` instead of fetching it each time, run
 `npx staple-cli install --yes`: a versioned runtime and a launcher at
 `~/.local/bin/staple`, no `sudo`, with rollback. Add `--update-path` to put
 `~/.local/bin` on your `PATH` ([packaging](docs/packaging.md)).
+
+[Getting started](docs/getting-started.md) walks through the first workspace,
+the MCP wiring and the loop your agents follow, one ticket from created to done.
 
 ## What you get
 

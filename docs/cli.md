@@ -1,7 +1,6 @@
 ---
 title: CLI
 description: Every staple command, flag, JSON shape and exit code, with the rules each one enforces.
-sidebar_position: 11
 ---
 
 # CLI
@@ -1506,15 +1505,19 @@ codes for a cloud command should branch on the codes below instead.
 
 Exit codes let CI branch without parsing stderr:
 
-| code | meaning | | code | meaning |
-|---|---|---|---|---|
-| 0 | success | | 4 | `conflict` |
-| 1 | unknown error | | 5 | `duplicate` |
-| 2 | `validation` | | 6 | `cycle` |
-| 3 | `not_found` | | 7 | `revision_conflict` |
-| | | | 8 | `timeout` (`wait` only) |
-| | | | 9 | `gated` (a review gate above it is unresolved) |
-| | | | 10 | `out_of_order` (the plan says something else comes first) |
+| code | meaning |
+|---|---|
+| 0 | success |
+| 1 | unknown error |
+| 2 | `validation` |
+| 3 | `not_found` |
+| 4 | `conflict` |
+| 5 | `duplicate` |
+| 6 | `cycle` |
+| 7 | `revision_conflict` |
+| 8 | `timeout` (`wait` only) |
+| 9 | `gated` (a review gate above it is unresolved) |
+| 10 | `out_of_order` (the plan says something else comes first) |
 
 Cloud sync failures (`staple cloud …`, `staple hub registry …`) use 2, 3 and 4 for the
 three codes they share with the tracker, and these for the rest:

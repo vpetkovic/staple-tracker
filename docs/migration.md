@@ -1,7 +1,6 @@
 ---
 title: Migrating a .tasks workspace
 description: How staple moves a legacy .tasks/tasks.db workspace to .staple/staple.db, upgrades a workspace's schema when it opens it, and explains a schema mismatch.
-sidebar_position: 15
 ---
 
 # Migrating a `.tasks` workspace

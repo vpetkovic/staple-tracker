@@ -1,7 +1,6 @@
 ---
 title: Execution telemetry
 description: How staple records agent attempts on issues, provider usage-limit windows and budget readings, and how each is read back.
-sidebar_position: 13
 ---
 
 # Execution telemetry

@@ -1,7 +1,6 @@
 ---
 title: Semantics
 description: What an issue is in staple, and what the store guarantees about statuses, kinds, parents, checkout, dependencies, approval gates and documents.
-sidebar_position: 10
 ---
 
 # Semantics

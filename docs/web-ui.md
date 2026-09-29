@@ -1,7 +1,6 @@
 ---
 title: Web UI
 description: The local browser app that staple open serves, with every view it has, what each one shows and changes, and how it authenticates.
-sidebar_position: 9
 ---
 
 # Web UI
