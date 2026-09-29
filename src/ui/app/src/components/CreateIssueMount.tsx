@@ -27,10 +27,19 @@ import { useBackToClose } from "@/lib/back-to-close";
 
 export function CreateIssueMount() {
   const [open, setOpen] = useState(false);
+  /** The kind a caller asked for (`openCreateIssue({ kind })`); the C key asks for none. */
+  const [kind, setKind] = useState<string | undefined>(undefined);
   // Phone Back closes the form (lib/back-to-close.ts).
   useBackToClose(open, () => setOpen(false));
 
-  useEffect(() => onOpenCreateIssue(() => setOpen(true)), []);
+  useEffect(
+    () =>
+      onOpenCreateIssue((request) => {
+        setKind(request.kind);
+        setOpen(true);
+      }),
+    [],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -42,6 +51,7 @@ export function CreateIssueMount() {
       // one over the palette would trap focus between the two.
       if (isTyping(event.target) || dialogIsOpen()) return;
       event.preventDefault();
+      setKind(undefined);
       setOpen(true);
     };
     window.addEventListener("keydown", onKeyDown);
@@ -50,5 +60,5 @@ export function CreateIssueMount() {
 
   // Mounted only while open: the form's state resets with it, by construction.
   if (!open) return null;
-  return <CreateIssueDialog open onOpenChange={setOpen} />;
+  return <CreateIssueDialog open onOpenChange={setOpen} initialKind={kind} />;
 }

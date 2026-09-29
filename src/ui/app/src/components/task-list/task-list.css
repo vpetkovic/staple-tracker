@@ -1309,6 +1309,12 @@
   inset: -13px -3px;
 }
 
+/* The parent chip draws 17px of 11px text (less than a badge's 18px with its border), so its
+   target reaches 14px out instead of 13: 17 + 2 × 14 = 45px tall, never under 44. */
+.staple-row[data-layout="compact"] .staple-row-breadcrumb::before {
+  inset: -14px -3px;
+}
+
 /* A one-digit badge is 34px wide. Its target is measured from inside its 1px border: at a
    40px minimum that is 38 + 2 × 3 = 44px across (and 18 + 2 × 13 = 44px tall). Two badges
    side by side stand 4px apart, so their targets, 2px past each border, meet and never

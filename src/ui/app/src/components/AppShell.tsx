@@ -194,7 +194,7 @@ export function TopBar({
         </button>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button data-top-new-task onClick={openCreateIssue} className="h-control-md gap-1.5 rounded-lg px-3 text-body pointer-coarse:h-11">
+            <Button data-top-new-task onClick={() => openCreateIssue()} className="h-control-md gap-1.5 rounded-lg px-3 text-body pointer-coarse:h-11">
               <Plus aria-hidden className="size-4" />
               New task
             </Button>
@@ -365,7 +365,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <BarButton label="Search and commands" onClick={openCommandPalette} data-bar-search>
                 <Search aria-hidden />
               </BarButton>
-              <BarButton label="New task" onClick={openCreateIssue} data-bar-new-task>
+              <BarButton label="New task" onClick={() => openCreateIssue()} data-bar-new-task>
                 <SquarePen aria-hidden />
               </BarButton>
             </div>

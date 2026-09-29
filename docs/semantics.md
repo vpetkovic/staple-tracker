@@ -142,11 +142,23 @@ Three consequences worth stating out loud:
 
 **Derivation may only change what derivation set.** The pre-work band is the
 *absence* of a statement, so derivation writes into it freely; everything else —
-`in_progress`, `in_review`, `blocked`, `done`, `cancelled` — only when the event
-log says derivation itself wrote the current value. So an epic a human closed by
-hand, cancelled, parked in `blocked` with an unblock descriptor, or genuinely
-checked out is immune until that human moves it. `staple done <epic>` therefore
-still works, is idempotent, and sticks.
+`in_progress`, `in_review`, `blocked`, `done`, `cancelled` — only when derivation
+itself wrote the current value. So an epic a human closed by hand, cancelled,
+parked in `blocked` with an unblock descriptor, or genuinely checked out is
+immune until that human moves it. `staple done <epic>` therefore still works, is
+idempotent, and sticks.
+
+"Derivation wrote it" is a fact on the row, `derived_status`: the status
+derivation last wrote, which the schema clears the moment anything else moves
+the status or the claim — a status write from the CLI, MCP or the web UI, a
+gate, a checkout, a steal, a release (workspace migration 017). It replicates as
+the issue field `derivedStatus`, so it holds on every device alike, including
+one that joined with a seed or hydrated from a snapshot and so holds no events
+for what it pulled. Read from the event log instead, a device with no events
+would take every derived parent as set by hand, and work landing there would
+never close its epic or its milestone. The migration backfills the column from
+that event-log rule, and each upgraded device sends what it backfilled after its
+next pull.
 
 Every derived transition is a `status_changed` event carrying `derived` (the
 rung that fired) and `derivedFrom` (the child that caused it). That marker is
