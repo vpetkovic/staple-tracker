@@ -5,9 +5,11 @@ import type * as Preset from '@docusaurus/preset-classic';
 import {syntaxTheme} from './src/css/prism';
 import githubAlerts from './src/remark/githubAlerts';
 
-// Where the site lives: the only two values to change when it moves. `url` is a
-// placeholder until the production domain is set up with the Cloudflare deploy.
-const url = 'https://example.com';
+// Where the site lives. `url` comes from SITE_URL, which the deploy workflow sets
+// from the SITE_URL repository variable, or else to the Worker's workers.dev
+// address. Set that variable to move the site to a custom domain; no code change.
+// Local builds fall back to a placeholder.
+const url = (process.env.SITE_URL || 'https://example.com').replace(/\/+$/, '');
 const baseUrl = '/';
 
 const repo = 'https://github.com/vpetkovic/staple-tracker';

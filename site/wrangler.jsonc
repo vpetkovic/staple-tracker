@@ -1,0 +1,23 @@
+// The website's Cloudflare Worker: static assets only, no Worker script.
+// It is separate from the sync Worker in worker/.
+//
+// No account id, zone id or route lives here: the repository is public. Wrangler
+// reads CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN from the environment, and
+// .github/workflows/site.yml supplies them from repository secrets.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "staple-site",
+  "compatibility_date": "2026-09-29",
+  // Served at https://staple-site.<account subdomain>.workers.dev until a custom
+  // domain is attached (see "Deploying the website" in CONTRIBUTING.md).
+  "workers_dev": true,
+  "assets": {
+    // The output of `npm run build` (docusaurus build).
+    "directory": "./build",
+    // Unknown paths get build/404.html with status 404.
+    "not_found_handling": "404-page",
+    // Docusaurus runs with trailingSlash: false and writes docs/cli.html, not
+    // docs/cli/index.html: /docs/cli serves that file, /docs/cli/ redirects to it.
+    "html_handling": "drop-trailing-slash"
+  }
+}

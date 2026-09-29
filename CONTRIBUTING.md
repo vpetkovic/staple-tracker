@@ -150,6 +150,45 @@ The docs pages are `docs/*.md`, rendered in place (the docs plugin reads
 broken Markdown link. A Markdown link from `docs/` to a `.md` file git tracks
 outside `docs/`, such as `../CONTRIBUTING.md`, becomes a link to that file on
 GitHub; link any other repository file by its full GitHub URL, since Docusaurus
-publishes a relative link to a non-Markdown file as a site asset. The site URL and
-base path are the `url` and `baseUrl` constants at the top of
-`site/docusaurus.config.ts`.
+publishes a relative link to a non-Markdown file as a site asset. The base path is
+the `baseUrl` constant at the top of `site/docusaurus.config.ts`; the site URL
+comes from the `SITE_URL` environment variable (see below), and local builds use a
+placeholder.
+
+### Deploying the website
+
+`.github/workflows/site.yml` builds the site on every pull request that touches
+`site/`, `docs/`, a Markdown file at the repository root or the workflow itself,
+into any base branch, and runs `wrangler deploy --dry-run` against the output. It never deploys from a pull
+request. On master it builds the site and deploys it to Cloudflare as the
+`staple-site` Worker, which serves `site/build` as static assets
+(`site/wrangler.jsonc`). The sync Worker in `worker/` is separate.
+
+Until the Cloudflare secrets exist, the deploy job skips with a notice and passes.
+To turn it on:
+
+1. Create a Cloudflare API token from the "Edit Cloudflare Workers" template,
+   for the account and all zones (it includes Workers Scripts: Edit, which the
+   deploy and the workers.dev subdomain lookup use).
+2. Add two repository secrets (Settings, Secrets and variables, Actions):
+   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+3. Deploy: run the Site workflow on master from the Actions tab
+   (Run workflow), or push a change under `site/` or `docs/` to master. The first
+   deploy creates the Worker at
+   `https://staple-site.<account subdomain>.workers.dev`; the workflow looks the
+   subdomain up and builds the site with that URL.
+
+To serve the site on a custom domain:
+
+1. In the Cloudflare dashboard, open the `staple-site` Worker, then Settings,
+   Domains and Routes, and add the domain as a Custom Domain (its zone must be on
+   the same account). `site/wrangler.jsonc` declares no routes, so later
+   deploys leave the domain in place.
+2. Set the repository variable `SITE_URL` to `https://<the domain>` (scheme and
+   host, no path). This is the one value that moves the site: canonical links,
+   the sitemap and social cards use it from the next deploy. Run the workflow
+   again to rebuild.
+3. The workers.dev address keeps serving the site. To turn it off, set
+   `workers_dev` to `false` in `site/wrangler.jsonc`.
+
+Nothing account-specific (account id, zone id, domain) belongs in the repository.
