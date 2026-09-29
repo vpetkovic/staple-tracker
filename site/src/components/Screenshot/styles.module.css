@@ -44,7 +44,7 @@
   }
 
   .image {
-    width: 220%;
+    width: 250%;
     max-width: none;
     transform: translate(var(--focus-x), var(--focus-y));
   }

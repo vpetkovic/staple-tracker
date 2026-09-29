@@ -41,34 +41,42 @@ function CheckIcon(): ReactNode {
 
 // A shell command with a copy button: the call to action when the action is a command.
 export default function CopyCommand({command, variant = 'primary', className}: Props): ReactNode {
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'copied' | 'manual'>('idle');
+  const text = useRef<HTMLElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
 
   async function copy(): Promise<void> {
+    clearTimeout(timer.current);
     try {
       await navigator.clipboard.writeText(command);
+      setStatus('copied');
+      timer.current = setTimeout(() => setStatus('idle'), 1600);
     } catch {
-      return;
+      // No clipboard access (an insecure origin, a denied permission): select the
+      // command so the keyboard shortcut copies it, and say so.
+      if (text.current) window.getSelection()?.selectAllChildren(text.current);
+      setStatus('manual');
     }
-    setCopied(true);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), 1600);
   }
 
   return (
     <div className={clsx(styles.command, styles[variant], className)}>
-      <code className={styles.text}>
+      <code className={styles.text} ref={text}>
         <span className={styles.prompt} aria-hidden="true">
           $
         </span>
         {command}
       </code>
       <button type="button" className={styles.copy} onClick={copy} aria-label={`Copy ${command}`}>
-        {copied ? <CheckIcon /> : <CopyIcon />}
+        {status === 'copied' ? <CheckIcon /> : <CopyIcon />}
       </button>
       <span className={styles.status} role="status">
-        {copied ? 'Copied to the clipboard' : ''}
+        {status === 'copied'
+          ? 'Copied to the clipboard'
+          : status === 'manual'
+            ? 'Selected: press Ctrl+C or ⌘C to copy'
+            : ''}
       </span>
     </div>
   );

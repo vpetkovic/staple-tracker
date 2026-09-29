@@ -63,11 +63,6 @@
   background: var(--st-bg-muted);
 }
 
-.copy:focus-visible {
-  outline: var(--st-focus-ring) solid var(--st-accent-ring);
-  outline-offset: 2px;
-}
-
 /* Announced to screen readers, not shown. */
 .status {
   position: absolute;
@@ -76,4 +71,10 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* The global accent ring would be green on green here: use the text colour instead. */
+.primary .copy:focus-visible {
+  outline-color: var(--st-on-accent);
+  outline-offset: calc(-1 * var(--st-focus-ring));
 }

@@ -20,8 +20,8 @@ const DESCRIPTION =
 const FACTS: {value: string; label: ReactNode}[] = [
   {value: '65', label: 'MCP tools, each calling the same store method as the CLI'},
   {value: '6', label: 'views in the web UI, from Tasks to Usage'},
-  {value: '9', label: 'stop rules an autopilot run checks after every ticket'},
-  {value: '0', label: 'network calls until you connect cloud sync'},
+  {value: '9', label: 'reasons an autopilot run stops, each named in its answer'},
+  {value: '0', label: 'network calls until you opt in to sync or live usage checks'},
 ];
 
 type FeatureProps = {
@@ -74,9 +74,9 @@ const WALKTHROUGH = [
   'commented.',
   '$ staple done LUM-9 -m "Fixed and covered by an e2e test on WebKit"',
   '●!! LUM-9     done        Session expires mid-checkout on Safari @claude · bug',
-  '# a ticket another agent holds is refused, with what to do instead',
-  '$ staple start LUM-8',
-  'error(conflict): Checkout refused: status is "in_progress" (held by codex), expected one of todo, backlog, blocked. Pick a different task — do not retry.',
+  '# another agent asking for a held ticket is refused, with what to do instead',
+  '$ staple start LUM-6 --agent codex',
+  'error(conflict): Checkout refused: status is "in_progress" (held by claude), expected one of todo, backlog, blocked. Pick a different task — do not retry.',
 ];
 
 const STEPS: {command: string; tool: string; text: string}[] = [
@@ -90,11 +90,17 @@ const STEPS: {command: string; tool: string; text: string}[] = [
 const RUN = [
   '# one agent, one scope, a budget',
   '$ staple run start --scope LUM-3 --max-tickets 3 --until 4h',
+  'run 1565a768-8228-472e-9c06-4511b90f21bf  active  codex over issue LUM-3',
+  '  started 2026-09-29T07:06:45.766Z · 0/3 tickets, until 2026-09-29T11:06:45.766Z · 0 done, 0 failed, 0 open',
   '$ staple run continue',
   'take     LUM-15 Search API endpoint',
   '  LUM-15 is in scope and already held by you: finish it before taking more.',
   '# after each ticket, ask again: take, wait or stop',
   '$ staple run stop -m "enough for today"',
+  'run 1565a768-8228-472e-9c06-4511b90f21bf  stopped  codex over issue LUM-3',
+  '  started 2026-09-29T07:06:45.766Z · 1/3 tickets, until 2026-09-29T11:06:45.766Z · 0 done, 1 failed, 0 open',
+  '    1  LUM-15    failed  stopped_by_human: enough for today',
+  '  ended 2026-09-29T07:06:46.239Z: stopped_by_human by codex (enough for today)',
   '$ staple run continue',
   'stop     no_run: codex has no active or paused run (staple run start --scope <queue|ref>).',
 ];
@@ -126,7 +132,7 @@ export default function Home(): ReactNode {
             name="tasks"
             focus={{x: 18.5, y: 0}}
             priority
-            alt="The Tasks view of the staple web UI: epics for checkout, onboarding and search with their tasks, two of them being worked on by agents and three waiting on other work."
+            alt="The Tasks view of the staple web UI: epics for checkout, onboarding and search with their tasks, two being worked on by claude and codex, four waiting on other work and three done."
           />
         </section>
 
@@ -177,8 +183,8 @@ export default function Home(): ReactNode {
                 take.
               </>,
               <>
-                A gate parks a parent on a person. Its tasks answer <code>gated</code> until you approve or request
-                changes.
+                A gate parks a parent on a person. Its tasks answer <code>gated</code> until you approve; a request for
+                changes keeps them parked.
               </>,
             ]}
             link={{to: '/docs/queue', label: 'The pickup queue'}}
@@ -293,8 +299,8 @@ export default function Home(): ReactNode {
               <Eyebrow>The agent loop</Eyebrow>
               <Heading>How an agent works a ticket.</Heading>
               <Lead>
-                Five commands, or the five MCP tools beside them. The session on the right ran against the demo
-                workspace in the screenshots.
+                Five commands, or the five MCP tools beside them. This session ran against a copy of the demo workspace
+                in the screenshots.
               </Lead>
               <ol className={styles.steps}>
                 {STEPS.map((step) => (
