@@ -34,7 +34,7 @@ Every tool, by area:
 | Vocabulary and settings | `list_statuses`, `list_kinds`, `update_statuses`, `update_kinds`, `get_setting`, `set_setting` |
 | Plans and forecasts | `compare_plans`, `timing_quality`, `calibration_cohorts`, `forecast` |
 | Execution telemetry and budget | `list_attempts`, `get_attempt`, `get_budget`, `list_budget_samples`, `record_budget_sample`, `forget_budget_samples` |
-| Cloud sync ([cloud-sync.md](cloud-sync.md)) | `cloud_status`, `conflict_list`, `conflict_resolve` |
+| [Cloud sync](cloud-sync.md) | `cloud_status`, `conflict_list`, `conflict_resolve` |
 | Workspaces and the hub | `init`, `hub_overview`, `cross_link`, `cross_unlink`, `hub_unregister`, `hub_prune` |
 
 ## Changing an estimate
@@ -155,7 +155,7 @@ CLI prints and exits `9` on. `steal_if_idle_seconds` does not open it: only the
 named human does, via `approve_task`.
 
 The UI server's read routes mirror this exactly, and `/api/agent-context` is
-expression-for-expression identical to `get_task`, so the agent-view pane below
+expression-for-expression identical to `get_task`, so the [agent-view pane](working-a-ticket.md#what-the-agent-actually-receives)
 shows the gate the agent will actually receive.
 
 ## The queue tools

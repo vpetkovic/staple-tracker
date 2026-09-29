@@ -5,7 +5,6 @@ description: Wire Claude Code, Codex or any MCP client to staple, and what the M
 
 # Connect your agent
 
-
 Agents work the tracker through the MCP server, which is the same package started
 with `mcp`. `STAPLE_AGENT` names the agent: every write is recorded under that
 name, and a write without one is refused.
@@ -25,7 +24,7 @@ codex mcp add staple --env STAPLE_AGENT=codex -- npx -y staple-cli mcp
 Any other MCP client launches `npx -y staple-cli mcp` the same way. With
 `staple` installed, `staple mcp` replaces `npx -y staple-cli mcp`. The server
 starts from any directory and finds the workspace above its working directory.
-[Agents](mcp-tools.md) lists every MCP tool.
+[MCP tools](mcp-tools.md) lists every tool.
 
 ## Harness ergonomics
 

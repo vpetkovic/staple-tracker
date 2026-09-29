@@ -54,7 +54,7 @@ A held claim on work that is really waiting on a person is the failure mode
 this whole file exists for, and `staple gate` is the honest way to end it:
 parking a parent **clears its claim**, so it stops accruing time and stops
 reading as live work somebody should steal. See
-[approval-gates.md](approval-gates.md).
+[Approval gates](approval-gates.md).
 
 ## A claim change is not a plan change
 

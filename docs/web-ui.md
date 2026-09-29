@@ -108,7 +108,7 @@ on the right, the palette field (*Find a task or command*, `⌘K`) and the
 that means and the technical values behind *Show details*. It renders nothing
 when the workspace is not connected, and it never prompts you to connect. It
 reads `/api/cloud/status` once per workspace shown (on *All workspaces*,
-`/api/cloud/workspaces` once), never on the poll. See [sync.md](cloud-sync.md).
+`/api/cloud/workspaces` once), never on the poll. See [Cloud sync](cloud-sync.md).
 
 **The toolbar** (44px) is only on views that use it (`viewControls` in
 `lib/session.ts`): Tasks has all of it, Graph has the filters only, Milestones
@@ -714,7 +714,7 @@ the command palette, which also finds it by *estimate accuracy* and
 *calibration*), is the
 workspace's calibration report: `GET /api/calibration`, the payload of `staple
 calibrate --json` and MCP `calibration_cohorts`
-([budget-and-estimates.md](budget-and-estimates.md), "Calibration cohorts" and
+([timing-semantics.md](../design/timing-semantics.md#calibration-cohorts), "Calibration cohorts" and
 "Confidence ranges"). The view's internal id is `calibration` (saved preferences
 and commands key off it); the address calls it `estimate-accuracy`. It is per
 workspace; on *All workspaces* it shows [Choose a workspace](#choose-a-workspace)
@@ -1032,7 +1032,7 @@ estimated.
 **Forecast.** Between the breakdown and the sub-task list, an open parent
 shows its forecast, and an open leaf with its own estimate a compact one: both
 read `GET /api/forecast?ref=` (`staple forecast --json`, MCP `forecast`; see
-[budget-and-estimates.md](budget-and-estimates.md), "Forecasts") and render it as
+[timing-semantics.md](../design/timing-semantics.md#forecasts), "Forecasts") and render it as
 returned. The page computes nothing: every figure is a field of the payload,
 rounded and phrased for a reader who is not an engineer, with the exact figure
 one click away. A resolved issue, or a leaf with no estimate, shows no forecast.
@@ -1341,7 +1341,7 @@ comes back as a refusal on the responsible row.
 ### Statuses and kinds
 
 The status set and the kind vocabulary are workspace data, not staple's
-(see [epics-and-dependencies.md](epics-and-dependencies.md)).
+(see [Epics and dependencies](epics-and-dependencies.md)).
 
 Two lists. Each row has an editable label, a drag handle, and — for statuses —
 a category select; removing a row that issues still carry requires a target to
@@ -1436,7 +1436,7 @@ Three sections deal with sync, and none of them is in the settings registry:
 they read `/api/cloud/status` and write the cloud routes, which act on this
 computer's files, because a credential written to the workspace database would
 replicate to every device. Opening them makes one network-free request; nothing
-leaves the machine without a press. See [cloud-sync.md](cloud-sync.md).
+leaves the machine without a press. See [Cloud sync](cloud-sync.md).
 
 - **Cloud account** (across all workspaces): this computer's connection to the
   sync service. Connecting is two steps: a preview of the service, then a

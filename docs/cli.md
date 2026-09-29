@@ -1071,7 +1071,7 @@ guard, the `[queued: …]` cue on `ls`, and the reviewer's checklist in the web 
   it.
 
 Semantics and the tests that pin each rule are in
-[approval-gates.md](approval-gates.md).
+[semantics.md](../design/semantics.md#approval-gates).
 
 ```console
 $ staple gate STA-142 --owner VP -m "Schema plus the three CLI verbs — ok to build on this?"
@@ -1161,7 +1161,7 @@ what distinguishes a partial approval from a whole one:
 same rule `claim` and `timing` follow. At most one of the pair is ever non-null.
 
 Semantics, and the tests behind each rule, are in
-[approval-gates.md](approval-gates.md).
+[semantics.md](../design/semantics.md#approval-gates).
 
 ## Provider budget
 

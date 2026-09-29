@@ -28,7 +28,8 @@ function tracked(relative: string): boolean {
 }
 
 // docs/*.md is the single source of truth and links to repository files outside
-// docs/ (CONTRIBUTING.md, RELEASING.md). Those links point at the file on GitHub.
+// docs/ (CONTRIBUTING.md, RELEASING.md, the design documents in design/). Those
+// links point at the file on GitHub; the site never renders design/.
 // Any other unresolvable Markdown link fails the build.
 function linkOutsideDocs({sourceFilePath, url: target}: {sourceFilePath: string; url: string}): string {
   const match = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(target);
@@ -164,7 +165,7 @@ const config: Config = {
             {label: 'Pickup queue', to: '/docs/queue'},
             {label: 'Milestones', to: '/docs/milestones'},
             {label: 'Autopilot runs', to: '/docs/runs'},
-            {label: 'Agents', to: '/docs/working-a-ticket'},
+            {label: 'How an agent works a ticket', to: '/docs/working-a-ticket'},
           ],
         },
         {

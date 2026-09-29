@@ -11,7 +11,9 @@ on:
     paths:
       - "site/**"
       - "docs/**"
-      # Root Markdown files that docs/ links to (CONTRIBUTING.md, RELEASING.md).
+      # design/ and the root Markdown files are not rendered, but docs/ links to
+      # them and the build fails when a link target is gone.
+      - "design/**"
       - "*.md"
       - ".github/workflows/site.yml"
   push:
@@ -19,6 +21,7 @@ on:
     paths:
       - "site/**"
       - "docs/**"
+      - "design/**"
       - "*.md"
       - ".github/workflows/site.yml"
   # Deploys master on demand, e.g. once the Cloudflare secrets are added.

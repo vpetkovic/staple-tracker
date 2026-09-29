@@ -6,7 +6,7 @@ description: Install staple, set up a repository and follow one ticket through t
 # Install and first workspace
 
 This page takes one repository from nothing to an agent working a ticket: install,
-the first workspace, the MCP wiring, and the loop your agents follow. It needs
+the first workspace, connecting your agent, and the loop your agents follow. It needs
 Node >= 22.5 and nothing else.
 
 ## Install
@@ -100,7 +100,7 @@ that dies holding a claim leaves it to go stale, and another agent can take it
 over on the record ([continuity](handoff.md)).
 
 The CLI takes the agent name from `--agent`, then `STAPLE_AGENT`, then your user
-name. [Semantics](epics-and-dependencies.md) has the rules behind statuses, claims and
+name. [Epics and dependencies](epics-and-dependencies.md) covers statuses, claims and
 dependencies.
 
 ## Next

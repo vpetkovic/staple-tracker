@@ -18,7 +18,7 @@ It covers:
 - the **identity rule** — act under the identity you claimed with, all session,
   or your own writes stop counting as liveness;
 - **parents close themselves** — an epic's status follows its children, so the
-  last child to land closes it (see [epics-and-dependencies.md](epics-and-dependencies.md)). Nobody has to
+  last child to land closes it (see [Epics and dependencies](epics-and-dependencies.md)). Nobody has to
   remember to close an epic; what is still owed is the **summary comment**, and
   an explicit `staple done <epic>` remains allowed, idempotent, and immune to
   the derivation afterwards;

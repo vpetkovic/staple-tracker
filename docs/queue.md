@@ -1,5 +1,6 @@
 ---
 title: The pickup queue
+sidebar_label: Pickup queue
 description: The explicit, human-ordered plan of what agents pick up next, how it resolves to an effective order, and how strict policy and overrides enforce it.
 ---
 
