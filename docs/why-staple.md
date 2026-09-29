@@ -35,7 +35,7 @@ weekly quota ran out, or someone closed the terminal. The plan and the task list
 harness kept lived in that session. The next session starts cold: it rereads the
 files, guesses which steps are done, and asks you where to pick up.
 
-As the author puts it: "I don't want Markdown files acting as a backlog, especially
+As the author puts it: "I don’t want Markdown files acting as a backlog, especially
 for large features such as integrating multi-tenancy."
 
 ## What staple does about it
@@ -43,7 +43,7 @@ for large features such as integrating multi-tenancy."
 **Tickets carry the whole context.** A feature becomes an epic, and its steps become
 tickets with dependencies between them. The plan is stored on the ticket as a
 document, next to the worklog, the comments and the tickets it waits on. An agent
-that opens a ticket finds everything it needs in one place.
+that opens a ticket finds everything it needs there.
 
 ```bash
 staple new "Multi-tenancy" --kind epic                                # STA-1
@@ -69,7 +69,8 @@ staple start STA-2 --steal-if-stale 1h    # take over the dead session's claim
 staple doc STA-2 worklog                  # continue from "Next"
 ```
 
-Takeover is a deliberate step, and it is logged; a claim never expires on its own.
+Takeover is a deliberate step, and it is logged; a claim held on your machine never
+expires on its own.
 [Handoff and resume](handoff.md) walks through it.
 
 **Local-first.** Each repository keeps its tickets in one SQLite file,
@@ -87,12 +88,8 @@ the claim is atomic, and the second agent is told to pick a different one.
 
 ## Where it came from
 
-staple started from four problems met in daily work with agents: plans that died
-with the session, agents colliding on the same task because hosted trackers have no
-atomic claim, hosted trackers too slow and too network-bound for an agent's loop,
-and the wish to keep a person in the loop without watching every step.
-
-The inspiration was Paperclip AI's inbox, where agents or people file tickets and
+staple grew out of daily work with agents: plans died with sessions, two agents took
+the same task, and hosted trackers were too slow for an agent's loop. The inspiration was Paperclip AI's inbox, where agents or people file tickets and
 agents pick them up. staple has an inbox too, but the focus is different. Agents
 claiming work on their own matters less than the tickets themselves being
 first-class, so that each one carries the complete context an agent needs to move
