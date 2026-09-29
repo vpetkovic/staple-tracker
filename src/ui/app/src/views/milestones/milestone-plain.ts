@@ -147,9 +147,10 @@ export function dueText(
 export function projectionNote(projection: ProjectedDue): string {
   const hours = (seconds: number) => `${Math.round(seconds / 360) / 10}h`;
   const n = projection.unknown;
-  const partial = n > 0 ? ` ${n} open ${n === 1 ? "task" : "tasks"} cannot be weighed (no estimate, or nothing like it finished yet) and ${n === 1 ? "is" : "are"} not included, so it can only be later.` : "";
-  const estimated = projection.estimateSeconds === null ? "" : ` (${hours(projection.estimateSeconds)} estimated, scaled by how long estimates have really taken; work in review counts as done)`;
-  return `${hours(projection.seconds)} of work left${estimated}, counted from now, as staple forecast reads it. Set a date to override it.${partial}`;
+  const partial = n > 0 ? ` ${n} open ${n === 1 ? "task" : "tasks"} cannot be forecast (no estimate, or nothing like it finished yet) and ${n === 1 ? "is" : "are"} not in it, so the day can only be later.` : "";
+  // ALL OPEN WORK, said as such: the pace beside it reads the longest chain instead.
+  const estimated = projection.estimateSeconds === null ? "" : `${hours(projection.estimateSeconds)} estimated, `;
+  return `All open work: ${estimated}~${hours(projection.seconds)} by the forecast (estimates scaled by how long they have really taken; work in review counts as done), counted from now. Set a date to override it.${partial}`;
 }
 
 /**

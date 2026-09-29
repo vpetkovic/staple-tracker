@@ -6287,25 +6287,27 @@ export class WorkspaceStore {
 
   /**
    * The unfiltered calibration population (`calibrate`'s, no filter), built once and reused
-   * until the data it is built from changes. Its members are FINISHED work: resolved issues with
-   * their ended attempts, so the population moves only when an issue is resolved, reopened or
-   * edited after resolving, an attempt ends, an attempt's history is written, or the statuses'
-   * categories change — and the fingerprint reads exactly those. A write to open work, the
-   * common case on a milestone page, leaves it in place.
+   * while the database has not changed at all since.
+   *
+   * THE FINGERPRINT IS SQLITE'S OWN WRITE COUNTERS, not a reading of the tables. A reading of
+   * "the rows the population comes from" can be fooled: a synced edit keeps the other device's
+   * older `updated_at`, a reopened sample keeps its `completed_at`, and every future input to
+   * calibration would have to be added to it by hand. Instead:
+   *
+   *   - `total_changes()` counts every row this connection has inserted, updated or deleted,
+   *     triggers included — every local write, sync apply, hydrate, restore and migration that
+   *     runs through this store's handle moves it;
+   *   - `PRAGMA data_version` moves whenever ANOTHER connection commits to the file — another
+   *     process, the CLI beside a running UI, a backup written into place.
+   *
+   * No write reaches the file without moving one of the two, so no write path can leave the
+   * cache stale, whatever it touches. The price is a rebuild on the first read after any write;
+   * reads with nothing written in between — the page's polls — reuse it.
    */
   private forecastPopulation(asOf: string): CalibrationMember[] {
-    const fingerprint = JSON.stringify(
-      this.db
-        .prepare(
-          `SELECT
-             (SELECT COUNT(*) || '|' || COALESCE(MAX(updated_at), '') FROM issues
-               WHERE completed_at IS NOT NULL OR cancelled_at IS NOT NULL) AS resolved,
-             (SELECT COUNT(*) || '|' || COALESCE(MAX(ended_at), '') FROM attempts WHERE ended_at IS NOT NULL) AS ended,
-             (SELECT COUNT(*) FROM attempt_transitions) AS transitions,
-             (SELECT COALESCE(GROUP_CONCAT(id || ':' || category), '') FROM workspace_statuses) AS statuses`,
-        )
-        .get(),
-    );
+    const version = this.db.prepare("PRAGMA data_version").get() as { data_version: number };
+    const changes = this.db.prepare("SELECT total_changes() AS n").get() as { n: number };
+    const fingerprint = `${version.data_version}:${changes.n}`;
     if (this.forecastPopulationCache?.fingerprint === fingerprint) return this.forecastPopulationCache.members;
     const { members } = this.calibrationBasis({ kinds: null, priorities: null, parentRow: null, since: null, forRows: [], pinnedModel: null }, asOf);
     this.forecastPopulationCache = { fingerprint, members };

@@ -183,10 +183,10 @@ describe("the due date: the set target, else the projection from the work left",
 
   it("says in its tooltip what it counted and what it left out", () => {
     expect(projectionNote(projectedDue(remaining(12, 8), NOW)!)).toBe(
-      "12h of work left (8h estimated, scaled by how long estimates have really taken; work in review counts as done), counted from now, as staple forecast reads it. Set a date to override it.",
+      "All open work: 8h estimated, ~12h by the forecast (estimates scaled by how long they have really taken; work in review counts as done), counted from now. Set a date to override it.",
     );
     expect(projectionNote(projectedDue(remaining(1, 1, 1), NOW)!)).toContain(
-      "1 open task cannot be weighed (no estimate, or nothing like it finished yet) and is not included, so it can only be later.",
+      "1 open task cannot be forecast (no estimate, or nothing like it finished yet) and is not in it, so the day can only be later.",
     );
   });
 });

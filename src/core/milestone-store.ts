@@ -983,7 +983,9 @@ export class MilestoneStore {
       for (const plan of this.store.comparePlans(chunk).plans) {
         plans.push({
           ref: plan.ref,
-          resolved: this.store.isResolvedStatus(plan.status),
+          // Resolved only when nothing is left under it: a done epic can still hold an open
+          // task (added or reopened after it closed), and that work is not done.
+          resolved: this.store.isResolvedStatus(plan.status) && plan.remainingPath.chain.length === 0 && !plan.remainingPath.partial,
           laborSeconds: plan.labor.seconds,
           remainingSeconds: plan.remainingPath.seconds,
           partial: plan.coverage.partial || plan.remainingPath.partial,

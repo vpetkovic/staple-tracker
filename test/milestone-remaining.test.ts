@@ -109,9 +109,9 @@ describe("a milestone's remaining work", () => {
     expect(row.remaining).toEqual(store.milestones().get(refs.milestone!).remaining);
   });
 
-  it("rebuilds the calibration population when finished work changes it, and only then", () => {
+  it("reads a new calibration population once finished work changes it", () => {
     const before = store.remainingForecasts([refs.a!], asOf).get(store.getIssue(refs.a!).id)!.seconds!;
-    // Work on open tasks leaves the population alone: same figure.
+    // Work on open tasks leaves the population's figure as it was.
     store.addComment(refs.b!, "still going", "w", "agent");
     expect(store.remainingForecasts([refs.a!], asOf).get(store.getIssue(refs.a!).id)!.seconds).toBe(before);
     // A sixth sample, finished at 4× its estimate, moves the class's ratio: a new figure.
@@ -144,5 +144,24 @@ describe("a milestone's closedAt", () => {
     expect(store.milestones().list({ all: true }).find((r) => r.milestone.id === id)!.milestone.closedAt).toBeNull();
     store.updateIssue(id, { status: "done" }, "vp");
     expect(store.milestones().get(id).milestone.closedAt).toBe(store.getIssue(id).completedAt);
+  });
+});
+
+describe("a milestone's pace", () => {
+  it("counts open work under a closed epic, instead of calling it finished", () => {
+    const epic = store.createIssue({ title: "Closed epic", kind: "epic" });
+    const first = store.createIssue({ title: "landed", parent: epic.id, estimatedSeconds: 3600 });
+    store.updateIssue(first.id, { status: "done" }, "w");
+    store.updateIssue(epic.id, { status: "done" }, "w");
+    // Added after the epic closed: open work under a done parent.
+    store.createIssue({ title: "late", parent: epic.id, estimatedSeconds: 10800 });
+    store.updateIssue(epic.id, { status: "done" }, "w");
+    const m = store.milestones().create({ title: "Carried", targetDate: "2099-01-01" }, "vp") as MilestoneCreateResult;
+    store.milestones().addMember(m.milestone.id, epic.id, {}, "vp");
+    const pace = store.milestones().get(m.milestone.id).goal.pace;
+    expect(store.getIssue(epic.id).status).toBe("done");
+    expect(pace.remainingSeconds).toBe(10800);
+    expect(pace.verdict).toBe("on_track");
+    expect(pace.message).toContain("3h");
   });
 });
