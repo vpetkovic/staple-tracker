@@ -46,6 +46,11 @@ const config: Config = {
   tagline: 'Local-first task tracking for coding agents.',
   favicon: 'img/favicon.svg',
   headTags: [
+    // A PNG beside the SVG favicon, for browsers that do not take SVG icons.
+    {
+      tagName: 'link',
+      attributes: {rel: 'icon', type: 'image/png', sizes: '32x32', href: `${baseUrl}img/favicon-32.png`},
+    },
     {tagName: 'link', attributes: {rel: 'apple-touch-icon', href: `${baseUrl}img/apple-touch-icon.png`}},
   ],
   url,
@@ -118,6 +123,8 @@ const config: Config = {
   ],
 
   themeConfig: {
+    // The social card (1200 x 630): og:image and twitter:image on every page.
+    image: 'img/og.png',
     colorMode: {
       respectPrefersColorScheme: true,
     },

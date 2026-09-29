@@ -55,7 +55,11 @@
 }
 
 .command {
-  white-space: pre;
+  /* A long command wraps with a hanging indent: continuation lines start under the command, not the prompt. */
+  padding-left: 2ch;
+  text-indent: -2ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--st-code-fg);
 }
 
