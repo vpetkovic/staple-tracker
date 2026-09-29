@@ -13,7 +13,8 @@ export const TABLES: Record<string, { readonly key: readonly string[]; readonly 
                  assignee, created_by, labels, acceptance_criteria, block_parent_until_done, unblock_owner, unblock_action,
                  origin_kind, origin_id, idempotency_key, estimated_seconds, kind, project_id, gate_state, gate_owner,
                  gate_requested_by, gate_requested_at, gate_resolved_by, gate_resolved_at, gate_released, started_at,
-                 blocked_transition_at, completed_at, cancelled_at, checkout_agent, checkout_at, created_at, updated_at
+                 blocked_transition_at, completed_at, cancelled_at, checkout_agent, checkout_at, created_at, updated_at,
+                 derived_status
             FROM issues ORDER BY id`,
   },
   comments: {

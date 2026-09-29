@@ -317,6 +317,17 @@ staple run drive [--run <id> | --scope <queue|ref> [--max-tickets N] [--until T]
 - **Nothing outlives its session.** When the session's leader exits, its
   process group is ended too (TERM, then KILL after five seconds): a
   background `sleep &` or dev server it left behind does not keep running.
+  Ending a session early (a stop, a timeout, Ctrl-C) works the same way, and
+  the grace lasts until the whole group is gone, not only its leader: a
+  `custom` template runs under `/bin/sh -c`, which on Debian and Ubuntu (dash)
+  forks the agent instead of exec-ing it, and the agent still gets its grace
+  when that shell dies at once on TERM. A driver that fails with an error
+  mid-session ends the session the same way before it exits, so no session
+  outlives its driver unnamed. In a container, run the driver under an init
+  (`docker run --init`, or tini): as PID 1 the driver does not reap the
+  session's orphaned children, their zombies keep the group "running" until
+  each grace runs out, and a stop can take up to ten seconds even when the
+  session ended at once.
 - **The brief** tells a session that knows nothing: the ticket and how to read
   it; that it is already checked out (do not check out, release or take
   anything else, do not call `run` commands); to put the work on a branch,

@@ -189,7 +189,7 @@ export function FilterMenuBody({
                 className={cn(
                   "flex w-full items-center gap-1.5 border-b px-2.5 py-2 text-left text-[13px] max-md:min-h-11",
                   "text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground",
-                  "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                  "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring",
                 )}
               >
                 <ChevronLeft className="size-3.5" aria-hidden />

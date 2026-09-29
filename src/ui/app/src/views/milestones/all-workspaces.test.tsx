@@ -61,6 +61,17 @@ describe("every workspace's milestones, grouped", () => {
     expect(all.failed).toEqual([]);
   });
 
+  it("lists under the Done toggle as one workspace's page does, and counts what it hides", () => {
+    const done = row("STA-9");
+    done.milestone.state = "done";
+    const results = [{ workspace: "staple", ok: true as const, rows: [row("STA-1"), done], effective: [] }];
+    expect(groupAllMilestones(results, false)).toMatchObject({ hiddenFinished: 1 });
+    expect(groupAllMilestones(results, false).groups[0]!.rows.map((r) => r.milestone.identifier)).toEqual(["STA-1"]);
+    // All finished and hidden: no group at all, and the count the empty page states.
+    expect(groupAllMilestones([{ workspace: "staple", ok: true, rows: [done] }], false)).toMatchObject({ groups: [], hiddenFinished: 1 });
+    expect(groupAllMilestones(results, true).groups[0]!.rows).toHaveLength(2);
+  });
+
   it("keeps a real failure visible under its workspace instead of hiding it", () => {
     const boom = new ApiError(500, { code: "unknown", message: "database is locked" });
     expect(groupAllMilestones([{ workspace: "staple", ok: false, error: boom }]).failed).toEqual([
@@ -70,6 +81,7 @@ describe("every workspace's milestones, grouped", () => {
 
   it("reads every workspace, and one failing does not hide the others", async () => {
     const asked: string[] = [];
+    const queues: string[] = [];
     const results = await readAllMilestones(
       [{ slug: "a" }, { slug: "b" }],
       false,
@@ -79,9 +91,13 @@ describe("every workspace's milestones, grouped", () => {
         if (ws === "a") throw missingKindError();
         return [row("B-1")];
       },
+      // The queue too, per workspace with milestones: what blocked and gated are counted from.
+      async ({ ws }) => (queues.push(ws), { effective: [] }),
     );
     expect(asked).toEqual(["a", "b"]);
+    expect(queues).toEqual(["b"]);
     expect(results.map((r) => [r.workspace, r.ok])).toEqual([["a", false], ["b", true]]);
+    expect(results[1]).toMatchObject({ effective: [] });
   });
 
   it("hands a bad credential to the token screen rather than filing it under one workspace", async () => {

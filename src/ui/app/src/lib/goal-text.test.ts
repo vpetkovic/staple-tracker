@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { criterion, pace } from "@/views/milestones/fixtures";
-import {
+import { shownPace,
   CRITERION_TONE,
   CRITERION_WORDS,
   PACE_TONE,
@@ -102,23 +102,30 @@ describe("pace against the target", () => {
   it("says each verdict with its numbers", () => {
     expect(paceText(pace({ verdict: "done", leaves: { done: 9, countable: 9, percent: 100 }, remainingSeconds: 0 }), NOW)).toBe("All of its work is done (9 of 9 tasks done).");
     expect(paceText(pace({ verdict: "no_target", targetDate: null, daysToTarget: null, leaves, remainingSeconds: 7200 }), NOW)).toBe(
-      "3 of 9 tasks done; 2h of estimated work left. It has no target date to measure against.",
+      "3 of 9 tasks done; the longest chain of open work is 2h estimated. It has no target date to measure against.",
     );
     expect(paceText(pace({ verdict: "overdue", targetDate: "2026-09-26", daysToTarget: -2, leaves, remainingSeconds: null }), NOW)).toBe(
       "Its target, 26 Sept, passed 2 days ago. 3 of 9 tasks done.",
     );
     expect(paceText(pace({ verdict: "no_estimate", targetDate: "2026-10-11", daysToTarget: 13, leaves, remainingSeconds: null }), NOW)).toBe(
-      "13 days to 11 Oct, but nothing open has an estimate, so there is no telling whether it fits. 3 of 9 tasks done.",
+      "13 days to 11 Oct, but the open work has no estimate to measure, so there is no telling whether it fits. 3 of 9 tasks done.",
     );
     expect(paceText(pace({ verdict: "behind", targetDate: "2026-09-29", daysToTarget: 1, leaves, remainingSeconds: 50 * 3600, partial: true }), NOW)).toBe(
-      "At least 50h of estimated work left: more than the time left to the end of 29 Sept, even worked around the clock. 3 of 9 tasks done.",
+      "The longest chain of open work is at least 50h estimated: more than the time left to the end of 29 Sept, even worked around the clock. 3 of 9 tasks done.",
     );
     expect(paceText(pace({ verdict: "on_track", targetDate: "2026-10-11", daysToTarget: 13, leaves, remainingSeconds: 12 * 3600 }), NOW)).toBe(
-      "12h of estimated work left, 13 days to 11 Oct: it fits. 3 of 9 tasks done.",
+      "The longest chain of open work is 12h estimated, 13 days to 11 Oct: it fits. 3 of 9 tasks done.",
     );
     expect(paceText(pace({ verdict: "on_track", targetDate: "2026-09-28", daysToTarget: 0, leaves, remainingSeconds: 3600 }), NOW)).toBe(
-      "1h of estimated work left, due today (28 Sept): it fits. 3 of 9 tasks done.",
+      "The longest chain of open work is 1h estimated, due today (28 Sept): it fits. 3 of 9 tasks done.",
     );
+  });
+
+  it("never says on track about open work its figure did not count", () => {
+    // Nothing left by the estimate, yet 6 of 9 tasks are open: the work is not in the figure.
+    const uncounted = pace({ verdict: "on_track", targetDate: "2026-10-11", daysToTarget: 13, leaves, remainingSeconds: 0 });
+    expect(shownPace(uncounted, NOW).verdict).toBe("no_estimate");
+    expect(paceText(uncounted, NOW)).not.toContain(": it fits");
   });
 
   it("names the members with no estimate, only when the figures are lower bounds", () => {
