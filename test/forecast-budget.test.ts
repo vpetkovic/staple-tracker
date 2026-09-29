@@ -1,5 +1,5 @@
 /**
- * Budget forecasts (`docs/timing-semantics.md`, "Forecasts"): the pace of a limit's current
+ * Budget forecasts (`design/timing-semantics.md`, "Forecasts"): the pace of a limit's current
  * window, when it runs out, the work rate from attempts' measured burn, what a piece of work
  * leaves at the reset, and the probability it leaves less than the reserve, kept apart from
  * the completion forecast.

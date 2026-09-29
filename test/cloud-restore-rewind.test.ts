@@ -1,5 +1,5 @@
 /**
- * A restore rewinds the repository, and every device with it (`docs/sync.md`, "A restore
+ * A restore rewinds the repository, and every device with it (`design/sync.md`, "A restore
  * rewinds"; `src/core/cloud/rewind.ts`).
  *
  * A device that held rows pushed after the backup kept them through the re-bootstrap, while

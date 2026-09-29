@@ -2,7 +2,7 @@
  * What a device holds, reconciled to the current epoch's fold: a restore rewinds the
  * repository, and every device that follows it rewinds with it.
  *
- * Contract: `docs/sync.md`, "A restore rewinds".
+ * Contract: `design/sync.md`, "A restore rewinds".
  *
  * A restore puts the repository back to a backup, in a new epoch, and every device
  * re-bootstraps into it (`beginBootstrap`). The snapshot it reads says what the repository

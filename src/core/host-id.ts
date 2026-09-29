@@ -1,7 +1,7 @@
 /**
  * Which machine this is — the one fact a restored backup cannot bring with it.
  *
- * Contract: `docs/sync.md`, "A copied home is not a second device".
+ * Contract: `design/sync.md`, "A copied home is not a second device".
  *
  * ## Why this exists at all
  *

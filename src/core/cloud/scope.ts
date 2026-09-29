@@ -1,7 +1,7 @@
 /**
  * Is this claim exclusive on one machine, or across all of them?
  *
- * `docs/sync.md`, "Claims: a local checkout is not a global lease": *"the claim
+ * `design/sync.md`, "Claims: a local checkout is not a global lease": *"the claim
  * payload grows a scope, and every surface reports it"* — `local` for "this
  * database only, no global exclusivity is claimed", `lease` for "a server lease
  * is held; the claim is globally exclusive". *"An agent that reads `local` and
@@ -22,7 +22,7 @@
  *
  * `store.ts` is on the path of `staple ls`, `staple show` and `staple inbox` —
  * the most-used commands in the product, and precisely the ones
- * `docs/sync.md` requires to be silent: *"a `staple ls` on a connected
+ * `design/sync.md` requires to be silent: *"a `staple ls` on a connected
  * repository in manual mode is as silent as a `staple ls` on a disconnected
  * one, and that is a tested assertion, not an intention."* `src/commands/cloud.ts`
  * already guards the same property in prose on its own non-refresh path: *"The

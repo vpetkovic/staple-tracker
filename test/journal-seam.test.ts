@@ -1,7 +1,7 @@
 /**
  * The journal seam's seven obligations, one describe block each.
  *
- * `docs/sync.md`, "The journal seam and what it owes", states them as a list.
+ * `design/sync.md`, "The journal seam and what it owes", states them as a list.
  * This file is that list turned into assertions, in the same order, so a reader
  * can check the contract against the tests without a translation step.
  *

@@ -1,8 +1,3 @@
----
-title: Packaging and install
-description: What the published staple-cli package contains, how the build proves it, and how staple install keeps a versioned runtime and launcher under your home.
----
-
 # Packaging and install
 
 ## The published package

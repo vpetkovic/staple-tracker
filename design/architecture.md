@@ -1,15 +1,10 @@
----
-title: Architecture
-description: Where each part of staple lives in the source tree, how workspaces and the hub fit together, and the known limits of the current build.
----
-
 # Architecture
 
 ## Where the code lives
 
 | Piece | File | What it does |
 |---|---|---|
-| CLI | `src/cli.ts`, `src/commands/` | Argument parsing and the human and CI surface; larger verbs (`queue`, `milestone`, `run`, `budget`, `cloud`, `doctor`, `add`, `discover`, …) live in `src/commands/` — see [cli.md](cli.md) |
+| CLI | `src/cli.ts`, `src/commands/` | Argument parsing and the human and CI surface; larger verbs (`queue`, `milestone`, `run`, `budget`, `cloud`, `doctor`, `add`, `discover`, …) live in `src/commands/` — see [cli.md](../docs/cli.md) |
 | MCP server | `src/mcp.ts`, `src/mcp-attempts.ts`, `src/core/telemetry/mcp-tools.ts`, `src/core/telemetry/mcp-read-tools.ts` | 65 stdio tools, the agent surface; each calls the same store method the CLI does |
 | Packaged entrypoint | `src/package/staple.ts` | The published `staple` binary: dispatches `mcp` to the MCP server and everything else to the CLI — see [packaging.md](packaging.md) |
 | Core store | `src/core/store.ts` | Issues, statuses, kinds, guards, claims, dependencies, approval gates, comments, documents, settings — see [semantics.md](semantics.md) |
@@ -17,11 +12,11 @@ description: Where each part of staple lives in the source tree, how workspaces 
 | Schema migrations | `src/core/migrations/workspace/`, `src/core/migrations/hub/` | Numbered migrations (workspace 001–016, hub 001–008) and the runner that applies them on open — see [migration.md](migration.md#schema-upgrades-on-open) |
 | Path migration | `src/core/path-migration.ts` | The journalled `.tasks/tasks.db` → `.staple/staple.db` move behind `staple migrate` |
 | Hub | `src/core/hub.ts`, `src/core/hub-repair.ts`, `src/core/hub-follow.ts` | Workspace registry, unique prefixes, cross-workspace links, holistic views |
-| Settings registry | `src/core/settings-registry.ts` | Every machine preference and workspace setting, typed once — see [configuration.md](configuration.md) |
-| Pickup queue | `src/core/queue-store.ts` | The human-ordered plan and its effective order — see [queue.md](queue.md) |
-| Milestones | `src/core/milestones.ts`, `src/core/milestone-store.ts`, `src/core/milestone-goal.ts` | Dated plans over epics and tasks, their goal and criteria — see [milestones.md](milestones.md) |
+| Settings registry | `src/core/settings-registry.ts` | Every machine preference and workspace setting, typed once — see [configuration.md](../docs/configuration.md) |
+| Pickup queue | `src/core/queue-store.ts` | The human-ordered plan and its effective order — see [queue.md](../docs/queue.md) |
+| Milestones | `src/core/milestones.ts`, `src/core/milestone-store.ts`, `src/core/milestone-goal.ts` | Dated plans over epics and tasks, their goal and criteria — see [milestones.md](../docs/milestones.md) |
 | Projects | `src/core/project-store.ts`, `src/core/projects.ts` | Tracked projects an issue can belong to |
-| Autopilot runs | `src/core/run-store.ts`, `src/core/run-driver.ts`, `src/core/run-hook.ts` | A run over a scope, its stop rules, the headless driver and the interactive stop hooks — see [runs.md](runs.md) |
+| Autopilot runs | `src/core/run-store.ts`, `src/core/run-driver.ts`, `src/core/run-hook.ts` | A run over a scope, its stop rules, the headless driver and the interactive stop hooks — see [runs.md](../docs/runs.md) |
 | Execution telemetry | `src/core/telemetry/` | Execution attempts, provider budget samples and limit windows, automatic collection, timing, calibration and forecasts — see [execution-telemetry.md](execution-telemetry.md) |
 | Cloud sync client | `src/core/cloud/` | Connect, push and pull of operations, conflicts, leases, automatic sync, backups and the hub registry on the service — see [sync.md](sync.md) |
 | Sync service | `worker/` | The Cloudflare Worker and its D1 operation log (`worker/migrations/`); a separate npm package, not part of `staple-cli` — see [worker/README.md](https://github.com/vpetkovic/staple-tracker/blob/master/worker/README.md) |
@@ -30,7 +25,7 @@ description: Where each part of staple lives in the source tree, how workspaces 
 | Setup | `src/onboarding/` | The setup service `staple init` and bare `staple` share |
 | Agent guide | `src/core/agents-template.ts` | The working protocol `init` writes to `.staple/AGENTS.md` |
 | Web UI server | `src/ui/server.ts` | `staple open`: token-gated JSON API + serves the built app; per-workspace or `--hub` |
-| Web UI app | `src/ui/app/` | Vite + React + Tailwind with Radix primitives — Tasks, Queue, Graph, Milestones, Estimates and Usage views, the detail panel and Settings — see [web-ui.md](web-ui.md) |
+| Web UI app | `src/ui/app/` | Vite + React + Tailwind with Radix primitives — Tasks, Queue, Graph, Milestones, Estimates and Usage views, the detail panel and Settings — see [web-ui.md](../docs/web-ui.md) |
 | Tests | `test/`, `*.test.ts(x)` beside the UI code | Store semantics, CLI and MCP surfaces, migrations and crash drills, the packed runtime, sync, telemetry, UI |
 | Smoke | `scripts/smoke-mcp.ts` | Full JSON-RPC agent workflow over stdio |
 
@@ -54,7 +49,7 @@ Cross-links are the exception to "derived", since they exist only in the hub:
 unregistering refuses while a link names the workspace rather than dangling or
 silently deleting the edge.
 
-`STAPLE_HOME` relocates the hub — see [configuration.md](configuration.md) for
+`STAPLE_HOME` relocates the hub — see [configuration.md](../docs/configuration.md) for
 the full resolution order.
 
 Walk-up prefers `.staple/staple.db` and still finds a legacy `.tasks/tasks.db`.

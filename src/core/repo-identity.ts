@@ -2,7 +2,7 @@
  * The repository's identity: a UUID that survives cloning, because the thing
  * being shared is the repository, not the directory or the database file.
  *
- * Contract: `docs/sync.md`, "Repository identity".
+ * Contract: `design/sync.md`, "Repository identity".
  *
  * ## Why it is a checked-in file and not a row
  *

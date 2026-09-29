@@ -1,5 +1,5 @@
 /**
- * Which account a reading belongs to (docs/execution-telemetry.md, "Source bindings
+ * Which account a reading belongs to (design/execution-telemetry.md, "Source bindings
  * produce the account").
  *
  * The status-line JSON has no account field and a rollout line has only a plan name, so

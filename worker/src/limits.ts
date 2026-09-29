@@ -26,7 +26,7 @@ import type { Env, Plan } from "./env.js";
  * older device handed a `registration` operation fails the page and stops
  * converging — with a message about an unknown entity, which reads as corruption
  * rather than as "upgrade". See `envelope.ts` for the full reasoning and
- * `docs/sync.md`, "Protocol evolution", which has been corrected to match.
+ * `design/sync.md`, "Protocol evolution", which has been corrected to match.
  *
  * What the bump buys is one specific thing: a protocol-1 client cannot PUSH a
  * registry entity and cannot be HANDED one either — `pull.ts` and `snapshot.ts`
@@ -41,7 +41,7 @@ import type { Env, Plan } from "./env.js";
  */
 /**
  * Protocol 3 adds the execution attempts (`attempt`, `attemptTransition` —
- * `docs/execution-telemetry.md`, "Where it lives and what synchronizes"), and this time
+ * `design/execution-telemetry.md`, "Where it lives and what synchronizes"), and this time
  * the workspace client DOES move to 3: attempts are journaled by every mutation that opens
  * or ends one, so there is no leg to confine them to. This Worker is deployed first, and
  * every device upgrades with it: the same release adds workspace migration 013, so an

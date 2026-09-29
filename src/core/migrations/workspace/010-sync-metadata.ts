@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 10 — local sync bookkeeping (contract in docs/sync.md, "The local
+ * Version 10 — local sync bookkeeping (contract in design/sync.md, "The local
  * sync tables").
  *
  * ## Why 10

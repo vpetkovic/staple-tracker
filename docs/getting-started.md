@@ -1,9 +1,9 @@
 ---
-title: Getting started
-description: Install staple, set up a repository, connect Claude Code or Codex over MCP, and follow one ticket through the agent loop.
+title: Install and first workspace
+description: Install staple, set up a repository and follow one ticket through the agent loop.
 ---
 
-# Getting started
+# Install and first workspace
 
 This page takes one repository from nothing to an agent working a ticket: install,
 the first workspace, the MCP wiring, and the loop your agents follow. It needs
@@ -25,7 +25,7 @@ npx staple-cli install --yes
 
 Add `--update-path` to put `~/.local/bin` on your `PATH`. The rest of this page
 writes `staple`; with no install, read it as
-`npx staple-cli`. [Packaging and install](packaging.md) covers the runtime,
+`npx staple-cli`. [Packaging and install](../design/packaging.md) covers the runtime,
 upgrades and rollback.
 
 > [!NOTE]
@@ -60,26 +60,8 @@ and machine settings, and [Web UI](web-ui.md) every view.
 
 ## Connect your agent
 
-Agents work the tracker through the MCP server, which is the same package started
-with `mcp`. `STAPLE_AGENT` names the agent: every write is recorded under that
-name, and a write without one is refused.
-
-**Claude Code**
-
-```bash
-claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
-```
-
-**Codex**
-
-```bash
-codex mcp add staple --env STAPLE_AGENT=codex -- npx -y staple-cli mcp
-```
-
-Any other MCP client launches `npx -y staple-cli mcp` the same way. With
-`staple` installed, `staple mcp` replaces `npx -y staple-cli mcp`. The server
-starts from any directory and finds the workspace above its working directory.
-[Agents](agents.md) lists every MCP tool.
+Connecting Claude Code, Codex or another MCP client has its own page:
+[Connect your agent](connect-your-agent.md).
 
 ## The agent loop
 
@@ -115,10 +97,10 @@ A claim is exclusive: when two agents race for one ticket, one gets it and the
 other gets a `conflict` and picks another ticket rather than retrying. Finishing
 MYA-1 makes MYA-2 ready, and the next `staple inbox` lists it under READY. An agent
 that dies holding a claim leaves it to go stale, and another agent can take it
-over on the record ([continuity](continuity.md)).
+over on the record ([continuity](handoff.md)).
 
 The CLI takes the agent name from `--agent`, then `STAPLE_AGENT`, then your user
-name. [Semantics](semantics.md) has the rules behind statuses, claims and
+name. [Semantics](epics-and-dependencies.md) has the rules behind statuses, claims and
 dependencies.
 
 ## Next
@@ -126,5 +108,5 @@ dependencies.
 - [The pickup queue](queue.md): set the order agents take work in.
 - [Milestones](milestones.md): dated plans with goal criteria.
 - [Autopilot runs](runs.md): one agent works a scope ticket after ticket.
-- [Cloud sync](sync.md): share a workspace between two machines.
+- [Cloud sync](cloud-sync.md): share a workspace between two machines.
 - [CLI](cli.md): every command and flag.

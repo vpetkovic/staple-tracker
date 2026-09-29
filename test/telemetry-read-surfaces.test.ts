@@ -1,7 +1,7 @@
 /**
  * The telemetry read surfaces, driven as an agent and a person drive them: the CLI as real
  * child processes, MCP over a real stdio connection, and the web UI's HTTP routes, against
- * one scratch staple home (docs/execution-telemetry.md, "One shape on every surface").
+ * one scratch staple home (design/execution-telemetry.md, "One shape on every surface").
  *
  *   - `show --json`, MCP `get_task`, `/api/agent-context` and `/api/issue` carry the same
  *     `attempts` block, from `WorkspaceStore.attemptSummary`.

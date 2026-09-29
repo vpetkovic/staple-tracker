@@ -1030,7 +1030,7 @@ function HubSelfPanel({
  * standing VALUE, so a switch would make an event look like a state. The two
  * consents that do have values are per workspace and stay there: automatic sync
  * is a decision about one repository's traffic, and a hub-wide switch for it
- * would be one press spending N consents, which is the shape `docs/sync.md`
+ * would be one press spending N consents, which is the shape `design/sync.md`
  * separates them to prevent.
  *
  * `title` carries the reason for a pointer AND the sentence is rendered

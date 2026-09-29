@@ -1,6 +1,6 @@
 /**
  * An attempt that ended after the backup is open again once the restore rewinds it
- * (`docs/sync.md`, "A restore rewinds").
+ * (`design/sync.md`, "A restore rewinds").
  *
  * The epoch holds the attempt, so the rewind keeps its row and lets the snapshot say what it
  * holds. The snapshot says `running` or `paused`, and the apply rule every reader shares

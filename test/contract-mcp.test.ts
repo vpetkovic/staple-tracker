@@ -87,7 +87,7 @@ function assertGolden(label: string, expected: Record<string, unknown>): void {
 
 /**
  * The attempt a claim tool returns beside its unchanged issue payload
- * (`docs/execution-telemetry.md`, "Surfaces"): as it reads, every derived field included.
+ * (`design/execution-telemetry.md`, "Surfaces"): as it reads, every derived field included.
  */
 function attemptGolden(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -864,7 +864,7 @@ describe("tool inventory", () => {
        *
        * Connect, disconnect, revoke and purge are not exposed over MCP. Each is
        * a human consent decision whose preview or typed confirmation only means
-       * something to a person at a terminal — `docs/sync.md` makes the connect
+       * something to a person at a terminal — `design/sync.md` makes the connect
        * preview the consent mechanism, and an MCP tool has no human to show it
        * to. So an agent can ask whether this repository is connected, and
        * everything that changes that answer needs a person.
@@ -878,7 +878,7 @@ describe("tool inventory", () => {
        * The conflict lane's two, and the ONE cloud write an agent may make.
        *
        * The paragraph above holds because connect, disconnect, revoke and purge
-       * are consents. Resolving is not: `docs/sync.md` says outright that
+       * are consents. Resolving is not: `design/sync.md` says outright that
        * *"resolving it is a decision a human or an agent makes on the record"*.
        * It touches the local database only, spends no credential, and destroys
        * nothing — the losing value stays on the record — so `destructiveHint` is
@@ -933,7 +933,7 @@ describe("tool inventory", () => {
         hasOutputSchema: true,
       },
       /**
-       * The telemetry reads (docs/execution-telemetry.md, "Surfaces"): two per workspace
+       * The telemetry reads (design/execution-telemetry.md, "Surfaces"): two per workspace
        * (attempts), two per machine (budget). All read-only, all bounded.
        */
       {
@@ -1317,7 +1317,7 @@ describe("tool response shapes (31/31)", () => {
       // Keyed by IDENTIFIER, not uuid — which is why this line is readable.
       childrenTiming: { "CON-4": timingGolden() },
       /**
-       * Execution attempts, worker lane, as they read now (docs/execution-telemetry.md,
+       * Execution attempts, worker lane, as they read now (design/execution-telemetry.md,
        * "Surfaces"). CON-1's checkout opened one; it is running, so it is `current`,
        * and nothing has ended, so `last` is null rather than omitted. The agent
        * reported no harness and no account, so both are null with `not_supplied`.

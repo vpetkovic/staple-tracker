@@ -47,7 +47,7 @@ staple start <ref> --steal-if-stale <30m|2h|3600>   take over a dead agent's cla
 staple release <ref> --if-stale <dur>               free a dead agent's claim
 staple start|done|cancel|status|estimate|release … --agent A   who acts; else $STAPLE_AGENT, else $USER
 staple <any write> … --ack-renumber                 write through a number sync renumbered here
-                                                    (docs/sync.md, "A number that moved under a caller")
+                                                    (design/sync.md, "A number that moved under a caller")
 
 staple gate <ref> --owner O [-m text]               park a PARENT on a human; queue its subtree
 staple approve <ref> [--children R1,R2] [-m text]   release the whole queue, or only what you name
@@ -148,7 +148,7 @@ mismatch it prints ONE repair command under `REPAIRS`, derived from what
 database and where the snapshot goes. Under `--json` the reason is
 `data.code` (`database_newer_than_runtime`, `config_newer_than_runtime`,
 `selected_runtime_older_than_database`, `migration_pending`, or `null`). See
-[migration](migration.md).
+[migration](../design/migration.md).
 
 ## Workspace vocabulary
 
@@ -169,7 +169,7 @@ staple kinds ls | add | rename | reorder | rm     # same verbs, no categories
 
 `--category` is required on `add` and is one of `unstarted`, `ready`, `active`,
 `review`, `gated`, `blocked`, `done`, `cancelled`. That category is where a
-status's behaviour comes from — see [semantics.md](semantics.md#categories--why-a-configurable-status-set-is-still-safe).
+status's behaviour comes from — see [semantics.md](../design/semantics.md#categories--why-a-configurable-status-set-is-still-safe).
 `--label` is optional: `needs_qa` becomes `Needs Qa`.
 
 The configured order is the canonical order everywhere — `board` columns, group
@@ -598,7 +598,7 @@ staple show STA-42
 ```
 
 The same object also carries the effort and elapsed fields of
-[timing-semantics.md](timing-semantics.md#where-the-numbers-appear): `workSeconds`
+[timing-semantics.md](../design/timing-semantics.md#where-the-numbers-appear): `workSeconds`
 (agent work from worker attempts, the estimate ratio's actual, the same on every
 device), `ownWorkSeconds`, `orchestrationSeconds`, `leadSeconds`,
 `estimateRatio`, the `wall` partition of elapsed time into buckets, `quality`, and
@@ -753,7 +753,7 @@ something beneath is planned.
 ### Timing quality: `staple timing quality`
 
 Every record that carries a timing figure has exactly one quality state, with
-the reasons that produced it ([timing-semantics.md](timing-semantics.md#quality-states)).
+the reasons that produced it ([timing-semantics.md](../design/timing-semantics.md#quality-states)).
 `show --json` carries it as `timing.quality.work` and `timing.quality.wall`, each
 `{state, inputs, reasons}`, and every attempt as `effortSeconds` with its
 `quality`. `staple timing quality` (MCP `timing_quality`, HTTP
@@ -819,7 +819,7 @@ staple timing quality --kind task --exclude approximate
 
 `staple calibrate` (MCP `calibration_cohorts`, HTTP `GET /api/calibration`)
 groups trusted samples into cohorts and says how long work of each class took
-against its estimate ([timing-semantics.md](timing-semantics.md#calibration-cohorts)).
+against its estimate ([timing-semantics.md](../design/timing-semantics.md#calibration-cohorts)).
 All three surfaces call one store method and answer one payload:
 
 ```bash
@@ -921,7 +921,7 @@ staple calibrate --kind task --include reconstructed --for STA-42
   chain is not the sum of its links' p90s, and summed bounds are no bound at
   any stated confidence. A sum over heavy-tailed classes inherits the clipped
   figure's low bias. The rules and a worked example are
-  in [timing-semantics.md](timing-semantics.md#confidence-ranges).
+  in [timing-semantics.md](../design/timing-semantics.md#confidence-ranges).
 - **Snapshot.** `snapshot.id` identifies the data the report was computed
   from. The same data gives the same id on every device, in any order and at
   any later instant (a relative `--since` is hashed as written); a changed
@@ -937,7 +937,7 @@ staple calibrate --kind task --include reconstructed --for STA-42
 `staple forecast <ref>` (MCP `forecast`, HTTP `GET /api/forecast?ref=`)
 forecasts the work left under an issue and, apart from it, what that work
 costs this machine's provider limits
-([timing-semantics.md](timing-semantics.md#forecasts)). All three surfaces call
+([timing-semantics.md](../design/timing-semantics.md#forecasts)). All three surfaces call
 one store method and answer one payload, `{asOf, subject, filter, snapshot,
 method, completion, budget}`:
 
@@ -1071,7 +1071,7 @@ guard, the `[queued: …]` cue on `ls`, and the reviewer's checklist in the web 
   it.
 
 Semantics and the tests that pin each rule are in
-[semantics.md](semantics.md#approval-gates).
+[approval-gates.md](approval-gates.md).
 
 ```console
 $ staple gate STA-142 --owner VP -m "Schema plus the three CLI verbs — ok to build on this?"
@@ -1161,13 +1161,13 @@ what distinguishes a partial approval from a whole one:
 same rule `claim` and `timing` follow. At most one of the pair is ever non-null.
 
 Semantics, and the tests behind each rule, are in
-[semantics.md](semantics.md#approval-gates).
+[approval-gates.md](approval-gates.md).
 
 ## Provider budget
 
 Provider usage readings, recorded on this machine so a scheduler can reason
 about subscription windows. The contract is
-[execution-telemetry.md](execution-telemetry.md): limit windows, budget
+[execution-telemetry.md](../design/execution-telemetry.md): limit windows, budget
 samples, missingness. Samples live in the staple home's `hub.db` and never
 replicate, and ingestion makes no network request. Capture is opt-in and each
 harness home is bound to an account label first
@@ -1235,7 +1235,7 @@ same reading sent by an agent through `record_budget_sample` is refused
 ### Automatic collection
 
 One explicit consent turns on everything above and keeps it running
-([execution-telemetry.md](execution-telemetry.md#automatic-collection)):
+([execution-telemetry.md](../design/execution-telemetry.md#automatic-collection)):
 
 ```bash
 staple budget setup --claude-account personal-max --codex-account codex-plus      # prints the plan, changes nothing (exit 2)
@@ -1293,7 +1293,7 @@ staple budget live                                                              
   failures, which is how the agent runs it. The agent's `PATH` is the node
   setup ran under, then `/opt/homebrew/bin` and `/usr/local/bin`. Off macOS, schedule it yourself:
   `*/5 * * * * ~/.local/bin/staple budget collect --quiet` (`crontab -e`).
-- **`live on|off`** is [live polling](execution-telemetry.md#live-polling):
+- **`live on|off`** is [live polling](../design/execution-telemetry.md#live-polling):
   with it on (and capture on), every `collect` also asks each bound provider
   for the account's current usage, at most every 4 minutes per account, with
   the sign-in Claude Code and Codex keep on this machine (read at call time,
@@ -1358,7 +1358,7 @@ A reading that should never have been stored can be removed by id. A common
 case is a test status-line payload piped through the live ingest. Its fake reset
 can open a window of its own, and that window then supersedes the real one and
 reads as current
-([execution-telemetry.md](execution-telemetry.md#removing-a-reading)):
+([execution-telemetry.md](../design/execution-telemetry.md#removing-a-reading)):
 
 ```bash
 staple budget history --account personal-max --json      # find the ids
@@ -1430,7 +1430,7 @@ staple attempt 0b6f2c1e-6d0a-4f7e-9d38-2f3b8a1c9e44 --json
   latest reading's value is over 10 minutes old, judged on `observedAt`, which
   is also how `budget history` finds its gaps.
 - **Pressure.** Every limit also carries `pressure`, PROVISIONAL until the
-  admission policy defines it ([execution-telemetry.md](execution-telemetry.md#pressure)).
+  admission policy defines it ([execution-telemetry.md](../design/execution-telemetry.md#pressure)).
   Measured: `observed` (the window's pace, `%/hour` of wall clock),
   `lastReadingAgeSeconds`, `secondsToReset`. Forecast:
   `sustainablePercentPerHour` = `(remaining − reserve) / hours to reset`,
@@ -1461,7 +1461,7 @@ stated rather than inferred from a full page. Pass `nextCursor` back as
 rows added between pages never shift a page. `coverage.gaps` lists the spans no
 capture ran in, each with a reason. These are the payloads the MCP tools
 `get_budget`, `list_budget_samples`, `list_attempts` and `get_attempt` return
-([agents.md](agents.md#execution-telemetry)).
+([mcp-tools.md](mcp-tools.md#execution-telemetry)).
 
 ## Machine-readable output
 
@@ -1485,7 +1485,7 @@ Among cloud sync failures, `rate_limited`, `unavailable` and `offline` are
 retryable, and nothing else is.
 
 A cloud sync failure carries the service's own code, from the taxonomy in
-[sync.md](sync.md#error-taxonomy): `auth`, `forbidden`, `revoked` and the rest,
+[sync.md](../design/sync.md#error-taxonomy): `auth`, `forbidden`, `revoked` and the rest,
 never the nearest store code. `detail.cloudCode` and `detail.retryable` repeat
 the code and the bit. They are there for scripts written before the code was true, and
 they always agree with the top level:

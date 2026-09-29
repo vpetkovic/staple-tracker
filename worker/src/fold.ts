@@ -360,7 +360,7 @@ export async function foldLog(
        * when it is written, state and provenance alike, so the state holds the latest.
        */
       /**
-       * A stored orphan end never overwrites a real end (`docs/execution-telemetry.md`), and a
+       * A stored orphan end never overwrites a real end (`design/execution-telemetry.md`), and a
        * dropped one leaves no `fieldWrites` for its keys: a device hydrated from this fold must
        * not inherit provenance for a write it never took. The same rule the client applier, the
        * tail fold and the test service call (`src/core/cloud/attempt-ends.ts`).

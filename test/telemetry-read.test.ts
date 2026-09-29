@@ -1,5 +1,5 @@
 /**
- * The telemetry read surfaces, in process (docs/execution-telemetry.md, "Surfaces",
+ * The telemetry read surfaces, in process (design/execution-telemetry.md, "Surfaces",
  * "Bounded reads, coverage and truncation", "Missingness").
  *
  * Every attempt here is made by a real store mutation (checkout, release, status, an

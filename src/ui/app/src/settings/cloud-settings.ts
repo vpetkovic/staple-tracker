@@ -1199,7 +1199,7 @@ export function hubWideDisconnectWarning(report: HubCloudReport): string {
  * It is the fourth consent and the first that belongs to the hub. The other
  * three are per workspace and stay on their rows — automatic sync is a decision
  * about one repository's traffic, and a hub-wide switch for it would be one
- * press spending N consents, which is the shape `docs/sync.md` separates them to
+ * press spending N consents, which is the shape `design/sync.md` separates them to
  * prevent. This one is genuinely singular: there is one registry.
  */
 export function hubRegistryControl(report: HubCloudReport): {

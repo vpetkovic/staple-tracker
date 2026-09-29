@@ -1,8 +1,3 @@
----
-title: Cloud sync
-description: How two or more machines share one Staple workspace through a sync service, what travels, what stays local, and what each consent allows.
----
-
 # Cloud sync
 
 Optional, repository-scoped synchronization so two machines share one Staple
@@ -398,7 +393,7 @@ entity's own primary key.
 | `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `milestone_meta` | `issue_id` | `target_date`, `start_date`, `updated_at` — `members_revision` is derived, see below |
-| `milestone_criterion_marks` | `(milestone_id, position)` | `criterion`, `verdict`, `evidence`, `note`, `marked_by`, `run_id`, `marked_at` — as the milestone's field `criterion<position>` (a JSON object; null clears it), one field per criterion, so concurrent marks of one criterion are a field conflict and of two criteria are not. No new entity and no protocol change: the service folds a milestone's keys one by one, as it always has ([milestones](milestones.md#goal)) |
+| `milestone_criterion_marks` | `(milestone_id, position)` | `criterion`, `verdict`, `evidence`, `note`, `marked_by`, `run_id`, `marked_at` — as the milestone's field `criterion<position>` (a JSON object; null clears it), one field per criterion, so concurrent marks of one criterion are a field conflict and of two criteria are not. No new entity and no protocol change: the service folds a milestone's keys one by one, as it always has ([milestones](../docs/milestones.md#goal)) |
 | `attempts` | `id` | `issue_id`, `agent`, `role` (workspace migration 014; a create without it is a `worker` attempt), `opened_by`, `resumes_attempt_id`, `started_at`, `device_id`, `claim_scope`, `claim_fencing_token`, `harness`, `provider_binding`, `estimate_at_start`, `idempotency_key`, `provenance`, `missing` on the create; then only the end: `state`, `outcome`, `end_reason`, `end_detection`, `ended_by`, `ended_at`, `ended_at_source`, always all seven together — protocol 3, see [execution telemetry](execution-telemetry.md#where-it-lives-and-what-synchronizes) |
 | `attempt_transitions` | `id` | `attempt_id`, `kind`, `at`, `actor`, `detection`, `reason`, `detail`, `concurrency` — immutable once written, like a document revision; protocol 3 |
 | `meta` | `key` | **only** rows matching `setting:*` — the repository's prefix travels as one of them, `setting:repository.prefix` ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)); `slug` and `prefix` themselves are this workspace's own |
@@ -483,7 +478,7 @@ derived, they merge as `max()` so the local optimistic-concurrency checks stay
 monotonic, and they are bumped on apply like any other local write. Two counters,
 deliberately: one is what this database has seen, the other is what the
 repository agreed. The existing local editor keeps using the local one and needs
-no change ([queue.md](queue.md)).
+no change ([queue.md](../docs/queue.md)).
 
 A `baseRevision` key inside the payload would be a second copy of a number the
 envelope already carries for every operation — a second thing that can be wrong,
@@ -2054,7 +2049,7 @@ both plans are retained and the human picks one, or edits a third.
 
 ## Claims: a local checkout is not a global lease
 
-[continuity.md](continuity.md) describes the local model — an explicit claim, no
+[handoff.md](../docs/handoff.md) describes the local model — an explicit claim, no
 sweeper, no TTL, no expiry, takeover only when a human says "continue". None of
 that changes when a repository is connected. What connection adds is a way to make
 a claim globally exclusive; a disconnected repository cannot, and does not imply
@@ -2098,7 +2093,7 @@ render; the token and the server expiry live in the sync tables, not in new
 `issues` columns.
 
 Takeover stays explicit. `--steal-if-stale` and `--if-stale` still mean what
-[continuity.md](continuity.md) says they mean; connected, they additionally
+[handoff.md](../docs/handoff.md) says they mean; connected, they additionally
 require the server to agree the lease is stale. There is still **no sweeper and
 no automatic takeover**, on either side of the wire.
 
@@ -2853,7 +2848,7 @@ sustained one.
 `StapleErrorCode` member. A sync failure's envelope `code` is the service's code,
 its `retryable` is the column above, and the CLI exits with the code's own number:
 `validation` 2, `not_found` 3 and `conflict` 4, shared with the tracker, then 11 to
-21 in this table's order ([cli.md](cli.md#exit-codes)). A refusal the client makes
+21 in this table's order ([cli.md](../docs/cli.md#exit-codes)). A refusal the client makes
 before sending has the same shape as the service's. Examples are the handshake's
 `protocol_unsupported`, a pulled operation's `schema_ahead`, an oversized seed row's
 `payload_too_large` and the backup consent's `forbidden`. `src/core/cloud/errors.ts`

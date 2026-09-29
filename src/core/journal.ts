@@ -2,7 +2,7 @@
  * The journal seam — the one place a repository mutation becomes a replicable
  * operation.
  *
- * Contract: `docs/sync.md`, "The journal seam and what it owes". That section
+ * Contract: `design/sync.md`, "The journal seam and what it owes". That section
  * states seven obligations; this file is where six of them are enforced and the
  * seventh (nothing outside the boundary) is enforced by omission — migrations,
  * snapshots and the hub never call in here.
@@ -61,7 +61,7 @@ const DERIVED_FIELDS: ReadonlySet<string> = new Set(["normalizedTitle", "depth"]
 /** Both spellings, for provenance a snapshot or an older build's operation names by column. */
 const DERIVED_ISSUE_KEYS: ReadonlySet<string> = new Set([...DERIVED_FIELDS, "normalized_title"]);
 
-/** Every entity an operation can name. Closed set — see docs/sync.md. */
+/** Every entity an operation can name. Closed set — see design/sync.md. */
 export const SYNC_ENTITIES = [
   "issue",
   "comment",
@@ -76,7 +76,7 @@ export const SYNC_ENTITIES = [
   "queue",
   "lease",
   "conflict",
-  // Protocol 3: execution attempts (`docs/execution-telemetry.md`, "Where it lives").
+  // Protocol 3: execution attempts (`design/execution-telemetry.md`, "Where it lives").
   "attempt",
   "attemptTransition",
 ] as const;
@@ -264,8 +264,8 @@ interface SyncStateRow {
 /**
  * One status-moving or edge event a local mutation emitted, carried on the operation that
  * made it (`originEvents`) so a device applying that operation re-emits the same event,
- * dated at the origin's own instant (`docs/sync.md`, "Events are re-derived, never
- * transported"; `docs/timing-semantics.md`, "Multi-device").
+ * dated at the origin's own instant (`design/sync.md`, "Events are re-derived, never
+ * transported"; `design/timing-semantics.md`, "Multi-device").
  */
 export interface OriginEvent {
   /** The issue the event is on: not always the operation's own entity (a parent's blocker set rides on the child's create). */
@@ -299,7 +299,7 @@ class JournalScope {
   /**
    * The mutation's one instant: read from the clock once, on first use, and handed to every
    * writer in the scope — the row, its events and the attempt ledger — so one mutation's
-   * boundaries are one instant (`docs/timing-semantics.md`, "Boundary rules").
+   * boundaries are one instant (`design/timing-semantics.md`, "Boundary rules").
    */
   at(): string {
     this.instant ??= nowIso();
@@ -383,7 +383,7 @@ export interface FieldWriteRecord {
  * newest write refreshes its attribution rather than being ignored.
  */
 export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): void {
-  // A derived column is nobody's write, on every path that records one (`docs/sync.md`, "Derived columns"),
+  // A derived column is nobody's write, on every path that records one (`design/sync.md`, "Derived columns"),
   // and an operation's narration is not a field at all (`cloud/narration.ts`).
   const fields = (record.entity === "issue" ? record.fields.filter((field) => !DERIVED_ISSUE_KEYS.has(field)) : record.fields).filter(
     (field) => field !== NARRATION_KEY,
@@ -926,7 +926,7 @@ export class Journal {
    * operation of its own: an `update`, or a `create` for a row it inserted, attributed to
    * the mutation's actor. A declared `delete` is left as it is.
    *
-   * A derived issue column is never part of the change (`docs/sync.md`, "Derived
+   * A derived issue column is never part of the change (`design/sync.md`, "Derived
    * columns"): no provenance, never contested, and ignored by this build's applier, which
    * computes it. What an issue operation does carry, as the row holds it, is a copy for the
    * builds from before this one, whose applier reads it — the normalized title beside any

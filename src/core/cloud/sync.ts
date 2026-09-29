@@ -1,7 +1,7 @@
 /**
  * `staple cloud sync` — explicit, human-triggered synchronization.
  *
- * Contract: `docs/sync.md`, "Ordering, cursors and epochs" and "Three consents".
+ * Contract: `design/sync.md`, "Ordering, cursors and epochs" and "Three consents".
  *
  * ## Nothing here runs on an ordinary command path
  *

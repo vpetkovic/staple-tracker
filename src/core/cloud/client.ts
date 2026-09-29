@@ -1,7 +1,7 @@
 /**
  * The HTTP client for `staple-sync`. **The only outbound call site in the tree.**
  *
- * That is a design constraint, not a description. `docs/sync.md`, "The network
+ * That is a design constraint, not a description. `design/sync.md`, "The network
  * rule": *"Today the runtime contains zero outbound network call sites … The
  * invariant is therefore not a reduction to be achieved — it is a floor to be
  * held, and the assertion is literally zero rather than an allowlist."* Keeping
@@ -14,7 +14,7 @@
  * disconnected one, and the cheapest way to guarantee that is for the code that
  * could speak to not be loaded at all.
  *
- * ## The Worker is the API; `docs/sync.md` is the contract
+ * ## The Worker is the API; `design/sync.md` is the contract
  *
  * Where they disagree the Worker wins, because the Worker is what is deployed.
  * Every such divergence is marked `DIVERGENCE:` below.
@@ -42,7 +42,7 @@ import { cloudError, isCloudErrorCode } from "./errors.js";
  * The wire protocol this build's workspace leg speaks. Matches `PROTOCOL_MAX` in the Worker.
  *
  * 3 since execution attempts (`attempt`, `attemptTransition`): a new entity kind is not
- * additive (`docs/sync.md`, "Protocol evolution"), so the Worker that understands them is
+ * additive (`design/sync.md`, "Protocol evolution"), so the Worker that understands them is
  * deployed first and advertises `{ min: 1, max: 3 }`, and this build is refused by any
  * Worker that has not been — before anything is sent. The hub registry leg still declares 2
  * (`REGISTRY_PROTOCOL`).
@@ -353,7 +353,7 @@ export function fetchCapabilities(
 /**
  * `POST /v1/repos/{repoId}/connect` — bind this device and mint its credential.
  *
- * DIVERGENCE from `docs/sync.md`: the contract defines no provisioning route and
+ * DIVERGENCE from `design/sync.md`: the contract defines no provisioning route and
  * no account model, so the Worker did not invent one. The bearer presented here
  * is an **enrollment credential** — either an existing non-revoked device token
  * for this repository (how a second machine is added by a first) or the

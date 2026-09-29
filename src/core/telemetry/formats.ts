@@ -1,5 +1,5 @@
 /**
- * The formats docs/execution-telemetry.md fixes for budget telemetry ("Formats",
+ * The formats design/execution-telemetry.md fixes for budget telemetry ("Formats",
  * "Privacy"): hashing, instants, the account slug, and the display label.
  *
  * Every digest here hashes UTF-8 bytes. A tuple is serialized as a compact JSON array

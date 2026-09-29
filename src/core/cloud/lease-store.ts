@@ -1,7 +1,7 @@
 /**
  * The local mirror of `sync_leases`. **No network, no clock authority.**
  *
- * Contract: `docs/sync.md`, "Claims: a local checkout is not a global lease".
+ * Contract: `design/sync.md`, "Claims: a local checkout is not a global lease".
  *
  * ## What this table is, and what it is emphatically not
  *

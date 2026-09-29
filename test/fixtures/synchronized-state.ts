@@ -1,11 +1,11 @@
 /**
  * Every synchronized column of every synchronized table, and the differences between two
  * devices' copies of it — what "every device holds the same" is checked against
- * (`docs/sync.md`, "What synchronizes").
+ * (`design/sync.md`, "What synchronizes").
  */
 import type { DatabaseSync } from "node:sqlite";
 
-/** Every synchronized column of every synchronized table, by natural key (`docs/sync.md`). */
+/** Every synchronized column of every synchronized table, by natural key (`design/sync.md`). */
 export const TABLES: Record<string, { readonly key: readonly string[]; readonly sql: string; readonly ordered?: boolean }> = {
   issues: {
     key: ["id"],

@@ -1,5 +1,5 @@
 /**
- * Quality states (docs/timing-semantics.md, "Quality states"): exactly one state per record
+ * Quality states (design/timing-semantics.md, "Quality states"): exactly one state per record
  * that carries a timing or budget figure, and the machine-readable reasons that produced it.
  *
  * The state set is closed: `exact`, `approximate`, `missing`, `timing-floor`, `reconstructed`
@@ -24,7 +24,7 @@
  */
 
 /**
- * The approximate inputs a reading of effort can carry (`docs/timing-semantics.md`, "Quality
+ * The approximate inputs a reading of effort can carry (`design/timing-semantics.md`, "Quality
  * inputs"). `effort.ts` and the store emit exactly these; they are listed here, beside the level
  * map, so a new one cannot be emitted without a level.
  */
@@ -108,7 +108,7 @@ export function isQualityState(value: string): value is QualityState {
 }
 
 /**
- * An issue's work state (docs/timing-semantics.md, "Quality inputs"). `missingReason` is the
+ * An issue's work state (design/timing-semantics.md, "Quality inputs"). `missingReason` is the
  * `missing.workSeconds` code when the figure is null; `inputs` are the approximate inputs.
  */
 export function workQuality(input: {

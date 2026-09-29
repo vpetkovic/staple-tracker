@@ -1,5 +1,5 @@
 /**
- * Budget ingestion (docs/execution-telemetry.md, "Limit windows", "Budget samples",
+ * Budget ingestion (design/execution-telemetry.md, "Limit windows", "Budget samples",
  * "Missingness", "Formats", "Privacy"), driven through the one method every surface
  * calls, `ingestBudget`, against a scratch staple home.
  *

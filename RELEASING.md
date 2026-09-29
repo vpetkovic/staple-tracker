@@ -22,11 +22,11 @@ secrets, and none should ever be added.
 - **Upgrades snapshot first.** An installed runtime that finds a workspace
   behind its schema takes a `VACUUM INTO` snapshot beside the database before
   migrating it, and retains the prior runtime under `<home>/runtime/versions/`
-  for `staple install --rollback --yes`. See `docs/migration.md`.
+  for `staple install --rollback --yes`. See `design/migration.md`.
 - **The schema matrix is a release gate.** `test/install-schema-matrix.test.ts`
   drives the packed runtime through the real launcher against the schema-3,
   -5, -6, future-schema and WAL-backed fixtures, an interrupted install, and
-  the commands `docs/migration.md` prints. It runs in every `npm test`, against
+  the commands `design/migration.md` prints. It runs in every `npm test`, against
   a payload the suite builds from the checkout's source with the same
   `buildPackage()` that produces `dist-package/`, so it cannot skip and
   cannot pass against a stale build. On its own:

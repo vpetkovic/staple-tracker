@@ -1,5 +1,5 @@
 /**
- * The Usage page's words for live checks (docs/execution-telemetry.md, "Live polling"): what a
+ * The Usage page's words for live checks (design/execution-telemetry.md, "Live polling"): what a
  * Refresh did, per provider, and what each account's last check says. Pure, so a test with no
  * browser pins it; every sentence is chosen from a value the server sent (an outcome, a failure
  * code), and a failure's own sentence is the server's, written by the poller in plain words.

@@ -1,6 +1,6 @@
 /**
  * `staple attempts <ref>` and `staple attempt <attempt-id>`: the attempt read surfaces
- * (docs/execution-telemetry.md, "Surfaces"). Each is one store method —
+ * (design/execution-telemetry.md, "Surfaces"). Each is one store method —
  * `WorkspaceStore.listAttempts` and `WorkspaceStore.getAttempt` — that MCP `list_attempts`
  * and `get_attempt` call too, so `--json` and the tools answer one shape.
  */

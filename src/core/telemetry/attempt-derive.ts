@@ -1,7 +1,7 @@
 /**
  * What an attempt reads as: the read-time orphan rule, and every derived field.
  *
- * Contract: `docs/execution-telemetry.md`, "Orphaned attempts are closed at read time" and
+ * Contract: `design/execution-telemetry.md`, "Orphaned attempts are closed at read time" and
  * the derived-field table under "The attempt record".
  *
  * ## Only replicated rows
@@ -30,7 +30,7 @@ export interface IssueFacts {
   readonly active: boolean;
   readonly checkoutAgent: string | null;
   /**
-   * What the orchestrator lane's clauses and the row bound read (`docs/timing-semantics.md`,
+   * What the orchestrator lane's clauses and the row bound read (`design/timing-semantics.md`,
    * "The orchestrator lane" and "Work"). Absent on facts a mutator built from a row it read
    * before writing, which only ever feed the worker lane's clauses.
    */
@@ -72,7 +72,7 @@ export function issueFacts(db: DatabaseSync, issueId: string): IssueFacts {
 }
 
 /**
- * The row bound (`docs/timing-semantics.md`, "Work"): `completedAt` of a `done` row,
+ * The row bound (`design/timing-semantics.md`, "Work"): `completedAt` of a `done` row,
  * `cancelledAt` of a `cancelled` one, and no bound from any other row — `updatedAt` is not
  * one, because recategorizing a status moves issues without touching it.
  */
@@ -147,7 +147,7 @@ export function evaluateIssue(
 ): Map<string, Evaluation> {
   const out = new Map<string, Evaluation>();
   /**
-   * The WORKER lane only (`docs/timing-semantics.md`, "The orchestrator lane"): the contested
+   * The WORKER lane only (`design/timing-semantics.md`, "The orchestrator lane"): the contested
    * set, clauses 3 to 5 and `laterOpen` never see an orchestrator attempt, so an open
    * orchestrator attempt cannot orphan an older worker attempt as `superseded_by_merge`. An
    * orchestrator attempt passed in is left out of the map; `evaluateLanes` evaluates it.
@@ -398,7 +398,7 @@ function viewOf(
   /**
    * An orchestrator's activity is on the issues it coordinates, so its last activity is read
    * over the issue and every descendant; its orphan end is read from replicated evidence
-   * before the clauses' limit, as every device reads it (`docs/timing-semantics.md`).
+   * before the clauses' limit, as every device reads it (`design/timing-semantics.md`).
    */
   let lastActivityAt: string;
   if (!storedOpen) lastActivityAt = attempt.endedAt ?? attempt.startedAt;
@@ -483,7 +483,7 @@ export const EVIDENCE_TRANSITIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Every replicated evidence instant of one attempt, ascending (`docs/timing-semantics.md`,
+ * Every replicated evidence instant of one attempt, ascending (`design/timing-semantics.md`,
  * "Work"): its evidence transitions, and the `created_at` of every comment (not deleted)
  * and document revision on the issue by its agent after its `startedAt` — for an
  * orchestrator attempt, on the issue and every descendant. Never the local `events` table.

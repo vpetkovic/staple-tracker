@@ -1,5 +1,5 @@
 /**
- * Quality states (`docs/timing-semantics.md`, "Quality states" and "Cohort coverage"): one state
+ * Quality states (`design/timing-semantics.md`, "Quality states" and "Cohort coverage"): one state
  * per record that carries a timing or budget figure, with the reasons that produced it, and the
  * cohort read that counts them over the eligible population.
  *

@@ -1,5 +1,5 @@
 /**
- * Limit windows and budget samples in `hub.db` (docs/execution-telemetry.md, "Limit
+ * Limit windows and budget samples in `hub.db` (design/execution-telemetry.md, "Limit
  * windows", "Budget samples", "Missingness").
  *
  * One method writes: {@link BudgetStore.record}, called once per reading by the single
@@ -385,7 +385,7 @@ export class BudgetStore {
     // observed before the reset poll, never lands in (and never raises) the corrected window.
     joined = joined === null ? null : this.windowAt(joined, reading.observedAt);
     // Two authoritative readings in a row below the window's counted high-water mark close
-    // it (docs/execution-telemetry.md, "Window identity"): see {@link isUsageReset}.
+    // it (design/execution-telemetry.md, "Window identity"): see {@link isUsageReset}.
     const corrected = joined !== null && this.isUsageReset(joined.id, reading) ? joined : null;
     if (corrected !== null) joined = null;
     const needsWindow = reading.resetsAt !== null && joined === null;
@@ -538,7 +538,7 @@ export class BudgetStore {
   /**
    * Which samples of a window COUNT, by `observedAt` (up to `upTo` when given). While a
    * window holds authoritative readings (live polling), the provider's own figure governs
-   * (docs/execution-telemetry.md, "Window identity"):
+   * (design/execution-telemetry.md, "Window identity"):
    *
    *   - A passive reading (status line, rollout, typed) a later poll CONFIRMS (reads no more
    *     than {@link USAGE_RESET_TOLERANCE_PERCENT} below it) counts.

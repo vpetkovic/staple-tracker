@@ -1,7 +1,7 @@
 /**
  * History before capture: attempts rebuilt from the events that already exist.
  *
- * Contract: `docs/execution-telemetry.md`, "History before capture". `checkout` opens,
+ * Contract: `design/execution-telemetry.md`, "History before capture". `checkout` opens,
  * `claim_stolen` interrupts and reopens, `release`, `claim_released_stale` and a
  * `status_changed` out of the active category end. A reconstructed attempt says so
  * everywhere it can: `provenance`, `openedBy` and `endDetection` are `reconstructed`, and

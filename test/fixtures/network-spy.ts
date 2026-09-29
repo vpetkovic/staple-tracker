@@ -1,7 +1,7 @@
 /**
  * The network-silence harness.
  *
- * Contract: `docs/sync.md`, "The network rule — and the test that proves it".
+ * Contract: `design/sync.md`, "The network rule — and the test that proves it".
  *
  * ## What counts as a violation
  *

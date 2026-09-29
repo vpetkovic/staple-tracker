@@ -1,5 +1,5 @@
 /**
- * The presence index and the concurrency context it feeds (`docs/execution-telemetry.md`,
+ * The presence index and the concurrency context it feeds (`design/execution-telemetry.md`,
  * "Concurrency context"; hub migration 006). One machine, one staple home, several real
  * workspaces registered in its hub; every attempt is opened and ended by a real mutation.
  */

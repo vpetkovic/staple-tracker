@@ -2,12 +2,12 @@
  * The hub registry as a portable set: what this machine knows about, in a form
  * another machine can adopt.
  *
- * Contract: `docs/sync.md`, "What never leaves the machine" — amended by this
+ * Contract: `design/sync.md`, "What never leaves the machine" — amended by this
  * module and only this far.
  *
  * ## What changed in the contract, and what did not
  *
- * `docs/sync.md` put the whole hub database on the never-leaves list for two
+ * `design/sync.md` put the whole hub database on the never-leaves list for two
  * reasons: `workspaces.path` is an absolute filesystem path, and cross-repository
  * topology is not a repository's business. Both survive intact.
  *
@@ -104,7 +104,7 @@ export interface RegistryCrossLink {
  * schema version. `lastSeenAt` is an observation this machine made about its own
  * filesystem and means nothing anywhere else. `hub_events` is level-triggered
  * and is re-derived from the edges on arrival. The schema version is omitted for
- * the reason `docs/sync.md` already gives for the workspace one: replicating it
+ * the reason `design/sync.md` already gives for the workspace one: replicating it
  * lets an older build be told it is newer than it is.
  */
 export interface HubRegistryPayload {
@@ -154,7 +154,7 @@ export const HUB_BACKUP_EXCLUSIONS: readonly string[] = [
  * `Hub` type and nothing else, so every surface can reach it and none of them acquires
  * the transport by doing so.
  *
- * It is the same sentence as the module header above, and as `docs/sync.md`, verbatim.
+ * It is the same sentence as the module header above, and as `design/sync.md`, verbatim.
  * A disclosure reworded per surface is a disclosure whose strongest wording is whichever
  * surface the person did not read.
  */

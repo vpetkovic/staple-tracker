@@ -37,7 +37,7 @@ codex mcp add staple --env STAPLE_AGENT=codex -- npx -y staple-cli mcp
 To have `staple` on your `PATH` instead of fetching it each time, run
 `npx staple-cli install --yes`: a versioned runtime and a launcher at
 `~/.local/bin/staple`, no `sudo`, with rollback. Add `--update-path` to put
-`~/.local/bin` on your `PATH` ([packaging](https://github.com/vpetkovic/staple-tracker/blob/master/docs/packaging.md)).
+`~/.local/bin` on your `PATH` ([packaging](https://github.com/vpetkovic/staple-tracker/blob/master/design/packaging.md)).
 
 [Getting started](https://github.com/vpetkovic/staple-tracker/blob/master/docs/getting-started.md) walks through the first workspace,
 the MCP wiring and the loop your agents follow, one ticket from created to done.
@@ -46,11 +46,11 @@ the MCP wiring and the loop your agents follow, one ticket from created to done.
 
 - **Claims and dependencies.** Atomic checkout, claims that go stale when an
   agent dies and can be taken over on the record, `blocks` edges that decide
-  what is ready ([semantics](https://github.com/vpetkovic/staple-tracker/blob/master/docs/semantics.md), [continuity](https://github.com/vpetkovic/staple-tracker/blob/master/docs/continuity.md)).
+  what is ready ([dependencies](https://github.com/vpetkovic/staple-tracker/blob/master/docs/epics-and-dependencies.md), [handoff](https://github.com/vpetkovic/staple-tracker/blob/master/docs/handoff.md)).
 - **The pickup queue.** An ordered plan of what agents take next, advisory or
   strict, with overrides recorded ([queue](https://github.com/vpetkovic/staple-tracker/blob/master/docs/queue.md)).
 - **Approval gates.** Park a parent on a person; its subtree waits until they
-  approve or request changes ([gates](https://github.com/vpetkovic/staple-tracker/blob/master/docs/semantics.md#approval-gates)).
+  approve or request changes ([gates](https://github.com/vpetkovic/staple-tracker/blob/master/docs/approval-gates.md)).
 - **Milestones and goal mode.** Dated plans over epics and tasks with derived
   progress, a pace verdict and acceptance criteria judged with evidence
   ([milestones](https://github.com/vpetkovic/staple-tracker/blob/master/docs/milestones.md)).
@@ -58,15 +58,15 @@ the MCP wiring and the loop your agents follow, one ticket from created to done.
   budget, and the tracker decides when it stops ([runs](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md)).
 - **Cloud sync.** Optional: two machines share one workspace through a
   Cloudflare Worker you deploy, with conflicts kept, never guessed
-  ([sync](https://github.com/vpetkovic/staple-tracker/blob/master/docs/sync.md)).
+  ([cloud sync](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cloud-sync.md)).
 - **Web UI.** Tasks, queue, dependency graph, milestones, estimates, usage,
   task detail, autopilot runs and settings, on localhost ([web UI](https://github.com/vpetkovic/staple-tracker/blob/master/docs/web-ui.md)).
 - **Budget and estimates.** Estimates against measured agent work, calibrated
   forecasts, and the Claude and Codex rate-limit windows the work will cost
-  ([timing](https://github.com/vpetkovic/staple-tracker/blob/master/docs/timing-semantics.md), [provider budget](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md#provider-budget)).
+  ([timing](https://github.com/vpetkovic/staple-tracker/blob/master/docs/budget-and-estimates.md), [provider budget](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md#provider-budget)).
 - **The hub.** Every workspace on the machine registers in one hub, with unique
   prefixes, cross-repository `blocks` links and a hub-wide inbox
-  ([architecture](https://github.com/vpetkovic/staple-tracker/blob/master/docs/architecture.md#workspace-topology)).
+  ([several repositories](https://github.com/vpetkovic/staple-tracker/blob/master/docs/hub.md)).
 
 ## Everyday commands
 

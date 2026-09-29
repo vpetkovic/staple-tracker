@@ -31,7 +31,7 @@ the same row. (Pinned by `store-milestones.test.ts` — *"a milestone is
 an ordinary issue with an ordinary history"*.)
 
 **Why a reserved id and not a kind flag.** Kinds are a vocabulary without
-categories, and that is deliberate ([semantics.md](semantics.md#kinds--declared-never-derived)):
+categories, and that is deliberate ([semantics.md](../design/semantics.md#kinds--declared-never-derived)):
 a status gets its behaviour from a category column, a kind gets none. Giving
 kinds a flag column would be inventing categories for kinds so that exactly one
 of them could carry a rule — a second vocabulary mechanism for one value. The
@@ -90,7 +90,7 @@ issue and is reused rather than duplicated:
 | owner | `issues.assignee` | the person who owns the plan is its assignee; a second owner column would be two fields that disagree |
 | details | `issues.description` | what the milestone is for; `milestone new`/`set -d`, or wherever a description is edited |
 | goal | `issues.acceptance_criteria` | the milestone's definition of done, see [Goal](#goal); `milestone new`/`set --criteria` |
-| notes | the `notes` document | revisioned, restorable, already keyed per issue ([semantics.md](semantics.md#revisioned-documents)) |
+| notes | the `notes` document | revisioned, restorable, already keyed per issue ([semantics.md](../design/semantics.md#revisioned-documents)) |
 
 ```sql
 CREATE TABLE milestone_meta (
@@ -140,7 +140,7 @@ from the queue's eligibility, not from status categories"*.)
 
 **Milestone status is derived from its members, like any parent's.** The
 derived ladder in
-[semantics.md](semantics.md#a-parents-status-is-derived-from-its-children)
+[semantics.md](../design/semantics.md#a-parents-status-is-derived-from-its-children)
 reads a milestone's members as well as its children: a member's status reports
 upward exactly as a child's does, with the same reversibility law and the same
 gate immunity. So a milestone goes `in_progress` when work starts anywhere
@@ -470,7 +470,7 @@ unmet criterion needs through the marker's live goal run
 it is refused. Marks replicate (workspace migration 016 stores them in
 `milestone_criterion_marks`): each is the milestone's field `criterion<n>` on the
 wire, so concurrent marks of one criterion are a field conflict, preserved until
-someone decides, and marks of two criteria never collide ([sync.md](sync.md)). The runs
+someone decides, and marks of two criteria never collide ([cloud-sync.md](cloud-sync.md)). The runs
 that usually make them stay machine-local; a mark's `runId` is a label.
 
 **Pace** is `goal.pace`: done work, the remaining estimate and the days to the

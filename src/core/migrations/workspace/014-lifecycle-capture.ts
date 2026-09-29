@@ -3,7 +3,7 @@ import type { Migration } from "../types.js";
 
 /**
  * Version 14: what closing the lifecycle capture gaps needs stored
- * (`docs/timing-semantics.md`).
+ * (`design/timing-semantics.md`).
  *
  * ## `attempts.role`, the attempt's lane
  *
@@ -13,7 +13,7 @@ import type { Migration } from "../types.js";
  * `orchestrationSeconds` the second, and no attempt is in both. Every attempt that exists
  * before this migration was opened by a mutation that can only open a worker attempt, so
  * `worker` is the truth for all of them and the default says so. No CHECK: a value from a
- * newer build is preserved verbatim (`docs/sync.md`, the unknown-field rule), and a reader
+ * newer build is preserved verbatim (`design/sync.md`, the unknown-field rule), and a reader
  * treats anything other than `orchestrator` as the worker lane.
  *
  * ## `events.origin_device` and `events.origin_seq`, one order on every device

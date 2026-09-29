@@ -1,7 +1,7 @@
 /**
  * `staple cloud sync` — the engine.
  *
- * Contract: `docs/sync.md`, "Ordering, cursors and epochs". Every describe block
+ * Contract: `design/sync.md`, "Ordering, cursors and epochs". Every describe block
  * below is one of STA-72's acceptance criteria, in the order they are written.
  *
  * The service is `test/fixtures/fake-sync-server.ts`, which re-implements the

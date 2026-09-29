@@ -503,7 +503,7 @@ describe("in_review is measured, and kept out of the actual", () => {
     backdateEvents(issue.id, [9000, 8000, 5000]);
 
     // The newest event is the transition into review itself, and the queue still
-    // reads the 5000 seconds it has been waiting (docs/timing-semantics.md, Q3):
+    // reads the 5000 seconds it has been waiting (design/timing-semantics.md, Q3):
     // review waits on a person, and silence is the waiting, not the end of it.
     const asOf = new Date().toISOString();
     expect(store.timingFor([issue.id], asOf).get(issue.id)!.reviewSeconds).toBeGreaterThanOrEqual(5000);

@@ -1,7 +1,7 @@
 /**
  * Applying an operation re-emits the local event the original mutation emitted, dated at
- * the ORIGIN's instant (`docs/sync.md`, "Events are re-derived, never transported";
- * `docs/timing-semantics.md`, "Multi-device").
+ * the ORIGIN's instant (`design/sync.md`, "Events are re-derived, never transported";
+ * `design/timing-semantics.md`, "Multi-device").
  *
  * The timing replay reads a device's own event log. Before this, a device that pulled an
  * issue's status change wrote no event for it, its replay could not reach the row's status,

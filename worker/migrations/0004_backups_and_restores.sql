@@ -5,11 +5,11 @@
 -- retaining or deleting a backup must not be able to move a cursor, and the cheapest
 -- way to guarantee that is for the convergence path to have no reason to look here.
 --
--- Contract: `docs/sync.md`, "Backup, disconnect and purge are three different things".
+-- Contract: `design/sync.md`, "Backup, disconnect and purge are three different things".
 
 -- The server-side half of the third consent.
 --
--- `docs/sync.md` grants backup with "`sync.backup = true` in machine config, plus a
+-- `design/sync.md` grants backup with "`sync.backup = true` in machine config, plus a
 -- server-side flag". The machine-local half is per-device and lives in the connection
 -- record; this half is per-repository and is what stops a device that merely holds a
 -- credential from creating backups because its own config file said it could. Both

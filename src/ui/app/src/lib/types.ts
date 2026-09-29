@@ -1607,7 +1607,7 @@ export interface CloudSurfaceReport {
   /**
    * Static text, and ONLY when disconnected.
    *
-   * The page deliberately does not render it. `docs/sync.md` permits a static
+   * The page deliberately does not render it. `design/sync.md` permits a static
    * hint before connect, but permitting is not requiring, and this page's
    * requirement is the stronger one: *"The UI does not prompt."* The field is
    * mirrored because it is part of the contract, and left unrendered because
@@ -2365,7 +2365,7 @@ export interface HubAdoptResult {
 /**
  * `GET /api/calibration` and `GET /api/forecast`, mirroring `CalibrationReport` in
  * src/core/telemetry/calibration.ts and `ForecastReport` in src/core/telemetry/forecast-report.ts
- * (both pinned in test/contract-ui-types.test.ts). docs/timing-semantics.md, "Calibration
+ * (both pinned in test/contract-ui-types.test.ts). design/timing-semantics.md, "Calibration
  * cohorts", "Confidence ranges" and "Forecasts", says what every field means. The browser renders
  * these; it never recomputes one of them.
  */
@@ -2836,7 +2836,7 @@ export interface ForecastReport {
 /**
  * `GET /api/budget` (`staple budget --json`, MCP `get_budget`), mirroring `BudgetView` in
  * src/core/telemetry/read-budget.ts and `LimitPressure` in src/core/telemetry/budget-pressure.ts.
- * docs/execution-telemetry.md, "Pressure", says what every field means. Machine-level: it reads
+ * design/execution-telemetry.md, "Pressure", says what every field means. Machine-level: it reads
  * this machine's hub, never a workspace, and never synchronizes.
  */
 /** The fields of a stored sample the page reads; the payload carries the whole record. */

@@ -11,7 +11,7 @@
  * the dedup ledger really does absorb a replay, the tombstone really does
  * outlive its row, the singleton really is a singleton, and the client-sequence
  * allocator really does survive an emptied outbox. Each one is a property the
- * contract in docs/sync.md depends on, expressed at the only layer that can
+ * contract in design/sync.md depends on, expressed at the only layer that can
  * currently hold it.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

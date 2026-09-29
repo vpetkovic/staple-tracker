@@ -1,6 +1,6 @@
 /**
  * Execution attempts on one device: how they open, end, pause, resume and resume each other,
- * and what they read as (`docs/execution-telemetry.md`, "Execution attempts").
+ * and what they read as (`design/execution-telemetry.md`, "Execution attempts").
  *
  * Every attempt here is the side effect of a real store mutation; nothing writes an attempt
  * row by hand. Times are moved only where a rule reads a duration (last activity, paused

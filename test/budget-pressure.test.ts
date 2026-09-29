@@ -1,5 +1,5 @@
 /**
- * Session pressure on `get_budget` (docs/execution-telemetry.md, "Pressure"), from readings
+ * Session pressure on `get_budget` (design/execution-telemetry.md, "Pressure"), from readings
  * ingested the way they arrive: Claude Code status-line JSON through the real status-line
  * source, Codex rollout files through the real rollout source, and `--source manual`, into a
  * scratch staple home. No reading is written by hand, so every figure below is what the page and

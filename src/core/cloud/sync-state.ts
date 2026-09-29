@@ -1,7 +1,7 @@
 /**
  * The `sync_state` singleton: this device's position in a shared log.
  *
- * Contract: `docs/sync.md`, "The local sync tables" and "Ordering, cursors and
+ * Contract: `design/sync.md`, "The local sync tables" and "Ordering, cursors and
  * epochs".
  *
  * ## Cursors are bytes
@@ -220,7 +220,7 @@ export function recordHeadSeq(db: DatabaseSync, headSeq: number, epoch: number):
  * The last pull reached the head of the log, at `cursor`.
  *
  * Staple did not keep this: `hasMore` was a loop variable. The stored orphan end is written
- * only after a pull reached the head (`docs/execution-telemetry.md`, "Orphaned attempts are
+ * only after a pull reached the head (`design/execution-telemetry.md`, "Orphaned attempts are
  * closed at read time"), which narrows the window in which another device's real end is
  * still in flight. The condition is read as "the cursor has not moved since", so a pull
  * stopped part-way, or a re-bootstrap that resets the cursor, withdraws it with no second

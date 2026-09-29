@@ -160,7 +160,7 @@ export default function Home(): ReactNode {
               'A ticket with open blockers cannot be claimed, and a dependency cycle is refused on write.',
               'A claim left by an agent that died goes stale, and another agent takes it over on the record.',
             ]}
-            link={{to: '/docs/semantics', label: 'Statuses, claims and dependencies'}}
+            link={{to: '/docs/epics-and-dependencies', label: 'Epics and dependencies'}}
             visual={
               <Screenshot
                 name="graph"
@@ -270,21 +270,21 @@ export default function Home(): ReactNode {
             <Heading>Local first, with the rest when you want it.</Heading>
           </div>
           <CardGrid>
-            <Card eyebrow="Cloud sync" title="Two machines, one workspace" to="/docs/sync">
+            <Card eyebrow="Cloud sync" title="Two machines, one workspace" to="/docs/cloud-sync">
               <p>
                 Off until you connect: a workspace that was never connected makes no network call, and a test holds it
                 to that. Connecting, automatic sync and backups are three separate consents, each per device. Conflicts
                 are kept, never guessed.
               </p>
             </Card>
-            <Card eyebrow="Budget and estimates" title="What the work really costs" to="/docs/timing-semantics">
+            <Card eyebrow="Budget and estimates" title="What the work really costs" to="/docs/budget-and-estimates">
               <p>
                 Record an estimate when you plan; staple measures the agent&apos;s work against it, groups similar work
                 and forecasts what is left, with ranges. Opt in, and it reads your Claude and Codex limits on this
                 machine.
               </p>
             </Card>
-            <Card eyebrow="MCP and CLI" title="One set of rules, two surfaces" to="/docs/agents">
+            <Card eyebrow="MCP and CLI" title="One set of rules, two surfaces" to="/docs/mcp-tools">
               <p>
                 Every MCP tool calls the same store method as its CLI command. Refusals are typed: <code>conflict</code>{' '}
                 means pick another ticket, <code>gated</code> means a person has to act.

@@ -1,6 +1,6 @@
 /**
  * Removing budget readings (`staple budget forget`, `forget_budget_samples`, `POST
- * /api/budget/forget`; docs/execution-telemetry.md, "Removing a reading").
+ * /api/budget/forget`; design/execution-telemetry.md, "Removing a reading").
  *
  * The case this exists for happened on a real machine. While a status-line wrapper was
  * being verified, a synthetic status-line JSON was piped through the live ingest. It

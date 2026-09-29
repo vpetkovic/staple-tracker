@@ -1,7 +1,7 @@
 /**
  * An attempt as every surface returns it: the view (`attempt-derive.ts`) plus the figure it
  * contributes to the issue's effort and that figure's one quality state
- * (docs/timing-semantics.md, "Quality states").
+ * (design/timing-semantics.md, "Quality states").
  *
  * `effortSeconds` is the attempt's contribution to `workSeconds` (worker lane) or to
  * `orchestrationSeconds` (orchestrator lane), read from replicated data only with the end

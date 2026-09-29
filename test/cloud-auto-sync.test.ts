@@ -1,7 +1,7 @@
 /**
  * Automatic synchronization: the second consent, and the three bounded triggers.
  *
- * Contract: `docs/sync.md`, "Three consents".
+ * Contract: `design/sync.md`, "Three consents".
  *
  * This file is about the SCHEDULER and the GATE — consent, coalescing, bounds,
  * jittered backoff, cancellation, and the import graph that makes the gate

@@ -1,5 +1,5 @@
 /**
- * Execution attempts on the service (`docs/execution-telemetry.md`, "Where it lives and what
+ * Execution attempts on the service (`design/execution-telemetry.md`, "Where it lives and what
  * synchronizes"): the protocol-3 vocabulary, and the apply rule the fold shares with every
  * other reader of the log — a stored orphan end never overwrites a real end, and a dropped
  * one leaves no `fieldWrites` for a hydrating device to inherit.
@@ -153,7 +153,7 @@ describe("the fold: a stored orphan end never overwrites a real end", () => {
 });
 
 /**
- * The orchestrator lane (`docs/timing-semantics.md`, "The orchestrator lane"): its stored orphan
+ * The orchestrator lane (`design/timing-semantics.md`, "The orchestrator lane"): its stored orphan
  * ends carry `issue_resolved` or `superseded_by_newer`, and the fold treats both as SUBORDINATE,
  * exactly as the worker lane's five — a real `coordination_ended` wins in either order of
  * arrival, and two ends of one kind still meet as ordinary writes.

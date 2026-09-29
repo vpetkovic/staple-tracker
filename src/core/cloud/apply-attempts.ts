@@ -1,7 +1,7 @@
 /**
  * Applying `attempt` and `attemptTransition` operations (protocol 3).
  *
- * Contract: `docs/execution-telemetry.md`, "Where it lives and what synchronizes".
+ * Contract: `design/execution-telemetry.md`, "Where it lives and what synchronizes".
  *
  * An applied attempt operation runs NONE of the attempt side effects: nothing here opens,
  * ends or infers anything. It writes the originating device's own record — its ids, its

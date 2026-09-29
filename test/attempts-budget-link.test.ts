@@ -1,5 +1,5 @@
 /**
- * A budget reading names the attempt it belongs to (`docs/execution-telemetry.md`, "Linking
+ * A budget reading names the attempt it belongs to (`design/execution-telemetry.md`, "Linking
  * samples to attempts"): exactly one effectively open attempt on this machine with the
  * reading's provider, account and harness session. Real workspaces registered in a scratch
  * home's hub, real ingestion of a real-shaped status line, the linker the CLI and MCP pass.

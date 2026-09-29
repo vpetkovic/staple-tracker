@@ -4,7 +4,7 @@
  * ## Nothing here calculates
  *
  * Every figure on those pages is a field of `GET /api/forecast` or `GET /api/calibration`,
- * which are `staple forecast --json` and `staple calibrate --json` (docs/timing-semantics.md,
+ * which are `staple forecast --json` and `staple calibrate --json` (design/timing-semantics.md,
  * "Forecasts", "Confidence ranges"). This module turns a field into text: seconds into `3h10m`,
  * a probability into `12%`, a ratio into `×0.85`, a reason code into a sentence. It never adds,
  * divides or compares two figures, so the page cannot disagree with the CLI. The one rule it
@@ -83,7 +83,7 @@ export function formatRange(lower: number, upper: number, format: (value: number
 // ------------------------------------------------------------------ reason codes
 
 /**
- * Warnings, calibration's and the forecast's (docs/timing-semantics.md, the two closed lists), as
+ * Warnings, calibration's and the forecast's (design/timing-semantics.md, the two closed lists), as
  * a short chip label and a plain-language tooltip. An unknown code (a newer server) reads as
  * itself, never as nothing.
  */
@@ -191,7 +191,7 @@ export function warningText(code: string, table: Record<string, { label: string;
 
 /**
  * Why a figure is unknown: the reason codes of `missing` (the telemetry contract's closed set,
- * docs/execution-telemetry.md "Missingness", and the forecast's own) and of `missingInputs`.
+ * design/execution-telemetry.md "Missingness", and the forecast's own) and of `missingInputs`.
  */
 export const MISSING_TEXT: Record<string, string> = {
   unknown_units: "some units' remaining work is unknown",

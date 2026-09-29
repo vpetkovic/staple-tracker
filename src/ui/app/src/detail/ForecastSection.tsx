@@ -14,7 +14,7 @@
  * ## One payload, two blocks, never blended
  *
  * Both blocks are drawn from ONE `GET /api/forecast?ref=` (`staple forecast --json`), and they stay
- * two blocks (docs/timing-semantics.md, "Forecasts"): the completion forecast is replicated data,
+ * two blocks (design/timing-semantics.md, "Forecasts"): the completion forecast is replicated data,
  * the same on every device; the budget forecast is this machine's readings and nothing else. The
  * budget block sits in its own dashed frame under its own heading, and no figure crosses between
  * them.

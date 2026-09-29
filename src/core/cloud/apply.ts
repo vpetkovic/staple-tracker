@@ -1,7 +1,7 @@
 /**
  * Applying a remote operation to the local database.
  *
- * Contract: `docs/sync.md`, "What synchronizes", "Deletion is a tombstone" and
+ * Contract: `design/sync.md`, "What synchronizes", "Deletion is a tombstone" and
  * "Ordering, cursors and epochs".
  *
  * ## Why this writes rows instead of calling the store
@@ -98,7 +98,7 @@ function col(column: string, encoding: Encoding = "raw"): Column {
 /**
  * The `issues` columns that travel, keyed by the payload name the seam uses.
  *
- * This is `docs/sync.md`'s field inventory for `issues`, plus `checkoutAgent` and
+ * This is `design/sync.md`'s field inventory for `issues`, plus `checkoutAgent` and
  * `checkoutAt` — which travel, but *"never as a plain field write"*: they are the
  * projection of a lease. They are accepted here because the merged claim
  * operations already carry them as fields and refusing them would drop a claim
@@ -179,7 +179,7 @@ export const MILESTONE_FIELDS: Record<string, Column> = {
  * The issue columns computed from other synchronized columns: `normalized_title` from
  * `title`, `depth` from the parent's depth. Never part of a change a device journals —
  * no provenance, never contested — and never read from an operation by this build: the
- * applier computes them from what it wrote (`docs/sync.md`, "Derived columns").
+ * applier computes them from what it wrote (`design/sync.md`, "Derived columns").
  */
 export const DERIVED_ISSUE_FIELDS: ReadonlySet<string> = new Set(["normalizedTitle", "depth"]);
 const DERIVED_ISSUE_COLUMNS: ReadonlySet<string> = new Set(["normalized_title", "depth"]);
@@ -212,7 +212,7 @@ export const PROJECT_COLUMNS: Record<string, Column> = withColumnAliases(PROJECT
  * `createIssue` declares `{ estimatedSeconds, acceptanceCriteria, … }`, while
  * `updateIssue` declares `{ ...next }` where `next` is the SQL patch it is about
  * to run — so its keys are `estimated_seconds`, `acceptance_criteria`,
- * `normalized_title`. `docs/sync.md` names the fields in its inventory as
+ * `normalized_title`. `design/sync.md` names the fields in its inventory as
  * columns and gives its envelope example single-word fields, so it settles
  * nothing either.
  *
@@ -409,7 +409,7 @@ function restoreActor(actor: string | null | undefined): boolean {
  * store read the clock a millisecond before its journal did, and whose row the applier
  * catch-up re-dates once. When the only create is one a restore staged, there is no true
  * time or author to converge on, and a row this device holds keeps its own
- * (`docs/sync.md`, "A restore's own actor and instant are never a create's").
+ * (`design/sync.md`, "A restore's own actor and instant are never a create's").
  */
 function canonicalCreate(input: ApplyInput): { at: string; actor: string | null } | null {
   if (input.verb !== "create" || input.atIsCreate !== true) return null;
@@ -1669,7 +1669,7 @@ function settledInRead(db: DatabaseSync, read: SnapshotRead, issueId: string, ke
  * The end of a snapshot read, for every document: this device's own revisions the log has not
  * reached are placed after the log's (`placeOwnAgain`), and — when `rewind` — every other
  * revision the snapshot did not place is dropped. That is a revision the log does not hold: a
- * copy an older build made, or one pushed to an epoch a restore rewound (`docs/sync.md`).
+ * copy an older build made, or one pushed to an epoch a restore rewound (`design/sync.md`).
  * Without `rewind` (a join, whose rows are this workspace's own and are sent by the seed, or a
  * snapshot from a fold before this build) they stay where they are.
  */
@@ -2288,7 +2288,7 @@ function entryMetadata(rows: readonly EntryRow[]): Map<string, EntryMetadata> {
  *
  * The list travels as ids, because the ORDER is what is contested and what the rank
  * is recomputed from; the per-entry facts travel beside it, in `entries`, keyed by
- * issue id — `docs/sync.md`: *"`added_by`, `added_at` and `note` ride along"*. Before
+ * issue id — `design/sync.md`: *"`added_by`, `added_at` and `note` ride along"*. Before
  * they did, a note written on one device never reached another, and every apply wrote
  * the applying operation's actor and time over every entry, so a plan reordered on one
  * device erased every other device's record of who queued what.

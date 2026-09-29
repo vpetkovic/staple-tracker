@@ -1,9 +1,10 @@
 ---
-title: Web UI
+title: Web UI tour
+sidebar_label: Tour
 description: The local browser app that staple open serves, with every view it has, what each one shows and changes, and how it authenticates.
 ---
 
-# Web UI
+# Web UI tour
 
 ```bash
 staple open      # serves the app and opens it in your browser
@@ -107,7 +108,7 @@ on the right, the palette field (*Find a task or command*, `⌘K`) and the
 that means and the technical values behind *Show details*. It renders nothing
 when the workspace is not connected, and it never prompts you to connect. It
 reads `/api/cloud/status` once per workspace shown (on *All workspaces*,
-`/api/cloud/workspaces` once), never on the poll. See [sync.md](sync.md).
+`/api/cloud/workspaces` once), never on the poll. See [sync.md](cloud-sync.md).
 
 **The toolbar** (44px) is only on views that use it (`viewControls` in
 `lib/session.ts`): Tasks has all of it, Graph has the filters only, Milestones
@@ -713,7 +714,7 @@ the command palette, which also finds it by *estimate accuracy* and
 *calibration*), is the
 workspace's calibration report: `GET /api/calibration`, the payload of `staple
 calibrate --json` and MCP `calibration_cohorts`
-([timing-semantics.md](timing-semantics.md), "Calibration cohorts" and
+([budget-and-estimates.md](budget-and-estimates.md), "Calibration cohorts" and
 "Confidence ranges"). The view's internal id is `calibration` (saved preferences
 and commands key off it); the address calls it `estimate-accuracy`. It is per
 workspace; on *All workspaces* it shows [Choose a workspace](#choose-a-workspace)
@@ -803,7 +804,7 @@ issues get a forecast. The type mirror is pinned against the store's types in
 The rail's **This computer** group holds one view, **Usage** (also "Go to
 Usage" in the command palette, which also finds it by *budget*): this machine's provider limits and each
 one's session pressure, `GET /api/budget`, the payload of `staple budget
---json` and MCP `get_budget` ([execution-telemetry.md](execution-telemetry.md#pressure)).
+--json` and MCP `get_budget` ([execution-telemetry.md](../design/execution-telemetry.md#pressure)).
 It sits apart from the workspace views because budget readings live in this
 machine's hub and never synchronize: the view takes no workspace and shows
 the same figures whichever one the switcher names. It has no toolbar, and the
@@ -881,7 +882,7 @@ fingerprint: budget readings live in the hub, not in a workspace.
 
 **Refresh.** The button runs one real collection
 (`POST /api/budget/collection/refresh`, what `staple budget collect` runs: the
-passive scan, then, with [live polling](execution-telemetry.md#live-polling)
+passive scan, then, with [live polling](../design/execution-telemetry.md#live-polling)
 on, one check with each linked provider, at most once a minute per account),
 reads *Checking…* while it runs, then says per provider what happened:
 *Updated just now*, or the provider's reason in plain words (*Claude Code's
@@ -1031,7 +1032,7 @@ estimated.
 **Forecast.** Between the breakdown and the sub-task list, an open parent
 shows its forecast, and an open leaf with its own estimate a compact one: both
 read `GET /api/forecast?ref=` (`staple forecast --json`, MCP `forecast`; see
-[timing-semantics.md](timing-semantics.md), "Forecasts") and render it as
+[budget-and-estimates.md](budget-and-estimates.md), "Forecasts") and render it as
 returned. The page computes nothing: every figure is a field of the payload,
 rounded and phrased for a reader who is not an engineer, with the exact figure
 one click away. A resolved issue, or a leaf with no estimate, shows no forecast.
@@ -1340,7 +1341,7 @@ comes back as a refusal on the responsible row.
 ### Statuses and kinds
 
 The status set and the kind vocabulary are workspace data, not staple's
-(see [semantics.md](semantics.md)).
+(see [epics-and-dependencies.md](epics-and-dependencies.md)).
 
 Two lists. Each row has an editable label, a drag handle, and — for statuses —
 a category select; removing a row that issues still carry requires a target to
@@ -1435,7 +1436,7 @@ Three sections deal with sync, and none of them is in the settings registry:
 they read `/api/cloud/status` and write the cloud routes, which act on this
 computer's files, because a credential written to the workspace database would
 replicate to every device. Opening them makes one network-free request; nothing
-leaves the machine without a press. See [sync.md](sync.md).
+leaves the machine without a press. See [cloud-sync.md](cloud-sync.md).
 
 - **Cloud account** (across all workspaces): this computer's connection to the
   sync service. Connecting is two steps: a preview of the service, then a

@@ -532,7 +532,7 @@ export interface ClaimActivity {
   /** Wall-clock seconds since the holder last did anything here ("silent for"). */
   idleSeconds: number;
   /**
-   * How exclusive this claim actually is — `docs/sync.md`, "Claims: a local
+   * How exclusive this claim actually is — `design/sync.md`, "Claims: a local
    * checkout is not a global lease".
    *
    * `"local"` means THIS DATABASE only: the claim still refuses a fresher holder
@@ -726,7 +726,7 @@ export interface IssueTiming {
    */
   subtreePlan: SubtreePlan;
   /**
-   * AGENT WORK, the estimate ratio's actual (`docs/timing-semantics.md`, "Work"): worker-lane
+   * AGENT WORK, the estimate ratio's actual (`design/timing-semantics.md`, "Work"): worker-lane
    * attempts only, from replicated data only, so it reads the same on every device. Leaf:
    * `ownWorkSeconds`. Parent: the sum of the direct children's `workSeconds`, with
    * `quality.work.coverage`. `cancelled`: null (`not_applicable_cancelled`). Null reasons
@@ -748,7 +748,7 @@ export interface IssueTiming {
    * `done`, and `workSeconds` of quality `exact`. Null otherwise.
    */
   estimateRatio: number | null;
-  /** The elapsed partition, device-local (`docs/timing-semantics.md`). Null reasons in `missing.wall`. */
+  /** The elapsed partition, device-local (`design/timing-semantics.md`). Null reasons in `missing.wall`. */
   wall: WallTiming | null;
   /**
    * The issue's own worker-lane chain links, oldest first: each interrupted attempt that has
@@ -764,7 +764,7 @@ export interface IssueTiming {
 }
 
 /**
- * One link of a worker-lane chain (`docs/timing-semantics.md`, `resumeGapSeconds`): an
+ * One link of a worker-lane chain (`design/timing-semantics.md`, `resumeGapSeconds`): an
  * attempt that ended `interrupted` or reads `orphaned`, and the attempt that resumed it.
  */
 export interface ResumeGap {
@@ -805,7 +805,7 @@ export interface WallTiming {
 export type WorkQualityState = "missing" | "reconstructed" | "approximate" | "timing-floor" | "exact";
 
 /**
- * One state per record (`docs/timing-semantics.md`, "Quality states"), with `reasons`: every
+ * One state per record (`design/timing-semantics.md`, "Quality states"), with `reasons`: every
  * reason that holds, highest precedence first (`src/core/telemetry/quality.ts`).
  */
 export interface TimingQuality {
@@ -1091,7 +1091,7 @@ export type StapleErrorCode =
    */
   | "out_of_order"
   /**
-   * The cloud sync taxonomy (STA-251, `docs/sync.md`, "Error taxonomy"). A sync failure
+   * The cloud sync taxonomy (STA-251, `design/sync.md`, "Error taxonomy"). A sync failure
    * carries the service's own code, never the nearest store code: `validation`,
    * `not_found` and `conflict` above are shared with it, and these are the rest.
    * `src/core/cloud/errors.ts` builds them; `offline` is the client-side one, a request
@@ -1126,7 +1126,7 @@ export class StapleError extends Error {
  * input. A checkout conflict is NOT retryable — pick a different task.
  *
  * Of the sync codes, the three the protocol marks retryable: `rate_limited` and
- * `unavailable` from the service, `offline` from the client (`docs/sync.md`,
+ * `unavailable` from the service, `offline` from the client (`design/sync.md`,
  * "Error taxonomy"). Everything else there is a decision for a human.
  *
  * Unknown (non-StapleError) failures are NOT retryable: a caller honoring the bit
@@ -1311,7 +1311,7 @@ export function normalizeTitle(title: string): string {
  * The write clock: the one seam every recorded instant reads. The store, the event writer
  * (`Journal.mutationAt`, `event-row.ts`) and the attempt ledger all take their instants from
  * `nowIso`, so a run that installs a clock here controls every instant a mutation stamps
- * (`docs/timing-semantics.md`, "Controlled runs"). Production installs nothing and reads the
+ * (`design/timing-semantics.md`, "Controlled runs"). Production installs nothing and reads the
  * real clock.
  */
 let clockSource: (() => number) | null = null;

@@ -1,7 +1,7 @@
 /**
  * `claim.scope` on the EVERYDAY read surfaces — `ls`, `show` and `inbox`.
  *
- * `docs/sync.md`, "Claims: a local checkout is not a global lease":
+ * `design/sync.md`, "Claims: a local checkout is not a global lease":
  *
  *   *"the claim payload grows a scope, and **every surface reports it**"* —
  *   `local` for "this database only, no global exclusivity is claimed", `lease`

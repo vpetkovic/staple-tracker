@@ -538,7 +538,7 @@ describe("what identity does NOT do", () => {
       // `sync_leases.fencing_token` is the one legitimate "token": a monotonic
       // integer issued by the server for write fencing, not an authenticator. An
       // attempt copies the same integer at open, for correlation only
-      // (`docs/execution-telemetry.md`, the attempt's `claim`).
+      // (`design/execution-telemetry.md`, the attempt's `claim`).
       expect(offenders).toEqual([
         { tbl: "sync_leases", col: "fencing_token" },
         { tbl: "attempts", col: "claim_fencing_token" },
@@ -546,7 +546,7 @@ describe("what identity does NOT do", () => {
 
       // And there is no device secret anywhere, under any spelling. Deliberately
       // narrower than /auth/, which matches `comments.author` — attribution is
-      // disclosed on purpose (docs/sync.md, "What synchronizes") and is not a
+      // disclosed on purpose (design/sync.md, "What synchronizes") and is not a
       // credential.
       expect(
         columns.filter(({ col }) => /device_secret|api_key|access_token|refresh_token/i.test(col)),

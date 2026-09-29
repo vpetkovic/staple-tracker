@@ -11,7 +11,7 @@
  * category (the first remaining kind). It travels as the removal's `migrateTo`. Every
  * device that finds an issue on a removed status or kind moves the issue there, and the
  * device whose own write was involved journals the move, so the log says it too
- * (`docs/sync.md`, "A removal and a move into it").
+ * (`design/sync.md`, "A removal and a move into it").
  *
  * The target is recorded per device in `meta` (`vocabulary_target:<entity>:<id>`), from
  * the local removal or the removal operation; `own` marks a removal made here.

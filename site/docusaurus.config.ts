@@ -155,7 +155,7 @@ const config: Config = {
             {label: 'Getting started', to: '/docs/getting-started'},
             {label: 'CLI', to: '/docs/cli'},
             {label: 'Web UI', to: '/docs/web-ui'},
-            {label: 'Cloud sync', to: '/docs/sync'},
+            {label: 'Cloud sync', to: '/docs/cloud-sync'},
           ],
         },
         {
@@ -164,7 +164,7 @@ const config: Config = {
             {label: 'Pickup queue', to: '/docs/queue'},
             {label: 'Milestones', to: '/docs/milestones'},
             {label: 'Autopilot runs', to: '/docs/runs'},
-            {label: 'Agents', to: '/docs/agents'},
+            {label: 'Agents', to: '/docs/working-a-ticket'},
           ],
         },
         {

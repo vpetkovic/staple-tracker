@@ -1039,7 +1039,7 @@ export function startUiServer(options: UiOptions): UiHandle {
   /**
    * S10: this server's automatic-sync registration, and all of it.
    *
-   * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+   * Contract: `design/sync.md`, "Three consents" — *"After automatic — bounded
    * triggers only: startup, post-write, long-running session … Coalesced,
    * jittered backoff, cancellable, bounded timeout."*
    *
@@ -1840,7 +1840,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       /**
        * `GET /api/cloud/status` — read-only, and network-free by construction.
        *
-       * `docs/sync.md`, on what a surface may do before a repository is
+       * `design/sync.md`, on what a surface may do before a repository is
        * connected: *"render 'not connected' and a static hint naming
        * `staple cloud connect`. Static text. No probe, no reachability check, no
        * 'we noticed you might want to connect'. The UI does not prompt."*
@@ -2132,7 +2132,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        *
        * `{ auto: boolean }` OR `{ backup: boolean }`, and **exactly one**. Two
        * consents are two decisions; a body carrying both would let one click
-       * spend both, which is the shape `docs/sync.md` separates them to prevent.
+       * spend both, which is the shape `design/sync.md` separates them to prevent.
        *
        * This writes a file in the staple home — `setConsent` — and nothing else.
        * It is emphatically NOT a workspace setting and never touches
@@ -2198,7 +2198,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        * from `/api/cloud/status`, which is network-free, and asks for devices only
        * when a human presses the button. A panel that listed devices on open would
        * turn opening settings into a request to Cloudflare — the shape
-       * `docs/sync.md` calls a heartbeat arrived at by accident.
+       * `design/sync.md` calls a heartbeat arrived at by accident.
        */
       if (url.pathname === "/api/cloud/devices") {
         const body = await readBody(req);
@@ -3049,7 +3049,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        * settings panel touches and this is deliberately absent from all of those
        * lists, exactly as `/api/cloud/workspace/sync` and `/api/cloud/devices`
        * are. A settings page that synchronized the machine when you opened it
-       * would be the heartbeat `docs/sync.md` describes as arrived at by
+       * would be the heartbeat `design/sync.md` describes as arrived at by
        * accident, multiplied by the size of the registry.
        *
        * A row that fails answers **200 with `status: "failed"`**, and that is not

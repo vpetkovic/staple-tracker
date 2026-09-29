@@ -1,5 +1,5 @@
 /**
- * The one ingestion method (docs/execution-telemetry.md, "Surfaces"): `staple budget
+ * The one ingestion method (design/execution-telemetry.md, "Surfaces"): `staple budget
  * ingest` and the MCP tool `record_budget_sample` both call {@link ingestBudget}, so the
  * two cannot answer differently.
  *

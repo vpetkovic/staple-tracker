@@ -1,5 +1,5 @@
 /**
- * Live usage polling (docs/execution-telemetry.md, "Live polling"): one small interface
+ * Live usage polling (design/execution-telemetry.md, "Live polling"): one small interface
  * every provider implements, so adding a provider is one new module in this directory
  * and one line in `registry.ts`.
  *

@@ -2761,7 +2761,7 @@ try {
 /**
  * S10: the CLI's entire automatic-sync registration.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * Contract: `design/sync.md`, "Three consents" — *"After automatic — bounded
  * triggers only … A tracker command never blocks indefinitely on Cloudflare."*
  *
  * **After the command, never around it.** Output is printed, `process.exitCode`

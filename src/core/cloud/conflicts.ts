@@ -1,7 +1,7 @@
 /**
  * Conflicts: detection, preservation, and explicit resolution.
  *
- * Contract: `docs/sync.md`, "Conflicts are preserved, never resolved silently".
+ * Contract: `design/sync.md`, "Conflicts are preserved, never resolved silently".
  *
  * ## The one rule everything here serves
  *
@@ -251,7 +251,7 @@ function policy(entity: string, key: string): FieldPolicy | null {
       return key === "value" ? { name: "value" } : null;
     /**
      * An attempt's seven end fields are ONE field, `end`, compared as a unit
-     * (`docs/execution-telemetry.md`, "A stored orphan end never overwrites a real end").
+     * (`design/execution-telemetry.md`, "A stored orphan end never overwrites a real end").
      * Two real ends that disagree conflict; so do two orphan ends. One of each never does:
      * the apply rule settles that pair (`attempt-ends.ts`). Everything else on an attempt is
      * written once, at its create.
@@ -1049,7 +1049,7 @@ function record(db: DatabaseSync, conflict: NewConflict): void {
 }
 
 /**
- * The canonical event of a status resolution (`docs/timing-semantics.md`, clarifications): a
+ * The canonical event of a status resolution (`design/timing-semantics.md`, clarifications): a
  * `status_changed` to the chosen value, written at the decision instant on EVERY device the
  * decision reaches — whether or not the row moves there — and naming where the disagreement
  * began (`conflictStartedAt`, the earlier of the two contested writes). The two sides held

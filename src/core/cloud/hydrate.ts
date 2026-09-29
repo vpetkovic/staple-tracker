@@ -1,7 +1,7 @@
 /**
  * Applying a snapshot's entities in an order a database can take them.
  *
- * Contract: `docs/sync.md`, "Bootstrap is a snapshot cutoff plus the ordered tail".
+ * Contract: `design/sync.md`, "Bootstrap is a snapshot cutoff plus the ordered tail".
  *
  * ## The snapshot is ordered for paging, not for applying
  *

@@ -1,8 +1,3 @@
----
-title: Semantics
-description: What an issue is in staple, and what the store guarantees about statuses, kinds, parents, checkout, dependencies, approval gates and documents.
----
-
 # Semantics
 
 What an issue is, and what the store guarantees about it. Every rule here is
@@ -27,7 +22,7 @@ automatically as a side effect of the transition, never by a caller.
 
 Every issue carries a `kind` (`issues.kind`, NOT NULL, default `task`). The
 default is the registered workspace setting `kinds.default` (see
-[configuration.md](configuration.md#the-settings-registry)): `task` until a
+[configuration.md](../docs/configuration.md#the-settings-registry)): `task` until a
 workspace chooses otherwise, and a chosen kind that is later removed resets it.
 Like statuses, the vocabulary is data: it lives in `workspace_kinds` and is edited
 with `staple kinds` or MCP `update_kinds`, so validation asks the workspace what
@@ -42,7 +37,7 @@ and for filtering, and keeping it inert is deliberate — the moment a kind
 implied a rule, adding one would mean adding a rule nobody had tested. The one
 documented exception is the reserved `milestone` kind, which may own dates,
 members and a goal
-([milestones.md](milestones.md#identity-an-issue-of-the-milestone-kind)).
+([milestones.md](../docs/milestones.md#identity-an-issue-of-the-milestone-kind)).
 
 The name is the whole design: **kind is declared, not derived**. A `task` that
 gains children stays a `task`. Surfaces may *suggest* promoting it to an `epic`,
@@ -76,7 +71,7 @@ tree and the board, but can never lift `done` above `in_progress`:
 - list/board rank: `active, review, gated, blocked, ready, unstarted, done, cancelled`
 - inbox pickup: `active, review, ready, unstarted`
 
-The pickup **queue** ([queue.md](queue.md)) sits in front of the inbox order:
+The pickup **queue** ([queue.md](../docs/queue.md)) sits in front of the inbox order:
 a human-ordered plan READY is derived from, with these tiers ordering only what
 the plan does not mention.
 
@@ -108,7 +103,7 @@ transition, in the same transaction as the transition itself — there is no
 window where a child has moved and its epic still says the old thing.
 
 A milestone reads its **members** the same way it reads its children, whatever
-their kind, every rung included ([milestones.md](milestones.md)).
+their kind, every rung included ([milestones.md](../docs/milestones.md)).
 
 The ladder, stated in categories (so it survives any renaming):
 
@@ -172,7 +167,7 @@ contributions** — never both. That one rule is what lets a middle epic nobody
 estimated pass its children's plan up to its parent while a parent's plan and
 its descendants' are never counted twice in one ancestor total. The depth-1
 `childrenEstimatedSeconds` keeps its meaning beside it; the recursive figure is
-`subtreePlan` (see [Estimates vs actuals](cli.md#estimates-vs-actuals)).
+`subtreePlan` (see [Estimates vs actuals](../docs/cli.md#estimates-vs-actuals)).
 
 The automatic close does not replace the summary. `children_complete` still
 fires when the last child lands (before the close, so the wake is never
@@ -225,7 +220,7 @@ counterpart of the graph above: a blocker is work waiting on other *work*, a
 gate is work waiting on a *person*. Any parent with children can be gated, not
 only an epic, and so can a milestone with members, whose gate holds its close
 and queues nothing through membership
-([milestones.md](milestones.md#gating-a-milestone)).
+([milestones.md](../docs/milestones.md#gating-a-milestone)).
 
 `staple gate <ref> --owner <who>` moves the parent to **`awaiting_approval`**
 and **clears its claim** — nobody is working a parked ticket, and leaving
@@ -322,7 +317,7 @@ unrelated facts. The code is non-retryable on purpose: the instruction is not
 "pick a different task right now" but "this one opens when a human opens it".
 `wait` will not call a queued issue ready either. The pickup queue adds a third
 non-retryable code to this family, `out_of_order` (exit 10) — see
-[queue.md](queue.md#policy-advisory-or-strict). (`store-gates.test.ts` —
+[queue.md](../docs/queue.md#policy-advisory-or-strict). (`store-gates.test.ts` —
 *"refuses with code `gated`, naming the gate and its owner"*, *"is not bypassed
 by --steal-if-stale"*, *"still lets the EXISTING holder re-claim after a
 crash"*, *"lets a released child be claimed while its siblings stay queued"*,

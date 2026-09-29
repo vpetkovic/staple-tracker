@@ -127,7 +127,7 @@ describe("the pane cannot drift from the tool", () => {
        */
       "gate",
       "issue",
-      // The orchestrator lane beside `attempts` (docs/timing-semantics.md), in lockstep too.
+      // The orchestrator lane beside `attempts` (design/timing-semantics.md), in lockstep too.
       "orchestration",
       // The certified plan of a parent, in lockstep with get_task.
       "planSummary",

@@ -1,7 +1,7 @@
 /**
  * `staple attempt …` and the attempt flags on `checkout`, `status`, `done` and `release`.
  *
- * Contract: `docs/execution-telemetry.md`, "Surfaces". Every verb here is one store
+ * Contract: `design/execution-telemetry.md`, "Surfaces". Every verb here is one store
  * method (`WorkspaceStore.recordAttemptEvent`, `reconstructAttemptHistory`), called by the
  * CLI, the MCP tool and the HTTP route alike, so the surfaces cannot drift. The read
  * surfaces (`staple attempts`, `staple attempt <id>`) are in `attempts.ts`; this file only
@@ -50,7 +50,7 @@ export function attemptOptionsFrom(values: Record<string, unknown>): AttemptOpti
 
 /**
  * A checkout, a steal, a re-claim, a status write and a release always act on the WORKER lane,
- * and refuse a role rather than drop it (`docs/timing-semantics.md`, "Orchestration"): an
+ * and refuse a role rather than drop it (`design/timing-semantics.md`, "Orchestration"): an
  * orchestrator that takes a leaf is working it. No environment variable sets a role either.
  */
 export function refuseRole(role: string | undefined): void {

@@ -47,7 +47,7 @@ export interface StapleConfig {
   setupComplete: boolean;
   connectors: Record<string, ConnectorReceipt>;
   /**
-   * Budget capture and its source bindings (docs/execution-telemetry.md). A structured
+   * Budget capture and its source bindings (design/execution-telemetry.md). A structured
    * field like `connectors`, validated by `core/telemetry/config.ts`, because a list of
    * bindings is not a shape the settings registry has. Off, with no bindings, by default.
    */

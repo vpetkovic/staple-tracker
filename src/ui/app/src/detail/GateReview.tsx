@@ -103,7 +103,7 @@ import type { GateQueueEntry, IssueGate } from "@/lib/types";
  * So the action is named for what it does to the ticket — it sends it back — and the
  * three consequences are printed above the box rather than discovered afterwards. The
  * SAME sentence is the CLI's `request-changes --help`, the MCP `request_changes`
- * description and the paragraph in docs/semantics.md. One wording, four surfaces: if the
+ * description and the paragraph in design/semantics.md. One wording, four surfaces: if the
  * behaviour ever changes, the grep that finds one finds them all.
  *
  * The COMMAND is still `request-changes` / `request_changes`. Renaming a shipped verb to

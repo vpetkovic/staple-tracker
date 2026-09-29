@@ -4,7 +4,7 @@ import type { Migration } from "../types.js";
 /**
  * Hub version 7: the presence index records each attempt's lane (`role`), so the
  * concurrency context can report how many open attempts on this machine are workers and
- * how many are orchestrators (`docs/timing-semantics.md`, "The orchestrator lane").
+ * how many are orchestrators (`design/timing-semantics.md`, "The orchestrator lane").
  *
  * Both lanes still count toward the totals, because both spend provider budget; the split
  * is reported beside them. Rows written before this migration are all workers, which is

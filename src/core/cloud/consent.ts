@@ -1,7 +1,7 @@
 /**
  * How preview-then-consent survives an HTTP boundary.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"**Connect shows before it
+ * Contract: `design/sync.md`, "Three consents" — *"**Connect shows before it
  * asks.** It prints the endpoint, the `repositoryId` and the account it is about
  * to bind, and performs **no remote mutation** before the answer."*
  *

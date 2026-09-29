@@ -1,5 +1,5 @@
 /**
- * Codex CLI rollout files (docs/execution-telemetry.md, "Codex rollout rules").
+ * Codex CLI rollout files (design/execution-telemetry.md, "Codex rollout rules").
  *
  * A rollout is `~/.codex/sessions/YYYY/MM/DD/rollout-<stamp>-<id>.jsonl`. Ingestion reads
  * only the first `session_meta` line's session id, fork marker, CLI version and outer

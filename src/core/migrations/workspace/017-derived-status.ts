@@ -3,7 +3,7 @@ import type { Migration } from "../types.js";
 
 /**
  * Version 17: who owns a parent's status, stored where every device can read it
- * (`docs/semantics.md`, "A parent's status is derived from its children").
+ * (`design/semantics.md`, "A parent's status is derived from its children").
  *
  * ## The column
  *

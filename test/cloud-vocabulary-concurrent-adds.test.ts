@@ -3,7 +3,7 @@
  * log's: every device, the two writers included, and a fresh one hold the entries in the order
  * their creates reached the log. The device whose create landed second used to keep its entry
  * where it had put it, ahead of the other's, for good — a locally chosen place surviving the
- * acknowledgement (`docs/sync.md`, "Vocabulary order").
+ * acknowledgement (`design/sync.md`, "Vocabulary order").
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";

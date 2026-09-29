@@ -67,7 +67,7 @@ import { pendingCount, readSyncState } from "./sync-state.js";
 /**
  * What a surface may OFFER, as distinct from what it observes.
  *
- * `docs/sync.md`'s "Three consents" table is organised around this: before
+ * `design/sync.md`'s "Three consents" table is organised around this: before
  * connect a surface may show static text and nothing else; connected-manual it
  * may offer a sync action; automatic it may additionally report background
  * activity. `state` has six values because it also carries reachability, and a
@@ -171,7 +171,7 @@ export interface CloudSurfaceReport {
   /** Present only when there is something to do about it. */
   failure: CloudFailure | null;
   /**
-   * The ONE static hint, and only where `docs/sync.md` permits one: *"Before
+   * The ONE static hint, and only where `design/sync.md` permits one: *"Before
    * connect — render 'not connected' and a static hint naming `staple cloud
    * connect`. Static text."* Null in every other state, so a connected
    * repository can never be nagged to connect and a UI can render this field
@@ -193,7 +193,7 @@ function modeOf(status: CloudStatus): CloudMode {
  * `manual` and `automatic` are working states and produce null. `disconnected`
  * also produces null: not being connected is the DEFAULT and the entire point of
  * the epic's first invariant, and reporting the product's normal resting state
- * as a failure is how a status widget turns into the nag `docs/sync.md` forbids.
+ * as a failure is how a status widget turns into the nag `design/sync.md` forbids.
  * The static `hint` covers it instead.
  */
 function failureOf(state: CloudState): CloudFailure | null {

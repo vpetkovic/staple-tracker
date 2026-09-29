@@ -1,6 +1,6 @@
 /**
  * An issue two devices put in two different milestones offline is in the one the log wrote last,
- * on every device and a fresh one (`docs/sync.md`, "A hydrating device applies competing claims in log order").
+ * on every device and a fresh one (`design/sync.md`, "A hydrating device applies competing claims in log order").
  *
  * An issue is in one milestone at most. Each device's add is a whole membership of its own
  * milestone, so the log holds both lists naming the issue. A device reading the tail applies them

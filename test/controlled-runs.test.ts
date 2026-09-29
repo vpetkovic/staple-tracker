@@ -1,5 +1,5 @@
 /**
- * Controlled runs (`docs/timing-semantics.md`, "Controlled runs"): every timeline in
+ * Controlled runs (`design/timing-semantics.md`, "Controlled runs"): every timeline in
  * `test/fixtures/controlled-runs/` replayed through the real store, journal, attempt ledger
  * and sync engine with the write clock installed, and every figure it states compared within
  * the spec's tolerance. `npm run validate:timing` runs this file alone.

@@ -872,7 +872,7 @@ export class WorkspaceStore {
     /**
      * A mutating command begins by writing down the end of any attempt this device opened
      * that the read-time rule now closes (`AttemptLedger.writeOrphanEnds`,
-     * `docs/execution-telemetry.md`): at the start of the command, in a scope of its own, so
+     * `design/execution-telemetry.md`): at the start of the command, in a scope of its own, so
      * a read never writes to the journal and a refused mutation does not take it back.
      */
     if (this.attempts().mayOweOrphanEnds()) this.journal.run(() => this.attempts().writeOrphanEnds());
@@ -951,7 +951,7 @@ export class WorkspaceStore {
   /**
    * `staple attempt open <ref> --role orchestrator` and MCP `record_attempt_event` with
    * `event: "open"`: an orchestrator attempt on the issue being coordinated
-   * (`docs/timing-semantics.md`, "The orchestrator lane"). The only way an attempt gets
+   * (`design/timing-semantics.md`, "The orchestrator lane"). The only way an attempt gets
    * `role: orchestrator`, and an exception to "no caller writes an attempt directly". It
    * changes neither the issue's status nor its claim. Refused for any other role: a worker
    * attempt opens with a checkout or a status write, never by hand.
@@ -1002,7 +1002,7 @@ export class WorkspaceStore {
 
   /**
    * `orchestration: {current, count}` on `show`/`get_task`, beside `attempts`
-   * (`docs/timing-semantics.md`, "The orchestrator lane"): the orchestrator lane of this
+   * (`design/timing-semantics.md`, "The orchestrator lane"): the orchestrator lane of this
    * issue, read with that lane's own clauses — the newest effectively open orchestrator
    * attempt, and how many there are. A pure read.
    */
@@ -2573,7 +2573,7 @@ export class WorkspaceStore {
       /**
        * Every edge-writing path says what the blocker set became (`blockers_changed`, the
        * full set), so the elapsed partition's `blocked` bucket never has to fall back to
-       * `relations.created_at` (`docs/timing-semantics.md`, "Dependency edge history"): the
+       * `relations.created_at` (`design/timing-semantics.md`, "Dependency edge history"): the
        * new issue's own set, and the parent's when this child blocks it until done.
        */
       if (blockerRows.length > 0) this.emitBlockerSet(id, input.createdBy ?? null);
@@ -2590,7 +2590,7 @@ export class WorkspaceStore {
        * declared blockers had not arrived.
        *
        * The payload is the contract's `issues` field inventory
-       * (`docs/sync.md`, "What synchronizes"), and it has to be. A create is the
+       * (`design/sync.md`, "What synchronizes"), and it has to be. A create is the
        * only operation that will ever carry these columns: nothing journals an
        * update for a field that was set once at birth and never touched again, so
        * a field missing here is a field that never reaches another device at all.
@@ -2606,7 +2606,7 @@ export class WorkspaceStore {
        *                            optimistic-concurrency token, carried by the
        *                            operations that move status
        *   checkout_agent/_at     — never a plain field write. They are the
-       *                            projection of a lease (docs/sync.md, "Claims")
+       *                            projection of a lease (design/sync.md, "Claims")
        *   blocked_transition_at  — null at create; every transition into or out of
        *                            a blocked status journals it
        *   completed_at,          — null at create by construction; the status
@@ -2775,7 +2775,7 @@ export class WorkspaceStore {
       /**
        * Only the edges that leave are deleted, and only the ones that arrive inserted: an edge
        * the new set keeps keeps its `created_at`, which the edge history reads as a lower bound
-       * on how long it has existed (`docs/timing-semantics.md`, "Dependency edge history").
+       * on how long it has existed (`design/timing-semantics.md`, "Dependency edge history").
        */
       const keep = new Set(deduped.map((b) => b.id));
       const held = this.db
@@ -4649,7 +4649,7 @@ export class WorkspaceStore {
 
       /**
        * The estimate has no history of its own — it is overwritten in place — so a change says
-       * what it was and what it became (`docs/execution-telemetry.md`, "The estimate reading").
+       * what it was and what it became (`design/execution-telemetry.md`, "The estimate reading").
        */
       if (patch.estimatedSeconds !== undefined && (next.estimated_seconds ?? null) !== (row.estimated_seconds ?? null)) {
         this.emitEvent({
@@ -4970,7 +4970,7 @@ export class WorkspaceStore {
     events: readonly { kind: string; createdAt: string; payload: Record<string, unknown> }[],
     clampAt: string,
     /**
-     * The read instant. An OPEN review interval ends here (Q3 of `docs/timing-semantics.md`):
+     * The read instant. An OPEN review interval ends here (Q3 of `design/timing-semantics.md`):
      * review is a queue, and a queue's clock does not stop because nobody writes.
      */
     asOf: string = clampAt,
@@ -5203,7 +5203,7 @@ export class WorkspaceStore {
   timingFor(
     issueIds: string[],
     /**
-     * The read instant every derivation is measured at (`docs/timing-semantics.md`: `asOf` is a
+     * The read instant every derivation is measured at (`design/timing-semantics.md`: `asOf` is a
      * parameter). Surfaces pass nothing and get the clock; a fixture passes an explicit instant.
      */
     asOf: string = nowIso(),
@@ -5477,7 +5477,7 @@ export class WorkspaceStore {
   }
 
   /**
-   * The effort and elapsed fields of one issue's timing (`docs/timing-semantics.md`), from its
+   * The effort and elapsed fields of one issue's timing (`design/timing-semantics.md`), from its
    * own replay, its attempts and its children's already-final timings.
    */
   private telemetryOf(
@@ -5665,7 +5665,7 @@ export class WorkspaceStore {
   }
 
   /**
-   * When an issue had an unresolved blocker (`docs/timing-semantics.md`, "Dependency edge
+   * When an issue had an unresolved blocker (`design/timing-semantics.md`, "Dependency edge
    * history"), as half-open intervals in milliseconds. The sources, in order of authority:
    * the issue's `blockers_changed` events (each the whole set after the change); for an edge
    * none of them explains, its `relations.created_at` onwards (and that time is reported
@@ -5972,7 +5972,7 @@ export class WorkspaceStore {
   /**
    * `staple calibrate` / MCP `calibration_cohorts` / `GET /api/calibration`: calibration cohorts
    * over the trusted samples of a filtered population (`telemetry/calibration.ts`,
-   * docs/timing-semantics.md "Calibration cohorts"). The population is the ratio population
+   * design/timing-semantics.md "Calibration cohorts"). The population is the ratio population
    * of {@link timingQuality}; the `exact` set is always read, and `include: ["reconstructed"]`
    * adds the reconstructed set beside it, never pooled. Lists cohorts (default) or samples,
    * bounded and keyset-cursored. A pure read.
@@ -6126,7 +6126,7 @@ export class WorkspaceStore {
    * an issue (its remaining labor and the longest dependency chain of remaining work over the
    * certified plan's units, from each unit's calibrated duration, with resampled bands) and,
    * apart from it, the budget forecast of that work against this machine's provider limits
-   * (`telemetry/forecast.ts`, `telemetry/forecast-budget.ts`, docs/timing-semantics.md
+   * (`telemetry/forecast.ts`, `telemetry/forecast-budget.ts`, design/timing-semantics.md
    * "Forecasts"). A pure read.
    */
   forecast(query: ForecastQuery, asOf: string = nowIso(), home: string = stapleHome()): ForecastReport {
@@ -6396,7 +6396,7 @@ export class WorkspaceStore {
 
   /**
    * The populations every analytics read counts over (`timingQuality`, `calibration`;
-   * docs/timing-semantics.md, "Cohort coverage"): the issues in the filter (milestones never),
+   * design/timing-semantics.md, "Cohort coverage"): the issues in the filter (milestones never),
    * the ELIGIBLE leaves (resolved `done`), and the parents that are ratio data points (done,
    * their own estimate above 0, no live estimated descendant). The ratio population is those
    * parents plus the eligible leaves with their own estimate. `notEligible` says why the rest

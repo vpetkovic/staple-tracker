@@ -1,5 +1,5 @@
 /**
- * Budget forecasts (docs/timing-semantics.md, "Forecasts"): per provider account and limit,
+ * Budget forecasts (design/timing-semantics.md, "Forecasts"): per provider account and limit,
  * what is left of the current window, how fast it is going, when it runs out, and what a piece
  * of work would do to it through the reset and the windows after. Kept apart from the
  * completion forecast on purpose: one says how much work is left, this one says what that work

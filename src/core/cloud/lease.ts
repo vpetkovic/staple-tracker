@@ -1,7 +1,7 @@
 /**
  * Fenced server leases — the client half, and the checkout/release integration.
  *
- * Contract: `docs/sync.md`, "Claims: a local checkout is not a global lease".
+ * Contract: `design/sync.md`, "Claims: a local checkout is not a global lease".
  * The server half is `worker/src/leases.ts` and it is not re-litigated here: it
  * allocates the monotonic token, it owns the expiry, and it decides every
  * question of legitimacy in one SQL predicate. This module's whole job is to

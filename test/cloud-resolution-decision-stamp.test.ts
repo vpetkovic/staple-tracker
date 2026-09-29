@@ -1,5 +1,5 @@
 /**
- * A decision stamps the entity it decides with the decision's time on every device (`docs/sync.md`,
+ * A decision stamps the entity it decides with the decision's time on every device (`design/sync.md`,
  * "Conflicts are preserved, never resolved silently").
  *
  * The resolving write carried `updatedAt`; the decision that closes the record on every other

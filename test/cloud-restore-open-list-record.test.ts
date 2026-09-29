@@ -1,6 +1,6 @@
 /**
  * A record about a list, open across a restore that removed an issue one side of it names, can
- * still be resolved either way (`docs/sync.md`, "A restore rewinds").
+ * still be resolved either way (`design/sync.md`, "A restore rewinds").
  *
  * The rewind removes an issue pushed after the backup, and closes the records about it. A record
  * about the plan or a milestone's members is about the list, not the issue, so it stayed open with

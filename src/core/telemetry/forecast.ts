@@ -1,5 +1,5 @@
 /**
- * Completion forecasts (docs/timing-semantics.md, "Forecasts"): how much work is left on an
+ * Completion forecasts (design/timing-semantics.md, "Forecasts"): how much work is left on an
  * issue or a subtree, and how long its dependency chain still runs, from the calibrated
  * duration of each plan unit. `staple forecast` / MCP `forecast` / `GET /api/forecast`, one
  * store method; this module is pure, and the store hands it the rows.

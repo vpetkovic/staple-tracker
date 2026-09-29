@@ -1,5 +1,5 @@
 /**
- * Confidence ranges (`docs/timing-semantics.md`, "Confidence ranges"): lower quantiles, the
+ * Confidence ranges (`design/timing-semantics.md`, "Confidence ranges"): lower quantiles, the
  * order-statistic intervals and prediction bounds with the confidence each reaches, the
  * heavy-tail test and the fence-clipped expected ratio, timing floors kept apart, the warnings,
  * and duration forecasts.

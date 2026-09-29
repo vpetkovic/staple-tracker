@@ -1,5 +1,5 @@
 /**
- * Timing across devices (`docs/timing-semantics.md`, "Multi-device"): `workSeconds` and
+ * Timing across devices (`design/timing-semantics.md`, "Multi-device"): `workSeconds` and
  * `orchestrationSeconds` read the same on every device, a freshly hydrated one included, and
  * do not move when a stored end arrives; status-moving and edge events are re-emitted on apply,
  * dated at the origin, so `wall` is the same on a device that read the tail.

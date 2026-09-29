@@ -2,7 +2,7 @@
  * The attempt write surfaces, driven as an agent drives them: `staple attempt …` and the
  * attempt flags on `checkout`, `status`, `done` and `release` as real child processes, and
  * MCP `record_attempt_event` over a real MCP connection, against one scratch staple home
- * (`docs/execution-telemetry.md`, "Surfaces").
+ * (`design/execution-telemetry.md`, "Surfaces").
  *
  *   - Every write returns its payload unchanged, plus `attempt`.
  *   - CLI `--json` and MCP answer the same shape, because both call `recordAttemptEvent`.

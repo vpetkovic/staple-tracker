@@ -1,5 +1,5 @@
 /**
- * Every synchronized value a device holds is a function of the log (`docs/sync.md`, "The
+ * Every synchronized value a device holds is a function of the log (`design/sync.md`, "The
  * support boundary"): the devices that wrote, a device that joined late and a fresh device hold
  * the same, column for column — vocabulary entries added concurrently, issues numbered alike
  * offline with a settlement lost on the way, documents put concurrently, milestones, and restores

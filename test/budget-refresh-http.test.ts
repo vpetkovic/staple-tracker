@@ -1,5 +1,5 @@
 /**
- * The surfaces of live polling (docs/execution-telemetry.md, "Live polling"):
+ * The surfaces of live polling (design/execution-telemetry.md, "Live polling"):
  *
  *   - the UI server's Refresh (`POST /api/budget/collection/refresh`), the one write the
  *     server accepts from a foreign Origin (the phone on the tailnet), while every other

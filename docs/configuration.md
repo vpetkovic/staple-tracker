@@ -259,7 +259,7 @@ bytes, never half of each.
 
 `telemetry` holds the machine's consent to read provider usage from a harness
 and the account each harness home spends from
-([execution-telemetry.md](execution-telemetry.md#source-bindings-produce-the-account)).
+([execution-telemetry.md](../design/execution-telemetry.md#source-bindings-produce-the-account)).
 It is a structured field like `connectors`, not a registered setting, because
 a list of bindings is not a shape the settings registry has.
 
@@ -324,7 +324,7 @@ staple budget bindings
 
 Or all of it, plus the status-line wrapper and the Codex watcher, as one
 explicit consent
-([execution-telemetry.md](execution-telemetry.md#automatic-collection)):
+([execution-telemetry.md](../design/execution-telemetry.md#automatic-collection)):
 
 ```bash
 staple budget setup --claude-account personal-max --codex-account codex-plus        # the plan; changes nothing

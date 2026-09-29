@@ -1,5 +1,5 @@
 /**
- * Removing budget readings (docs/execution-telemetry.md, "Removing a reading"): the one
+ * Removing budget readings (design/execution-telemetry.md, "Removing a reading"): the one
  * method `staple budget forget`, the MCP tool `forget_budget_samples` and `POST
  * /api/budget/forget` call, so the three cannot answer differently.
  *

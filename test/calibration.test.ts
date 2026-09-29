@@ -1,5 +1,5 @@
 /**
- * Calibration cohorts (`docs/timing-semantics.md`, "Calibration cohorts"): trusted samples by
+ * Calibration cohorts (`design/timing-semantics.md`, "Calibration cohorts"): trusted samples by
  * default, reconstructed history only as its own set, the dimensions, the fallback to broader
  * classes, coverage with a named denominator, the estimate a sample divides by, and a snapshot
  * identity that follows the data and nothing else.

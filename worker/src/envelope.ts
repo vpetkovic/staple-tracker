@@ -12,7 +12,7 @@ import { SyncError } from "./errors.js";
 import { MAX_OP_BYTES, PROTOCOL_MAX, PROTOCOL_MIN } from "./limits.js";
 
 /**
- * The vocabulary from docs/sync.md, PER PROTOCOL VERSION.
+ * The vocabulary from design/sync.md, PER PROTOCOL VERSION.
  *
  * This used to be one set with the comment *"additive within a protocol version"*.
  * That claim came from the contract, and the contract was wrong about entities. It
@@ -69,7 +69,7 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
    */
   [2, new Set(["registration", "crossLink"])],
   /**
-   * Execution attempts (`docs/execution-telemetry.md`). `attempt` is keyed by the attempt's
+   * Execution attempts (`design/execution-telemetry.md`). `attempt` is keyed by the attempt's
    * UUID with `create` and `update`; `attemptTransition` by the transition's UUID, `create`
    * only and immutable once written, like `documentRevision`. A new entity kind is a
    * protocol change: a client below 3 is refused a page or a fold that holds one.
@@ -281,7 +281,7 @@ export function validateEnvelope(
 
   /**
    * An attempt is created and then updated, and a transition is created and never touched
-   * again (`docs/execution-telemetry.md`, "Where it lives"). Refused here rather than merely
+   * again (`design/execution-telemetry.md`, "Where it lives"). Refused here rather than merely
    * not emitted, for the reason the registry's `delete` is: the client is not the only thing
    * that can push, and a tombstone or an edit on an immutable record would fold into state no
    * emitter can produce.

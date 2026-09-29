@@ -1,7 +1,7 @@
 /**
  * Backups, restore and purge — disaster recovery, which is not convergence.
  *
- * Contract: `docs/sync.md`, "Backup, disconnect and purge are three different things".
+ * Contract: `design/sync.md`, "Backup, disconnect and purge are three different things".
  *
  * ## The three things, kept apart on purpose
  *
@@ -134,7 +134,7 @@ async function readRepo(env: Env, repoId: string): Promise<RepoRow> {
 /**
  * The server-side half of the third consent.
  *
- * `docs/sync.md` grants backup with "`sync.backup = true` in machine config, plus a
+ * `design/sync.md` grants backup with "`sync.backup = true` in machine config, plus a
  * server-side flag", and BOTH halves are required. The machine-local half cannot
  * stand alone: it is a file on the device, so a device that merely holds a valid
  * credential could create and delete backups because its own config said it could.
@@ -179,7 +179,7 @@ function newId(): string {
 /**
  * PUT /v1/repos/{repoId}/backup — set the server-side backup flag.
  *
- * ADDITIVE to the route table in `docs/sync.md`. The contract names the flag but no
+ * ADDITIVE to the route table in `design/sync.md`. The contract names the flag but no
  * route that writes it, and a consent that only exists in a file on the device is not
  * the two-sided consent the contract describes. Body: `{ "enabled": true|false }`.
  *

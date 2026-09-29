@@ -13,7 +13,7 @@
  *
  * ## The default is still to render nothing
  *
- * `docs/sync.md`: *"Before connect — render 'not connected' and a static hint naming
+ * `design/sync.md`: *"Before connect — render 'not connected' and a static hint naming
  * `staple cloud connect`. Static text. No probe, no reachability check, no 'we noticed you
  * might want to connect'. **The UI does not prompt.**"* A disconnected workspace, a status
  * that has not arrived, and a workspace with no sync identity all render the empty string

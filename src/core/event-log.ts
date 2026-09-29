@@ -6,7 +6,7 @@
  * `INSERT INTO events`. Three of the four hardcoded `NULL` for `dedup_key`, so
  * three quarters of the event table had no dedup token at all.
  *
- * That was survivable while nothing retried. `docs/sync.md` makes applying a
+ * That was survivable while nothing retried. `design/sync.md` makes applying a
  * pulled operation re-emit the same local event rather than transporting the
  * `events` rows — the audit trail converges in content while each device keeps
  * its own monotonic `seq`. Re-derivation plus the `sync_applied` ledger already

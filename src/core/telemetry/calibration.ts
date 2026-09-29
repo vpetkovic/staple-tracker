@@ -1,6 +1,6 @@
 /**
  * Calibration cohorts: how long work of a given class takes against its estimate, from the
- * samples that can be trusted (docs/timing-semantics.md, "Calibration cohorts").
+ * samples that can be trusted (design/timing-semantics.md, "Calibration cohorts").
  * `staple calibrate` / MCP `calibration_cohorts` / `GET /api/calibration`, one store method.
  *
  * ## Samples

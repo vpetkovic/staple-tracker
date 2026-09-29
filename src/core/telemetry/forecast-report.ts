@@ -1,6 +1,6 @@
 /**
  * The forecast report: one issue's completion forecast and its budget forecast, side by side
- * and never blended (docs/timing-semantics.md, "Forecasts"). `staple forecast` / MCP
+ * and never blended (design/timing-semantics.md, "Forecasts"). `staple forecast` / MCP
  * `forecast` / `GET /api/forecast` all return this shape from `WorkspaceStore.forecast`.
  */
 import { MIN_COHORT_SAMPLES } from "./calibration.js";

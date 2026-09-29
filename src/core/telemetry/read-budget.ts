@@ -1,5 +1,5 @@
 /**
- * The budget read surfaces (docs/execution-telemetry.md, "Surfaces", "Regressions within a
+ * The budget read surfaces (design/execution-telemetry.md, "Surfaces", "Regressions within a
  * window", "Linking samples to attempts", "Missingness"): `staple budget` / `get_budget`,
  * `staple budget history` / `list_budget_samples`, and the burn `get_attempt` reports.
  *
@@ -53,7 +53,7 @@ import {
   type Quality,
 } from "./quality.js";
 
-/** A budget record's one quality state (docs/timing-semantics.md, "Quality states"). */
+/** A budget record's one quality state (design/timing-semantics.md, "Quality states"). */
 export type BudgetQuality = Quality<BudgetState>;
 
 /** A stored sample as every read returns it: with the quality state of its reading. */

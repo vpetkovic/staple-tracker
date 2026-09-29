@@ -163,7 +163,7 @@ export const CLI_EXIT_CODES: Record<string, number> = {
   timeout: 8,
   gated: 9,
   out_of_order: 10,
-  // The cloud sync taxonomy (STA-251), in docs/sync.md's table order. The three
+  // The cloud sync taxonomy (STA-251), in design/sync.md's table order. The three
   // retryable codes are adjacent, 19-21, and a shell tests for exactly those three for
   // "try again later".
   auth: 11,

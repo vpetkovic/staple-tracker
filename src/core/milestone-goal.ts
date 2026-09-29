@@ -249,7 +249,7 @@ export function goalPace(input: {
   return { targetDate: target, daysToTarget, leaves, laborSeconds, remainingSeconds, partial, unplannedRefs, verdict, message };
 }
 
-// ---------- a mark on the wire (docs/sync.md; `cloud/apply.ts`) ----------
+// ---------- a mark on the wire (design/sync.md; `cloud/apply.ts`) ----------
 
 /**
  * A mark replicates as ONE field of the milestone entity, keyed by the criterion's position:

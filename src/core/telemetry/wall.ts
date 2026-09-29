@@ -1,5 +1,5 @@
 /**
- * The elapsed partition of one issue: `wall` and its buckets (`docs/timing-semantics.md`,
+ * The elapsed partition of one issue: `wall` and its buckets (`design/timing-semantics.md`,
  * "The elapsed partition of one issue" and "Boundary rules").
  *
  * Every millisecond of `[startAt, endAt or through)` falls into exactly one bucket, chosen by
@@ -115,7 +115,7 @@ export function partition(input: WallInput): Wall | null {
     .sort((a, b) => a.from - b.from);
   /**
    * A chain link whose resumer starts more than the snap window before the end it resumes: two
-   * devices' clocks disagree (`docs/timing-semantics.md`, "Clocks", comparison 2). The gap
+   * devices' clocks disagree (`design/timing-semantics.md`, "Clocks", comparison 2). The gap
    * between them is an inverted interval, counted as 0, so the partition is off by that much
    * and says so.
    */

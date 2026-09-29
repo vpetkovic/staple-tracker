@@ -1,78 +1,9 @@
 ---
-title: Agents
-description: The working protocol that staple init writes for agents, and the MCP tools an agent harness works a tracker through.
+title: MCP tools
+description: The MCP tools an agent harness works a staple tracker through.
 ---
 
-# Agents
-
-## The protocol `init` writes
-
-A repo-local `staple init` also writes **`.staple/AGENTS.md`** — the working
-protocol, rendered with that workspace's own slug and identifier prefix, so the
-next harness to arrive learns it from the repository instead of from whoever
-briefed the last one.
-
-It covers:
-
-- the loop (below);
-- the **identity rule** — act under the identity you claimed with, all session,
-  or your own writes stop counting as liveness;
-- **parents close themselves** — an epic's status follows its children, so the
-  last child to land closes it (see [semantics.md](semantics.md)). Nobody has to
-  remember to close an epic; what is still owed is the **summary comment**, and
-  an explicit `staple done <epic>` remains allowed, idempotent, and immune to
-  the derivation afterwards;
-- the **worklog convention** — `Done` / `Next` / `Files touched`, revised at
-  every milestone. A checkpoint written *before* the interruption is the
-  handoff; one written at the end never survives a kill;
-- the branch pointer to comment at checkout;
-- the **pickup queue rule** — plan order versus effective order, and the three
-  non-retryable refusals (below);
-- **approval gates** — how a design-first ticket ends (`staple gate <ref>
-  --owner <who>`, not a held claim), that the inbox's QUEUED section is never
-  pickable, and that checkout of it is refused with `gated`;
-- the continuity rules in [continuity.md](continuity.md);
-- **the vocabulary is the workspace's** — read the statuses and kinds
-  (`staple statuses ls`, `staple kinds ls`, MCP `list_statuses` / `list_kinds`)
-  rather than assuming them, remember that all behaviour keys off the status
-  category, and edit the vocabulary only when a human asks;
-- **attempts and lanes** — yield (`release`) or pause (`staple attempt pause
-  <ref> --reason awaiting_input`) when a blocker appears mid-work, so the wait
-  reads as `blocked` or `paused` rather than as work; and how an orchestrator
-  coordinates without claiming: `staple attempt open <epic> --role orchestrator`
-  at the start of a coordination session, `staple attempt end <epic> --role
-  orchestrator` at handoff (MCP `record_attempt_event` with `event: "open"` /
-  `"end"` and `role: "orchestrator"`). That time is `orchestrationSeconds`, never `workSeconds`
-  ([timing-semantics.md](timing-semantics.md#the-orchestrator-lane));
-- **autopilot runs** ([runs.md](runs.md)) — after every ticket, ask
-  `staple run continue --json` (MCP `continue_run`) and do what it answers:
-  `take` (the ticket is already checked out to you), `wait` or `stop`. The
-  three ways a run is worked (the `staple run drive` driver, a stop hook, or
-  the agent calling `run continue` itself), and the rules that hold for all
-  three: finish before you ask, record a `review:` comment before you hand a
-  ticket on, never merge or push to master or main, and stop when told to;
-- the **wiring** — `claude mcp add staple … -- staple mcp` and the MCP tools
-  that mirror the loop.
-
-An existing `AGENTS.md` is **never overwritten** — `init` says it kept it.
-`--global` workspaces get no guide: the file exists to be found in a repo, and
-`~/.staple/workspaces/` is not one. The MCP `init` tool behaves identically and
-returns `guidePath` / `guideWritten`.
-
-Source: `src/core/agents-template.ts`.
-
-It also teaches **the pickup queue rule** ([queue.md](queue.md)), which is the
-part an agent is most likely to get wrong because every symptom of getting it
-wrong looks like a transient failure: READY is the effective queue rather than a
-presentation sort it may re-rank; a queued epic or milestone stands for its open
-leaf work and is never a checkout target; `staple queue next` answers before you
-claim; and `conflict` (exit 4), `gated` (exit 9) and `out_of_order` (exit 10)
-each mean STOP and take what the refusal names — retrying, waiting and
-`--steal-if-stale` clear none of the three. The guide also tells an agent not to
-reorder the plan and not to send `--override`: both work for it, both record it
-as the actor, and both are a human's decision.
-
-## The MCP surface
+# MCP tools
 
 ```bash
 claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
@@ -103,10 +34,10 @@ Every tool, by area:
 | Vocabulary and settings | `list_statuses`, `list_kinds`, `update_statuses`, `update_kinds`, `get_setting`, `set_setting` |
 | Plans and forecasts | `compare_plans`, `timing_quality`, `calibration_cohorts`, `forecast` |
 | Execution telemetry and budget | `list_attempts`, `get_attempt`, `get_budget`, `list_budget_samples`, `record_budget_sample`, `forget_budget_samples` |
-| Cloud sync ([sync.md](sync.md)) | `cloud_status`, `conflict_list`, `conflict_resolve` |
+| Cloud sync ([cloud-sync.md](cloud-sync.md)) | `cloud_status`, `conflict_list`, `conflict_resolve` |
 | Workspaces and the hub | `init`, `hub_overview`, `cross_link`, `cross_unlink`, `hub_unregister`, `hub_prune` |
 
-### Changing an estimate
+## Changing an estimate
 
 **`set_estimate`** `{ref, estimate_seconds}` changes only the estimate. You do
 not restate the status, and you do not need the claim: like a status write, any
@@ -123,7 +54,7 @@ the UI server's `estimate` action ([cli.md](cli.md#changing-an-estimate-staple-e
 `update_task`'s `estimate_seconds` still works, but `set_estimate` is the form
 to use.
 
-### The milestone tools
+## The milestone tools
 
 Nine tools over dated, human-ordered plans ([milestones.md](milestones.md)),
 usable only in a workspace whose vocabulary has the reserved `milestone` kind —
@@ -166,7 +97,7 @@ addedAt, note}], next, goal: {criteria, counts, met, pace}}`.
   order stands. Adding a present member with no position is a replay
   (`replayed: true`, no event); with a position it is a move.
 
-### The gate verbs
+## The gate verbs
 
 Three write tools park work on a human and release it again. All three take
 `ref` plus the usual `actor` / `ws`, and all three return the **parent issue
@@ -227,7 +158,7 @@ The UI server's read routes mirror this exactly, and `/api/agent-context` is
 expression-for-expression identical to `get_task`, so the agent-view pane below
 shows the gate the agent will actually receive.
 
-### The queue tools
+## The queue tools
 
 Seven tools over the pickup plan ([queue.md](queue.md)) — an explicit,
 human-ordered sequence of what to take next, separate from status, priority and
@@ -286,7 +217,7 @@ away.
 the effective queue: every entry carries its `position`, and a row the plan
 reaches carries `planPosition` too.
 
-### Workspace settings
+## Workspace settings
 
 Two tools read and write the registered workspace settings
 ([configuration.md](configuration.md#the-settings-registry)). **`get_setting`**
@@ -303,10 +234,10 @@ human asked. Both tools answer the exact object `staple settings get --json`
 prints and `/api/settings` serves under `values`, so no surface disagrees
 about a value or where it came from.
 
-### Execution telemetry
+## Execution telemetry
 
 Four read-only tools over what execution cost
-([execution-telemetry.md](execution-telemetry.md#surfaces)). Each answers the
+([execution-telemetry.md](../design/execution-telemetry.md#surfaces)). Each answers the
 object the matching CLI command prints with `--json`, because both call one
 method:
 
@@ -362,12 +293,12 @@ An agent that finds `get_budget` empty can read `staple budget status --json`
 (capture, each source's newest reading, and `problems` with codes such as
 `capture_off`, `statusline_not_installed`, `watcher_stale`) and tell the operator
 what is missing, and must not work around it
-([execution-telemetry.md](execution-telemetry.md#automatic-collection)).
+([execution-telemetry.md](../design/execution-telemetry.md#automatic-collection)).
 
 Removing a wrong reading is the operator's decision too.
 `forget_budget_samples {ids, confirm?}` calls the same method as
 `staple budget forget` and `POST /api/budget/forget`
-([execution-telemetry.md](execution-telemetry.md#removing-a-reading)). Without
+([execution-telemetry.md](../design/execution-telemetry.md#removing-a-reading)). Without
 `confirm: true` it only returns the preview (`applied: false`): each reading
 and its window, what the window becomes, and each limit's current window and
 reading before and after. Show that preview to the operator, and send
@@ -378,7 +309,7 @@ ambiguous one with `validation`. Either way nothing is removed. If the audit
 line cannot be written, the removal still stands and `warnings` says so. The
 tool is `destructiveHint: true`.
 
-### Comparing plans
+## Comparing plans
 
 `compare_plans {refs, ws?}` (1 to 20 refs) is `staple compare <ref> ... --json`.
 For each named issue it returns:
@@ -400,7 +331,7 @@ adding estimates by hand. For a parent, `get_task` carries the same object as
 `planSummary` (null for a leaf). The rules are in
 [cli.md](cli.md#comparing-plans-staple-compare).
 
-### Timing quality
+## Timing quality
 
 `timing_quality {kind?, parent?, since?, include?, exclude?, exclude_reasons?, limit?, cursor?, ws?}`
 is `staple timing quality --json`. It answers how much of a population's timing
@@ -427,7 +358,7 @@ can be trusted, before you calibrate anything on it:
 
 The rules are in [cli.md](cli.md#timing-quality-staple-timing-quality).
 
-### Calibration cohorts
+## Calibration cohorts
 
 `calibration_cohorts {kind?, priority?, parent?, since?, include?, list?, limit?, cursor?, for?, model?, ws?}`
 is `staple calibrate --json`. Use it to see how long a class of work takes
@@ -466,7 +397,7 @@ against its estimate, from trusted samples only:
 
 The rules are in [cli.md](cli.md#calibration-staple-calibrate).
 
-### Forecasts
+## Forecasts
 
 `forecast {ref, reserve?, account?, model?, ws?}` is `staple forecast <ref> --json`.
 Use it before committing to a piece of work, and quote the figures with the
@@ -493,38 +424,4 @@ snapshot ids:
   to spare, and treat a `low`-confidence breach figure as a guess.
 
 The rules are in [cli.md](cli.md#forecasts-staple-forecast) and
-[timing-semantics.md](timing-semantics.md#forecasts).
-
-## Harness ergonomics
-
-All in-protocol, so a harness never needs out-of-band setup:
-
-- **The server starts from any directory.** With no workspace above the working
-  directory, tools answer `not_found` *with instructions* instead of crashing
-  the connection. The `init` tool creates a workspace headlessly, and every
-  workspace tool takes an optional `ws` (hub slug or prefix) to target any
-  registered workspace per call.
-- **Writes require an identity.** Pass `actor` per call or set `STAPLE_AGENT`.
-  There is no silent default: a misconfigured harness fails loudly rather than
-  polluting the audit trail with anonymous writes.
-- **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
-  creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 25 read-only; among the writes, 15 are
-  `idempotentHint: true` (`checkout_task`, `set_estimate`, `set_blocked_by`,
-  `cross_link`, `hub_prune`, `init`, `update_milestone`, `set_setting`,
-  `enqueue_task`, `prune_queue`, `pause_run`, `resume_run`, `stop_run`,
-  `conflict_resolve`, `record_budget_sample`) — and return `structuredContent`
-  (arrays wrap as `{items}`).
-- **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
-  The telemetry lists answer `{items, truncated, nextCursor, coverage}` instead
-  ([below](#execution-telemetry)).
-- `get_task` includes cross-workspace blockers and can inline document bodies
-  with `include_documents: true`.
-
-## What the agent actually receives
-
-The web UI has an "agent view" pane that renders the exact `get_task` payload
-for an issue, both with and without `include_documents`, plus its token cost.
-It exists because a human hands over an issue believing the ticket says one
-thing while the agent receives a payload that says something slightly
-different, and nothing else shows the two side by side.
+[timing-semantics.md](../design/timing-semantics.md#forecasts).

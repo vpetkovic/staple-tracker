@@ -10,7 +10,7 @@
  * journal now records every synchronized column a mutation changed (`journal.ts`), and
  * this is what holds it to that: the registry below names every public mutation of the
  * four stores, a new one fails the first test until it is listed, and each is run and
- * compared column for column over every synchronized table (`docs/sync.md`, "What
+ * compared column for column over every synchronized table (`design/sync.md`, "What
  * synchronizes").
  */
 import { readFileSync } from "node:fs";
@@ -541,7 +541,7 @@ describe("every public mutation", () => {
     /**
      * The restore step: everything after the half-way backup is rewound, B's unsent work
      * survives, and every device and a fresh one hold the same on every synchronized column —
-     * the sentence "every device, and a fresh one, then holds the same" (`docs/sync.md`, "A
+     * the sentence "every device, and a fresh one, then holds the same" (`design/sync.md`, "A
      * restore rewinds") as a test.
      */
     try {

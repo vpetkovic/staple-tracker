@@ -1,5 +1,5 @@
 /**
- * Bounded telemetry reads: limits, cursors and coverage (docs/execution-telemetry.md,
+ * Bounded telemetry reads: limits, cursors and coverage (design/execution-telemetry.md,
  * "Bounded reads, coverage and truncation").
  *
  * Every telemetry list answers `{items, truncated, nextCursor, coverage}`:

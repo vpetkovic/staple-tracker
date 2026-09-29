@@ -3,7 +3,7 @@
  *
  * A prefix is derived from the directory a clone is initialised in, so two clones of one
  * repository in `tracker/` and `staple-tracker/` numbered issues `TRA-N` and `STA-N`, and a
- * repository they both synchronized held two identifier namespaces. `docs/sync.md` said the
+ * repository they both synchronized held two identifier namespaces. `design/sync.md` said the
  * prefix synchronizes; nothing sent it.
  */
 import { createHash, randomUUID } from "node:crypto";

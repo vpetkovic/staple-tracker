@@ -1,6 +1,6 @@
 ---
 title: Documentation
-description: What staple is, where to start, and every reference page grouped by what you want to do.
+description: What staple is, where to start, and every page grouped by what you want to do.
 ---
 
 # staple documentation
@@ -11,7 +11,7 @@ finish work through the CLI or the MCP server, and you follow along in a local w
 UI. A pickup queue, milestones and autopilot runs decide what gets worked next.
 Cloud sync is optional and lets two machines share one workspace.
 
-## Where to start
+## Quick start
 
 ```bash
 npx staple-cli                      # set this repository up and open the web UI
@@ -19,56 +19,60 @@ claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
 npx staple-cli install --yes        # optional: put `staple` on your PATH
 ```
 
-[Getting started](getting-started.md) walks through these three lines: the first
-workspace, the MCP wiring and the agent loop. Read [agents.md](agents.md) next. It
-covers the protocol your agents follow and the MCP tools they use.
-[cli.md](cli.md) documents every command.
+[Install and first workspace](getting-started.md) walks through these three lines.
+[Connect your agent](connect-your-agent.md) covers other MCP clients, and
+[How an agent works a ticket](working-a-ticket.md) the loop your agents follow.
 
-## Getting started
+## Start here
 
-| Page | What it covers |
+| Page | What it is for |
 |---|---|
-| [Getting started](getting-started.md) | Install, the first workspace, MCP wiring for Claude Code and Codex, one ticket through the agent loop |
-| [Packaging and install](packaging.md) | The `staple-cli` package, `npx` versus `staple install`, the versioned runtime and launcher |
-| [Web UI](web-ui.md) | `staple open` and every view: tasks, queue, graph, milestones, estimates, usage, task detail, autopilot runs, settings |
-| [Configuration](configuration.md) | The staple home, `config.json`, machine and workspace settings, `doctor` |
+| [Why staple](why-staple.md) | Why staple exists and where it fits next to Linear, GitHub or ClickUp |
+| [Install and first workspace](getting-started.md) | Install staple, set up a repository and take one ticket through the loop |
+| [Connect your agent](connect-your-agent.md) | Wire Claude Code, Codex or any MCP client to staple |
 
 ## Working with agents
 
-| Page | What it covers |
+| Page | What it is for |
 |---|---|
-| [Agents](agents.md) | The protocol `init` writes to `.staple/AGENTS.md`, the MCP tool surface, harness setup |
-| [Semantics](semantics.md) | Statuses and guards, kinds, atomic checkout, the dependency graph, approval gates, revisioned documents |
+| [How an agent works a ticket](working-a-ticket.md) | The loop every agent follows: claim, plan, worklog, done |
+| [Plans become tickets](plans-to-tickets.md) | Turn an implementation plan into an epic with tickets agents work through |
+| [Handoff and resume](handoff.md) | Pick up work after a session dies, hits a limit or changes hands |
 
-## Planning: queue, milestones and runs
+## Planning
 
-| Page | What it covers |
+| Page | What it is for |
 |---|---|
-| [The pickup queue](queue.md) | The ordered plan of what agents take next, the effective order, advisory versus strict policy, overrides |
-| [Milestones](milestones.md) | Dated plans over epics and tasks, derived state and progress, goal criteria, milestones in the queue |
-| [Autopilot runs](runs.md) | Working a scope ticket after ticket, budget and stop rules, the take, wait or stop decision |
+| [Epics and dependencies](epics-and-dependencies.md) | Group work under epics and order it with dependencies |
+| [The pickup queue](queue.md) | Set the order agents take work in |
+| [Milestones](milestones.md) | Dated plans over epics and tasks, with goal criteria |
+| [Approval gates](approval-gates.md) | Make a ticket wait for a person's approval |
+| [Autopilot runs](runs.md) | Let one agent work a scope ticket after ticket, within a budget |
 
-## Sync and continuity
+## Across machines and repositories
 
-| Page | What it covers |
+| Page | What it is for |
 |---|---|
-| [Cloud sync](sync.md) | Sharing a workspace between machines: what travels, ordering, conflicts, leases, consents, backups, the hub registry |
-| [Continuity](continuity.md) | Claims, staleness, taking over a dead agent's work |
+| [Cloud sync](cloud-sync.md) | Share one workspace between two machines |
+| [Several repositories](hub.md) | Work across several repositories from one machine |
+
+## The web UI
+
+| Page | What it is for |
+|---|---|
+| [Tour](web-ui.md) | Every view of the local web UI and what you do there |
+| [Budget and estimates](budget-and-estimates.md) | Estimate work, compare it with what it took, watch your provider budget |
 
 ## Reference
 
-| Page | What it covers |
+| Page | What it is for |
 |---|---|
-| [CLI](cli.md) | Every command and flag, `--json` shapes, exit codes |
-| [Execution telemetry](execution-telemetry.md) | Execution attempts, provider usage-limit windows and budget samples |
-| [Timing semantics](timing-semantics.md) | Elapsed time versus agent work, the number an estimate is compared against, calibration and [forecasts](timing-semantics.md#forecasts) |
+| [CLI](cli.md) | Every command and flag |
+| [MCP tools](mcp-tools.md) | Every tool the MCP server offers |
+| [Configuration](configuration.md) | The staple home, machine preferences and workspace settings |
+| [Errors and exit codes](errors.md) | What each error means and what to do about it |
 
-## Internals
-
-| Page | What it covers |
-|---|---|
-| [Architecture](architecture.md) | Where the code lives, workspace and hub topology, known limits |
-| [Migrating a `.tasks` workspace](migration.md) | Moving a legacy workspace, schema upgrades, schema mismatch diagnosis |
-
-Working on staple itself is covered in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md), and
-cutting a release in [RELEASING.md](https://github.com/vpetkovic/staple-tracker/blob/master/RELEASING.md).
+Working on staple itself is covered in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md),
+and cutting a release in [RELEASING.md](https://github.com/vpetkovic/staple-tracker/blob/master/RELEASING.md).
+The design documents behind the code (sync protocol, timing, telemetry, the store's
+guarantees) live in the repository's [design/](https://github.com/vpetkovic/staple-tracker/tree/master/design) folder.

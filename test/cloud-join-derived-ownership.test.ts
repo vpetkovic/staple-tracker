@@ -1,6 +1,6 @@
 /**
  * A status derivation wrote stays derivation's on every device, however the device came to
- * hold it (`docs/semantics.md`, "A parent's status is derived from its children"; migration 017).
+ * hold it (`design/semantics.md`, "A parent's status is derived from its children"; migration 017).
  *
  * Ownership was read from the event log, and events never replicate: a device re-emits the
  * events an operation narrates, and a join seed or a snapshot narrates nothing. So a device

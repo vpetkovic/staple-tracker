@@ -1,6 +1,6 @@
 /**
  * Effort: agent work and orchestration on one issue, from REPLICATED data only
- * (`docs/timing-semantics.md`, "Effort: work and orchestration").
+ * (`design/timing-semantics.md`, "Effort: work and orchestration").
  *
  * `workSeconds` reads the worker-lane attempt rows, their transitions, the replicated issue
  * row and the agent's replicated comments and document revisions. It never reads the local
@@ -41,7 +41,7 @@ export const SPARSE_GAP_MS = 30 * 60 * 1000;
 /** The capture-gap and clock-skew tolerance: one second. */
 const TOLERANCE_MS = 1000;
 
-/** The quality inputs a reading of effort can carry (`docs/timing-semantics.md`, "Quality inputs"). */
+/** The quality inputs a reading of effort can carry (`design/timing-semantics.md`, "Quality inputs"). */
 /** The inputs themselves are listed once, in `quality.ts`, beside the level each sits at. */
 import type { EffortInput } from "./quality.js";
 export type { EffortInput };

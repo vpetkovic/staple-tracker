@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 11 — field-write provenance (contract in docs/sync.md, "Conflicts are
+ * Version 11 — field-write provenance (contract in design/sync.md, "Conflicts are
  * preserved, never resolved silently").
  *
  * ## Why 11

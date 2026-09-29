@@ -25,7 +25,7 @@ import type { Migration } from "../types.js";
  *
  * ## What replicates
  *
- * The marks do: each is the milestone entity's field `criterion<n>` on the wire (docs/sync.md,
+ * The marks do: each is the milestone entity's field `criterion<n>` on the wire (design/sync.md,
  * "What synchronizes"), so no new sync entity and no protocol change. The run columns do not:
  * like the run tables of 015, they describe which agent loops on this machine.
  *

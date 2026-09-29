@@ -2,7 +2,7 @@
  * STA-251: every cloud sync failure surfaces with its TRUE code.
  *
  * The sync protocol has thirteen wire codes and one client-side one (`offline`), and three
- * of the fourteen are retryable (`docs/sync.md`, "Error taxonomy"). `StapleErrorCode` used to
+ * of the fourteen are retryable (`design/sync.md`, "Error taxonomy"). `StapleErrorCode` used to
  * have none of the sync-only members, so the client folded each into the nearest store code
  * — `auth`, `forbidden`, `revoked` and five others became `validation` (exit 2), while
  * `rate_limited`, `unavailable` and `offline` became a NON-retryable `conflict` (exit 4) — and

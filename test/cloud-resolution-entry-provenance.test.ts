@@ -1,6 +1,6 @@
 /**
  * A resolution of a plan or a milestone's members keeps who added each entry, and when, on every
- * device (`docs/sync.md`, "Conflicts are preserved, never resolved silently").
+ * device (`design/sync.md`, "Conflicts are preserved, never resolved silently").
  *
  * A device with its own record open about the same list withholds the resolving `replace` from
  * the list, and closes its record by the decision that follows. That decision carried the list and

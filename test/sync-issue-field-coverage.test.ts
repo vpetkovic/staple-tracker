@@ -40,7 +40,7 @@ const EXCLUDED: Record<string, string> = {
   status_version:
     "0 by schema default on every device; the optimistic-concurrency token, carried by the operations that move status",
   checkout_agent:
-    "never a plain field write — the projection of a lease (docs/sync.md, 'Claims')",
+    "never a plain field write — the projection of a lease (design/sync.md, 'Claims')",
   checkout_at: "as checkout_agent",
   blocked_transition_at:
     "null at create; every transition into or out of a blocked status journals it (test/cloud-blocked-transition.test.ts)",

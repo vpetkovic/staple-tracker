@@ -1,7 +1,7 @@
 /**
  * Execution attempts: where they open, end and change, as side effects of LOCAL mutations.
  *
- * Contract: `docs/execution-telemetry.md`, "How an attempt opens", "The resume rule", "How
+ * Contract: `design/execution-telemetry.md`, "How an attempt opens", "The resume rule", "How
  * an attempt ends", "Orphaned attempts are closed at read time", "Lifecycle" and
  * "Concurrency context".
  *
@@ -362,7 +362,7 @@ export class AttemptLedger {
    * the opening device and stored, so it never changes afterwards.
    */
   private resumeFor(issueId: string, before?: IssueFacts): { id: string | null; contested: boolean } {
-    // "The latest attempt" is the latest WORKER attempt (`docs/timing-semantics.md`).
+    // "The latest attempt" is the latest WORKER attempt (`design/timing-semantics.md`).
     const attempts = attemptsOfIssue(this.db, issueId).filter(isWorkerAttempt);
     const latest = attempts[attempts.length - 1];
     if (!latest) return { id: null, contested: false };
@@ -624,7 +624,7 @@ export class AttemptLedger {
   }
 
   /**
-   * Which attempt an event acts on (`docs/timing-semantics.md`, "Worker-lane scoping"):
+   * Which attempt an event acts on (`design/timing-semantics.md`, "Worker-lane scoping"):
    *
    *   - an attempt id names it, in either lane, when it is the actor's and effectively open;
    *   - `--role` names the lane, and the actor's open attempt in it is the one;
@@ -690,7 +690,7 @@ export class AttemptLedger {
 
   /**
    * `staple attempt open <ref> --role orchestrator`: an orchestrator attempt on the issue being
-   * coordinated. The ONLY way an attempt gets `role: orchestrator` (`docs/timing-semantics.md`,
+   * coordinated. The ONLY way an attempt gets `role: orchestrator` (`design/timing-semantics.md`,
    * "The orchestrator lane"). It changes neither the issue's status nor its claim, holds no
    * claim (`claim.scope: none`), and supersedes the agent's older orchestrator attempts by the
    * read-time rule, wherever they were opened.

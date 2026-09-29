@@ -1,7 +1,7 @@
 /**
  * The seed: a workspace's existing state reaches the service when it first synchronizes.
  *
- * Contract: `docs/sync.md`, "A workspace's history reaches the service when it first
+ * Contract: `design/sync.md`, "A workspace's history reaches the service when it first
  * synchronizes".
  *
  * ## The gap this closes
@@ -643,7 +643,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     if (row.identifier === null) {
       /**
        * `document_revisions` has no foreign key to `issues`, so a revision can outlive
-       * its issue — `docs/sync.md` lists it under Known limits. A receiver cannot place
+       * its issue — `design/sync.md` lists it under Known limits. A receiver cannot place
        * a revision of an issue it will never have, and would defer it for ever.
        */
       skipped.push({

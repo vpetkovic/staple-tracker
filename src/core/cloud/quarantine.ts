@@ -1,7 +1,7 @@
 /**
  * What names something this device does not hold waits here, and the rest applies.
  *
- * Contract: `docs/sync.md`, "No entity can stop a sync".
+ * Contract: `design/sync.md`, "No entity can stop a sync".
  *
  * A snapshot page or a page of the ordered tail used to fail whole when one entity named
  * something that never arrived — a comment on an issue the repository does not hold, an

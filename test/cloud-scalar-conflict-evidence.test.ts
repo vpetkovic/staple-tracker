@@ -1,7 +1,7 @@
 /**
  * STA-261 — a stale scalar write is refused after a relay and after a compaction.
  *
- * Contract: `docs/sync.md`, "Conflicts are preserved, never resolved silently".
+ * Contract: `design/sync.md`, "Conflicts are preserved, never resolved silently".
  *
  * ## What was actually wrong
  *

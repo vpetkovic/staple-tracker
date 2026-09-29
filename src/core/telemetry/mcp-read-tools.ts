@@ -1,5 +1,5 @@
 /**
- * The MCP half of the telemetry read surfaces (docs/execution-telemetry.md, "Surfaces"):
+ * The MCP half of the telemetry read surfaces (design/execution-telemetry.md, "Surfaces"):
  * `list_attempts`, `get_attempt`, `get_budget` and `list_budget_samples`. Each calls the
  * same method the CLI does — `WorkspaceStore.listAttempts` / `getAttempt`, `readBudget` /
  * `listBudgetSamples` — so `--json` and the tool answer one shape.
@@ -53,7 +53,7 @@ export function registerTelemetryReadTools(
     "list_attempts",
     {
       description:
-        "The execution attempts on one issue, oldest first (docs/execution-telemetry.md): each one agent's tenure, as it reads now. `state`, `outcome` and `endReason` are the effective values: an attempt whose claim was cleared or moved by a path that ran no side effect reads as ended/orphaned with `storedState` showing what the row holds. Bounded: {items, truncated, nextCursor, coverage}; coverage.gaps names spans before capture began. Same payload as `staple attempts <ref> --json`.",
+        "The execution attempts on one issue, oldest first (design/execution-telemetry.md): each one agent's tenure, as it reads now. `state`, `outcome` and `endReason` are the effective values: an attempt whose claim was cleared or moved by a path that ran no side effect reads as ended/orphaned with `storedState` showing what the row holds. Bounded: {items, truncated, nextCursor, coverage}; coverage.gaps names spans before capture began. Same payload as `staple attempts <ref> --json`.",
       inputSchema: { ref: refSchema, limit, cursor, ws: wsSchema },
       outputSchema: pageShape,
       annotations: { title: "List attempts", ...READ },
@@ -84,7 +84,7 @@ export function registerTelemetryReadTools(
     "get_budget",
     {
       description:
-        "Provider budget on THIS machine (docs/execution-telemetry.md): per account (those with readings and those a source binding names), each limit's current window with its latest sample, `status`, the high-water `remainingPercent` (the conservative figure) and `missing`. An unknown value is null with a reason (no_sample_yet, source_unavailable, window_elapsed, reset_not_reported, sliding_window), never 0. `stale` is true when the latest reading's value is over 10 minutes old (judged on observedAt, as history's gaps are). Each limit's `pressure` (PROVISIONAL until the admission policy defines it): MEASURED `observed` pace (%/hour of wall clock) and `lastReadingAgeSeconds`; FORECAST `sustainablePercentPerHour` = (remaining − reserve) / hours to reset, `ratio` = observed / sustainable, `state` unsafe at 1 or over (or at the reserve already) else within, `exhaustion` and `reserveReach` at the pace, and `safeConcurrency` always null (policy_not_defined). Budget data is machine-local and never synchronizes. Same payload as `staple budget --json`.",
+        "Provider budget on THIS machine (design/execution-telemetry.md): per account (those with readings and those a source binding names), each limit's current window with its latest sample, `status`, the high-water `remainingPercent` (the conservative figure) and `missing`. An unknown value is null with a reason (no_sample_yet, source_unavailable, window_elapsed, reset_not_reported, sliding_window), never 0. `stale` is true when the latest reading's value is over 10 minutes old (judged on observedAt, as history's gaps are). Each limit's `pressure` (PROVISIONAL until the admission policy defines it): MEASURED `observed` pace (%/hour of wall clock) and `lastReadingAgeSeconds`; FORECAST `sustainablePercentPerHour` = (remaining − reserve) / hours to reset, `ratio` = observed / sustainable, `state` unsafe at 1 or over (or at the reserve already) else within, `exhaustion` and `reserveReach` at the pace, and `safeConcurrency` always null (policy_not_defined). Budget data is machine-local and never synchronizes. Same payload as `staple budget --json`.",
       inputSchema: {
         account: z.string().optional().describe("Only this account label."),
         reserve: z.union([z.string(), z.number()]).optional().describe("The reserve pressure protects, a percent of each limit (20 or \"20%\"); a provisional default otherwise, said on `reserve.source`."),

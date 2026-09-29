@@ -19,7 +19,7 @@
  *   schema 99  refused before any write: same bytes, no sidecars, no snapshot
  *   WAL-only   rows another process committed only to the WAL are in the snapshot
  *   interrupt  an install that dies between stage and switch leaves one runtime
- *   docs       the commands `docs/migration.md` prints are run verbatim
+ *   docs       the commands `design/migration.md` prints are run verbatim
  *
  * The package build is shared, not repeated: the payload is the one this
  * run's globalSetup built from the current source (`testPackageDir()`,
@@ -235,13 +235,13 @@ function relabelledPayload(version: string): string {
 }
 
 /**
- * Every command line inside a ```bash fence in docs/migration.md, comments
+ * Every command line inside a ```bash fence in design/migration.md, comments
  * stripped. `documented(prefix)` is how a case runs one: the line is the
  * doc's, verbatim, so a command that stops being documented fails the case
  * that depended on it, and a command that stops working fails the doc.
  */
 function documentedCommands(): string[] {
-  const text = readFileSync(join(REPO_ROOT, "docs", "migration.md"), "utf8");
+  const text = readFileSync(join(REPO_ROOT, "design", "migration.md"), "utf8");
   const lines: string[] = [];
   for (const [, body] of text.matchAll(/```bash\n([\s\S]*?)```/g)) {
     for (const raw of body!.split("\n")) {
@@ -254,7 +254,7 @@ function documentedCommands(): string[] {
 
 function documented(prefix: string): string {
   const line = documentedCommands().find((candidate) => candidate.startsWith(prefix));
-  if (!line) throw new Error(`docs/migration.md no longer documents \`${prefix}\` in a bash fence`);
+  if (!line) throw new Error(`design/migration.md no longer documents \`${prefix}\` in a bash fence`);
   return line;
 }
 
@@ -576,7 +576,7 @@ describe("the packed runtime against every workspace schema on disk (STA-165)", 
     }, CASE_TIMEOUT);
   });
 
-  describe("the commands docs/migration.md prints", () => {
+  describe("the commands design/migration.md prints", () => {
     it("names the same commands the runtime does", () => {
       expect(documented("staple install --from")).toBe(INSTALL_FROM_PLACEHOLDER);
       expect(documented("staple install --rollback")).toBe(ROLLBACK_COMMAND);

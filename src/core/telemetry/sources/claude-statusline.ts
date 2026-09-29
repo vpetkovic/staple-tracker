@@ -1,5 +1,5 @@
 /**
- * Claude Code status-line input (docs/execution-telemetry.md, "What providers actually
+ * Claude Code status-line input (design/execution-telemetry.md, "What providers actually
  * expose" and "Status-line readings are cached re-reads").
  *
  * The configured `statusLine` command receives a JSON object on stdin. Its

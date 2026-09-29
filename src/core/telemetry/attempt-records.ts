@@ -1,7 +1,7 @@
 /**
  * The execution attempt and its transitions: shapes, rows and wire payloads.
  *
- * Contract: `docs/execution-telemetry.md`, "The attempt record" and "Lifecycle". The
+ * Contract: `design/execution-telemetry.md`, "The attempt record" and "Lifecycle". The
  * stored fields are exactly the contract's; everything derived (`ordinal`,
  * `lastActivityAt`, `activeSeconds`, the read-time orphan end, …) lives in
  * `attempt-derive.ts` and is never written.
@@ -34,7 +34,7 @@ export type EndDetection = "reported" | "by_other" | "inferred" | "reconstructed
 export type OpenedBy = "checkout" | "steal" | "reclaim" | "status" | "reconstructed" | "orchestrate";
 
 /**
- * The attempt's lane (`docs/timing-semantics.md`, "The orchestrator lane"). `worker` is
+ * The attempt's lane (`design/timing-semantics.md`, "The orchestrator lane"). `worker` is
  * every attempt a checkout, steal, re-claim or status write opens; `orchestrator` only
  * one `staple attempt open --role orchestrator` opens. Anything else a newer build wrote
  * is preserved verbatim and read as the worker lane.

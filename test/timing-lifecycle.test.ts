@@ -1,5 +1,5 @@
 /**
- * Closing the lifecycle capture gaps (`docs/timing-semantics.md`): `workSeconds`, the `wall`
+ * Closing the lifecycle capture gaps (`design/timing-semantics.md`): `workSeconds`, the `wall`
  * partition and their quality, on one device, over the spec's timelines.
  *
  * Every history here is built by real store calls at instants this suite controls: the write

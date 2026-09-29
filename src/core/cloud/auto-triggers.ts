@@ -1,7 +1,7 @@
 /**
  * Where the three triggers meet the three surfaces.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * Contract: `design/sync.md`, "Three consents" — *"After automatic — bounded
  * triggers only: startup, post-write, long-running session, pre-checkout."*
  * (On the absence of the fourth, see the header of `auto.ts`.)
  *

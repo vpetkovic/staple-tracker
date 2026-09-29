@@ -1,6 +1,6 @@
 /**
  * A membership sent again into the epoch a restore made lands on a device that rewound its rows
- * (`docs/sync.md`, "A restore rewinds").
+ * (`design/sync.md`, "A restore rewinds").
  *
  * A device's member add reached the log, its answer did not, and a restore rewound it: the device
  * sends it again into the new epoch, under its old base version. A device that had applied it

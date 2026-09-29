@@ -2,7 +2,7 @@
  * The endpoint a repository is connected to, validated before anything is done
  * with it.
  *
- * Contract: `docs/sync.md`, "Trust boundaries" — "**TLS is required.** No
+ * Contract: `design/sync.md`, "Trust boundaries" — "**TLS is required.** No
  * plaintext transport, no certificate-validation escape hatch, no
  * `NODE_TLS_REJECT_UNAUTHORIZED` accommodation. A non-HTTPS endpoint is refused
  * at connect time, so it cannot be configured and discovered later."

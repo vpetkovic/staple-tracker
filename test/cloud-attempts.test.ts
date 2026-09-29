@@ -1,5 +1,5 @@
 /**
- * Execution attempts across devices (`docs/execution-telemetry.md`, "Orphaned attempts are
+ * Execution attempts across devices (`design/execution-telemetry.md`, "Orphaned attempts are
  * closed at read time", "A stored orphan end never overwrites a real end" and "Where it lives
  * and what synchronizes").
  *

@@ -1,5 +1,5 @@
 /**
- * The controlled-run harness (`docs/timing-semantics.md`, "Controlled runs").
+ * The controlled-run harness (`design/timing-semantics.md`, "Controlled runs").
  *
  * A controlled run states a timeline as a list of transitions at known instants, and what
  * every timing figure must read at a later `asOf`. The runner replays the timeline through

@@ -8,7 +8,7 @@
  * migration 006 put `awaiting_approval` at `in_review + 5`. Measured on a mixed fleet: the
  * absolute values differed across devices while every displayed order matched.
  *
- * That is settled by what reads them, and every reader is relative (`docs/sync.md`, "The
+ * That is settled by what reads them, and every reader is relative (`design/sync.md`, "The
  * numbers behind the order are each device's own"): `ORDER BY sort_order, id` in the store,
  * the applier, the seed and the conflict screen; the store's `insertionOrder`, which takes
  * the midpoint of two neighbours on this device; the applier's and seed's `MAX(sort_order)`,

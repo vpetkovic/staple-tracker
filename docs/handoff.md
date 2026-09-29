@@ -1,9 +1,9 @@
 ---
-title: Continuity
-description: What happens after an agent dies mid-task, and how another agent takes over its claim.
+title: Handoff and resume
+description: What happens when an agent session dies mid-task, and how another session or agent picks the work up.
 ---
 
-# Continuity
+# Handoff and resume
 
 What happens after an agent dies mid-task.
 
@@ -54,7 +54,7 @@ A held claim on work that is really waiting on a person is the failure mode
 this whole file exists for, and `staple gate` is the honest way to end it:
 parking a parent **clears its claim**, so it stops accruing time and stops
 reading as live work somebody should steal. See
-[semantics.md](semantics.md#approval-gates).
+[approval-gates.md](approval-gates.md).
 
 ## A claim change is not a plan change
 

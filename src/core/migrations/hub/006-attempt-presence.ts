@@ -3,7 +3,7 @@ import type { Migration } from "../types.js";
 
 /**
  * Hub version 6 — the machine-local presence index of execution attempts
- * (`docs/execution-telemetry.md`, "Concurrency context").
+ * (`design/execution-telemetry.md`, "Concurrency context").
  *
  * Every attempt transition records how many attempts this machine started that are still
  * open, across every repository it works in, and how many of those spend from the same

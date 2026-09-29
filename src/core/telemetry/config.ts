@@ -1,5 +1,5 @@
 /**
- * The `telemetry` field of `<home>/config.json` (docs/execution-telemetry.md, "Source
+ * The `telemetry` field of `<home>/config.json` (design/execution-telemetry.md, "Source
  * bindings produce the account").
  *
  *   "telemetry": {

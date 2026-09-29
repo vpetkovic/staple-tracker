@@ -351,7 +351,7 @@ describe("rollups sum DIRECT children and nothing else", () => {
         unplannedCount: 0,
         totalCount: 0,
       },
-      // docs/timing-semantics.md: nothing ran, so every effort and elapsed field is null, with its reason.
+      // design/timing-semantics.md: nothing ran, so every effort and elapsed field is null, with its reason.
       workSeconds: null,
       ownWorkSeconds: null,
       orchestrationSeconds: null,

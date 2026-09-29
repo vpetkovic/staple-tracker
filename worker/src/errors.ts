@@ -1,5 +1,5 @@
 /**
- * The error taxonomy from docs/sync.md, and the only way this Worker produces a
+ * The error taxonomy from design/sync.md, and the only way this Worker produces a
  * non-2xx response.
  *
  * The shape is the one the CLI already returns — `{ code, message, retryable }` —

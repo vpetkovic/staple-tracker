@@ -27,7 +27,7 @@ import { log, tokenFingerprint } from "./log.js";
  * turn that into a silently forked workspace.
  *
  * NOTE FOR THE CLIENT LANE: provisioning a repository and its first enrollment secret
- * is an out-of-band operation; see worker/README.md. docs/sync.md does not define a
+ * is an out-of-band operation; see worker/README.md. design/sync.md does not define a
  * provisioning route or an account model, so this Worker does not invent one.
  */
 export async function connect(

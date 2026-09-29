@@ -1,6 +1,6 @@
 /**
  * One live poll run: for every bound home a poller serves, ask its provider once and
- * store what it says (docs/execution-telemetry.md, "Live polling").
+ * store what it says (design/execution-telemetry.md, "Live polling").
  *
  * Nothing here runs unless budget capture AND live polling are on: with either off the
  * run returns at once, having read no sign-in and made no call.

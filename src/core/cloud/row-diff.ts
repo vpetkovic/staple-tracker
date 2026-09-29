@@ -1,7 +1,7 @@
 /**
  * What a mutation changed, read off the rows rather than remembered by the mutation.
  *
- * Contract: `docs/sync.md`, "The journal records what changed, by row".
+ * Contract: `design/sync.md`, "The journal records what changed, by row".
  *
  * Each mutation declares its operation (`Journal.record`), and for a long time that
  * declaration was also the whole list of what travelled. So a column a path wrote and did

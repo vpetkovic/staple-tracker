@@ -559,7 +559,7 @@ repairs neither"*.)
 
 ## What agents are told
 
-The protocol the generated `AGENTS.md` teaches ([agents.md](agents.md)) is this
+The protocol the generated `AGENTS.md` teaches ([working-a-ticket.md](working-a-ticket.md)) is this
 page reduced to what an agent must not get wrong: READY is the effective queue
 rather than a suggestion, a queued container stands for its leaf work and is
 never a checkout target, `staple queue next` answers before you claim, and

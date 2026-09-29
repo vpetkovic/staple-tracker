@@ -1,7 +1,7 @@
 /**
  * A repository's identifier prefix, shared by every workspace that joins it.
  *
- * Contract: `docs/sync.md`, "The prefix is the repository's; the slug is the machine's".
+ * Contract: `design/sync.md`, "The prefix is the repository's; the slug is the machine's".
  *
  * Every identifier carries the prefix, so a repository whose devices numbered issues under
  * two prefixes holds two namespaces: `TRA-4` on one machine and `STA-4` on another are

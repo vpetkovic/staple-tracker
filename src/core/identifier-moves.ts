@@ -1,7 +1,7 @@
 /**
  * Every time an issue's identifier changes, the old one is remembered.
  *
- * An identifier is a display allocation, not an identity (`docs/sync.md`: *"`issues.id` is
+ * An identifier is a display allocation, not an identity (`design/sync.md`: *"`issues.id` is
  * the sync identity of an issue … `issues.identifier` is a display allocation"*), and it
  * can change after people have started using it: sync renumbers an issue two devices
  * numbered alike, a joining workspace yields numbers the repository already uses, and a
@@ -313,7 +313,7 @@ export function takeRenumberNotices(): RenumberNotice[] {
  * Long enough to cover the work that learned the old number before the move — an agent
  * between `checkout` and `done`, a handoff written this morning, a script's variable — and
  * short enough that, once everybody has moved on, the number is simply the issue that holds
- * it now, with the notice (`WorkspaceStore.requireTarget`, `docs/sync.md`).
+ * it now, with the notice (`WorkspaceStore.requireTarget`, `design/sync.md`).
  */
 export const RENUMBER_GUARD_MS = 24 * 60 * 60 * 1000;
 

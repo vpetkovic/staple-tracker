@@ -6,7 +6,7 @@
  * wrote the epic's status, `status_version`, `updated_at` and timestamps in one row update
  * but journaled only `{ status, derived }`. Measured on real data: two epics whose
  * `status_version` and `updated_at` differed between the device that moved the child and
- * every other device, although `docs/sync.md` lists both as synchronized. Every
+ * every other device, although `design/sync.md` lists both as synchronized. Every
  * status-moving write now journals the columns it changed.
  */
 import type { DatabaseSync } from "node:sqlite";

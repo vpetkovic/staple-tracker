@@ -1,6 +1,6 @@
 /**
  * Cohort quality: how much of a filtered population's timing can be trusted, and which
- * records an analysis keeps (docs/timing-semantics.md, "Cohort coverage").
+ * records an analysis keeps (design/timing-semantics.md, "Cohort coverage").
  * `staple timing quality` / MCP `timing_quality` / `GET /api/timing/quality`, one store method.
  *
  * ## The populations

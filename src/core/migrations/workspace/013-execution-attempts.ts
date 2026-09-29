@@ -3,7 +3,7 @@ import type { Migration } from "../types.js";
 
 /**
  * Version 13 — execution attempts and their transitions (contract in
- * `docs/execution-telemetry.md`, "Execution attempts" and "Where it lives and what
+ * `design/execution-telemetry.md`, "Execution attempts" and "Where it lives and what
  * synchronizes").
  *
  * ## Why 13
@@ -25,7 +25,7 @@ import type { Migration } from "../types.js";
  * exists" is the first clause of the read-time orphan rule — and a pulled
  * transition can land before a restore re-stages the attempt it names. No CHECK on
  * the enumerations either: a value from a newer build is preserved verbatim, never
- * refused (`docs/sync.md`, the unknown-field rule).
+ * refused (`design/sync.md`, the unknown-field rule).
  *
  * `claim_scope` and `claim_fencing_token` are columns rather than one JSON value
  * because the orphan rule reads the scope of every stored-open attempt on every

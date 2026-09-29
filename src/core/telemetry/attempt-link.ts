@@ -1,5 +1,5 @@
 /**
- * Which attempt a budget reading belongs to (`docs/execution-telemetry.md`, "Linking
+ * Which attempt a budget reading belongs to (`design/execution-telemetry.md`, "Linking
  * samples to attempts").
  *
  * `attemptId` is set when exactly one effectively open attempt on this machine matches the
@@ -103,7 +103,7 @@ export function attemptLinkerFor(home: string): AttemptLinker {
       return observedAt >= reading.startedAt && (reading.endedAt === null || observedAt < reading.endedAt);
     });
     /**
-     * One harness session can hold an attempt in each lane (`docs/timing-semantics.md`, "The
+     * One harness session can hold an attempt in each lane (`design/timing-semantics.md`, "The
      * orchestrator lane"): the reading goes to the worker attempt, and to the orchestrator
      * attempt only when no worker attempt matches.
      */

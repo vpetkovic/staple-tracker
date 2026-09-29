@@ -3,7 +3,7 @@
  *
  * This is the acceptance criterion *"Disconnected UI remains quiet and never
  * prompts connects or contacts the network"*, turned into something a machine
- * can check. `docs/sync.md` is unusually specific about it: *"render 'not
+ * can check. `design/sync.md` is unusually specific about it: *"render 'not
  * connected' and a static hint naming `staple cloud connect`. Static text. No
  * probe, no reachability check, no 'we noticed you might want to connect'. **The
  * UI does not prompt.**"*

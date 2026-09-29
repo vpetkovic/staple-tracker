@@ -1,7 +1,7 @@
 /**
  * "A stored orphan end never overwrites a real end": one rule, for every reader of the log.
  *
- * Contract: `docs/execution-telemetry.md`, "A stored orphan end never overwrites a real end".
+ * Contract: `design/execution-telemetry.md`, "A stored orphan end never overwrites a real end".
  *
  * A remote steal or release journals its `issue.update` and its `attempt.update` from one
  * scope, but push batches and pull pages are bounded, so the two can arrive apart, and the
@@ -42,7 +42,7 @@ export const ATTEMPT_END_FIELDS = [
 /**
  * The reasons only a stored orphan end is written with (`attempts.ts`, `orphanReason`): the
  * worker lane's five clauses, and the orchestrator lane's `issue_resolved` and
- * `superseded_by_newer` (`docs/timing-semantics.md`, "The orchestrator lane"; its
+ * `superseded_by_newer` (`design/timing-semantics.md`, "The orchestrator lane"; its
  * `issue_removed` is the worker lane's). Without the last two, every reader would take an
  * orchestrator's stored orphan end for a real end, and a stored `superseded_by_newer` would
  * conflict with a real `coordination_ended`. The Worker imports this set, so it is redeployed

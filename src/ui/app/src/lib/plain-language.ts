@@ -245,7 +245,7 @@ export function plainRatioRange(lower: number, upper: number): string {
 
 /**
  * Why a figure is unknown, in everyday words. The codes are the payload's `missing` and
- * `missingInputs` (docs/execution-telemetry.md "Missingness", docs/timing-semantics.md
+ * `missingInputs` (design/execution-telemetry.md "Missingness", design/timing-semantics.md
  * "Forecasts"); an unlisted code falls back to forecast-text's wording, never to nothing.
  */
 export const PLAIN_MISSING: Record<string, string> = {

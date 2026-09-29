@@ -1,5 +1,5 @@
 /**
- * Session pressure (docs/execution-telemetry.md, "Pressure"): per limit, how fast the current
+ * Session pressure (design/execution-telemetry.md, "Pressure"): per limit, how fast the current
  * window is being used against how fast it COULD be used and still keep the protected reserve at
  * the reset. Machine state, like everything `staple budget` reads: no workspace, no attempts, only
  * this machine's readings of the window.

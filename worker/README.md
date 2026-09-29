@@ -1,6 +1,6 @@
 # staple-sync — the Cloudflare Worker and its D1 operation log
 
-The server half of [cloud sync](../docs/sync.md). It stores an ordered operation log per
+The server half of [cloud sync](../design/sync.md). It stores an ordered operation log per
 repository, assigns the total order every device replays, and arbitrates leases. It is
 trusted for exactly those two things and nothing else.
 
@@ -75,7 +75,7 @@ worker/
 | `POST` | `/v1/repos/{repoId}/backups/{backupId}/restore` | device token |
 | `DELETE` | `/v1/repos/{repoId}` | device token, plus `{ "confirm": "<repoId>" }` in the body |
 
-Three of those are **additive** to the route table in `docs/sync.md`, which names create,
+Three of those are **additive** to the route table in `design/sync.md`, which names create,
 list and restore but nothing that writes the backup consent flag and nothing that removes
 a backup. `PUT /backup` exists because the contract grants backup with "a server-side
 flag" and names no route that sets one; `DELETE /backups/{backupId}` exists because "its
@@ -328,7 +328,7 @@ Worker's fold and the client's appliers agree on rules each side assumes the oth
 follows — among them that a field is folded under one spelling, and that a payload naming a
 field in both spellings keeps the column's (`columnSpellingWins`, `src/fold.ts`). A client of
 a newer build editing a field while an older Worker is live, followed by a backup and a
-restore, writes an edit that no build can recover (`docs/sync.md`, "Every field travels in
+restore, writes an edit that no build can recover (`design/sync.md`, "Every field travels in
 one spelling"). With the Worker deployed first, that window is empty.
 
 **The lifecycle release (orchestrator lane, re-emitted events)** — the checklist, in order:
@@ -386,7 +386,7 @@ and database names do not.
 
 ### Provisioning a repository
 
-`docs/sync.md` defines no provisioning route and no account model, so this Worker does
+`design/sync.md` defines no provisioning route and no account model, so this Worker does
 not invent one. A repository and its first enrollment secret are created out of band:
 
 ```sql

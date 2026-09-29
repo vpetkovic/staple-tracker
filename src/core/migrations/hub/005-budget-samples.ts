@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 5: provider limit windows and budget samples (docs/execution-telemetry.md,
+ * Version 5: provider limit windows and budget samples (design/execution-telemetry.md,
  * "Limit windows" and "Budget samples").
  *
  * ## Why the hub and not the workspace

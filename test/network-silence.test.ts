@@ -1,7 +1,7 @@
 /**
  * The test that proves the zero-network invariant.
  *
- * Contract: `docs/sync.md`, "The network rule — and the test that proves it".
+ * Contract: `design/sync.md`, "The network rule — and the test that proves it".
  *
  *   *"Today the runtime contains **zero outbound network call sites** … The
  *   invariant is therefore not a reduction to be achieved — it is a floor to be
@@ -1648,7 +1648,7 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
 
 /**
  * Live polling is the one budget feature that makes a network call, behind its own
- * consent (`telemetry.livePolling`, off by default; docs/execution-telemetry.md, "Live
+ * consent (`telemetry.livePolling`, off by default; design/execution-telemetry.md, "Live
  * polling"). Off, `budget collect` stays silent (the scenario above and the UI routes);
  * on, it may ask the bound providers and NOBODY ELSE: each call's destination is the
  * usage host of a bound account's provider. The spy throws at the call, which the poller

@@ -1,6 +1,6 @@
 /**
  * A revision the log renumbered keeps saying so on the device that wrote it, across a restore it
- * made before hearing back (`docs/sync.md`, "Two revisions written as one number").
+ * made before hearing back (`design/sync.md`, "Two revisions written as one number").
  *
  * The device's r1 reached the log after another device's r1, and the log placed it at r2 with a
  * summary saying why; the answer was lost, so the device still held it as its own r1. It restored

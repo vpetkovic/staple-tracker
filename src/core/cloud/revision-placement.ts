@@ -1,7 +1,7 @@
 /**
  * Where a document revision goes: one rule, for every reader of the log.
  *
- * Contract: `docs/sync.md`, "Two revisions written as one number".
+ * Contract: `design/sync.md`, "Two revisions written as one number".
  *
  * A revision's number is its document's next, decided on the device that writes it, so two
  * devices that each write revision N before seeing the other's both send an N. The log

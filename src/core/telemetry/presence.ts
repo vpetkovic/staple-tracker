@@ -1,6 +1,6 @@
 /**
  * The presence index: which attempts this machine started are still open, across every
- * workspace it works in (`docs/execution-telemetry.md`, "Concurrency context"; hub
+ * workspace it works in (`design/execution-telemetry.md`, "Concurrency context"; hub
  * migration 006).
  *
  * It is a cache of the workspace rows, and its rules say so:

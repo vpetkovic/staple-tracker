@@ -1,5 +1,5 @@
 /**
- * `staple budget` — provider budget telemetry (docs/execution-telemetry.md): ingesting
+ * `staple budget` — provider budget telemetry (design/execution-telemetry.md): ingesting
  * readings, the operator's opt-in and source bindings, and reading them back.
  * Machine-level: it reads and writes the staple home, never a workspace.
  *
@@ -64,7 +64,7 @@ import { limitFlag } from "./attempts.js";
 
 const USAGE = "Use: history, forget, ingest, capture, bind, unbind, bindings, setup, unsetup, status, live, collect (staple budget --help)";
 
-const HELP = `staple budget — provider budget telemetry on this machine (docs/execution-telemetry.md)
+const HELP = `staple budget — provider budget telemetry on this machine (design/execution-telemetry.md)
 
   budget [--account A] [--reserve P]    each account's limits: the current window, its
               latest reading, the high-water remaining percent and status, and the

@@ -4,8 +4,10 @@ This guide is for people hacking on staple itself. If you just want to *use*
 staple, you never need any of this — the entire install is
 `npx staple-cli` (see the [README](README.md)).
 
-Reference material on how staple behaves — semantics, the agent surface,
-continuity, configuration, migration, packaging — lives in [docs/](docs/).
+The user guides and reference live in [docs/](docs/), which the site renders.
+The design documents behind the code — the store's semantics, the cloud sync
+protocol, timing and telemetry, architecture, migration and packaging — live in
+[design/](design/README.md), which the site does not render.
 
 ## Prerequisites
 
@@ -76,7 +78,7 @@ Run all of these before sending a change; CI runs the same set:
 npm test                # vitest — semantics, CLI JSON, UI auth, takeover drill, tarball acceptance
 npm run typecheck       # tsc over the server code and the UI app
 npm run smoke:mcp       # full MCP JSON-RPC workflow over stdio
-npm run validate:timing # controlled timing runs (docs/timing-semantics.md), also part of npm test
+npm run validate:timing # controlled timing runs (design/timing-semantics.md), also part of npm test
 ```
 
 ## Working on the web UI
@@ -146,7 +148,8 @@ npm run site:build    # static build into site/build
 ```
 
 The docs pages are `docs/*.md`, rendered in place (the docs plugin reads
-`../docs`); never copy them into `site/`. The build fails on a broken link or a
+`../docs`); never copy them into `site/`. Contributor material (protocols, schemas,
+storage, internal modules) goes in `design/`, never in `docs/`. The build fails on a broken link or a
 broken Markdown link. A Markdown link from `docs/` to a `.md` file git tracks
 outside `docs/`, such as `../CONTRIBUTING.md`, becomes a link to that file on
 GitHub; link any other repository file by its full GitHub URL, since Docusaurus

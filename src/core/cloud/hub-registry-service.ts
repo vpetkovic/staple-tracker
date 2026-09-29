@@ -1,7 +1,7 @@
 /**
  * The hub's own leg to the service: connect, publish, back up, restore, adopt.
  *
- * Contract: `docs/sync.md`, "The hub registry is a set, not a map", and "Three
+ * Contract: `design/sync.md`, "The hub registry is a set, not a map", and "Three
  * consents" — specifically its fourth subsection, *"The fourth consent: publishing
  * the hub registry"*. Sibling of {@link ./hub-registry.js} (the payload and the
  * adoption rules) and {@link ./hub-registry-ops.js} (the wire translation, pure).
@@ -45,7 +45,7 @@
  *
  * ## What this file deliberately does not do
  *
- * It does not provision. It cannot: `docs/sync.md` defines no provisioning route and
+ * It does not provision. It cannot: `design/sync.md` defines no provisioning route and
  * no account model, so the Worker does not have one, and a `repos` row plus its first
  * enrollment secret are created out of band (`worker/README.md`). The product's job is
  * therefore to say so in words a person can act on rather than to fail generically —
@@ -149,7 +149,7 @@ export function registryDisclosure(endpoint: string): string {
   lines.push("    `staple hub unlink` publishes that removal. A machine that simply does not");
   lines.push("    have a link, or a workspace, leaves it alone.");
   lines.push("Anything the service holds that this machine lacks is reported by publish, and");
-  lines.push("`staple hub registry adopt` takes it on. See docs/sync.md.");
+  lines.push("`staple hub registry adopt` takes it on. See design/sync.md.");
   return lines.join("\n");
 }
 

@@ -1,8 +1,3 @@
----
-title: Timing semantics
-description: What each time number staple reports means, how an issue's elapsed time and its agent work are measured, and which number an estimate is compared against.
----
-
 # Timing semantics
 
 What each time number staple reports means, which instants bound it, and which
@@ -16,7 +11,7 @@ choices behind the rules are under [Design decisions](#design-decisions).
 
 Two pages already define time numbers, and this one does not redefine either:
 
-- [cli.md](cli.md#estimates-vs-actuals) and `IssueTiming` in `src/core/types.ts`
+- [cli.md](../docs/cli.md#estimates-vs-actuals) and `IssueTiming` in `src/core/types.ts`
   define the issue's `timing`: `activeSeconds`, `ownActiveSeconds`,
   `reviewSeconds`, `countedThrough`, `approximate`, and the estimate fields
   `estimatedSeconds`, `childrenEstimatedSeconds` and `subtreePlan`.
@@ -239,7 +234,7 @@ work. A pre-work second with an unresolved blocker cannot be worked, because the
 `in_progress` guard refuses it, so it is blocked whichever way the block was
 recorded. Precedence is by category: an issue in `active` that gains a blocker
 stays in the `active` buckets. Checkout is refused only on entry, and the agent's
-attempt is still open. The agent guidance in [agents.md](agents.md)
+attempt is still open. The agent guidance in [working-a-ticket.md](../docs/working-a-ticket.md)
 asks the agent to yield or pause in that case, so the time moves to `blocked` or
 `paused`.
 
@@ -1341,7 +1336,7 @@ and `src/core/telemetry/forecast-budget.ts`, and `method` in every report states
 
 ### Completion
 
-**Units.** The units are the certified plan's ([Comparing plans](cli.md#comparing-plans-staple-compare)):
+**Units.** The units are the certified plan's ([Comparing plans](../docs/cli.md#comparing-plans-staple-compare)):
 every unit once, a parent's own estimate shadowing the estimates beneath it, a
 cancelled issue no unit. An issue with no child carrying live work is its own single
 unit (`subject.scope: "unit"`); otherwise its units are beneath it (`"subtree"`).
@@ -1758,7 +1753,7 @@ and agents execute faster. That is the thing being calibrated, not an error.
 
 | Part | What it takes from this page |
 |---|---|
-| Lifecycle capture | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition). `asOf` as a parameter of every derivation. One mutation instant for every writer (`Journal.mutationAt`). `workSeconds` from replicated data only ([Work](#work)). Status-moving and edge events re-emitted at the origin instant, so `wall` reads the same on a device that read the tail. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping. The agent guidance in [agents.md](agents.md): yield or pause when a blocker appears mid-work. |
+| Lifecycle capture | The [bucket table](#the-buckets), its precedence and [every transition](#every-transition). `asOf` as a parameter of every derivation. One mutation instant for every writer (`Journal.mutationAt`). `workSeconds` from replicated data only ([Work](#work)). Status-moving and edge events re-emitted at the origin instant, so `wall` reads the same on a device that read the tail. `blockers_changed` from every edge-writing path. Pauses never counted as work, and resume opening a new interval. Terminal transitions closing every open interval. The replicated-only inputs (`sparse`, `capture_gap`, `end_unbounded`) as approximation flags on `workSeconds`, and `unattributed` and `edge_history_incomplete` on `wall`. The orchestrator lane and worker-lane scoping. The agent guidance in [working-a-ticket.md](../docs/working-a-ticket.md): yield or pause when a blocker appears mid-work. |
 | Controlled runs | Every bucket is defined in milliseconds from recorded instants, so a run states its expected timeline as a list of transitions and an `asOf`, and compares the `wall` buckets, `workSeconds`, `interrupted`, `resumeGapSeconds` and `orchestrationSeconds`. `review` and `blocked` are disjoint by construction, so a run that reads the same second in both has found a defect. See [Controlled runs](#controlled-runs). |
 | Quality states | The [quality inputs](#quality-inputs), the precedence, the [coverage](#missingness-for-the-new-fields) of parents and of the ratio aggregate, and the five reason codes this page adds. See [Quality states](#quality-states). |
 | Calibration and forecasts | `estimateRatio` and its eligibility, `orchestrationSeconds` as a separate overhead figure, `resumeGapSeconds` per chain link. See [Calibration cohorts](#calibration-cohorts), [Confidence ranges](#confidence-ranges) and [Forecasts](#forecasts). A completion forecast along a path sums `forecasts[].expected.seconds` (a floor forecast's is its 60-second bound) as the `walkPlanGraph` weight, and carries the warnings. Quantiles and bounds do not add along a path. A fence-clipped `expected` reads low on a heavy-tailed class, and the sum inherits it. |

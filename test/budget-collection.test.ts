@@ -1,5 +1,5 @@
 /**
- * Automatic budget collection (docs/execution-telemetry.md, "Automatic collection"):
+ * Automatic budget collection (design/execution-telemetry.md, "Automatic collection"):
  * `budget setup|unsetup|status|collect` and the service they share.
  *
  * Every path is injected: the staple home, the Claude config directory, the Codex home,

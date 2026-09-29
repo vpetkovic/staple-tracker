@@ -1,5 +1,5 @@
 /**
- * A number a restore emptied, after the refusal (`docs/sync.md`, "A number that moved under a
+ * A number a restore emptied, after the refusal (`design/sync.md`, "A number that moved under a
  * caller"; `recordRemovedHolder`, `identifier-moves.ts`).
  *
  * B1. The contract answers every use of a number whose issue left it with what happened: a read,

@@ -1,7 +1,7 @@
 /**
  * Where a repository's cloud credential lives on THIS machine.
  *
- * Contract: `docs/sync.md`, "Trust boundaries" — "Tokens are least-privilege,
+ * Contract: `design/sync.md`, "Trust boundaries" — "Tokens are least-privilege,
  * stored on the device in OS-protected storage with a `0600` file fallback, and
  * never written to the workspace database, the repository manifest, or git."
  *

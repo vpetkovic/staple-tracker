@@ -1,5 +1,5 @@
 /**
- * WV3. A stand-in names the same issue on every device (`docs/sync.md`, "Identifiers and other
+ * WV3. A stand-in names the same issue on every device (`design/sync.md`, "Identifiers and other
  * unique values").
  *
  * An issue whose claim on a number came later in the log waits under a stand-in until the

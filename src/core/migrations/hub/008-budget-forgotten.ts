@@ -3,7 +3,7 @@ import type { Migration } from "../types.js";
 
 /**
  * Hub version 8: the readings an operator removed (`staple budget forget`,
- * docs/execution-telemetry.md, "Removing a reading").
+ * design/execution-telemetry.md, "Removing a reading").
  *
  * A removed reading has to stay removed. A reading's `dedup_key` is a hash over the
  * reading's own fields, its `observedAt` included, and a Codex rollout carries the

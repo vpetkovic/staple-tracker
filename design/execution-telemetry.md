@@ -1,8 +1,3 @@
----
-title: Execution telemetry
-description: How staple records agent attempts on issues, provider usage-limit windows and budget readings, and how each is read back.
----
-
 # Execution telemetry
 
 What agent execution costs, recorded so a scheduler can reason about it. Staple
@@ -46,7 +41,7 @@ The reason for these records is one separation. A scheduler has to make two
 predictions, and they come from different data:
 
 - **Completion latency**: how long the work will take. That comes from estimates
-  and measured runtime, which staple already records ([cli.md](cli.md#estimates-vs-actuals)).
+  and measured runtime, which staple already records ([cli.md](../docs/cli.md#estimates-vs-actuals)).
 - **Provider-budget consumption**: how much of a subscription window the work
   will burn. That can only come from what the provider reports. **Runtime is
   never converted into quota.** Fourteen agents that finish fourteen
@@ -66,17 +61,17 @@ reads, and the column on the right is the whole of what it adds.
 | Existing rule | Where it is specified | What telemetry does with it |
 |---|---|---|
 | Issue identity: `issues.id` (UUID), `identifier` for display | [sync.md](sync.md#identity-is-the-uuid-never-the-identifier) | An attempt names its issue by `issueId`. `identifier` is copied into read payloads for display only, never used as a key. |
-| The claim: `checkout_agent`, `checkout_at`, and the derived `claim` payload (`heldBy`, `lastActivityAt`, `idleSeconds`, `scope`, `lease`) | [continuity.md](continuity.md), [sync.md](sync.md#claims-a-local-checkout-is-not-a-global-lease) | An attempt is the **history of a claim tenure**. The claim stays the only concurrency mechanism; attempts never grant or refuse anything. |
-| Checkout semantics: atomic claim, idempotent re-claim by the holder, `--steal-if-stale`, `release --if-stale`, no sweeper | [semantics.md](semantics.md#atomic-checkout-and-release), [continuity.md](continuity.md) | Attempt boundaries are placed on exactly these mutations, in the same transaction. No timer, sweeper or TTL opens or closes an attempt. |
+| The claim: `checkout_agent`, `checkout_at`, and the derived `claim` payload (`heldBy`, `lastActivityAt`, `idleSeconds`, `scope`, `lease`) | [handoff.md](../docs/handoff.md), [sync.md](sync.md#claims-a-local-checkout-is-not-a-global-lease) | An attempt is the **history of a claim tenure**. The claim stays the only concurrency mechanism; attempts never grant or refuse anything. |
+| Checkout semantics: atomic claim, idempotent re-claim by the holder, `--steal-if-stale`, `release --if-stale`, no sweeper | [semantics.md](semantics.md#atomic-checkout-and-release), [handoff.md](../docs/handoff.md) | Attempt boundaries are placed on exactly these mutations, in the same transaction. No timer, sweeper or TTL opens or closes an attempt. |
 | Status categories (`active`, `review`, `blocked`, `gated`, `done`, `cancelled`, …) and derived parent flips | [semantics.md](semantics.md#categories--why-a-configurable-status-set-is-still-safe) | Attempt outcomes key off the **category** an issue leaves `active` for, never a status id. Derived flips never open an attempt: a parent that is `in_progress` only because a child is has no attempt, as it has no stopwatch. A parent that is itself checked out does. |
-| Timing: `activeSeconds`, `reviewSeconds`, `countedThrough`, `approximate`, replayed from events at read time | [cli.md](cli.md#estimates-vs-actuals) | Unchanged. Attempt durations are derived the same way (clamped at `lastActivityAt`, never stored). Attempts do not change what `activeSeconds` means. |
-| Estimates: `estimatedSeconds`, `subtreePlan`, the duration vocabulary (`90s`, `30m`, `2h`) | [cli.md](cli.md#estimates-vs-actuals) | The only estimate. An attempt records a **reading** of it at start (see [below](#the-estimate-reading)), never a second estimate. |
-| Agent identity: `STAPLE_AGENT` / the `actor` on every write | [agents.md](agents.md) | The attempt's `agent`. Harness details are an optional, self-reported addition, not a new identity. |
+| Timing: `activeSeconds`, `reviewSeconds`, `countedThrough`, `approximate`, replayed from events at read time | [cli.md](../docs/cli.md#estimates-vs-actuals) | Unchanged. Attempt durations are derived the same way (clamped at `lastActivityAt`, never stored). Attempts do not change what `activeSeconds` means. |
+| Estimates: `estimatedSeconds`, `subtreePlan`, the duration vocabulary (`90s`, `30m`, `2h`) | [cli.md](../docs/cli.md#estimates-vs-actuals) | The only estimate. An attempt records a **reading** of it at start (see [below](#the-estimate-reading)), never a second estimate. |
+| Agent identity: `STAPLE_AGENT` / the `actor` on every write | [working-a-ticket.md](../docs/working-a-ticket.md) | The attempt's `agent`. Harness details are an optional, self-reported addition, not a new identity. |
 | The events log and its `dedup_key`; events re-derived on apply, never transported | [sync.md](sync.md#events-are-re-derived-never-transported) | Every attempt transition also emits one local event, keyed from the transition id, so `events --follow` hooks keep working. |
 | Idempotency keys on create | [semantics.md](semantics.md#duplicate-and-replay-guards) | Attempt-opening writes accept one; a replay returns the original attempt. |
 | Sync: entity operations, the envelope, deterministic `opId`, protocol integers, "what never leaves the machine" | [sync.md](sync.md) | Attempts are synchronized entities (protocol 3). Limit windows and budget samples are on the never-leaves list. |
-| The actionable pickup set (`inbox`, `next_task`, the queue resolver) | [queue.md](queue.md) | Not consumed here. The scheduler ranks from that set; telemetry never decides what is actionable. |
-| The error envelope and exit codes | [cli.md](cli.md#machine-readable-output) | Reused as they stand. Telemetry adds no error code. |
+| The actionable pickup set (`inbox`, `next_task`, the queue resolver) | [queue.md](../docs/queue.md) | Not consumed here. The scheduler ranks from that set; telemetry never decides what is actionable. |
+| The error envelope and exit codes | [cli.md](../docs/cli.md#machine-readable-output) | Reused as they stand. Telemetry adds no error code. |
 
 ## Terms
 
@@ -185,7 +180,7 @@ Stored fields:
 | `provenance` | `recorded` (written live by the mutation) or `reconstructed` (backfilled from events; see [History](#history-before-capture)). |
 | `missing` | The [missingness map](#missingness). Empty when every nullable field that should have a value has one. |
 
-Derived at read time and **never stored**, for the reason [cli.md](cli.md#estimates-vs-actuals)
+Derived at read time and **never stored**, for the reason [cli.md](../docs/cli.md#estimates-vs-actuals)
 gives for `activeSeconds`: a reading frozen onto an entity is wrong the instant
 it is written.
 
@@ -252,7 +247,7 @@ the original attempt.
 **Why a new harness session is not an interruption.** A change of `sessionRef`
 under one agent identity would mean the old session died only if every
 identity ran one session at a time. It does not: the MCP setup in
-[agents.md](agents.md#the-mcp-surface) names every Claude Code install
+[mcp-tools.md](../docs/mcp-tools.md) names every Claude Code install
 `STAPLE_AGENT=claude`, and the CLI falls back to `$USER` when no identity is set,
 so two live sessions routinely share one identity. Staple records the
 second session and concludes nothing. Interruptions become visible through a
@@ -1167,7 +1162,7 @@ it changed in the staple home (`telemetry/collection.json`):
   (skipped with `--no-statusline`).
   The existing `statusLine` command keeps running unchanged, as the tail of a
   plain POSIX command list that first hands staple its own copy of the input in
-  the background: the [rollback-safe recipe](cli.md#provider-budget) plus a
+  the background: the [rollback-safe recipe](../docs/cli.md#provider-budget) plus a
   marker (`: staple-statusline-wrapper/v2;`) so it is never wrapped twice. No
   shell is nested, so the command means what it meant in the shell Claude Code
   runs it with. Nothing waits on staple and nothing it prints reaches the
@@ -1281,7 +1276,7 @@ An unknown value is never zero, never the previous value and never an
 estimate. The encoding is the same for every record on this page:
 
 1. **Every measurable field is nullable, and `null` never means `0`.** Zero means
-   measured zero, the same distinction [cli.md](cli.md#estimates-vs-actuals)
+   measured zero, the same distinction [cli.md](../docs/cli.md#estimates-vs-actuals)
    draws for `activeSeconds` and for estimate sums.
 2. **Every `null` measurable field has an entry in the record's `missing`
    object**, `{ "<field>": "<reason code>" }`. A field with a value never appears
@@ -1471,7 +1466,7 @@ Stored columns are the snake_case form of the stored fields on this page
 
 Every read and write below is one store method called by the CLI, the MCP tool
 and, where one exists, the HTTP route alike. That rule is what keeps the queue's
-verbs identical across surfaces ([queue.md](queue.md#operations-by-surface)), and
+verbs identical across surfaces ([queue.md](../docs/queue.md#operations-by-surface)), and
 it is how the CLI and MCP give the same telemetry JSON structurally rather than
 by tests catching drift. Attempts have no HTTP route of their own: the web UI
 reads `attempts` from the issue payload (`GET /api/issue`, `GET /api/agent-context`)

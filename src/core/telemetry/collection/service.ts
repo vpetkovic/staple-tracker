@@ -1,5 +1,5 @@
 /**
- * Automatic budget collection after ONE explicit consent (docs/execution-telemetry.md,
+ * Automatic budget collection after ONE explicit consent (design/execution-telemetry.md,
  * "Automatic collection").
  *
  * One method per action, each with a typed result, called by `staple budget

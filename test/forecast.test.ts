@@ -1,5 +1,5 @@
 /**
- * Completion forecasts (`docs/timing-semantics.md`, "Forecasts"): each plan unit's remaining work
+ * Completion forecasts (`design/timing-semantics.md`, "Forecasts"): each plan unit's remaining work
  * from its calibrated duration less the work done on it, the remaining labor and the longest
  * chain of remaining work over the certified plan's units, resampled bands with a fixed seed,
  * and the treatment of done, in-review, overrun and unknown units.

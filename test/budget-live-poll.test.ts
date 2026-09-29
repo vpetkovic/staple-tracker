@@ -1,5 +1,5 @@
 /**
- * Live usage polling (docs/execution-telemetry.md, "Live polling"): the two pollers, the
+ * Live usage polling (design/execution-telemetry.md, "Live polling"): the two pollers, the
  * runner that schedules them, and the store rule that lets an authoritative reading
  * correct a window. Everything runs against a scratch staple home with a fake `fetch` and
  * fake stored sign-ins: no test here reads a real keychain or credential file, or makes a
@@ -848,7 +848,7 @@ describe("an authoritative reading can correct the window", () => {
   });
 });
 
-/** The counting rule as docs/execution-telemetry.md states it, reading by reading: the reference the one-pass version is held to. */
+/** The counting rule as design/execution-telemetry.md states it, reading by reading: the reference the one-pass version is held to. */
 function plainCounting(samples: readonly BudgetSample[], governance: PollGovernance): Map<string, { counted: boolean; contradictedBy: string | null }> {
   const polls = samples.filter((s) => s.source.kind === "usage_poll" && s.usedPercent !== null && Date.parse(s.observedAt) <= Date.parse(governance.now) + POLL_CLOCK_SKEW_SECONDS * 1000);
   const out = new Map<string, { counted: boolean; contradictedBy: string | null }>();

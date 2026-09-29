@@ -708,7 +708,7 @@ reason with its `goal`.
 **What replicates.** The goal itself (description, criteria), every criterion's
 mark, the evidence, the tickets the run creates and the gate all replicate; the
 run itself stays machine-local. A mark travels as the milestone field
-`criterion<n>` ([sync](sync.md#what-synchronizes)): two devices judging
+`criterion<n>` ([sync](../design/sync.md#what-synchronizes)): two devices judging
 different criteria never meet, and two judging the same one at once are a
 preserved field conflict, settled by a decision like any other.
 

@@ -1,5 +1,5 @@
 /**
- * The attempt read surfaces (docs/execution-telemetry.md, "Surfaces"): the summary on
+ * The attempt read surfaces (design/execution-telemetry.md, "Surfaces"): the summary on
  * `show`/`get_task`, the bounded list behind `staple attempts`/`list_attempts`, and the one
  * attempt behind `staple attempt <id>`/`get_attempt`.
  *
@@ -27,7 +27,7 @@ import {
 } from "./read-page.js";
 
 /**
- * The worker lane (docs/timing-semantics.md, "The orchestrator lane"): the read summary
+ * The worker lane (design/timing-semantics.md, "The orchestrator lane"): the read summary
  * `attempts: {current, last, count}` describes worker attempts only. An attempt with no
  * `role` is a worker attempt, as every attempt opened by checkout, a steal, a re-claim or a
  * status write is. This is the ONE predicate the summary filters on.
@@ -108,7 +108,7 @@ export function listAttempts(db: DatabaseSync, issueId: string, request: PageReq
     }
   }
   // A page that speaks for no span says why, with the timing contract's codes for an issue
-  // without attempts (docs/timing-semantics.md, "Missingness for the new fields"): it never
+  // without attempts (design/timing-semantics.md, "Missingness for the new fields"): it never
   // started, or it has a start and no attempt, which capture began too late to see or a
   // derived flip opened without one.
   const started = (db.prepare("SELECT started_at FROM issues WHERE id = ?").get(issueId) as { started_at: string | null } | undefined)?.started_at ?? null;
@@ -127,7 +127,7 @@ export interface ChainEntry {
   readonly startedAt: string;
   readonly endedAt: string | null;
   /**
-   * `docs/timing-semantics.md`, `resumeGapSeconds`: from this attempt's end to the start of the
+   * `design/timing-semantics.md`, `resumeGapSeconds`: from this attempt's end to the start of the
    * attempt that resumed it. Null when nothing has resumed it yet.
    */
   readonly resumeGapSeconds: number | null;

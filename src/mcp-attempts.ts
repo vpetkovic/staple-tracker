@@ -1,5 +1,5 @@
 /**
- * The MCP half of the attempt write surfaces (`docs/execution-telemetry.md`, "Surfaces"):
+ * The MCP half of the attempt write surfaces (`design/execution-telemetry.md`, "Surfaces"):
  * the optional attempt fields on `checkout_task`, `release_task` and `update_task`, and the
  * `record_attempt_event` tool. Each calls the same store method the CLI does
  * (`src/commands/attempt.ts`), so the two cannot disagree.

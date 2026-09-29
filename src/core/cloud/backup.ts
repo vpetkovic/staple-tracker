@@ -1,7 +1,7 @@
 /**
  * `staple cloud backup` and `staple cloud restore` — the client half.
  *
- * Contract: `docs/sync.md`, "Backup, disconnect and purge are three different
+ * Contract: `design/sync.md`, "Backup, disconnect and purge are three different
  * things", and the "Three consents" table.
  *
  * ## Backup is a third consent, and this module is where that is enforced
