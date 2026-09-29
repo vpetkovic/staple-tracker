@@ -1,13 +1,28 @@
 ---
 title: Connect your agent
-description: Wire Claude Code, Codex or any MCP client to staple, and what the MCP server does for a harness.
+description: Wire Claude Code, Codex or any MCP client to staple, name the agent, and point it at the protocol.
 ---
 
 # Connect your agent
 
-Agents work the tracker through the MCP server, which is the same package started
-with `mcp`. `STAPLE_AGENT` names the agent: every write is recorded under that
-name, and a write without one is refused.
+Use this page to give your coding agent staple's tools. Agents work the tracker
+through staple's MCP server, the same package started with `mcp`, so there is nothing
+else to run. Set it up once per machine, then every repository with a `.staple/`
+folder works.
+
+> [!NOTE]
+> Until `staple-cli`'s first release on npm, replace `npx -y staple-cli` below with
+> the package you built, as [Install and first workspace](getting-started.md) describes.
+
+## 1. Pick a name for the agent
+
+`STAPLE_AGENT` names the agent. Every claim, comment and document it writes is
+recorded under that name, and a write with no name is refused, so a misconfigured
+agent fails loudly instead of writing anonymously. Use one name per harness
+(`claude`, `codex`), or one per session if you run several at once
+(`claude-7f3a`), so the web UI shows who did what.
+
+## 2. Add the server
 
 **Claude Code**
 
@@ -21,33 +36,61 @@ claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
 codex mcp add staple --env STAPLE_AGENT=codex -- npx -y staple-cli mcp
 ```
 
-Any other MCP client launches `npx -y staple-cli mcp` the same way. With
-`staple` installed, `staple mcp` replaces `npx -y staple-cli mcp`. The server
-starts from any directory and finds the workspace above its working directory.
-[MCP tools](mcp-tools.md) lists every tool.
+**Any other MCP client** starts the same command. In a client that takes a JSON
+configuration:
 
-## Harness ergonomics
+```json
+{
+  "mcpServers": {
+    "staple": {
+      "command": "npx",
+      "args": ["-y", "staple-cli", "mcp"],
+      "env": { "STAPLE_AGENT": "my-agent" }
+    }
+  }
+}
+```
 
-All in-protocol, so a harness never needs out-of-band setup:
+With `staple` [installed on your PATH](getting-started.md#2-put-staple-on-your-path-optional),
+use `staple mcp` in place of `npx -y staple-cli mcp`.
 
-- **The server starts from any directory.** With no workspace above the working
-  directory, tools answer `not_found` *with instructions* instead of crashing
-  the connection. The `init` tool creates a workspace headlessly, and every
-  workspace tool takes an optional `ws` (hub slug or prefix) to target any
-  registered workspace per call.
-- **Writes require an identity.** Pass `actor` per call or set `STAPLE_AGENT`.
-  There is no silent default: a misconfigured harness fails loudly rather than
-  polluting the audit trail with anonymous writes.
-- **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
-  creates and comments come back with `replayed: true`.
-- **Tools declare annotations** — 25 read-only; among the writes, 15 are
-  `idempotentHint: true` (`checkout_task`, `set_estimate`, `set_blocked_by`,
-  `cross_link`, `hub_prune`, `init`, `update_milestone`, `set_setting`,
-  `enqueue_task`, `prune_queue`, `pause_run`, `resume_run`, `stop_run`,
-  `conflict_resolve`, `record_budget_sample`) — and return `structuredContent`
-  (arrays wrap as `{items}`).
-- **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors.
-  The telemetry lists answer `{items, truncated, nextCursor, coverage}` instead
-  ([MCP tools](mcp-tools.md#execution-telemetry)).
-- `get_task` includes cross-workspace blockers and can inline document bodies
-  with `include_documents: true`.
+The server starts from any directory and uses the workspace above the agent's working
+directory. Outside a repository with staple, its tools answer with instructions
+instead of failing, and its `init` tool sets a repository up.
+
+## 3. Point the agent at the protocol
+
+`staple init` wrote `.staple/AGENTS.md`, the rules agents follow in this repository.
+Your agent does not read files in `.staple/` on its own, so add one line to the
+instructions file it does read, `CLAUDE.md` for Claude Code or `AGENTS.md` at the
+root for Codex:
+
+```markdown
+This repository tracks its work in staple. Read .staple/AGENTS.md before you start.
+```
+
+[How an agent works a ticket](working-a-ticket.md) explains what the protocol asks.
+
+## 4. Check it works
+
+Start a new session in the repository and ask:
+
+> What is in the staple inbox?
+
+The agent calls the `inbox` tool and answers with the same READY and BLOCKED lists
+that `staple inbox` prints. Then give it real work:
+
+> Take the next staple ticket and work it.
+
+It asks `next_task` which ticket to take, claims it with `checkout_task`, and follows
+the loop. Watch it happen in the web UI (`staple open`).
+
+## If it doesn't work
+
+| What you see | What to do |
+|---|---|
+| The agent has no staple tools | Restart the session: MCP servers load when a session starts. `claude mcp list` or `codex mcp list` shows whether it is registered. |
+| Writes fail with "This write needs an agent identity" | `STAPLE_AGENT` is missing from the server's environment. Add it with `-e` (Claude Code) or `--env` (Codex). |
+| Tools answer `not_found` with instructions | The agent is working outside a repository with staple. Run `staple init` there, or let the agent call `init`. |
+
+[MCP tools](mcp-tools.md) lists every tool and its arguments.

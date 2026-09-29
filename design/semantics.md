@@ -189,6 +189,100 @@ idempotent, which is what makes crash recovery work.
 
 Release is the inverse and returns the issue to `todo`.
 
+## Claims, liveness and takeover
+
+The user guide is [Handoff and resume](../docs/handoff.md). This section is the
+contract behind it.
+
+### Claims carry liveness
+
+Every held issue carries a `claim`: `heldBy`, `lastActivityAt`, `heldSeconds`,
+`idleSeconds`. Those are derived at read time from the checkout plus the newest
+event, comment or document revision *by that holder* (a comment deleted later still
+counts), so a caller can tell a working agent from one a usage limit killed three
+hours ago. Comments and revisions replicate, so a device that pulled them reads the
+same liveness as the one they were written on
+([timing-semantics.md](timing-semantics.md#every-timing-field-one-meaning)).
+
+`ls` and `show` print `held 2h · silent 45m` on `in_progress` rows, and `--json`
+carries the same numbers under `claim`.
+
+### Takeover is explicit and opt-in
+
+`staple checkout <ref> --steal-if-stale <dur>` takes over a claim whose holder has
+been silent at least `<dur>`; `staple release <ref> --if-stale <dur>` just frees it.
+Over MCP the same two affordances are `checkout_task`'s `steal_if_idle_seconds` and
+`release_task`'s `if_idle_seconds`. Both refuse a fresher holder, by name
+(`Checkout refused: held by opus-x, active 3m ago. Pick a different task.`). A
+successful takeover logs `claim_stolen` / `claim_released_stale` with the previous
+holder and their last activity, so the audit trail survives.
+
+There is **no sweeper, no daemon, no TTL, and nothing automatic**. A claim never
+expires on its own. Staleness is information plus an affordance you invoke when a
+human says "continue". Blockers still win: a steal is refused while dependencies
+are unresolved, however dead the holder looks.
+
+Gates win too. `--steal-if-stale` cannot route around a review gate above the issue:
+checkout is refused with `gated` (exit 9) however dead the holder looks, because a
+stale holder and a closed gate are unrelated facts. The inverse is also true and is
+why the guard sits *after* the crash-recovery re-claim: an agent that was already
+holding a ticket when a gate went up above it can still resume its own work.
+
+A held claim on work that is really waiting on a person is the failure mode
+takeover exists for, and `staple gate` is the honest way to end it: parking a parent
+**clears its claim**, so it stops accruing time and stops reading as live work
+somebody should steal (see [Approval gates](#approval-gates)).
+
+### A claim change is not a plan change
+
+A live claim is a hard constraint on pickup ([queue.md](../docs/queue.md)): a row
+held by somebody else is `claimed` in effective order and the next agent is handed
+the row after it. A steal, a release and a stale-claim takeover therefore move what
+agents take, and **none of them writes to the queue**. Each changes one column on
+one issue; the effective order is derived on every read, so the very next `inbox`,
+`queue` or `next_task` reflects it with nothing re-queued, nothing recomputed in
+advance and the plan's `revision` exactly where it was. Releasing the head hands the
+head back; stealing it moves who may take it, not where it sits. That is also why a
+stale claim never silently promotes later work permanently: the moment it is freed,
+the human's order is back in force. (Pinned by `queue-lifecycle.test.ts`, *"a live
+claim is skipped, a steal moves it, and a release hands the head back"*, and across
+two processes by `queue-concurrency.test.ts`, *"releasing a stale claim re-derives
+the effective order for the next process"*.)
+
+### Waking on someone else's completion
+
+`staple wait <ref> [--timeout s] [--interval ms]` blocks until the issue is ready or
+finished, so an orchestrator can block on a blocker instead of polling. `staple
+events --follow [--since N] [--max N] [--exec CMD]` runs a command per event with
+the event JSON as the last argument and in `$STAPLE_EVENT`, so hooks fire the moment
+`blockers_resolved` / `children_complete` land. A failing hook is logged, never
+fatal.
+
+### The takeover drill
+
+The handoff is proven with two different harnesses:
+
+1. In harness one (say Claude Code), have it `checkout` a task, comment the branch
+   pointer, and `put_document … worklog` a *Done / Next / Files touched* checkpoint
+   after the **first** step of real work. Then kill the session: no release, no
+   goodbye.
+2. In harness two (say `codex`), in a fresh thread, say only: **"continue"**. It
+   should run `staple inbox` and `staple ls --status in_progress` (the row reads
+   `held 2h · silent 2h`; `inbox` does not print liveness), `staple checkout
+   <ref> --steal-if-stale 1h`, then `staple show <ref>` plus `staple doc <ref>
+   worklog`, and pick up from the `Next` it finds there.
+3. Afterwards, check three things: the *artifact* is finished (not just the ticket),
+   `staple show <ref>` names the second harness as assignee, and `staple events`
+   carries `claim_stolen` with the first harness as `previousHolder`. If the second
+   harness had to ask a question to continue, the checkpoint was too thin: that is
+   the drill failing, not the agent.
+
+`test/takeover-drill.test.ts` is the executable version of exactly this: agent
+`drill-claude` works a scratch repo over the **CLI** and dies mid-task, agent
+`drill-codex` finishes it over a real **MCP** server, and its resume is a pure
+function of one `get_task` payload, so the test cannot pass on anything the tracker
+did not carry.
+
 ## The `blocks` dependency graph
 
 - **Cycle detection** is a BFS over the whole graph on every write: adding a

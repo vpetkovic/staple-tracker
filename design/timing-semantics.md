@@ -98,9 +98,9 @@ The complete list. A field not in this table is not a timing field.
 | `timing.reviewSeconds` | elapsed | Seconds in the `review` category, non-derived intervals only. An open interval ends at the read's `asOf` ([decision 3](#design-decisions)). | docs/cli.md | never in review |
 | `timing.countedThrough` | instant | Where a leaf's open active interval stopped counting. Held issue: the holder's `lastActivityAt`. Unheld issue (a status write into `active` with no checkout): the newest event, comment or document revision by **any** actor on the issue. Comments and revisions count because they replicate and their events do not, so a device that read the tail stops the interval where the writer does. A comment deleted later still counts, as its event on the writer does. | cli.md, `store.ts` `timingFor` | no open active interval, or a parent |
 | `timing.approximate` | quality | The event log could not be replayed, so the numbers came from the fallback: `completedAt − startedAt` for `done`, `now − startedAt` for `active` and `review`, `null` otherwise. A parent is also `approximate` when any child is (the flags are ORed up). | cli.md, `store.ts` `approximateActiveOf` | never null |
-| `claim.lastActivityAt` | instant | The newest event, comment or document revision by the holder on the issue, floored at `checkoutAt`. A comment deleted later still counts. | docs/handoff.md | not held |
-| `claim.heldSeconds` | elapsed | `now − checkoutAt`. | docs/handoff.md | not held |
-| `claim.idleSeconds` | elapsed | `now − lastActivityAt`. Information, never a verdict. | docs/handoff.md | not held |
+| `claim.lastActivityAt` | instant | The newest event, comment or document revision by the holder on the issue, floored at `checkoutAt`. A comment deleted later still counts. | semantics.md | not held |
+| `claim.heldSeconds` | elapsed | `now − checkoutAt`. | semantics.md | not held |
+| `claim.idleSeconds` | elapsed | `now − lastActivityAt`. Information, never a verdict. | semantics.md | not held |
 | `attempt.activeSeconds` | effort | `startedAt` to `endedAt` (open: to `lastActivityAt`) minus `pausedSeconds`. | execution-telemetry.md | never null |
 | `attempt.pausedSeconds` | effort | Sum of the attempt's paused intervals, clipped to the same end. | execution-telemetry.md | never null |
 | `attempt.idleSeconds` | elapsed | For an effectively open attempt, `now − lastActivityAt`. | execution-telemetry.md | ended |

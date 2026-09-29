@@ -29,6 +29,108 @@
 | Tests | `test/`, `*.test.ts(x)` beside the UI code | Store semantics, CLI and MCP surfaces, migrations and crash drills, the packed runtime, sync, telemetry, UI |
 | Smoke | `scripts/smoke-mcp.ts` | Full JSON-RPC agent workflow over stdio |
 
+## The agent surface
+
+The user guides ([Connect your agent](../docs/connect-your-agent.md),
+[How an agent works a ticket](../docs/working-a-ticket.md)) say how to use these. This
+section records how they are built and why.
+
+### The protocol file `init` writes
+
+A repo-local `staple init` also writes **`.staple/AGENTS.md`**
+(`src/core/agents-template.ts`): the working protocol, rendered with that
+workspace's own slug and identifier prefix, so the next harness to arrive learns it
+from the repository instead of from whoever briefed the last one.
+
+It covers:
+
+- the loop (inbox, checkout, plan document, estimate, comments, done, events);
+- the **identity rule**: act under the identity you claimed with, all session, or
+  your own writes stop counting as liveness;
+- **parents close themselves**: an epic's status follows its children, so the last
+  child to land closes it (see [semantics.md](semantics.md#a-parents-status-is-derived-from-its-children)).
+  What is still owed is the **summary comment**, and an explicit `staple done <epic>`
+  remains allowed, idempotent, and immune to the derivation afterwards;
+- the **worklog convention**: `Done` / `Next` / `Files touched`, revised at every
+  milestone. A checkpoint written *before* the interruption is the handoff; one
+  written at the end never survives a kill;
+- the branch pointer to comment at checkout;
+- the **pickup queue rule**: plan order versus effective order, and the three
+  non-retryable refusals. It is the part an agent is most likely to get wrong,
+  because every symptom of getting it wrong looks like a transient failure: READY
+  is the effective queue rather than a presentation sort it may re-rank; a queued
+  epic or milestone stands for its open leaf work and is never a checkout target;
+  `staple queue next` answers before you claim; and `conflict` (exit 4), `gated`
+  (exit 9) and `out_of_order` (exit 10) each mean STOP and take what the refusal
+  names. Retrying, waiting and `--steal-if-stale` clear none of the three. The guide
+  also tells an agent not to reorder the plan and not to send `--override`: both
+  work for it, both record it as the actor, and both are a human's decision;
+- **approval gates**: how a design-first ticket ends (`staple gate <ref> --owner
+  <who>`, not a held claim), that the inbox's QUEUED section is never pickable, and
+  that checkout of it is refused with `gated`;
+- the continuity rules ([semantics.md](semantics.md#claims-liveness-and-takeover));
+- **the vocabulary is the workspace's**: read the statuses and kinds (`staple
+  statuses ls`, `staple kinds ls`, MCP `list_statuses` / `list_kinds`) rather than
+  assuming them, remember that all behaviour keys off the status category, and edit
+  the vocabulary only when a human asks;
+- **attempts and lanes**: yield (`release`) or pause (`staple attempt pause <ref>
+  --reason awaiting_input`) when a blocker appears mid-work, so the wait reads as
+  `blocked` or `paused` rather than as work; and how an orchestrator coordinates
+  without claiming: `staple attempt open <epic> --role orchestrator` at the start
+  of a coordination session, `staple attempt end <epic> --role orchestrator` at
+  handoff (MCP `record_attempt_event` with `event: "open"` / `"end"` and `role:
+  "orchestrator"`). That time is `orchestrationSeconds`, never `workSeconds`
+  ([timing-semantics.md](timing-semantics.md#the-orchestrator-lane));
+- **autopilot runs** ([runs.md](../docs/runs.md)): after every ticket, ask `staple
+  run continue --json` (MCP `continue_run`) and do what it answers: `take` (the
+  ticket is already checked out to you), `wait` or `stop`. The three ways a run is
+  worked (the `staple run drive` driver, a stop hook, or the agent calling `run
+  continue` itself), and the rules that hold for all three: finish before you ask,
+  record a `review:` comment before you hand a ticket on, never merge or push to
+  master or main, and stop when told to;
+- the **wiring**: `claude mcp add staple … -- staple mcp` and the MCP tools that
+  mirror the loop.
+
+An existing `AGENTS.md` is **never overwritten**; `init` says it kept it. `--global`
+workspaces get no guide: the file exists to be found in a repo, and
+`~/.staple/workspaces/` is not one. The MCP `init` tool behaves identically and
+returns `guidePath` / `guideWritten`.
+
+### The MCP server for harnesses
+
+Everything a harness needs is in-protocol, so it never needs out-of-band setup:
+
+- **The server starts from any directory.** With no workspace above the working
+  directory, tools answer `not_found` *with instructions* instead of crashing the
+  connection. The `init` tool creates a workspace headlessly, and every workspace
+  tool takes an optional `ws` (hub slug or prefix) to target any registered
+  workspace per call.
+- **Writes require an identity.** Pass `actor` per call or set `STAPLE_AGENT`.
+  There is no silent default: a misconfigured harness fails loudly rather than
+  polluting the audit trail with anonymous writes.
+- **Replay is explicit.** `add_comment` takes an `idempotency_key`; replayed
+  creates and comments come back with `replayed: true`.
+- **Tools declare annotations**: 25 read-only; among the writes, 15 are
+  `idempotentHint: true` (`checkout_task`, `set_estimate`, `set_blocked_by`,
+  `cross_link`, `hub_prune`, `init`, `update_milestone`, `set_setting`,
+  `enqueue_task`, `prune_queue`, `pause_run`, `resume_run`, `stop_run`,
+  `conflict_resolve`, `record_budget_sample`), and return `structuredContent`
+  (arrays wrap as `{items}`).
+- **List tools paginate**: `{items, nextCursor, hasMore}` with opaque cursors. The
+  telemetry lists answer `{items, truncated, nextCursor, coverage}` instead
+  ([MCP tools](../docs/mcp-tools.md#execution-telemetry)).
+- `get_task` includes cross-workspace blockers and can inline document bodies with
+  `include_documents: true`.
+
+### The For agents tab
+
+The web UI's detail panel has a **For agents** tab
+(`src/ui/app/src/detail/tabs/AgentViewTab.tsx`) that renders the exact `get_task`
+payload for an issue, both with and without `include_documents`, plus its token
+cost. It exists because a human hands over an issue believing the ticket says one
+thing while the agent receives a payload that says something slightly different,
+and nothing else shows the two side by side.
+
 ## Workspace topology
 
 A workspace is one SQLite file: `.staple/staple.db` in a repository (found by

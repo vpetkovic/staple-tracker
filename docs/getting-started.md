@@ -1,112 +1,116 @@
 ---
 title: Install and first workspace
-description: Install staple, set up a repository and follow one ticket through the agent loop.
+description: Install staple, set up a repository, open the web UI and file the first tickets.
 ---
 
 # Install and first workspace
 
-This page takes one repository from nothing to an agent working a ticket: install,
-the first workspace, connecting your agent, and the loop your agents follow. It needs
-Node >= 22.5 and nothing else.
-
-## Install
-
-```bash
-npx staple-cli              # set this repository up, then open the web UI
-```
-
-`npx` fetches the package and runs it; nothing is installed globally. To have
-`staple` on your `PATH` instead, install a versioned runtime and a launcher at
-`~/.local/bin/staple` (no `sudo`, with rollback):
-
-```bash
-npx staple-cli install --yes
-```
-
-Add `--update-path` to put `~/.local/bin` on your `PATH`. The rest of this page
-writes `staple`; with no install, read it as
-`npx staple-cli`. [Packaging and install](../design/packaging.md) covers the runtime,
-upgrades and rollback.
+Use this page to go from nothing to a repository your agents can work in: install
+staple, set the repository up, open the web UI and file your first tickets. It takes
+about five minutes and needs Node 22.5 or later, nothing else.
 
 > [!NOTE]
-> `staple-cli` is not on npm until its first release. Until then, build the
-> package from a checkout with `npm run pack:package` (see
+> `staple-cli` is not on npm until its first release. Until then, build the package
+> from a checkout with `npm run pack:package` (see
 > [CONTRIBUTING.md](../CONTRIBUTING.md)) and use
 > `npx -y file:/absolute/path/to/checkout/dist-package/staple-cli-<version>.tgz`
-> wherever this page says `npx staple-cli` or `npx -y staple-cli`.
+> wherever these docs say `npx staple-cli` or `npx -y staple-cli`.
 
-## Set up a repository
+## 1. Set up the repository
 
-Run `staple` (or `npx staple-cli`) at the root of a git repository. The first
-run sets the repository up and then opens the web UI:
+At the root of a git repository, run:
 
-- `.staple/staple.db` is the workspace: one SQLite file with every ticket,
-  comment, document and event. Its ticket prefix comes from the directory name
-  (its first three letters: `my-app` gets `MYA-1`, `MYA-2`, …, unless another
-  workspace on this machine holds `MYA`); the first run prints it.
-- `.staple/AGENTS.md` is the protocol your agents follow, written with this
-  workspace's slug and prefix. Commit it. An existing one is never
-  overwritten.
-- `.staple/repository.json` holds the repository's identity, which cloud sync
-  uses to recognise it on another machine. Commit it.
-- `.staple/.gitignore` keeps the database out of git.
-- The workspace is registered in the hub, so `staple open --hub` and
-  cross-repository links can find it.
+```bash
+npx staple-cli
+```
 
-The UI runs in the foreground on `http://localhost:4400/` (a free port if 4400
-is busy) until you press Ctrl-C. Where there is no terminal (CI, a script), use
-`staple init --yes`: the same setup, then exit. [Configuration](configuration.md) covers the staple home
-and machine settings, and [Web UI](web-ui.md) every view.
+The first run asks a few questions, sets the repository up and opens the web UI.
+Where there is no terminal to answer in (CI, a script), run `npx staple-cli init --yes`
+instead: the same setup with the defaults, and no UI.
 
-## Connect your agent
+```text
+Created workspace "app" (prefix APP) at /work/app/.staple/staple.db — registered in hub.
+Wrote the agent protocol guide to /work/app/.staple/AGENTS.md — read it before working this repo.
+Wrote /work/app/.staple/.gitignore so the database stays out of git; AGENTS.md is deliberately NOT ignored.
+```
 
-Connecting Claude Code, Codex or another MCP client has its own page:
-[Connect your agent](connect-your-agent.md).
+The prefix is the first three letters of the directory name, in capitals: tickets in
+a repository called `app` are `APP-1`, `APP-2`, and in `payments-service` they are
+`PAY-1`, `PAY-2`. If another repository on this machine already has
+a workspace called `app`, `init --yes` stops with a `conflict`. Name this one yourself with
+`staple init --yes --slug <name>`, and staple picks a prefix no other workspace uses
+(`APPA`, for example).
 
-## The agent loop
+Everything lives in a new `.staple/` folder:
 
-Every agent follows one loop, whether it calls MCP tools or the CLI. Create two
-tickets, the second waiting on the first:
+- **Your tickets**, in one local file that git ignores.
+- **`AGENTS.md`**, the working protocol for agents in this repository. Commit it.
+  [How an agent works a ticket](working-a-ticket.md) explains what it is for.
+- **`repository.json`**, which lets [cloud sync](cloud-sync.md) recognise the
+  repository on another machine. Commit it.
+
+Commit the folder (its own `.gitignore` keeps the tickets out) so every clone, and
+every agent in it, gets the same protocol:
+
+```bash
+git add .staple && git commit -m "chore: set up staple"
+```
+
+## 2. Put `staple` on your PATH (optional)
+
+`npx` runs staple without installing anything. To type `staple` instead, install a
+runtime under your home directory (no `sudo`, with rollback):
+
+```bash
+npx staple-cli install --yes --update-path
+```
+
+The rest of the docs write `staple`. Without the install, read it as `npx staple-cli`.
+
+## 3. Open the web UI
+
+```bash
+staple open
+```
+
+```text
+staple ui — workspace "app" at http://localhost:4400/
+```
+
+The UI runs until you press Ctrl-C, on port 4400 or a free port if that one is busy.
+It shows the board, the ticket tree, dependencies and every ticket's plan, worklog
+and comments. [Tour](web-ui.md) covers each view.
+
+## 4. File your first tickets
+
+Create two tickets, the second waiting on the first:
 
 ```bash
 staple new "Add a health check endpoint"
-staple new "Document the endpoint" --blocked-by MYA-1
+staple new "Document the endpoint" --blocked-by APP-1
 staple inbox
 ```
 
 ```text
 READY (pickup order):
-  ◌  MYA-1     backlog     Add a health check endpoint
+  ◌  APP-1     backlog     Add a health check endpoint
 BLOCKED:
-  ◌  MYA-2     backlog     Document the endpoint  [waiting on MYA-1]
+  ◌  APP-2     backlog     Document the endpoint  [waiting on APP-1]
 ```
 
-An agent then works the first ticket through to done. The MCP tool for each step
-is on the right:
+The inbox is what an agent reads first: READY is the work it may take, in order, and
+BLOCKED is waiting on other work. When APP-1 is done, APP-2 moves to READY on its own.
 
-```bash
-staple queue next                               # next_task: the one ticket to take
-staple start MYA-1                              # checkout_task: claim it, atomically
-staple doc MYA-1 plan --put plan.md             # put_document: the plan
-staple estimate MYA-1 2h                        # set_estimate: how long it should take
-staple comment MYA-1 "route added, tests next"  # add_comment: progress
-staple done MYA-1                               # update_task: finish it
-```
+## 5. Connect your agent
 
-A claim is exclusive: when two agents race for one ticket, one gets it and the
-other gets a `conflict` and picks another ticket rather than retrying. Finishing
-MYA-1 makes MYA-2 ready, and the next `staple inbox` lists it under READY. An agent
-that dies holding a claim leaves it to go stale, and another agent can take it
-over on the record ([continuity](handoff.md)).
-
-The CLI takes the agent name from `--agent`, then `STAPLE_AGENT`, then your user
-name. [Epics and dependencies](epics-and-dependencies.md) covers statuses, claims and
-dependencies.
+Wire Claude Code, Codex or another MCP client to staple, then ask your agent to take
+the next ticket: [Connect your agent](connect-your-agent.md).
 
 ## Next
 
-- [The pickup queue](queue.md): set the order agents take work in.
-- [Milestones](milestones.md): dated plans with goal criteria.
-- [Autopilot runs](runs.md): one agent works a scope ticket after ticket.
-- [Cloud sync](cloud-sync.md): share a workspace between two machines.
-- [CLI](cli.md): every command and flag.
+- [How an agent works a ticket](working-a-ticket.md): the loop your agents follow.
+- [Plans become tickets](plans-to-tickets.md): turn a feature plan into an epic.
+- [Configuration](configuration.md): machine preferences and workspace settings.
+
+Going deeper: [packaging and install](../design/packaging.md) covers the runtime,
+upgrades and rollback.

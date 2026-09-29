@@ -2049,7 +2049,7 @@ both plans are retained and the human picks one, or edits a third.
 
 ## Claims: a local checkout is not a global lease
 
-[handoff.md](../docs/handoff.md) describes the local model — an explicit claim, no
+[semantics.md](semantics.md#claims-liveness-and-takeover) describes the local model — an explicit claim, no
 sweeper, no TTL, no expiry, takeover only when a human says "continue". None of
 that changes when a repository is connected. What connection adds is a way to make
 a claim globally exclusive; a disconnected repository cannot, and does not imply
@@ -2093,7 +2093,7 @@ render; the token and the server expiry live in the sync tables, not in new
 `issues` columns.
 
 Takeover stays explicit. `--steal-if-stale` and `--if-stale` still mean what
-[handoff.md](../docs/handoff.md) says they mean; connected, they additionally
+[semantics.md](semantics.md#claims-liveness-and-takeover) says they mean; connected, they additionally
 require the server to agree the lease is stale. There is still **no sweeper and
 no automatic takeover**, on either side of the wire.
 

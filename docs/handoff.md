@@ -1,111 +1,140 @@
 ---
 title: Handoff and resume
-description: What happens when an agent session dies mid-task, and how another session or agent picks the work up.
+description: Pick up a ticket after an agent session dies, hits a usage limit or changes hands, exactly where it stopped.
 ---
 
 # Handoff and resume
 
-What happens after an agent dies mid-task.
+Use this page when an agent session ends in the middle of a ticket: it hit the
+five-hour limit, the weekly quota ran out, or someone closed the terminal. The ticket
+still shows who held it and how long they have been silent, and the worklog says
+where to continue. Another session, or another agent in a different harness, takes
+it over and carries on.
 
-## Claims carry liveness
+The example continues [Plans become tickets](plans-to-tickets.md). A later ticket
+under the password reset epic, APP-7 "Lock the account after five failed resets", is
+in Claude's hands when its session dies. Codex picks
+it up.
 
-Every held issue carries a `claim`: `heldBy`, `lastActivityAt`, `heldSeconds`,
-`idleSeconds`. Those are derived at read time from the checkout plus the newest
-event, comment or document revision *by that holder* (a comment deleted later
-still counts) — so a caller can tell a working agent from one a usage limit killed
-three hours ago. Comments and revisions replicate, so a device that pulled them
-reads the same liveness as the one they were written on.
+## 1. Before the interruption: checkpoint as you go
 
-`ls` and `show` print `held 2h · silent 45m` on `in_progress` rows, and
-`--json` carries the same numbers under `claim`.
+A handoff is only as good as what the last session left. Agents that follow the
+protocol (see [How an agent works a ticket](working-a-ticket.md)) leave two things:
 
-## Takeover is explicit and opt-in
+- a **branch pointer** comment at claim time:
+  `staple comment APP-7 "Branch pointer: branch feat/reset-lockout, base 7d1e2f3."`
+- a **worklog** replaced after every step, with *Done*, *Next* and *Files touched*.
 
-```bash
-staple checkout STA-42 --steal-if-stale 1h    # take over a dead agent's claim
-staple release STA-42 --if-stale 1h           # just free it
-```
+Both must be written before the interruption, because an interruption gives no warning.
+A summary planned for the end of the session never gets written.
 
-Over MCP the same two affordances are `checkout_task`'s
-`steal_if_idle_seconds` and `release_task`'s `if_idle_seconds`.
+## 2. See which claims have gone quiet
 
-Both refuse a fresher holder, by name:
-
-```
-Checkout refused: held by opus-x, active 3m ago. Pick a different task.
-```
-
-A successful takeover logs `claim_stolen` / `claim_released_stale` with the
-previous holder and their last activity, so the audit trail survives.
-
-There is **no sweeper, no daemon, no TTL, and nothing automatic**. A claim
-never expires on its own. Staleness is information plus an affordance you
-invoke when a human says "continue". Blockers still win: a steal is refused
-while dependencies are unresolved, however dead the holder looks.
-
-Gates win too. `--steal-if-stale` cannot route around a review gate above the
-issue — checkout is refused with `gated` (exit 9) however dead the holder
-looks, because a stale holder and a closed gate are unrelated facts. The
-inverse is also true and is why the guard sits *after* the crash-recovery
-re-claim: an agent that was already holding a ticket when a gate went up
-above it can still resume its own work.
-
-A held claim on work that is really waiting on a person is the failure mode
-this whole file exists for, and `staple gate` is the honest way to end it:
-parking a parent **clears its claim**, so it stops accruing time and stops
-reading as live work somebody should steal. See
-[Approval gates](approval-gates.md).
-
-## A claim change is not a plan change
-
-A live claim is a hard constraint on pickup ([queue.md](queue.md)): a row held
-by somebody else is `claimed` in effective order and the next agent is handed
-the row after it. Everything on this page therefore moves what agents take —
-and **none of it writes to the queue**. A steal, a release and a stale-claim
-takeover all change one column on one issue; the effective order is derived on
-every read, so the very next `inbox`, `queue` or `next_task` reflects it with
-nothing re-queued, nothing recomputed in advance and the plan's `revision`
-exactly where it was. Releasing the head hands the head back; stealing it moves
-who may take it, not where it sits. That is also why a stale claim never
-silently promotes later work permanently: the moment it is freed, the human's
-order is back in force. (Pinned by `queue-lifecycle.test.ts` — *"a live claim is
-skipped, a steal moves it, and a release hands the head back"* — and across two
-processes by `queue-concurrency.test.ts` — *"releasing a stale claim re-derives
-the effective order for the next process"*.)
-
-## Waking on someone else's completion
+`staple ls` and `staple show` print how long each claim has been held, and how long
+since its holder last wrote anything:
 
 ```bash
-staple wait STA-42 [--timeout s] [--interval ms]     # block until ready or finished
-staple events --follow [--since N] [--max N] [--exec CMD]
+staple ls --status in_progress
 ```
 
-`wait` lets an orchestrator block on a blocker instead of polling. `--follow
---exec` runs a command per event with the event JSON as the last argument and
-in `$STAPLE_EVENT`, so hooks fire the moment `blockers_resolved` /
-`children_complete` land. A failing hook is logged, never fatal.
+```text
+◆ ◐  APP-1     in_progress Password reset · epic
+◇ ◐  APP-7     in_progress Lock the account after five failed resets @claude · held 2m · silent 2m
+```
 
-## The takeover drill
+A working agent comments and updates its worklog, so its *silent* stays short.
+A dead session goes on being silent. Agents read the same numbers from the `claim`
+object in MCP `get_task`. In a real handoff the silence is usually hours; this
+example uses minutes.
 
-Prove the handoff works on your own machine, with two different harnesses:
+## 3. Take over the claim
 
-1. In harness one (say Claude Code), have it `checkout` a task, comment the
-   branch pointer, and `put_document … worklog` a *Done / Next / Files touched*
-   checkpoint after the **first** step of real work. Then kill the session — no
-   release, no goodbye. That is the whole simulation.
-2. In harness two (say `codex`), in a fresh thread, say only: **"continue"**.
-   It should run `staple inbox` (the row reads `held 2h · silent 2h`),
-   `staple checkout <ref> --steal-if-stale 1h`, then `staple show <ref>` plus
-   `staple doc <ref> worklog` — and pick up from the `Next` it finds there.
-3. Afterwards, check three things: the *artifact* is finished (not just the
-   ticket), `staple show <ref>` names the second harness as assignee, and
-   `staple events` carries `claim_stolen` with the first harness as
-   `previousHolder`. If the second harness had to ask you a question to
-   continue, the checkpoint was too thin — that is the drill failing, not the
-   agent.
+A plain claim is refused while someone else holds the ticket:
 
-`test/takeover-drill.test.ts` is the executable version of exactly this: agent
-`drill-claude` works a scratch repo over the **CLI** and dies mid-task, agent
-`drill-codex` finishes it over a real **MCP** server, and its resume is a pure
-function of one `get_task` payload — so the test cannot pass on anything the
-tracker did not carry.
+```text
+error(conflict): Checkout refused: status is "in_progress" (held by claude), expected one of todo, backlog, blocked. Pick a different task — do not retry.
+```
+
+To take it over, say how long the holder must have been silent:
+
+```bash
+staple start APP-7 --steal-if-stale 2m    # MCP checkout_task with steal_if_idle_seconds
+```
+
+```text
+stole ◐  APP-7     in_progress Lock the account after five failed resets @codex (was claude, silent 2m)
+```
+
+If the holder has written anything within that time, the takeover is refused by name,
+so a live agent is never pushed off its work:
+
+```text
+error(conflict): Checkout refused: held by claude, active 0s ago. Pick a different task.
+```
+
+The takeover is on the record. `staple events` shows who took what from whom:
+
+```text
+64  2026-09-29T14:10:09  claim_stolen  {"identifier":"APP-7","previousHolder":"claude",…,"previousIdleSeconds":126,…}
+```
+
+## 4. Continue from the worklog
+
+The new holder reads the ticket and the worklog, and picks up at *Next*:
+
+```bash
+staple show APP-7            # MCP get_task, include_documents: true
+staple doc APP-7 worklog     # MCP get_document, key "worklog"
+```
+
+```text
+## Done
+- Failed-attempt counter on the reset form (b7c8d9e).
+
+## Next
+- Lock after the fifth failure and email the owner.
+```
+
+The branch pointer comment says where the code is. From here it is the ordinary
+[loop](working-a-ticket.md).
+
+## Just saying "continue"
+
+With the protocol in the repository, a new session needs no briefing. In Claude Code,
+Codex or any connected agent, say:
+
+> continue
+
+The agent reads the inbox, lists the claims in progress (`staple ls --status
+in_progress`), finds the silent one, takes it over, reads the worklog and carries on. If it has to ask you where to start, the last worklog was too thin.
+That is worth fixing in the protocol, not in the prompt.
+
+## Free a claim without taking it
+
+To hand a dead session's ticket back to the queue instead of working it yourself:
+
+```bash
+staple release APP-7 --if-stale 2h    # MCP release_task with if_idle_seconds
+```
+
+The ticket returns to `todo` and the next agent to ask takes it.
+
+## What staple never does on its own
+
+- **Nothing expires.** No timer frees a claim. Silence is information, and takeover
+  is a step someone chooses. Agents are told to take over only when a person asks
+  them to continue, never because a ticket looks abandoned.
+- **Dependencies and gates still apply.** A takeover is refused while the ticket
+  waits on unfinished work or on an [approval gate](approval-gates.md), however long
+  the holder has been silent.
+- **A claim covers this machine.** Another computer that shares the workspace through
+  [cloud sync](cloud-sync.md) can hold the same ticket at the same time, unless the
+  agent takes a lease with `staple cloud lease acquire APP-7`.
+
+Durations take `90s`, `30m`, `2h`, `3d` or a number of seconds.
+
+## Next
+
+- [How an agent works a ticket](working-a-ticket.md): the loop, and the worklog in it.
+- [Autopilot runs](runs.md): one agent works a scope ticket after ticket.
+- [Cloud sync](cloud-sync.md): hand work between two machines.
