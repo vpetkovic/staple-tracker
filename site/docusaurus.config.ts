@@ -4,6 +4,7 @@ import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 import {syntaxTheme} from './src/css/prism';
 import githubAlerts from './src/remark/githubAlerts';
+import preloadFonts from './src/plugins/preloadFonts';
 
 // Where the site lives. `url` comes from SITE_URL, which the deploy workflow sets
 // from the SITE_URL repository variable, or else to the Worker's workers.dev
@@ -103,6 +104,8 @@ const config: Config = {
       } satisfies Preset.Options,
     ],
   ],
+
+  plugins: [preloadFonts],
 
   themes: [
     [
