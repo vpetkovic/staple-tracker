@@ -134,6 +134,11 @@ function readPids(dir: string, ref: string): { session: number; grandchild: numb
   return JSON.parse(readFileSync(join(dir, `${ref}.pids`), "utf8")) as { session: number; grandchild: number };
 }
 
+/** The process group `pid` belongs to, from `ps` (Node has no getpgid). */
+function pgidOf(pid: number): number {
+  return Number(spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim());
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -370,6 +375,12 @@ describe("nothing outlives its session", () => {
     await until(() => existsSync(join(dir, `${refs[0]}.pids`)));
     const pids = readPids(dir, refs[0]!);
     const attached = lines(first.out())[0]!;
+    // The group the driver spawned. Its leader is not always the agent: a custom template
+    // runs under /bin/sh, which forks the command on Linux (dash) and execs it on macOS.
+    await until(() => lines(first.out()).some((e) => e.event === "session_started"));
+    const group = Number(lines(first.out()).find((e) => e.event === "session_started")!.pid);
+    expect(pgidOf(pids.session)).toBe(group);
+    expect(pgidOf(pids.grandchild)).toBe(group);
     process.kill(Number(attached.pid), "SIGKILL");
     await first.exited;
     expect(alive(pids.session)).toBe(true); // nobody ended it
@@ -380,8 +391,8 @@ describe("nothing outlives its session", () => {
     const refused = await cli(dir, ["run", "drive", "--run", runId, ...fake("sleep"), "--poll", "0.2", "--json"]);
     expect(refused.status).toBe(4);
     const error = JSON.parse(refused.stderr.trim().split("\n").at(-1)!) as { code: string; message: string; detail: Record<string, unknown> };
-    expect(error).toMatchObject({ code: "conflict", detail: { pgid: pids.session, ticket: refs[0], driverPid: Number(attached.pid), sessionStartedAt: expect.any(String) } });
-    expect(error.message).toContain(`kill -TERM -${pids.session}`);
+    expect(error).toMatchObject({ code: "conflict", detail: { pgid: group, ticket: refs[0], driverPid: Number(attached.pid), sessionStartedAt: expect.any(String) } });
+    expect(error.message).toContain(`kill -TERM -${group}`);
     expect(error.message).toContain("--forget-stale-session");
     expect(alive(pids.session)).toBe(true);
 
@@ -389,12 +400,12 @@ describe("nothing outlives its session", () => {
     const second = startDriver(dir, ["--run", runId, ...fake("sleep"), "--poll", "0.2", "--forget-stale-session"]);
     await until(() => lines(second.out()).some((e) => e.event === "session_started"));
     const events = lines(second.out());
-    expect(events.find((e) => e.event === "stale_session_forgotten")).toMatchObject({ pid: pids.session, ticket: refs[0], driverPid: Number(attached.pid) });
+    expect(events.find((e) => e.event === "stale_session_forgotten")).toMatchObject({ pid: group, ticket: refs[0], driverPid: Number(attached.pid) });
     expect(events.find((e) => e.event === "take")).toMatchObject({ ref: refs[0], resumed: true });
     expect(alive(pids.session)).toBe(true);
 
     // The test started that orphan: end it, as the message says.
-    process.kill(-pids.session, "SIGKILL");
+    process.kill(-group, "SIGKILL");
     await until(() => !alive(pids.session) && !alive(pids.grandchild), 3_000);
     expect((await cli(dir, ["run", "stop", runId, "--json"], "vp")).status).toBe(0);
     expect(await second.exited).toBe(0);
@@ -416,6 +427,42 @@ describe("nothing outlives its session", () => {
     expect(alive(pids.session)).toBe(false);
     expect(alive(pids.grandchild)).toBe(false);
     expect((await runOf(dir, String(attached.runId))).driver).toBeNull();
+  }, 60_000);
+
+  it("a run stop gives a session that ignores TERM its grace, then KILLs it, and the driver still cleans up", async () => {
+    const { dir, refs } = await workspace(["stubborn to a stop"]);
+    const driver = startDriver(dir, ["--scope", "queue", ...fake("stubborn"), "--poll", "0.2"]);
+    await until(() => existsSync(join(dir, `${refs[0]}.pids`)));
+    const pids = readPids(dir, refs[0]!);
+    const runId = String(lines(driver.out())[0]!.runId);
+    expect((await cli(dir, ["run", "stop", runId, "-m", "enough", "--json"], "vp")).status).toBe(0);
+    await until(() => lines(driver.out()).some((e) => e.event === "session_ended"), 1_000);
+    expect(lines(driver.out()).some((e) => e.event === "session_ended")).toBe(false); // still in the grace
+    expect(alive(pids.session)).toBe(true); // TERM ignored; not KILLed with its shell
+    expect(await driver.exited).toBe(0);
+    expect(lines(driver.out()).find((e) => e.event === "session_ended")).toMatchObject({ ended: "stopped", outcome: "failed" });
+    expect(alive(pids.session)).toBe(false);
+    expect(alive(pids.grandchild)).toBe(false);
+    expect((await runOf(dir, runId)).driver).toBeNull();
+  }, 60_000);
+
+  it("a driver that fails mid-session ends the session before it forgets driver.json, so nothing is orphaned", async () => {
+    const { dir, refs } = await workspace(["driver fails"]);
+    const driver = startDriver(dir, ["--scope", "queue", ...fake("sleep"), "--poll", "0.2"]);
+    await until(() => existsSync(join(dir, `${refs[0]}.pids`)));
+    const pids = readPids(dir, refs[0]!);
+    const attached = lines(driver.out())[0]!;
+    // The next heartbeat writes driver.json through this temp name: a directory there makes
+    // it throw inside the poll loop.
+    mkdirSync(join(dir, ".staple", "runs", String(attached.runId), `driver.json.${Number(attached.pid)}.tmp`));
+    // Without the group ended, the live session also keeps the failed driver from exiting.
+    const code = await Promise.race([driver.exited, new Promise<"still running">((r) => setTimeout(() => r("still running"), 15_000))]);
+    expect(alive(pids.session)).toBe(false);
+    expect(code).not.toBe("still running");
+    expect(code).not.toBe(0);
+    expect(driver.err()).toContain("EISDIR");
+    expect(alive(pids.grandchild)).toBe(false);
+    expect(existsSync(join(dir, ".staple", "runs", String(attached.runId), "driver.json"))).toBe(false);
   }, 60_000);
 
   it("two drivers started on one run at the same instant: one attaches, the other is refused", async () => {

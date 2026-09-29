@@ -70,6 +70,17 @@ const bundle = uiBundleExists();
 const browserReady = bundle && (await chromiumAvailable());
 const reason = !bundle ? "no UI bundle (run npm run build:ui)" : !browserReady ? "no Chromium for playwright-core" : "";
 if (reason) console.warn(`ui-phone-back: skipped — ${reason}`);
+/**
+ * In CI this suite MUST run: CI installs Chromium for playwright-core (.github/workflows/ci.yml),
+ * and a skip there would pass the gate having pressed nothing. Locally a missing browser skips.
+ */
+if (reason && process.env.CI) {
+  describe("ui-phone-back: a browser to run in", () => {
+    it("has the UI bundle and Chromium", () => {
+      throw new Error(`ui-phone-back cannot run in CI: ${reason}.`);
+    });
+  });
+}
 
 /** Does a task-list-lane overlay use the shared hook yet? Its case runs once it does. */
 const usesHook = (file: string) => {

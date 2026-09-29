@@ -283,6 +283,19 @@ interface UnitPlan {
   readonly known: boolean;
 }
 
+/**
+ * One unit's expected remaining work exactly as the completion forecast adds it into its labor:
+ * 0 when done or waiting for review (a review is not work left), the calibrated duration for a
+ * unit nobody has started, the conditional mean of the admissible remainders once work has, the
+ * floor bound less the work for a floor-dominated class. `seconds` is null when the unit is
+ * unknown (no estimate, no samples, or beyond its class's range), which makes a sum a lower
+ * bound. The milestone view's `remaining.forecastSeconds` sums this over its open tasks.
+ */
+export function unitRemaining(input: ForecastUnitInput): { known: boolean; seconds: number | null } {
+  const plan = planUnit(input);
+  return { known: plan.known, seconds: plan.known ? (plan.unit.expected?.remainingSeconds ?? plan.constant) : null };
+}
+
 function planUnit(input: ForecastUnitInput): UnitPlan {
   const { node } = input;
   const base = {
