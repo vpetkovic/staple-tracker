@@ -565,6 +565,24 @@ pre code,
   font-size: 0.9em;
 }
 
+/* On a phone a wide table scrolls inside its frame. Without a floor its columns squeeze
+   to a word or two each and every row grows tall; with one, the prose column (last, in
+   these docs) keeps a readable line and the table scrolls instead. */
+@media (max-width: 767px) {
+  .theme-doc-markdown table td {
+    min-width: 7rem;
+  }
+
+  .theme-doc-markdown table td:last-child:not(:first-child) {
+    min-width: 13rem;
+  }
+
+  /* Three columns or more already scroll: give the prose a full line. */
+  .theme-doc-markdown table td:last-child:nth-child(n + 3) {
+    min-width: 18rem;
+  }
+}
+
 /* ---------- Admonitions ---------- */
 
 .theme-admonition {

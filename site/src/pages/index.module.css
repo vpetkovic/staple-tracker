@@ -299,6 +299,10 @@
     gap: var(--st-space-10);
   }
 
+  .walkCopy {
+    max-width: var(--st-measure);
+  }
+
   .stacked,
   .split {
     grid-template-columns: minmax(0, 1fr);

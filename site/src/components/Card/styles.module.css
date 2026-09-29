@@ -72,6 +72,14 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* Three across needs a desk: on a tablet the cards stack, each at a readable width. */
+@media (max-width: 996px) {
+  .grid:not(.two) {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: var(--st-measure);
+  }
+}
+
 @media (max-width: 767px) {
   .grid,
   .two {

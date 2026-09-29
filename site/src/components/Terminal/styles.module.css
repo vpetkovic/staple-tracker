@@ -54,12 +54,18 @@
   color: var(--st-code-fg);
 }
 
-.command {
-  /* A long command wraps with a hanging indent: continuation lines start under the command, not the prompt. */
+.command,
+.comment,
+.output {
+  /* A long line wraps with a hanging indent, so a continuation never reads as a new line:
+     a command continues under the command, not the prompt, and output two columns in. */
   padding-left: 2ch;
   text-indent: -2ch;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.command {
   color: var(--st-code-fg);
 }
 
@@ -70,11 +76,9 @@
 }
 
 .comment {
-  white-space: pre-wrap;
   color: var(--st-fg-subtle);
 }
 
 .output {
-  white-space: pre-wrap;
   color: var(--st-fg-muted);
 }
