@@ -139,10 +139,6 @@
   gap: var(--st-space-16);
 }
 
-.splitWide {
-  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
-}
-
 .splitCopy {
   min-width: 0;
 }
@@ -244,12 +240,27 @@
 
 /* ---------- Plan to work ---------- */
 
+.resume {
+  align-items: start;
+}
+
 .flowShot {
   margin-top: var(--st-space-16);
 }
 
 .resume {
   margin-top: var(--st-space-24);
+}
+
+/* ---------- Human in the loop ---------- */
+
+.humanHead {
+  align-items: end;
+  margin-bottom: var(--st-space-12);
+}
+
+.humanPoints {
+  margin: 0;
 }
 
 /* ---------- Next to your tracker ---------- */
@@ -402,6 +413,18 @@
   border-left: 2px solid var(--st-accent);
 }
 
+.quote blockquote {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.quote figcaption {
+  margin-top: var(--st-space-3);
+  font-size: var(--st-text-sm);
+  color: var(--st-fg-subtle);
+}
+
 .quote p {
   margin: 0;
   font-size: var(--st-text-2xl);
@@ -464,8 +487,7 @@
 /* ---------- Breakpoints ---------- */
 
 @media (max-width: 996px) {
-  .split,
-  .splitWide {
+  .split {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--st-space-10);
   }

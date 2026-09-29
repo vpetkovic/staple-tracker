@@ -31,8 +31,11 @@ const PLAN_FILES: {name: string; note?: string}[] = [
 ];
 
 // A session against a scratch workspace, run for this page: claude claimed TEN-2,
-// stored a worklog and went silent; half an hour later codex ran these. The output
-// is verbatim (`show` cut to its first three lines).
+// stored a worklog and went silent; half an hour later codex ran these. Commands and
+// output are verbatim, with three changes: the `# ` lines above commands are
+// annotations, `show` is cut to its first three lines, and the blank line after the
+// worklog header is dropped. The header itself (`# worklog @ r1 …`) is real output,
+// which the Terminal draws like a comment.
 const RESUME = [
   '# claude went quiet mid-ticket; the ticket says so',
   '$ staple show TEN-2',
@@ -327,7 +330,7 @@ export default function Story(): ReactNode {
         </Section>
 
         <Section tone="subtle" id="human">
-          <div className={clsx(styles.split, styles.splitWide)}>
+          <div className={clsx(styles.split, styles.humanHead)}>
             <div className={styles.splitCopy}>
               <Eyebrow>Human in the loop</Eyebrow>
               <Heading>You decide. You don’t babysit.</Heading>
@@ -335,33 +338,32 @@ export default function Story(): ReactNode {
                 Agents take the next ready ticket on their own. You set the order, choose what needs your sign-off,
                 and see at any moment what is done, what is next and who is on it.
               </p>
-              <ul className={styles.points}>
-                <li>
-                  The <Link to="/docs/queue">pickup queue</Link> is the order agents take work in. Rank never lifts a
-                  blocker or a live claim.
-                </li>
-                <li>
-                  An <Link to="/docs/approval-gates">approval gate</Link> parks an epic on a person: its tickets wait
-                  until you approve.
-                </li>
-                <li>
-                  <Link to="/docs/milestones">Milestones</Link> put a date and a definition of done on a set of
-                  epics, with progress and pace.
-                </li>
-                <li>
-                  <code>staple open</code> serves the <Link to="/docs/web-ui">web UI</Link> from your machine, with no
-                  daemon and no account.
-                </li>
-              </ul>
             </div>
-            <div className={styles.splitVisual}>
-              <Screenshot
-                name="queue"
-                phone
-                alt="The Queue view: the pickup order, how many tasks are ready, being worked on or waiting, and the task an agent would get next."
-              />
-            </div>
+            <ul className={clsx(styles.points, styles.humanPoints)}>
+              <li>
+                The <Link to="/docs/queue">pickup queue</Link> is the order agents take work in. Rank never lifts a
+                blocker or a live claim.
+              </li>
+              <li>
+                An <Link to="/docs/approval-gates">approval gate</Link> parks a parent, such as an epic, on a person:
+                the tickets under it wait until you approve.
+              </li>
+              <li>
+                <Link to="/docs/milestones">Milestones</Link> put a date and a definition of done on a set of epics and
+                tasks, with progress and pace.
+              </li>
+              <li>
+                <code>staple open</code> serves the <Link to="/docs/web-ui">web UI</Link> from your machine, with no
+                daemon and no account.
+              </li>
+            </ul>
           </div>
+          <Screenshot
+            name="milestones"
+            phone
+            alt="The Milestones view: the Public beta milestone with its due date and progress, 2 of 10 tasks finished, and next up LUM-9, number 1 in the pickup order; below it the epics and tasks in the milestone, in order."
+            caption="A milestone in the web UI: how far along it is, what waits on whom, and the ticket an agent takes next."
+          />
         </Section>
 
         <Section id="alongside">
@@ -393,12 +395,16 @@ export default function Story(): ReactNode {
 
         <Section tone="subtle" width="narrow" id="origin" className={styles.origin}>
           <Eyebrow>Where it came from</Eyebrow>
-          <blockquote className={styles.quote}>
-            <p>“I don’t want Markdown files acting as a backlog, especially for large features such as integrating multi-tenancy.”</p>
-          </blockquote>
+          <Heading>Built out of daily work with agents.</Heading>
+          <figure className={styles.quote}>
+            <blockquote>
+              <p>“I don’t want Markdown files acting as a backlog, especially for large features such as integrating multi-tenancy.”</p>
+            </blockquote>
+            <figcaption>staple’s author</figcaption>
+          </figure>
           <p className={styles.body}>
-            staple grew out of daily work with agents: plans died with sessions, two agents took the same task, and
-            hosted trackers were too slow for an agent’s loop. The inspiration was Paperclip AI’s inbox, where agents or
+            Plans died with sessions, two agents took the same task, and hosted trackers were too slow for an agent’s
+            loop. The inspiration was Paperclip AI’s inbox, where agents or
             people file tickets and agents pick them up. The focus here is the tickets themselves: first-class, each
             carrying the complete context an agent needs to move the work forward.
           </p>
