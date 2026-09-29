@@ -50,7 +50,7 @@ APP-11. Dates are calendar days in UTC; `--start` sets an optional start day, an
 
 ```bash
 staple milestone add APP-11 APP-10        # MCP add_milestone_member
-staple milestone mv APP-10 --at 1         # the flaky test goes first
+staple milestone mv APP-10 --at 1         # MCP move_milestone_member: the flaky test first
 ```
 
 Joining a milestone changes nothing about a ticket: it keeps its epic, its
@@ -58,40 +58,7 @@ dependencies and its status. The epic's tickets come along with it, and tickets 
 to the epic later join the milestone too. A ticket belongs directly to at most one
 milestone; `staple milestone mv <ref> --to <milestone>` moves it to another.
 
-## 4. See where it stands
-
-```bash
-staple milestone show APP-11      # MCP get_milestone
-```
-
-```text
-APP-11 · Account recovery beta
-state active · status backlog · target 2026-10-30 · start none · revision 3
-progress 2/6 33% · 6 leaves
-pace     no_estimate: 2/6 leaves done; nothing open is estimated, 31 day(s) to 2026-10-30. (labor —, remaining —, partly planned)
-goal     0/3 met
-   1. unknown A user can reset a forgotten password from the email link
-   2. unknown Reset tokens expire after 30 minutes
-   3. unknown The user guide documents the flow
-members
-   1. APP-10    backlog     Login test is flaky on CI · bug
-   2. APP-1     backlog     Password reset · epic
-next     APP-10 (member 1)
-```
-
-- **progress** counts the tickets that do the work, each once; epics are not counted
-  on top of their tickets, and cancelled work leaves the count.
-- **pace** compares the open work's estimates with the days left. Estimate the
-  tickets to get `on_track` or `behind` instead of `no_estimate`.
-- **state** is `planned`, `active`, `overdue` (the day after the target), `done` or
-  `cancelled`.
-- **next** is the ticket an agent would take first inside this milestone.
-
-`staple milestone ls` lists every open milestone on one line each. In the web UI, the
-**Milestones** view shows the same, and a milestone's detail shows the goal with its
-evidence.
-
-## 5. Put it in the queue
+## 4. Put it in the queue
 
 ```bash
 staple queue add APP-11 --at 1
@@ -100,7 +67,7 @@ staple queue add APP-11 --at 1
 A milestone in the [pickup queue](queue.md) takes one place and expands to its members
 in the order you gave them. Reorder the members and agents feel it on their next ask.
 
-## 6. Mark each criterion with evidence
+## 5. Mark each criterion with evidence
 
 staple never decides on its own that a criterion is met. An agent or a person marks it
 and says why (MCP `mark_milestone_criterion`):
@@ -111,17 +78,43 @@ staple milestone criterion APP-11 3 --met --evidence APP-5
 ```
 
 Evidence is a ticket (`APP-2`), a document on a ticket (`APP-2:plan`) or plain text.
-A ticket counts only while it is done, so a mark made early waits for the work:
+A ticket counts only while it is done, so a mark made early waits for the work (below).
+If that ticket is reopened, the criterion reads `unknown` until it is done again. If
+the criterion is reworded, mark it again. Use `--unmet` with a note to record what is
+missing.
+
+## 6. See where it stands
+
+```bash
+staple milestone show APP-11      # MCP get_milestone
+```
 
 ```text
+APP-11 · Account recovery beta
+state active · status backlog · target 2026-10-30 · start none · revision 3
+progress 2/6 33% · 6 leaves
+pace     no_estimate: 2/6 leaves done; nothing open is estimated, 31 day(s) to 2026-10-30. (labor 2h, remaining —, partly planned)
 goal     1/3 met
    1. unknown A user can reset a forgotten password from the email link
    2. met     Reset tokens expire after 30 minutes  [APP-2]
    3. unknown The user guide documents the flow  [APP-5]  (marked met, but its evidence does not hold yet: APP-5 is backlog, not done)
+members
+   1. APP-10    backlog     Login test is flaky on CI · bug
+   2. APP-1     backlog     Password reset · epic
+next     APP-10 (member 1)
 ```
 
-If the ticket is reopened later, or a criterion is reworded, the mark goes back to
-`unknown`. Use `--unmet` with a note to record what is missing.
+- **progress** counts the tickets that do the work, each once; epics are not counted
+  on top of their tickets, and cancelled work leaves the count.
+- **pace** compares the open work's estimates with the days left. Estimate the open
+  tickets to get `on_track` or `behind` instead of `no_estimate`.
+- **state** is `planned`, `active`, `overdue` (the day after the target), `done` or
+  `cancelled`.
+- **next** is the ticket an agent would take first inside this milestone.
+
+`staple milestone ls` lists every open milestone on one line each. In the web UI, the
+**Milestones** view shows the same, and a milestone's detail shows the goal with its
+evidence.
 
 ## 7. Sign it off
 
@@ -134,9 +127,12 @@ staple gate APP-11 --owner VP
 
 The gate holds the milestone's close until you
 [approve it](approval-gates.md#4-decide). Unlike a gate on an epic, it does not hold
-the members: agents keep working them. An
-[autopilot goal run](runs.md#goal-runs-over-a-milestone) opens this gate for you when it
-starts.
+the members: agents keep working them.
+
+> [!NOTE]
+> Leave this step out if you plan an [autopilot goal run](runs.md#goal-runs-over-a-milestone)
+> over the milestone: the run opens its own gate for you. A gate you open yourself
+> stops a goal run until you approve it.
 
 ## Next
 

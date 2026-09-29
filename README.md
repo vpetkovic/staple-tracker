@@ -121,7 +121,7 @@ branch, fails a session that moves `master` or `main`, and requires a
 never starts one.
 
 The `run continue` contract, stop rules and reason codes, the drive brief,
-every supported hook and goal mode in full: [docs/runs.md](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md).
+every supported hook and goal mode in full: [design/runs.md](https://github.com/vpetkovic/staple-tracker/blob/master/design/runs.md); the guide is [docs/runs.md](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md).
 
 ## Documentation
 

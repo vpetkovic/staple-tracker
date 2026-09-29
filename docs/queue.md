@@ -12,8 +12,8 @@ you want them done, and every agent that asks what to take next gets the first t
 in that order it can actually work.
 
 The examples use the password reset epic (APP-1) from
-[Plans become tickets](plans-to-tickets.md), an audit log epic (APP-7) and a flaky test
-(APP-10).
+[Plans become tickets](plans-to-tickets.md), plus an audit log epic (APP-7, with APP-8
+and APP-9, which waits on APP-8) and a flaky test (APP-10), filed the same way.
 
 ## 1. Queue work in order
 
@@ -36,17 +36,17 @@ staple queue        # MCP list_queue
 queue revision 3
   1  APP-10    backlog     Login test is flaky on CI                      → 1   eligible
   2  APP-1     backlog     Password reset                                 container (4)
-      APP-6     Reset emails bounce for Outlook users          → 2   eligible
+      APP-6     Rate-limit reset requests per address          → 2   eligible
       APP-3     Send the reset email                           → 3   eligible
       APP-4     Reset form sets the new password               → 4   eligible
-      APP-5     Document the reset flow                        → 5   blocked APP-3, APP-4
+      APP-5     Document the reset flow                        → 5   blocked APP-3, APP-4, APP-6
   3  APP-7     backlog     Audit log                                      container (2)
       APP-8     Record sign-ins                                → 6   eligible
       APP-9     Show the audit log to admins                   → 7   blocked APP-8
 ```
 
 The numbers on the left are your plan. An epic or milestone in the plan stands for the
-open tickets under it, listed beneath it; agents take those tickets, never the epic.
+open tickets under it, listed beneath it; agents are handed those tickets, never the epic.
 The `→` numbers are the order agents actually receive, and the word after each says whether
 a ticket can be taken now.
 
@@ -73,7 +73,7 @@ tickets, it says why: held by another agent, blocked, or waiting on a gate.
 ```bash
 staple queue mv APP-7 --before APP-1    # MCP move_queue_entry
 staple queue rm APP-10                  # MCP dequeue_task
-staple queue prune                      # drop finished entries
+staple queue prune                      # MCP prune_queue: drop finished entries
 ```
 
 In the Queue view, drag rows or use Alt-↑ and Alt-↓. Finished work stays in the plan,

@@ -11,7 +11,8 @@ works out the rest: what is ready, what is blocked and on what, and when an epic
 finished.
 
 The examples continue the password reset epic from
-[Plans become tickets](plans-to-tickets.md): APP-1 is the epic, APP-2 to APP-5 its tickets.
+[Plans become tickets](plans-to-tickets.md): APP-1 is the epic, and APP-2 to APP-6 are its
+tickets.
 
 ## 1. Pick a kind for each ticket
 
@@ -30,8 +31,9 @@ your own when they help you read the board:
 
 ```bash
 staple kinds add incident --label Incident     # MCP update_kinds
-staple new "Reset emails bounce for Outlook users" --kind bug --parent APP-1
 ```
+
+Then `staple new "…" --kind incident` files one (MCP `create_task` with `kind`).
 
 One kind is special: `milestone`, which you add once to turn on
 [milestones](milestones.md).
@@ -42,9 +44,10 @@ One kind is special: `milestone`, which you add once to turn on
 can have children, and epics can sit under epics.
 
 You never set an epic's status by hand. It reports what its tickets are doing: in
-progress while one of them is, back to backlog when nothing is in flight, blocked
-when everything open under it is blocked, and done when the last ticket is done.
-Agents take the tickets, never the epic.
+progress while one of them is, in review when that is where they stand, back to
+backlog when nothing is in flight, and blocked when everything open under it is
+blocked. It closes itself as done when the last ticket is done (cancelled if every
+ticket was cancelled). `queue next` hands out the tickets, never the epic.
 
 ## 3. Say what waits on what
 
@@ -71,7 +74,7 @@ READY (pickup order):
   ◐  APP-1     in_progress Password reset · epic
   ◐  APP-2     in_progress Issue single-use reset tokens @claude
 BLOCKED:
-  ⊘  APP-6     blocked     Reset emails bounce for Outlook users · bug  [VP must Confirm which mail provider we use in production]
+  ⊘  APP-6     blocked     Rate-limit reset requests per address  [VP must Confirm the per-address limit]
   ◌  APP-3     backlog     Send the reset email  [waiting on APP-2]
   ◌  APP-4     backlog     Reset form sets the new password  [waiting on APP-2]
   ◌  APP-5     backlog     Document the reset flow  [waiting on APP-3, APP-4, APP-6]
@@ -86,11 +89,11 @@ Some work waits on a decision rather than on a ticket. Block it on a named perso
 what they need to do:
 
 ```bash
-staple block APP-6 --owner VP --action "Confirm which mail provider we use in production"
+staple block APP-6 --owner VP --action "Confirm the per-address limit"
 ```
 
 ```text
-⊘  APP-6     blocked     Reset emails bounce for Outlook users · bug  [unblock: VP → Confirm which mail provider we use in production]
+⊘  APP-6     blocked     Rate-limit reset requests per address  [unblock: VP → Confirm the per-address limit]
 ```
 
 An agent does the same with MCP `update_task`: status `blocked` with `unblock_owner`

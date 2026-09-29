@@ -39,7 +39,7 @@ READY (pickup order):
   (nothing ready)
 QUEUED (waiting on a human — checkout is refused):
   ⊙  APP-1     awaiting_approval Password reset · epic  [awaiting VP]
-  ○  APP-6     todo        Reset emails bounce for Outlook users · bug  [awaiting VP on APP-1]
+  ○  APP-6     todo        Rate-limit reset requests per address  [awaiting VP on APP-1]
   ◌  APP-3     backlog     Send the reset email  [awaiting VP on APP-1]
   ◌  APP-4     backlog     Reset form sets the new password  [awaiting VP on APP-1]
   ◌  APP-5     backlog     Document the reset flow  [awaiting VP on APP-1]
@@ -89,7 +89,7 @@ staple approve APP-1 --children APP-6
 ```
 
 **Send it back.** Your note is stored as a comment on the epic, the epic returns to
-`todo` for the next agent, and the held tickets stay held:
+`todo`, and the held tickets stay held:
 
 ```bash
 staple request-changes APP-1 -m "Tokens must be hashed at rest. Fix that first."   # MCP request_changes
@@ -104,8 +104,8 @@ asks for the note before it sends. Each asks you to type your name as the signer
 
 ## 5. Resubmit after changes
 
-The agent that picks the epic up reads your note, does the fix (usually as a new ticket
-under the epic), and gates the epic again for your second look:
+An agent reads your note on the epic, does the fix (usually as a new ticket under it),
+and gates the epic again for your second look:
 
 ```bash
 staple gate APP-1 --owner VP -m "Tokens are hashed now"

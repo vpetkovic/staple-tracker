@@ -59,9 +59,10 @@ staple run status          # MCP run_status
 ```
 
 ```text
-run ebfaa715-…  active  claude over milestone APP-11
-  started 2026-09-29T14:24:40.957Z · 1/5 tickets, until 2026-09-29T18:24:40.957Z · 0 done, 0 failed, 1 open
-    1  APP-10    open
+run 888bc3df-1f29-4ac7-bf25-4b7cc74ccf41  active  claude over issue APP-7
+  started 2026-09-29T14:44:36.749Z · 1/5 tickets, until 2026-09-29T18:44:36.749Z · 0 done, 0 failed, 1 open
+    1  APP-8     open
+  continues: 1 workable in scope
 ```
 
 In the web UI, each live run is a card in the sidebar's **Autopilot** section with
@@ -86,11 +87,13 @@ to the queue with your note. A stopped run stays stopped; start a new one to car
 | Reason | Meaning |
 |---|---|
 | `scope_empty` | Everything in scope is done or cancelled |
+| `stopped_by_human` | Someone ran `run stop` or pressed Stop; the note says why |
 | `budget` | It reached `--max-tickets`, `--until` or `--ceiling` |
 | `failure_streak` | Two tickets in a row failed; read their comments and logs |
 | `gate_pending` | What is left waits on an [approval gate](approval-gates.md) |
 | `vp_blocked` | A ticket is blocked on a person |
 | `touched_main_line` | A session moved `master` or `main` |
+| `scope_gone` | The epic or milestone was deleted, or holds nothing any more |
 | `goal_met` | A goal run's criteria are all met (below) |
 
 Work only others can move (a review, another agent's claim, a dependency) makes the
