@@ -165,3 +165,33 @@ describe("a milestone's pace", () => {
     expect(pace.message).toContain("3h");
   });
 });
+
+describe("a milestone's 'not estimated yet'", () => {
+  it("names only open work, never a finished task that had no estimate", () => {
+    const epic = store.createIssue({ title: "Unplanned mix", kind: "epic" });
+    const openOne = store.createIssue({ title: "open, no estimate", parent: epic.id });
+    const finished = store.createIssue({ title: "finished, no estimate", parent: epic.id });
+    const dropped = store.createIssue({ title: "cancelled, no estimate", parent: epic.id });
+    store.createIssue({ title: "open, estimated", parent: epic.id, estimatedSeconds: 3600 });
+    store.updateIssue(finished.id, { status: "done" }, "w");
+    store.updateIssue(dropped.id, { status: "cancelled" }, "w");
+    const m = store.milestones().create({ title: "Unplanned", targetDate: "2099-01-01" }, "vp") as MilestoneCreateResult;
+    store.milestones().addMember(m.milestone.id, epic.id, {}, "vp");
+    const pace = store.milestones().get(m.milestone.id).goal.pace;
+    expect(pace.unplannedRefs).toEqual([openOne.identifier]);
+    expect(pace.partial).toBe(true);
+  });
+
+  it("does not call the figure a lower bound for finished tasks without an estimate", () => {
+    const epic = store.createIssue({ title: "Finished unplanned", kind: "epic" });
+    const finished = store.createIssue({ title: "done, no estimate", parent: epic.id });
+    store.updateIssue(finished.id, { status: "done" }, "w");
+    store.createIssue({ title: "open, estimated", parent: epic.id, estimatedSeconds: 3600 });
+    const m = store.milestones().create({ title: "No open unplanned", targetDate: "2099-01-01" }, "vp") as MilestoneCreateResult;
+    store.milestones().addMember(m.milestone.id, epic.id, {}, "vp");
+    const pace = store.milestones().get(m.milestone.id).goal.pace;
+    expect(pace.unplannedRefs).toEqual([]);
+    expect(pace.partial).toBe(false);
+    expect(pace.remainingSeconds).toBe(3600);
+  });
+});

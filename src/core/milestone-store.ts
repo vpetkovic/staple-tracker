@@ -981,6 +981,10 @@ export class MilestoneStore {
     for (let index = 0; index < top.length; index += COMPARE_MAX_REFS) {
       const chunk = top.slice(index, index + COMPARE_MAX_REFS).map((member) => member.issueId);
       for (const plan of this.store.comparePlans(chunk).plans) {
+        const openUnplanned = plan.coverage.unplannedRefs.filter((ref) => {
+          const row = this.db.prepare("SELECT status FROM issues WHERE identifier = ?").get(ref) as { status: string } | undefined;
+          return row !== undefined && !this.store.isResolvedStatus(row.status);
+        });
         plans.push({
           ref: plan.ref,
           // Resolved only when nothing is left under it: a done epic can still hold an open
@@ -988,8 +992,10 @@ export class MilestoneStore {
           resolved: this.store.isResolvedStatus(plan.status) && plan.remainingPath.chain.length === 0 && !plan.remainingPath.partial,
           laborSeconds: plan.labor.seconds,
           remainingSeconds: plan.remainingPath.seconds,
-          partial: plan.coverage.partial || plan.remainingPath.partial,
-          unplannedRefs: plan.coverage.unplannedRefs,
+          // Open work only: a finished task with no estimate is not work left to estimate, so it
+          // is neither named as "not estimated yet" nor a reason to call the figure a lower bound.
+          partial: plan.remainingPath.partial || openUnplanned.length > 0,
+          unplannedRefs: openUnplanned,
         });
       }
     }
