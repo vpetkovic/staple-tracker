@@ -568,8 +568,10 @@ whole hub graph.
 
 The Milestones view (`views/milestones/MilestonesView.tsx`) is the planning view
 for [milestones](milestones.md): dated, human-ordered plans that contain epics
-and tasks without moving them. The toolbar has only the *Done* toggle, which
-sits in the top bar and decides whether resolved milestones are listed.
+and tasks without moving them. The page has no toolbar of its own. The *Done*
+toggle in the top bar, the same one the Tasks view uses, decides whether
+finished and cancelled milestones are listed and whether finished rows show in a
+milestone's member list.
 
 **Turned off.** A workspace without the `milestone` kind shows *Milestones are
 not turned on in staple.* (the workspace's name) and a **Turn on milestones in Settings** button
@@ -577,25 +579,74 @@ that opens that workspace's *Task types* in [Settings](#settings).
 
 **Left, the plan.** Every milestone in plan order, then target date, then
 identifier: an unplanned milestone sits below every planned one, and a date
-never reorders a plan. On a desk each is a card: the title, a pill in plain
-words (*Not started*, *In progress*, *Blocked*, *Done*, *Cancelled*), the due
-date in words (*Due 15 Oct, in 18 days*, *Was due …, 3 days ago*), a progress
-strip, *3 of 4 tasks finished (75%).* and what is in the way (*1 is blocked and
-2 wait for approval.*). On a phone a row is denser: identifier, target date,
-member count, `plan #`, a progress bar with `done/countable` and the percent,
-the state, the risk, and the queue's answer, `next: STA-67 (#4)`, or "no
-eligible work".
+never reorders a plan. On a desk each is a card: the title; the status pill; the
+due date in words; a progress strip; *3 of 4 tasks finished (75%).*; and what
+is in the way (*3 are blocked: 2 wait on other tasks, 1 on a person.*). On a
+phone a row is denser: identifier, `target` date, member count, `plan #`, a
+progress bar with `done/countable` and the percent, the state, the risk, and the
+queue's answer, `next: STA-67 (#4)`, or "no eligible work". With Done hidden
+and nothing open, the list says *No open milestones* (*All 3 milestones are
+finished and hidden while Done is hidden.*) with a **Show finished milestones**
+button; a workspace with no milestones at all says *No milestones here yet* with
+a **New task** button that opens the create dialog on the Milestone kind. A
+milestone the address points at (`?focus=`) or that is open stays listed even
+when it is finished and Done is hidden.
 
-**Right, one milestone.** On a desk: the title, the pill, the due date, *Owned
-by …*, **Open** (the milestone's [detail](#task-detail), where its goal is) and
-an expand button that gives the detail the whole content box. A progress card
-follows with the progress sentence, the risk, and *Next up: STA-67, number 4 in
-the pickup order.*; the identifier, start and target dates, plan position and
-the rollups (progress, blocked, gated, active, ready) are behind *Show
-details*. Then *What is in this milestone*: the ordered members, drawn with the
-same row as the Tasks view. A member epic's children follow it indented and
+**The status pill** is the milestone's stored status, the same glyph, word and
+colour the Tasks list and the task detail give any status (*Backlog*, *Todo*,
+*In Progress*, *Awaiting Approval*, *Done*, or the workspace's own label). The store derives that status
+from the members, so this page and the Tasks list give one answer about the same
+milestone. In the detail header the pill is the task detail's own status menu,
+and a pending approval gate shows the task detail's approve and send-back block
+under the header, through the same action controller, refusals and signing.
+
+**The due date** (`views/milestones/MilestoneDue.tsx`) is said in words: the
+target a person set (*Due 15 Oct, in 18 days*, *Due today*, *Due tomorrow*,
+*Was due 12 Oct, 3 days ago*, and only *Was due 12 Oct* once the milestone is
+finished or cancelled); with no target, a projection from the work still
+estimated in it, *Due ~3 Oct (estimated)*, or *Due no earlier than ~3 Oct
+(estimated)* when some open tasks cannot be forecast; a finished milestone with
+no target says *Finished 3 Oct* (*Closed 3 Oct* when cancelled), from its
+`closedAt`; and otherwise *No due date*. The projection is now plus the view's
+`remaining.forecastSeconds` ([milestones](milestones.md)), all open work summed
+rather than the critical path, and it is never stored; its tooltip gives the
+estimated and forecast hours and how many open tasks it leaves out. Overdue is
+judged on the reader's local calendar day, so the words, the red and the risk
+line agree. Beside an open milestone's date a calendar button (*Set a due date*,
+or *Change the due date*) opens a date field pre-filled from the projection;
+**Save** writes the milestone's own target through `POST /api/milestone/update`,
+the same write as `staple milestone set --target`, and a set target has a
+**Use the estimate** (or **Clear date**) button that removes it. The milestone's
+task detail shows the same control as its Due property.
+
+**Right, one milestone.** On a desk: the title, the status, the due date,
+*Owned by …*, **Open** (the milestone's [detail](#task-detail), where its goal
+is) and an expand button that gives the detail the whole content box. A progress
+card follows with the progress sentence, then one line that says what waits,
+how many cancelled tasks the count leaves out (*1 cancelled task is not
+counted.*) and *Next up: STA-67, number 4 in the pickup order.* The strip splits
+the counted tasks into finished, in review, in progress, blocked, to do and not
+started, in the colours the task rows' status glyphs use; every counted task is
+in exactly one, and cancelled ones are in none. *Show details* opens a grid of
+*Reference*, *Tasks counted* (with the cancelled ones it leaves out), *Starts*,
+*Target*, *Blocked, waiting on other tasks*, *Blocked, waiting on a person*,
+*Started, still waiting on other tasks* and *Started, waiting for an approval*
+(each only when not 0), *Plan position* (when queued) and *Next up*. The two
+*Blocked* rows add up to the strip's blocked count.
+
+Then *What is in this milestone* (*4 items, in order*): the ordered members,
+drawn with the Tasks list's own row and columns. A click on a row, or Enter or
+Space on it, opens the task; the arrow keys, Home and End move between rows, and
+right and left unfold and fold a member epic's children, which follow it
 read-only: membership never rewrites hierarchy and neither does this list. A
-member added with a note shows the note under its row.
+member added with a note shows the note under its row. Done hidden hides the
+same rows here as in the Tasks list: a hidden row's open children take its
+place, each with its parent's chip, and the first of them carries the hidden
+member's controls. The list ends with *3 finished items hidden* and a **Show
+done** button; when every member is finished and hidden it says so (*Everything
+in this milestone is finished; Done is hidden.*) instead of calling the
+milestone empty (`views/milestones/HiddenDone.tsx`). A milestone with no members
+says *Nothing is in this milestone yet*.
 
 **Editing membership.** Each member has *Open*, *Move up*, *Move down* and
 *Remove*, plus Alt-↑ / Alt-↓ on the row. Below 1280px, and on a phone, the four
@@ -606,14 +657,16 @@ optional note (*Add to milestone*). Writes go to `POST /api/milestone/add`,
 `baseRevision`; the store refuses a stale one with `revision_conflict` and the
 page shows *Member order changed elsewhere.* with the store's sentence and a
 Reload, because the fix is to read again. Any other refusal is the store's own
-sentence. There is no drag.
+sentence. There is no drag. A finished or cancelled milestone is a record: its
+members keep *Open* only, the add form is gone, and its due date has no
+calendar.
 
-**States without colour.** Where the technical state shows (a phone row, *Show
-details*), it is a glyph and a word: planned `○`, active `◐`, overdue `!`, done
-`✓`, cancelled `×`, with "all members done" beside an active milestone whose
-members have all landed (seen only while a gate or a manual status holds it
-open). Blocked and gated are facts about members, not milestone states, and
-appear as `⊘ n blocked` / `◇ n gated` in the risk line.
+**States without colour.** On a phone row (and in the phone detail header until
+the milestone's status loads) the milestone's state is a glyph and a word: planned `○`, active `◐`, overdue `!`,
+done `✓`, cancelled `×`, with "all members done" beside an active milestone
+whose members have all landed (seen only while a gate or a manual status holds
+it open). Blocked and gated are facts about members, not milestone states, and
+appear in the risk line.
 
 **Layout.** Below 1024px (`SPLIT_MIN_WIDTH_PX`) the two panes stack: the list,
 then the detail with a "Back to milestones" button. From 1024px they split:
@@ -645,7 +698,9 @@ carries its member's identifier and only the true edges are disabled, that each
 state is a glyph and a word with the glyph `aria-hidden`, and that a genuinely
 stale `baseRevision`, a real 409 from the real route, renders the conflict
 banner with the store's sentence verbatim while the server keeps the other
-writer's order.
+writer's order. It also sets a due date through the real update route and clears
+it back to the projection, and shows the stored status with the detail's approve
+action, whose approval lands where the Tasks list reads it.
 
 ## Estimates
 

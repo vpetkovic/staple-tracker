@@ -203,6 +203,8 @@ const BOOKKEEPING = new Set(["updated_at"]);
 const DERIVED: Record<string, string> = {
   normalized_title: "title",
   status_version: "status",
+  // Who wrote the status: it means nothing apart from the status it names (migration 017).
+  derived_status: "status",
 };
 
 /** The whole-plan pseudo-field an ordered collection replicates as. */
@@ -806,6 +808,7 @@ function contest(
       remoteAt: op.createdAt,
       detectedAt,
     });
+    if (op.entity === "issue" && named.name === "status") keepStatusOwners(db, conflictId(op.entity, op.entityId, named.name, side.opId, op.opId), op.entityId, local.value, carried, op.payload);
     if (named.name === wholeField) {
       keepEntries(
         db,
@@ -905,12 +908,48 @@ function entriesFor(
   return picked;
 }
 
-/** Forget the entries of every record that is closed now. */
+/** Forget the entries, and the status owners, of every record that is closed now. */
 function forgetClosedEntries(db: DatabaseSync): void {
   db.prepare(
     `DELETE FROM meta WHERE key LIKE 'conflict_entries:%'
        AND substr(key, 18) IN (SELECT id FROM sync_conflicts WHERE resolved_at IS NOT NULL)`,
   ).run();
+  db.prepare(
+    `DELETE FROM meta WHERE key LIKE 'conflict_status_owner:%'
+       AND substr(key, 23) IN (SELECT id FROM sync_conflicts WHERE resolved_at IS NOT NULL)`,
+  ).run();
+}
+
+/**
+ * Whether each side of a contested status was derivation's write (`derived_status`, migration
+ * 017), kept beside the record like a list's entries, device-local in `meta`
+ * (`conflict_status_owner:<id>`). The column is withheld with the status while the record is
+ * open, so the resolution has to write it back with the value chosen: derivation's if the side
+ * chosen was, nobody's otherwise. Written once, when detected.
+ */
+function statusOwnerKey(conflictId: string): string {
+  return `conflict_status_owner:${conflictId}`;
+}
+
+function keepStatusOwners(db: DatabaseSync, id: string, issueId: string, local: unknown, remote: unknown, payload: Record<string, unknown>): void {
+  const held = db.prepare("SELECT derived_status FROM issues WHERE id = ?").get(issueId) as { derived_status: string | null } | undefined;
+  const carried = "derivedStatus" in payload ? payload.derivedStatus : "derived_status" in payload ? payload.derived_status : undefined;
+  const remoteOwned = carried !== undefined ? carried === remote : typeof payload.derived === "string";
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING").run(
+    statusOwnerKey(id),
+    JSON.stringify({ local: held?.derived_status != null && held.derived_status === local, remote: remoteOwned }),
+  );
+}
+
+/** The `derived_status` a resolution to `chosen` writes: the chosen value when the side it came from was derivation's. */
+function ownerFor(db: DatabaseSync, conflict: ConflictRecord, chosen: unknown): string | null {
+  if (typeof chosen !== "string") return null;
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(statusOwnerKey(conflict.id)) as { value: string } | undefined;
+  if (row === undefined) return null;
+  const kept = JSON.parse(row.value) as { local: boolean; remote: boolean };
+  if (sameValue(chosen, conflict.localValue) && kept.local) return chosen;
+  if (sameValue(chosen, conflict.remoteValue) && kept.remote) return chosen;
+  return null;
 }
 
 // ------------------------------------------- a snapshot re-read on this timeline
@@ -1261,6 +1300,8 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
     if (conflict.entity === "issue" && conflict.field === "status") {
       const row = db.prepare("SELECT status_version FROM issues WHERE id = ?").get(conflict.entityId) as { status_version: number } | undefined;
       if (row !== undefined) companions.statusVersion = row.status_version + 1;
+      // And who wrote the status chosen, withheld with it while the record was open.
+      companions.derivedStatus = ownerFor(db, conflict, chosen);
     }
     for (const write of writes) {
       const payload: Record<string, unknown> = { ...resolutionPayload(conflict.entity, conflict.field, write.value), ...companions };
@@ -1594,6 +1635,7 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
     ...(isEntries(payload.entries) ? { entries: payload.entries } : {}),
     ...(typeof payload.statusVersion === "number" ? { statusVersion: payload.statusVersion } : {}),
     ...(typeof payload.updatedAt === "string" ? { updatedAt: payload.updatedAt } : {}),
+    ...(typeof payload.derivedStatus === "string" || payload.derivedStatus === null ? { derivedStatus: payload.derivedStatus } : {}),
   };
   if (current.present && (!sameValue(current.value, value) || Object.keys(companions).length > 0)) {
     applyToDatabase(db, {

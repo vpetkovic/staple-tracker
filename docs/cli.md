@@ -1107,7 +1107,7 @@ pickup order.
 
 ```console
 READY (pickup order):
-  ◌! STA-61    backlog     L1: scaffold Docusaurus site (single locale)
+  ◌! STA-151   backlog     R1: export a milestone as CSV
 QUEUED (waiting on a human — checkout is refused):
   ⊙! STA-142   awaiting_approval Q: approval gates — park a parent for VP review …  [awaiting VP]
   ◐! STA-143   in_progress Q1: gate model in the store … @opus-q1  [awaiting VP on STA-142]

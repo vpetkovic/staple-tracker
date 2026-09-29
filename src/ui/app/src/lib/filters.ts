@@ -614,7 +614,7 @@ function searchable(row: IssueRow): string {
  * lifts the default FOR THAT STATUS. Asking for Done and getting an empty list is how a
  * filter system loses a user's trust in one click.
  */
-function passesDone(row: IssueRow, state: FilterState): boolean {
+export function passesDone(row: IssueRow, state: FilterState): boolean {
   if (state.showDone) return true;
   if (!RESOLVED_STATUSES.includes(row.issue.status)) return true;
   return (state.dims.status ?? []).includes(row.issue.status);

@@ -16,7 +16,7 @@ Requirements: Node >= 22.5.
 
 `staple-cli` is not on npm until its first release. Until then, build the
 package from a checkout (`npm run pack:package`, see
-[CONTRIBUTING.md](CONTRIBUTING.md)) and put
+[CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md)) and put
 `npx -y file:/absolute/path/to/checkout/dist-package/staple-cli-<version>.tgz`
 wherever this page says `npx staple-cli` or `npx -y staple-cli`.
 
@@ -37,7 +37,7 @@ codex mcp add staple --env STAPLE_AGENT=codex -- npx -y staple-cli mcp
 To have `staple` on your `PATH` instead of fetching it each time, run
 `npx staple-cli install --yes`: a versioned runtime and a launcher at
 `~/.local/bin/staple`, no `sudo`, with rollback. Add `--update-path` to put
-`~/.local/bin` on your `PATH` ([packaging](docs/packaging.md)).
+`~/.local/bin` on your `PATH` ([packaging](https://github.com/vpetkovic/staple-tracker/blob/master/docs/packaging.md)).
 
 [Getting started](docs/getting-started.md) walks through the first workspace,
 the MCP wiring and the loop your agents follow, one ticket from created to done.
@@ -46,27 +46,27 @@ the MCP wiring and the loop your agents follow, one ticket from created to done.
 
 - **Claims and dependencies.** Atomic checkout, claims that go stale when an
   agent dies and can be taken over on the record, `blocks` edges that decide
-  what is ready ([semantics](docs/semantics.md), [continuity](docs/continuity.md)).
+  what is ready ([semantics](https://github.com/vpetkovic/staple-tracker/blob/master/docs/semantics.md), [continuity](https://github.com/vpetkovic/staple-tracker/blob/master/docs/continuity.md)).
 - **The pickup queue.** An ordered plan of what agents take next, advisory or
-  strict, with overrides recorded ([queue](docs/queue.md)).
+  strict, with overrides recorded ([queue](https://github.com/vpetkovic/staple-tracker/blob/master/docs/queue.md)).
 - **Approval gates.** Park a parent on a person; its subtree waits until they
-  approve or request changes ([gates](docs/semantics.md#approval-gates)).
+  approve or request changes ([gates](https://github.com/vpetkovic/staple-tracker/blob/master/docs/semantics.md#approval-gates)).
 - **Milestones and goal mode.** Dated plans over epics and tasks with derived
   progress, a pace verdict and acceptance criteria judged with evidence
-  ([milestones](docs/milestones.md)).
+  ([milestones](https://github.com/vpetkovic/staple-tracker/blob/master/docs/milestones.md)).
 - **Autopilot runs.** One agent works a scope ticket after ticket within a
-  budget, and the tracker decides when it stops ([runs](docs/runs.md)).
+  budget, and the tracker decides when it stops ([runs](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md)).
 - **Cloud sync.** Optional: two machines share one workspace through a
   Cloudflare Worker you deploy, with conflicts kept, never guessed
-  ([sync](docs/sync.md)).
+  ([sync](https://github.com/vpetkovic/staple-tracker/blob/master/docs/sync.md)).
 - **Web UI.** Tasks, queue, dependency graph, milestones, estimates, usage,
-  task detail, autopilot runs and settings, on localhost ([web UI](docs/web-ui.md)).
+  task detail, autopilot runs and settings, on localhost ([web UI](https://github.com/vpetkovic/staple-tracker/blob/master/docs/web-ui.md)).
 - **Budget and estimates.** Estimates against measured agent work, calibrated
   forecasts, and the Claude and Codex rate-limit windows the work will cost
-  ([timing](docs/timing-semantics.md), [provider budget](docs/cli.md#provider-budget)).
+  ([timing](https://github.com/vpetkovic/staple-tracker/blob/master/docs/timing-semantics.md), [provider budget](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md#provider-budget)).
 - **The hub.** Every workspace on the machine registers in one hub, with unique
   prefixes, cross-repository `blocks` links and a hub-wide inbox
-  ([architecture](docs/architecture.md#workspace-topology)).
+  ([architecture](https://github.com/vpetkovic/staple-tracker/blob/master/docs/architecture.md#workspace-topology)).
 
 ## Everyday commands
 
@@ -83,7 +83,7 @@ staple queue add STA-42 --at 1              # say what gets picked up next
 staple checkout STA-42 --steal-if-stale 1h  # take over a dead agent's claim
 ```
 
-`staple help` lists every command; [docs/cli.md](docs/cli.md) documents them.
+`staple help` lists every command; [docs/cli.md](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cli.md) documents them.
 
 ## Autopilot
 
@@ -121,18 +121,18 @@ branch, fails a session that moves `master` or `main`, and requires a
 never starts one.
 
 The `run continue` contract, stop rules and reason codes, the drive brief,
-every supported hook and goal mode in full: [docs/runs.md](docs/runs.md).
+every supported hook and goal mode in full: [docs/runs.md](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md).
 
 ## Documentation
 
-[docs/](docs/README.md) is the reference: every page, grouped by what you want
+[docs/](https://github.com/vpetkovic/staple-tracker/blob/master/docs/README.md) is the reference: every page, grouped by what you want
 to do.
 
 ## Contributing
 
 Running from a checkout, building the UI and the package, and the test gates
-are in [CONTRIBUTING.md](CONTRIBUTING.md).
+are in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/vpetkovic/staple-tracker/blob/master/LICENSE).
