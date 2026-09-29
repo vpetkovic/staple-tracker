@@ -12,9 +12,8 @@ where to continue. Another session, or another agent in a different harness, tak
 it over and carries on.
 
 The example continues [Plans become tickets](plans-to-tickets.md). A later ticket
-under the password reset epic, APP-7 "Lock the account after five failed resets", is
-in Claude's hands when its session dies. Codex picks
-it up.
+under the password reset epic, APP-12 "Lock the account after five failed resets",
+is in Claude's hands when its session dies. Codex picks it up.
 
 ## 1. Before the interruption: checkpoint as you go
 
@@ -22,7 +21,7 @@ A handoff is only as good as what the last session left. Agents that follow the
 protocol (see [How an agent works a ticket](working-a-ticket.md)) leave two things:
 
 - a **branch pointer** comment at claim time:
-  `staple comment APP-7 "Branch pointer: branch feat/reset-lockout, base 7d1e2f3."`
+  `staple comment APP-12 "Branch pointer: branch feat/reset-lockout, base 7d1e2f3."`
 - a **worklog** replaced after every step, with *Done*, *Next* and *Files touched*.
 
 Both must be written before the interruption, because an interruption gives no warning.
@@ -39,7 +38,7 @@ staple ls --status in_progress
 
 ```text
 ◆ ◐  APP-1     in_progress Password reset · epic
-◇ ◐  APP-7     in_progress Lock the account after five failed resets @claude · held 2m · silent 2m
+◇ ◐  APP-12    in_progress Lock the account after five failed resets @claude · held 2m · silent 2m
 ```
 
 A working agent comments and updates its worklog, so its *silent* stays short.
@@ -59,11 +58,11 @@ To take it over, say how long the holder must have been silent:
 
 ```bash
 # MCP: checkout_task with steal_if_idle_seconds
-staple start APP-7 --steal-if-stale 2m
+staple start APP-12 --steal-if-stale 2m
 ```
 
 ```text
-stole ◐  APP-7     in_progress Lock the account after five failed resets @codex (was claude, silent 2m)
+stole ◐  APP-12    in_progress Lock the account after five failed resets @codex (was claude, silent 2m)
 ```
 
 If the holder has written anything within that time, the takeover is refused by name,
@@ -76,7 +75,7 @@ error(conflict): Checkout refused: held by claude, active 0s ago. Pick a differe
 The takeover is on the record. `staple events` shows who took what from whom:
 
 ```text
-64  2026-09-29T14:10:09  claim_stolen  {"identifier":"APP-7","previousHolder":"claude",…,"previousIdleSeconds":126,…}
+64  2026-09-29T14:10:09  claim_stolen  {"identifier":"APP-12","previousHolder":"claude",…,"previousIdleSeconds":126,…}
 ```
 
 ## 4. Continue from the worklog
@@ -84,8 +83,8 @@ The takeover is on the record. `staple events` shows who took what from whom:
 The new holder reads the ticket and the worklog, and picks up at *Next*:
 
 ```bash
-staple show APP-7            # MCP get_task, include_documents: true
-staple doc APP-7 worklog     # MCP get_document, key "worklog"
+staple show APP-12           # MCP get_task, include_documents: true
+staple doc APP-12 worklog     # MCP get_document, key "worklog"
 ```
 
 ```text
@@ -115,7 +114,7 @@ That is worth fixing in the protocol, not in the prompt.
 To hand a dead session's ticket back to the queue instead of working it yourself:
 
 ```bash
-staple release APP-7 --if-stale 2h    # MCP release_task with if_idle_seconds
+staple release APP-12 --if-stale 2h    # MCP release_task with if_idle_seconds
 ```
 
 The ticket returns to `todo` and the next agent to ask takes it.
@@ -130,7 +129,7 @@ The ticket returns to `todo` and the next agent to ask takes it.
   the holder has been silent.
 - **A claim covers this machine.** Another computer that shares the workspace through
   [cloud sync](cloud-sync.md) can hold the same ticket at the same time, unless the
-  agent takes a lease with `staple cloud lease acquire APP-7`.
+  agent takes a lease with `staple cloud lease acquire APP-12`.
 
 Durations take `90s`, `30m`, `2h`, `3d` or a number of seconds.
 

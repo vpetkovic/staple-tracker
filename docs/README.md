@@ -70,7 +70,7 @@ the reference pages at the end are for looking things up.
 
 | Page | What it is for |
 |---|---|
-| [CLI](cli.md) | Every command and flag |
+| [CLI](cli.md) | Every command, with its main flags |
 | [MCP tools](mcp-tools.md) | Every tool the MCP server offers |
 | [Configuration](configuration.md) | The staple home, machine preferences and workspace settings |
 | [Errors and exit codes](errors.md) | What each error means and what to do about it |

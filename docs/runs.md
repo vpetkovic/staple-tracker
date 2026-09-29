@@ -10,7 +10,7 @@ or the whole queue, one after another, until the work is done, a budget runs out
 something needs you. After each ticket, staple decides whether the run goes on, not
 the prompt. A run never merges: it leaves branches and draft pull requests for you.
 
-The examples use the audit log epic, APP-7: APP-8, and APP-9, which waits on it.
+The examples use the audit log epic from [The pickup queue](queue.md): APP-7, with its tickets APP-8 and APP-9 (APP-9 waits on APP-8).
 
 ## 1. Start a run
 
@@ -79,8 +79,9 @@ staple run stop -m "Reviewing APP-8 first"   # MCP stop_run, or Stop in the UI
 ```
 
 **Pause** lets the current session finish and takes nothing new until you resume.
-**Stop** ends the run now: the session is ended within seconds and its ticket goes back
-to the queue with your note. A stopped run stays stopped; start a new one to carry on.
+**Stop** ends the run now: the session is ended within seconds, and the ticket it held is
+recorded as failed and released, with your note, so it can be taken again. A stopped
+run stays stopped; start a new one to carry on.
 
 ## 5. Why it stopped
 
