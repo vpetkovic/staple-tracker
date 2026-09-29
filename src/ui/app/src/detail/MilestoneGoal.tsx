@@ -20,6 +20,7 @@ import {
   CRITERION_WORDS,
   PACE_TONE,
   PACE_WORDS,
+  shownPace,
   gateText,
   goalSummary,
   markedByText,
@@ -157,6 +158,8 @@ export function MilestoneGoalSection({ plan, gate, workspace }: { plan: Mileston
   const now = useNow();
   const { entries } = useRuns();
   const { goal } = plan;
+  // Judged on the reader's local day, as the rest of the page is (`shownPace`).
+  const pace = shownPace(goal.pace, now);
   const run = goalRunOf(entries, workspace, plan.milestone.id);
   const unplanned = unplannedText(goal.pace);
   const gateWords = gate ? gateText(gate, now) : null;
@@ -177,10 +180,10 @@ export function MilestoneGoalSection({ plan, gate, workspace }: { plan: Mileston
       ) : null}
 
       <DetailCard className="mt-3 flex flex-col gap-3">
-        <div className="flex min-w-0 flex-col gap-1" data-goal-pace={goal.pace.verdict}>
+        <div className="flex min-w-0 flex-col gap-1" data-goal-pace={pace.verdict}>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="text-label font-medium text-text-secondary">Pace</span>
-            <RunStatePill text={PACE_WORDS[goal.pace.verdict]} tone={PACE_TONE[goal.pace.verdict]} />
+            <RunStatePill text={PACE_WORDS[pace.verdict]} tone={PACE_TONE[pace.verdict]} />
           </div>
           <p className="m-0 text-body text-foreground text-pretty">{paceText(goal.pace, now)}</p>
           {unplanned ? <p className="m-0 text-label text-text-tertiary">{unplanned}</p> : null}

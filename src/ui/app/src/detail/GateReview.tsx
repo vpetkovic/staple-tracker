@@ -220,10 +220,33 @@ export function gateStateSummary(gate: IssueGate, now: Date): string {
  * does not move when it opens. A disclosure that pushes the thing you were just reading
  * off the screen is a disclosure people learn not to press.
  */
+/**
+ * WHAT APPROVING WILL DO when nothing is queued behind the gate — said by its outcome, because
+ * the store's approval re-derives the parent (`approveGate`): it closes only when everything
+ * under it has landed, and otherwise follows its work. `open` is the work still open under the
+ * parent, `noun` what it is counted in, `kind` what the parent is ("milestone", "epic").
+ */
+export interface GateOutcome {
+  open: number;
+  noun: "task" | "item";
+  kind: string;
+}
+
+/** The sentence and the button for an empty queue, by outcome. */
+export function gateOutcomeWords(outcome: GateOutcome): { sentence: string; button: string } {
+  if (outcome.open === 0) return { sentence: "All work here is finished.", button: `Approve and close ${outcome.kind}` };
+  const one = outcome.open === 1;
+  return {
+    sentence: `${outcome.open} ${outcome.noun}${one ? " is" : "s are"} still open. Approving lifts the hold; the ${outcome.kind} closes on its own when ${one ? "it is" : "they are"} done.`,
+    button: "Approve and continue",
+  };
+}
+
 export function GateReview({
   identifier,
   gate,
   queue,
+  outcome = { open: 0, noun: "task", kind: "task" },
   busy,
   now = new Date(),
   showState = true,
@@ -240,6 +263,8 @@ export function GateReview({
    * `lib/derived-queued.ts` on why the browser does not re-derive eligibility.
    */
   queue: readonly GateQueueEntry[];
+  /** What approving does when the queue is empty (`GateOutcome`). */
+  outcome?: GateOutcome;
   busy: boolean;
   /** Injected so the header's age is a pure function of props in tests. */
   now?: Date;
@@ -387,22 +412,24 @@ export function GateReview({
         /*
           THE EMPTY STATE — rule (d) of VP's review.
 
-          Reached two ways that mean the same thing to the reviewer: everything queued has
-          been released one by one, or there was never anything open under this parent to
-          queue. Either way the only remaining decision is whether the gate stays open, so
-          the block offers exactly that and nothing else. An "Approve all" beside "Nothing
-          left to release" is a button whose noun is not on the screen.
+          Nothing is queued: everything queued has been released one by one, or the open work
+          under this parent is past the queue (in progress, in review). Approving then lifts the
+          hold, and what follows depends on that work — the store re-derives the parent and
+          closes it only when all of it has landed. So the sentence and the button say the
+          outcome (`gateOutcomeWords`): "Approve and continue" while work is open, "Approve and
+          close milestone" when none is. VP read the old "Approve and close gate" as "close this
+          unfinished milestone".
         */
-        <p className="staple-gate-empty">
-          Nothing left to release — no open work is queued behind this gate.
+        <p className="staple-gate-empty" data-gate-outcome={outcome.open === 0 ? "closes" : "continues"}>
+          {gateOutcomeWords(outcome).sentence}
         </p>
       )}
 
       <div className="staple-gate-actions">
         {/*
           "Approve all" ONLY while the list is non-empty. When it is empty the same store
-          call is still the right one, but it is a different decision — closing the review
-          rather than releasing a queue — so it says so.
+          call is still the right one, but it is a different decision — lifting the hold rather
+          than releasing a queue — so it says what it will do.
         */}
         {count > 0 ? (
           <Button size="sm" disabled={busy} onClick={() => onApproveAll()}>
@@ -410,7 +437,7 @@ export function GateReview({
           </Button>
         ) : (
           <Button size="sm" disabled={busy} onClick={() => onApproveAll()}>
-            Approve and close gate
+            {gateOutcomeWords(outcome).button}
           </Button>
         )}
         {/*

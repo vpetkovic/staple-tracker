@@ -416,6 +416,10 @@ describe("schema migration against a live database", () => {
       // Migration 014's columns on a table the legacy shape keeps.
       legacyDb.exec("ALTER TABLE events DROP COLUMN origin_device");
       legacyDb.exec("ALTER TABLE events DROP COLUMN origin_seq");
+      // Migration 017's trigger and column.
+      legacyDb.exec("DROP TRIGGER IF EXISTS issues_derived_status_cleared");
+      legacyDb.exec("DROP TRIGGER IF EXISTS issues_derived_status_created");
+      legacyDb.exec("ALTER TABLE issues DROP COLUMN derived_status");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 
