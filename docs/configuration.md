@@ -74,15 +74,15 @@ Statuses and kinds are workspace settings too, with their own commands:
 
 | Variable | What it does |
 |---|---|
-| `STAPLE_AGENT` | The name every claim, comment and document is recorded under. Set one per agent, such as `claude` or `codex`. Without it the CLI uses `$USER`, and the MCP server refuses writes that do not pass `actor`. |
-| `STAPLE_DB` | Pin commands and the MCP server to one workspace database, such as `/path/to/repo/.staple/staple.db`. It wins over the current directory. |
+| `STAPLE_AGENT` | The name every claim, comment and document is recorded under. Set one per agent, such as `claude` or `codex`. Without it the CLI uses `$USER`, and the MCP server refuses a write that records who acted unless it passes `actor`. |
+| `STAPLE_DB` | Pin commands and the MCP server to one workspace database, such as `/path/to/repo/.staple/staple.db`. It wins over the current directory and over `--ws`. |
 | `STAPLE_WS` | For the MCP server: a workspace slug or prefix to use by default. The CLI takes `--ws` instead. |
 | `STAPLE_HOME` | Where staple keeps this machine's files, instead of `~/.staple`. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | Where Claude Code and Codex keep their files. Budget capture looks there, and falls back to `~/.claude` and `~/.codex`. |
 
-Staple sets three variables for the commands it starts: `STAPLE_EVENT` for
-`staple events --exec`, and `STAPLE_RUN` and `STAPLE_RUN_TICKET` for sessions that
-`staple run drive` launches.
+Staple also sets variables for the commands it starts: `STAPLE_EVENT` for
+`staple events --exec`, and `STAPLE_AGENT`, `STAPLE_DB`, `STAPLE_RUN` and
+`STAPLE_RUN_TICKET` for the sessions `staple run drive` launches.
 
 ```bash
 STAPLE_AGENT=codex-2 staple checkout APP-3
@@ -108,8 +108,9 @@ network. The web UI does the same under **Settings → Usage**
 
 ## Where staple keeps its files
 
-- **Each repository**: `.staple/` beside your code, with the workspace database and
-  `AGENTS.md`. The database is git-ignored; `AGENTS.md` is meant to be committed.
+- **Each repository**: `.staple/` beside your code. It holds the workspace database,
+  which is git-ignored, and two files to commit: `AGENTS.md`, the protocol for agents,
+  and `repository.json`, the repository's identity for cloud sync.
 - **This machine**: the staple home, `~/.staple` unless `STAPLE_HOME` says otherwise.
   It holds the list of workspaces, the web UI's token, `config.json`, global
   workspaces and budget readings.

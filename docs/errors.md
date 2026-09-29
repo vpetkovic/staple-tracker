@@ -36,9 +36,9 @@ and on the CLI each code has its own exit status.
 |---|---|---|---|
 | 0 | | It worked | |
 | 1 | `unknown` | Something failed that staple has no code for, or `staple doctor` found a failing check | Read the message; `staple doctor` prints the fix for a failing check |
-| 2 | `validation` | The input is wrong: an unknown flag, kind, status or setting value, a bad duration. A preview that needs `--yes` (`install`, `add`, `budget setup`, `budget forget`, `budget live on`) also exits 2 and changes nothing | Fix the input the message names, or add `--yes` after reading the preview |
+| 2 | `validation` | The input is wrong: an unknown flag, kind, status or setting value, a bad duration. A preview that needs `--yes` (for example `install`, `add`, `config home --move`, `budget setup`, `budget forget`) also exits 2 and changes nothing | Fix the input the message names, or add `--yes` after reading the preview |
 | 3 | `not_found` | No such ticket, document, workspace, run or reading | Check the reference with `staple ls` or `staple hub`, or pass `--ws` |
-| 4 | `conflict` | Someone else got there first: the ticket is claimed, or its status does not allow the move | Pick a different ticket. Do not retry |
+| 4 | `conflict` | Someone else got there first: the ticket is claimed, its status does not allow the move, or it still has unresolved blockers | Pick a different ticket. Do not retry |
 | 5 | `duplicate` | An open ticket with this title already exists under the same parent, or the status or kind already exists | Use the existing one, or pass `--allow-duplicate` to `staple new` |
 | 6 | `cycle` | The blockers you set would make tickets wait on each other in a loop | Remove one of the blockers |
 | 7 | `revision_conflict` | Someone changed the document, queue or milestone order since you read it (`--base N`) | Read it again, merge your change, and retry |

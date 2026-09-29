@@ -13,8 +13,8 @@ To look something up from the terminal:
 
 1. `staple help` lists every command and flag.
 2. `staple <command> --help` prints one command's part of it, and does nothing else.
-   `run`, `queue`, `cloud`, `budget`, `attempt`, `compare`, `timing`, `calibrate` and
-   `forecast` have a page of their own, and so do `staple run drive --help` and
+   `run`, `queue`, `cloud`, `budget`, `attempt`, `attempts`, `compare`, `timing`,
+   `calibrate` and `forecast` have a page of their own, and so do `staple run drive --help` and
    `staple run hook --help`.
 3. Every command that has an [MCP tool](mcp-tools.md) behaves the same through it.
 
@@ -24,11 +24,14 @@ To look something up from the terminal:
 |---|---|
 | `--json` | Machine-readable output: the full objects, ISO-8601 timestamps. `events` prints one JSON object per line. An error is one JSON line on stderr. |
 | `--db <path>` | Use this workspace database instead of the one found by walking up from the current directory. |
-| `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. |
-| `--agent <name>` | Who acts, on writes that record an actor. Otherwise `STAPLE_AGENT`, then `$USER`. |
+| `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. `STAPLE_DB`, when set, wins over it. |
 
-Durations (`--estimate`, `--if-stale`, `--until`) are `90s`, `30m`, `2h`, `3d`, or a
-number of seconds. An error under `--json` looks like this:
+Writes are recorded under `STAPLE_AGENT`, else `$USER`. `checkout`, `done`, `cancel`,
+`status`, `estimate` and `release` also take `--agent <name>` to say who acts.
+
+Durations (`--estimate`, `--if-stale`, `--steal-if-stale`) are `90s`, `30m`, `2h`,
+`3d`, or a number of seconds. `run start --until` takes a duration or an ISO time with
+a zone. An error under `--json` looks like this:
 
 ```json
 {"code":"conflict","message":"Checkout refused: status is \"in_progress\" (held by claude), expected one of todo, backlog, blocked. Pick a different task — do not retry.","detail":{"currentStatus":"in_progress","heldBy":"claude","blockers":[]},"retryable":false}
@@ -48,12 +51,13 @@ Guide: [Install and first workspace](getting-started.md).
 | `staple install [--yes] [--update-path]` | Install a runtime so `staple` is on your PATH. `install status` shows it; `--rollback` returns to the previous one. |
 | `staple doctor [--json]` | Check the home, config, workspace, UI port and runtime, read-only. Exits 1 when a check fails and prints the repair. |
 | `staple doctor --fix --only <check> --yes` | Apply one named repair. |
+| `staple mcp` | Start the MCP server on stdio. Your agent's client runs it ([Connect your agent](connect-your-agent.md)). |
 | `staple config` | This machine's settings and where each came from. |
 | `staple config set <key> <value>` | Set `browser`, `port` or `setupComplete`. |
 | `staple config home <path> --move --yes` | Move the staple home, verify it, then switch to it. |
 | `staple settings` | This workspace's settings. `settings get <key>` and `settings set <key> <value>` read and write one. |
 | `staple statuses ls` | This workspace's statuses, in order. `add`, `rename`, `recategorize`, `reorder` and `rm` change them. |
-| `staple kinds ls` | This workspace's kinds (`epic`, `task`, `bug`, `chore`, `spike`). Same verbs as `statuses`. |
+| `staple kinds ls` | This workspace's kinds (`epic`, `task`, `bug`, `chore`, `spike`). Same verbs as `statuses`, except `recategorize`. |
 
 ```bash
 staple init --yes
@@ -243,7 +247,9 @@ Guide: [Budget and estimates](budget-and-estimates.md).
 | `staple budget` | Each account's usage limits: what is left, when it resets, and your pace. |
 | `staple budget setup --claude-account A --yes` | Turn on capture of Claude Code and Codex usage in one step. Without `--yes` it shows the plan. `budget unsetup --yes` reverses it. |
 | `staple budget status` | Whether capture is working, and what is missing. |
-| `staple budget capture on\|off` | Turn capture on or off by hand. `budget bind` names the account a harness spends from. |
+| `staple budget capture on\|off` | Turn capture on or off by hand. `budget bind` names the account a harness spends from; `budget bindings` lists them and `budget unbind` removes one. |
+| `staple budget ingest --source S` | Record a reading by hand (`manual`), from a Claude Code status line, or from a Codex session file. `budget setup` wires this up for you. |
+| `staple budget collect` | Read new Codex session files now; setup runs it every few minutes. |
 | `staple budget live on --yes` | Also ask the provider for current usage. Off by default. |
 | `staple budget history --account A` | One account's readings. `budget forget <id> --yes` removes a wrong one. |
 

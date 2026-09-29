@@ -11,7 +11,8 @@ type for the same thing. The server offers 65 tools, grouped the same way as the
 answer the same object the command prints with `--json`.
 
 1. Add the server once per machine, naming the agent
-   ([Connect your agent](connect-your-agent.md) covers Codex and other clients):
+   ([Connect your agent](connect-your-agent.md) covers Codex and other clients, and
+   what to run until `staple-cli` is on npm):
 
    ```bash
    claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
@@ -20,7 +21,7 @@ answer the same object the command prints with `--json`.
 2. Ask your agent to list its staple tools. Each has a description and typed
    arguments; the client shows them.
 3. Most tools take `ws` (a workspace slug or prefix) to reach another repository, and
-   every write takes `actor` when `STAPLE_AGENT` is not set.
+   every write that records who acted takes `actor` when `STAPLE_AGENT` is not set.
 
 The loop an agent follows, described in
 [How an agent works a ticket](working-a-ticket.md):
