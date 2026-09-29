@@ -40,7 +40,7 @@
   background: transparent;
   border-radius: 0;
   font-size: var(--st-text-sm);
-  line-height: 1.75;
+  line-height: var(--st-leading-code);
   overflow-x: auto;
 }
 

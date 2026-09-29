@@ -83,8 +83,7 @@ const config: Config = {
         theme: {
           // Fonts first, then the tokens, then the chrome that reads them.
           customCss: [
-            require.resolve('@fontsource-variable/geist/wght.css'),
-            require.resolve('@fontsource-variable/geist-mono/wght.css'),
+            './src/css/fonts.css',
             './src/css/tokens.css',
             './src/css/custom.css',
           ],
@@ -99,7 +98,7 @@ const config: Config = {
     },
     navbar: {
       title: 'staple',
-      logo: {src: 'img/logo.svg', alt: 'staple logo', width: 24, height: 24},
+      logo: {src: 'img/logo.svg', srcDark: 'img/logo-dark.svg', alt: 'staple logo', width: 24, height: 24},
       items: [
         {type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs'},
         {href: repo, label: 'GitHub', position: 'right'},
@@ -107,7 +106,7 @@ const config: Config = {
     },
     footer: {
       style: 'light',
-      logo: {src: 'img/logo.svg', alt: 'staple', width: 20, height: 20, href: '/'},
+      logo: {src: 'img/logo.svg', srcDark: 'img/logo-dark.svg', alt: 'staple', width: 20, height: 20, href: '/'},
       links: [
         {
           title: 'Docs',

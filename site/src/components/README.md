@@ -3,9 +3,10 @@
 The building blocks for marketing pages (`src/pages`). Docs pages do not use
 them: they are Markdown from `../docs`, styled by `src/css/custom.css`.
 
-Every colour, size, radius, duration and font comes from the tokens in
-`src/css/tokens.css`. Components read `var(--st-*)` and never hard-code a value,
-so both themes work without per-component dark rules.
+Colours, type, spacing, radii, control sizes, durations and fonts come from
+the tokens in `src/css/tokens.css`; components read `var(--st-*)`, so both
+themes work without per-component dark rules. Only small local geometry (a dot's
+size, a hover nudge) is literal.
 
 | Component | Import | Use it for |
 | --- | --- | --- |
@@ -13,7 +14,7 @@ so both themes work without per-component dark rules.
 | `Eyebrow` | `@site/src/components/Eyebrow` | The small mono label above a heading. |
 | `Heading`, `Lead` | `@site/src/components/Heading` | The type scale. `as` picks the element for the outline (`h1` to `h4`, `p`), `size` picks the look (`display`, `xl`, `lg`, `md`); they are independent. `Lead` is the paragraph under a heading. Both take `align="center"`. |
 | `Button`, `ButtonRow` | `@site/src/components/Button` | A link styled as a button: `variant="primary"` for the one main action in a view, `secondary` for the rest; `size="lg"` in heroes. `ButtonRow` wraps a group. |
-| `Card`, `CardGrid` | `@site/src/components/Card` | A hairline panel with `title`, optional `eyebrow` and body; `to` makes the whole card a link, `titleAs` picks the title element for the outline (default `h3`). `CardGrid` lays cards out 1 / 2 / 3 columns (`columns={2}` for two). |
+| `Card`, `CardGrid` | `@site/src/components/Card` | A hairline panel with `title`, optional `eyebrow` and body; `to` makes the whole card a link, `titleAs` picks the title element for the outline (default `h3`). `CardGrid` lays cards out in one column on phones and `columns` (3 by default, or 2) from 768 px up. |
 | `Terminal` | `@site/src/components/Terminal` | A short shell session. `lines` is an array: `$ ` starts a command (the prompt is not selectable), `# ` a comment, anything else output. |
 
 A page composes them:

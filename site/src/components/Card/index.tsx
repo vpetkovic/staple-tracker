@@ -40,7 +40,7 @@ export default function Card({title, children, eyebrow, to, titleAs: Title = 'h3
   );
 }
 
-// A grid of cards: one column on phones, two on tablets, `columns` on desktop.
+// A grid of cards: one column on phones, `columns` from tablets up.
 export function CardGrid({children, columns = 3}: {children: ReactNode; columns?: 2 | 3}): ReactNode {
   return <div className={clsx(styles.grid, columns === 2 && styles.two)}>{children}</div>;
 }

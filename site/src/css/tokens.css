@@ -1,7 +1,10 @@
 /*
- * Design tokens: the only place colours, type, spacing, radii and motion are
- * defined. Everything else (the Infima mapping in custom.css, the components in
- * src/components) reads these custom properties and never hard-codes a value.
+ * Design tokens: the only place colours, type, spacing, radii, control sizes
+ * and motion are defined. Everything else (the Infima mapping in custom.css,
+ * the components in src/components) reads these custom properties. What stays
+ * local to a component is small geometry with no system meaning (a 6 px dot, a
+ * 3 px hover nudge). Media queries cannot read custom properties; the
+ * breakpoints are Infima's: 996 px (sidebar and TOC collapse) and 767 px.
  *
  * Neutrals are a cool grey ramp; the one accent is green. Dark mode has its own
  * tuned values rather than an inversion of light. Contrast ratios of the text
@@ -26,6 +29,8 @@
   --st-leading-tight: 1.1;
   --st-leading-snug: 1.3;
   --st-leading-body: 1.7;
+  --st-leading-relaxed: 1.6;
+  --st-leading-code: 1.75;
 
   --st-tracking-display: -0.045em;
   --st-tracking-heading: -0.025em;
@@ -36,6 +41,7 @@
   --st-weight-semibold: 600;
 
   --st-measure: 44rem;
+  --st-measure-lead: 38rem;
 
   /* Spacing (4 px base) */
   --st-space-1: 0.25rem;
@@ -71,10 +77,18 @@
   --st-duration-fast: 120ms;
   --st-duration: 180ms;
   --st-duration-slow: 480ms;
+  --st-stagger: 80ms;
+  --st-rise: 8px;
 
   /* Layout */
   --st-navbar-height: 3.5rem;
+  --st-navbar-blur: 14px;
   --st-container: 72rem;
+  --st-container-wide: 88rem;
+  --st-gutter: var(--st-space-6);
+  --st-logo-nav: 1.5rem;
+  --st-logo-footer: 1.25rem;
+  --st-grid-cell: 48px;
 
   /* Light theme colours */
   --st-bg: #ffffff;

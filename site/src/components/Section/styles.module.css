@@ -14,11 +14,11 @@
 .inner {
   max-width: var(--st-container);
   margin-inline: auto;
-  padding-inline: var(--st-space-6);
+  padding-inline: var(--st-gutter);
 }
 
 .narrow {
-  max-width: calc(var(--st-measure) + 2 * var(--st-space-6));
+  max-width: calc(var(--st-measure) + 2 * var(--st-gutter));
 }
 
 @media (max-width: 767px) {
@@ -28,9 +28,5 @@
 
   .tight {
     padding-block: var(--st-space-10);
-  }
-
-  .inner {
-    padding-inline: var(--st-space-5);
   }
 }

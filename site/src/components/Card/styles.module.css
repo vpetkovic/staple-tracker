@@ -55,7 +55,7 @@
 
 .body {
   font-size: var(--st-text-sm);
-  line-height: 1.6;
+  line-height: var(--st-leading-relaxed);
 }
 
 .body > :last-child {
@@ -72,13 +72,7 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-@media (max-width: 996px) {
-  .grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
+@media (max-width: 767px) {
   .grid,
   .two {
     grid-template-columns: minmax(0, 1fr);

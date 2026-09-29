@@ -12,7 +12,7 @@
   z-index: -1;
   background-image: linear-gradient(to right, var(--st-border) var(--st-hairline), transparent var(--st-hairline)),
     linear-gradient(to bottom, var(--st-border) var(--st-hairline), transparent var(--st-hairline));
-  background-size: 48px 48px;
+  background-size: var(--st-grid-cell) var(--st-grid-cell);
   background-position: center top;
   mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 30%, transparent 100%);
   -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 30%, transparent 100%);
@@ -32,13 +32,13 @@
 }
 
 .heroTerminal {
-  animation-delay: 80ms;
+  animation-delay: var(--st-stagger);
 }
 
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(var(--st-rise));
   }
   to {
     opacity: 1;

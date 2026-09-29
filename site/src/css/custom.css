@@ -1,8 +1,8 @@
 /*
  * Site chrome: maps Infima (Docusaurus classic) onto the tokens in tokens.css
  * and restyles the navbar, sidebar, table of contents, content, code, tables,
- * admonitions and footer. No colour, size or duration is defined here; they all
- * come from --st-* tokens.
+ * admonitions and footer. Colours, type, spacing, radii and durations all come
+ * from --st-* tokens; only small offsets inside a single rule are literal.
  */
 
 /* ---------- Infima mapping: the tokens switch with the theme, the mapping does not ---------- */
@@ -63,8 +63,8 @@ html[data-theme] {
   --ifm-transition-slow: var(--st-duration);
   --ifm-transition-timing-default: var(--st-ease);
 
-  --ifm-container-width-xl: 88rem;
-  --ifm-spacing-horizontal: var(--st-space-6);
+  --ifm-container-width-xl: var(--st-container-wide);
+  --ifm-spacing-horizontal: var(--st-gutter);
 
   --ifm-code-font-size: 0.875em;
   --ifm-code-background: var(--st-code-inline-bg);
@@ -89,7 +89,7 @@ html[data-theme] {
   --ifm-navbar-height: var(--st-navbar-height);
   --ifm-navbar-background-color: var(--st-bg-translucent);
   --ifm-navbar-shadow: none;
-  --ifm-navbar-padding-horizontal: var(--st-space-6);
+  --ifm-navbar-padding-horizontal: var(--st-gutter);
   --ifm-navbar-link-color: var(--st-fg-muted);
   --ifm-navbar-link-hover-color: var(--st-fg-strong);
   --ifm-navbar-link-active-color: var(--st-fg-strong);
@@ -146,7 +146,6 @@ html {
 :focus-visible {
   outline: var(--st-focus-ring) solid var(--st-accent);
   outline-offset: var(--st-focus-ring);
-  border-radius: var(--st-radius-sm);
 }
 
 a {
@@ -176,8 +175,8 @@ hr {
 /* The blur only while the mobile menu is closed: a backdrop filter makes the
    navbar the containing block of the fixed menu panel and would clip it. */
 .navbar:not(.navbar-sidebar--show) {
-  backdrop-filter: saturate(180%) blur(14px);
-  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  backdrop-filter: saturate(180%) blur(var(--st-navbar-blur));
+  -webkit-backdrop-filter: saturate(180%) blur(var(--st-navbar-blur));
 }
 
 .navbar__inner {
@@ -191,7 +190,7 @@ hr {
 }
 
 .navbar__logo {
-  height: 1.5rem;
+  height: var(--st-logo-nav);
   margin-right: 0;
 }
 
@@ -310,7 +309,7 @@ hr {
 .table-of-contents__link {
   display: block;
   margin-left: calc(-1 * var(--st-hairline));
-  padding: 0.2rem 0 0.2rem var(--st-space-4);
+  padding: var(--st-space-1) 0 var(--st-space-1) var(--st-space-4);
   border-left: var(--st-hairline) solid transparent;
   line-height: 1.45;
 }
@@ -506,26 +505,33 @@ pre code,
   color: var(--st-fg-muted);
 }
 
+/* Fully visible while the block is hovered (Docusaurus dims it to 0.4). */
+.theme-code-block:hover [class*='buttonGroup'] button {
+  opacity: 1;
+}
+
 /* ---------- Tables ---------- */
 
+/* The wrapper (src/theme/MDXComponents.tsx) owns the border and the scroll:
+   it hugs a narrow table and fills the column for a wide one, whose right edge
+   then stays framed while it scrolls. */
 .table-scroll {
+  width: fit-content;
   max-width: 100%;
   overflow-x: auto;
   margin-bottom: var(--ifm-spacing-vertical);
+  border: var(--st-hairline) solid var(--st-border);
   border-radius: var(--st-radius-lg);
 }
 
 .theme-doc-markdown table {
-  /* The .table-scroll wrapper (src/theme/MDXComponents.tsx) scrolls, so the
-     table itself is a real table again and its border hugs its content. */
   display: table;
   margin: 0;
   font-size: var(--st-text-sm);
-  line-height: 1.55;
+  line-height: var(--st-leading-relaxed);
   border-collapse: separate;
   border-spacing: 0;
-  border: var(--st-hairline) solid var(--st-border);
-  border-radius: var(--st-radius-lg);
+  border: 0;
 }
 
 .theme-doc-markdown table thead tr {
@@ -616,6 +622,14 @@ pre code,
   max-width: var(--st-container);
 }
 
+@media (min-width: 600px) and (max-width: 996px) {
+  .footer__links .footer__col {
+    --ifm-col-width: calc(100% / 3);
+    flex-basis: var(--ifm-col-width);
+    max-width: var(--ifm-col-width);
+  }
+}
+
 .footer__title {
   font-size: var(--st-text-xs);
   font-weight: var(--st-weight-medium);
@@ -626,7 +640,7 @@ pre code,
 }
 
 .footer__item {
-  padding: 0.2rem 0;
+  padding: var(--st-space-1) 0;
 }
 
 .footer__link-item {
@@ -653,7 +667,7 @@ pre code,
 }
 
 .footer__logo {
-  height: 1.25rem;
+  height: var(--st-logo-footer);
   margin: 0;
 }
 

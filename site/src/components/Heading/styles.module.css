@@ -30,10 +30,10 @@
 }
 
 .lead {
-  max-width: 38rem;
+  max-width: var(--st-measure-lead);
   margin: 0 0 var(--st-space-8);
   font-size: var(--st-text-lg);
-  line-height: 1.6;
+  line-height: var(--st-leading-relaxed);
   color: var(--st-fg-muted);
   text-wrap: pretty;
 }
