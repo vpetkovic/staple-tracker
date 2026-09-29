@@ -39,7 +39,7 @@ To have `staple` on your `PATH` instead of fetching it each time, run
 `~/.local/bin/staple`, no `sudo`, with rollback. Add `--update-path` to put
 `~/.local/bin` on your `PATH` ([packaging](https://github.com/vpetkovic/staple-tracker/blob/master/docs/packaging.md)).
 
-[Getting started](docs/getting-started.md) walks through the first workspace,
+[Getting started](https://github.com/vpetkovic/staple-tracker/blob/master/docs/getting-started.md) walks through the first workspace,
 the MCP wiring and the loop your agents follow, one ticket from created to done.
 
 ## What you get
