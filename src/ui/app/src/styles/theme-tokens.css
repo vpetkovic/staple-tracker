@@ -196,7 +196,7 @@
   --status-task-icon-cancelled: #52585d;
   --status-task-icon-in_queue: var(--status-task-in_progress);    /* blocked shape, blue */
 
-  /* Plain-language analytics (components/plain, docs/web-ui.md "Forecast").
+  /* Plain-language analytics (components/plain, design/web-ui.md "Forecast").
      Status pills: a word + an icon on a tint; every fg clears 4.5:1 on its bg
      (checked with the dataviz validator's contrast()). The viz hues are ONE
      blue ramp (sequential): the likely band and the fill clear 3:1 on the

@@ -1,5 +1,5 @@
 /**
- * The card every plain-language block is built from (docs/web-ui.md, "Plain-language cards"):
+ * The card every plain-language block is built from (design/web-ui.md, "Plain-language cards"):
  * a small title, an optional status pill, ONE headline figure, the answer sentence, an optional
  * visual, a "What does this mean?" help, and a "Show details" disclosure that keeps every
  * technical figure on the page for power users and agents.

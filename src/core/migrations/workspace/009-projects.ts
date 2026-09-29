@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 9 — tracked projects (contract in docs/web-ui.md, "Projects").
+ * Version 9 — tracked projects (contract in design/web-ui.md, "Projects").
  *
  * ## Why 9
  *

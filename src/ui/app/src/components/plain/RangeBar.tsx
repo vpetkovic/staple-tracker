@@ -1,7 +1,7 @@
 /**
  * The likely-range bar: where a figure will most likely land, on a scale that starts at 0.
  *
- * Marks (one blue ramp, docs/web-ui.md "Plain-language cards"): an optional pale WIDE band with a
+ * Marks (one blue ramp, design/web-ui.md "Plain-language cards"): an optional pale WIDE band with a
  * ≥3:1 edge, a strong LIKELY band, the EXPECTED figure as an ink marker with a card-coloured ring,
  * and an optional REFERENCE as a dashed line (the estimate, on the estimate-accuracy cards).
  *

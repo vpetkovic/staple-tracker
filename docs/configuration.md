@@ -334,7 +334,7 @@ staple budget unsetup --yes                                                     
 ```
 
 The web app does the same from **Settings → Usage**
-([web-ui.md](web-ui.md#usage--budget)): capture on and off, bindings listed,
+([web-ui.md](../design/web-ui.md#usage--budget)): capture on and off, bindings listed,
 added, edited and removed, and automatic collection turned on and off after
 its plan is shown. It calls the same store methods through
 `POST /api/budget/capture`, `POST /api/budget/live` and

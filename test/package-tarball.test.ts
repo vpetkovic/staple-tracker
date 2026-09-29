@@ -170,7 +170,7 @@ describe("the packed artifact", () => {
     // `icon-previews.generated-<hash>.js`, the LAZY chunk R5d (STA-184) split the
     // Lucide components into so the glyph picker can preview the whole catalog
     // without the main view carrying ~140 kB gzipped of icons it never draws
-    // (docs/web-ui.md, "Glyph picker"). It ships because the picker fetches it at
+    // (design/web-ui.md, "Glyph picker"). It ships because the picker fetches it at
     // runtime; a build that folded it back into the bundle is the regression.
     // Anything else appearing under assets/ is a payload regression, which is the
     // whole point of matching by shape instead of counting files.

@@ -188,7 +188,7 @@ export function SortByOptions({
 
       {/*
         THE TIE-BREAK CHAIN, ON SCREEN. The ticket asks every mode to document a complete
-        chain and `docs/web-ui.md` is where the table lives, but the question "why is this
+        chain and `design/web-ui.md` is where the table lives, but the question "why is this
         row above that one when both are critical" is asked HERE, with both rows in view, by
         somebody who is not going to go and read the docs. Rendered from `sortChain` via the
         registry, so it cannot describe an order the comparator does not run.

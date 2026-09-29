@@ -7,7 +7,7 @@
  * the right shape for a list with one order. The moment the order becomes a CHOICE, three
  * things have to agree about it: the comparator, the menu that names it, and the docs that
  * promise a tie-break chain. A switch inside the model can only be the first of those, so
- * the menu would retype the names and `docs/web-ui.md` would retype the chains, and the day
+ * the menu would retype the names and `design/web-ui.md` would retype the chains, and the day
  * a mode's tie-break changes, two of the three would keep saying the old thing.
  *
  * So a mode is DATA: an id, both of its direction labels, the chain written out as the list

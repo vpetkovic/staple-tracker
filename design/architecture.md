@@ -25,7 +25,7 @@
 | Setup | `src/onboarding/` | The setup service `staple init` and bare `staple` share |
 | Agent guide | `src/core/agents-template.ts` | The working protocol `init` writes to `.staple/AGENTS.md` |
 | Web UI server | `src/ui/server.ts` | `staple open`: token-gated JSON API + serves the built app; per-workspace or `--hub` |
-| Web UI app | `src/ui/app/` | Vite + React + Tailwind with Radix primitives — Tasks, Queue, Graph, Milestones, Estimates and Usage views, the detail panel and Settings — see [web-ui.md](../docs/web-ui.md) |
+| Web UI app | `src/ui/app/` | Vite + React + Tailwind with Radix primitives — Tasks, Queue, Graph, Milestones, Estimates and Usage views, the detail panel and Settings — see [web-ui.md](web-ui.md) |
 | Tests | `test/`, `*.test.ts(x)` beside the UI code | Store semantics, CLI and MCP surfaces, migrations and crash drills, the packed runtime, sync, telemetry, UI |
 | Smoke | `scripts/smoke-mcp.ts` | Full JSON-RPC agent workflow over stdio |
 

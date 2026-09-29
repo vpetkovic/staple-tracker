@@ -258,7 +258,7 @@ issue.
 | --- | --- | --- |
 | `lucide` | a canonical Lucide key (`triangle-alert`) | lowercase words joined by dashes, at most 64 characters |
 | `emoji` | an emoji or short Unicode glyph (`🚀`, `→→`) | 1 to 2 **grapheme clusters** (a joined family or a flag is one), at most 32 UTF-16 units, no whitespace or control characters, at least one visible code point |
-| `svg` | the sanitiser's **canonical** SVG document | at most 8 KiB, one `<svg>` root with a `viewBox` within ±4096, sanitised as described in [web-ui.md](web-ui.md#custom-glyphs) |
+| `svg` | the sanitiser's **canonical** SVG document | at most 8 KiB, one `<svg>` root with a `viewBox` within ±4096, sanitised as described in [web-ui.md](../design/web-ui.md#custom-glyphs) |
 | `none` | `""` | draw the built-in mark |
 
 An `svg` value is accepted only as the sanitiser's own output — a raw document,
@@ -1332,7 +1332,7 @@ action, or a plan that no longer reads the same (`plan_changed`) is 409. The
 routes are machine-local and never trigger a sync.
 
 `capture`, `bind`, `unbind` and `bindings` have routes too, for the web
-Settings' *Usage & budget* section ([web-ui.md](web-ui.md#usage--budget)):
+Settings' *Usage & budget* section ([web-ui.md](../design/web-ui.md#usage--budget)):
 `POST /api/budget/capture` (`{enabled}`), `POST /api/budget/bindings/bind`
 (`{source, account, provider?, configDir? | codexHome?, replacing?}`, `source`
 spelled as `--source`; `replacing` is `bind --replace-source/--replace-dir`,

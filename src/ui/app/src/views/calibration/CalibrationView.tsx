@@ -1,7 +1,7 @@
 /**
  * The Estimates destination (the `calibration` view): how long finished work really took
  * against its estimate, by group, as `staple calibrate` reads it (design/timing-semantics.md,
- * "Calibration cohorts" and "Confidence ranges"; docs/web-ui.md, "Estimates").
+ * "Calibration cohorts" and "Confidence ranges"; design/web-ui.md, "Estimates").
  *
  * ## Plain first, exact behind "Show details"
  *

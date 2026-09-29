@@ -19,7 +19,7 @@
  * lib/forecast-text.ts exactly as before, so an engineer or an agent loses nothing.
  *
  * The one judgement made here is the status word of a budget limit, and it lives in ONE function,
- * `limitStatus`, whose thresholds are named constants documented in docs/web-ui.md. Pure and tested
+ * `limitStatus`, whose thresholds are named constants documented in design/web-ui.md. Pure and tested
  * (plain-language.test.ts).
  */
 // Relative, like forecast-text.ts: a pure module stays resolvable without the alias.
@@ -448,7 +448,7 @@ export const STATUS_WORDS: Record<PlainStatus, string> = {
 /**
  * The thresholds of `limitStatus`, on the payload's own breach probability (the chance, over the
  * simulated draws, that the work takes the limit under its reserve before the work ends).
- * docs/web-ui.md states them.
+ * design/web-ui.md states them.
  */
 export const STATUS_THRESHOLDS = {
   /** From this chance of going under the reserve, a limit is Tight. */

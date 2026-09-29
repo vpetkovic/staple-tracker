@@ -4893,7 +4893,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
-       * Projects — migration 009, docs/web-ui.md "Projects". One read and a POST
+       * Projects — migration 009, design/web-ui.md "Projects". One read and a POST
        * family, the milestone routes' shape.
        *
        * The read answers `{ workspace, project }` rows rather than bare projects,

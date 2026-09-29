@@ -296,7 +296,7 @@ export function AnalyticsTab({ detail, workspace, onAuthError }: TabProps) {
   const beneath = cohort.data ? cohortLine(cohort.data) : null;
 
   /**
-   * The forecast (docs/web-ui.md, "Analytics"): what is left and what it costs a provider limit,
+   * The forecast (design/web-ui.md, "Analytics"): what is left and what it costs a provider limit,
    * from `GET /api/forecast`. After the headline and its breakdown, before the per-child list,
    * which can be long. Full for an open parent, compact for an open leaf with its own estimate,
    * one line for a leaf in review, absent otherwise.

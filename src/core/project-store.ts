@@ -1,5 +1,5 @@
 /**
- * Projects in the store — the database half of docs/web-ui.md "Projects".
+ * Projects in the store — the database half of design/web-ui.md "Projects".
  *
  * Owns the one table migration 009 added (`projects`) and the one column it put
  * on `issues` (`project_id`), and nothing else: an issue's title, status, parent,

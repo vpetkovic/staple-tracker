@@ -1,6 +1,6 @@
 /**
  * The Budget destination: this machine's provider limits and each one's session pressure, as
- * `staple budget` reads them (design/execution-telemetry.md, "Pressure"; docs/web-ui.md, "Budget").
+ * `staple budget` reads them (design/execution-telemetry.md, "Pressure"; design/web-ui.md, "Budget").
  *
  * ## The machine's, not a workspace's
  *
