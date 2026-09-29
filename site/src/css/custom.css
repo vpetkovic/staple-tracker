@@ -1,8 +1,9 @@
 /*
  * Site chrome: maps Infima (Docusaurus classic) onto the tokens in tokens.css
  * and restyles the navbar, sidebar, table of contents, content, code, tables,
- * admonitions and footer. Colours, type, spacing, radii and durations all come
- * from --st-* tokens; only small offsets inside a single rule are literal.
+ * admonitions and footer. Colours, type scale, line heights, spacing, radii and
+ * durations come from --st-* tokens; relative em sizes for nested code and
+ * small offsets inside a single rule are literal.
  */
 
 /* ---------- Infima mapping: the tokens switch with the theme, the mapping does not ---------- */
@@ -73,7 +74,7 @@ html[data-theme] {
   --ifm-code-padding-vertical: 0.1em;
   --ifm-pre-background: var(--st-code-bg);
   --ifm-pre-color: var(--st-code-fg);
-  --ifm-pre-line-height: 1.65;
+  --ifm-pre-line-height: var(--st-leading-code);
   --ifm-pre-padding: var(--st-space-4);
   --docusaurus-highlighted-code-line-bg: var(--st-bg-muted);
 
@@ -265,7 +266,7 @@ hr {
 
 .menu__link {
   border-radius: var(--st-radius-sm);
-  line-height: 1.45;
+  line-height: var(--st-leading-ui);
   transition: color var(--st-duration-fast) var(--st-ease),
     background-color var(--st-duration-fast) var(--st-ease);
 }
@@ -311,7 +312,7 @@ hr {
   margin-left: calc(-1 * var(--st-hairline));
   padding: var(--st-space-1) 0 var(--st-space-1) var(--st-space-4);
   border-left: var(--st-hairline) solid transparent;
-  line-height: 1.45;
+  line-height: var(--st-leading-ui);
 }
 
 .table-of-contents ul {
@@ -506,7 +507,7 @@ pre code,
 }
 
 /* Fully visible while the block is hovered (Docusaurus dims it to 0.4). */
-.theme-code-block:hover [class*='buttonGroup'] button {
+.theme-code-block:hover [class*='buttonGroup'] button.clean-btn {
   opacity: 1;
 }
 

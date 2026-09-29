@@ -1,9 +1,19 @@
 /*
  * Self-hosted fonts (Geist and Geist Mono, SIL Open Font License 1.1, from
- * @fontsource-variable). Only the Latin subset is loaded: the site is English,
- * and characters outside the range fall back to the system font. Variable
- * weight, font-display: swap.
+ * @fontsource-variable). The Latin subsets, plus Geist Mono's box-drawing
+ * subset so diagrams in code blocks keep one advance width. The browser only
+ * downloads a subset when a page uses a character in its range; characters
+ * outside them fall back to the system font. Variable weight, font-display: swap.
  */
+
+@font-face {
+  font-family: 'Geist Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('../../node_modules/@fontsource-variable/geist-mono/files/geist-mono-symbols2-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+2000-2001, U+2004-2008, U+200A, U+23B8-23BD, U+2500-259F;
+}
 
 @font-face {
   font-family: 'Geist Variable';
