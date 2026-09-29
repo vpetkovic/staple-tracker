@@ -75,7 +75,7 @@ When a run stops, open pages say why and link to what needs you.
 ```bash
 staple run pause                             # MCP pause_run
 staple run resume                            # MCP resume_run
-staple run stop -m "Reviewing APP-8 first"   # MCP stop_run, or Stop in the web UI
+staple run stop -m "Reviewing APP-8 first"   # MCP stop_run, or Stop in the UI
 ```
 
 **Pause** lets the current session finish and takes nothing new until you resume.

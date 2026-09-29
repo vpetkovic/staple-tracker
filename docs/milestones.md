@@ -49,8 +49,8 @@ APP-11. Dates are calendar days in UTC; `--start` sets an optional start day, an
 ## 3. Add work from anywhere
 
 ```bash
-staple milestone add APP-11 APP-10        # MCP add_milestone_member
-staple milestone mv APP-10 --at 1         # MCP move_milestone_member: the flaky test first
+staple milestone add APP-11 APP-10   # MCP add_milestone_member
+staple milestone mv APP-10 --at 1    # first in line: MCP move_milestone_member
 ```
 
 Joining a milestone changes nothing about a ticket: it keeps its epic, its

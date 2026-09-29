@@ -100,7 +100,7 @@ staple done APP-2 -m "merged"
 Taking over from an agent that died:
 
 ```bash
-staple checkout APP-3 --steal-if-stale 30m     # take a claim silent for 30 minutes
+staple checkout APP-3 --steal-if-stale 30m     # take over a silent claim
 staple release APP-3 --if-stale 2h             # or just free it
 ```
 

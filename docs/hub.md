@@ -134,12 +134,13 @@ staple hub events
 ## 6. Tidy the list
 
 ```bash
-staple hub unlink APP-3 WEB-1        # remove one link (MCP cross_unlink)
-staple hub unregister web            # drop one workspace from the list (MCP hub_unregister)
-staple hub prune                     # preview workspaces whose folder is gone; --yes removes them
+staple hub unlink APP-3 WEB-1   # remove one link (MCP cross_unlink)
+staple hub unregister web       # drop a workspace from the list (MCP hub_unregister)
+staple hub prune                # list workspaces whose folder is gone
 ```
 
-Unregistering never touches the workspace's tickets: the next staple command run
+`staple hub prune --yes` removes what `prune` lists. Unregistering never touches
+the workspace's tickets: the next staple command run
 in that repository registers it again. It refuses while a link names the
 workspace; remove the link first, or pass `--with-links`.
 

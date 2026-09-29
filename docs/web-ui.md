@@ -24,7 +24,7 @@ staple ui — workspace "app" at http://localhost:4400/
 ```
 
 Your browser opens on this repository's workspace. The server listens on this
-machine only and runs until you press Ctrl-C.
+machine only and stops on Ctrl-C.
 
 - `staple open --port 4410` picks the port. Without `--port`, staple takes 4400,
   or a free port when 4400 is busy.
@@ -60,23 +60,18 @@ Every ticket, parents over children. Each row shows its status, what it waits on
 (*Blocked by 2*), what waits on it, and who holds it (*Working*). A folded epic
 shows its progress.
 
-Narrow the list with the **quick filters** (*My tasks*, *In progress*, *Blocked*,
-*High priority*) or **Filter**; **Group**, **Sort** and search shape it, and
-**Done** shows finished work. Change a status from the status icon (or `s` on a
-focused row), and press Enter or click to open a ticket (step 7).
+The **quick filters** (*My tasks*, *In progress*, *Blocked*, *High priority*),
+**Filter**, **Group**, **Sort** and search shape the list. Change a status from its
+icon, and click a ticket to open it (step 7).
 
 ## 4. Queue: what agents take next
 
 ![The Queue view: the Next up band over the numbered pickup order, with each queued epic expanded into its tickets](../site/static/img/screens/queue-light.webp)
 
 The [pickup queue](queue.md) as one list. **Next up** names the ticket an agent
-asking now would get. Below it, your plan in order, with each queued epic or
-milestone expanded into the tickets it stands for, and a word on each saying
-whether it can be taken.
-
-Drag rows, or use Alt-↑ and Alt-↓, to reorder. *Queue a task, epic or
-milestone…* adds work, a row's `⋯` menu removes it, and *Clear n finished* tidies
-the plan.
+asking now would get; below it, your plan in order, each queued epic or milestone
+expanded into its tickets. Drag rows (or Alt-↑ and Alt-↓) to reorder; *Queue a
+task, epic or milestone…* adds work, and a row's `⋯` menu removes it.
 
 ## 5. Graph: how work depends on work
 
@@ -123,9 +118,8 @@ approve all, approve some children, or send it back with a note
 
 Once the workspace has had an [autopilot run](runs.md), the rail gains an
 *Autopilot* section: a card per live run with its progress, next ticket and
-**Stop**. Tickets a run holds wear an *Autopilot* badge, and *Run history* lists
-how each run ended. When a run stops, every open page shows why and links to what
-needs you. Agents start runs; the web UI watches, pauses and stops them.
+**Stop**, and *Run history* with how each run ended. Agents start runs; the web UI
+watches, pauses and stops them.
 
 ## 9. Estimates and Usage
 

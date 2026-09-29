@@ -58,7 +58,8 @@ error(conflict): Checkout refused: status is "in_progress" (held by claude), exp
 To take it over, say how long the holder must have been silent:
 
 ```bash
-staple start APP-7 --steal-if-stale 2m    # MCP checkout_task with steal_if_idle_seconds
+# MCP: checkout_task with steal_if_idle_seconds
+staple start APP-7 --steal-if-stale 2m
 ```
 
 ```text

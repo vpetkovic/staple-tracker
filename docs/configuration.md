@@ -85,7 +85,7 @@ Staple also sets variables for the commands it starts: `STAPLE_EVENT` for
 `STAPLE_RUN_TICKET` for the sessions `staple run drive` launches.
 
 ```bash
-STAPLE_AGENT=codex-2 staple checkout APP-3
+STAPLE_AGENT=codex-2 staple start APP-3
 ```
 
 ## Budget capture
@@ -94,10 +94,12 @@ Recording your provider's usage limits is off until you turn it on, and stays on
 this machine. One command does all of it and shows the plan first:
 
 ```bash
-staple budget setup --claude-account personal --codex-account work        # the plan; changes nothing
-staple budget setup --claude-account personal --codex-account work --yes  # apply it
-staple budget status                                                      # is it working?
-staple budget unsetup --yes                                               # undo exactly what setup did
+# the plan; changes nothing
+staple budget setup --claude-account personal --codex-account work
+# apply it
+staple budget setup --claude-account personal --codex-account work --yes
+staple budget status             # is it working?
+staple budget unsetup --yes      # undo exactly what setup did
 ```
 
 The account names are labels you choose. `staple budget live on --yes` also asks

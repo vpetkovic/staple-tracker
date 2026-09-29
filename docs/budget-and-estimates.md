@@ -151,7 +151,7 @@ Then read it:
 
 ```bash
 staple budget                   # MCP get_budget
-staple budget status            # what is collected, and anything that needs fixing
+staple budget status            # what is collected, and what needs fixing
 ```
 
 ```text

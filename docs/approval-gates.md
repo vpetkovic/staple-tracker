@@ -92,7 +92,8 @@ staple approve APP-1 --children APP-6
 `todo`, and the held tickets stay held:
 
 ```bash
-staple request-changes APP-1 -m "Tokens must be hashed at rest. Fix that first."   # MCP request_changes
+# MCP request_changes
+staple request-changes APP-1 -m "Hash tokens at rest. Fix that first."
 ```
 
 ```text

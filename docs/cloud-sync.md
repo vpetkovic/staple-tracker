@@ -46,10 +46,9 @@ not connected — no credential, no endpoint and no cloud state on this machine
   Connect with: staple cloud connect --endpoint <url> --token <secret>
 ```
 
-`status` reads local files only. Once connected, `pending` counts the changes
-waiting to be sent, and `cursor` and `epoch` say how far this machine has caught
-up. `staple cloud status --all` lists every workspace on this machine, and
-`--refresh` is the one form that asks the service.
+`status` reads local files only; `--refresh` asks the service. Once connected,
+`pending` counts the changes waiting to be sent. `--all` lists every workspace on
+this machine.
 
 ## 2. Connect: the first consent
 
@@ -57,10 +56,10 @@ up. `staple cloud status --all` lists every workspace on this machine, and
 staple cloud connect --endpoint https://sync.example.com --token <enrollment-secret>
 ```
 
-Before anything is sent, staple shows the service, the repository id, this
-device's name and where the credential will go, and waits for your yes. Without a
-terminal, it prints that preview and sends nothing. The credential goes into your OS keychain (or a private file with
-`--credential-file`), never into the repository.
+Before anything is sent, staple shows the service, the repository and this device,
+and waits for your yes; without a terminal it only prints that preview. The
+credential goes into your OS keychain (or a private file with `--credential-file`),
+never into the repository.
 
 A new connection is **manual**: nothing syncs until someone asks.
 `staple cloud connect --all …` connects every workspace on this machine in one
@@ -75,9 +74,8 @@ workspace, **Settings → Cloud sync**.
 staple cloud sync            # or --all for every connected workspace
 ```
 
-This pushes what changed here and applies what the other machines did. The first
-run uploads what the workspace already holds. An interrupted run picks up where it
-stopped.
+This sends what changed here and applies what the other machines did. An
+interrupted sync picks up where it stopped.
 
 ## 4. Sync automatically: the second consent
 
@@ -122,10 +120,9 @@ enrollment secret, or the device token of a machine that is already connected.
 This machine starts manual too: give its own consents with `cloud auto on` and
 `cloud backup enable` if you want them here.
 
-Restoring a backup of your staple home (`~/.staple`) onto another machine is not
-adding a device: sync refuses on the copy, and `cloud status` says why. Delete the
-copy and join as above, or run `staple cloud fork-id` there to make it an
-independent workspace.
+A copy of your staple home (`~/.staple`) restored onto another machine is not a
+new device: sync refuses on it and `cloud status` says why. Join as above instead,
+or run `staple cloud fork-id` to make the copy an independent workspace.
 
 ## 7. Settle conflicts
 
@@ -148,7 +145,7 @@ Your choice syncs to every device as a new change (MCP `conflict_resolve`).
 
 ## 8. Claims across machines
 
-A plain `staple checkout` claims a ticket on this machine only; another machine
+A plain `staple start` claims a ticket on this machine only; another machine
 may take it until the next sync. When that matters, take a lease, which the
 service grants to one machine only:
 
@@ -174,12 +171,10 @@ they will do and want the repository id typed back.
 
 ## What agents may do
 
-- **May:** read `cloud_status`, list conflicts with `conflict_list` and settle them
-  with `conflict_resolve`, run `staple cloud sync`, and take a lease with
-  `staple cloud lease acquire` when a claim must hold across machines.
-- **May not:** connect, disconnect, turn automatic sync or backups on or off,
-  revoke a device, restore or purge. These are a person's decisions, made at a
-  terminal or in Settings, and have no MCP tool.
+- **May:** check `cloud_status`, list and settle conflicts, run `staple cloud sync`,
+  and take a lease when a claim must hold across machines.
+- **May not:** connect, disconnect, switch automatic sync or backups, revoke a
+  device, restore or purge. These are a person's decisions, and have no MCP tool.
 
 ## Next
 

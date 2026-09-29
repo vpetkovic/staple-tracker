@@ -73,7 +73,7 @@ tickets, it says why: held by another agent, blocked, or waiting on a gate.
 ```bash
 staple queue mv APP-7 --before APP-1    # MCP move_queue_entry
 staple queue rm APP-10                  # MCP dequeue_task
-staple queue prune                      # MCP prune_queue: drop finished entries
+staple queue prune                      # MCP prune_queue: drop finished
 ```
 
 In the Queue view, drag rows or use Alt-↑ and Alt-↓. Finished work stays in the plan,
@@ -113,7 +113,7 @@ When you need one ticket done now, you do not have to reorder the plan. Claim it
 a reason:
 
 ```bash
-staple checkout APP-3 --override -m "The email provider trial ends Friday"
+staple start APP-3 --override -m "The email provider trial ends Friday"
 ```
 
 The claim goes through, the reason is recorded on the ticket, and the plan is

@@ -17,9 +17,12 @@ Work with agents for a few weeks and a folder like this appears:
 ```text
 docs/plans/
   brainstorm-rate-limits.md
-  plan-auth-refactor.md          "blocked until tenant ids land, see plan-multi-tenancy.md"
-  plan-multi-tenancy.md          "step 4 depends on plan-auth-refactor.md, step 2"
-  plan-multi-tenancy-v2.md       "replaces parts of plan-multi-tenancy.md"
+  plan-auth-refactor.md
+      "blocked until tenant ids land, see plan-multi-tenancy.md"
+  plan-multi-tenancy.md
+      "step 4 depends on plan-auth-refactor.md, step 2"
+  plan-multi-tenancy-v2.md
+      "replaces parts of plan-multi-tenancy.md"
   plan-tenant-billing.md
 ```
 
@@ -46,15 +49,15 @@ document, next to the worklog, the comments and the tickets it waits on. An agen
 that opens a ticket finds everything it needs there.
 
 ```bash
-staple new "Multi-tenancy" --kind epic                                # STA-1
-staple new "Tenant id on every table" --parent STA-1                   # STA-2
-staple new "Scope queries by tenant" --parent STA-1 --blocked-by STA-2 # STA-3
-staple doc STA-2 plan --put plan.md
+staple new "Multi-tenancy" --kind epic                                # APP-1
+staple new "Tenant id on every table" --parent APP-1                   # APP-2
+staple new "Scope queries by tenant" --parent APP-1 --blocked-by APP-2 # APP-3
+staple doc APP-2 plan --put plan.md
 ```
 
 **New work goes under the same epic.** When something turns up that the plan did not
 foresee, an agent (or you) files it as a ticket under the epic:
-`staple new "Tenant-aware rate limits" --parent STA-1`. It shows up in the tree and
+`staple new "Tenant-aware rate limits" --parent APP-1`. It shows up in the tree and
 the inbox. Nothing depends on someone remembering to edit a file.
 
 **Handoff survives interruption.** An agent claims a ticket with `staple start` and
@@ -64,9 +67,9 @@ Another session, or another agent in a different harness, takes it over and read
 where to continue:
 
 ```bash
-staple show STA-2                         # held by claude, silent 2h
-staple start STA-2 --steal-if-stale 1h    # take over the dead session's claim
-staple doc STA-2 worklog                  # continue from "Next"
+staple show APP-2                         # held by claude, silent 2h
+staple start APP-2 --steal-if-stale 1h    # take over the dead session's claim
+staple doc APP-2 worklog                  # continue from "Next"
 ```
 
 Takeover is a deliberate step, and it is logged; a claim held on your machine never

@@ -5,30 +5,30 @@ description: What staple is, where to start, and every page grouped by what you 
 
 # staple documentation
 
-staple is a local-first task tracker for coding agents. Each repository keeps its
-tickets in one SQLite file, `.staple/staple.db`. Agents claim, plan, hand off and
-finish work through the CLI or the MCP server, and you follow along in a local web
-UI. A pickup queue, milestones and autopilot runs decide what gets worked next.
-Cloud sync is optional and lets two machines share one workspace.
+staple is a local-first task tracker for coding agents: the execution layer where
+agents work through your plans ticket by ticket, next to the board your team already
+uses. These pages show you how to use it. Each one starts with what it is for and
+takes a few minutes to read.
 
-## Quick start
+**New here?** Read [Why staple](why-staple.md) to see whether it fits your project,
+then [Install and first workspace](getting-started.md) to set up a repository:
 
 ```bash
-npx staple-cli                      # set this repository up and open the web UI
+# set this repository up and open the web UI
+npx staple-cli
+# give Claude Code staple's tools
 claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
-npx staple-cli install --yes        # optional: put `staple` on your PATH
 ```
 
-[Install and first workspace](getting-started.md) walks through these three lines.
-[Connect your agent](connect-your-agent.md) covers other MCP clients, and
-[How an agent works a ticket](working-a-ticket.md) the loop your agents follow.
+**Already set up?** Find what you want to do below. Guides walk you through a task;
+the reference pages at the end are for looking things up.
 
 ## Start here
 
 | Page | What it is for |
 |---|---|
 | [Why staple](why-staple.md) | Why staple exists and where it fits next to Linear, GitHub or ClickUp |
-| [Install and first workspace](getting-started.md) | Install staple, set up a repository and take one ticket through the loop |
+| [Install and first workspace](getting-started.md) | Install staple, set up a repository, open the web UI and file your first tickets |
 | [Connect your agent](connect-your-agent.md) | Wire Claude Code, Codex or any MCP client to staple |
 
 ## Working with agents
