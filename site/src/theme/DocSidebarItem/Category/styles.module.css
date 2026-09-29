@@ -1,0 +1,12 @@
+/* A group heading in the sidebar: the link's metrics, none of its hover. */
+.group,
+.group:hover {
+  background: none;
+  color: var(--ifm-menu-color);
+  cursor: default;
+}
+
+.active,
+.active:hover {
+  color: var(--ifm-menu-color-active);
+}

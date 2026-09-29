@@ -1,0 +1,27 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: var(--st-measure-lead);
+  margin: 0 auto;
+  padding: var(--st-space-24) var(--st-gutter);
+  text-align: center;
+}
+
+.eyebrow {
+  margin-bottom: var(--st-space-6);
+}
+
+.title {
+  margin-bottom: var(--st-space-5);
+}
+
+.lead {
+  margin-bottom: var(--st-space-10);
+}
+
+@media (max-width: 767px) {
+  .page {
+    padding-block: var(--st-space-16);
+  }
+}
