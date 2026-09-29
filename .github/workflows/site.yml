@@ -43,6 +43,8 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # No job pushes, so the GitHub token is not left in .git/config.
+          persist-credentials: false
 
       - name: Setup Node 22
         uses: actions/setup-node@v6
@@ -68,8 +70,9 @@ jobs:
     name: Deploy to Cloudflare
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
-    # The Cloudflare secrets are scoped to the steps that use them: the install and
-    # build steps (third-party code) never see them.
+    # The Cloudflare secrets are scoped to the steps that use them, so the install
+    # and build steps' environment never holds them. The deploy step still runs
+    # wrangler from the node_modules that install populated (the lockfile pins it).
     steps:
       - name: Check for Cloudflare credentials
         id: creds
@@ -114,6 +117,8 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # No job pushes, so the GitHub token is not left in .git/config.
+          persist-credentials: false
 
       - name: Setup Node 22
         if: steps.creds.outputs.ready == 'true'
