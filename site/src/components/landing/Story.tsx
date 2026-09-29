@@ -30,38 +30,39 @@ const PLAN_FILES: {name: string; note?: string}[] = [
   {name: 'plan-tenant-billing.md'},
 ];
 
-// A session against a scratch workspace, run for this page: claude claimed TEN-2,
+// A session against a scratch workspace, run for this page: claude claimed APP-2,
 // stored a worklog and went silent; half an hour later codex ran these. Commands and
-// output are verbatim, with three changes: the `# ` lines above commands are
-// annotations, `show` is cut to its first three lines, and the blank line after the
-// worklog header is dropped. The header itself (`# worklog @ r1 …`) is real output,
-// which the Terminal draws like a comment.
+// output are verbatim, with four changes: the workspace's own prefix is shown as APP
+// (the docs' example prefix), the `# ` lines above commands are annotations, `show`
+// is cut to its first three lines, and the blank line after the worklog header is
+// dropped. The header itself (`# worklog @ r1 …`) is real output, which the Terminal
+// draws like a comment.
 const RESUME = [
   '# claude went quiet mid-ticket; the ticket says so',
-  '$ staple show TEN-2',
-  '◇ TEN-2 · Tenant id on every table',
+  '$ staple show APP-2',
+  '◇ APP-2 · Tenant id on every table',
   'status in_progress (v1) · kind task · priority medium · @claude · held by claude',
   'claim  held 31m · silent 31m (last activity 2026-09-29T13:11:53Z)',
   '# take the claim over, on the record',
-  '$ staple start TEN-2 --steal-if-stale 30m',
-  'stole ◐  TEN-2     in_progress Tenant id on every table @codex (was claude, silent 31m)',
-  '$ staple doc TEN-2 worklog',
+  '$ staple start APP-2 --steal-if-stale 30m',
+  'stole ◐  APP-2     in_progress Tenant id on every table @codex (was claude, silent 31m)',
+  '$ staple doc APP-2 worklog',
   '# worklog @ r1 (2026-09-29T13:11)',
   'Done: tenant_id column on 9 of 14 tables, backfill script',
   'Next: invoices, payments, audit_log, sessions, api_keys',
   'Files touched: db/migrations/0042_tenant_id.sql, scripts/backfill-tenant.ts',
   '# work the plan did not foresee goes under the same epic',
-  '$ staple new "Tenant-aware rate limits" --parent TEN-1',
-  '◌  TEN-5     backlog     Tenant-aware rate limits',
-  '$ staple done TEN-2 -m "tenant_id on all 14 tables, backfilled"',
-  '●  TEN-2     done        Tenant id on every table @codex',
+  '$ staple new "Tenant-aware rate limits" --parent APP-1',
+  '◌  APP-5     backlog     Tenant-aware rate limits',
+  '$ staple done APP-2 -m "tenant_id on all 14 tables, backfilled"',
+  '●  APP-2     done        Tenant id on every table @codex',
   '$ staple inbox',
   'READY (pickup order):',
-  '  ◌  TEN-1     backlog     Multi-tenancy · epic',
-  '  ◌  TEN-3     backlog     Scope queries by tenant',
-  '  ◌  TEN-5     backlog     Tenant-aware rate limits',
+  '  ◌  APP-1     backlog     Multi-tenancy · epic',
+  '  ◌  APP-3     backlog     Scope queries by tenant',
+  '  ◌  APP-5     backlog     Tenant-aware rate limits',
   'BLOCKED:',
-  '  ◌  TEN-4     backlog     Tenant-aware billing  [waiting on TEN-3]',
+  '  ◌  APP-4     backlog     Tenant-aware billing  [waiting on APP-3]',
 ];
 
 // Every figure is counted from the source, as on the classic landing page.
@@ -265,13 +266,13 @@ export default function Story(): ReactNode {
                 visual: (
                   <FlowTickets
                     title="staple tree"
-                    meta="TEN-1"
+                    meta="APP-1"
                     tickets={[
-                      {id: 'TEN-1', title: 'Multi-tenancy', state: 'active', epic: true, note: 'epic · plan.md'},
-                      {id: 'TEN-2', title: 'Tenant id on every table', state: 'active', note: 'held by claude'},
-                      {id: 'TEN-3', title: 'Scope queries by tenant', state: 'waiting', note: 'waits on TEN-2'},
-                      {id: 'TEN-4', title: 'Tenant-aware billing', state: 'waiting', note: 'waits on TEN-3'},
-                      {id: 'TEN-5', title: 'Tenant-aware rate limits', state: 'ready', note: 'filed mid-flight', added: true},
+                      {id: 'APP-1', title: 'Multi-tenancy', state: 'active', epic: true, note: 'epic · plan.md'},
+                      {id: 'APP-2', title: 'Tenant id on every table', state: 'active', note: 'held by claude'},
+                      {id: 'APP-3', title: 'Scope queries by tenant', state: 'waiting', note: 'waits on APP-2'},
+                      {id: 'APP-4', title: 'Tenant-aware billing', state: 'waiting', note: 'waits on APP-3'},
+                      {id: 'APP-5', title: 'Tenant-aware rate limits', state: 'ready', note: 'filed mid-flight', added: true},
                     ]}
                   />
                 ),
@@ -281,13 +282,13 @@ export default function Story(): ReactNode {
                 text: 'An agent claims a ticket and keeps a worklog. When its session dies, the next one takes over from “Next”.',
                 visual: (
                   <FlowEvents
-                    title="TEN-2 activity"
+                    title="APP-2 activity"
                     events={[
-                      {who: 'claude', text: 'Claims TEN-2 and stores the worklog after each step'},
+                      {who: 'claude', text: 'Claims APP-2 and stores the worklog after each step'},
                       {who: 'claude', text: 'Session ends: usage limit reached', tone: 'warn'},
                       {who: 'codex', text: 'Takes over the silent claim and reads “Next”'},
-                      {who: 'codex', text: 'Files TEN-5 under the same epic'},
-                      {who: 'codex', text: 'Finishes TEN-2, and TEN-3 is ready', tone: 'accent'},
+                      {who: 'codex', text: 'Files APP-5 under the same epic'},
+                      {who: 'codex', text: 'Finishes APP-2, and APP-3 is ready', tone: 'accent'},
                     ]}
                   />
                 ),
@@ -324,7 +325,7 @@ export default function Story(): ReactNode {
               </Link>
             </div>
             <div className={styles.splitVisual}>
-              <Terminal title="codex · tenantly" lines={RESUME} className={styles.terminal} />
+              <Terminal title="codex · app" lines={RESUME} className={styles.terminal} />
             </div>
           </div>
         </Section>

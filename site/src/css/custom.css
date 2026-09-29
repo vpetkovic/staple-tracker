@@ -441,6 +441,17 @@ hr {
   font-weight: var(--st-weight-medium);
 }
 
+/* Two columns on a phone split page titles mid-word; stack them instead. */
+@media (max-width: 575.98px) {
+  .pagination-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .pagination-nav__link--next {
+    grid-column: auto;
+  }
+}
+
 .theme-back-to-top-button.clean-btn {
   background: var(--st-bg);
   border: var(--st-hairline) solid var(--st-border);

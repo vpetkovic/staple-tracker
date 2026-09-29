@@ -154,7 +154,7 @@ const config: Config = {
       items: [
         // A plain link, not a `doc` item: a doc item reads as active on every
         // page of the sidebar, which would highlight both entries in the docs.
-        {to: '/docs/getting-started', label: 'Getting started', position: 'left', activeBaseRegex: '^$'},
+        {to: '/docs/getting-started', label: 'Get started', position: 'left', activeBaseRegex: '^$'},
         {type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs'},
         {href: repo, label: 'GitHub', position: 'right'},
       ],
@@ -167,19 +167,20 @@ const config: Config = {
           title: 'Docs',
           items: [
             {label: 'Overview', to: '/docs'},
-            {label: 'Getting started', to: '/docs/getting-started'},
+            {label: 'Why staple', to: '/docs/why-staple'},
+            {label: 'Get started', to: '/docs/getting-started'},
             {label: 'CLI', to: '/docs/cli'},
-            {label: 'Web UI', to: '/docs/web-ui'},
-            {label: 'Cloud sync', to: '/docs/cloud-sync'},
+            {label: 'MCP tools', to: '/docs/mcp-tools'},
           ],
         },
         {
           title: 'Work',
           items: [
-            {label: 'Pickup queue', to: '/docs/queue'},
-            {label: 'Milestones', to: '/docs/milestones'},
-            {label: 'Autopilot runs', to: '/docs/runs'},
             {label: 'How an agent works a ticket', to: '/docs/working-a-ticket'},
+            {label: 'Plans become tickets', to: '/docs/plans-to-tickets'},
+            {label: 'Handoff and resume', to: '/docs/handoff'},
+            {label: 'Pickup queue', to: '/docs/queue'},
+            {label: 'Autopilot runs', to: '/docs/runs'},
           ],
         },
         {
