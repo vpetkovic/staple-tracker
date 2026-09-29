@@ -86,8 +86,7 @@ because each workspace keeps its own pickup order and its own history.
 Any command takes `--ws` with a workspace's name or prefix:
 
 ```bash
-staple ls --ws web
-staple show WEB-1 --ws WEB
+staple ls --ws web           # by name, or by prefix: --ws WEB
 ```
 
 ```text
@@ -126,9 +125,11 @@ staple hub events
 
 > [!NOTE]
 > A link across repositories informs; it does not refuse. `staple inbox` in `web`
-> still lists WEB-1 as ready and a checkout goes through, so agents should read
-> the ticket before taking it. Within one repository, use `--blocked-by`
-> ([Epics and dependencies](epics-and-dependencies.md)), which does hold work back.
+> still lists WEB-1 as ready and a checkout goes through, and `staple show WEB-1`
+> does not mention the link. At the terminal, check `staple hub links` before
+> taking a ticket; agents see it in `get_task`. Within one repository, use
+> `--blocked-by` ([Epics and dependencies](epics-and-dependencies.md)), which does
+> hold work back.
 
 ## 6. Tidy the list
 
@@ -154,4 +155,5 @@ machine can adopt it. That is a separate consent, off until you grant it with
 
 - [Cloud sync](cloud-sync.md): share a workspace between machines.
 - [Web UI tour](web-ui.md): the views `open --hub` serves.
-- [CLI reference](cli.md#the-machine-registry): every hub command.
+- [CLI reference](cli.md#the-machine-registry): tidying the hub; `staple help`
+  lists every hub command.

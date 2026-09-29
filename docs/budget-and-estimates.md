@@ -53,7 +53,8 @@ The estimate is compared with **agent work**: the time agents actually spent on
 the ticket, from their checkout to their `done`, with pauses and orchestration
 left out. Each figure carries a quality word. `exact` can be trusted;
 `timing-floor` (under a minute, as here), `approximate` and `missing` are shown
-but kept out of what staple learns from. The **Time** tab of a ticket in the
+but kept out of what staple learns from, and `reconstructed` (rebuilt from older
+history) is used only when you ask for it. The **Time** tab of a ticket in the
 [web UI](web-ui.md) shows the same comparison as a bar.
 
 `staple timing quality` (MCP `timing_quality`) counts how many finished tickets
@@ -113,7 +114,8 @@ budget      this machine · reserve 20.0% (provisional default, until the admiss
 ```
 
 Once calibration has data, the forecast scales the remaining estimates by how
-long similar work really took, and gives a range, not a single date. The budget
+long similar work really took, and gives a range of hours of work rather than
+one figure. The budget
 line says what that work would cost against your provider limits on this
 machine. The ticket's **Time** tab shows the same forecast.
 
@@ -152,7 +154,13 @@ staple budget                   # MCP get_budget
 staple budget status            # what is collected, and anything that needs fixing
 ```
 
-Each limit shows what is left, when it resets, and whether your recent pace keeps
+```text
+reserve 20% (provisional default); pressure is provisional
+no accounts (capture off; staple budget bind names one)
+```
+
+That is a machine with nothing set up yet. Once readings come in, each limit
+shows what is left, when it resets, and whether your recent pace keeps
 a reserve (20% until you choose another with `--reserve`). Nothing is sent
 anywhere unless you also turn on live checks (`staple budget live on`), which ask
 the provider for your current usage. The **Usage** view in
@@ -163,7 +171,8 @@ the web UI shows the same per limit, with a gauge and a plain verdict.
 ## Next
 
 - [Web UI tour](web-ui.md): the Estimates and Usage views, and the Time tab.
-- [CLI reference](cli.md#estimates-vs-actuals): every timing and budget command.
+- [CLI reference](cli.md#estimates-vs-actuals): estimates and timing in full, and
+  [provider budget](cli.md#provider-budget).
 - [Configuration](configuration.md): budget capture settings.
 
 Going deeper: [timing semantics](../design/timing-semantics.md) defines every time

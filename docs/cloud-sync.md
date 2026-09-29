@@ -12,7 +12,8 @@ through a sync service you run. Sync is optional and off until you turn it on.
 A workspace that was never connected makes no network request at all.
 
 **What travels:** tickets, comments, documents, statuses and kinds, dependencies,
-gates, the pickup queue, milestones and workspace settings.
+gates, the pickup queue, milestones, workspace settings, and the record of agent
+work that estimates are measured against.
 **What stays on the machine:** your credential and consents, provider budget
 readings, autopilot runs, and file paths.
 
@@ -45,8 +46,10 @@ not connected — no credential, no endpoint and no cloud state on this machine
   Connect with: staple cloud connect --endpoint <url> --token <secret>
 ```
 
-`status` reads local files only. `staple cloud status --all` lists every workspace
-on this machine, and `--refresh` is the one form that asks the service.
+`status` reads local files only. Once connected, `pending` counts the changes
+waiting to be sent, and `cursor` and `epoch` say how far this machine has caught
+up. `staple cloud status --all` lists every workspace on this machine, and
+`--refresh` is the one form that asks the service.
 
 ## 2. Connect: the first consent
 
@@ -55,9 +58,8 @@ staple cloud connect --endpoint https://sync.example.com --token <enrollment-sec
 ```
 
 Before anything is sent, staple shows the service, the repository id, this
-device's name and where the credential will be stored, and waits for your yes.
-Without a terminal to answer in, it prints that preview, exits 2 and sends
-nothing. The credential goes into your OS keychain (or a private file with
+device's name and where the credential will go, and waits for your yes. Without a
+terminal, it prints that preview and sends nothing. The credential goes into your OS keychain (or a private file with
 `--credential-file`), never into the repository.
 
 A new connection is **manual**: nothing syncs until someone asks.
@@ -84,8 +86,8 @@ staple cloud auto on
 ```
 
 This device then syncs on its own when a command starts, after a write, and
-during long sessions. A sync failure never blocks a command: it falls back to
-manual and says so. `staple cloud auto off` stops it without disconnecting.
+during long sessions. A failed sync never blocks a command. `staple cloud auto off`
+stops it without disconnecting.
 
 ## 5. Keep backups: the third consent
 
@@ -146,9 +148,9 @@ Your choice syncs to every device as a new change (MCP `conflict_resolve`).
 
 ## 8. Claims across machines
 
-A plain `staple checkout` claims a ticket on this machine only. Another
-machine may take the same ticket until the next sync shows it. When that matters,
-take a lease: the service grants it to one machine only.
+A plain `staple checkout` claims a ticket on this machine only; another machine
+may take it until the next sync. When that matters, take a lease, which the
+service grants to one machine only:
 
 ```bash
 staple cloud lease acquire APP-3
@@ -157,13 +159,6 @@ staple cloud lease release APP-3
 
 `ls`, `show` and the MCP `claim` object say which kind of claim is held: `local`
 or `lease`.
-
-## What agents may do
-
-Through MCP, agents can read `cloud_status`, list conflicts and resolve them.
-They can run `staple cloud sync`. Connecting, disconnecting, revoking a device,
-restoring and purging are decisions for a person at a terminal, and have no MCP
-tool.
 
 ## 9. Disconnect, revoke, restore, purge
 
@@ -177,11 +172,21 @@ tool.
 `staple cloud devices` lists the devices first. Both restore and purge print what
 they will do and want the repository id typed back.
 
+## What agents may do
+
+- **May:** read `cloud_status`, list conflicts with `conflict_list` and settle them
+  with `conflict_resolve`, run `staple cloud sync`, and take a lease with
+  `staple cloud lease acquire` when a claim must hold across machines.
+- **May not:** connect, disconnect, turn automatic sync or backups on or off,
+  revoke a device, restore or purge. These are a person's decisions, made at a
+  terminal or in Settings, and have no MCP tool.
+
 ## Next
 
 - [Several repositories](hub.md): one machine, many workspaces.
 - [Handoff](handoff.md): hand a ticket from one session or machine to another.
-- [CLI reference](cli.md#at-a-glance): every `staple cloud` command.
+- [CLI reference](cli.md#at-a-glance): the `staple cloud` commands at a glance;
+  `staple cloud --help` lists every one.
 
 Going deeper: [the sync design](../design/sync.md) covers the service, self-hosting
 and the protocol.
