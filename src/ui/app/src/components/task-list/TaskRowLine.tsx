@@ -594,10 +594,15 @@ export function TaskRowLine({
           A leaf has no `rollup` at all and this is absent from the DOM, per the column rule
           at the top of this file.
         */}
-        {columns.disclosure && hasChildren && rollup ? (
+        {/*
+          A parent whose children the filter hid all of (a milestone whose epic is done while one
+          of its tasks is not) still has a count to declare: the rows are elsewhere or hidden, so
+          it reads as folded — the count and the bar, the way the milestone's own page counts it.
+        */}
+        {columns.disclosure && rollup && (hasChildren || rollup.total > 0) ? (
           <ParentRollupBar
             rollup={rollup}
-            collapsed={collapsedParent}
+            collapsed={collapsedParent || !hasChildren}
             // R7c (STA-194): the rolled-up plan rides beside the bar only where density
             // permits — the comfortable preset. Compact rows keep the count and the bar.
             showPlan={config.density === "comfortable" && plan.rollupPlan}

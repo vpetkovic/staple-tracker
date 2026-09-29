@@ -373,7 +373,7 @@ describe("milestones in plain words", () => {
     );
     expect(count(html, "data-milestone-row=")).toBe(milestones.length);
     expect(count(html, 'class="staple-progress"')).toBe(milestones.length);
-    expect(html).toMatch(/\d+ (is|are) blocked\./);
+    expect(html).toMatch(/\d+ (is|are) blocked[.,:]/);
   });
 });
 

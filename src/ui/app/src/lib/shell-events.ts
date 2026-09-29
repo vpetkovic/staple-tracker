@@ -24,9 +24,14 @@ const COMMAND_PALETTE = "staple:open-command-palette";
 /** O7b (STA-141) — the workspace vocabulary editor. Third verb, same idiom. */
 const SETTINGS = "staple:open-settings";
 
+/** What the create dialog opens with: a kind chosen in advance (the Milestones page asks for a milestone). */
+export interface CreateIssueRequest {
+  kind?: string;
+}
+
 /** Ask whatever owns the create dialog to open it. No-op if nothing is listening. */
-export function openCreateIssue(): void {
-  window.dispatchEvent(new CustomEvent(CREATE_ISSUE));
+export function openCreateIssue(request: CreateIssueRequest = {}): void {
+  window.dispatchEvent(new CustomEvent<CreateIssueRequest>(CREATE_ISSUE, { detail: request }));
 }
 
 /** Ask whatever owns the palette to open it. No-op if nothing is listening. */
@@ -35,9 +40,10 @@ export function openCommandPalette(): void {
 }
 
 /** Subscribe a mount to its verb. Returns the unsubscribe, shaped for useEffect. */
-export function onOpenCreateIssue(handler: () => void): () => void {
-  window.addEventListener(CREATE_ISSUE, handler);
-  return () => window.removeEventListener(CREATE_ISSUE, handler);
+export function onOpenCreateIssue(handler: (request: CreateIssueRequest) => void): () => void {
+  const listener = (event: Event) => handler((event as CustomEvent<CreateIssueRequest | null>).detail ?? {});
+  window.addEventListener(CREATE_ISSUE, listener);
+  return () => window.removeEventListener(CREATE_ISSUE, listener);
 }
 
 export function onOpenCommandPalette(handler: () => void): () => void {

@@ -276,6 +276,29 @@ function emptyCounts(): Record<StatusCategory, number> {
 }
 
 /**
+ * The LEAVES reachable from the members, each once: what `milestoneProgress` counts and what
+ * the milestone's remaining work is summed over. An issue is a leaf when nothing in the
+ * reachable set names it as parent.
+ */
+export function milestoneLeaves(
+  members: readonly ProgressNode[],
+  descendantsByMember: ReadonlyMap<string, readonly ProgressNode[]>,
+): ProgressNode[] {
+  const reachable = new Map<string, ProgressNode>();
+  for (const member of members) {
+    reachable.set(member.id, member);
+    for (const descendant of descendantsByMember.get(member.id) ?? []) {
+      reachable.set(descendant.id, descendant);
+    }
+  }
+  const parents = new Set<string>();
+  for (const node of reachable.values()) {
+    if (node.parentId !== null) parents.add(node.parentId);
+  }
+  return [...reachable.values()].filter((node) => !parents.has(node.id));
+}
+
+/**
  * Roll up the LEAVES reachable from the members, each counted once.
  *
  * `members` are the direct members in any order; `descendantsByMember` holds
@@ -289,22 +312,9 @@ export function milestoneProgress(
   members: readonly ProgressNode[],
   descendantsByMember: ReadonlyMap<string, readonly ProgressNode[]>,
 ): MilestoneProgress {
-  const reachable = new Map<string, ProgressNode>();
-  for (const member of members) {
-    reachable.set(member.id, member);
-    for (const descendant of descendantsByMember.get(member.id) ?? []) {
-      reachable.set(descendant.id, descendant);
-    }
-  }
-  const parents = new Set<string>();
-  for (const node of reachable.values()) {
-    if (node.parentId !== null) parents.add(node.parentId);
-  }
-
   const counts = emptyCounts();
   let total = 0;
-  for (const node of reachable.values()) {
-    if (parents.has(node.id)) continue;
+  for (const node of milestoneLeaves(members, descendantsByMember)) {
     counts[node.category] += 1;
     total += 1;
   }

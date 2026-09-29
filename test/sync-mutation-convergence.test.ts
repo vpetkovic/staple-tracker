@@ -78,7 +78,7 @@ const READS: Record<StoreName, readonly string[]> = {
     // The orchestrator lane's read summary (`orchestration` on show/get_task).
     "orchestrationSummary",
     // The certified plan reads (`planSummary` on show/get_task, `staple compare`).
-    "planSummary", "comparePlans", "timingQuality", "calibration", "forecast",
+    "planSummary", "comparePlans", "timingQuality", "calibration", "remainingForecasts", "forecast",
     // The autopilot run service. Its writes touch only `runs` and `run_tickets`, which are
     // machine-local and never journaled (`run-store.ts`); `test/run-store.test.ts` pins
     // that a run leaves no outbox row on a device that journals. `run continue`'s take
@@ -389,6 +389,20 @@ const SCENARIOS: readonly Scenario[] = [
       w.a.store.updateIssue(w.ids["Member two"]!, { assignee: "alice" }, "alice");
       w.a.store.updateIssue(w.ids["Member two"]!, { status: "in_progress" }, "alice");
       w.a.store.rederiveMilestones([w.ids["M1"]!], "Member two", "alice");
+    },
+  },
+  {
+    // The upgrade's one-shot repair travels like any derived move. M1 reads `backlog` while
+    // its member is in progress, as a milestone did before this build; A owes the repair.
+    method: "WorkspaceStore.rederiveEveryMilestone",
+    name: "an upgrade re-derives a stale milestone",
+    prep: (w) => void w.a.store.updateIssue(w.ids["M1"]!, { status: "backlog" }, "alice"),
+    run: (w) => {
+      w.a.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+      const moved = w.a.store.rederiveEveryMilestone();
+      if (moved !== 1 || w.a.store.getIssue(w.ids["M1"]!).status !== "in_progress") {
+        throw new Error(`the repair did not move M1 (moved ${moved})`);
+      }
     },
   },
 
