@@ -17,25 +17,36 @@ import { Settings2 } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { PlainCard } from "@/components/plain/PlainCard";
 import { Button } from "@/components/ui/button";
-import { AuthError, getMilestones } from "@/lib/api";
+import { withShowDone } from "@/lib/filters";
+import { AuthError, getMilestones, getQueue } from "@/lib/api";
 import { useSession, type StapleSession } from "@/lib/session";
 import { openSettings } from "@/lib/shell-events";
-import type { WorkspaceRef } from "@/lib/types";
+import type { QueueView, WorkspaceRef } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { MilestoneListPane, useMilestonesDesk } from "./MilestonesView";
 import { groupAllMilestones, type WorkspaceMilestonesResult } from "./milestones-model";
 
-/** Read every workspace's list; one workspace failing never hides the others. */
+/**
+ * Read every workspace's list, and its queue: the same two inputs the workspace page reads, so
+ * a card here says what the same card says there. One workspace failing never hides the others;
+ * a queue that cannot be read leaves that workspace's risk lines silent rather than wrong.
+ */
 export async function readAllMilestones(
   workspaces: readonly Pick<WorkspaceRef, "slug">[],
   all: boolean,
   read: typeof getMilestones = getMilestones,
+  readQueue: (params: { ws: string }) => Promise<Pick<QueueView, "effective">> = getQueue,
 ): Promise<WorkspaceMilestonesResult[]> {
   return Promise.all(
     workspaces.map(async ({ slug }): Promise<WorkspaceMilestonesResult> => {
       try {
-        return { workspace: slug, ok: true, rows: await read({ ws: slug, all }) };
+        const rows = await read({ ws: slug, all });
+        const effective = rows.length === 0 ? [] : await readQueue({ ws: slug }).then((queue) => queue.effective, (error: unknown) => {
+          if (error instanceof AuthError) throw error;
+          return [];
+        });
+        return { workspace: slug, ok: true, rows, effective };
       } catch (error) {
         // A bad credential is the page's problem, not this workspace's: let the token screen have it.
         if (error instanceof AuthError) throw error;
@@ -55,14 +66,14 @@ export function AllWorkspacesMilestones({
   const session = useSession();
   const showDone = session.filters.showDone;
   // Keyed on the slugs, not the array: the scope hands over a fresh array every render, and
-  // an array dependency would refetch every workspace on every render.
+  // an array dependency would refetch every workspace on every render. Every milestone is read,
+  // finished ones included; the header's Done toggle decides which are listed, as on one
+  // workspace's page.
   const slugs = workspaces.map((workspace) => workspace.slug).join("\n");
-  const load = useCallback(
-    () => readAllMilestones(slugs.split("\n").map((slug) => ({ slug })), showDone),
-    [slugs, showDone],
-  );
-  const resource = useResource(load, [slugs, showDone, session.version], onAuthError);
-  const all = useMemo(() => (resource.data ? groupAllMilestones(resource.data) : null), [resource.data]);
+  const load = useCallback(() => readAllMilestones(slugs.split("\n").map((slug) => ({ slug })), true), [slugs]);
+  const resource = useResource(load, [slugs, session.version], onAuthError);
+  const all = useMemo(() => (resource.data ? groupAllMilestones(resource.data, showDone) : null), [resource.data, showDone]);
+  const onShowFinished = () => session.setFilters(withShowDone(session.filters, true));
 
   const open = (workspace: string, ref: string) => openMilestoneIn(session, workspace, ref);
   const desk = useMilestonesDesk();
@@ -78,9 +89,10 @@ export function AllWorkspacesMilestones({
         {!all ? (
           resource.error ? null : <LoadingState />
         ) : all.groups.length === 0 && all.failed.length === 0 ? (
-          <p className="mt-6 text-[14px]" data-all-milestones-empty="">
-            No workspace has milestones yet. A milestone gathers tasks that should be finished by a date.
-          </p>
+          // The workspace page's own empty states: finished ones hidden, or none at all.
+          <div className="mt-6" data-all-milestones-empty="">
+            <MilestoneListPane rows={[]} hiddenFinished={all.hiddenFinished} onShowFinished={onShowFinished} selectedRef={null} onSelect={() => {}} desk={desk} />
+          </div>
         ) : (
           <div className="mt-4 flex flex-col gap-6">
             {all.groups.map((group) => (
@@ -88,6 +100,7 @@ export function AllWorkspacesMilestones({
                 <h3 className="mb-2 border-b pb-1.5 text-[13px] font-semibold">{group.workspace}</h3>
                 <MilestoneListPane
                   rows={group.rows}
+                  effective={group.effective}
                   selectedRef={null}
                   onSelect={(ref) => open(group.workspace, ref)}
                   desk={desk}

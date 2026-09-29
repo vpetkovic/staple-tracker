@@ -61,6 +61,7 @@ import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
+import { owedMilestoneRederive, publishDerivedStatuses, rederiveMilestonesAfterPull } from "../store.js";
 import { blockerSets, narrateRewoundSets, reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
@@ -620,6 +621,8 @@ export async function syncRepository(
     clearTailSurvey(db);
     if (seed?.prefix) restampHubPrefix(options.home, db, seed.prefix.to);
     if (seed?.mode === "join") {
+      // What it repaired at a write was its own; what it joins has not been, here.
+      owedMilestoneRederive(db);
       joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) };
     }
   }
@@ -662,6 +665,18 @@ export async function syncRepository(
     const ledger = catchUpOwed ? `applier-${APPLIER_VERSION}` : `reconcile-${requireSyncState(db).epoch}`;
     caughtUp = (await recoverFromSnapshot(db, journal, session, capabilities, options, ledger)).bootstrap;
   }
+  // And what migration 017 backfilled, which the service has never been sent (`publishDerivedStatuses`).
+  publishDerivedStatuses(db);
+  /**
+   * And the one-shot milestone repair an upgrade owes (`rederiveMilestonesAfterPull`): here,
+   * with the members every other device holds, and never at a write before the pull — a
+   * device that last reached the head a week ago would re-derive from a week-old member and
+   * push the regression. After the catch-up and the reconcile, not before: a reconcile owed
+   * rewinds members the repair would otherwise read. Sent in this sync, after any repair a
+   * device that synchronized first has already sent.
+   */
+  rederiveMilestonesAfterPull(db);
+  if (pendingCount(db) > 0) await pushAll();
   /**
    * Recorded only when what this database holds came through the fold this applier needs.
    * A snapshot from the older one — hydrated from, joined on, or re-read — leaves it owed,
