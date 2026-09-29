@@ -172,6 +172,44 @@ depth"*.) (Pinned by
 and a member reopening reopens it"* and *"lands where its members say when a
 gate on it is approved"*.)
 
+A workspace upgraded from a build that did not derive milestones gets them
+re-derived once. On a workspace that has never synchronized and is not
+connected, the first mutating command the new build runs does it; a read never
+does. On any other workspace — connected, or one that has synchronized before,
+whose queued writes will go out on a later sync — the first sync whose pull
+reaches the head of the log does it, in that sync and after any reconcile a
+restore left owed, so it derives from the members every other device already
+holds and not from whatever this device last pulled. The rule is the journal's
+own test for a queue that will be sent: a write-time repair there would go out
+too, derived from members that may be stale by then.
+
+A known limitation follows: a workspace that synchronized and was then
+disconnected for good (or a copy of one) never runs the repair. Its milestones
+keep the status the older build left until a member moves, which re-derives
+them as usual; reconnecting and syncing runs the repair. A device that pulls another's repair
+first finds nothing left to move. The `meta` key `milestone_status_rederived`
+records that the repair has run. A repair that fails is logged and skipped for
+the rest of the process, and the command that ran it goes ahead.
+
+Every move is an ordinary derived `status_changed`, with the actor and the
+member of the input that moved last, and a journaled operation, so it syncs
+like any other derived move. The parent rules decide what it may write:
+
+- the pre-work band (`backlog`, `todo`) belongs to derivation, as on any
+  parent, so a milestone set there by hand is re-derived;
+- a status set by hand outside that band stays, and so does a gate, pending or
+  sent back;
+- a milestone whose members have all landed closes as `done`;
+- the repair never writes `cancelled`: a milestone whose members were all
+  cancelled keeps its status until a member moves.
+
+(Pinned by `store-milestones.test.ts` — *"an upgraded workspace re-derives
+every milestone once, at its first mutation"*, *"an upgrade's repair leaves a
+gate on the milestone as it stands, pending or sent back"*, *"an upgrade's
+repair never cancels a milestone whose members were all cancelled"* and *"an
+upgrade's repair that throws is logged and skipped, and the write that ran it
+lands"*; and by `cloud-milestone-rederive.test.ts`.)
+
 ## Dates: calendar days, UTC, inclusive
 
 A milestone date is a **calendar day**, written and stored as `YYYY-MM-DD`,
@@ -631,7 +669,32 @@ mutation returns this same view, so a writer redraws from its result exactly
 as a reader does.
 
 Title, assignee and status are edited with the ordinary issue commands; `set`
-takes the dates and the goal. A non-milestone
+takes the dates and the goal.
+
+The view's `milestone` carries `closedAt`: its `completedAt` when its status is
+in the done category, its `cancelledAt` when cancelled, and `null` otherwise. A
+reopened milestone is open, whatever stamp it kept.
+
+The view (and every `ls` row) carries `remaining`, the work still open in the
+milestone from its estimates, derived on every read:
+`{"estimated": 4, "unestimated": 1, "unknown": 1, "estimateSeconds": 39600, "forecastSeconds": 9300}`.
+It is over the milestone's open leaves (not done, not cancelled; the tasks
+`progress` counts). `estimateSeconds` sums their own estimates. `forecastSeconds`
+sums each one's remaining work exactly as `staple forecast` adds its units into
+the labor: the estimate scaled by its class's calibrated ratio for work nobody
+has started, the expected remainder once work has started, and nothing for
+work waiting in review. `unknown` counts the open tasks the forecast cannot
+weigh (no estimate, no samples for its class, or beyond its class's range); they
+are in neither figure, which is then a lower bound. `forecastSeconds` is `null`
+when no open task can be weighed. It is a sum, not the critical path
+`goal.pace.remainingSeconds` reads. The web UI projects a due date from it while
+no target is set (now plus `forecastSeconds`, labelled an estimate, "no earlier
+than" when `unknown` is not 0); the projection is never stored. The calibration
+population behind it is read once per store and reused while nothing at all is
+written to the workspace file (SQLite's own write counters, so no write path can
+leave it stale).
+
+A non-milestone
 identifier given where a milestone is expected is refused with `validation`
 naming its kind (`STA-66 is an epic, not a milestone`); an unknown identifier
 is `not_found`; `--at N` is a 1-based position; `rm` of a non-member is

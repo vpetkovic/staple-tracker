@@ -139,8 +139,9 @@ describe("version detection", () => {
     // (008-budget-forgotten, the removed readings a replay must not restore),
     // workspace still 14. Then workspace 14 -> 15 (015-autopilot-runs, two
     // machine-local tables), hub still 8. Then workspace 15 -> 16 (016-milestone-goals,
-    // the machine-local criterion marks and three run columns), hub still 8.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(16);
+    // the machine-local criterion marks and three run columns), hub still 8. Then workspace
+    // 16 -> 17 (017-derived-status, the replicated ownership column and its trigger), hub still 8.
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(17);
     expect(latestVersion(HUB_TARGET)).toBe(8);
   });
 });

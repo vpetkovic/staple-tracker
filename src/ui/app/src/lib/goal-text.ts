@@ -11,7 +11,7 @@
  * Pure and tested (goal-text.test.ts); the real payloads are pinned end to end in
  * detail/milestone-goal-e2e.test.tsx.
  */
-import { shortDay } from "@/views/milestones/milestone-plain";
+import { daysFrom, shortDay } from "@/views/milestones/milestone-plain";
 import { formatEffort } from "./forecast-text";
 import { clockText, type RunTone } from "./run-text";
 import type { CriterionVerdict, EvidenceItem, GoalCounts, GoalCriterion, GoalPace, IssueGate, PaceVerdict } from "./types";
@@ -120,16 +120,40 @@ export const PACE_TONE: Readonly<Record<PaceVerdict, RunTone>> = {
 const days = (n: number): string => (n === 1 ? "1 day" : `${n} days`);
 
 /**
+ * The pace as the page shows it: the days to the target, and whether it has passed, on the
+ * reader's LOCAL calendar day — the check reads the UTC day, so in the evening in New York it
+ * would call a target "today" that is still tomorrow there. Behind or on track is re-read
+ * against the end of the local target day; everything else is the check's.
+ */
+export function shownPace(pace: GoalPace, now: Date = new Date()): GoalPace {
+  if (pace.targetDate === null || pace.verdict === "done" || pace.verdict === "no_target") return pace;
+  const local = daysFrom(pace.targetDate, now);
+  if (local === null) return pace;
+  if (local < 0) return { ...pace, daysToTarget: local, verdict: "overdue" };
+  // Never "on track" on work the figure did not count: nothing left by the estimate while tasks
+  // are still open means the open work has no estimate to measure.
+  const uncounted = pace.remainingSeconds === 0 && pace.leaves.done < pace.leaves.countable;
+  if (pace.remainingSeconds === null || uncounted) return { ...pace, daysToTarget: local, remainingSeconds: null, verdict: "no_estimate" };
+  const [y, m, d] = pace.targetDate.split("-").map(Number);
+  const endOfDay = new Date(y!, m! - 1, d!, 23, 59, 59, 999).getTime();
+  const secondsLeft = Math.max(0, Math.floor((endOfDay - now.getTime()) / 1000));
+  return { ...pace, daysToTarget: local, verdict: pace.remainingSeconds > secondsLeft ? "behind" : "on_track" };
+}
+
+/**
  * The pace against the target, in plain words, with the numbers: the verdict's reason
  * first, then how much is done. Every figure is the check's own (`goal.pace`).
  */
-export function paceText(pace: GoalPace, now: Date = new Date()): string {
+export function paceText(checked: GoalPace, now: Date = new Date()): string {
+  const pace = shownPace(checked, now);
   const { leaves } = pace;
   const done = leaves.countable === 0 ? "Nothing to count yet" : `${leaves.done} of ${leaves.countable} ${leaves.countable === 1 ? "task" : "tasks"} done`;
+  // THE LONGEST CHAIN, said as such: the goal check's figure is the critical path of the open
+  // work's own estimates, not all of it and not the forecast, which the due date reads.
   const left =
     pace.remainingSeconds === null
       ? null
-      : `${pace.partial ? "at least " : ""}${formatEffort(pace.remainingSeconds)} of estimated work left`;
+      : `the longest chain of open work is ${pace.partial ? "at least " : ""}${formatEffort(pace.remainingSeconds)} estimated`;
   const day = pace.targetDate ? shortDay(pace.targetDate, now) : null;
   const toTarget =
     pace.daysToTarget === null || day === null ? null : pace.daysToTarget === 0 ? `due today (${day})` : `${days(pace.daysToTarget)} to ${day}`;
@@ -142,7 +166,7 @@ export function paceText(pace: GoalPace, now: Date = new Date()): string {
     case "overdue":
       return `Its target, ${day}, passed ${days(-(pace.daysToTarget ?? 0))} ago. ${done}${left ? `; ${left}` : ""}.`;
     case "no_estimate":
-      return `${capital(toTarget ?? "no target")}, but nothing open has an estimate, so there is no telling whether it fits. ${done}.`;
+      return `${capital(toTarget ?? "no target")}, but the open work has no estimate to measure, so there is no telling whether it fits. ${done}.`;
     case "behind":
       return `${capital(left ?? "")}: more than the time left to the end of ${day}, even worked around the clock. ${done}.`;
     case "on_track":
