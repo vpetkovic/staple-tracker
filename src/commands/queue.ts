@@ -1,5 +1,5 @@
 /**
- * `staple queue` — the CLI half of docs/queue.md (STA-168, R2c).
+ * `staple queue` — the CLI half of design/queue.md (STA-168, R2c).
  *
  *   queue [ls] [--all] [--effective] [--actor A]
  *   queue next [--actor A] [--scope <ref>]
@@ -93,7 +93,7 @@ with "staple checkout <ref> --override -m <why>".
 
 --json prints {revision, entries, effective} on every subcommand, and
 {revision, next, skipped} for "queue next" ({revision, scope, next, skipped}
-with --scope) — the same shape MCP and the UI server answer. Full contract: docs/queue.md.`;
+with --scope) — the same shape MCP and the UI server answer. Full contract: design/queue.md.`;
 
 function integerOption(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;

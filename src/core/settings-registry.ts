@@ -39,7 +39,7 @@
  * settings with behaviour in this module's neighbours (`kinds.default` and the
  * per-kind glyph map `kinds.appearance`), and — R6d (STA-179) — the
  * pickup-queue policy `queue.policy`, registered here to
- * the contract docs/queue.md fixed (R2a) and READ by the checkout resolver R2c
+ * the contract design/queue.md fixed (R2a) and READ by the checkout resolver R2c
  * (STA-168) adds. Registering is the whole of this module's part: it defines,
  * persists and exposes the value on every surface; it enforces nothing.
  */
@@ -145,7 +145,7 @@ const categories: SettingCategory[] = [
   },
   {
     // R6d (STA-179): the first `fields` category in workspace scope. Its id is
-    // `queue` because the key docs/queue.md names is `queue.policy` and a key is
+    // `queue` because the key design/queue.md names is `queue.policy` and a key is
     // namespaced by its category; its label says what the category is FOR.
     id: "queue",
     label: "Workflow",
@@ -170,7 +170,7 @@ export const BROWSER_PREFERENCES = ["auto", "always", "never"] as const;
 export type BrowserPreference = (typeof BROWSER_PREFERENCES)[number];
 
 /**
- * The pickup-queue policy, exactly as docs/queue.md "Policy: advisory or strict"
+ * The pickup-queue policy, exactly as design/queue.md "Policy: advisory or strict"
  * defines it (R2a, STA-166). This module REGISTERS the setting; the resolver
  * that reads it on checkout is R2c's (STA-168), which imports this set rather
  * than restating it.

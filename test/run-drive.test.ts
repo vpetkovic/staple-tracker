@@ -646,13 +646,13 @@ describe("run drive options", () => {
     expect(epicless.status).toBe(2);
   }, 90_000);
 
-  it("the help and docs/runs.md name every option run drive parses", () => {
+  it("the help and design/runs.md name every option run drive parses", () => {
     const source = readFileSync(join(REPO_ROOT, "src/commands/run-drive.ts"), "utf8");
     const block = source.slice(source.indexOf("options: {"), source.indexOf("},\n  });"));
     const flags = [...block.matchAll(/^\s+"?([a-z-]+)"?: \{ type:/gm)].map((match) => match[1]!).filter((flag) => !["db", "ws", "help", "actor"].includes(flag));
     expect(flags.length).toBeGreaterThan(15);
     const help = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, "run", "drive", "--help"], { cwd: REPO_ROOT, encoding: "utf8", env: bareEnv(env()) }).stdout;
-    const docs = readFileSync(join(REPO_ROOT, "docs/runs.md"), "utf8");
+    const docs = readFileSync(join(REPO_ROOT, "design/runs.md"), "utf8");
     const synopsis = docs.slice(docs.indexOf("staple run drive [--run <id>"), docs.indexOf("```", docs.indexOf("staple run drive [--run <id>")));
     expect(flags.filter((flag) => !help.includes(`--${flag}`))).toEqual([]);
     expect(flags.filter((flag) => !synopsis.includes(`--${flag}`))).toEqual([]);

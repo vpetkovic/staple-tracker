@@ -619,7 +619,7 @@ describe("a v7 workspace — the last shape before the pickup queue", () => {
    * walked to exactly 7 IS a v7 file, carrying the rows the fixture shipped
    * with. The issues, the comment and the milestone all exist BEFORE 008 runs,
    * so what 008 preserves is data it did not create — and the queue it hands
-   * over is empty, which is the whole promise of docs/queue.md's "Storage": an
+   * over is empty, which is the whole promise of design/queue.md's "Storage": an
    * upgraded workspace behaves exactly as it did until a human queues something.
    */
   const THROUGH_007: MigrationTarget = {

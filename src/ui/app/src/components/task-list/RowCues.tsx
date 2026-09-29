@@ -40,7 +40,7 @@ import {
  * "Can I take this, and where is it in the plan."
  *
  * A span and not a button: the cue is a READING of the queue and this list may never write
- * one (docs/queue.md, "Presentation sort is not the queue"). Making it clickable would
+ * one (design/queue.md, "Presentation sort is not the queue"). Making it clickable would
  * advertise an affordance that does not and must not exist here.
  */
 export function PickupCue({ cue, compact = false }: { cue: RowPickupCue; compact?: boolean }) {

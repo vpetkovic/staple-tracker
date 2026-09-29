@@ -550,7 +550,7 @@ describe("explaining an empty page", () => {
  * "Filters persist and round-trip WITHOUT CHANGING QUEUE POLICY" — the ticket's last
  * criterion, and the one that would be most expensive to discover the hard way.
  *
- * docs/queue.md is explicit that presentation is not the queue: the list may display and
+ * design/queue.md is explicit that presentation is not the queue: the list may display and
  * order by the resolver's answers and may never set them. This file is where that could go
  * wrong, because it is the one that reads `queue.policy`'s neighbourhood — the settings
  * envelope — and the one whose functions run on every keystroke in the search box.

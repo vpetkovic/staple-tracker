@@ -1,5 +1,5 @@
 /**
- * The pickup queue in the store — `docs/queue.md` (STA-167 R2b, STA-168 R2c).
+ * The pickup queue in the store — `design/queue.md` (STA-167 R2b, STA-168 R2c).
  *
  * TWO HALVES, in this order and deliberately not mixed.
  *
@@ -647,7 +647,7 @@ export class QueueStore {
     });
   }
 
-  // ---------- the resolver (docs/queue.md "The resolver") ----------
+  // ---------- the resolver (design/queue.md "The resolver") ----------
 
   /** Every issue in the file, keyed by id: the tree the expansion walks. */
   private nodes(): Map<string, IssueNode> {
@@ -661,7 +661,7 @@ export class QueueStore {
    * `store.queue().effectiveQueue()` — the ONE deterministic next-item
    * algorithm, and the only thing in the codebase that computes effective order.
    *
-   * Inputs are exactly the ones docs/queue.md names: the `queue_entries` table,
+   * Inputs are exactly the ones design/queue.md names: the `queue_entries` table,
    * the issue tree, status categories, local `blocks` edges and (injected) hub
    * cross links, gates, live claims, milestone membership order and the calling
    * actor. Same inputs, same output, on every surface and after a restart —
@@ -761,7 +761,7 @@ export class QueueStore {
        * visible on the next read with no queue write. Its target date rides
        * along as `dueAt`: an explanation of urgency, never an input to order.
        * It rides as the day's INCLUSIVE END (`milestoneDateBounds(target).endsAt`,
-       * docs/milestones.md "Dates"), so a consumer comparing `dueAt` to `now` is
+       * design/milestones.md "Dates"), so a consumer comparing `dueAt` to `now` is
        * on time all through the target day instead of overdue from its 00:00Z.
        */
       if (node.kind === MILESTONE_KIND) {
@@ -1091,7 +1091,7 @@ export class QueueStore {
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * THE RESOLVER — R2c (STA-168), docs/queue.md "The resolver".
+ * THE RESOLVER — R2c (STA-168), design/queue.md "The resolver".
  *
  * Everything above this line is the PLAN: rows a human put in a table, in the
  * order they put them. Everything below is the one deterministic function that

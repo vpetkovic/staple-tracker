@@ -429,7 +429,7 @@ describe("the next-up band", () => {
 /**
  * WORK AN AGENT HAS ALREADY PICKED UP.
  *
- * docs/queue.md: rows are never dropped for being ineligible. So a claimed row keeps its
+ * design/queue.md: rows are never dropped for being ineligible. So a claimed row keeps its
  * place and its number, and says who has it — the alternative, lifting it into a section of
  * its own, would rearrange the order while somebody was reading it.
  */
@@ -498,7 +498,7 @@ describe("the board", () => {
 });
 
 /**
- * THE WORKED EXAMPLE — docs/queue.md, and the ticket's first acceptance criterion.
+ * THE WORKED EXAMPLE — design/queue.md, and the ticket's first acceptance criterion.
  *
  * Through the real client with a stubbed `fetch`, so what is proven is the whole path: the
  * order a drag or a keyboard move produces goes out as one `reorder` with the CAS base,

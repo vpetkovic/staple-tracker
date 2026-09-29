@@ -2314,7 +2314,7 @@ server.registerTool(
     }),
 );
 
-// ---------- milestones (docs/milestones.md, STA-172) ----------
+// ---------- milestones (design/milestones.md, STA-172) ----------
 
 /**
  * One shape for every milestone tool, and the same one the CLI prints under
@@ -2550,7 +2550,7 @@ server.registerTool(
   "mark_milestone_criterion",
   {
     description:
-      "Judge one acceptance criterion of a milestone (its goal; docs/milestones.md \"Goal\"): verdict met, unmet or unknown, with evidence. The tracker never judges a criterion itself; it records yours and decides at each check what it is still worth: unmarked is unknown, a criterion reworded since is unknown, and a met criterion whose cited ticket is not done (or cited document is gone) reads unknown until it is. Evidence items are a ticket (ABC-12), a document (ABC-12:plan) or free text; met needs at least one, and a cited ticket or document must exist. follow_up (unmet only) files a ticket through your live goal run over this milestone (or run_id): attributed to the run, made a member, counted against its cap (refused past it). A mark replicates to every device (as the milestone field criterion<n>); two devices judging the same criterion at once are a preserved field conflict (conflict_list / conflict_resolve). Returns the milestone view with its goal. Same payload as `staple milestone criterion --json`.",
+      "Judge one acceptance criterion of a milestone (its goal; design/milestones.md \"Goal\"): verdict met, unmet or unknown, with evidence. The tracker never judges a criterion itself; it records yours and decides at each check what it is still worth: unmarked is unknown, a criterion reworded since is unknown, and a met criterion whose cited ticket is not done (or cited document is gone) reads unknown until it is. Evidence items are a ticket (ABC-12), a document (ABC-12:plan) or free text; met needs at least one, and a cited ticket or document must exist. follow_up (unmet only) files a ticket through your live goal run over this milestone (or run_id): attributed to the run, made a member, counted against its cap (refused past it). A mark replicates to every device (as the milestone field criterion<n>); two devices judging the same criterion at once are a preserved field conflict (conflict_list / conflict_resolve). Returns the milestone view with its goal. Same payload as `staple milestone criterion --json`.",
     inputSchema: {
       ref: milestoneRefSchema,
       position: z.number().int().min(1).describe("The criterion's 1-based number"),
@@ -2703,7 +2703,7 @@ server.registerTool(
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * THE PICKUP QUEUE — R2c (STA-168), docs/queue.md "Operations, by surface".
+ * THE PICKUP QUEUE — R2c (STA-168), design/queue.md "Operations, by surface".
  *
  * Seven tools over ONE service. Every mutation calls `QueueStore.mutate`, the
  * same method `staple queue` and `/api/queue/*` call, and every one of them
@@ -3064,7 +3064,7 @@ server.registerTool(
   "start_run",
   {
     description:
-      "Start an autopilot run: you (actor) work a scope ticket after ticket until the tracker's stop rules say stop. scope is `queue` (the whole pickup queue) or the ref of an epic, a parent or a milestone; a leaf or a resolved issue is refused with validation. Optional budget: max_tickets, until (ISO instant with a zone, or a duration from now: 90m, 2h, 1d), ceiling_percent (stop once a current rate-limit window on this machine reaches that % used; ceiling_account narrows it to one account). One live run per actor per scope: a second start is refused with `conflict` whose detail.runId names the existing run. A run over a milestone is a GOAL run (docs/runs.md \"Goal mode\"): it gates the milestone to gate_owner (default VP) so it never closes unreviewed, may create up to goal_cap tickets itself (default 5: goal checks and follow-ups), and ends goal_met once every acceptance criterion is met. Runs are machine-local and never synchronized; the gate a goal run opens is an ordinary gate and replicates. Same payload as `staple run start --json`.",
+      "Start an autopilot run: you (actor) work a scope ticket after ticket until the tracker's stop rules say stop. scope is `queue` (the whole pickup queue) or the ref of an epic, a parent or a milestone; a leaf or a resolved issue is refused with validation. Optional budget: max_tickets, until (ISO instant with a zone, or a duration from now: 90m, 2h, 1d), ceiling_percent (stop once a current rate-limit window on this machine reaches that % used; ceiling_account narrows it to one account). One live run per actor per scope: a second start is refused with `conflict` whose detail.runId names the existing run. A run over a milestone is a GOAL run (design/runs.md \"Goal mode\"): it gates the milestone to gate_owner (default VP) so it never closes unreviewed, may create up to goal_cap tickets itself (default 5: goal checks and follow-ups), and ends goal_met once every acceptance criterion is met. Runs are machine-local and never synchronized; the gate a goal run opens is an ordinary gate and replicates. Same payload as `staple run start --json`.",
     inputSchema: {
       scope: z.string().describe("`queue`, or an epic / parent / milestone reference"),
       max_tickets: z.number().optional(),

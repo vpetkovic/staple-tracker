@@ -219,7 +219,7 @@ describe("staple kinds", () => {
   });
 
   /**
-   * The one kind that carries a rule (docs/milestones.md): `rm` is refused outright
+   * The one kind that carries a rule (design/milestones.md): `rm` is refused outright
    * while a milestone still owns members or dates, and the refusal names it so the
    * operator knows what to clear first.
    */

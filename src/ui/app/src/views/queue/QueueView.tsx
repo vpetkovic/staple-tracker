@@ -1,5 +1,5 @@
 /**
- * The Queue destination — R2d (STA-169), docs/queue.md, redesigned.
+ * The Queue destination — R2d (STA-169), design/queue.md, redesigned.
  *
  * ── WHAT THIS VIEW IS, AND THE TWO THINGS IT USED TO BE ───────────────────────────────
  *
@@ -35,7 +35,7 @@
  * ── WORK THAT IS ALREADY IN FLIGHT ────────────────────────────────────────────────────
  *
  * An agent claiming a row while you are looking at it changes NOTHING about where the row is.
- * docs/queue.md: "Rows are never dropped for being ineligible", and `queue-store.ts` gives it
+ * design/queue.md: "Rows are never dropped for being ineligible", and `queue-store.ts` gives it
  * `eligibility: "claimed"` with the store's own sentence (`held by codex-1`) and the holder in
  * `detail`. So the row keeps its place, wears the app's existing live treatment, and its
  * ordinal dims — a number that is no longer a turn that is coming. Nothing moves under the
@@ -543,7 +543,7 @@ function PlanRowExpansion({
 /**
  * NOT PLANNED — the unqueued band, folded.
  *
- * docs/queue.md: "the queue is a prefix, not a filter", and this is that sentence as a
+ * design/queue.md: "the queue is a prefix, not a filter", and this is that sentence as a
  * control. Folded by default because it is every other open leaf in the workspace and would
  * otherwise be most of the screen; open it and the rows are the same tree rows, so a reader
  * comparing planned work to unplanned work is comparing like with like.
@@ -1057,7 +1057,7 @@ function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthE
    * there is no query state left in this view.
    *
    * Restricted to the workspace because a plan IS one: `/api/queue` answers for a single
-   * workspace (docs/queue.md), so a foreign identifier is a ref the store would refuse.
+   * workspace (design/queue.md), so a foreign identifier is a ref the store would refuse.
    *
    * Excluding what is queued is not a policy the store shares — enqueuing twice is a replay
    * it answers with `replayed: true` and no write. Offering it would be offering a no-op.

@@ -70,7 +70,7 @@ reads, and the column on the right is the whole of what it adds.
 | The events log and its `dedup_key`; events re-derived on apply, never transported | [sync.md](sync.md#events-are-re-derived-never-transported) | Every attempt transition also emits one local event, keyed from the transition id, so `events --follow` hooks keep working. |
 | Idempotency keys on create | [semantics.md](semantics.md#duplicate-and-replay-guards) | Attempt-opening writes accept one; a replay returns the original attempt. |
 | Sync: entity operations, the envelope, deterministic `opId`, protocol integers, "what never leaves the machine" | [sync.md](sync.md) | Attempts are synchronized entities (protocol 3). Limit windows and budget samples are on the never-leaves list. |
-| The actionable pickup set (`inbox`, `next_task`, the queue resolver) | [queue.md](../docs/queue.md) | Not consumed here. The scheduler ranks from that set; telemetry never decides what is actionable. |
+| The actionable pickup set (`inbox`, `next_task`, the queue resolver) | [queue.md](queue.md) | Not consumed here. The scheduler ranks from that set; telemetry never decides what is actionable. |
 | The error envelope and exit codes | [cli.md](../docs/cli.md#machine-readable-output) | Reused as they stand. Telemetry adds no error code. |
 
 ## Terms
@@ -1466,7 +1466,7 @@ Stored columns are the snake_case form of the stored fields on this page
 
 Every read and write below is one store method called by the CLI, the MCP tool
 and, where one exists, the HTTP route alike. That rule is what keeps the queue's
-verbs identical across surfaces ([queue.md](../docs/queue.md#operations-by-surface)), and
+verbs identical across surfaces ([queue.md](queue.md#operations-by-surface)), and
 it is how the CLI and MCP give the same telemetry JSON structurally rather than
 by tests catching drift. Attempts have no HTTP route of their own: the web UI
 reads `attempts` from the issue payload (`GET /api/issue`, `GET /api/agent-context`)

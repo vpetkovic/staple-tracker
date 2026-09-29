@@ -3,7 +3,7 @@
  * Pause / Resume control.
  *
  * THE PAGE WATCHES AND STOPS; IT NEVER STARTS. A run is started by talking to an agent, and
- * only its actor's `run continue` takes tickets (docs/runs.md). So the only verbs here are a
+ * only its actor's `run continue` takes tickets (design/runs.md). So the only verbs here are a
  * person's: stop (`stopped_by_human`, recorded with who pressed it and why), pause and resume.
  *
  * Stop always asks first. It ends the run for good (a stopped run cannot be resumed; a new

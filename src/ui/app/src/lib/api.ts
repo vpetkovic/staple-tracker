@@ -952,7 +952,7 @@ export const getQueue = (params: { ws?: string; all?: boolean } = {}) =>
  * which is what lets the editor restore the server order and offer a deliberate retry
  * rather than silently replaying a write against an order it has not seen.
  *
- * The route names are the HTTP spelling from docs/queue.md "Operations, by surface"
+ * The route names are the HTTP spelling from design/queue.md "Operations, by surface"
  * (`enqueue`/`remove`), NOT the CLI's shorter verbs (`add`/`rm`). `/api/queue/move` and
  * `/api/queue/next` have no function here because nothing calls them: the editor's every
  * move is a bulk `reorder` (see views/queue/QueueView.tsx), and with no actor the next
@@ -1024,7 +1024,7 @@ export const deleteProject = (target: { ws?: string; ref: string }) =>
 export const assignProject = (target: { ws?: string; ref: string; project: string | null }) =>
   projectWrite<IssueDetail>("assign", target);
 
-// ---------- autopilot runs (docs/runs.md) ----------
+// ---------- autopilot runs (design/runs.md) ----------
 
 /**
  * Every live run and the recent ended ones, each the object `staple run status --json`

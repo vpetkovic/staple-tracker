@@ -163,7 +163,7 @@ export function MilestoneCrumb({ milestone, workspace }: { milestone: EffectiveM
 
 /**
  * A ticket an autopilot run created itself (a goal check or a follow-up: `originKind` `run`,
- * docs/runs.md "Goal mode") says so after its title, so the reader tells the plan a person
+ * design/runs.md "Goal mode") says so after its title, so the reader tells the plan a person
  * made from the work a goal run added to it. A member the page's list does not carry yet is
  * drawn from its member row, which has no origin, and says nothing until the next poll.
  */

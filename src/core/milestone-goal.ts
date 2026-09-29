@@ -1,5 +1,5 @@
 /**
- * Milestone goal mode, the pure half (docs/runs.md "Goal mode", docs/milestones.md "Goal").
+ * Milestone goal mode, the pure half (design/runs.md "Goal mode", design/milestones.md "Goal").
  *
  * A run scoped to a milestone treats the milestone as its goal: the milestone's own
  * acceptance criteria are the definition of done. Whether each criterion is met is judged

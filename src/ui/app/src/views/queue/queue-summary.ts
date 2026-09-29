@@ -4,7 +4,7 @@
  *
  * Read off the resolver's own `effective` rows (`/api/queue`), never re-derived: whether a
  * row is ready is the store's answer, and a second definition here would be the one thing the
- * queue cannot afford (docs/queue.md). This only counts what the server already decided.
+ * queue cannot afford (design/queue.md). This only counts what the server already decided.
  */
 import type { EffectiveQueueRow, QueueEligibility } from "@/lib/types";
 

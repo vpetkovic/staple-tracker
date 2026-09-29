@@ -71,7 +71,7 @@ export interface QueueRowMenuState {
  * row can be in the effective order because an ancestor was queued, and "remove from queue"
  * on such a row would be a lie: there is no entry of its own to remove, and dequeuing the
  * ancestor is a much larger act than the menu item implies. Those rows get the ADD items
- * instead, which is honest — queueing them explicitly is exactly how docs/queue.md says you
+ * instead, which is honest — queueing them explicitly is exactly how design/queue.md says you
  * pull one child out in front of its siblings.
  *
  * A SET, built once by the caller, rather than a scan per row: this is called for every

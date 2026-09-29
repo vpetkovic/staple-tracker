@@ -86,7 +86,7 @@ addedAt, note}], next, goal: {criteria, counts, met, pace}}`.
   least one). The tracker records your verdict and never judges a criterion
   itself; a criterion reworded since, or a `met` one whose cited ticket is not
   done, reads `unknown` again. `follow_up` (on `unmet`) files a ticket through
-  your live goal run over the milestone ([milestones.md](milestones.md#goal)).
+  your live goal run over the milestone ([milestones.md](../design/milestones.md#goal)).
 - **`add_milestone_member`** `{milestone, ref, before? | after? | at?,
   base_revision?, note?}`, **`remove_milestone_member`** `{milestone, ref,
   base_revision?}`, **`move_milestone_member`** `{ref, before? | after? | at? |

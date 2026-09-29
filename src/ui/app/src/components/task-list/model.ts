@@ -380,7 +380,7 @@ export interface RollupOptions {
  * A descendant that has children of its own is NOT counted: its status is derived from
  * theirs, so counting it and them counts the same work twice (an epic under a milestone
  * made a milestone of 11 tasks read 0/12). A childless descendant is its own leaf. This is
- * `milestoneProgress`'s rule (core/milestones.ts, docs/milestones.md "Progress"), so a
+ * `milestoneProgress`'s rule (core/milestones.ts, design/milestones.md "Progress"), so a
  * milestone's row and its detail count the same leaves. That falls out
  * of `forEachAncestor` for free: every row walks up to all of its ancestors, so a
  * grandparent is reached on the same pass as a parent, with no recursion and no depth bound.

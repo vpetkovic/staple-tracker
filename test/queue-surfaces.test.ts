@@ -8,7 +8,7 @@
  * normalization, the same revision and the same order on every surface, the
  * same `{code, retryable, detail}` triple for a stale base and for an
  * out-of-order checkout, and READY printed in effective order with its
- * positions. Every test name is the one docs/queue.md says pins the paragraph.
+ * positions. Every test name is the one design/queue.md says pins the paragraph.
  */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";

@@ -38,7 +38,7 @@
  * Statuses and kinds come from the settings envelope through lib/settings.ts, assignees and
  * labels from the rows, milestones from `/api/milestones`, epics from the rows' own ancestry.
  * Nothing here hard-codes a value a workspace is allowed to rename — the one exception is the
- * five pickup states, which are a CONTRACT with the resolver (docs/queue.md) rather than a
+ * five pickup states, which are a CONTRACT with the resolver (design/queue.md) rather than a
  * vocabulary, and are listed in `PICKUP_STATES` in lib/types.ts.
  */
 import { isGateParked, isQueuedBehindGate } from "./derived-queued";
@@ -170,7 +170,7 @@ const isPickupState = (value: unknown): value is PickupState =>
  *
  * ── THE SERVED VALUE WINS, ALWAYS ─────────────────────────────────────────────────────
  *
- * `row.pickupState` is the queue resolver's own classification (docs/queue.md, step 3), and
+ * `row.pickupState` is the queue resolver's own classification (design/queue.md, step 3), and
  * it knows two things the browser cannot: the effective ORDER, and cross-workspace blockers
  * that cannot be resolved from this page. When it is there it is used verbatim.
  *

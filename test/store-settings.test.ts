@@ -632,7 +632,7 @@ describe("registered workspace settings", () => {
 
   /**
    * R6d (STA-179) — the queue policy through the store, to the contract
-   * docs/queue.md fixed. What is pinned: the default is advisory with nothing
+   * design/queue.md fixed. What is pinned: the default is advisory with nothing
    * stored (upgrading a workspace changes nothing an agent can observe), a set
    * value is the same object on the single-key and the list read, a value
    * outside the contract is refused by name, and the change records actor,

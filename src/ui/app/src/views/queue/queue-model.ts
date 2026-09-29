@@ -1,5 +1,5 @@
 /**
- * The Queue view's pure model — R2d (STA-169), docs/queue.md.
+ * The Queue view's pure model — R2d (STA-169), design/queue.md.
  *
  * Everything here is a function of the server's `{revision, entries, effective}` view plus
  * the page's issue list; no React, no fetch. The component renders what these return and
@@ -9,14 +9,14 @@
  *
  * NOTHING about ORDER or ELIGIBILITY is derived here. `entries` is the plan the human
  * wrote and `effective` is the resolver's answer — expansion, the unqueued band and the
- * eligibility ladder are all `store.queue().effectiveQueue()`'s work, and docs/queue.md is
+ * eligibility ladder are all `store.queue().effectiveQueue()`'s work, and design/queue.md is
  * explicit that one function computes them for every surface. This module only JOINS the
  * two lists the server sent (which effective row came out of which plan row), turns the
  * numbers into labels, and does the move arithmetic a reorder needs before it is sent.
  *
  * The one thing that looks like a derivation is `nextEligible`, and it is not a second
  * resolver: with no actor the resolver's next item IS the first `eligible` row of
- * `effective` (docs/queue.md, "Next item"), so reading it off the list the page already
+ * `effective` (design/queue.md, "Next item"), so reading it off the list the page already
  * holds is the same computation on the same data rather than a second fetch that can
  * disagree with the list under it.
  */

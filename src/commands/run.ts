@@ -13,7 +13,7 @@
  * Every verb is one `RunStore` method, the same one the MCP tools call, and `--json`
  * prints the object that method returns: a run for `start`, `stop`, `pause` and
  * `resume`, `{run, decision, facts}` per run for `status`, and the take / wait / stop
- * answer for `continue` (docs/runs.md). Errors are thrown as `StapleError` and
+ * answer for `continue` (design/runs.md). Errors are thrown as `StapleError` and
  * formatted by the top-level catch in cli.ts like every other command's.
  */
 import { parseArgs } from "node:util";
@@ -103,7 +103,7 @@ run_ticket_recorded) show in staple events --follow.
 
   --actor A        who acts; else $STAPLE_AGENT, else $USER
   --json           the run, {runs: [{run, decision, facts, driver}]} for status, or
-                   {action, ...} for continue (docs/runs.md)`;
+                   {action, ...} for continue (design/runs.md)`;
 
 export function positiveInteger(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;

@@ -7,7 +7,7 @@ import { WorkspaceStore } from "../src/core/store.js";
 import { StapleError } from "../src/core/types.js";
 
 /**
- * STA-172 — milestones in the store, the database half of docs/milestones.md.
+ * STA-172 — milestones in the store, the database half of design/milestones.md.
  *
  * The pure rules (dates, ranks, refusals, the count-once rollup) are pinned in
  * `milestones.test.ts` and are not re-proved here. What is pinned here is what
@@ -15,7 +15,7 @@ import { StapleError } from "../src/core/types.js";
  * relation and never a re-parent, that order is durable and independent, that
  * the CAS refuses a stale base and leaves the order standing, that progress
  * reads categories, and that deletion cascades through the two tables and
- * touches nothing else. Every test name below is the one docs/milestones.md
+ * touches nothing else. Every test name below is the one design/milestones.md
  * says pins the paragraph.
  */
 

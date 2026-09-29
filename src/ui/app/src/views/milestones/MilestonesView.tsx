@@ -1,5 +1,5 @@
 /**
- * The Milestones destination — R3c (STA-173), docs/milestones.md.
+ * The Milestones destination — R3c (STA-173), design/milestones.md.
  *
  * Master–detail: the plan on the left (every milestone in plan order, then target date),
  * one milestone on the right with its dates, details, ordered members, rollups and the

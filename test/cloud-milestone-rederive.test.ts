@@ -1,5 +1,5 @@
 /**
- * The one-shot milestone repair on a synchronized workspace (`docs/milestones.md`).
+ * The one-shot milestone repair on a synchronized workspace (`design/milestones.md`).
  *
  * The repair re-derives every milestone from the members this device holds. On a device that
  * reached the head of the log long ago and has not pulled since, those members are stale: run

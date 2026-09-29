@@ -531,7 +531,7 @@ export const CONTINUE_RETRY_AFTER_SECONDS = 60;
 
 /**
  * THE answer `run continue` / `continue_run` gives a driver: a public JSON contract
- * (docs/runs.md). Exactly one of three actions.
+ * (design/runs.md). Exactly one of three actions.
  */
 export type ContinueAnswer =
   | {

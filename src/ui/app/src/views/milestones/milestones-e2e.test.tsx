@@ -231,7 +231,7 @@ describe("the page draws what the server sent", () => {
     // The note the member was added with, verbatim from the store.
     expect(html).toContain("pull the surfaces forward");
     // The rollups are the store's counts, and the blocked/gated cells are the ones
-    // `docs/milestones.md` records as under-reporting (see the `it.todo` below).
+    // `design/milestones.md` records as under-reporting (see the `it.todo` below).
     expect(html).toContain("data-milestone-rollups");
     expect(html).toContain("1 of 4 tasks finished (25%).");
     // The store counted five leaves and left the cancelled one out; the page says so, in the
@@ -452,7 +452,7 @@ describe("reordering members", () => {
    * moves no status when work is blocked or gated: a blocker lives in the blocker table
    * and an approval gate queues descendants through `queuedBy`, both leaving the status
    * where it was. So the risk lines and the rollups read the QUEUE instead, exactly as
-   * docs/milestones.md says: "facts about members, which the view shows per row from the
+   * design/milestones.md says: "facts about members, which the view shows per row from the
    * queue's eligibility". On this fixture October has one genuinely blocked leaf (MSC-4,
    * blocked by MSC-3) and November two genuinely gated ones (MSC-7 and MSC-8, behind
    * VP's gate on MSC-6) — and every number below came off the wire.

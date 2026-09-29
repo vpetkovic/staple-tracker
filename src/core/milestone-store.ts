@@ -1,5 +1,5 @@
 /**
- * Milestones in the store — the database half of `docs/milestones.md` (STA-172, R3b).
+ * Milestones in the store — the database half of `design/milestones.md` (STA-172, R3b).
  *
  * A milestone is an ordinary issue of the reserved `milestone` kind. This
  * service owns the two tables migration 007 added — `milestone_meta` (two
@@ -77,7 +77,7 @@ export interface MilestoneSummary {
   assignee: string | null;
   /** The issue's own description: what the milestone is for. */
   description: string | null;
-  /** The issue's own acceptance criteria: the milestone's goal (docs/milestones.md "Goal"). Empty when none. */
+  /** The issue's own acceptance criteria: the milestone's goal (design/milestones.md "Goal"). Empty when none. */
   acceptanceCriteria: string[];
   targetDate: string | null;
   startDate: string | null;

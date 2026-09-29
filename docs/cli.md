@@ -331,14 +331,14 @@ staple milestone show STA-190                        # members, progress, goal c
   ticket, a document (`STA-12:plan`) or text. `show` prints each criterion's
   verdict with its evidence and the pace against the target date. An autopilot
   run over a milestone works toward these criteria
-  ([runs.md](runs.md#goal-mode)).
+  ([runs.md](../design/runs.md#goal-mode)).
 - A non-milestone given where a milestone is expected is exit 2 naming its
   kind (`STA-66 is an epic, not a milestone.`); an unknown reference is exit 3;
   `rm` of a non-member is exit 3.
 
 `--json` on every subcommand prints the one shape MCP and the UI server
 return: `{milestone, progress, revision, members, next, goal}` — see
-[milestones.md](milestones.md#operations-by-surface).
+[milestones.md](../design/milestones.md#operations-by-surface).
 
 ## The pickup queue
 
@@ -414,7 +414,7 @@ four refusal codes. `--json` on every subcommand prints the one shape MCP and
 the UI server return: `{revision, entries, effective}`, with `queue next`
 answering `{revision, next, skipped}` (`{revision, scope, next, skipped}` with
 `--scope`) — see
-[queue.md](queue.md#operations-by-surface).
+[queue.md](../design/queue.md#operations-by-surface).
 
 ## Autopilot runs
 
@@ -446,16 +446,16 @@ staple run hook bind
   goal-check ticket when the scope empties with criteria unmet, and may create
   at most `--goal-cap` tickets itself (default 5). It ends `goal_met` when
   nothing is left and every criterion is met
-  ([runs.md](runs.md#goal-mode)).
+  ([runs.md](../design/runs.md#goal-mode)).
 - **`run drive`** loops `run continue` in one process and launches one
   headless `claude`, `codex` or custom session per ticket, with logs under
   `.staple/runs/<run-id>/`. `--dry-run` prints the next ticket's command and
   brief and claims nothing; `staple run drive --help` lists every option
-  ([runs.md](runs.md#run-drive-the-headless-driver)).
+  ([runs.md](../design/runs.md#run-drive-the-headless-driver)).
 - **`run hook`** installs a stop hook (`claude`, `codex`, `gemini`, `cursor`,
   `copilot`, `droid`, `qwen`) that hands an interactive session the run's next
   ticket whenever it would end its turn; `run hook bind` ties the session to a
-  live run ([runs.md](runs.md#interactive-sessions-stop-hooks)).
+  live run ([runs.md](../design/runs.md#interactive-sessions-stop-hooks)).
 
 ## Estimates vs actuals
 

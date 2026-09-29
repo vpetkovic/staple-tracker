@@ -40,7 +40,7 @@
  *
  * ── THE NESTING IS THE WIRE'S, NOT THE TREE'S ────────────────────────────────────────
  *
- * docs/queue.md is absolute that one function computes expansion and every surface reads
+ * design/queue.md is absolute that one function computes expansion and every surface reads
  * it. So depth here is read off the fields the resolver already sends — `milestonePath`,
  * `epicPath`, `via` and `parent` — and NEVER by re-walking `parentId` through the page's
  * issue list. The difference matters the moment the two disagree: the resolver's answer is
@@ -155,7 +155,7 @@ function issueFromContainer(identifier: string): Issue {
  * The ancestors of an effective row, outermost first, as the WIRE names them.
  *
  * `milestonePath` leads because a milestone is a container OVER its membership and sits
- * above the epics it holds (docs/queue.md, step 1). `via` is appended only when it is not
+ * above the epics it holds (design/queue.md, step 1). `via` is appended only when it is not
  * already in the chain: a queued container that is neither an epic nor a milestone — a task
  * with open children — appears in neither path but is still the thing this row hangs under.
  */

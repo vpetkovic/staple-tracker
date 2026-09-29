@@ -13,10 +13,10 @@
 | Path migration | `src/core/path-migration.ts` | The journalled `.tasks/tasks.db` → `.staple/staple.db` move behind `staple migrate` |
 | Hub | `src/core/hub.ts`, `src/core/hub-repair.ts`, `src/core/hub-follow.ts` | Workspace registry, unique prefixes, cross-workspace links, holistic views |
 | Settings registry | `src/core/settings-registry.ts` | Every machine preference and workspace setting, typed once — see [configuration.md](../docs/configuration.md) |
-| Pickup queue | `src/core/queue-store.ts` | The human-ordered plan and its effective order — see [queue.md](../docs/queue.md) |
-| Milestones | `src/core/milestones.ts`, `src/core/milestone-store.ts`, `src/core/milestone-goal.ts` | Dated plans over epics and tasks, their goal and criteria — see [milestones.md](../docs/milestones.md) |
+| Pickup queue | `src/core/queue-store.ts` | The human-ordered plan and its effective order — see [queue.md](queue.md) |
+| Milestones | `src/core/milestones.ts`, `src/core/milestone-store.ts`, `src/core/milestone-goal.ts` | Dated plans over epics and tasks, their goal and criteria — see [milestones.md](milestones.md) |
 | Projects | `src/core/project-store.ts`, `src/core/projects.ts` | Tracked projects an issue can belong to |
-| Autopilot runs | `src/core/run-store.ts`, `src/core/run-driver.ts`, `src/core/run-hook.ts` | A run over a scope, its stop rules, the headless driver and the interactive stop hooks — see [runs.md](../docs/runs.md) |
+| Autopilot runs | `src/core/run-store.ts`, `src/core/run-driver.ts`, `src/core/run-hook.ts` | A run over a scope, its stop rules, the headless driver and the interactive stop hooks — see [runs.md](runs.md) |
 | Execution telemetry | `src/core/telemetry/` | Execution attempts, provider budget samples and limit windows, automatic collection, timing, calibration and forecasts — see [execution-telemetry.md](execution-telemetry.md) |
 | Cloud sync client | `src/core/cloud/` | Connect, push and pull of operations, conflicts, leases, automatic sync, backups and the hub registry on the service — see [sync.md](sync.md) |
 | Sync service | `worker/` | The Cloudflare Worker and its D1 operation log (`worker/migrations/`); a separate npm package, not part of `staple-cli` — see [worker/README.md](https://github.com/vpetkovic/staple-tracker/blob/master/worker/README.md) |
@@ -81,7 +81,7 @@ It covers:
   handoff (MCP `record_attempt_event` with `event: "open"` / `"end"` and `role:
   "orchestrator"`). That time is `orchestrationSeconds`, never `workSeconds`
   ([timing-semantics.md](timing-semantics.md#the-orchestrator-lane));
-- **autopilot runs** ([runs.md](../docs/runs.md)): after every ticket, ask `staple
+- **autopilot runs** ([runs.md](runs.md)): after every ticket, ask `staple
   run continue --json` (MCP `continue_run`) and do what it answers: `take` (the
   ticket is already checked out to you), `wait` or `stop`. The three ways a run is
   worked (the `staple run drive` driver, a stop hook, or the agent calling `run

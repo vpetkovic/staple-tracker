@@ -2,7 +2,7 @@
  * `staple run drive`: the headless driver. It loops {@link RunStore.continue} in-process and,
  * for every `take`, launches a FRESH headless agent session on that ticket, waits for it,
  * and reports how it ended on the next `continue`. The tracker decides; the driver only
- * does what the answer says (docs/runs.md, "run drive").
+ * does what the answer says (design/runs.md, "run drive").
  *
  * ## Providers are rows
  *

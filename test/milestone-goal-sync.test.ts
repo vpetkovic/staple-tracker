@@ -1,5 +1,5 @@
 /**
- * Criterion marks replicate (design/sync.md, "What synchronizes"; docs/milestones.md "Goal"):
+ * Criterion marks replicate (design/sync.md, "What synchronizes"; design/milestones.md "Goal"):
  * a mark is the milestone field `criterion<n>`, so it travels in the operations and the
  * snapshot the service already carries, with no new entity and no protocol change.
  *

@@ -15,7 +15,7 @@
  * every read goes through `everySurface`, so "CLI, MCP and HTTP agree" is not a
  * separate test that could pass while the interesting ones consult one surface.
  *
- * The last describe replays docs/queue.md's worked example, STA-31 → STA-66 →
+ * The last describe replays design/queue.md's worked example, STA-31 → STA-66 →
  * STA-146, end to end. It runs in-process against a scratch workspace whose
  * prefix really is `STA`: the doc's transitions are written about those
  * identifiers, and a replay that renamed them would not be a replay.
@@ -234,7 +234,7 @@ describe("a claim taken, stolen and released re-derives the order", () => {
 
 describe("reopened work resumes its plan position until the entry is pruned", () => {
   /**
-   * docs/queue.md, "Lifecycle of an entry": a resolved entry is KEPT at its
+   * design/queue.md, "Lifecycle of an entry": a resolved entry is KEPT at its
    * rank, so an issue that comes back out of `done` resumes its position with
    * nothing to re-queue; only a `prune` turns it into unqueued work. Both halves
    * are asserted here, in that order, because they are the same issue twice and
@@ -291,7 +291,7 @@ describe("reopened work resumes its plan position until the entry is pruned", ()
 // ------------------------------------------------ the doc's worked example
 
 /**
- * docs/queue.md, "Worked example: STA-31 → STA-66 → STA-146".
+ * design/queue.md, "Worked example: STA-31 → STA-66 → STA-146".
  *
  * In-process and single-threaded, because what is being replayed is a SEQUENCE
  * of nine transitions on one plan, and every one of them is a store call whose

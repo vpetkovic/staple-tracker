@@ -1,5 +1,5 @@
 /**
- * `staple milestone` — the CLI half of docs/milestones.md (STA-172, R3b).
+ * `staple milestone` — the CLI half of design/milestones.md (STA-172, R3b).
  *
  *   milestone ls [--all]
  *   milestone show <ref>

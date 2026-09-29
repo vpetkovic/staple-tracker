@@ -1,5 +1,5 @@
 /**
- * The Milestones view's pure model — R3c (STA-173), docs/milestones.md.
+ * The Milestones view's pure model — R3c (STA-173), design/milestones.md.
  *
  * Everything here is a function of the server's milestone view plus the page's issue list;
  * no React, no fetch. The component renders what these return and the tests pin them
@@ -9,7 +9,7 @@
  *
  * The milestone STATE (planned/active/overdue/done/cancelled) is derived by the store on
  * every read and arrives on the view; this module never re-derives it. Blocked and gated
- * are not milestone states — docs/milestones.md says so — they are facts about members,
+ * are not milestone states — design/milestones.md says so — they are facts about members,
  * and the one place staple states them is the queue resolver's `eligibility`. So "risk"
  * is a reading of the view plus a reading of the queue, not a third derivation that could
  * disagree with either.
@@ -50,7 +50,7 @@ function nullsLast<T extends number | string>(a: T | null, b: T | null, compare:
 
 /**
  * Plan order first, then target date, then identifier. Plan order is the human's explicit
- * sequence and beats a date the same way it does in the queue (docs/queue.md); a date
+ * sequence and beats a date the same way it does in the queue (design/queue.md); a date
  * explains urgency but never reorders a plan.
  */
 export function sortMilestones<T extends Pick<MilestoneListRow, "milestone">>(rows: readonly T[]): T[] {
@@ -113,7 +113,7 @@ export interface MilestoneRisk {
  * and an approval gate queues its descendants through `queuedBy`, both leaving the status
  * alone. `effective` rows carry the resolver's verdict per row, and `milestonePath` names
  * the milestone each one is planned under, which is exactly the set to count over
- * (docs/milestones.md, "State is derived, never stored").
+ * (design/milestones.md, "State is derived, never stored").
  *
  * `effective` empty — the queue has not loaded, or failed — reads as no risk rather than
  * as an invented one.

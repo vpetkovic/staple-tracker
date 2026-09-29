@@ -4725,7 +4725,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
-       * Milestones — R3b (STA-172), docs/milestones.md. Two reads and a POST
+       * Milestones — R3b (STA-172), design/milestones.md. Two reads and a POST
        * family, the gate routes' shape: every answer is the ONE milestone view
        * the CLI prints under `--json` and the MCP tools return, so the
        * Milestones page (R3c) redraws from a write result exactly as it does
@@ -4733,7 +4733,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        * the plan; a stale `baseRevision` is the store's own revision_conflict.
        */
       /**
-       * Autopilot runs (docs/runs.md). The page WATCHES and STOPS runs; it never starts or
+       * Autopilot runs (design/runs.md). The page WATCHES and STOPS runs; it never starts or
        * continues one, so there is no route for either: a run is started by talking to an
        * agent, and only its actor's `run continue` takes tickets.
        *
@@ -4973,7 +4973,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
-       * The pickup queue — R2c (STA-168), docs/queue.md "Operations, by surface".
+       * The pickup queue — R2c (STA-168), design/queue.md "Operations, by surface".
        * Two reads and a POST family, the milestone routes' shape: every answer is
        * the ONE `{revision, entries, effective}` view the CLI prints under
        * `--json` and the MCP tools return, so the queue editor (R2d) redraws from

@@ -1,6 +1,6 @@
 /**
  * `staple run hook` — interactive adapters for autopilot runs (`src/core/run-hook.ts`,
- * docs/runs.md "Interactive sessions: stop hooks").
+ * design/runs.md "Interactive sessions: stop hooks").
  *
  *   run hook <provider>-stop [--max-repeats N] [--max-blocks N]   (the hook itself; stdin: the payload)
  *   run hook bind [--run <id>] [--session <id>] [--provider P]

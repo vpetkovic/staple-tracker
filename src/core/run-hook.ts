@@ -1,5 +1,5 @@
 /**
- * Interactive adapters for autopilot runs (docs/runs.md, "Interactive sessions: stop
+ * Interactive adapters for autopilot runs (design/runs.md, "Interactive sessions: stop
  * hooks"): a session a person is already in keeps working a run's tickets because its
  * agent CLI asks `staple run hook <provider>` whenever the agent is about to end its turn.
  *
@@ -488,7 +488,7 @@ function currentIssue(store: WorkspaceStore, issueId: string): ReturnType<Worksp
 
 /**
  * A `review: ...` comment on the issue since `since`, by anyone: a separate reviewer may
- * post it. The same test `run drive` applies to a finished session (docs/runs.md).
+ * post it. The same test `run drive` applies to a finished session (design/runs.md).
  */
 export function reviewedSince(store: WorkspaceStore, issueId: string, since: string): boolean {
   const bodies = store.db

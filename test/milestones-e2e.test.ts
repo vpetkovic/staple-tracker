@@ -645,7 +645,7 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
   });
 
   /**
-   * docs/milestones.md, "Dates": "On the queue, a target date surfaces as `dueAt` — the
+   * design/milestones.md, "Dates": "On the queue, a target date surfaces as `dueAt` — the
    * `endsAt` bound, so that sorting by `dueAt` and comparing to `now` both honour the
    * inclusive day", and the worked example spells the value out as
    * `dueAt: 2026-10-31T23:59:59.999Z`.

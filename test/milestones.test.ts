@@ -1,7 +1,7 @@
 /**
  * STA-171 — the milestone model is pure, so it gets pure tests: no store, no db.
  *
- * What is pinned is the CONTRACT in `docs/milestones.md`: the UTC inclusive-day
+ * What is pinned is the CONTRACT in `design/milestones.md`: the UTC inclusive-day
  * date rules, the sparse-rank encoding shared with the queue, the membership
  * refusals, and the count-each-leaf-once progress rollup with its duplicate,
  * nested, cancelled and reopened cases. R3b's store tests build on these; they
@@ -187,7 +187,7 @@ describe("milestoneProgress", () => {
   };
 
   it("counts a task reached through its epic and as a direct member once", () => {
-    // The worked example from docs/milestones.md: E{T1 done, T2 todo}, T2 again, S done.
+    // The worked example from design/milestones.md: E{T1 done, T2 todo}, T2 again, S done.
     const epic = node("E", "active");
     const t1 = node("T1", "done", "E");
     const t2 = node("T2", "ready", "E");

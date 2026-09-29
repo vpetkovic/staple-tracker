@@ -1587,7 +1587,7 @@ function main() {
         stealIfIdleSeconds:
           stale === undefined ? undefined : parseDuration(stale, "steal-if-stale"),
         /**
-         * The human override (docs/queue.md). `--override` alone reaches the
+         * The human override (design/queue.md). `--override` alone reaches the
          * store as an EMPTY reason and is refused there rather than here, so the
          * "a reason is mandatory" rule has exactly one implementation and MCP,
          * HTTP and the CLI cannot disagree about it.

@@ -393,7 +393,7 @@ entity's own primary key.
 | `workspace_statuses` | `id` | `label`, `category`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `workspace_kinds` | `id` | `label`, `sort_order`, `is_builtin` (as `isBuiltin` on a create, below) |
 | `milestone_meta` | `issue_id` | `target_date`, `start_date`, `updated_at` — `members_revision` is derived, see below |
-| `milestone_criterion_marks` | `(milestone_id, position)` | `criterion`, `verdict`, `evidence`, `note`, `marked_by`, `run_id`, `marked_at` — as the milestone's field `criterion<position>` (a JSON object; null clears it), one field per criterion, so concurrent marks of one criterion are a field conflict and of two criteria are not. No new entity and no protocol change: the service folds a milestone's keys one by one, as it always has ([milestones](../docs/milestones.md#goal)) |
+| `milestone_criterion_marks` | `(milestone_id, position)` | `criterion`, `verdict`, `evidence`, `note`, `marked_by`, `run_id`, `marked_at` — as the milestone's field `criterion<position>` (a JSON object; null clears it), one field per criterion, so concurrent marks of one criterion are a field conflict and of two criteria are not. No new entity and no protocol change: the service folds a milestone's keys one by one, as it always has ([milestones](milestones.md#goal)) |
 | `attempts` | `id` | `issue_id`, `agent`, `role` (workspace migration 014; a create without it is a `worker` attempt), `opened_by`, `resumes_attempt_id`, `started_at`, `device_id`, `claim_scope`, `claim_fencing_token`, `harness`, `provider_binding`, `estimate_at_start`, `idempotency_key`, `provenance`, `missing` on the create; then only the end: `state`, `outcome`, `end_reason`, `end_detection`, `ended_by`, `ended_at`, `ended_at_source`, always all seven together — protocol 3, see [execution telemetry](execution-telemetry.md#where-it-lives-and-what-synchronizes) |
 | `attempt_transitions` | `id` | `attempt_id`, `kind`, `at`, `actor`, `detection`, `reason`, `detail`, `concurrency` — immutable once written, like a document revision; protocol 3 |
 | `meta` | `key` | **only** rows matching `setting:*` — the repository's prefix travels as one of them, `setting:repository.prefix` ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)); `slug` and `prefix` themselves are this workspace's own |
@@ -478,7 +478,7 @@ derived, they merge as `max()` so the local optimistic-concurrency checks stay
 monotonic, and they are bumped on apply like any other local write. Two counters,
 deliberately: one is what this database has seen, the other is what the
 repository agreed. The existing local editor keeps using the local one and needs
-no change ([queue.md](../docs/queue.md)).
+no change ([queue.md](queue.md)).
 
 A `baseRevision` key inside the payload would be a second copy of a number the
 envelope already carries for every operation — a second thing that can be wrong,

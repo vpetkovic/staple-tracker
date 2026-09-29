@@ -974,7 +974,7 @@ function checkOrphanWorkspaces(dir: string): CheckResult {
 }
 
 /**
- * The pickup plan's own health (STA-170, docs/queue.md "Storage").
+ * The pickup plan's own health (STA-170, design/queue.md "Storage").
  *
  * Three facts nothing else surfaces, because every ordinary listing JOINs
  * `queue_entries` to `issues` and so cannot show a row whose issue is gone, and

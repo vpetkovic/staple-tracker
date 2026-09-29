@@ -45,8 +45,8 @@ npx staple-cli install --yes        # optional: put `staple` on your PATH
 |---|---|
 | [Epics and dependencies](epics-and-dependencies.md) | Group work under epics and order it with dependencies |
 | [The pickup queue](queue.md) | Set the order agents take work in |
-| [Milestones](milestones.md) | Dated plans over epics and tasks, with goal criteria |
-| [Approval gates](approval-gates.md) | Make a ticket wait for a person's approval |
+| [Milestones and goals](milestones.md) | Put a date and a goal on work from several epics, and track it |
+| [Approval gates](approval-gates.md) | Hold an epic for your review, then approve it or send it back |
 | [Autopilot runs](runs.md) | Let one agent work a scope ticket after ticket, within a budget |
 
 ## Across machines and repositories

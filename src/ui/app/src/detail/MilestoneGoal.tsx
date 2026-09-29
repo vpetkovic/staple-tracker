@@ -1,7 +1,7 @@
 /**
  * THE MILESTONE'S GOAL, on its own detail: where "Done when" is on every other issue.
  *
- * A milestone's acceptance criteria are its goal (docs/milestones.md "Goal"), and the goal
+ * A milestone's acceptance criteria are its goal (design/milestones.md "Goal"), and the goal
  * check weighs each one at every read: met, not met, or unknown, with the evidence it rests
  * on. So a milestone's criteria are not a static checklist; each row says what the check
  * says, the evidence as links (a ticket opens the ticket, a document opens it on that

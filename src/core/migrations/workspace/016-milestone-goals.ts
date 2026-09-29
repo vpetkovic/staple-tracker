@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 16: milestone goal mode (`src/core/milestone-goal.ts`, docs/runs.md "Goal mode").
+ * Version 16: milestone goal mode (`src/core/milestone-goal.ts`, design/runs.md "Goal mode").
  *
  * ## Criterion marks
  *

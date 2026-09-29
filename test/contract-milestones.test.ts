@@ -8,7 +8,7 @@
  * for a non-milestone, an unknown reference, a stale base revision and a
  * workspace without the kind, and a create-from-epic preview that names the
  * same changes on every surface as the commit does. Every test name is the one
- * docs/milestones.md says pins the paragraph.
+ * design/milestones.md says pins the paragraph.
  */
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";

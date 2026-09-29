@@ -792,7 +792,7 @@ export interface IssueDeps {
 }
 
 /**
- * WHETHER AN AGENT COULD TAKE THIS ROW RIGHT NOW — R4b (STA-187), docs/queue.md "Policy".
+ * WHETHER AN AGENT COULD TAKE THIS ROW RIGHT NOW — R4b (STA-187), design/queue.md "Policy".
  *
  * Five words, one per row, first match wins, mirroring the resolver's eligibility ladder:
  * `gated` and `blocked` are the hard constraints it names before anything else, `claimed`
@@ -879,7 +879,7 @@ export interface IssueRow {
    * consumer is obliged to check rather than assume. `null` means "not in the plan", which is
    * NOT the same as position 0, and `lib/sort-modes.ts` treats absent and null identically.
    *
-   * READ ONLY, EVERYWHERE IN THE UI. `docs/queue.md` is explicit that presentation sort is
+   * READ ONLY, EVERYWHERE IN THE UI. `design/queue.md` is explicit that presentation sort is
    * not the queue: the list may display and order by these numbers and may never set them.
    * The one write path is the queue's own API.
    */
@@ -921,7 +921,7 @@ export interface IssueRow {
  * WHAT AN UNGROUPED ROW DISCLOSES ABOUT THE PICKUP PLAN — R4c (STA-188).
  *
  * Six words, one per row. Five of them are `PICKUP_STATES` above, unchanged and meaning
- * exactly what docs/queue.md says they mean; the sixth, `unqueued`, is the queue's own
+ * exactly what design/queue.md says they mean; the sixth, `unqueued`, is the queue's own
  * sixth answer — `EffectiveQueueRow.unqueued`, "a row after the last plan row: still work,
  * just later". It is a state rather than the absence of one because "nothing is stopping
  * this and nobody planned it" is a different fact from "this is next", and a reader who
@@ -1262,7 +1262,7 @@ export interface ErrorEnvelope {
 
 /**
  * The milestone view as every surface prints it — the mirror of `MilestoneView` in
- * `src/core/milestone-store.ts` and the JSON shape in docs/milestones.md. One shape for
+ * `src/core/milestone-store.ts` and the JSON shape in design/milestones.md. One shape for
  * `GET /api/milestone`, and for the result of every `POST /api/milestone/*` write, so the
  * page redraws from a write result exactly as it does from a read.
  */
@@ -1356,7 +1356,7 @@ export interface MilestoneRemaining {
 export type MilestoneListRow = Omit<MilestoneView, "members" | "goal"> & { memberCount: number };
 
 /**
- * The milestone's goal as the check reads it now (core/milestone-goal.ts, docs/milestones.md
+ * The milestone's goal as the check reads it now (core/milestone-goal.ts, design/milestones.md
  * "Goal"). The tracker never judges a criterion: an agent marks it, and the check weighs the
  * mark at every read. Pinned against core in test/contract-ui-types.test.ts.
  */
@@ -1437,7 +1437,7 @@ export interface MilestoneGoal {
 
 /**
  * The queue as every surface prints it — the mirror of `QueueView` in
- * `src/core/queue-store.ts` and the JSON shape in docs/queue.md. ONE shape for
+ * `src/core/queue-store.ts` and the JSON shape in design/queue.md. ONE shape for
  * `GET /api/queue` and for the result of every `POST /api/queue/*` write, so the
  * editor (R2d) redraws from a write result exactly as it does from a read.
  *
@@ -2923,7 +2923,7 @@ export interface BudgetView {
 
 /**
  * An autopilot run, as `staple run status --json` prints it under `run` (core/run-store.ts,
- * docs/runs.md). The reason codes are a public contract and never renamed; the page words
+ * design/runs.md). The reason codes are a public contract and never renamed; the page words
  * them in lib/run-text.ts. Pinned against core in test/contract-ui-types.test.ts.
  */
 export type RunState = "active" | "paused" | "stopped" | "completed";

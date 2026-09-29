@@ -1,5 +1,5 @@
 /**
- * `staple run drive`: the headless driver (`src/core/run-driver.ts`, docs/runs.md).
+ * `staple run drive`: the headless driver (`src/core/run-driver.ts`, design/runs.md).
  *
  *   run drive [--run <id> | --scope <queue|ref> [start options]] --agent <claude|codex|custom>
  *             [--command "<template>"] [--model M] [--full-access] [--finish in_review|done]

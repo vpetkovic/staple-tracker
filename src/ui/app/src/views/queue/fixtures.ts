@@ -50,7 +50,7 @@ export function queue(over: Partial<QueueView> = {}): QueueView {
 }
 
 /**
- * docs/queue.md's worked example, cut to the rows the editor has to draw: STA-31 resolved
+ * design/queue.md's worked example, cut to the rows the editor has to draw: STA-31 resolved
  * at plan 1, STA-66 a container at plan 2 expanding to three of its children, STA-146 at
  * plan 3 and effective 5 — the row where the two numbers differ.
  */

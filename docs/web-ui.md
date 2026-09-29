@@ -971,7 +971,7 @@ document opens that document), who marked it and when, and why an unknown one
 is unknown; the pace (*On track*, *Behind*, *Overdue*, …) with its numbers; the
 gate, and whether a goal run or a person asked for it; and the goal run working
 it. A member a run created says *Created by autopilot*. See
-[milestones.md](milestones.md#goal) and [runs.md](runs.md#goal-mode).
+[milestones.md](../design/milestones.md#goal) and [runs.md](../design/runs.md#goal-mode).
 `detail/milestone-goal-e2e.test.tsx` pins the goal view against a real goal run.
 
 **The dependencies dialog** (`components/DependenciesDialog.tsx`) opens from a
@@ -1214,7 +1214,7 @@ The forecast re-reads on the page's refresh fingerprint.
 
 The page watches and stops [autopilot runs](runs.md); it never starts or
 continues one. Everything reads one `GET /api/runs` per change fingerprint
-(`lib/runs.ts`). [runs.md](runs.md#in-the-web-ui) has the full description.
+(`lib/runs.ts`). [runs.md](../design/runs.md#in-the-web-ui) has the full description.
 
 - **The rail's Autopilot section**, once the workspace has had a run: one card
   per live run (its scope, progress, the next ticket, what would stop it, its

@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 7 — milestones (STA-172, R3b; contract in docs/milestones.md).
+ * Version 7 — milestones (STA-172, R3b; contract in design/milestones.md).
  *
  * ## Why 7
  *
@@ -27,7 +27,7 @@ import type { Migration } from "../types.js";
  * "one direct milestone per issue" rule; `UNIQUE (milestone_id, rank)` plus a
  * midpoint computed inside an immediate transaction is what makes concurrent
  * inserts unable to collide. `rank` is the queue's sparse-integer encoding
- * (docs/queue.md, "Storage"), and `members_revision` is the per-milestone CAS
+ * (design/queue.md, "Storage"), and `members_revision` is the per-milestone CAS
  * base every membership mutation bumps.
  *
  * The rows are created lazily — on the first `milestone set`, `milestone add`

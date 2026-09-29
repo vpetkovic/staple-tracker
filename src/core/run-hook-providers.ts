@@ -1,5 +1,5 @@
 /**
- * Each agent CLI's stop-hook contract, as its own documentation states it (docs/runs.md,
+ * Each agent CLI's stop-hook contract, as its own documentation states it (design/runs.md,
  * "Interactive sessions: stop hooks", has the survey, the links and the quotes). A
  * provider is a row: how to read its stdin payload into a {@link StopEvent}, how to write
  * a {@link HookVerdict} back in the form it obeys, which variable (if any) carries its

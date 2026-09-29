@@ -5,7 +5,7 @@
  * Every figure comes off `GET /api/runs` (the object `staple run status --json` prints).
  * This module PHRASES the tracker's reason codes and never decides anything itself: whether
  * a run goes on is `evaluateStopRules` in core/run-store.ts, and the page only says what it
- * answered. The codes are a public contract (docs/runs.md) and every one of them has words
+ * answered. The codes are a public contract (design/runs.md) and every one of them has words
  * here; `STOP_REASON_WORDS` is a `Record` over the tuple, so a code added to core without
  * words fails to compile once the mirror in lib/types.ts learns it.
  *
@@ -16,7 +16,7 @@
  * `stopped_by_human: …`, `touched_main_line: …`). Those get words; anything else is the
  * tracker's own sentence, passed through.
  *
- * A goal run (a run over a milestone, docs/runs.md "Goal mode") adds `goal_met`, the
+ * A goal run (a run over a milestone, design/runs.md "Goal mode") adds `goal_met`, the
  * `goal_children` budget and the goal check a live run is about to take; each has words.
  *
  * Pure and tested (run-text.test.ts).

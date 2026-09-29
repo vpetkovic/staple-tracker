@@ -1,21 +1,128 @@
 ---
 title: Epics and dependencies
-description: Group work under epics, order it with dependencies, and read what is ready.
+description: Group work under epics, say what waits on what, park work on a person, and read what is ready to pick up.
 ---
 
 # Epics and dependencies
 
-This page explains how epics group work and how dependencies decide what is
-ready to pick up.
+Use this page to shape work so agents can tell what to do next: group tickets under an
+epic, say which ticket waits on which, and mark work that waits on a person. staple
+works out the rest: what is ready, what is blocked and on what, and when an epic is
+finished.
 
-## What this page will cover
+The examples continue the password reset epic from
+[Plans become tickets](plans-to-tickets.md): APP-1 is the epic, APP-2 to APP-5 its tickets.
 
-- Kinds: epics, tasks and your own kinds.
-- Parents and children, and how an epic's status follows its children.
-- Blocking one ticket on another (`staple blocked-by`), and when a ticket is ready to pick up.
-- Statuses and the moves between them.
+## 1. Pick a kind for each ticket
 
-Until this page is written, the [CLI reference](cli.md#kinds) covers kinds and
-the commands that set dependencies.
+Every ticket has a kind. A new workspace has five:
 
-<!-- Source material for the rewrite: design/semantics.md (statuses, kinds, derived parent status, the blocks graph). -->
+```text
+◆ epic                 Epic
+◇ task                 Task
+✱ bug                  Bug
+↻ chore                Chore
+↯ spike                Spike
+```
+
+An **epic** groups work; the others are work an agent takes. Kinds are labels, so add
+your own when they help you read the board:
+
+```bash
+staple kinds add incident --label Incident     # MCP update_kinds
+staple new "Reset emails bounce for Outlook users" --kind bug --parent APP-1
+```
+
+One kind is special: `milestone`, which you add once to turn on
+[milestones](milestones.md).
+
+## 2. Put tickets under an epic
+
+`--parent` puts a ticket under an epic (MCP `create_task` with `parent`). Any ticket
+can have children, and epics can sit under epics.
+
+You never set an epic's status by hand. It reports what its tickets are doing: in
+progress while one of them is, back to backlog when nothing is in flight, blocked
+when everything open under it is blocked, and done when the last ticket is done.
+Agents take the tickets, never the epic.
+
+## 3. Say what waits on what
+
+`--blocked-by` on `staple new`, or `staple blocked-by` later (MCP `set_blocked_by`),
+sets the tickets that must finish first. It replaces the whole list each time:
+
+```bash
+staple blocked-by APP-5 APP-3,APP-4,APP-6    # APP-5 now waits on all three
+staple blocked-by APP-5 --none               # APP-5 waits on nothing
+```
+
+A blocked ticket stays out of the ready list and cannot be claimed. It becomes ready
+by itself when its blockers are done, and the agent that was waiting is told.
+Dependencies may cross epics, but not form a loop: a loop is refused.
+
+## 4. Read what is ready
+
+```bash
+staple inbox        # MCP inbox
+```
+
+```text
+READY (pickup order):
+  ◐  APP-1     in_progress Password reset · epic
+  ◐  APP-2     in_progress Issue single-use reset tokens @claude
+BLOCKED:
+  ⊘  APP-6     blocked     Reset emails bounce for Outlook users · bug  [VP must Confirm which mail provider we use in production]
+  ◌  APP-3     backlog     Send the reset email  [waiting on APP-2]
+  ◌  APP-4     backlog     Reset form sets the new password  [waiting on APP-2]
+  ◌  APP-5     backlog     Document the reset flow  [waiting on APP-3, APP-4, APP-6]
+```
+
+Every blocked row says what it waits on. `staple tree` shows the same tickets as a
+tree, and the web UI's Graph view draws the dependencies.
+
+## 5. Park work on a person
+
+Some work waits on a decision rather than on a ticket. Block it on a named person, with
+what they need to do:
+
+```bash
+staple block APP-6 --owner VP --action "Confirm which mail provider we use in production"
+```
+
+```text
+⊘  APP-6     blocked     Reset emails bounce for Outlook users · bug  [unblock: VP → Confirm which mail provider we use in production]
+```
+
+An agent does the same with MCP `update_task`: status `blocked` with `unblock_owner`
+and `unblock_action`. This kind of block never clears by itself. When the person has
+answered, move the ticket back: `staple status APP-6 todo`.
+
+> [!TIP]
+> If the wait is really on other work, file that work as a ticket and use
+> `blocked-by` instead. A dependency clears itself when the work is done; a block on a
+> person waits until someone remembers to lift it.
+
+For "look at this before agents go on", use an [approval gate](approval-gates.md):
+it holds a whole epic until you approve it.
+
+## Statuses
+
+| Status | Means |
+|---|---|
+| `backlog`, `todo` | not started; `todo` is ready to take |
+| `in_progress` | an agent holds it |
+| `in_review` | finished, waiting for a person to look |
+| `awaiting_approval` | held by an [approval gate](approval-gates.md) |
+| `blocked` | waiting on a person, with who and what |
+| `done`, `cancelled` | finished |
+
+`staple statuses ls` prints your workspace's list. You can rename, add and reorder
+statuses; each belongs to a fixed category, which is what staple reads, so renaming
+`done` changes nothing about how it behaves. The [CLI reference](cli.md#kinds) has
+the commands.
+
+## Next
+
+- [The pickup queue](queue.md): decide which epic agents take first.
+- [Milestones and goals](milestones.md): put a date and a goal on one or more epics.
+- [Approval gates](approval-gates.md): hold an epic for your review.

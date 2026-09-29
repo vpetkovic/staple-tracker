@@ -8,9 +8,9 @@ import { StapleError } from "../src/core/types.js";
 
 /**
  * STA-168 — the RESOLVER, `strict` and the human override: the policy half of
- * docs/queue.md, over the storage half `store-queue.test.ts` already pins.
+ * design/queue.md, over the storage half `store-queue.test.ts` already pins.
  *
- * Every test name below is the one docs/queue.md names for the paragraph it
+ * Every test name below is the one design/queue.md names for the paragraph it
  * proves. The doc originally filed them under `store-queue.test.ts` because R2b
  * and R2c had not been split yet; they live here, and the doc's pins now say so.
  *
@@ -246,7 +246,7 @@ describe("container expansion", () => {
     expect(identifiers()).toEqual(before);
     const row = queue.effectiveQueue().rows.find((r) => r.identifier === late)!;
     // The INCLUSIVE end of the target day, so `new Date(dueAt) < now` is overdue only
-    // once the day is over — docs/milestones.md, "Dates".
+    // once the day is over — design/milestones.md, "Dates".
     expect(row.dueAt).toBe("2026-01-01T23:59:59.999Z");
     // A date explains urgency; it never reorders a plan somebody wrote by hand.
     expect(identifiers()[0]).toBe(late);

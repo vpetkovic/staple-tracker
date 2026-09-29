@@ -44,7 +44,7 @@
  *
  * ## Why a resolver object and not a function per issue
  *
- * `claimActivityFor` batches a whole page — `docs/queue.md`'s 114-row list
+ * `claimActivityFor` batches a whole page — `design/queue.md`'s 114-row list
  * against a UI that polls every 1.5s. A per-issue `claimScopeOf` would be one
  * connection-file read and one `sync_leases` query per ROW. This reads each
  * source ONCE and then answers from a map, which is the same N+1 argument

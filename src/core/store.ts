@@ -1829,7 +1829,7 @@ export class WorkspaceStore {
     return this.atomically(() => {
       this.requireKindRow(id);
       /**
-       * The bulk half of `assertRekindAllowed` (docs/milestones.md): `--migrate-to`
+       * The bulk half of `assertRekindAllowed` (design/milestones.md): `--migrate-to`
        * re-kinds every milestone at once, so the same rule applies at once — an issue
        * that is not a milestone cannot own members or dates. Refused outright rather
        * than migrated, and the refusal names the milestones so the operator knows
@@ -3175,7 +3175,7 @@ export class WorkspaceStore {
    * the same reason: whatever it writes goes out, on the next sync of this device or of a
    * re-connected one, whenever that is. So such a workspace repairs only in a sync, after its
    * pull reached the head. A workspace disconnected for good never does: its milestones keep
-   * what the old build left until a member moves (`docs/milestones.md`).
+   * what the old build left until a member moves (`design/milestones.md`).
    */
   private synchronizes(): boolean {
     // A database a store was opened on before its migrations ran has no sync state at all.
@@ -3984,9 +3984,9 @@ export class WorkspaceStore {
    *    when its last member lands (`deriveOneAncestor`). What it queues is
    *    what any gate queues, the tree beneath it by `parent_id`, and nothing
    *    through membership: members are other issues' work, planned rather
-   *    than parented (docs/milestones.md), and they stay workable, which is
+   *    than parented (design/milestones.md), and they stay workable, which is
    *    what lets a goal run gate its milestone at the start and keep working
-   *    the members (docs/runs.md "Goal mode").
+   *    the members (design/runs.md "Goal mode").
    *  - **A gate that is still PENDING.** Re-gating would move the owner out
    *    from under a reviewer who has not answered yet.
    *
@@ -4495,7 +4495,7 @@ export class WorkspaceStore {
       // Two-state: absent leaves it alone, a string sets it. Re-declaring the
       // kind is a plain field write with no guard of its own — unlike status, a
       // kind carries no category and therefore no behaviour to violate. The one
-      // documented exception (docs/milestones.md): a milestone that still owns
+      // documented exception (design/milestones.md): a milestone that still owns
       // members or dates cannot stop being one.
       if (patch.kind !== undefined && patch.kind !== row.kind) assertRekindAllowed(this.db, row, patch.kind);
       if (patch.kind !== undefined) next.kind = patch.kind;
@@ -6622,7 +6622,7 @@ export class WorkspaceStore {
       throw new StapleError("validation", "--outcome goes on the write that clears the claim (release, status, done), never on a checkout.");
     }
     /**
-     * The human override (docs/queue.md "Human override"). The store cannot tell
+     * The human override (design/queue.md "Human override"). The store cannot tell
      * a human from an agent and does not try — THE FLAG IS THE DISTINCTION, and
      * the reason is mandatory exactly as it is for `request-changes`, so an
      * override can never be triggered by adding one boolean to a script.
@@ -7606,7 +7606,7 @@ export class WorkspaceStore {
     return rows;
   }
 
-  // ---------- milestones (docs/milestones.md) ----------
+  // ---------- milestones (design/milestones.md) ----------
 
   private milestoneStore: MilestoneStore | null = null;
 
@@ -7615,7 +7615,7 @@ export class WorkspaceStore {
     return (this.milestoneStore ??= new MilestoneStore(this));
   }
 
-  // ---------- the pickup queue (docs/queue.md) ----------
+  // ---------- the pickup queue (design/queue.md) ----------
 
   private queueStore: QueueStore | null = null;
 

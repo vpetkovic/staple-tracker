@@ -32,7 +32,7 @@
  *
  * ── PRESENTATION ONLY. THIS FILE CANNOT REACH THE QUEUE ───────────────────────────────
  *
- * `docs/queue.md` is explicit that presentation sort is not the queue: queue position is a
+ * `design/queue.md` is explicit that presentation sort is not the queue: queue position is a
  * thing the list may DISPLAY and order by, and never a thing it may set. Nothing here
  * writes: the module exports pure comparators over `readonly` rows, it reads `queuePosition`
  * off the row payload and reads nothing else about the queue, and `sort-modes.test.ts` sorts

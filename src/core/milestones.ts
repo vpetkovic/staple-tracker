@@ -1,5 +1,5 @@
 /**
- * Milestones — the pure half of the contract in `docs/milestones.md` (STA-171, R3a).
+ * Milestones — the pure half of the contract in `design/milestones.md` (STA-171, R3a).
  *
  * A milestone is an issue of the reserved `milestone` kind that owns two calendar
  * dates and an ORDERED MEMBERSHIP of other issues, without re-parenting any of
@@ -15,7 +15,7 @@ import { STATUS_CATEGORIES, StapleError, type StatusCategory } from "./types.js"
  * The reserved kind id. A milestone is identified by its kind and by nothing
  * else — there is no flag column — which is why this is an id and not a
  * category: kinds have no categories, and the one behaviour a milestone carries
- * is confined to the milestone tables (see "Identity" in docs/milestones.md).
+ * is confined to the milestone tables (see "Identity" in design/milestones.md).
  */
 export const MILESTONE_KIND = "milestone";
 
@@ -117,7 +117,7 @@ export function assertMilestoneDates(dates: { startDate: string | null; targetDa
 
 // ---------- membership order: sparse integer ranks ----------
 
-/** The gap between two ranks; the queue's step (docs/queue.md, "Storage"). */
+/** The gap between two ranks; the queue's step (design/queue.md, "Storage"). */
 export const MEMBER_RANK_STEP = 1024;
 
 /**

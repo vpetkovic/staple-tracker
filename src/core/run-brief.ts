@@ -35,7 +35,7 @@ export interface BriefInput {
 }
 
 /**
- * The goal section of a goal run's brief (docs/runs.md "Goal mode"): the milestone's criteria
+ * The goal section of a goal run's brief (design/runs.md "Goal mode"): the milestone's criteria
  * as the check reads them now, and how the session records a verdict. The tracker never
  * judges a criterion; the session does, through `staple milestone criterion`.
  */

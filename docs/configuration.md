@@ -66,7 +66,7 @@ on the workspace surface, each refusal naming the surface that does own it.
 
 A feature control in the **Workflow** category (registry id `queue`, because a
 key is namespaced by its category). It is defined as
-[queue.md](queue.md#policy-advisory-or-strict) names it: workspace scope,
+[queue.md](queue.md#5-choose-advisory-or-strict) names it: workspace scope,
 `advisory | strict`, default `advisory`.
 
 - `advisory` — the queue orders and explains; a checkout is never refused for
