@@ -98,8 +98,8 @@ function Hero(): ReactNode {
         </p>
         <ButtonRow align="center">
           <CopyCommand command="npx staple-cli" />
-          <Button to="/docs" variant="secondary" size="lg">
-            Read the docs
+          <Button to="/docs/getting-started" variant="secondary" size="lg">
+            Get started
           </Button>
         </ButtonRow>
       </div>

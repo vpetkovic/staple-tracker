@@ -4,6 +4,7 @@ import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import Button from '@site/src/components/Button';
 import {TrackerSync} from '@site/src/components/scenes';
+import {Planned} from './parts/CompareTable';
 import Faq from './parts/Faq';
 import Install from './parts/Install';
 import Steps from './parts/Steps';
@@ -235,7 +236,7 @@ export default function Walkthrough(): ReactNode {
         <section className={clsx(styles.alongside, styles.tinted)} aria-labelledby="wt-alongside">
           <div className={styles.container}>
             <div className={styles.centerHead}>
-              <Pill>Next to Linear, GitHub, ClickUp</Pill>
+              <Pill>Next to Linear, GitHub and ClickUp</Pill>
               <h2 id="wt-alongside" className={styles.title}>
                 <Lines>{['Keep your team’s board.', 'Give agents their own.']}</Lines>
               </h2>
@@ -250,6 +251,7 @@ export default function Walkthrough(): ReactNode {
               </div>
             </div>
             <p className={styles.plannedNote}>
+              <Planned />
               Integrations that keep the two in sync, with GitHub Issues, ClickUp and Linear, are planned, not shipped.
               Today staple does not read from or write to any of them: use it alongside them and carry items across
               yourself.
