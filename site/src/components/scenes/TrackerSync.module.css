@@ -80,6 +80,14 @@
   white-space: nowrap;
 }
 
+/* A mid-width cell sets the three trackers in a row, which keeps the stack short. */
+@container scene (min-width: 39rem) and (max-width: 43.99rem) {
+  .trackers {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--st-space-2);
+  }
+}
+
 /* Side by side: trackers, the bridge running across, staple. */
 @container scene (min-width: 44rem) {
   .wrap {

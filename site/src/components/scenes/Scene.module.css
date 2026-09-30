@@ -53,6 +53,8 @@
 
 .meta {
   flex-shrink: 0;
+  display: inline-flex;
+  white-space: pre;
   color: var(--st-fg-subtle);
 }
 

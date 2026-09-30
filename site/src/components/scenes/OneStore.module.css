@@ -30,6 +30,7 @@
 .tree {
   --branch-gap: var(--st-space-5);
   --branch-inset: var(--st-space-6);
+  --branch-rail: var(--st-space-3);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--branch-gap);
@@ -46,7 +47,7 @@
 .branch::after {
   content: '';
   position: absolute;
-  left: calc(var(--st-space-3) - var(--branch-inset));
+  left: calc(var(--branch-rail) - var(--branch-inset));
 }
 
 .branch::before {
@@ -61,7 +62,7 @@
 
 .branch::after {
   top: 50%;
-  width: calc(var(--branch-inset) - var(--st-space-3));
+  width: calc(var(--branch-inset) - var(--branch-rail));
   border-top: var(--st-hairline) solid var(--st-border-strong);
   transition: border-color var(--st-duration-scene) var(--st-ease);
 }
@@ -110,6 +111,22 @@
 .branchLit .code,
 .branchLit .ui {
   border-color: var(--st-accent);
+}
+
+/* A narrow cell gives the branches less inset, so the terminal's output fits. */
+@container scene (max-width: 24rem) {
+  .tree {
+    --branch-inset: var(--st-space-4);
+    --branch-rail: var(--st-space-2);
+  }
+
+  .tree .code {
+    padding: var(--st-space-3) 0.375rem;
+  }
+
+  .tree .codeLine {
+    gap: 0.375rem;
+  }
 }
 
 .codeLine {

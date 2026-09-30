@@ -46,7 +46,7 @@ them by name at the widths of the cells they may sit in: check a change there.
 | `QueuePickup` | An agent asks what is next, gets the top ready ticket and claims it. |
 | `TicketContext` | Done-when criteria are ticked; the worklog document moves to a new version. |
 | `Handoff` | A session goes silent; another agent takes the claim over and reads the worklog. |
-| `ApprovalGate` | An epic waits on a person; Approve is pressed; the tickets under it become ready. |
+| `ApprovalGate` | An epic waits on a person; Approve all is pressed; the tickets under it become ready. |
 | `AutopilotRun` | Tickets go done one after another, then the budget stops the run. |
 | `MilestoneGoal` | Goal criteria are marked met with evidence; the progress fills. |
 | `TrackerSync` | staple beside GitHub Issues, ClickUp and Linear, each marked Planned. |
@@ -97,7 +97,9 @@ To add a scene:
    size. Something that arrives holds its place from the start.
 4. A state class has to outrank the rule it changes (`.row.rowLit`, not `.rowLit`): the
    production CSS is minified across files, and two rules of equal weight can swap
-   places.
+   places. That reaches other components too: new CSS once greyed the status marks of
+   `PlanFlow` on the landing page. After adding CSS, compare `/` and `/classic` from a
+   production build with the build before your change.
 5. Use the landing page's example data (prefix APP, the Multi-tenancy epic) and claim
    nothing the docs do not. An integration that is not shipped carries the Planned chip.
 6. Add it to `scenes/catalog.ts` and `scenes/index.ts`, then look at it on `/scenes` at

@@ -36,7 +36,7 @@ type Props = SceneOptions & {
  * playback state that the scene's CSS reads.
  */
 export default function Scene({label, title, meta, timeline, children, className, fade = 'none', bar = true, loop = false}: Props): ReactNode {
-  const {ref, step, state, reduced, paused, togglePaused} = useScenePlayback(timeline, {loop});
+  const {ref, step, state, live, paused, togglePaused} = useScenePlayback(timeline, {loop});
   return (
     <div ref={ref} className={clsx(styles.frame, className)} data-scene-state={state} data-scene-step={step}>
       <div role="img" aria-label={label} className={styles.panel}>
@@ -52,7 +52,7 @@ export default function Scene({label, title, meta, timeline, children, className
           </div>
         </div>
       </div>
-      {loop && !reduced && (
+      {loop && live && (
         <button type="button" className={styles.pause} onClick={togglePaused} aria-label={paused ? 'Play animation' : 'Pause animation'}>
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
             {paused ? <path d="M5 3.5v9l7-4.5z" fill="currentColor" /> : <path d="M4.5 3.5h2.5v9H4.5zM9 3.5h2.5v9H9z" fill="currentColor" />}

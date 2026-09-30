@@ -161,6 +161,7 @@
   white-space: nowrap;
   transition:
     background-color var(--st-duration-scene) var(--st-ease),
+    border-color var(--st-duration-scene) var(--st-ease),
     opacity var(--st-duration-scene) var(--st-ease);
 }
 
@@ -189,6 +190,10 @@
 
 .row.rowChild {
   padding-left: var(--st-space-6);
+}
+
+.row.rowHidden {
+  border-top-color: transparent;
 }
 
 .rowHidden > * {
@@ -261,7 +266,7 @@
   }
 
   .row.rowChild {
-    padding-left: var(--st-space-3);
+    padding-left: var(--st-space-4);
   }
 }
 

@@ -58,6 +58,13 @@
   font-size: var(--st-text-xs);
 }
 
+/* Wide enough for the sentence on one line: no second line to hold. */
+@container scene (min-width: 28rem) {
+  .foot {
+    min-height: 1.375rem;
+  }
+}
+
 .running {
   color: var(--st-fg-muted);
 }

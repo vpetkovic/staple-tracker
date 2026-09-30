@@ -87,6 +87,8 @@
 
 .evidence {
   flex: none;
+  /* A chip is taller than a line of text: level it with the first line. */
+  margin-top: -0.1rem;
 }
 
 .unknown {
@@ -94,5 +96,6 @@
   font-family: var(--st-font-mono);
   font-size: var(--st-text-xs);
   line-height: 1.375rem;
+  margin-top: -0.1rem;
   color: var(--st-fg-subtle);
 }

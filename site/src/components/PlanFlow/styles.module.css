@@ -180,21 +180,21 @@
   border-radius: var(--st-radius-full);
 }
 
-.done {
+.mark.done {
   border-color: var(--st-accent);
   background: var(--st-accent);
 }
 
-.active {
+.mark.active {
   border-color: var(--st-accent);
   background: linear-gradient(90deg, var(--st-accent) 50%, transparent 50%);
 }
 
-.ready {
+.mark.ready {
   border-color: var(--st-accent);
 }
 
-.waiting {
+.mark.waiting {
   border-style: dashed;
 }
 
@@ -269,7 +269,7 @@
   text-wrap: pretty;
 }
 
-.warn::before {
+.event.warn::before {
   border-color: var(--st-warning);
   border-style: dashed;
 }
@@ -278,7 +278,7 @@
   color: var(--st-warning);
 }
 
-.accent::before {
+.event.accent::before {
   border-color: var(--st-accent);
   background: var(--st-accent);
 }

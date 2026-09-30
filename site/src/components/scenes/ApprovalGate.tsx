@@ -9,7 +9,7 @@ export default function ApprovalGate(options: SceneOptions): ReactNode {
   const approved = (step: number) => step >= 3;
   return (
     <Scene
-      label="The epic APP-1 Multi-tenancy is gated: it waits for VP's approval, and the tickets under it wait with it. Approve is pressed. APP-3 and APP-5 become ready; APP-4 still waits on APP-3."
+      label="The epic APP-1 Multi-tenancy is gated: it waits for VP's approval, and the tickets under it wait with it. Approve all is pressed: the gate is approved. APP-3 and APP-5 become ready; APP-4 still waits on APP-3."
       title="APP-1"
       meta="approval gate"
       timeline={[450, 1350, 1650, 2300, 2700, 3300]}
@@ -20,20 +20,20 @@ export default function ApprovalGate(options: SceneOptions): ReactNode {
             <List className={styles.gateRow}>
               <Row
                 id="APP-1"
-                status={approved(step) ? 'active' : 'gated'}
+                status={approved(step) ? 'backlog' : 'gated'}
                 title="Multi-tenancy"
                 epic
-                trail={<Swap on={approved(step)} align="end" before={<Chip tone="danger">Awaiting VP</Chip>} after={<Chip tone="accent">Approved</Chip>} />}
+                trail={<Swap on={approved(step)} align="end" before={<Chip tone="danger">Awaiting VP</Chip>} after={<Chip tone="accent">Gate approved</Chip>} />}
               />
             </List>
             <div className={styles.ask}>
-              <p className={styles.note}>Review the tenant id design before queries are built on it.</p>
+              <p className={styles.note}>Review the tenant id design before queries build on it.</p>
               <span className={styles.action}>
                 <span className={clsx(styles.button, step === 2 && styles.pressed, approved(step) && styles.gone)}>
                   <svg viewBox="0 0 16 16" width="14" height="14">
                     <path d="M3.5 8.4 6.6 11.4 12.5 5" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
-                  Approve
+                  Approve all
                 </span>
                 <span className={clsx(styles.signed, approved(step) && styles.signedOn)}>Approved by VP</span>
                 <Pointer className={clsx(styles.pointer, step >= 1 && step < 4 && styles.pointerOn, step === 2 && styles.pointerDown)} />

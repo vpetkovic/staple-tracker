@@ -61,8 +61,9 @@ export default function Handoff(options: SceneOptions): ReactNode {
           <div className={styles.worklog}>
             <Label>
               <span className={styles.worklogName}>Worklog</span>
-              <Reveal on={step >= 3} from="none" inline>
-                <Chip tone="accent">Read by codex</Chip>
+              <Reveal on={step >= 3} from="none" inline className={styles.read}>
+                <Agent name="codex" />
+                <span>staple doc APP-2 worklog</span>
               </Reveal>
             </Label>
             <dl className={styles.entries}>

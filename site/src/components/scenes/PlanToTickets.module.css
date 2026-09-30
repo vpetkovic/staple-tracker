@@ -115,6 +115,7 @@
 @container scene (max-width: 20rem) {
   .file {
     padding: var(--st-space-2);
+    font-size: var(--st-text-2xs);
   }
 
   .file .line {

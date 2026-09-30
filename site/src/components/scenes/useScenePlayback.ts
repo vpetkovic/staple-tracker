@@ -12,6 +12,8 @@ export type Playback = {
   state: PlaybackState;
   /** True when the visitor asked for reduced motion: the scene shows its final state. */
   reduced: boolean;
+  /** True once playback is running in this browser: false on the server, without JavaScript and with reduced motion. */
+  live: boolean;
   /** Only meaningful with `loop`: stops and restarts the repetition. */
   paused: boolean;
   togglePaused: () => void;
@@ -51,6 +53,7 @@ export function useScenePlayback(timeline: readonly number[], {loop = false}: Op
   const [state, setState] = useState<PlaybackState>('done');
   const [reduced, setReduced] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [live, setLive] = useState(false);
   // The timeline is a literal in every scene; keying on its values keeps the effect stable.
   const timelineKey = timeline.join(',');
 
@@ -70,8 +73,10 @@ export function useScenePlayback(timeline: readonly number[], {loop = false}: Op
     if (!node || still || typeof IntersectionObserver === 'undefined') {
       setStep(finalStep);
       setState('done');
+      setLive(false);
       return undefined;
     }
+    setLive(true);
 
     let timers: number[] = [];
     let inView = false;
@@ -134,5 +139,5 @@ export function useScenePlayback(timeline: readonly number[], {loop = false}: Op
 
   const togglePaused = useCallback(() => setPaused((value) => !value), []);
 
-  return {ref, step, state, reduced, paused, togglePaused};
+  return {ref, step, state, reduced, live, paused, togglePaused};
 }

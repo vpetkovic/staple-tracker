@@ -86,6 +86,20 @@
   color: var(--st-fg-strong);
 }
 
+/* Who reads it, and with what. */
+.read {
+  gap: var(--st-space-2);
+  min-width: 0;
+  font-family: var(--st-font-mono);
+  font-weight: var(--st-weight-regular);
+  color: var(--st-fg-muted);
+}
+
+.read span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .entries {
   display: grid;
   gap: var(--st-space-1);
@@ -118,6 +132,13 @@
 
 .entry.entryLit dd {
   color: var(--st-fg-strong);
+}
+
+/* In a narrow cell every event is a name over a sentence, so the list keeps one rhythm. */
+@container scene (max-width: 24rem) {
+  .events .event {
+    flex-direction: column;
+  }
 }
 
 @container scene (min-width: 44rem) {

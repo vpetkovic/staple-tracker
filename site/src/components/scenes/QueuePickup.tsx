@@ -22,7 +22,7 @@ export default function QueuePickup({fade = 'bottom', ...options}: SceneOptions)
               <Typed on={step >= 1}>staple queue next</Typed>
             </span>
             <Reveal on={step >= 2} from="left" className={styles.answer}>
-              next APP-2 (position 1)
+              next APP-2 (position 1) Tenant id on every table
             </Reveal>
           </div>
           <List>
