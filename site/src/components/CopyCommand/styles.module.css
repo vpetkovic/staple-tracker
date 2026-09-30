@@ -33,10 +33,16 @@
   text-overflow: ellipsis;
 }
 
+/* The prompt is text and meets AA like the command: it sets itself apart by weight on
+   the accent, and by the accent text colour on the plain surface, as in Terminal. */
 .prompt {
   margin-right: 1ch;
-  opacity: 0.7;
+  font-weight: var(--st-weight-regular);
   user-select: none;
+}
+
+.secondary .prompt {
+  color: var(--st-accent-text);
 }
 
 .copy {
