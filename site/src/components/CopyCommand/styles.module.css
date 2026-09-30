@@ -59,6 +59,14 @@
   color: inherit;
   cursor: pointer;
   transition: background-color var(--st-duration-fast) var(--st-ease);
+  position: relative;
+}
+
+/* The button is drawn at the small control size and taps as a 44 px target. */
+.copy::after {
+  content: '';
+  position: absolute;
+  inset: calc((var(--st-control-sm) - var(--st-target-min)) / 2);
 }
 
 .primary .copy:hover {

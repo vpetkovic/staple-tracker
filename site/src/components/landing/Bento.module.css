@@ -271,6 +271,18 @@
   color: var(--st-fg-muted);
 }
 
+/* A docs link is drawn small but taps as a 44 px target: its hit area reaches above
+   and below the text, which keeps its place. */
+.page .more {
+  position: relative;
+}
+
+.page .more::after {
+  content: '';
+  position: absolute;
+  inset: calc(50% - var(--st-target-min) / 2) 0;
+}
+
 .more:hover {
   color: var(--st-fg-strong);
   text-decoration: none;

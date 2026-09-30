@@ -73,6 +73,8 @@
   --st-control-sm: 2.25rem;
   --st-control-md: 2.5rem;
   --st-control-lg: 2.875rem;
+  /* The smallest tap target: a control drawn smaller reaches this far with its hit area. */
+  --st-target-min: 2.75rem;
 
   /* Motion */
   --st-ease: cubic-bezier(0.2, 0, 0, 1);
