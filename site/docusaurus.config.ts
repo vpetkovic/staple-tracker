@@ -105,8 +105,9 @@ const config: Config = {
           beforeDefaultRemarkPlugins: [githubAlerts],
         },
         blog: false,
-        // The comparison copies of the landing page are noindex, so they stay out of the sitemap.
-        sitemap: {ignorePatterns: ['/story', '/classic']},
+        // The comparison copies of the landing page and the scene review page are
+        // noindex, so they stay out of the sitemap.
+        sitemap: {ignorePatterns: ['/story', '/classic', '/scenes']},
         theme: {
           // Fonts first, then the tokens, then the chrome that reads them.
           customCss: [

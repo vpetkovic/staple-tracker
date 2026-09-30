@@ -1,0 +1,129 @@
+.wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-3);
+}
+
+/* The claim's history: a rail with one mark per event. */
+.events {
+  position: relative;
+  display: grid;
+  gap: var(--st-space-2);
+  margin: var(--st-space-3) 0 0;
+  padding: 0 0 0 var(--st-space-5);
+  list-style: none;
+}
+
+/* The rail is drawn by each event up to the one before it, so it grows with the history. */
+.event + .event::after {
+  content: '';
+  position: absolute;
+  top: calc(-1 * var(--st-space-2) - 0.55em);
+  bottom: calc(100% - 0.35em);
+  left: calc(4px - var(--st-space-5));
+  border-left: var(--st-hairline) solid var(--st-border-strong);
+}
+
+.event {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--st-space-2);
+  color: var(--st-fg);
+  opacity: 0;
+  transform: translateY(var(--st-rise));
+  transition:
+    opacity var(--st-duration-scene) var(--st-ease),
+    transform var(--st-duration-scene) var(--st-ease);
+}
+
+.event.on {
+  opacity: 1;
+  transform: none;
+}
+
+.event::before {
+  content: '';
+  position: absolute;
+  top: 0.35em;
+  left: calc(-1 * var(--st-space-5));
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--st-fg-subtle);
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg-subtle);
+}
+
+.who {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  line-height: 1.6;
+  color: var(--st-fg-subtle);
+}
+
+.event.warn {
+  color: var(--st-warning);
+}
+
+.event.warn::before {
+  border-color: var(--st-status-ready);
+  border-style: dashed;
+}
+
+.event.accent::before {
+  border-color: var(--st-accent);
+  background: var(--st-accent);
+}
+
+.worklog {
+  padding: var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+}
+
+.worklogName {
+  color: var(--st-fg-strong);
+}
+
+.entries {
+  display: grid;
+  gap: var(--st-space-1);
+  margin: 0;
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  gap: var(--st-space-2);
+  margin: 0 calc(-1 * var(--st-space-2));
+  padding: var(--st-space-1) var(--st-space-2);
+  border-radius: var(--st-radius-sm);
+  transition: background-color var(--st-duration-scene) var(--st-ease);
+}
+
+.entry dt {
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+}
+
+.entry dd {
+  margin: 0;
+  color: var(--st-fg-muted);
+}
+
+.entryLit {
+  background: var(--st-accent-soft);
+}
+
+.entry.entryLit dd {
+  color: var(--st-fg-strong);
+}
+
+@container scene (min-width: 44rem) {
+  .wrap {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: var(--st-space-4);
+    align-items: start;
+  }
+}

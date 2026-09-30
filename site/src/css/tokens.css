@@ -129,6 +129,23 @@
   --st-info: #1d4ed8;
   --st-warning: #a16207;
   --st-danger: #b91c1c;
+  /* Scenes (src/components/scenes): the web UI's two small type sizes, its row
+     height, the pace of a scene's steps, and the status hues of the 16 px status
+     glyphs. The hues clear 3:1 on the scene surfaces as marks; text in a scene
+     uses the fg, accent, info, warning and danger tokens. */
+  --st-text-2xs: 0.6875rem;
+  --st-text-ui: 0.8125rem;
+  --st-scene-row: 2.25rem;
+  --st-duration-scene: 420ms;
+  --st-status-backlog: #85858f;
+  --st-status-ready: #c2710c;
+  --st-status-active: #2563eb;
+  --st-status-review: #7c3aed;
+  --st-status-done: #059669;
+  --st-status-blocked: #dc2626;
+  --st-active-soft: #eff4ff;
+  --st-warning-soft: #fdf6e3;
+  --st-danger-soft: #fdf1f1;
 }
 
 [data-theme='dark'] {
@@ -168,4 +185,14 @@
   --st-info: #93c5fd;
   --st-warning: #fcd34d;
   --st-danger: #fca5a5;
+
+  --st-status-backlog: #7c7c87;
+  --st-status-ready: #f59e0b;
+  --st-status-active: #60a5fa;
+  --st-status-review: #a78bfa;
+  --st-status-done: #34d399;
+  --st-status-blocked: #f87171;
+  --st-active-soft: rgb(96 165 250 / 0.12);
+  --st-warning-soft: rgb(252 211 77 / 0.1);
+  --st-danger-soft: rgb(252 165 165 / 0.1);
 }

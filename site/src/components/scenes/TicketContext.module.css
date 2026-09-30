@@ -1,0 +1,146 @@
+.wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-4);
+}
+
+.title {
+  font-size: var(--st-text-base);
+  font-weight: var(--st-weight-semibold);
+  letter-spacing: -0.01em;
+  line-height: var(--st-leading-snug);
+  color: var(--st-fg-strong);
+}
+
+.state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--st-space-2) var(--st-space-3);
+  margin: var(--st-space-2) 0 var(--st-space-4);
+}
+
+.stateGlyph {
+  width: 12px;
+  height: 12px;
+}
+
+.holder {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-muted);
+}
+
+.criteria {
+  display: grid;
+  gap: var(--st-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.criterion {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--st-space-2);
+  color: var(--st-fg-strong);
+  transition: color var(--st-duration-scene) var(--st-ease);
+}
+
+.criterion.criterionMet {
+  color: var(--st-fg-muted);
+}
+
+.check {
+  flex: none;
+  margin-top: 0.1em;
+}
+
+.checkBox {
+  fill: transparent;
+  stroke: var(--st-border-strong);
+  stroke-width: 1.5;
+  transition:
+    fill var(--st-duration-scene) var(--st-ease),
+    stroke var(--st-duration-scene) var(--st-ease);
+}
+
+.checkMark {
+  fill: none;
+  stroke: var(--st-bg);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset var(--st-duration-scene) var(--st-ease);
+}
+
+.checkOn .checkBox {
+  fill: var(--st-status-done);
+  stroke: var(--st-status-done);
+}
+
+.checkOn .checkMark {
+  stroke-dashoffset: 0;
+}
+
+.worklog {
+  padding: var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+  transition: border-color var(--st-duration-scene) var(--st-ease);
+}
+
+.worklog.worklogLit {
+  border-color: var(--st-accent);
+}
+
+.worklog .worklogHead {
+  margin-bottom: var(--st-space-3);
+}
+
+.worklogName {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  color: var(--st-fg-strong);
+}
+
+.version {
+  font-weight: var(--st-weight-regular);
+  color: var(--st-fg-subtle);
+}
+
+.entries {
+  display: grid;
+  gap: var(--st-space-2);
+  margin: 0;
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  gap: var(--st-space-2);
+}
+
+.entry dt {
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+}
+
+.entry dd {
+  margin: 0;
+  color: var(--st-fg-muted);
+}
+
+@container scene (min-width: 36rem) {
+  .wrap {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--st-space-5);
+    align-items: start;
+  }
+}

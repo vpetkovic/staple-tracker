@@ -1,6 +1,6 @@
 # Site primitives
 
-The building blocks for marketing pages (`src/pages`, and the two landing pages in `landing/`: see "Choosing the landing page" in CONTRIBUTING.md). Docs pages do not use
+The building blocks for marketing pages (`src/pages`, and the two landing pages in `landing/`: see "Choosing the landing page" in CONTRIBUTING.md), and the animated scenes those pages show features with (see "Scenes" below). Docs pages do not use
 them: they are Markdown from `../docs`, styled by `src/css/custom.css`.
 
 Colours, type, spacing, radii, control sizes, durations and fonts come from
@@ -32,6 +32,76 @@ A page composes them:
   </ButtonRow>
 </Section>
 ```
+
+## Scenes
+
+`scenes/` holds small animated pieces of staple's web UI, rebuilt in HTML and CSS: one per
+feature, showing only the UI that feature is about. A landing page puts one beside the
+copy for that feature. `/scenes` (noindex, not in the sitemap, not linked) shows all of
+them by name at the widths of the cells they may sit in: check a change there.
+
+| Scene | Shows |
+| --- | --- |
+| `PlanToTickets` | A Markdown plan becomes an epic, its tickets and their dependencies. |
+| `QueuePickup` | An agent asks what is next, gets the top ready ticket and claims it. |
+| `TicketContext` | Done-when criteria are ticked; the worklog document moves to a new version. |
+| `Handoff` | A session goes silent; another agent takes the claim over and reads the worklog. |
+| `ApprovalGate` | An epic waits on a person; Approve is pressed; the tickets under it become ready. |
+| `AutopilotRun` | Tickets go done one after another, then the budget stops the run. |
+| `MilestoneGoal` | Goal criteria are marked met with evidence; the progress fills. |
+| `TrackerSync` | staple beside GitHub Issues, ClickUp and Linear, each marked Planned. |
+| `Budget` | Provider limits as gauges with the reserve; an estimate against what the work took. |
+| `OneStore` | A command in the terminal changes the same ticket in the web UI and over MCP. |
+
+Use one with no props; it fills the width of its container:
+
+```tsx
+import {QueuePickup} from '@site/src/components/scenes';
+
+<div className={styles.cell}>
+  <QueuePickup />
+</div>
+```
+
+Every scene takes the same optional props (`SceneOptions`): `fade="bottom"` runs the last
+rows out under a fade and `fade="none"` shows the fragment whole (each scene has its own
+default), `bar={false}` drops the window bar, `loop` replays it while it is in view and
+adds a pause control, and `className`. `SCENES` (`scenes/catalog.ts`) lists them all with
+a name and a one-line story.
+
+How a scene behaves, which `Scene` and `useScenePlayback` take care of:
+
+- It starts when about a third of it has scrolled into view, plays once (under five
+  seconds) and rests on its final state. It rewinds once it has left the view, so it
+  plays again on re-entry.
+- The final state is what the server renders and what `prefers-reduced-motion: reduce`
+  gets: no timer is set and nothing moves.
+- It is an image to assistive technology: `role="img"` with a sentence in `aria-label`,
+  and the drawn UI hidden from the accessibility tree. Nothing inside a scene is
+  focusable. The pause control of a looping scene sits outside the image.
+- It adapts to its container, not the viewport: the frame is a size container named
+  `scene`, and scenes use `@container scene (min-width: …)`.
+
+To add a scene:
+
+1. Write `scenes/<Name>.tsx` around `<Scene label title meta timeline>`. `timeline` lists
+   when each step begins, in milliseconds; the child is a function of `step` (0 before
+   anything happened, `timeline.length` at the end). Keep the last step under about 3.5
+   seconds.
+2. Build it from `parts.tsx`: `Row`, `List`, `StatusGlyph`, `Priority`, `Agent`, `Chip`,
+   `Label`, `Meter`, `Pointer`, and the motion parts `Reveal` (arrives), `Swap` (one thing
+   replaces another in the same box), `Typed` (a typed line) and `Wide` (words a narrow
+   cell drops). Status hues, the two small type sizes and the step duration are tokens
+   (`--st-status-*`, `--st-text-ui`, `--st-text-2xs`, `--st-duration-scene`).
+3. Every step must occupy the same box: change opacity, transform and colour, never
+   size. Something that arrives holds its place from the start.
+4. A state class has to outrank the rule it changes (`.row.rowLit`, not `.rowLit`): the
+   production CSS is minified across files, and two rules of equal weight can swap
+   places.
+5. Use the landing page's example data (prefix APP, the Multi-tenancy epic) and claim
+   nothing the docs do not. An integration that is not shipped carries the Planned chip.
+6. Add it to `scenes/catalog.ts` and `scenes/index.ts`, then look at it on `/scenes` at
+   every width, in both themes, and with reduced motion.
 
 ## Rules
 

@@ -1,0 +1,68 @@
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-3);
+  white-space: nowrap;
+}
+
+.who {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  min-width: 0;
+}
+
+.scope {
+  overflow: hidden;
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+  text-overflow: ellipsis;
+}
+
+.count {
+  flex: none;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--st-fg-muted);
+}
+
+/* The ticket budget: one slot per ticket the run may take. */
+.budget {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--st-space-1);
+  margin: var(--st-space-3) 0;
+}
+
+.slot {
+  height: 4px;
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg-muted);
+  box-shadow: inset 0 0 0 var(--st-hairline) var(--st-border);
+  transition: background-color var(--st-duration-scene) var(--st-ease), box-shadow var(--st-duration-scene) var(--st-ease);
+}
+
+.slot.slotOn {
+  background: var(--st-status-done);
+  box-shadow: none;
+}
+
+.foot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  min-height: 2.25rem;
+  margin-top: var(--st-space-3);
+  font-size: var(--st-text-xs);
+}
+
+.running {
+  color: var(--st-fg-muted);
+}
+
+.reason {
+  font-family: var(--st-font-mono);
+  color: var(--st-fg-muted);
+}

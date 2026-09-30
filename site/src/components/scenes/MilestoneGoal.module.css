@@ -1,0 +1,98 @@
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-3);
+}
+
+.due {
+  flex: 1 1 0;
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+  white-space: nowrap;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--st-text-base);
+  font-weight: var(--st-weight-semibold);
+  letter-spacing: -0.01em;
+  color: var(--st-fg-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--st-space-3);
+  margin: var(--st-space-3) 0;
+}
+
+.figure {
+  font-size: var(--st-text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--st-fg-muted);
+  white-space: nowrap;
+}
+
+.figure strong {
+  font-weight: var(--st-weight-semibold);
+  color: var(--st-fg-strong);
+}
+
+.criteria {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+  list-style: none;
+}
+
+.criterion {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--st-space-2);
+  padding: var(--st-space-2) var(--st-space-3);
+  transition: background-color var(--st-duration-scene) var(--st-ease);
+}
+
+.criterion + .criterion {
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.criterionLit {
+  background: var(--st-accent-soft);
+}
+
+.verdict {
+  margin-top: 0.15em;
+}
+
+.text {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--st-fg-strong);
+  text-wrap: pretty;
+}
+
+.number {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.evidence {
+  flex: none;
+}
+
+.unknown {
+  flex: none;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  line-height: 1.375rem;
+  color: var(--st-fg-subtle);
+}

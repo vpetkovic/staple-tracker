@@ -1,0 +1,134 @@
+/* The frame is the size container: scenes adapt to the cell they are put in with
+   `@container scene (...)`, never to the viewport. */
+.frame {
+  position: relative;
+  container: scene / inline-size;
+  width: 100%;
+  min-width: 0;
+  font-family: var(--st-font-sans);
+  font-size: var(--st-text-ui);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg);
+  text-align: left;
+}
+
+/* Rewound and waiting to be seen: the jump back to the first step is not animated. */
+.frame[data-scene-state='idle'] *,
+.frame[data-scene-state='idle'] *::before,
+.frame[data-scene-state='idle'] *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+.panel {
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-lg);
+  background: var(--st-bg-subtle);
+}
+
+.inner {
+  display: flex;
+  flex-direction: column;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-3);
+  min-height: var(--st-control-sm);
+  padding: 0 var(--st-space-4);
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  white-space: nowrap;
+}
+
+.title {
+  overflow: hidden;
+  color: var(--st-fg-muted);
+  text-overflow: ellipsis;
+}
+
+.meta {
+  flex-shrink: 0;
+  color: var(--st-fg-subtle);
+}
+
+.body {
+  position: relative;
+  padding: var(--st-space-3);
+}
+
+/* The cropped edge: the last rows run out under a fade, so the fragment reads as a
+   detail of a larger screen. */
+.body.fadeBottom {
+  padding-bottom: 0;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent calc(100% - 0.125rem));
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent calc(100% - 0.125rem));
+}
+
+/* The narrowest cells give the padding to the content. */
+@container scene (max-width: 20rem) {
+  .body {
+    padding: var(--st-space-2);
+  }
+
+  .body.fadeBottom {
+    padding-bottom: 0;
+  }
+
+  .bar {
+    padding: 0 var(--st-space-3);
+  }
+}
+
+@container scene (min-width: 24rem) {
+  .body {
+    padding: var(--st-space-4);
+  }
+
+  .body.fadeBottom {
+    padding-bottom: 0;
+  }
+}
+
+@container scene (min-width: 30rem) {
+  .body {
+    padding: var(--st-space-5);
+  }
+
+  .body.fadeBottom {
+    padding-bottom: 0;
+  }
+}
+
+/* The pause control of a looping scene: below the panel, so it never covers the UI. */
+.pause {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  min-height: var(--st-control-sm);
+  margin-top: var(--st-space-2);
+  padding: 0 var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg);
+  font-family: var(--st-font-sans);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg);
+  cursor: pointer;
+  transition: border-color var(--st-duration) var(--st-ease), color var(--st-duration) var(--st-ease);
+}
+
+.pause:hover {
+  border-color: var(--st-fg-subtle);
+  color: var(--st-fg-strong);
+}
+
+.pause:focus-visible {
+  outline: var(--st-focus-ring) solid var(--st-accent);
+  outline-offset: 2px;
+}

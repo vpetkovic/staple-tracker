@@ -1,0 +1,115 @@
+.wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-2);
+}
+
+.side {
+  min-width: 0;
+}
+
+.trackers {
+  display: grid;
+  gap: var(--st-space-1);
+}
+
+.tracker {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  height: var(--st-scene-row);
+  padding: 0 var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+  white-space: nowrap;
+}
+
+.board {
+  flex: none;
+  fill: none;
+  stroke: var(--st-fg-subtle);
+  stroke-width: 1.25;
+}
+
+.trackerName {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--st-fg-strong);
+  text-overflow: ellipsis;
+}
+
+.local {
+  font-family: var(--st-font-mono);
+  font-weight: var(--st-weight-regular);
+  color: var(--st-fg-subtle);
+}
+
+/* The bridge: a dashed line, because nothing crosses it yet. Stacked, it runs down. */
+.bridge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--st-space-1);
+}
+
+.dash {
+  width: 0;
+  height: var(--st-space-4);
+  border-left: var(--st-hairline) dashed var(--st-fg-subtle);
+  clip-path: inset(0 0 100% 0);
+  transition: clip-path var(--st-duration-slow) var(--st-ease);
+}
+
+.dash + * + .dash {
+  transition-delay: var(--st-duration-scene);
+}
+
+.bridgeOn .dash {
+  clip-path: inset(0);
+}
+
+.bridgeLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-muted);
+  white-space: nowrap;
+}
+
+/* Side by side: trackers, the bridge running across, staple. */
+@container scene (min-width: 44rem) {
+  .wrap {
+    grid-template-columns: minmax(0, 0.8fr) auto minmax(0, 1fr);
+    gap: var(--st-space-3);
+    align-items: start;
+  }
+
+  .bridge {
+    flex-direction: row;
+    gap: var(--st-space-2);
+    /* Level with the middle row, under the labels. */
+    align-self: center;
+    margin-top: var(--st-space-6);
+  }
+
+  .dash {
+    width: var(--st-space-5);
+    height: 0;
+    border-left: 0;
+    border-top: var(--st-hairline) dashed var(--st-fg-subtle);
+    clip-path: inset(-1px 100% -1px 0);
+  }
+
+  .bridgeOn .dash {
+    clip-path: inset(-1px 0 -1px 0);
+  }
+
+  .bridgeLabel {
+    flex-direction: column;
+    gap: var(--st-space-1);
+  }
+}

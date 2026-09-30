@@ -1,0 +1,144 @@
+.wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-4);
+}
+
+.limits {
+  display: grid;
+  gap: var(--st-space-3);
+}
+
+.limitHead,
+.limitFoot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--st-space-3);
+  white-space: nowrap;
+}
+
+.limitName {
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+}
+
+.limitMeta,
+.reserveNote,
+.used {
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.used {
+  font-variant-numeric: tabular-nums;
+  color: var(--st-fg-muted);
+}
+
+/* The gauge: the window, how much of it is used, and the reserve at its end. */
+.gauge {
+  position: relative;
+  height: 8px;
+  margin: var(--st-space-2) 0 var(--st-space-1);
+  overflow: hidden;
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg-muted);
+  box-shadow: inset 0 0 0 var(--st-hairline) var(--st-border);
+}
+
+.gaugeFill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--st-status-active);
+  transform-origin: left center;
+  transition: transform calc(2 * var(--st-duration-scene)) var(--st-ease);
+}
+
+/* The last 20%: hatched, the part the pace should leave alone. */
+.reserve {
+  position: absolute;
+  inset: 0 0 0 80%;
+  border-left: var(--st-hairline) solid var(--st-fg-subtle);
+  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--st-border-strong) 3px 4px);
+}
+
+.verdict {
+  display: flex;
+}
+
+.estimate {
+  padding: var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+}
+
+.ticket {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  margin-bottom: var(--st-space-3);
+  white-space: nowrap;
+}
+
+.ticketId {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.ticketTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--st-fg-strong);
+  text-overflow: ellipsis;
+}
+
+.bars {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 3.25rem;
+  align-items: center;
+  gap: var(--st-space-2) var(--st-space-2);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+}
+
+.barLabel {
+  color: var(--st-fg-subtle);
+}
+
+.barValue {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--st-fg-strong);
+}
+
+.track {
+  display: block;
+  height: 6px;
+}
+
+.bar {
+  display: block;
+  height: 100%;
+  border-radius: var(--st-radius-full);
+  transform-origin: left center;
+  transition: transform calc(2 * var(--st-duration-scene)) var(--st-ease);
+}
+
+.barEstimate {
+  background: var(--st-status-backlog);
+}
+
+.barActual {
+  background: var(--st-status-done);
+}
+
+@container scene (min-width: 36rem) {
+  .wrap {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    gap: var(--st-space-5);
+    align-items: start;
+  }
+}

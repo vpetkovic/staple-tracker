@@ -1,0 +1,422 @@
+/* ---------- Status glyph ---------- */
+
+.glyph {
+  flex: none;
+  display: block;
+  /* The check and the bar are cut out of the disc in the colour of what is behind it. */
+  --glyph-cut: var(--st-bg);
+}
+
+.cut {
+  stroke: var(--glyph-cut);
+}
+
+.status_backlog {
+  color: var(--st-status-backlog);
+}
+
+.status_ready {
+  color: var(--st-status-ready);
+}
+
+.status_active {
+  color: var(--st-status-active);
+}
+
+.status_review {
+  color: var(--st-status-review);
+}
+
+.status_done {
+  color: var(--st-status-done);
+}
+
+.status_blocked,
+.status_gated {
+  color: var(--st-status-blocked);
+}
+
+.pop {
+  animation: pop var(--st-duration-scene) var(--st-ease) both;
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+
+  60% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ---------- Priority ---------- */
+
+.priority {
+  flex: none;
+  display: block;
+}
+
+.priorityOn {
+  fill: var(--st-fg-muted);
+}
+
+.priorityOff {
+  fill: var(--st-border-strong);
+}
+
+/* ---------- Agent ---------- */
+
+.agent {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-sm);
+  background: var(--st-bg-muted);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: 1;
+  color: var(--st-fg);
+}
+
+/* ---------- Chip ---------- */
+
+.chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-1);
+  height: 1.375rem;
+  padding: 0 var(--st-space-2);
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--st-fg-muted);
+}
+
+.chip.chip_accent {
+  border-color: transparent;
+  background: var(--st-accent-soft);
+  color: var(--st-accent-text);
+}
+
+.chip.chip_info {
+  border-color: transparent;
+  background: var(--st-active-soft);
+  color: var(--st-info);
+}
+
+.chip.chip_warn {
+  border-color: transparent;
+  background: var(--st-warning-soft);
+  color: var(--st-warning);
+}
+
+.chip.chip_danger {
+  border-color: transparent;
+  background: var(--st-danger-soft);
+  color: var(--st-danger);
+}
+
+/* Not shipped yet: a dashed outline, in mono capitals, as on the landing page. */
+.chip.chip_planned {
+  border-style: dashed;
+  background: transparent;
+  font-family: var(--st-font-mono);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-muted);
+}
+
+/* ---------- Rows ---------- */
+
+.list {
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  height: var(--st-scene-row);
+  padding: 0 var(--st-space-3);
+  white-space: nowrap;
+  transition:
+    background-color var(--st-duration-scene) var(--st-ease),
+    opacity var(--st-duration-scene) var(--st-ease);
+}
+
+.row + .row {
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+/* The marker of the row in focus: the web UI's selected-row rule. */
+.row::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--st-accent);
+  opacity: 0;
+  transition: opacity var(--st-duration-scene) var(--st-ease);
+}
+
+.row.rowLit {
+  background: var(--st-accent-soft);
+}
+
+.row.rowLit::before {
+  opacity: 1;
+}
+
+.row.rowChild {
+  padding-left: var(--st-space-6);
+}
+
+.rowHidden > * {
+  opacity: 0;
+  transform: translateY(var(--st-rise));
+}
+
+.row > * {
+  transition:
+    opacity var(--st-duration-scene) var(--st-ease),
+    transform var(--st-duration-scene) var(--st-ease),
+    color var(--st-duration-scene) var(--st-ease);
+}
+
+.rowLead {
+  flex: none;
+  width: 0.75rem;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.rowId {
+  flex: none;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.rowTitle {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--st-fg-strong);
+}
+
+.rowEpic .rowTitle {
+  font-weight: var(--st-weight-medium);
+}
+
+.rowDim .rowTitle {
+  color: var(--st-fg-subtle);
+}
+
+.rowTrail {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+}
+
+/* In a narrow cell the priority bars go first: the identifier and the status say more. */
+@container scene (max-width: 22rem) {
+  .priority {
+    display: none;
+  }
+
+  .row {
+    gap: 0.375rem;
+    padding: 0 0.375rem;
+  }
+
+  .row .rowLead {
+    width: auto;
+  }
+
+  .row .chip {
+    padding: 0 0.3125rem;
+  }
+
+  .row.rowChild {
+    padding-left: var(--st-space-3);
+  }
+}
+
+/* ---------- Label ---------- */
+
+.label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-2);
+  margin-bottom: var(--st-space-2);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-muted);
+  white-space: nowrap;
+}
+
+/* ---------- Reveal and swap ---------- */
+
+.reveal {
+  opacity: 0;
+  transition:
+    opacity var(--st-duration-scene) var(--st-ease),
+    transform var(--st-duration-scene) var(--st-ease);
+}
+
+.revealInline {
+  display: inline-flex;
+  align-items: center;
+}
+
+.from_below {
+  transform: translateY(var(--st-rise));
+}
+
+.from_left {
+  transform: translateX(calc(-1 * var(--st-rise)));
+}
+
+.reveal.on {
+  opacity: 1;
+  transform: none;
+}
+
+.swap {
+  display: inline-grid;
+  align-items: center;
+  justify-items: start;
+}
+
+.swap.swapEnd {
+  justify-items: end;
+}
+
+/* Two sentences that wrap: the swap takes the full width. */
+.swap.swapBlock {
+  display: grid;
+  align-items: start;
+}
+
+.swapBefore,
+.swapAfter {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  transition:
+    opacity var(--st-duration-scene) var(--st-ease),
+    transform var(--st-duration-scene) var(--st-ease);
+}
+
+.swapAfter {
+  opacity: 0;
+  transform: translateY(var(--st-rise));
+}
+
+.swap.on .swapBefore {
+  opacity: 0;
+  transform: translateY(calc(-1 * var(--st-rise)));
+}
+
+.swap.on .swapAfter {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- Meter ---------- */
+
+.meter {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg-muted);
+}
+
+.meterFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left center;
+  transition: transform calc(2 * var(--st-duration-scene)) var(--st-ease);
+}
+
+.meter_accent {
+  background: var(--st-status-done);
+}
+
+.meter_info {
+  background: var(--st-status-active);
+}
+
+.meter_warn {
+  background: var(--st-status-ready);
+}
+
+.meter_neutral {
+  background: var(--st-fg-subtle);
+}
+
+/* ---------- Pointer ---------- */
+
+.pointer {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  pointer-events: none;
+}
+
+.pointerShape {
+  fill: var(--st-fg-strong);
+  stroke: var(--st-bg);
+}
+
+/* ---------- Typed ---------- */
+
+.typed {
+  display: inline-block;
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path calc(var(--typed-chars) * 34ms) steps(var(--typed-chars), end);
+}
+
+.typed.on {
+  clip-path: inset(0 0 0 0);
+}
+
+/* ---------- Wide ---------- */
+
+.wide {
+  display: inline-flex;
+  align-items: center;
+}
+
+@container scene (max-width: 24rem) {
+  .wide {
+    display: none;
+  }
+}

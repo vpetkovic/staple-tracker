@@ -1,0 +1,27 @@
+/* What the agent asks and what it is told: one line in a wide cell, two in a narrow one. */
+.ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-1) var(--st-space-3);
+  margin-bottom: var(--st-space-3);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  white-space: nowrap;
+}
+
+.command {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  color: var(--st-fg-strong);
+}
+
+.prompt {
+  color: var(--st-accent-text);
+}
+
+.answer {
+  color: var(--st-fg-muted);
+}

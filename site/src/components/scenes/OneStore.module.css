@@ -1,0 +1,141 @@
+/* The store at the root, and a branch to every surface that reads and writes it. */
+.store {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  height: 1.75rem;
+  padding: 0 var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+  transition:
+    border-color var(--st-duration-scene) var(--st-ease),
+    background-color var(--st-duration-scene) var(--st-ease);
+}
+
+.store svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.25;
+}
+
+.storeLit {
+  border-color: var(--st-accent);
+  background: var(--st-accent-soft);
+}
+
+.tree {
+  --branch-gap: var(--st-space-5);
+  --branch-inset: var(--st-space-6);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--branch-gap);
+  padding: var(--branch-gap) 0 0 var(--branch-inset);
+}
+
+.branch {
+  position: relative;
+  min-width: 0;
+}
+
+/* The rail down from the store, and the twig across to the surface. */
+.branch::before,
+.branch::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--st-space-3) - var(--branch-inset));
+}
+
+.branch::before {
+  top: calc(-1 * var(--branch-gap));
+  bottom: 0;
+  border-left: var(--st-hairline) solid var(--st-border-strong);
+}
+
+.branch:last-child::before {
+  bottom: 50%;
+}
+
+.branch::after {
+  top: 50%;
+  width: calc(var(--branch-inset) - var(--st-space-3));
+  border-top: var(--st-hairline) solid var(--st-border-strong);
+  transition: border-color var(--st-duration-scene) var(--st-ease);
+}
+
+.branchLit::after {
+  border-color: var(--st-accent);
+}
+
+/* Which surface this is: a small tab on the top edge of its box. */
+.tag {
+  position: absolute;
+  top: calc(-0.5 * var(--st-text-2xs));
+  left: var(--st-space-3);
+  z-index: 1;
+  padding: 0 var(--st-space-1);
+  background: linear-gradient(to bottom, var(--st-bg-subtle) 50%, var(--st-bg) 50%);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  line-height: 1;
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-muted);
+}
+
+.code,
+.ui {
+  transition: border-color var(--st-duration-scene) var(--st-ease);
+}
+
+.code {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-1);
+  padding: var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+}
+
+.ui {
+  padding: var(--st-space-1) 0;
+}
+
+.branchLit .code,
+.branchLit .ui {
+  border-color: var(--st-accent);
+}
+
+.codeLine {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  min-width: 0;
+  color: var(--st-fg-strong);
+  white-space: nowrap;
+}
+
+.output {
+  color: var(--st-fg-muted);
+}
+
+.prompt,
+.done {
+  color: var(--st-accent-text);
+}
+
+.key {
+  color: var(--st-fg-subtle);
+}
+
+.clip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
