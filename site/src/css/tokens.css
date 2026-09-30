@@ -146,6 +146,21 @@
   --st-active-soft: #eff4ff;
   --st-warning-soft: #fdf6e3;
   --st-danger-soft: #fdf1f1;
+  /* The bento landing page (src/components/landing/Bento): a serif display face for
+     its headlines (Fraunces, loaded by that page only) with its own sizes, weight and
+     tracking; the dashed rules of its drafting grid; the glow behind its hero. */
+  --st-font-serif: 'Fraunces Variable', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --st-text-serif-hero: clamp(3.5rem, 2rem + 6.4vw, 7rem);
+  --st-text-serif-2xl: clamp(2.75rem, 1.9rem + 3.6vw, 4.75rem);
+  --st-text-serif-xl: clamp(2.25rem, 1.8rem + 1.6vw, 3rem);
+  --st-text-serif-lg: 1.625rem;
+  --st-weight-serif: 340;
+  --st-tracking-serif: -0.035em;
+  --st-leading-serif: 1.02;
+  --st-rule: #d0d0d6;
+  --st-rule-dash: 8px;
+  --st-glow: rgb(5 150 105 / 0.11);
+  --st-glow-faint: rgb(5 150 105 / 0.05);
 }
 
 [data-theme='dark'] {
@@ -195,4 +210,8 @@
   --st-active-soft: rgb(96 165 250 / 0.12);
   --st-warning-soft: rgb(252 211 77 / 0.1);
   --st-danger-soft: rgb(252 165 165 / 0.1);
+
+  --st-rule: #2e2e35;
+  --st-glow: rgb(52 211 153 / 0.15);
+  --st-glow-faint: rgb(52 211 153 / 0.05);
 }

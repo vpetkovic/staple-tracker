@@ -160,21 +160,24 @@ placeholder.
 
 ### Choosing the landing page
 
-The site has two landing pages, both in `site/src/components/landing/`:
-`Story.tsx` leads with why staple exists and how a plan becomes tickets, and
-`Classic.tsx` is the first landing page, a tour of the features. The
-`LANDING_VARIANT` environment variable decides which one `/` serves: `story` (the
-default when it is unset) or `classic`. Any other value fails the build. The
-other variant stays reachable for comparison: `/story` and `/classic` always
-serve their variant, marked `noindex` and left out of the sitemap.
+The site has three landing pages, all in `site/src/components/landing/`:
+`Story.tsx` leads with why staple exists and how a plan becomes tickets,
+`Classic.tsx` is the first landing page, a tour of the features, and `Bento.tsx`
+is an experiment: serif headlines, a dashed drafting grid and a grid of cells
+that each show one feature with an animated scene. The `LANDING_VARIANT`
+environment variable decides which one `/` serves: `story` (the default when it
+is unset), `classic` or `bento`. Any other value fails the build. Every variant
+stays reachable for comparison: `/story`, `/classic` and `/bento` always serve
+their variant, marked `noindex` and left out of the sitemap.
 
 ```bash
 npm run site:build                          # / serves the story page
 LANDING_VARIANT=classic npm run site:build  # / serves the classic page
+LANDING_VARIANT=bento npm run site:build    # / serves the bento page
 ```
 
 To switch the deployed site, set the repository variable `LANDING_VARIANT`
-(Settings, Secrets and variables, Actions) to `story` or `classic` and run the
+(Settings, Secrets and variables, Actions) to one of those names and run the
 Site workflow again. The workflow passes it to the build the way it passes
 `SITE_URL`; no code change is needed.
 

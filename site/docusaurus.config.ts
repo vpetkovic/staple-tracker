@@ -14,11 +14,12 @@ const url = (process.env.SITE_URL || 'https://example.com').replace(/\/+$/, '');
 const baseUrl = '/';
 
 // Which landing page `/` serves: `story` (the default) leads with why staple
-// exists; `classic` is the first landing page. LANDING_VARIANT picks one at build
+// exists; `classic` is the first landing page; `bento` is an experiment with serif
+// headlines and a grid of animated scenes. LANDING_VARIANT picks one at build
 // time, and the deploy workflow passes the LANDING_VARIANT repository variable
-// through, so switching needs no code change. Both stay reachable at /story and
-// /classic, marked noindex, for comparison.
-const landingVariants = ['story', 'classic'] as const;
+// through, so switching needs no code change. Each stays reachable at its own
+// address (/story, /classic, /bento), marked noindex, for comparison.
+const landingVariants = ['story', 'classic', 'bento'] as const;
 const landingVariant = process.env.LANDING_VARIANT || 'story';
 if (!(landingVariants as readonly string[]).includes(landingVariant)) {
   throw new Error(`LANDING_VARIANT must be one of ${landingVariants.join(', ')}; got "${landingVariant}"`);
@@ -107,7 +108,7 @@ const config: Config = {
         blog: false,
         // The comparison copies of the landing page and the scene review page are
         // noindex, so they stay out of the sitemap.
-        sitemap: {ignorePatterns: ['/story', '/classic', '/scenes']},
+        sitemap: {ignorePatterns: ['/story', '/classic', '/bento', '/scenes']},
         theme: {
           // Fonts first, then the tokens, then the chrome that reads them.
           customCss: [

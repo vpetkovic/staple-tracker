@@ -1,6 +1,6 @@
 # Site primitives
 
-The building blocks for marketing pages (`src/pages`, and the two landing pages in `landing/`: see "Choosing the landing page" in CONTRIBUTING.md), and the animated scenes those pages show features with (see "Scenes" below). Docs pages do not use
+The building blocks for marketing pages (`src/pages`, and the landing pages in `landing/`: see "Choosing the landing page" in CONTRIBUTING.md), and the animated scenes those pages show features with (see "Scenes" below). Docs pages do not use
 them: they are Markdown from `../docs`, styled by `src/css/custom.css`.
 
 Colours, type, spacing, radii, control sizes, durations and fonts come from
@@ -104,6 +104,22 @@ To add a scene:
    nothing the docs do not. An integration that is not shipped carries the Planned chip.
 6. Add it to `scenes/catalog.ts` and `scenes/index.ts`, then look at it on `/scenes` at
    every width, in both themes, and with reduced motion.
+
+## The bento landing page
+
+`landing/Bento.tsx` is the one page with a serif display face (Fraunces, SIL Open Font
+License 1.1, from `@fontsource-variable/fraunces`). Its `@font-face` rules are in
+`Bento.module.css` and the page preloads the two files itself, so no other page
+downloads them: keep `--st-font-serif` out of shared components. The page's pieces:
+
+- The hero's ticket chips (`CHIPS`) drift only while `data-motion="on"`, which the page
+  sets after it has loaded in a browser that did not ask for reduced motion. The Pause
+  button holds the chips and the changing word; out of view they hold too.
+- The sheet draws the dashed vertical rules once, at the column boundaries (3, 5 and 4
+  of 12 from 1280 px, two equal columns from 768 px, the two edges on a phone). A band
+  is one row of that grid; `tick` puts the solid mark on a heading.
+- `Cell` is one feature: a serif title, two lines and a scene inside `fragment`, which
+  cuts the scene's lower edge off (`cut="row"` cuts a whole row).
 
 ## Rules
 
