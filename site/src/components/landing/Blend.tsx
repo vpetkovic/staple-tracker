@@ -1,0 +1,438 @@
+import {Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
+import clsx from 'clsx';
+import Link from '@docusaurus/Link';
+import Layout from '@theme/Layout';
+import Button, {ButtonRow} from '@site/src/components/Button';
+import CopyCommand from '@site/src/components/CopyCommand';
+import {StatusGlyph, TrackerSync} from '@site/src/components/scenes';
+import CompareTable, {Planned} from './parts/CompareTable';
+import Faq from './parts/Faq';
+import Install from './parts/Install';
+import PlanFolder from './parts/PlanFolder';
+import SerifFont from './parts/SerifFont';
+import Steps from './parts/Steps';
+import TicketChips, {PauseButton, fromBottom, useDrift, type ChipSpec} from './parts/TicketChips';
+import {CHAPTERS, DESCRIPTION, FACTS, REPOSITORY, TITLE, type ChapterSpec, type FeatureSpec} from './parts/content';
+import styles from './Blend.module.css';
+
+// The blend landing page: one drawing sheet read in order. Every band has a legend on
+// the left (a mono eyebrow and a serif heading) and its content on the right. In the
+// walk-through the legend is the feature index: it stays in view while the stage beside
+// it shows one feature at a time, with the one scene that belongs to it. The three
+// steps are the spine: the strip under the hero, the groups of the index, and the
+// kicker of every feature. The story and its terms follow docs/why-staple.md and the
+// story landing page.
+
+// Tickets of the docs' example epic (Multi-tenancy, prefix APP), as the web UI would
+// list them, and where each sits: to the right of the copy from 1280 px, and below that
+// in a band above the copy and one below it, measured from the hero's edges.
+const CHIPS: ChipSpec[] = [
+  {id: 'APP-9', title: 'Audit log per tenant', status: 'backlog', depth: 3, at: ['61%', '11%'], tablet: ['16%', '7.75rem'], drift: [-20, -12], seconds: 27, leaves: 'middle'},
+  {id: 'APP-12', title: 'Rotate API keys per tenant', status: 'review', depth: 2, at: ['87%', '15%'], tablet: ['74%', '2.75rem'], drift: [-28, 12], seconds: 24, leaves: 'late'},
+  {id: 'APP-2', title: 'Tenant id on every table', status: 'active', depth: 1, at: ['69%', '27%'], tablet: ['30%', '4.25rem'], phone: ['38%', '2.75rem'], drift: [40, -16], seconds: 19, leaves: 'late'},
+  {id: 'APP-3', title: 'Scope queries by tenant', status: 'backlog', depth: 1, at: ['85%', '41%'], tablet: ['68%', '6.75rem'], phone: ['60%', '5.5rem'], drift: [-36, 12], seconds: 22, leaves: 'early'},
+  {id: 'APP-7', title: 'Backfill tenant_id on invoices', status: 'done', depth: 2, at: ['65%', '50%'], drift: [26, 12], seconds: 23, leaves: 'early'},
+  {id: 'APP-5', title: 'Tenant-aware rate limits', status: 'ready', depth: 1, at: ['78%', '62%'], tablet: ['26%', fromBottom(6.5)], phone: ['38%', fromBottom(7.25)], drift: [-34, -14], seconds: 21, leaves: 'middle'},
+  {id: 'APP-4', title: 'Tenant-aware billing', status: 'blocked', depth: 2, at: ['91%', '73%'], drift: [-22, -12], seconds: 26, leaves: 'middle'},
+  {id: 'APP-8', title: 'Tenant switcher in the admin', status: 'gated', depth: 1, at: ['68%', '80%'], tablet: ['62%', fromBottom(4.25)], phone: ['58%', fromBottom(4.5)], drift: [34, -18], seconds: 20, leaves: 'late'},
+  {id: 'APP-11', title: 'Index tenant_id on payments', status: 'done', depth: 3, at: ['84%', '91%'], drift: [-24, -8], seconds: 28, leaves: 'early'},
+  {id: 'APP-10', title: 'Remove the global admin query', status: 'backlog', depth: 3, at: ['56%', '93%'], tablet: ['84%', fromBottom(8)], drift: [22, -10], seconds: 25, leaves: 'late'},
+];
+
+function Arrow(): ReactNode {
+  return (
+    <span className={styles.arrow} aria-hidden="true">
+      →
+    </span>
+  );
+}
+
+function Hero(): ReactNode {
+  const {ref, allowed, motion, paused, togglePaused} = useDrift();
+  return (
+    <section ref={ref} className={styles.hero}>
+      <TicketChips chips={CHIPS} motion={motion} />
+      <div className={styles.heroCopy}>
+        <p className={styles.eyebrow}>Local-first task tracker for coding agents</p>
+        <h1 className={styles.heroTitle}>
+          <span className={styles.line}>From plan</span> <span className={styles.line}>
+            to <em>done</em>.
+          </span>
+        </h1>
+        <p className={styles.heroLead}>
+          staple turns an implementation plan into an epic and tickets that carry the whole context. Agents work them
+          one by one, and a new session picks up where a dead one stopped.
+        </p>
+        <ButtonRow>
+          <CopyCommand command="npx staple-cli" />
+          <Button to="/docs/getting-started" variant="secondary" size="lg">
+            Get started
+          </Button>
+        </ButtonRow>
+        <p className={styles.fineprint}>Node 22.5 or later. One SQLite file per repository.</p>
+      </div>
+      {allowed && <PauseButton paused={paused} onToggle={togglePaused} className={styles.pause} />}
+    </section>
+  );
+}
+
+type TourFeature = FeatureSpec & {chapter: ChapterSpec; step: number};
+
+// The nine features in one list, each knowing the step it belongs to.
+const FEATURES: TourFeature[] = CHAPTERS.flatMap((chapter, c) => chapter.features.map((feature) => ({...feature, chapter, step: c + 1})));
+
+const two = (n: number): string => String(n).padStart(2, '0');
+
+/** A line of a headline, with the feature's accent words in italic. */
+function accented(line: string, accent: string): ReactNode {
+  const at = line.indexOf(accent);
+  if (at < 0) return line;
+  return (
+    <>
+      {line.slice(0, at)}
+      <em>{accent}</em>
+      {line.slice(at + accent.length)}
+    </>
+  );
+}
+
+// When the walk-through is a pinned frame: a screen wide and tall enough for the index,
+// the copy and the scene side by side, in a browser that runs scripts. The stylesheet
+// lays the frame out under the same query, so the page and its script always agree, and
+// a browser that does not know `scripting` gets the plain layout from both.
+const PINNED = '(min-width: 1024px) and (min-height: 640px) and (scripting: enabled)';
+
+/**
+ * The walk-through. Its markup is a list of nine sections in reading order, which is
+ * what a phone shows. Where `PINNED` matches, the stylesheet turns it into a tall track
+ * with a frame pinned under the navbar: the scroll position picks the feature, the
+ * index marks it, and only that feature's section shows. The index is then a vertical
+ * tablist and the sections are its panels.
+ */
+function Tour(): ReactNode {
+  const [pinned, setPinned] = useState(false);
+  const [active, setActive] = useState(0);
+  const track = useRef<HTMLElement | null>(null);
+  const frame = useRef<HTMLDivElement | null>(null);
+  const tabs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const count = FEATURES.length;
+
+  useEffect(() => {
+    const query = window.matchMedia(PINNED);
+    const update = () => setPinned(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  /** Where the track is: how far the page has scrolled into it, and how far it can. */
+  const measure = useCallback(() => {
+    const node = track.current;
+    const pin = frame.current;
+    if (!node || !pin) return null;
+    const rect = node.getBoundingClientRect();
+    const top = Number.parseFloat(window.getComputedStyle(pin).top) || 0;
+    return {into: top - rect.top, span: rect.height - pin.offsetHeight};
+  }, []);
+
+  // The scroll position picks the feature.
+  useEffect(() => {
+    if (!pinned) {
+      setActive(0);
+      return undefined;
+    }
+    let waiting = 0;
+    const read = () => {
+      waiting = 0;
+      const at = measure();
+      if (!at || at.span <= 0) return;
+      setActive(Math.min(count - 1, Math.max(0, Math.floor((at.into / at.span) * count))));
+    };
+    const onScroll = () => {
+      if (!waiting) waiting = window.requestAnimationFrame(read);
+    };
+    read();
+    window.addEventListener('scroll', onScroll, {passive: true});
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+      if (waiting) window.cancelAnimationFrame(waiting);
+    };
+  }, [pinned, measure, count]);
+
+  /** Show a feature: the page moves to its place in the track, which the pinned frame hides. */
+  const select = useCallback(
+    (i: number, focus = false) => {
+      const at = measure();
+      if (!at) return;
+      const to = window.scrollY - at.into + ((i + 0.5) / count) * at.span;
+      window.scrollTo({top: to, behavior: 'instant'});
+      setActive(i);
+      if (focus) tabs.current[i]?.focus({preventScroll: true});
+    },
+    [measure, count],
+  );
+
+  // A link to a feature (`/blend#handoff`) opens on that feature.
+  useEffect(() => {
+    if (!pinned) return undefined;
+    const open = () => {
+      const i = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
+      if (i >= 0) select(i);
+    };
+    open();
+    window.addEventListener('hashchange', open);
+    return () => window.removeEventListener('hashchange', open);
+  }, [pinned, select]);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLAnchorElement>, i: number) => {
+    const to = {ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: count - 1}[event.key];
+    if (to === undefined) return;
+    event.preventDefault();
+    select(Math.min(count - 1, Math.max(0, to)), true);
+  };
+
+  return (
+    <section ref={track} className={clsx(styles.band, styles.tour, styles.pins)} aria-labelledby="blend-tour">
+      <div ref={frame} className={styles.frame}>
+        <div className={styles.index}>
+          <div className={styles.indexHead}>
+            <p className={styles.eyebrow}>The walk-through</p>
+            <h2 id="blend-tour" className={clsx(styles.title, styles.tick, styles.indexTitle)}>
+              One feature at a <em>time</em>.
+            </h2>
+            <p className={styles.indexLede}>Nine features, in the order a plan meets them.</p>
+          </div>
+          <nav className={styles.indexNav} aria-label="Features">
+            <div className={styles.tabs} role={pinned ? 'tablist' : undefined} aria-orientation={pinned ? 'vertical' : undefined} aria-label={pinned ? 'Features' : undefined}>
+              {FEATURES.map((feature, i) => (
+                <Fragment key={feature.id}>
+                  {feature.id === feature.chapter.features[0].id && (
+                    <p className={styles.group} aria-hidden={pinned || undefined}>
+                      <span className={styles.groupNumber}>{two(feature.step)}</span>
+                      <span className={styles.groupTitle}>{feature.chapter.title}</span>
+                      <StatusGlyph status={feature.chapter.status} className={styles.groupGlyph} />
+                    </p>
+                  )}
+                  <a
+                    ref={(node) => {
+                      tabs.current[i] = node;
+                    }}
+                    id={`blend-tab-${feature.id}`}
+                    href={`#${feature.id}`}
+                    className={clsx(styles.tab, i === active && styles.tabOn)}
+                    role={pinned ? 'tab' : undefined}
+                    aria-selected={pinned ? i === active : undefined}
+                    aria-controls={pinned ? feature.id : undefined}
+                    tabIndex={pinned && i !== active ? -1 : undefined}
+                    onClick={
+                      pinned
+                        ? (event) => {
+                            event.preventDefault();
+                            select(i);
+                          }
+                        : undefined
+                    }
+                    onKeyDown={pinned ? (event) => onKeyDown(event, i) : undefined}>
+                    {feature.pill}
+                  </a>
+                </Fragment>
+              ))}
+            </div>
+          </nav>
+          <p className={styles.counter} aria-hidden="true">
+            <span className={styles.counterNow}>{two(active + 1)}</span> / {two(count)}
+          </p>
+        </div>
+
+        <div className={styles.features}>
+          {FEATURES.map((feature, i) => (
+            <section
+              key={feature.id}
+              id={feature.id}
+              className={clsx(styles.feature, i === active && styles.featureOn)}
+              role={pinned ? 'tabpanel' : undefined}
+              aria-labelledby={pinned ? `blend-tab-${feature.id}` : undefined}>
+              <div className={styles.featureHead}>
+                <p className={styles.kicker}>
+                  <span className={styles.kickerStep}>
+                    Step {feature.step}: {feature.chapter.title}
+                  </span>
+                  <span className={styles.pill}>{feature.pill}</span>
+                </p>
+                <h3 className={styles.featureTitle}>
+                  <span className={styles.line}>{accented(feature.title[0], feature.accent)}</span>{' '}
+                  <span className={styles.line}>{accented(feature.title[1], feature.accent)}</span>
+                </h3>
+              </div>
+              <div className={styles.featureScene}>
+                {/* A feature that comes on stage plays its scene from the start. */}
+                <Fragment key={i === active ? 'on' : 'off'}>{feature.scene}</Fragment>
+              </div>
+              <div className={styles.featureText}>
+                {feature.body && <p className={styles.body}>{feature.body}</p>}
+                {feature.points && (
+                  <ul className={styles.points}>
+                    {feature.points.map((point, p) => (
+                      <li key={p}>{point}</li>
+                    ))}
+                  </ul>
+                )}
+                <Link to={feature.link.to} className={styles.more}>
+                  {feature.link.label}
+                  <Arrow />
+                </Link>
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export default function Blend(): ReactNode {
+  return (
+    <Layout title={TITLE} description={DESCRIPTION}>
+      {/* The serif face belongs to this page and the bento page: fetched early here, never on another page. */}
+      <SerifFont />
+      <main className={styles.page}>
+        <div className={styles.top}>
+          <Hero />
+        </div>
+
+        <div className={styles.sheet}>
+          <section className={clsx(styles.band, styles.start)} aria-labelledby="blend-steps">
+            <div className={styles.legend}>
+              <p className={styles.eyebrow}>What it is</p>
+              <p className={styles.statement}>
+                staple is a local-first task tracker for coding agents: one SQLite file per repository, next to your
+                team’s tracker.
+              </p>
+            </div>
+            <div className={styles.startSteps}>
+              <h2 id="blend-steps" className={styles.hidden}>
+                From plan to done in three steps
+              </h2>
+              <Steps className={styles.steps} />
+            </div>
+          </section>
+
+          <section className={clsx(styles.band, styles.split)} aria-labelledby="blend-problem">
+            <div className={styles.legend}>
+              <p className={styles.eyebrow}>The problem</p>
+              <h2 id="blend-problem" className={clsx(styles.title, styles.tick)}>
+                A folder of plans is <em>not</em> a backlog.
+              </h2>
+            </div>
+            <div className={styles.prose}>
+              <p>
+                Every brainstorm and implementation plan becomes a Markdown file, and the files point at each other.
+                Checkboxes drift because an agent forgot to tick them, and work found halfway through goes into
+                whichever file was open.
+              </p>
+              <p>
+                Then a session ends in the middle of a feature: the five-hour limit, the weekly quota, a closed
+                terminal. The next one rereads the files, guesses where things stand, and asks you.
+              </p>
+              <Link to="/docs/why-staple" className={styles.more}>
+                Why staple
+                <Arrow />
+              </Link>
+            </div>
+            <div className={styles.figure}>
+              <div className={styles.fragment}>
+                <PlanFolder />
+              </div>
+            </div>
+          </section>
+
+          <Tour />
+
+          <section className={clsx(styles.band, styles.split, styles.alongside)} aria-labelledby="blend-alongside">
+            <div className={styles.legend}>
+              <p className={styles.eyebrow}>Next to Linear, GitHub and ClickUp</p>
+              <h2 id="blend-alongside" className={clsx(styles.title, styles.tick)}>
+                Keep your team’s board. Give agents <em>their own</em>.
+              </h2>
+            </div>
+            <div className={styles.prose}>
+              <p>
+                staple does not replace your team’s tracker. It is the execution layer: the place where agents do the
+                work, locally, ticket by ticket. Your team’s board stays where people plan, discuss and report.
+              </p>
+              <p>
+                <Planned />
+                Integrations that keep the two in sync, with GitHub Issues, ClickUp and Linear, are planned, not
+                shipped. Today staple does not read from or write to any of them: use it alongside them and carry
+                items across yourself.
+              </p>
+            </div>
+            <div className={styles.figure}>
+              <TrackerSync fade="none" />
+            </div>
+            <div className={styles.compare}>
+              <CompareTable />
+            </div>
+          </section>
+
+          <section className={clsx(styles.band, styles.split, styles.underneath)} aria-labelledby="blend-underneath">
+            <div className={styles.legend}>
+              <p className={styles.eyebrow}>Underneath</p>
+              <h2 id="blend-underneath" className={clsx(styles.title, styles.tick)}>
+                Small enough to carry. <em>Strict</em> where it counts.
+              </h2>
+              <p className={styles.legendText}>
+                The rules are enforced by the store, not by a prompt, so they hold for every agent and every person.
+              </p>
+            </div>
+            <dl className={styles.facts}>
+              {FACTS.map((fact) => (
+                <div key={fact.value} className={styles.fact}>
+                  <dt className={styles.factLabel}>{fact.label}</dt>
+                  <dd className={styles.factValue}>{fact.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          <section className={clsx(styles.band, styles.faq)} aria-labelledby="blend-faq">
+            <div className={styles.legend}>
+              <div className={styles.legendSticky}>
+                <p className={styles.eyebrow}>FAQ</p>
+                <h2 id="blend-faq" className={clsx(styles.title, styles.tick)}>
+                  Questions, <em>answered</em>.
+                </h2>
+                <p className={styles.legendText}>The short answers. Each one ends at the page of the docs that has the long one.</p>
+              </div>
+            </div>
+            <div className={styles.faqBody}>
+              <Faq className={styles.faqList} linkClassName={styles.more} linkMark={<Arrow />} />
+            </div>
+          </section>
+
+          <section className={clsx(styles.band, styles.closing)} aria-labelledby="blend-install">
+            <p className={styles.eyebrow}>Get started</p>
+            <h2 id="blend-install" className={styles.closingTitle}>
+              Move the plan <em>out of</em> Markdown.
+            </h2>
+            <Install />
+            <p className={styles.closingLead}>
+              One command sets up the repository and opens the web UI. Your agents connect over MCP. Node 22.5 or
+              later, one SQLite file per repository.
+            </p>
+            <div className={styles.closingActions}>
+              <Button to="/docs/getting-started" size="lg">
+                Get started
+              </Button>
+              <Button to={REPOSITORY} variant="secondary" size="lg">
+                View on GitHub
+              </Button>
+            </div>
+          </section>
+        </div>
+      </main>
+    </Layout>
+  );
+}

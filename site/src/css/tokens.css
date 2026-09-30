@@ -175,6 +175,13 @@
   --st-tracking-heavy: -0.04em;
   --st-leading-heavy: 1.02;
   --st-radius-xl: 20px;
+  /* The blend landing page (src/components/landing/Blend): the serif heading of a
+     band's legend column, which follows the screen; the serif headline of a feature,
+     which follows its column, so it keeps its two lines; and how far the page scrolls
+     for one feature where the walk-through is pinned. */
+  --st-text-serif-legend: clamp(2.125rem, 0.6rem + 2.6vw, 3rem);
+  --st-text-serif-feature: clamp(1.625rem, 9.6cqw, 2.75rem);
+  --st-tour-step: min(60vh, 34rem);
 }
 
 [data-theme='dark'] {

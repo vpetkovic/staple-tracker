@@ -10,8 +10,9 @@ import styles from './Steps.module.css';
  * Stacked on a phone, three across from 768 px. The step titles are not headings.
  *
  * A page restyles it with custom properties on the list (`className`): `--steps-outset`
- * (how far it reaches into the gutter), `--steps-radius`, `--steps-line` (the border and
- * the dividers), `--steps-ground`, and `--steps-title-font`, `--steps-title-weight`,
+ * (how far it reaches into the gutter), `--steps-pad` (a step's inset), `--steps-radius`,
+ * `--steps-frame` (the border), `--steps-line` and `--steps-line-style` (the dividers),
+ * `--steps-ground`, and `--steps-title-font`, `--steps-title-weight`,
  * `--steps-title-tracking` for the titles.
  */
 export default function Steps({className}: {className?: string}): ReactNode {

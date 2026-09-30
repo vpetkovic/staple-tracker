@@ -11,7 +11,7 @@
   margin: 0 var(--steps-outset, 0);
   padding: 0;
   overflow: hidden;
-  border: var(--st-hairline) solid var(--steps-line, var(--st-border));
+  border: var(--st-hairline) solid var(--steps-frame, var(--st-border));
   border-radius: var(--steps-radius, var(--st-radius-xl));
   background: var(--steps-ground, var(--st-bg-subtle));
   list-style: none;
@@ -21,11 +21,11 @@
   display: grid;
   grid-row: span 3;
   grid-template-rows: subgrid;
-  padding: var(--st-space-6) var(--st-space-6) var(--st-space-8);
+  padding: var(--st-space-6) var(--steps-pad, var(--st-space-6)) var(--st-space-8);
 }
 
 .step + .step {
-  border-top: var(--st-hairline) solid var(--steps-line, var(--st-border));
+  border-top: var(--st-hairline) var(--steps-line-style, solid) var(--steps-line, var(--st-border));
 }
 
 .stepTop {
@@ -73,14 +73,14 @@
 
   .steps .step + .step {
     border-top: 0;
-    border-left: var(--st-hairline) solid var(--steps-line, var(--st-border));
+    border-left: var(--st-hairline) var(--steps-line-style, solid) var(--steps-line, var(--st-border));
   }
 }
 
 /* Three steps across a tablet: each title keeps one line. */
 @media (min-width: 768px) and (max-width: 996.98px) {
   .steps .step {
-    padding-inline: var(--st-space-4);
+    padding-inline: var(--steps-pad, var(--st-space-4));
   }
 
   .steps .stepTitle {
