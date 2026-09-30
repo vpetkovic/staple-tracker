@@ -472,13 +472,17 @@ export default function Bento(): ReactNode {
 
           <section className={clsx(styles.band, styles.underneath)} aria-labelledby="bento-underneath">
             <div className={styles.lede}>
-              <p className={styles.eyebrow}>Underneath</p>
-              <h2 id="bento-underneath" className={clsx(styles.title, styles.tick)}>
-                Small enough to carry. <em>Strict</em> where it counts.
-              </h2>
-              <p className={styles.ledeText}>
-                The rules are enforced by the store, not by a prompt, so they hold for every agent and every person.
-              </p>
+              <div className={styles.ledeSplit}>
+                <div>
+                  <p className={styles.eyebrow}>Underneath</p>
+                  <h2 id="bento-underneath" className={clsx(styles.title, styles.tick)}>
+                    Small enough to carry. <em>Strict</em> where it counts.
+                  </h2>
+                </div>
+                <p className={styles.ledeText}>
+                  The rules are enforced by the store, not by a prompt, so they hold for every agent and every person.
+                </p>
+              </div>
             </div>
             <dl className={styles.facts}>
               {FACTS.map((fact) => (
