@@ -1,6 +1,7 @@
-import {Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
+import {Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode} from 'react';
 import {flushSync} from 'react-dom';
 import clsx from 'clsx';
+import Head from '@docusaurus/Head';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import Button, {ButtonRow} from '@site/src/components/Button';
@@ -102,24 +103,35 @@ function accented(line: string, accent: string): ReactNode {
 // When the walk-through is a pinned frame: a landscape screen wide and tall enough for
 // the index, the copy and the scene side by side, and not so tall that one feature would
 // be lost in it. The heights are in `em`, which a media query reads as the reader's own
-// font size, because the frame's content grows with it. The stylesheet lays the frame
-// out under the same query, and only on the class this component sets once it runs:
-// without the script, the features flow down the page.
-// The frame is as tall as the small viewport (`svh`): a browser without that unit keeps
-// the plain layout.
+// font size, because the frame's content grows with it. The frame is as tall as the
+// small viewport (`svh`): a browser without that unit keeps the plain layout.
 const PINNED = '(min-width: 1024px) and (min-width: 64em) and (min-height: 40em) and (max-height: 100em) and (orientation: landscape)';
 
-// Whether this document has shown the walk-through before. The first time, the page is
-// hydrating the server's HTML, which has the plain layout, and it may be a reload that
-// the browser scrolls back itself. When the reader comes back to the page within the
-// site, it is laid out pinned from the start, so the browser puts the scroll position
-// back in the layout it was saved in.
-let arrived = false;
+// The attribute on the root element that pins the frame: the stylesheet lays it out when
+// the attribute is there and the query above matches. This component keeps it in step.
+const PIN = 'data-blend-pinned';
 
 /** Whether the walk-through is pinned on this screen. */
 function pins(): boolean {
   return typeof CSS !== 'undefined' && CSS.supports('height', '100svh') && window.matchMedia(PINNED).matches;
 }
+
+// The script in the page's head sets the attribute before the first paint, so a reload
+// is laid out as it was and the browser puts the scroll position back in that layout.
+// Not on a fresh visit to an address that names a feature or a piece of text: the
+// browser then scrolls to it, and it is in the flow of the page only in the plain
+// layout; this component opens the feature once it runs, unless the reader has moved on
+// by then (which the script notes). If this component has not run a few seconds later (its
+// script did not load), the plain layout comes back, where every feature is reachable.
+const EARLY = `(function(){try{
+['wheel','touchstart','keydown'].forEach(function(t){addEventListener(t,function(){window.__blendMoved=true;},{capture:true,passive:true,once:true});});
+if(!(window.CSS&&CSS.supports('height','100svh')&&matchMedia(${JSON.stringify(PINNED)}).matches))return;
+var n=performance.getEntriesByType&&performance.getEntriesByType('navigation')[0];
+var again=n&&(n.type==='reload'||n.type==='back_forward');
+if(!again&&(${JSON.stringify(FEATURES.map((feature) => `#${feature.id}`))}.indexOf(location.hash)>=0||/:~:/.test(n&&n.name||'')))return;
+var root=document.documentElement;root.setAttribute('${PIN}','');
+setTimeout(function(){if(!window.__blendTour)root.removeAttribute('${PIN}');},6000);
+}catch(e){}})();`;
 
 /** True when the page was reloaded or reached through the history: the browser puts the scroll position back itself. */
 function restored(): boolean {
@@ -127,6 +139,10 @@ function restored(): boolean {
   const type = (entry as PerformanceNavigationTiming | undefined)?.type;
   return type === 'reload' || type === 'back_forward';
 }
+
+// Whether this document has shown the walk-through before. When the reader comes back
+// to the page within the site, it is laid out pinned from its first render.
+let arrived = false;
 
 /**
  * Where the reader is: at one of the walk-through's features, or past it, at a band of
@@ -140,7 +156,8 @@ type Place = {feature: number} | {band: number; offset: number};
  * what a phone shows. Where `PINNED` matches, it becomes a tall track with a frame
  * pinned under the navbar: the scroll position picks the feature, the index marks it,
  * and only that feature's section shows. The index is then a vertical tablist and the
- * sections are its panels.
+ * sections are its panels. Each feature then has an anchor in the track, at the place
+ * the page scrolls to for it, so a link to a feature (`#handoff`) needs no script.
  */
 function Tour(): ReactNode {
   const [pinned, setPinned] = useState(() => arrived && pins());
@@ -151,14 +168,13 @@ function Tour(): ReactNode {
   const panels = useRef<(HTMLElement | null)[]>([]);
   // What is on the page now, for the handlers that outlive a render.
   const now = useRef({pinned, active: 0});
-  // Set when the page was opened by a link to a feature and is pinned from the start.
-  const fromLink = useRef(false);
   // Where the reader is, read on every scroll while the layout is at rest; and where they
   // were before the layout changed, kept until the new layout is in place.
   const last = useRef<Place | null>(null);
   const place = useRef<Place | null>(null);
   // A feature the browser has just found a match in, and until when it is kept on stage.
   const held = useRef<{feature: number; until: number} | null>(null);
+  const synced = useRef(false);
   const count = FEATURES.length;
 
   /** Where the reader is: null while the walk-through has not reached the middle of the screen. */
@@ -171,7 +187,6 @@ function Tour(): ReactNode {
     // Once the band after the walk-through is on the screen, that band is what the reader
     // keeps their place by.
     if (rect.bottom < window.innerHeight) {
-      // The band at the top of the screen, so the one being read stays where it is.
       const bands = Array.from(node.parentElement?.children ?? []);
       const band = bands.findIndex((child, i) => i > bands.indexOf(node) && child.getBoundingClientRect().bottom > 0);
       if (band < 0) return null;
@@ -183,32 +198,32 @@ function Tour(): ReactNode {
   }, []);
 
   useEffect(() => {
+    const page = window as Window & {__blendTour?: boolean; __blendMoved?: boolean};
+    page.__blendTour = true;
+    const first = !arrived;
+    arrived = true;
+    if (!pins()) document.documentElement.removeAttribute(PIN);
     const query = window.matchMedia(PINNED);
     const update = () => {
       const next = pins();
       if (next === now.current.pinned) return;
-      // The two layouts differ in height by more than a screen, and by the time a media
-      // query reports a change the stylesheet has already let go of the frame: the place
-      // to put the reader back at is the one read on the last scroll.
-      place.current = last.current;
-      // The browser's own scroll anchoring would move the page again after this component
-      // has put the reader back: it is off until the new layout has been painted.
-      document.documentElement.style.overflowAnchor = 'none';
+      // Was the frame pinned on the screen? The script in the head may have pinned it before
+      // this component ran. Where the layout changes, the reader is put back at the place
+      // read on the last scroll (by the time a media query reports a change, the stylesheet
+      // has already let go of the frame), and the browser's own scroll anchoring, which
+      // would move the page again afterwards, is off until the new layout has been painted.
+      const laidOut = now.current.pinned || document.documentElement.hasAttribute(PIN);
+      if (next !== laidOut) {
+        place.current = last.current;
+        document.documentElement.style.overflowAnchor = 'none';
+      }
       setPinned(next);
     };
-    // An address that names a feature (`/blend#handoff`) opens on that feature, as the
-    // router goes to the element an address names. The browser would otherwise put back a
-    // scroll position for it after the feature is on stage, measured in whichever layout
-    // it was saved in, so it is told not to (scroll restoration is kept per address). On
-    // the first load of the address, the reader may have scrolled on before this ran: then
-    // they stay where they are.
-    const linked = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
-    const there = linked >= 0 && Math.abs(panels.current[linked]?.getBoundingClientRect().top ?? Infinity) < window.innerHeight / 2;
-    const again = arrived || window.history.scrollRestoration === 'manual';
-    fromLink.current = pins() && linked >= 0 && (again || (!restored() && there));
-    arrived = true;
-    if (linked >= 0) window.history.scrollRestoration = 'manual';
     last.current = locate();
+    // A fresh visit to an address that names a feature opens on it, unless the reader has
+    // moved on before this ran.
+    const linked = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
+    if (first && linked >= 0 && !restored() && !page.__blendMoved) last.current = {feature: linked};
     update();
     query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
@@ -292,45 +307,27 @@ function Tour(): ReactNode {
     };
   }, [pinned, measure, select, locate, count]);
 
-  // A link to a feature (`/blend#handoff`) opens on that feature: when the page is opened
-  // by that link, and whenever the hash changes after that.
-  useEffect(() => {
-    if (!pinned) return undefined;
-    const open = () => {
-      const i = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
-      if (i < 0) return;
-      // Until the page has loaded, the browser may scroll to the element the address names
-      // once more, as if the frame were not pinned: the feature is kept on stage till then.
-      const loading = document.readyState !== 'complete';
-      held.current = {feature: i, until: window.performance.now() + (loading ? 1500 : 150)};
-      select(i);
-    };
-    const loaded = () => {
-      if (held.current) held.current.until = Math.min(held.current.until, window.performance.now() + 150);
-    };
-    if (fromLink.current) open();
-    fromLink.current = false;
-    window.addEventListener('hashchange', open);
-    window.addEventListener('load', loaded);
-    return () => {
-      window.removeEventListener('hashchange', open);
-      window.removeEventListener('load', loaded);
-    };
-  }, [pinned, select]);
-
   useIsomorphicLayoutEffect(() => {
     const before = now.current;
+    const first = !synced.current;
+    synced.current = true;
     now.current = {pinned, active};
+    // The attribute follows the layout. On the first render, a page that hydrates the
+    // server's HTML leaves it as the script in the head set it, until the check above has
+    // run.
+    const root = document.documentElement;
+    if (pinned) root.setAttribute(PIN, '');
+    else if (!first) root.removeAttribute(PIN);
     const moved = pinned && before.active !== active;
     const inPanel = moved && Boolean(panels.current[before.active]?.contains(document.activeElement));
     const onTab = moved && tabs.current[before.active] === document.activeElement;
 
-    // The features that are not showing stay in the page for the browser's find-in-page
-    // (`hidden="until-found"`, which React does not write, so it is set here): a match in
-    // one of them shows that feature. They are left unrendered by the stylesheet; a
-    // browser that cannot do that hides them.
-    // The one that shows takes focus as a tab panel; it is set here too, after the check
-    // above, because taking it from a panel that has focus drops the focus.
+    // The features that are not showing are left unrendered by the stylesheet, and marked
+    // `hidden="until-found"` (which React does not write, so it is set here), so the
+    // browser's find-in-page still reaches their text: a match shows that feature. A
+    // browser that cannot leave them unrendered hides them. The one that shows takes
+    // focus as a tab panel; that is set here too, after the check above, because taking
+    // it from a panel that has focus drops the focus.
     const skips = typeof CSS !== 'undefined' && CSS.supports('content-visibility', 'hidden');
     panels.current.forEach((panel, i) => {
       if (!panel) return;
@@ -350,7 +347,7 @@ function Tour(): ReactNode {
     // After a change of layout, the reader is put back where they were.
     if (before.pinned !== pinned) {
       window.requestAnimationFrame(() => {
-        document.documentElement.style.overflowAnchor = '';
+        root.style.overflowAnchor = '';
       });
     }
     const was = place.current;
@@ -363,6 +360,9 @@ function Tour(): ReactNode {
     else panels.current[was.feature]?.scrollIntoView({block: 'start', behavior: 'instant'});
   }, [pinned, active, select]);
 
+  // Leaving the page lets go of the frame.
+  useEffect(() => () => document.documentElement.removeAttribute(PIN), []);
+
   useEffect(() => {
     if (!pinned) return undefined;
     const nodes = panels.current.slice();
@@ -371,8 +371,17 @@ function Tour(): ReactNode {
       held.current = {feature: i, until: window.performance.now() + 400};
       flushSync(() => select(i));
     });
+    // Any move of the reader's own ends the hold at once.
+    const release = () => {
+      held.current = null;
+    };
+    const inputs = ['wheel', 'touchstart', 'keydown', 'pointerdown'] as const;
     nodes.forEach((panel, i) => panel?.addEventListener('beforematch', found[i]));
-    return () => nodes.forEach((panel, i) => panel?.removeEventListener('beforematch', found[i]));
+    inputs.forEach((type) => window.addEventListener(type, release, {capture: true, passive: true}));
+    return () => {
+      nodes.forEach((panel, i) => panel?.removeEventListener('beforematch', found[i]));
+      inputs.forEach((type) => window.removeEventListener(type, release, {capture: true}));
+    };
   }, [pinned, select]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLAnchorElement>, i: number) => {
@@ -383,7 +392,7 @@ function Tour(): ReactNode {
   };
 
   return (
-    <section ref={track} className={clsx(styles.band, styles.tour, pinned && styles.pins)} aria-labelledby="blend-tour">
+    <section ref={track} className={clsx(styles.band, styles.tour)} aria-labelledby="blend-tour">
       <div ref={frame} className={styles.frame}>
         <div className={styles.index}>
           <div className={styles.indexHead}>
@@ -416,7 +425,7 @@ function Tour(): ReactNode {
                     className={clsx(styles.tab, i === active && styles.tabOn)}
                     role={pinned ? 'tab' : undefined}
                     aria-selected={pinned ? i === active : undefined}
-                    aria-controls={pinned ? feature.id : undefined}
+                    aria-controls={pinned ? `blend-panel-${feature.id}` : undefined}
                     tabIndex={pinned && i !== active ? -1 : undefined}
                     onClick={
                       pinned
@@ -438,7 +447,10 @@ function Tour(): ReactNode {
           </p>
         </div>
 
-        <div className={styles.features}>
+        {/* New elements for each layout: a browser that has scrolled to a feature named in the
+            address keeps scrolling to that element while the page loads, which, inside the
+            pinned frame, would carry the page down the track. */}
+        <div key={pinned ? 'pinned' : 'plain'} className={styles.features}>
           {FEATURES.map((feature, i) => {
             const on = i === active;
             return (
@@ -447,7 +459,7 @@ function Tour(): ReactNode {
                 ref={(node) => {
                   panels.current[i] = node;
                 }}
-                id={feature.id}
+                id={pinned ? `blend-panel-${feature.id}` : feature.id}
                 className={clsx(styles.feature, on && styles.featureOn)}
                 role={pinned ? 'tabpanel' : undefined}
                 aria-labelledby={pinned ? `blend-tab-${feature.id}` : undefined}
@@ -487,6 +499,9 @@ function Tour(): ReactNode {
           })}
         </div>
       </div>
+      {/* Where the frame is pinned: the place in the track the page scrolls to for each feature. */}
+      {pinned &&
+        FEATURES.map((feature, i) => <span key={feature.id} id={feature.id} className={styles.anchor} style={{'--i': i} as CSSProperties} aria-hidden="true" />)}
     </section>
   );
 }
@@ -496,6 +511,9 @@ export default function Blend(): ReactNode {
     <Layout title={TITLE} description={DESCRIPTION}>
       {/* The serif face belongs to this page and the bento page: fetched early here, never on another page. */}
       <SerifFont />
+      <Head>
+        <script>{EARLY}</script>
+      </Head>
       <main className={styles.page}>
         <div className={styles.top}>
           <Hero />

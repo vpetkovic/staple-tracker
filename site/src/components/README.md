@@ -166,29 +166,39 @@ edges and the rules between its columns itself. Its pieces:
 - `Tour` is the walk-through. Its markup is nine sections in reading order, which is
   what a phone shows: kicker, headline, scene, copy. Where the `PINNED` query matches (a
   landscape screen at least 1024 px wide and between 40 and 100 em tall; the heights are
-  in `em` because the content grows with the reader's font size), the component sets
-  the class `pins`, and the stylesheet, under the same query, makes the walk-through a
-  tall track with a frame pinned under the navbar. The scroll position picks the
-  feature, the index marks it with the sheet's tick, and only that feature's section
-  shows; its scene is mounted again, so it plays from the start. Picking a feature moves
-  the scroll position to its place in the track, which the pinned frame hides.
-  `--st-tour-step` is how far the page scrolls for one feature.
+  in `em` because the content grows with the reader's font size), the root element
+  carries `data-blend-pinned`, and the stylesheet, under the same query, makes the
+  walk-through a tall track with a frame pinned under the navbar. The scroll position
+  picks the feature, the index marks it with the sheet's tick, and only that feature's
+  section shows; its scene is mounted again, so it plays from the start. Picking a
+  feature moves the scroll position to its place in the track, which the pinned frame
+  hides. `--st-tour-step` is how far the page scrolls for one feature.
+- A small script in the page's head sets the attribute before the first paint, so a
+  reload is laid out as it was and the browser puts the scroll position back in the same
+  layout; the component keeps the attribute in step after that. The script leaves the
+  page plain on a fresh visit to an address that names a feature or a piece of text
+  (the browser scrolls to it, which only works in the flow of the plain layout); the
+  component then opens that feature, unless the reader has scrolled on. If the
+  component has not run six seconds later, the script takes the attribute away again.
 - The index is then a vertical tablist (arrow keys, Home and End move and select, Enter
-  and Space select; Tab goes on into the panel) and the sections are its tabpanels. The
-  ones that are not showing are left unrendered (`content-visibility: hidden`), out of
-  the accessibility tree and the tab order, and marked `hidden="until-found"`, so the
-  browser's find-in-page reaches their text and shows the feature it is in. Focus that
-  is on a tab or inside a feature when scrolling replaces it moves to the one that
-  comes.
-- Where the query does not match at that width (a short, upright or very tall screen,
-  a large font size) or the script has not run, the index is a list of links beside the
-  features, which flow down the page. The two layouts differ in height by more than a
-  screen, so when one replaces the other (the window is resized, the page hydrates on
-  a reload) the reader is put back where they were: at the same feature, or as far past
-  the walk-through as before. An address that names a feature (`/blend#handoff`) opens
-  on it, also when the reader comes back to it or reloads it: the component turns the
-  browser's scroll restoration off for that address, because the position it saved may
-  belong to the other layout.
+  and Space select; Tab goes on into the panel) and the sections are its tabpanels
+  (`blend-panel-<id>`). The ones not showing are left unrendered
+  (`content-visibility: hidden`), out of the accessibility tree and the tab order, and
+  marked `hidden="until-found"`, so the browser's find-in-page reaches their text and
+  shows the feature it is in. Focus that is on a tab or inside a feature when scrolling
+  replaces it moves to the one that comes.
+- Each feature then also has an anchor in the track, at the place the page scrolls to
+  for it, which carries the feature's id: a link to `#handoff`, the router's own
+  scrolling on back and forward, and the browser's all land there without the
+  component. Nothing inside the pinned frame is a target the browser scrolls to: it
+  would compute the frame's place as if it were not pinned. For the same reason the
+  sections are new elements in each layout.
+- Where the query does not match (a short, upright or very tall screen, a large font
+  size) or the script has not run, the index is a list of links beside the features,
+  which flow down the page and carry the ids. The two layouts differ in height by more
+  than a screen, so when one replaces the other (the window is resized, the page
+  hydrates plain) the reader is put back where they were: at the same feature, or with
+  the band after the walk-through where it was on the screen.
 - Keep conditions out of `@supports not`: the minifier folded such a block into the
   rule it was meant to replace. The component checks `CSS.supports` instead.
 - The headline of a feature is two lines at every width: `--st-text-serif-feature`
