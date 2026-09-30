@@ -191,7 +191,7 @@ export function Typed({on, children, className}: {on: boolean; children: string;
   );
 }
 
-/** Words a narrow cell can do without: shown from 24rem of scene width up. */
+/** Words a narrow cell can do without: shown from 24.5rem of scene width up. */
 export function Wide({children}: {children: ReactNode}): ReactNode {
   return <span className={styles.wide}>{children}</span>;
 }

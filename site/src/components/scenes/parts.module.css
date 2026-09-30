@@ -435,7 +435,9 @@
   align-items: center;
 }
 
-@container scene (max-width: 24rem) {
+/* The words arrive a little past the width where the body's padding grows (24rem), so
+   a row never gains words and loses room at the same width. */
+@container scene (max-width: 24.5rem) {
   .wide {
     display: none;
   }

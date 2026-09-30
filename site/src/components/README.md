@@ -127,7 +127,9 @@ downloads them: keep `--st-font-serif` out of shared components. The page's piec
 `--st-tracking-heavy`), with pills for its eyebrows and buttons. Its pieces:
 
 - The hero's decoration is the staple of the logo, nested (`Staples`): SVG strokes in
-  the accent colour, driven in once on load, still under reduced motion.
+  the accent colour, driven in once on load, still under reduced motion. Its width and
+  the headline's size both follow the height of a short screen, so the button stays in
+  view; under 480 px of height (a phone on its side) the decoration is left out.
 - A headline is two lines (`Lines`) at every width, because its size follows the room
   it has: `--st-text-sans-hero` and `--st-text-sans-2xl` follow the viewport, and
   `--st-text-sans-xl` follows the feature's column (`cqw`). A line longer than the
@@ -135,8 +137,9 @@ downloads them: keep `--st-font-serif` out of shared components. The page's piec
 - `CHAPTERS` is the walk-through: three chapters that follow the three steps, each a
   list of features. `Feature` is one section: a pill, the headline, a paragraph or
   three points, a docs link, and exactly one scene in a `panel`. On a phone the order
-  is pill, headline, panel, copy, and the panel reaches into the gutter so the scene
-  keeps the 300 px the kit draws for. From 768 px the panel and the copy sit side by
+  is pill, headline, panel, copy, and the panel reaches into the gutter (edge to edge
+  under 350 px) so the scene keeps the 300 px the kit draws for; the page's other
+  boxes reach into the gutter with it. From 768 px the panel and the copy sit side by
   side under the headline, and from 997 px the headline joins the copy; the sides
   alternate in both.
 - Every rule in a media query starts at `main.page`, and media queries that set the

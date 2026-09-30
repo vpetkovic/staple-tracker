@@ -128,7 +128,8 @@
   }
 }
 
-@container scene (max-width: 22rem) {
+/* The identifiers come back once the longest line of the plan fits beside one. */
+@container scene (max-width: 22.5rem) {
   .line .lineId {
     display: none;
   }

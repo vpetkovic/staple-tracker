@@ -81,9 +81,10 @@
 
 .hero {
   /* The width of the decoration; the copy starts part of the way down it. It follows
-     the width of the screen, and on a short screen the height, so the button under the
-     copy stays in view. */
-  --wt-art: min(max(20rem, 70vw), max(12rem, (100vh - 28rem) * 2.38), 46rem);
+     the width of the screen, and on a short screen the height, in step with the size of
+     the headline (--st-text-sans-hero), so the hero keeps its proportions and the
+     button and the link under the copy stay in view. */
+  --wt-art: min(max(20rem, 70vw), max(12rem, (100vh - 19.8rem) * 1.506), 46rem);
   position: relative;
   overflow: hidden;
   padding: 0 var(--st-gutter) var(--wt-section);
@@ -99,9 +100,9 @@
   margin-left: calc(var(--wt-art) / -2);
   fill: none;
   stroke: var(--st-accent);
-  /* The legs run out as they reach the headline. */
-  -webkit-mask-image: linear-gradient(to bottom, #000 18%, transparent 74%);
-  mask-image: linear-gradient(to bottom, #000 18%, transparent 74%);
+  /* The legs run out where the headline starts. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 14%, transparent 62%);
+  mask-image: linear-gradient(to bottom, #000 14%, transparent 62%);
   pointer-events: none;
 }
 
@@ -146,7 +147,7 @@
   font-size: var(--st-text-lg);
   line-height: var(--st-leading-relaxed);
   color: var(--st-fg-muted);
-  text-wrap: balance;
+  text-wrap: pretty;
 }
 
 .heroActions {
@@ -186,7 +187,7 @@
 .steps {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  margin: 0;
+  margin: 0 calc(var(--st-gutter) / -2);
   padding: 0;
   overflow: hidden;
   border: var(--st-hairline) solid var(--st-border);
@@ -250,7 +251,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--st-hairline);
-  margin: var(--st-space-10) 0 0;
+  margin: var(--st-space-10) calc(var(--st-gutter) / -2) 0;
   padding: 0;
   overflow: hidden;
   border: var(--st-hairline) solid var(--st-border);
@@ -356,8 +357,8 @@
 }
 
 /* The panel: a lighter box with room around the one scene it holds. On a phone it
-   reaches into the gutter and keeps its padding small, so the scene gets the width
-   the kit draws for. */
+   reaches into the gutter, as the page's other boxes do, and keeps its padding small,
+   so the scene gets the width the kit draws for. */
 .panel {
   min-width: 0;
   margin-inline: calc(var(--st-gutter) / -2);
@@ -463,7 +464,7 @@
 }
 
 .plannedNote {
-  max-width: 44rem;
+  max-width: 36rem;
   margin: var(--st-space-6) auto 0;
   text-align: center;
   font-size: var(--st-text-sm);
@@ -478,7 +479,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0 var(--st-hairline);
-  margin: var(--st-space-12) 0 0;
+  margin: var(--st-space-12) calc(var(--st-gutter) / -2) 0;
   overflow: hidden;
   border: var(--st-hairline) solid var(--st-border);
   border-radius: var(--st-radius-xl);
@@ -619,6 +620,7 @@
 }
 
 .answer p {
+  max-width: var(--st-measure-lead);
   margin: 0 0 var(--st-space-4);
   font-size: var(--st-text-base);
   line-height: var(--st-leading-relaxed);
@@ -690,9 +692,29 @@
   margin-top: var(--st-space-8);
 }
 
+/* ---------- A phone on its side: the copy alone, so the button is in view ---------- */
+
+@media (max-height: 480px) {
+  main.page .art {
+    display: none;
+  }
+
+  main.page .heroCopy {
+    padding-top: var(--st-space-8);
+  }
+
+  main.page .heroLead {
+    max-width: var(--st-measure);
+  }
+
+  main.page .heroActions {
+    margin-top: var(--st-space-6);
+  }
+}
+
 /* ---------- The narrowest phones: the panel runs edge to edge ---------- */
 
-@media (max-width: 340px) {
+@media (max-width: 349.98px) {
   main.page .panel {
     margin-inline: calc(-1 * var(--st-gutter));
     border-inline: 0;
@@ -700,10 +722,13 @@
   }
 }
 
-/* ---------- From a large phone: the panel sits inside the column ---------- */
+/* ---------- From a large phone: the boxes sit inside the column ---------- */
 
 @media (min-width: 420px) {
-  main.page .panel {
+  main.page .panel,
+  main.page .steps,
+  main.page .tiles,
+  main.page .compare {
     margin-inline: 0;
   }
 
@@ -712,7 +737,7 @@
   }
 }
 
-@media (min-width: 420px) and (max-width: 599px) {
+@media (min-width: 420px) and (max-width: 599.98px) {
   main.page .panel {
     padding: var(--st-space-4);
   }
@@ -722,16 +747,20 @@
   main.page .cta {
     padding-inline: var(--st-space-8);
   }
+
+  main.page .heroLead {
+    text-wrap: balance;
+  }
 }
 
-@media (min-width: 600px) and (max-width: 767px) {
+@media (min-width: 600px) and (max-width: 767.98px) {
   main.page .panel {
     padding: var(--st-space-8);
   }
 }
 
 /* Where the copy has a wide column: a large phone on its side, and the desktop. */
-@media (min-width: 600px) and (max-width: 767px), (min-width: 997px) {
+@media (min-width: 600px) and (max-width: 767.98px), (min-width: 997px) {
   main.page .body,
   main.page .points {
     font-size: var(--st-text-lg);
@@ -750,7 +779,7 @@
   }
 
   main.page .step {
-    padding: var(--st-space-8) var(--st-space-6) var(--st-space-10);
+    padding-block: var(--st-space-8) var(--st-space-10);
   }
 
   main.page .step + .step {
@@ -781,9 +810,18 @@
 
 /* ---------- Tablet: the headline over the panel and the copy, side by side ---------- */
 
-@media (min-width: 768px) and (max-width: 996px) {
+@media (min-width: 768px) and (max-width: 996.98px) {
   main.page {
     --wt-section: var(--st-space-24);
+  }
+
+  /* Three steps across a tablet: each title keeps one line. */
+  main.page .step {
+    padding-inline: var(--st-space-5);
+  }
+
+  main.page .stepTitle {
+    font-size: var(--st-text-step);
   }
 
   main.page .tiles {

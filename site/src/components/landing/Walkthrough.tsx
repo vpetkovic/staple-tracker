@@ -274,7 +274,8 @@ const CHAPTERS: ChapterSpec[] = [
         body: (
           <>
             A milestone gathers epics and tickets from anywhere in the tree without moving them, and gives them an
-            order, a target date and a goal. The goal is a list of criteria, and each one is marked met with evidence.
+            order, a target date and a goal. The goal is a list of criteria, and each one is judged with evidence: met,
+            unmet or unknown.
           </>
         ),
         link: {to: '/docs/milestones', label: 'Milestones and goals'},
@@ -384,7 +385,8 @@ const FAQ: {question: string; answer: ReactNode; link: {to: string; label: strin
     answer: (
       <>
         No. The claim is atomic: when two agents race for one ticket, exactly one gets it, and the other is told to
-        pick a different one. A ticket with open blockers cannot be claimed at all.
+        pick a different one. A ticket with{' '}
+        <Link to="/docs/epics-and-dependencies">open blockers</Link> cannot be claimed at all.
       </>
     ),
     link: {to: '/docs/working-a-ticket', label: 'How an agent works a ticket'},
