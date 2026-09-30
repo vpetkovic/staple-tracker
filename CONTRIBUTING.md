@@ -160,24 +160,28 @@ placeholder.
 
 ### Choosing the landing page
 
-The site has four landing pages, all in `site/src/components/landing/`:
+The site has five landing pages, all in `site/src/components/landing/`:
 `Story.tsx` leads with why staple exists and how a plan becomes tickets,
-`Classic.tsx` is the first landing page, a tour of the features, and two are
+`Classic.tsx` is the first landing page, a tour of the features, and three are
 experiments: `Bento.tsx` has serif headlines, a dashed drafting grid and a grid of
-cells that each show one feature with an animated scene, and `Walkthrough.tsx`
+cells that each show one feature with an animated scene, `Walkthrough.tsx`
 has a centred hero in a heavy sans, three steps in one box, and then one feature
-per section, each with one animated scene in a panel beside its copy. The
+per section, each with one animated scene in a panel beside its copy, and
+`Blend.tsx` sets the serif headlines on the drafting grid and walks through the
+features one at a time beside a feature index that stays in view. The pieces the
+experiments share are in `site/src/components/landing/parts/`. The
 `LANDING_VARIANT` environment variable decides which one `/` serves: `story` (the
-default when it is unset), `classic`, `bento` or `walkthrough`. Any other value
-fails the build. Every variant stays reachable for comparison: `/story`,
-`/classic`, `/bento` and `/walkthrough` always serve their variant, marked
-`noindex` and left out of the sitemap.
+default when it is unset), `classic`, `bento`, `walkthrough` or `blend`. Any other
+value fails the build. Every variant stays reachable for comparison: `/story`,
+`/classic`, `/bento`, `/walkthrough` and `/blend` always serve their variant,
+marked `noindex` and left out of the sitemap.
 
 ```bash
 npm run site:build                              # / serves the story page
 LANDING_VARIANT=classic npm run site:build      # / serves the classic page
 LANDING_VARIANT=bento npm run site:build        # / serves the bento page
 LANDING_VARIANT=walkthrough npm run site:build  # / serves the walkthrough page
+LANDING_VARIANT=blend npm run site:build        # / serves the blend page
 ```
 
 To switch the deployed site, set the repository variable `LANDING_VARIANT`

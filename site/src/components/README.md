@@ -1,6 +1,6 @@
 # Site primitives
 
-The building blocks for marketing pages (`src/pages`, and the landing pages in `landing/`: see "Choosing the landing page" in CONTRIBUTING.md), and the animated scenes those pages show features with (see "Scenes" below). Docs pages do not use
+The building blocks for marketing pages (`src/pages`, and the landing pages in `landing/`: see "Choosing the landing page" in CONTRIBUTING.md), the animated scenes those pages show features with (see "Scenes" below), and the parts the experiment pages share (`landing/parts/`). Docs pages do not use
 them: they are Markdown from `../docs`, styled by `src/css/custom.css`.
 
 Colours, type, spacing, radii, control sizes, durations and fonts come from
@@ -107,14 +107,15 @@ To add a scene:
 
 ## The bento landing page
 
-`landing/Bento.tsx` is the one page with a serif display face (Fraunces, SIL Open Font
-License 1.1, from `@fontsource-variable/fraunces`). Its `@font-face` rules are in
-`Bento.module.css` and the page preloads the two files itself, so no other page
-downloads them: keep `--st-font-serif` out of shared components. The page's pieces:
+`landing/Bento.tsx` sets its headlines in a serif display face (Fraunces, SIL Open Font
+License 1.1, from `@fontsource-variable/fraunces`), as the blend page does. Both render
+`SerifFont` (see "Parts the experiment pages share"), so no other page downloads the
+face: keep `--st-font-serif` out of components that other pages use. The page's pieces:
 
-- The hero's ticket chips (`CHIPS`) drift only while `data-motion="on"`, which the page
-  sets after it has loaded in a browser that did not ask for reduced motion. The Pause
-  button holds the chips and the changing word; out of view they hold too.
+- The hero's ticket chips (`CHIPS`, drawn by `TicketChips`) drift only while the motion
+  state from `useDrift` is `on`, which it is once the page has loaded in a browser that
+  did not ask for reduced motion. The Pause button holds the chips and the changing
+  word; out of view they hold too.
 - The sheet draws the dashed vertical rules once, at the column boundaries (3, 5 and 4
   of 12 from 1280 px, two equal columns from 768 px, the two edges on a phone). A band
   is one row of that grid; `tick` puts the solid mark on a heading.
@@ -134,8 +135,8 @@ downloads them: keep `--st-font-serif` out of shared components. The page's piec
   it has: `--st-text-sans-hero` and `--st-text-sans-2xl` follow the viewport, and
   `--st-text-sans-xl` follows the feature's column (`cqw`). A line longer than the
   longest one today ("A plan becomes an epic.") needs a smaller factor in the token.
-- `CHAPTERS` is the walk-through: three chapters that follow the three steps, each a
-  list of features. `Feature` is one section: a pill, the headline, a paragraph or
+- `CHAPTERS` (in `parts/content.tsx`) is the walk-through: three chapters that follow
+  the three steps, each a list of features. `Feature` is one section: a pill, the headline, a paragraph or
   three points, a docs link, and exactly one scene in a `panel`. On a phone the order
   is pill, headline, panel, copy, and the panel reaches into the gutter (edge to edge
   under 350 px) so the scene keeps the 300 px the kit draws for; the page's other
@@ -145,8 +146,61 @@ downloads them: keep `--st-font-serif` out of shared components. The page's piec
 - Every rule in a media query starts at `main.page`, and media queries that set the
   same thing cover ranges that do not overlap: the minified CSS can reorder rules of
   equal weight.
-- The FAQ is native `details`, so it works by keyboard and without JavaScript. Every
-  answer says what the docs say and links the page that says it.
+- The FAQ (`Faq`) is native `details`, so it works by keyboard and without JavaScript.
+  Every answer says what the docs say and links the page that says it.
+
+## The blend landing page
+
+`landing/Blend.tsx` is one drawing sheet read in order: the serif headlines and dashed
+rules of the bento page, the pace of the walkthrough page, and a layout of its own.
+Every band has a legend on the left (a mono eyebrow and a serif heading with the tick)
+and its content on the right, on twelve columns: 3, 4 and 5 from 1280 px, 3.5, 4 and
+4.5 from 1024 px, two equal columns from 768 px, one below. A band draws the sheet's
+edges and the rules between its columns itself. Its pieces:
+
+- The hero is as wide as the sheet, with the copy on the left and the ticket chips to
+  its right from 1024 px (`wideFrom` on `TicketChips`); below that the chips sit in a
+  band above the copy and one below.
+- The three steps are the spine of the page: the strip under the hero (`Steps`), the
+  groups of the index, and the first line of every feature's kicker.
+- `Tour` is the walk-through. Its markup is nine sections in reading order, which is
+  what a phone shows: kicker, headline, scene, copy. Where the `PINNED` query matches (a
+  screen at least 1024 px wide and 640 px tall, in a browser that runs scripts), the
+  stylesheet, under the same query, makes it a tall track with a frame pinned under the
+  navbar. The scroll position picks the feature, the index marks it with the sheet's
+  tick, and only that feature's section shows; its scene is mounted again, so it plays
+  from the start. Picking a feature moves the scroll position to its place in the
+  track, which the pinned frame hides. The index is then a vertical tablist (arrow keys,
+  Home and End move and select; Tab goes on into the panel) and the sections are its
+  tabpanels; the ones that are not showing are out of the accessibility tree and the
+  tab order. `--st-tour-step` is how far the page scrolls for one feature.
+- Where the query does not match at that width (no scripting, a short screen, a browser
+  that does not know `scripting`), the index is a list of links beside the features,
+  which flow down the page.
+- The headline of a feature is two lines at every width: `--st-text-serif-feature`
+  follows its column (`cqw`). A feature's `accent` (in `parts/content.tsx`) is the part
+  of the headline set in italic.
+- Rules in a media query start at `main.page`, width ranges that set the same thing do
+  not overlap, and the pinned layout, which shares its width with the plain one,
+  starts at `main.page .tour.pins`. Under reduced motion nothing inside a feature
+  transitions, so the feature that is picked is there at once.
+
+## Parts the experiment pages share
+
+`landing/parts/` holds what more than one of the experiment pages uses. A page that
+needs a different look sets the custom properties a part documents; it does not
+restyle the part's classes (the minified CSS can reorder rules of equal weight).
+
+| Part | Used by | What it is |
+| --- | --- | --- |
+| `SerifFont` | bento, blend | Declares the serif face and preloads its two files. Render it once inside `Layout`. |
+| `TicketChips`, `useDrift`, `PauseButton` | bento, blend | The chips that drift through a hero (`chips` gives each its places at three widths), whether they may move, and the control that holds them. The page places the button. |
+| `Steps` | walkthrough, blend | The three steps in one list, with `--steps-*` properties for its box, lines and titles. |
+| `Faq` | walkthrough, blend | The questions as native `details`; `linkClassName` and `linkMark` style the docs link, `--faq-question-*` the questions. |
+| `Install` | walkthrough, blend | The install command in a small terminal window with its copy button. |
+| `PlanFolder` | bento, blend | The folder of plans that point at each other, as a scene. |
+| `CompareTable`, `Planned` | bento, blend | The team's tracker beside staple (`--compare-label` is the width of the label column, a length), and the chip on what is planned. |
+| `content.tsx` | all three | The page title, the three steps, the nine features in three chapters, the comparison, the figures and the FAQ. |
 
 ## Rules
 

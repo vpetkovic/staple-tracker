@@ -18,8 +18,8 @@ export type ChipSpec = {
   status: Status;
   /** 1 is nearest: full size and sharp. 3 is furthest: small, faint and soft. */
   depth: 1 | 2 | 3;
-  /** Where it sits from 1280 px. Below that it takes `tablet`, and under 700 px
-      `phone`. A chip without a place for a width is left out there. */
+  /** Where it sits on a wide screen (see `wideFrom`). Below that it takes `tablet`, and
+      under 700 px `phone`. A chip without a place for a width is left out there. */
   at: Place;
   tablet?: Place;
   phone?: Place;
@@ -76,10 +76,14 @@ export function useDrift(): DriftState {
   return {ref, allowed, motion, paused, togglePaused: () => setPaused((value) => !value)};
 }
 
-/** The chips, each at its place. They drift only while `motion` is `on`. */
-export default function TicketChips({chips, motion}: {chips: ChipSpec[]; motion: Motion}): ReactNode {
+/**
+ * The chips, each at its place. They drift only while `motion` is `on`. `wideFrom` is
+ * the width from which a chip takes its `at` place: 1280 px, or 1024 px for a hero that
+ * has room beside its copy by then.
+ */
+export default function TicketChips({chips, motion, wideFrom = 1280}: {chips: ChipSpec[]; motion: Motion; wideFrom?: 1024 | 1280}): ReactNode {
   return (
-    <div className={styles.chips} data-motion={motion} aria-hidden="true">
+    <div className={clsx(styles.chips, wideFrom === 1024 && styles.wide1024)} data-motion={motion} aria-hidden="true">
       {chips.map((chip) => {
         const place = {'--x': chip.at[0], '--y': chip.at[1], '--tx': chip.tablet?.[0], '--ty': chip.tablet?.[1], '--px': chip.phone?.[0], '--py': chip.phone?.[1]} as CSSProperties;
         const drift = {'--dx': `${chip.drift[0]}px`, '--dy': `${chip.drift[1]}px`, '--cycle': `${chip.seconds}s`} as CSSProperties;

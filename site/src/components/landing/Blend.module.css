@@ -597,9 +597,9 @@
   }
 }
 
-/* ---------- Below 1280 px: the chips sit in a band above the copy and one below ---------- */
+/* ---------- Below 1024 px: the chips sit in a band above the copy and one below ---------- */
 
-@media (min-width: 700px) and (max-width: 1279.98px) {
+@media (min-width: 700px) and (max-width: 1023.98px) {
   main.page .hero {
     padding-block: 10.5rem;
   }
@@ -609,7 +609,6 @@
 
 @media (min-width: 768px) {
   main.page {
-    --pad: var(--st-space-6);
     --pad-y: var(--st-space-12);
     --edge: var(--st-gutter);
     --overshoot: var(--st-space-4);
@@ -698,6 +697,7 @@
 
 @media (min-width: 768px) and (max-width: 1023.98px) {
   main.page {
+    --pad: var(--st-space-6);
     --col-a: 1fr;
     --col-b: 1fr;
   }
@@ -834,6 +834,13 @@
 }
 
 @media (min-width: 1280px) {
+  main.page {
+    --pad: var(--st-space-6);
+  }
+}
+
+@media (min-width: 1024px) {
+  /* The copy on the left half, the chips to its right. */
   main.page .hero {
     min-height: clamp(34rem, calc(100svh - var(--st-navbar-height) - 12rem), 44rem);
     padding-block: var(--st-space-16);
@@ -842,9 +849,7 @@
   main.page .heroCopy {
     max-width: 50%;
   }
-}
 
-@media (min-width: 1024px) {
   main.page .split,
   main.page .frame {
     background-image: var(--rule-v), var(--rule-v), var(--rule-v), var(--rule-v);
@@ -917,7 +922,7 @@
     display: none;
   }
 
-  main.page .fact {
+  main.page .facts .fact {
     padding-block: var(--pad-y);
   }
 
@@ -932,7 +937,7 @@
   }
 
   /* The index: the features by step, as links. The heading gives its room to the list. */
-  main.page .index {
+  main.page .frame .index {
     padding-block: var(--st-space-8);
   }
 
@@ -996,6 +1001,7 @@
     display: flex;
     align-items: center;
     min-height: 2rem;
+    border-radius: var(--st-radius-sm);
     font-size: var(--st-text-sm);
     line-height: var(--st-leading-snug);
     color: var(--st-fg-muted);
@@ -1027,16 +1033,11 @@
    feature (Blend.tsx reads it under the same query); the features lie on top of each
    other and only the one that is picked shows. */
 @media (min-width: 1024px) and (min-height: 640px) and (scripting: enabled) {
+  /* Every browser that knows `scripting` knows `svh`. */
   main.page .tour.pins {
-    --frame: calc(100vh - var(--st-navbar-height));
+    --frame: calc(100svh - var(--st-navbar-height));
     display: block;
     height: calc(var(--frame) + 9 * var(--st-tour-step));
-  }
-
-  @supports (height: 100svh) {
-    main.page .tour.pins {
-      --frame: calc(100svh - var(--st-navbar-height));
-    }
   }
 
   main.page .tour.pins .frame {
@@ -1089,15 +1090,14 @@
     padding-block: var(--st-space-8);
   }
 
+  /* A feature that leaves is gone at once, so nothing in it can take focus while it
+     fades; the one that is picked fades and rises in. */
   main.page .tour.pins .feature {
     grid-area: 1 / 1;
     padding-block: 0;
     visibility: hidden;
     opacity: 0;
     transform: translateY(var(--st-rise));
-    transition:
-      opacity var(--st-duration-fast) var(--st-ease),
-      visibility 0s linear var(--st-duration-fast);
   }
 
   main.page .tour.pins .feature::before {
@@ -1109,9 +1109,8 @@
     opacity: 1;
     transform: none;
     transition:
-      opacity var(--st-duration-slow) var(--st-ease) var(--st-duration-fast),
-      transform var(--st-duration-slow) var(--st-ease) var(--st-duration-fast),
-      visibility 0s;
+      opacity var(--st-duration-slow) var(--st-ease),
+      transform var(--st-duration-slow) var(--st-ease);
   }
 }
 

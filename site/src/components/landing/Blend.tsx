@@ -24,7 +24,7 @@ import styles from './Blend.module.css';
 // story landing page.
 
 // Tickets of the docs' example epic (Multi-tenancy, prefix APP), as the web UI would
-// list them, and where each sits: to the right of the copy from 1280 px, and below that
+// list them, and where each sits: to the right of the copy from 1024 px, and below that
 // in a band above the copy and one below it, measured from the hero's edges.
 const CHIPS: ChipSpec[] = [
   {id: 'APP-9', title: 'Audit log per tenant', status: 'backlog', depth: 3, at: ['61%', '11%'], tablet: ['16%', '7.75rem'], drift: [-20, -12], seconds: 27, leaves: 'middle'},
@@ -51,7 +51,7 @@ function Hero(): ReactNode {
   const {ref, allowed, motion, paused, togglePaused} = useDrift();
   return (
     <section ref={ref} className={styles.hero}>
-      <TicketChips chips={CHIPS} motion={motion} />
+      <TicketChips chips={CHIPS} motion={motion} wideFrom={1024} />
       <div className={styles.heroCopy}>
         <p className={styles.eyebrow}>Local-first task tracker for coding agents</p>
         <h1 className={styles.heroTitle}>

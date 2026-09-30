@@ -203,6 +203,18 @@
   }
 }
 
+/* A hero with room beside its copy from 1024 px keeps the wide places down to there. */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .chips.wide1024 .slot {
+    left: var(--x);
+    top: var(--y);
+  }
+
+  .chips.wide1024 .slot.noTablet {
+    display: inline;
+  }
+}
+
 /* No JavaScript, or reduced motion asked for after the page loaded: nothing drifts. */
 @media (prefers-reduced-motion: reduce) {
   .chips .chip {
