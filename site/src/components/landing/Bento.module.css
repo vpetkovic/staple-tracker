@@ -2,32 +2,8 @@
  * The bento landing page. Three things make it: serif headlines (Fraunces, SIL Open
  * Font License 1.1, self-hosted from @fontsource-variable), a drafting grid of dashed
  * rules with a solid tick on every heading, and scenes that their cells cut off.
- *
- * The serif face is declared here, not in src/css/fonts.css, and only this page names
- * the family: a browser downloads a face when text on the page uses it, so no other
- * page fetches these two files. Latin subset with the optical-size axis, so large
- * headlines get the high-contrast cut.
+ * The serif face comes from parts/SerifFont, the chips from parts/TicketChips.
  */
-
-@font-face {
-  font-family: 'Fraunces Variable';
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url('../../../node_modules/@fontsource-variable/fraunces/files/fraunces-latin-opsz-normal.woff2') format('woff2-variations');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
-    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-
-@font-face {
-  font-family: 'Fraunces Variable';
-  font-style: italic;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url('../../../node_modules/@fontsource-variable/fraunces/files/fraunces-latin-opsz-italic.woff2') format('woff2-variations');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
-    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
 
 .page {
   /* The inset of a cell, and the dashed rules: a dash and a gap of equal length. */
@@ -144,209 +120,12 @@
   text-wrap: pretty;
 }
 
-/* ---------- The ticket chips that drift through the hero ---------- */
-
-.chips {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-/* Where a chip is, and how far away: the slot places it, the chip inside it moves. */
-.slot {
-  position: absolute;
-  left: var(--x);
-  top: var(--y);
-  transform: translate(-50%, -50%) scale(var(--scale, 1));
-}
-
-.slot.depth1 {
-  z-index: 3;
-}
-
-.slot.depth2 {
-  --scale: 0.88;
-  z-index: 2;
-  opacity: 0.62;
-}
-
-.slot.depth3 {
-  --scale: 0.76;
-  z-index: 1;
-  opacity: 0.42;
-  filter: blur(1.25px);
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--st-space-2);
-  height: var(--st-scene-row);
-  padding: 0 var(--st-space-4) 0 var(--st-space-3);
-  border: var(--st-hairline) solid var(--st-border-strong);
-  border-radius: var(--st-radius-lg);
-  background: var(--st-bg-subtle);
-  font-size: var(--st-text-ui);
-  line-height: 1;
-  white-space: nowrap;
-  color: var(--st-fg-strong);
-}
-
-.chip .chipGlyph {
-  --glyph-cut: var(--st-bg-subtle);
-}
-
-.chipId {
-  font-family: var(--st-font-mono);
-  font-size: var(--st-text-xs);
-  color: var(--st-fg-subtle);
-}
-
-/* The drift runs only once the page has said motion is on (`data-motion`), so the
-   server's HTML, a browser without JavaScript and reduced motion all show the chips at
-   rest. Each cycle starts and ends at rest and fully shown: starting it moves nothing. */
-.hero[data-motion='on'] .chip,
-.hero[data-motion='held'] .chip {
-  animation: var(--cycle, 20s) linear infinite;
-  will-change: transform, opacity;
-}
-
-.hero[data-motion='on'] .chip.leaves_early,
-.hero[data-motion='held'] .chip.leaves_early {
-  animation-name: driftEarly;
-}
-
-.hero[data-motion='on'] .chip.leaves_middle,
-.hero[data-motion='held'] .chip.leaves_middle {
-  animation-name: driftMiddle;
-}
-
-.hero[data-motion='on'] .chip.leaves_late,
-.hero[data-motion='held'] .chip.leaves_late {
-  animation-name: driftLate;
-}
-
-.hero[data-motion='held'] .chip {
-  animation-play-state: paused;
-}
-
-@keyframes driftEarly {
-  0% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-
-  16% {
-    opacity: 1;
-  }
-
-  27% {
-    opacity: 0;
-    transform: translate3d(calc(var(--dx) * 0.5), calc(var(--dy) * 0.5), 0);
-  }
-
-  44% {
-    opacity: 0;
-    transform: translate3d(calc(var(--dx) * -0.6), calc(var(--dy) * -0.6), 0);
-  }
-
-  56% {
-    opacity: 1;
-  }
-
-  100% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes driftMiddle {
-  0% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-
-  48% {
-    opacity: 1;
-  }
-
-  58% {
-    opacity: 0;
-    transform: translate3d(var(--dx), var(--dy), 0);
-  }
-
-  74% {
-    opacity: 0;
-    transform: translate3d(calc(var(--dx) * -0.4), calc(var(--dy) * -0.4), 0);
-  }
-
-  86% {
-    opacity: 1;
-  }
-
-  100% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
-@keyframes driftLate {
-  0% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-
-  70% {
-    opacity: 1;
-  }
-
-  80% {
-    opacity: 0;
-    transform: translate3d(var(--dx), var(--dy), 0);
-  }
-
-  88% {
-    opacity: 0;
-    transform: translate3d(calc(var(--dx) * -0.18), calc(var(--dy) * -0.18), 0);
-  }
-
-  97% {
-    opacity: 1;
-  }
-
-  100% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-  }
-}
-
 /* The control for everything in the hero that keeps moving: the chips and the word. */
 .pause {
   position: absolute;
   right: var(--edge);
   bottom: var(--st-space-4);
   z-index: 5;
-  display: flex;
-  align-items: center;
-  gap: var(--st-space-2);
-  min-height: var(--st-control-sm);
-  padding: 0 var(--st-space-3);
-  border: var(--st-hairline) solid var(--st-border-strong);
-  border-radius: var(--st-radius-full);
-  background: var(--st-bg);
-  font-family: var(--st-font-sans);
-  font-size: var(--st-text-xs);
-  font-weight: var(--st-weight-medium);
-  color: var(--st-fg);
-  cursor: pointer;
-  transition:
-    border-color var(--st-duration) var(--st-ease),
-    color var(--st-duration) var(--st-ease);
-}
-
-.pause:hover {
-  border-color: var(--st-fg-subtle);
-  color: var(--st-fg-strong);
 }
 
 .statement {
@@ -526,62 +305,6 @@
   --fade: var(--st-space-16);
 }
 
-/* ---------- The plan folder: the problem, drawn with the scene kit's frame ---------- */
-
-.folder {
-  display: grid;
-  gap: var(--st-space-1);
-}
-
-.file {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: var(--st-space-2);
-  align-items: center;
-  padding: var(--st-space-1) 0;
-}
-
-.fileIcon {
-  color: var(--st-fg-subtle);
-}
-
-.fileName {
-  overflow: hidden;
-  font-family: var(--st-font-mono);
-  font-size: var(--st-text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--st-fg-strong);
-}
-
-.fileNote {
-  grid-column: 2;
-  font-size: var(--st-text-xs);
-  line-height: var(--st-leading-ui);
-  color: var(--st-fg-muted);
-}
-
-.folderEnd {
-  display: flex;
-  align-items: center;
-  gap: var(--st-space-2);
-  margin-top: var(--st-space-2);
-  /* Room under the last line, so the cell's fade falls on the panel, not on the words. */
-  padding: var(--st-space-3) 0 var(--st-space-6);
-  border-top: var(--st-hairline) solid var(--st-border);
-  font-size: var(--st-text-xs);
-  line-height: var(--st-leading-ui);
-  color: var(--st-warning);
-}
-
-.folderEndMark {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--st-radius-full);
-  background: var(--st-status-ready);
-}
-
 /* ---------- The feature bento ---------- */
 
 .ideaInner {
@@ -708,85 +431,6 @@
   background-size: var(--st-rule-dash) var(--st-hairline);
 }
 
-.planned {
-  display: inline-flex;
-  align-items: center;
-  height: 1.375rem;
-  margin-right: var(--st-space-2);
-  padding: 0 var(--st-space-2);
-  border: var(--st-hairline) dashed var(--st-border-strong);
-  border-radius: var(--st-radius-full);
-  font-family: var(--st-font-mono);
-  font-size: var(--st-text-2xs);
-  font-weight: var(--st-weight-medium);
-  line-height: 1;
-  letter-spacing: var(--st-tracking-eyebrow);
-  text-transform: uppercase;
-  vertical-align: 0.1em;
-  color: var(--st-fg-muted);
-}
-
-.compareTable {
-  display: table;
-  width: 100%;
-  table-layout: fixed;
-  margin: 0;
-  border-collapse: collapse;
-  font-size: var(--st-text-sm);
-  line-height: var(--st-leading-ui);
-}
-
-.compareTable tr {
-  border: 0;
-  background: none;
-}
-
-.compareTable th,
-.compareTable td {
-  padding: var(--st-space-3) var(--st-space-4) var(--st-space-3) 0;
-  border: 0;
-  background: none;
-  text-align: left;
-  vertical-align: top;
-  color: var(--st-fg-muted);
-}
-
-.compareTable tbody tr {
-  border-top: var(--st-hairline) dashed var(--st-rule);
-}
-
-.compareTable thead th,
-.compareTable tbody th {
-  font-family: var(--st-font-mono);
-  font-size: var(--st-text-2xs);
-  font-weight: var(--st-weight-medium);
-  letter-spacing: var(--st-tracking-eyebrow);
-  text-transform: uppercase;
-  color: var(--st-fg-subtle);
-}
-
-.compareTable thead th {
-  padding-top: 0;
-  vertical-align: bottom;
-}
-
-.compareTable thead td {
-  width: 4.75rem;
-}
-
-.compareTable thead th:last-child {
-  color: var(--st-accent-text);
-}
-
-.compareTable tbody th {
-  padding-top: calc(var(--st-space-3) + 0.2em);
-}
-
-.compareTable td:last-child {
-  padding-right: 0;
-  color: var(--st-fg-strong);
-}
-
 /* ---------- Underneath: the figures ---------- */
 
 .facts {
@@ -904,15 +548,6 @@
   .hero {
     padding-block: 10.5rem;
   }
-
-  .slot {
-    left: var(--tx);
-    top: var(--ty);
-  }
-
-  .slot.noTablet {
-    display: none;
-  }
 }
 
 /* ---------- 768 to 1279 px: two equal columns, one rule down the middle ---------- */
@@ -921,6 +556,8 @@
   .page {
     /* Where copy beside a heading starts, to sit level with it under the eyebrow's line. */
     --beside-heading: calc(var(--st-space-5) + var(--st-text-2xs) * var(--st-leading-ui) + 0.5rem);
+    /* The comparison's row labels take the left column; the two answers start in the right one. */
+    --compare-label: calc(50% + var(--pad));
   }
 
   .sheet::before {
@@ -1020,11 +657,6 @@
   .alongside .compare {
     grid-column: 1 / -1;
     grid-row: 3;
-  }
-
-  /* The row labels take the left column; the two answers start in the right one. */
-  .compareTable thead td {
-    width: calc(50% + var(--pad));
   }
 
   .facts {
@@ -1185,21 +817,5 @@
   .word {
     display: flex;
     justify-content: center;
-  }
-
-  .slot {
-    left: var(--px);
-    top: var(--py);
-  }
-
-  .slot.noPhone {
-    display: none;
-  }
-}
-
-/* No JavaScript, or reduced motion asked for after the page loaded: nothing drifts. */
-@media (prefers-reduced-motion: reduce) {
-  .hero .chip {
-    animation: none !important;
   }
 }

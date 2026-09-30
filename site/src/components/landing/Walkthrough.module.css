@@ -182,62 +182,9 @@
   padding-bottom: var(--wt-section);
 }
 
-/* Each step lays its three lines on the box's rows, so the lines of neighbouring
-   steps stay level when a title wraps. */
+/* The strip reaches into the gutter on a phone, as the page's other boxes do. */
 .steps {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  margin: 0 calc(var(--st-gutter) / -2);
-  padding: 0;
-  overflow: hidden;
-  border: var(--st-hairline) solid var(--st-border);
-  border-radius: var(--st-radius-xl);
-  background: var(--st-bg-subtle);
-  list-style: none;
-}
-
-.step {
-  display: grid;
-  grid-row: span 3;
-  grid-template-rows: subgrid;
-  padding: var(--st-space-6) var(--st-space-6) var(--st-space-8);
-}
-
-.step + .step {
-  border-top: var(--st-hairline) solid var(--st-border);
-}
-
-.stepTop {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--st-space-5);
-  /* The glyph's check is cut out in the colour of the box. */
-  --glyph-cut: var(--st-bg-subtle);
-}
-
-.stepNumber {
-  font-family: var(--st-font-mono);
-  font-size: var(--st-text-xs);
-  color: var(--st-accent-text);
-}
-
-.stepTitle {
-  margin: 0 0 var(--st-space-2);
-  font-size: var(--st-text-2xl);
-  font-weight: var(--st-weight-semibold);
-  line-height: var(--st-leading-tight);
-  letter-spacing: var(--st-tracking-display);
-  color: var(--st-fg-strong);
-  text-wrap: balance;
-}
-
-.stepText {
-  margin: 0;
-  font-size: var(--st-text-base);
-  line-height: var(--st-leading-relaxed);
-  color: var(--st-fg-muted);
-  text-wrap: pretty;
+  --steps-outset: calc(var(--st-gutter) / -2);
 }
 
 /* ---------- Features overview ---------- */
@@ -546,133 +493,11 @@
   gap: var(--st-space-10);
 }
 
-.faqList {
-  border-top: var(--st-hairline) solid var(--st-border);
-}
-
-.item {
-  border-bottom: var(--st-hairline) solid var(--st-border);
-}
-
-.question {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--st-space-6);
-  padding-block: var(--st-space-5);
-  font-size: var(--st-text-lg);
-  font-weight: var(--st-weight-medium);
-  line-height: var(--st-leading-snug);
-  letter-spacing: var(--st-tracking-heading);
-  color: var(--st-fg-strong);
-  list-style: none;
-  cursor: pointer;
-}
-
-.questionText {
-  text-wrap: balance;
-}
-
-.question::-webkit-details-marker {
-  display: none;
-}
-
-.question:focus-visible {
-  border-radius: var(--st-radius-sm);
-}
-
-.chevron {
-  flex: none;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  color: var(--st-fg-subtle);
-  transition: transform var(--st-duration) var(--st-ease), color var(--st-duration) var(--st-ease);
-}
-
-.question:hover .chevron {
-  color: var(--st-fg-strong);
-}
-
-.item[open] .question .chevron {
-  transform: rotate(180deg);
-}
-
-/* Where the browser can size to `auto`, the answer opens and closes smoothly. */
-.item {
-  interpolate-size: allow-keywords;
-}
-
-.item::details-content {
-  block-size: 0;
-  overflow: clip;
-  transition: block-size var(--st-duration-slow) var(--st-ease), content-visibility var(--st-duration-slow) allow-discrete;
-}
-
-.item[open]::details-content {
-  block-size: auto;
-}
-
-.answer {
-  padding: 0 var(--st-space-10) var(--st-space-6) 0;
-}
-
-.answer p {
-  max-width: var(--st-measure-lead);
-  margin: 0 0 var(--st-space-4);
-  font-size: var(--st-text-base);
-  line-height: var(--st-leading-relaxed);
-  color: var(--st-fg-muted);
-  text-wrap: pretty;
-}
-
-/* A link inside an answer is told from the text around it by more than its colour. */
-.page .answer p a {
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-}
-
 /* ---------- Get started ---------- */
 
 .closing {
   padding-block: var(--wt-section);
   border-top: var(--st-hairline) solid var(--st-border);
-}
-
-.install {
-  width: 100%;
-  max-width: 30rem;
-  margin-top: var(--st-space-10);
-  overflow: hidden;
-  border: var(--st-hairline) solid var(--st-border-strong);
-  border-radius: var(--st-radius-lg);
-  background: var(--st-bg);
-  text-align: left;
-}
-
-.installBar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--st-space-3);
-  min-height: var(--st-control-sm);
-  padding: 0 var(--st-space-4);
-  border-bottom: var(--st-hairline) solid var(--st-border);
-  font-family: var(--st-font-mono);
-  font-size: var(--st-text-xs);
-  color: var(--st-fg-subtle);
-}
-
-.install .command {
-  display: flex;
-  justify-content: space-between;
-  height: 3.5rem;
-  padding: 0 var(--st-space-3) 0 var(--st-space-4);
-  border: 0;
-  border-radius: 0;
-  background: transparent;
 }
 
 .closingText {
@@ -727,10 +552,13 @@
 
 @media (min-width: 420px) {
   main.page .panel,
-  main.page .steps,
   main.page .tiles,
   main.page .compare {
     margin-inline: 0;
+  }
+
+  main.page .steps {
+    --steps-outset: 0rem;
   }
 
   main.page .panel.panelWide {
@@ -777,19 +605,6 @@
 }
 
 @media (min-width: 768px) {
-  main.page .steps {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  main.page .step {
-    padding-block: var(--st-space-8) var(--st-space-10);
-  }
-
-  main.page .step + .step {
-    border-top: 0;
-    border-left: var(--st-hairline) solid var(--st-border);
-  }
-
   main.page .tiles {
     margin-top: var(--st-space-16);
   }
@@ -816,15 +631,6 @@
 @media (min-width: 768px) and (max-width: 996.98px) {
   main.page {
     --wt-section: var(--st-space-24);
-  }
-
-  /* Three steps across a tablet: each title keeps one line. */
-  main.page .step {
-    padding-inline: var(--st-space-4);
-  }
-
-  main.page .stepTitle {
-    font-size: var(--st-text-step);
   }
 
   main.page .tiles {

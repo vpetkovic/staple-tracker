@@ -1,0 +1,35 @@
+/* The install command in a small terminal window. */
+
+.install {
+  width: 100%;
+  max-width: 30rem;
+  margin-top: var(--st-space-10);
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-lg);
+  background: var(--st-bg);
+  text-align: left;
+}
+
+.installBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-3);
+  min-height: var(--st-control-sm);
+  padding: 0 var(--st-space-4);
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.install .command {
+  display: flex;
+  justify-content: space-between;
+  height: 3.5rem;
+  padding: 0 var(--st-space-3) 0 var(--st-space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}

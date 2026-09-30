@@ -1,0 +1,56 @@
+/* The plan folder: the problem, drawn with the scene kit's frame. */
+
+.folder {
+  display: grid;
+  gap: var(--st-space-1);
+}
+
+.file {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--st-space-2);
+  align-items: center;
+  padding: var(--st-space-1) 0;
+}
+
+.fileIcon {
+  color: var(--st-fg-subtle);
+}
+
+.fileName {
+  overflow: hidden;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--st-fg-strong);
+}
+
+.fileNote {
+  grid-column: 2;
+  font-size: var(--st-text-xs);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-muted);
+}
+
+.folderEnd {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  margin-top: var(--st-space-2);
+  /* Room under the last line, so a cell that fades the panel's lower edge fades the
+     panel, not the words. */
+  padding: var(--st-space-3) 0 var(--st-space-6);
+  border-top: var(--st-hairline) solid var(--st-border);
+  font-size: var(--st-text-xs);
+  line-height: var(--st-leading-ui);
+  color: var(--st-warning);
+}
+
+.folderEndMark {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--st-radius-full);
+  background: var(--st-status-ready);
+}

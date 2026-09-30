@@ -1,0 +1,236 @@
+/*
+ * The ticket chips that drift through a hero. The layer fills the hero, which has to
+ * be positioned. Rules that change another outrank it (`.chips .slot`), and the media
+ * queries cover ranges that do not overlap: the production CSS is minified across files
+ * and rules of equal weight can swap places.
+ */
+
+.chips {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Where a chip is, and how far away: the slot places it, the chip inside it moves. */
+.slot {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  transform: translate(-50%, -50%) scale(var(--scale, 1));
+}
+
+.slot.depth1 {
+  z-index: 3;
+}
+
+.slot.depth2 {
+  --scale: 0.88;
+  z-index: 2;
+  opacity: 0.62;
+}
+
+.slot.depth3 {
+  --scale: 0.76;
+  z-index: 1;
+  opacity: 0.42;
+  filter: blur(1.25px);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  height: var(--st-scene-row);
+  padding: 0 var(--st-space-4) 0 var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-lg);
+  background: var(--st-bg-subtle);
+  font-size: var(--st-text-ui);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--st-fg-strong);
+}
+
+.chip .chipGlyph {
+  --glyph-cut: var(--st-bg-subtle);
+}
+
+.chipId {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+/* The drift runs only once the page has said motion is on (`data-motion`), so the
+   server's HTML, a browser without JavaScript and reduced motion all show the chips at
+   rest. Each cycle starts and ends at rest and fully shown: starting it moves nothing. */
+.chips[data-motion='on'] .chip,
+.chips[data-motion='held'] .chip {
+  animation: var(--cycle, 20s) linear infinite;
+  will-change: transform, opacity;
+}
+
+.chips[data-motion='on'] .chip.leaves_early,
+.chips[data-motion='held'] .chip.leaves_early {
+  animation-name: driftEarly;
+}
+
+.chips[data-motion='on'] .chip.leaves_middle,
+.chips[data-motion='held'] .chip.leaves_middle {
+  animation-name: driftMiddle;
+}
+
+.chips[data-motion='on'] .chip.leaves_late,
+.chips[data-motion='held'] .chip.leaves_late {
+  animation-name: driftLate;
+}
+
+.chips[data-motion='held'] .chip {
+  animation-play-state: paused;
+}
+
+@keyframes driftEarly {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  16% {
+    opacity: 1;
+  }
+
+  27% {
+    opacity: 0;
+    transform: translate3d(calc(var(--dx) * 0.5), calc(var(--dy) * 0.5), 0);
+  }
+
+  44% {
+    opacity: 0;
+    transform: translate3d(calc(var(--dx) * -0.6), calc(var(--dy) * -0.6), 0);
+  }
+
+  56% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes driftMiddle {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  48% {
+    opacity: 1;
+  }
+
+  58% {
+    opacity: 0;
+    transform: translate3d(var(--dx), var(--dy), 0);
+  }
+
+  74% {
+    opacity: 0;
+    transform: translate3d(calc(var(--dx) * -0.4), calc(var(--dy) * -0.4), 0);
+  }
+
+  86% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes driftLate {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  70% {
+    opacity: 1;
+  }
+
+  80% {
+    opacity: 0;
+    transform: translate3d(var(--dx), var(--dy), 0);
+  }
+
+  88% {
+    opacity: 0;
+    transform: translate3d(calc(var(--dx) * -0.18), calc(var(--dy) * -0.18), 0);
+  }
+
+  97% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Below 1280 px a chip takes its tablet place, under 700 px its phone place. */
+@media (min-width: 700px) and (max-width: 1279px) {
+  .chips .slot {
+    left: var(--tx);
+    top: var(--ty);
+  }
+
+  .chips .slot.noTablet {
+    display: none;
+  }
+}
+
+@media (max-width: 699px) {
+  .chips .slot {
+    left: var(--px);
+    top: var(--py);
+  }
+
+  .chips .slot.noTablet,
+  .chips .slot.noPhone {
+    display: none;
+  }
+}
+
+/* No JavaScript, or reduced motion asked for after the page loaded: nothing drifts. */
+@media (prefers-reduced-motion: reduce) {
+  .chips .chip {
+    animation: none !important;
+  }
+}
+
+/* The pause control: its look. The page gives it its place. */
+.pause {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  min-height: var(--st-control-sm);
+  padding: 0 var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-full);
+  background: var(--st-bg);
+  font-family: var(--st-font-sans);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg);
+  cursor: pointer;
+  transition:
+    border-color var(--st-duration) var(--st-ease),
+    color var(--st-duration) var(--st-ease);
+}
+
+.pause:hover {
+  border-color: var(--st-fg-subtle);
+  color: var(--st-fg-strong);
+}

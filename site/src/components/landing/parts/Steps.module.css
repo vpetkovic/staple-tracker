@@ -1,0 +1,89 @@
+/*
+ * Three steps in one box. Each step lays its three lines on the box's rows, so the
+ * lines of neighbouring steps stay level when a title wraps. Rules in a media query
+ * outrank the ones they change (`ol.steps`, `.steps .step`), because the production CSS
+ * is minified across files and rules of equal weight can swap places.
+ */
+
+.steps {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0 var(--steps-outset, 0);
+  padding: 0;
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--steps-line, var(--st-border));
+  border-radius: var(--steps-radius, var(--st-radius-xl));
+  background: var(--steps-ground, var(--st-bg-subtle));
+  list-style: none;
+}
+
+.step {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  padding: var(--st-space-6) var(--st-space-6) var(--st-space-8);
+}
+
+.step + .step {
+  border-top: var(--st-hairline) solid var(--steps-line, var(--st-border));
+}
+
+.stepTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--st-space-5);
+  /* The glyph's check is cut out in the colour of the box. */
+  --glyph-cut: var(--steps-ground, var(--st-bg-subtle));
+}
+
+.stepNumber {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-accent-text);
+}
+
+.stepTitle {
+  margin: 0 0 var(--st-space-2);
+  font-family: var(--steps-title-font, inherit);
+  font-size: var(--st-text-2xl);
+  font-weight: var(--steps-title-weight, var(--st-weight-semibold));
+  line-height: var(--st-leading-tight);
+  letter-spacing: var(--steps-title-tracking, var(--st-tracking-display));
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.stepText {
+  margin: 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+@media (min-width: 768px) {
+  ol.steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .steps .step {
+    padding-block: var(--st-space-8) var(--st-space-10);
+  }
+
+  .steps .step + .step {
+    border-top: 0;
+    border-left: var(--st-hairline) solid var(--steps-line, var(--st-border));
+  }
+}
+
+/* Three steps across a tablet: each title keeps one line. */
+@media (min-width: 768px) and (max-width: 996.98px) {
+  .steps .step {
+    padding-inline: var(--st-space-4);
+  }
+
+  .steps .stepTitle {
+    font-size: var(--st-text-step);
+  }
+}

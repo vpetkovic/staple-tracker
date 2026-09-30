@@ -1,0 +1,81 @@
+/* The comparison of a team's tracker with staple, and the Planned chip. The width of
+   the label column is `--compare-label`, which a page may set. */
+
+.compareTable {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: var(--st-text-sm);
+  line-height: var(--st-leading-ui);
+}
+
+.compareTable tr {
+  border: 0;
+  background: none;
+}
+
+.compareTable th,
+.compareTable td {
+  padding: var(--st-space-3) var(--st-space-4) var(--st-space-3) 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  vertical-align: top;
+  color: var(--st-fg-muted);
+}
+
+.compareTable tbody tr {
+  border-top: var(--st-hairline) dashed var(--st-rule);
+}
+
+.compareTable thead th,
+.compareTable tbody th {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-subtle);
+}
+
+.compareTable thead th {
+  padding-top: 0;
+  vertical-align: bottom;
+}
+
+.compareTable thead td {
+  width: var(--compare-label, 4.75rem);
+}
+
+.compareTable thead th:last-child {
+  color: var(--st-accent-text);
+}
+
+.compareTable tbody th {
+  padding-top: calc(var(--st-space-3) + 0.2em);
+}
+
+.compareTable td:last-child {
+  padding-right: 0;
+  color: var(--st-fg-strong);
+}
+
+.planned {
+  display: inline-flex;
+  align-items: center;
+  height: 1.375rem;
+  margin-right: var(--st-space-2);
+  padding: 0 var(--st-space-2);
+  border: var(--st-hairline) dashed var(--st-border-strong);
+  border-radius: var(--st-radius-full);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: 1;
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  vertical-align: 0.1em;
+  color: var(--st-fg-muted);
+}

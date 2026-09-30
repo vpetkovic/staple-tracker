@@ -1,28 +1,15 @@
 import {useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import clsx from 'clsx';
-import Head from '@docusaurus/Head';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import Button, {ButtonRow} from '@site/src/components/Button';
 import CopyCommand from '@site/src/components/CopyCommand';
-import {
-  ApprovalGate,
-  AutopilotRun,
-  Budget,
-  Handoff,
-  MilestoneGoal,
-  OneStore,
-  PlanToTickets,
-  QueuePickup,
-  Reveal,
-  Scene,
-  StatusGlyph,
-  TicketContext,
-  TrackerSync,
-  type Status,
-} from '@site/src/components/scenes';
-import serifRoman from '@fontsource-variable/fraunces/files/fraunces-latin-opsz-normal.woff2';
-import serifItalic from '@fontsource-variable/fraunces/files/fraunces-latin-opsz-italic.woff2';
+import {ApprovalGate, AutopilotRun, Budget, Handoff, MilestoneGoal, OneStore, PlanToTickets, QueuePickup, TicketContext, TrackerSync} from '@site/src/components/scenes';
+import CompareTable, {Planned} from './parts/CompareTable';
+import PlanFolder from './parts/PlanFolder';
+import SerifFont from './parts/SerifFont';
+import TicketChips, {PauseButton, fromBottom, useDrift, type ChipSpec} from './parts/TicketChips';
+import {DESCRIPTION, FACTS, TITLE} from './parts/content';
 import styles from './Bento.module.css';
 
 // The bento landing page: serif headlines, a dashed drafting grid, ticket chips
@@ -30,43 +17,14 @@ import styles from './Bento.module.css';
 // with one scene from the scene kit, cut by the cell. The story and its terms follow
 // docs/why-staple.md and the story landing page.
 
-const TITLE = 'Implementation plans your agents can finish';
-const DESCRIPTION =
-  'staple turns an implementation plan into an epic and tickets that carry their full context, so coding agents work through it, resume after a session dies and file new work under the same epic. Local-first, next to your team’s tracker.';
-
 // The word that changes in the headline. The first one is the headline a screen
 // reader, a crawler and a visitor who asked for reduced motion get.
 const WORDS = ['finish', 'resume', 'survive'];
 const WORD_MS = 3200;
 
-type Drift = 'early' | 'middle' | 'late';
-
-/** Where the centre of a chip is: across and down the hero, as CSS lengths. */
-type Place = [string, string];
-
-type ChipSpec = {
-  id: string;
-  title: string;
-  status: Status;
-  /** 1 is nearest: full size and sharp. 3 is furthest: small, faint and soft. */
-  depth: 1 | 2 | 3;
-  /** From 1280 px the chips sit around the copy. Below that (`tablet`) and on a phone
-      they sit in a band above it and one below, measured from the hero's edges. A chip
-      without a place is left out. */
-  at: Place;
-  tablet?: Place;
-  phone?: Place;
-  /** How far it drifts in one cycle, in pixels, and how long a cycle takes. */
-  drift: [number, number];
-  seconds: number;
-  /** When in its cycle it fades out and comes back. */
-  leaves: Drift;
-};
-
-const fromBottom = (rem: number): string => `calc(100% - ${rem}rem)`;
-
 // Tickets of the docs' example epic (Multi-tenancy, prefix APP), as the web UI would
-// list them. Decoration: the layer is hidden from assistive technology.
+// list them, and where each sits: around the copy from 1280 px, and below that in a band
+// above the copy and one below it, measured from the hero's edges.
 const CHIPS: ChipSpec[] = [
   {id: 'APP-2', title: 'Tenant id on every table', status: 'active', depth: 1, at: ['16%', '21%'], tablet: ['25%', '4.5rem'], phone: ['38%', '2.5rem'], drift: [46, -18], seconds: 19, leaves: 'late'},
   {id: 'APP-7', title: 'Backfill tenant_id on invoices', status: 'done', depth: 2, at: ['9.5%', '35%'], drift: [30, 14], seconds: 23, leaves: 'early'},
@@ -81,58 +39,13 @@ const CHIPS: ChipSpec[] = [
   {id: 'APP-10', title: 'Remove the global admin query', status: 'backlog', depth: 3, at: ['34%', '90%'], tablet: ['46%', fromBottom(8.5)], drift: [24, -10], seconds: 25, leaves: 'late'},
 ];
 
-function TicketChips(): ReactNode {
-  return (
-    <div className={styles.chips} aria-hidden="true">
-      {CHIPS.map((chip) => {
-        const place = {'--x': chip.at[0], '--y': chip.at[1], '--tx': chip.tablet?.[0], '--ty': chip.tablet?.[1], '--px': chip.phone?.[0], '--py': chip.phone?.[1]} as CSSProperties;
-        const motion = {'--dx': `${chip.drift[0]}px`, '--dy': `${chip.drift[1]}px`, '--cycle': `${chip.seconds}s`} as CSSProperties;
-        return (
-          <span key={chip.id} className={clsx(styles.slot, styles[`depth${chip.depth}`], !chip.tablet && styles.noTablet, !chip.phone && styles.noPhone)} style={place}>
-            <span className={clsx(styles.chip, styles[`leaves_${chip.leaves}`])} style={motion}>
-              <StatusGlyph status={chip.status} className={styles.chipGlyph} />
-              <span className={styles.chipId}>{chip.id}</span>
-              <span className={styles.chipTitle}>{chip.title}</span>
-            </span>
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-// `off`: nothing moves (the server's HTML, no JavaScript, reduced motion).
-// `on`: the chips drift and the word changes. `held`: stopped where it is.
-type Motion = 'off' | 'on' | 'held';
-
 function Hero(): ReactNode {
-  const ref = useRef<HTMLElement | null>(null);
-  const [allowed, setAllowed] = useState(false);
-  const [inView, setInView] = useState(true);
-  const [paused, setPaused] = useState(false);
+  // `off`: nothing moves (the server's HTML, no JavaScript, reduced motion). `on`: the
+  // chips drift and the word changes. `held`: stopped where it is.
+  const {ref, allowed, motion, paused, togglePaused} = useDrift();
   const [word, setWord] = useState({now: 0, before: -1});
   const words = useRef<(HTMLSpanElement | null)[]>([]);
   const [shift, setShift] = useState(0);
-
-  // Motion is allowed once the page runs in a browser that did not ask for less of it.
-  useEffect(() => {
-    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const update = () => setAllowed(!query.matches);
-    update();
-    query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
-  }, []);
-
-  // Out of view, the hero holds still.
-  useEffect(() => {
-    const node = ref.current;
-    if (!node || typeof IntersectionObserver === 'undefined') return undefined;
-    const observer = new IntersectionObserver(([entry]) => entry && setInView(entry.isIntersecting), {threshold: 0});
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
-  const motion: Motion = !allowed ? 'off' : paused || !inView ? 'held' : 'on';
 
   useEffect(() => {
     if (motion === 'off') setWord({now: 0, before: -1});
@@ -157,8 +70,8 @@ function Hero(): ReactNode {
   }, [word.now]);
 
   return (
-    <section ref={ref} className={styles.hero} data-motion={motion}>
-      <TicketChips />
+    <section ref={ref} className={styles.hero}>
+      <TicketChips chips={CHIPS} motion={motion} />
       <div className={styles.heroCopy}>
         {/* The headline is "Plans that finish" in the HTML and to assistive technology.
             The other words exist only while motion is on, and only to the eye. */}
@@ -190,58 +103,8 @@ function Hero(): ReactNode {
           </Button>
         </ButtonRow>
       </div>
-      {allowed && (
-        <button type="button" className={styles.pause} onClick={() => setPaused((value) => !value)} aria-label={paused ? 'Play animation' : 'Pause animation'}>
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            {paused ? <path d="M5 3.5v9l7-4.5z" fill="currentColor" /> : <path d="M4.5 3.5h2.5v9H4.5zM9 3.5h2.5v9H9z" fill="currentColor" />}
-          </svg>
-          <span>{paused ? 'Play' : 'Pause'}</span>
-        </button>
-      )}
+      {allowed && <PauseButton paused={paused} onToggle={togglePaused} className={styles.pause} />}
     </section>
-  );
-}
-
-// The folder from docs/why-staple.md: plans that point at each other. `step` is when
-// a file's note appears.
-const PLAN_FILES: {name: string; note?: string; step?: number}[] = [
-  {name: 'brainstorm-rate-limits.md'},
-  {name: 'plan-auth-refactor.md', note: 'blocked until tenant ids land, see plan-multi-tenancy.md', step: 1},
-  {name: 'plan-multi-tenancy.md', note: 'step 4 depends on plan-auth-refactor.md, step 2', step: 2},
-  {name: 'plan-multi-tenancy-v2.md', note: 'replaces parts of plan-multi-tenancy.md', step: 3},
-  {name: 'plan-tenant-billing.md'},
-];
-
-/** The problem as a piece of UI: the notes that tie the plans together appear, then the session ends. */
-function PlanFolder(): ReactNode {
-  return (
-    <Scene
-      label="A folder of five Markdown plans. Three of them carry notes that point at the others: one is blocked until another lands, one depends on a step of another, one replaces parts of another. Then the session ends mid-feature."
-      title="docs/plans/"
-      meta={`${PLAN_FILES.length} files`}
-      timeline={[500, 1200, 1900, 2900]}>
-      {(step) => (
-        <div className={styles.folder}>
-          {PLAN_FILES.map((file) => (
-            <div key={file.name} className={styles.file}>
-              <svg className={styles.fileIcon} viewBox="0 0 16 16" width="16" height="16">
-                <path d="M4 1.75h5.25L12.5 5v9.25h-8.5z M9 1.75V5.25h3.5" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
-              </svg>
-              <span className={styles.fileName}>{file.name}</span>
-              {file.note && (
-                <Reveal on={step >= (file.step ?? 0)} from="left" className={styles.fileNote}>
-                  “{file.note}”
-                </Reveal>
-              )}
-            </div>
-          ))}
-          <Reveal on={step >= 4} className={styles.folderEnd}>
-            <span className={styles.folderEndMark} />
-            Session ended mid-feature: usage limit reached.
-          </Reveal>
-        </div>
-      )}
-    </Scene>
   );
 }
 
@@ -276,28 +139,11 @@ function Cell({title, children, scene, cut = 'edge', beside}: CellProps): ReactN
   );
 }
 
-// Every figure is counted from the source, as on the story landing page.
-const FACTS: {value: string; label: string}[] = [
-  {value: '1', label: 'SQLite file per repository: no account, no server to run'},
-  {value: '65', label: 'MCP tools, each calling the same store method as the CLI'},
-  {value: '6', label: 'views in the web UI, from Tasks to Usage'},
-  {value: '0', label: 'network calls until you opt in to sync or live usage checks'},
-];
-
-const COMPARE: {term: string; tracker: string; staple: string}[] = [
-  {term: 'Used by', tracker: 'People planning and reporting', staple: 'Agents doing the work, and you watching it'},
-  {term: 'Runs', tracker: 'Hosted, over the network', staple: 'Locally, one file per repository'},
-  {term: 'Holds', tracker: 'Features, priorities, discussion', staple: 'Epics, tickets, plans, worklogs, claims'},
-];
-
 export default function Bento(): ReactNode {
   return (
     <Layout title={TITLE} description={DESCRIPTION}>
-      <Head>
-        {/* The serif face is this page's alone: fetched early here, never on another page. */}
-        <link rel="preload" href={serifRoman} as="font" type="font/woff2" crossOrigin="anonymous" />
-        <link rel="preload" href={serifItalic} as="font" type="font/woff2" crossOrigin="anonymous" />
-      </Head>
+      {/* The serif face belongs to this page and the blend page: fetched early here, never on another page. */}
+      <SerifFont />
       <main className={styles.page}>
         <div className={styles.top}>
           <Hero />
@@ -442,31 +288,14 @@ export default function Bento(): ReactNode {
                 work, locally, ticket by ticket. Your team’s board stays where people plan, discuss and report.
               </p>
               <p className={styles.plannedNote}>
-                <span className={styles.planned}>Planned</span>
+                <Planned />
                 Integrations that keep the two in sync, with GitHub Issues, ClickUp and Linear, are planned, not
                 shipped. Today staple does not read from or write to any of them: use it alongside them and carry
                 items across yourself.
               </p>
             </div>
             <div className={styles.compare}>
-              <table className={styles.compareTable}>
-                <thead>
-                  <tr>
-                    <td />
-                    <th scope="col">Your team’s tracker</th>
-                    <th scope="col">staple</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {COMPARE.map((row) => (
-                    <tr key={row.term}>
-                      <th scope="row">{row.term}</th>
-                      <td>{row.tracker}</td>
-                      <td>{row.staple}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <CompareTable />
             </div>
           </section>
 
