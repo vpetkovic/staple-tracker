@@ -185,7 +185,10 @@ edges and the rules between its columns itself. Its pieces:
   features, which flow down the page. The two layouts differ in height by more than a
   screen, so when one replaces the other (the window is resized, the page hydrates on
   a reload) the reader is put back where they were: at the same feature, or as far past
-  the walk-through as before.
+  the walk-through as before. An address that names a feature (`/blend#handoff`) opens
+  on it, also when the reader comes back to it or reloads it: the component turns the
+  browser's scroll restoration off for that address, because the position it saved may
+  belong to the other layout.
 - Keep conditions out of `@supports not`: the minifier folded such a block into the
   rule it was meant to replace. The component checks `CSS.supports` instead.
 - The headline of a feature is two lines at every width: `--st-text-serif-feature`

@@ -105,7 +105,21 @@ function accented(line: string, accent: string): ReactNode {
 // font size, because the frame's content grows with it. The stylesheet lays the frame
 // out under the same query, and only on the class this component sets once it runs:
 // without the script, the features flow down the page.
+// The frame is as tall as the small viewport (`svh`): a browser without that unit keeps
+// the plain layout.
 const PINNED = '(min-width: 1024px) and (min-width: 64em) and (min-height: 40em) and (max-height: 100em) and (orientation: landscape)';
+
+// Whether this document has shown the walk-through before. The first time, the page is
+// hydrating the server's HTML, which has the plain layout, and it may be a reload that
+// the browser scrolls back itself. When the reader comes back to the page within the
+// site, it is laid out pinned from the start, so the browser puts the scroll position
+// back in the layout it was saved in.
+let arrived = false;
+
+/** Whether the walk-through is pinned on this screen. */
+function pins(): boolean {
+  return typeof CSS !== 'undefined' && CSS.supports('height', '100svh') && window.matchMedia(PINNED).matches;
+}
 
 /** True when the page was reloaded or reached through the history: the browser puts the scroll position back itself. */
 function restored(): boolean {
@@ -114,8 +128,12 @@ function restored(): boolean {
   return type === 'reload' || type === 'back_forward';
 }
 
-/** Where the reader is in the walk-through: past its end (and how far), or at one of its features. */
-type Place = {past: number} | {feature: number};
+/**
+ * Where the reader is: at one of the walk-through's features, or past it, at a band of
+ * the sheet (its index among the sheet's children) whose top is `offset` from the top
+ * of the screen.
+ */
+type Place = {feature: number} | {band: number; offset: number};
 
 /**
  * The walk-through. Its markup is a list of nine sections in reading order, which is
@@ -125,14 +143,14 @@ type Place = {past: number} | {feature: number};
  * sections are its panels.
  */
 function Tour(): ReactNode {
-  const [pinned, setPinned] = useState(false);
+  const [pinned, setPinned] = useState(() => arrived && pins());
   const [active, setActive] = useState(0);
   const track = useRef<HTMLElement | null>(null);
   const frame = useRef<HTMLDivElement | null>(null);
   const tabs = useRef<(HTMLAnchorElement | null)[]>([]);
   const panels = useRef<(HTMLElement | null)[]>([]);
   // What is on the page now, for the handlers that outlive a render.
-  const now = useRef({pinned: false, active: 0});
+  const now = useRef({pinned, active: 0});
   // Set when the page was opened by a link to a feature and is pinned from the start.
   const fromLink = useRef(false);
   // Where the reader is, read on every scroll while the layout is at rest; and where they
@@ -143,14 +161,22 @@ function Tour(): ReactNode {
   const held = useRef<{feature: number; until: number} | null>(null);
   const count = FEATURES.length;
 
-  /** Where the reader is: null above the walk-through, or while the top third of the screen has not reached it. */
+  /** Where the reader is: null while the walk-through has not reached the middle of the screen. */
   const locate = useCallback((): Place | null => {
     const node = track.current;
     if (!node) return null;
     const rect = node.getBoundingClientRect();
-    const line = window.innerHeight / 3;
-    if (rect.bottom <= line) return {past: -rect.bottom};
+    const line = window.innerHeight / 2;
     if (rect.top >= line) return null;
+    // Once the band after the walk-through is on the screen, that band is what the reader
+    // keeps their place by.
+    if (rect.bottom < window.innerHeight) {
+      // The band at the top of the screen, so the one being read stays where it is.
+      const bands = Array.from(node.parentElement?.children ?? []);
+      const band = bands.findIndex((child, i) => i > bands.indexOf(node) && child.getBoundingClientRect().bottom > 0);
+      if (band < 0) return null;
+      return {band, offset: bands[band].getBoundingClientRect().top};
+    }
     if (now.current.pinned) return {feature: now.current.active};
     const under = panels.current.filter((panel) => panel && panel.getBoundingClientRect().top <= line).length - 1;
     return {feature: Math.max(0, under)};
@@ -158,19 +184,30 @@ function Tour(): ReactNode {
 
   useEffect(() => {
     const query = window.matchMedia(PINNED);
-    // The frame is as tall as the small viewport: a browser without that unit keeps the plain layout.
-    const able = typeof CSS !== 'undefined' && CSS.supports('height', '100svh');
     const update = () => {
-      const next = able && query.matches;
+      const next = pins();
       if (next === now.current.pinned) return;
       // The two layouts differ in height by more than a screen, and by the time a media
       // query reports a change the stylesheet has already let go of the frame: the place
       // to put the reader back at is the one read on the last scroll.
       place.current = last.current;
+      // The browser's own scroll anchoring would move the page again after this component
+      // has put the reader back: it is off until the new layout has been painted.
+      document.documentElement.style.overflowAnchor = 'none';
       setPinned(next);
     };
-    // A link to a feature opens on it, unless the browser is putting an earlier scroll position back.
-    fromLink.current = able && query.matches && !restored();
+    // An address that names a feature (`/blend#handoff`) opens on that feature, as the
+    // router goes to the element an address names. The browser would otherwise put back a
+    // scroll position for it after the feature is on stage, measured in whichever layout
+    // it was saved in, so it is told not to (scroll restoration is kept per address). On
+    // the first load of the address, the reader may have scrolled on before this ran: then
+    // they stay where they are.
+    const linked = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
+    const there = linked >= 0 && Math.abs(panels.current[linked]?.getBoundingClientRect().top ?? Infinity) < window.innerHeight / 2;
+    const again = arrived || window.history.scrollRestoration === 'manual';
+    fromLink.current = pins() && linked >= 0 && (again || (!restored() && there));
+    arrived = true;
+    if (linked >= 0) window.history.scrollRestoration = 'manual';
     last.current = locate();
     update();
     query.addEventListener('change', update);
@@ -261,12 +298,24 @@ function Tour(): ReactNode {
     if (!pinned) return undefined;
     const open = () => {
       const i = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
-      if (i >= 0) select(i);
+      if (i < 0) return;
+      // Until the page has loaded, the browser may scroll to the element the address names
+      // once more, as if the frame were not pinned: the feature is kept on stage till then.
+      const loading = document.readyState !== 'complete';
+      held.current = {feature: i, until: window.performance.now() + (loading ? 1500 : 150)};
+      select(i);
+    };
+    const loaded = () => {
+      if (held.current) held.current.until = Math.min(held.current.until, window.performance.now() + 150);
     };
     if (fromLink.current) open();
     fromLink.current = false;
     window.addEventListener('hashchange', open);
-    return () => window.removeEventListener('hashchange', open);
+    window.addEventListener('load', loaded);
+    return () => {
+      window.removeEventListener('hashchange', open);
+      window.removeEventListener('load', loaded);
+    };
   }, [pinned, select]);
 
   useIsomorphicLayoutEffect(() => {
@@ -280,6 +329,8 @@ function Tour(): ReactNode {
     // (`hidden="until-found"`, which React does not write, so it is set here): a match in
     // one of them shows that feature. They are left unrendered by the stylesheet; a
     // browser that cannot do that hides them.
+    // The one that shows takes focus as a tab panel; it is set here too, after the check
+    // above, because taking it from a panel that has focus drops the focus.
     const skips = typeof CSS !== 'undefined' && CSS.supports('content-visibility', 'hidden');
     panels.current.forEach((panel, i) => {
       if (!panel) return;
@@ -287,6 +338,8 @@ function Tour(): ReactNode {
       if (hide) panel.setAttribute('hidden', 'until-found');
       else panel.removeAttribute('hidden');
       panel.style.visibility = hide && !skips ? 'hidden' : '';
+      if (pinned && i === active) panel.tabIndex = 0;
+      else panel.removeAttribute('tabindex');
     });
 
     // Focus that was in the feature, or on the tab, that scrolling has just replaced goes
@@ -295,12 +348,17 @@ function Tour(): ReactNode {
     else if (onTab) tabs.current[active]?.focus({preventScroll: true});
 
     // After a change of layout, the reader is put back where they were.
+    if (before.pinned !== pinned) {
+      window.requestAnimationFrame(() => {
+        document.documentElement.style.overflowAnchor = '';
+      });
+    }
     const was = place.current;
     place.current = null;
     if (!was || before.pinned === pinned) return;
-    if ('past' in was) {
-      const bottom = track.current?.getBoundingClientRect().bottom;
-      if (bottom !== undefined) window.scrollTo({top: window.scrollY + bottom + was.past, behavior: 'instant'});
+    if ('band' in was) {
+      const band = track.current?.parentElement?.children[was.band];
+      if (band) window.scrollTo({top: window.scrollY + band.getBoundingClientRect().top - was.offset, behavior: 'instant'});
     } else if (pinned) select(was.feature);
     else panels.current[was.feature]?.scrollIntoView({block: 'start', behavior: 'instant'});
   }, [pinned, active, select]);
@@ -393,8 +451,7 @@ function Tour(): ReactNode {
                 className={clsx(styles.feature, on && styles.featureOn)}
                 role={pinned ? 'tabpanel' : undefined}
                 aria-labelledby={pinned ? `blend-tab-${feature.id}` : undefined}
-                aria-hidden={pinned && !on ? true : undefined}
-                tabIndex={pinned && on ? 0 : undefined}>
+                aria-hidden={pinned && !on ? true : undefined}>
                 <div className={styles.featureHead}>
                   <div className={styles.kicker}>
                     <p className={styles.kickerStep}>
