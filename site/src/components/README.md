@@ -173,18 +173,19 @@ edges and the rules between its columns itself. Its pieces:
   section shows; its scene is mounted again, so it plays from the start. Picking a
   feature moves the scroll position to its place in the track, which the pinned frame
   hides. `--st-tour-step` is how far the page scrolls for one feature.
-- On a reload, or a return through the history, a small script in the page's head
-  sets the attribute before the first paint, so the page is laid out as it was and the
-  browser puts the scroll position back in the same layout; if the component has not
-  run six seconds later, the script takes it away again. A fresh visit stays plain until
-  the component runs (the walk-through is out of view then). A fresh visit to an address
-  that names a feature (`/blend#milestones`) is pinned before the first paint as well,
-  or the walk-through would change layout in view (a layout shift of about 0.5): the
-  script takes the feature off the address, so the browser does not scroll to its
-  section inside the pinned frame, and the component puts it back and opens the feature,
-  unless the reader has scrolled on. Without the component, six seconds later, the plain
-  layout, the address and the feature come back. The script runs once per document (the
-  head manager can insert it again on hydration).
+- A small script in the page's head sets the attribute before the first paint whenever
+  the page does not open at its top: on a reload or a return through the history (the
+  page is laid out as it was and the browser puts the scroll position back in the same
+  layout), and on a fresh visit to an address with a fragment (`/blend#blend-faq`,
+  `/blend#milestones`), where the walk-through would otherwise change layout in view (a
+  layout shift of 0.5 to 0.9). A fragment that names a feature, its tab or the walk-through (`#blend-tour`, the first feature) is inside the
+  pinned frame, where the browser would scroll to the wrong place, so the script takes it
+  off the address and the component puts it back and opens the feature, unless the reader
+  has scrolled on. A fresh visit to the top stays plain until the component runs (the
+  walk-through is out of view then); so does a text fragment (`#:~:text=`). If the
+  component has not run three seconds after the page has loaded, the script restores the
+  plain layout, the address and the place. It runs once per document (the head manager
+  can insert it again on hydration).
 - The index is then a vertical tablist (arrow keys, Home and End move and select, Enter
   and Space select; Tab goes on into the panel) and the sections are its tabpanels
   (`blend-panel-<id>`). The ones not showing are left unrendered

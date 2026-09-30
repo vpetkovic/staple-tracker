@@ -116,20 +116,28 @@ function pins(): boolean {
   return typeof CSS !== 'undefined' && CSS.supports('height', '100svh') && window.matchMedia(PINNED).matches;
 }
 
-// On a reload, or a return through the history, the script in the page's head sets the
-// attribute before the first paint, so the page is laid out as it was and the browser
-// puts the scroll position back in that layout. A fresh visit stays plain until this
-// component runs: it is readable all along, and the walk-through is out of view. A fresh
-// visit to an address that names a feature is pinned before the first paint too, or the
-// walk-through, in view, would change layout under the reader when this component runs.
-// The browser would scroll to the feature's section in the server's HTML, which is
-// inside the pinned frame, so the script takes the feature off the address for the
-// moment (`__blendLinked` keeps it) and this component puts it back and opens the
-// feature. The script also notes the reader's first move, so the feature opens only if
-// the reader has not moved on. If this component has not run six seconds later (its
-// script did not load), the plain layout comes back, where every feature is reachable,
-// with the address and the feature as they were. The head manager can insert the script
-// again on hydration, which runs it again: only its first run counts.
+// The script in the page's head sets the attribute before the first paint when the page
+// does not open at its top: on a reload or a return through the history (the page is
+// laid out as it was, and the browser puts the scroll position back in that layout), and
+// on a fresh visit to an address with a fragment (`/blend#blend-faq`, `/blend#handoff`).
+// Laid out plain, the walk-through would change layout under the reader when this
+// component runs (a layout shift of 0.5 to 0.9). A fresh visit to the top stays plain
+// until this component runs: it is readable all along, and the walk-through is out of
+// view. A fragment that names a feature, its tab or the walk-through is inside the
+// pinned frame, and the browser would scroll to it as if the frame were not pinned (the
+// walk-through's heading opens the first feature), so the script takes it off
+// the address for the moment (`__blendLinked` keeps it) and this component puts it back
+// and opens the feature. The script also notes the reader's first move, so the feature
+// opens only if the reader has not moved on. If this component has not run three
+// seconds after the page has loaded (its script did not load), the plain layout comes
+// back, where every feature is reachable, with the address and the place as they were.
+// A text fragment (`#:~:text=`) stays plain: the browser looks for the text itself. The
+// head manager can insert the script again on hydration, which runs it again: only its
+// first run counts.
+// The addresses of what is inside the pinned frame: a feature, its tab, and the walk-through's heading (the first feature).
+const linkedFeature = (hash: string): number =>
+  hash === '#blend-tour' ? 0 : FEATURES.findIndex((feature) => [`#${feature.id}`, `#blend-tab-${feature.id}`].includes(hash));
+const INSIDE = ['#blend-tour', ...FEATURES.flatMap((feature) => [`#${feature.id}`, `#blend-tab-${feature.id}`])];
 const EARLY = `(function(){try{
 if(window.__blendEarly)return;window.__blendEarly=true;
 ['wheel','touchstart','keydown'].forEach(function(t){addEventListener(t,function(){window.__blendMoved=true;},{capture:true,passive:true,once:true});});
@@ -137,11 +145,13 @@ var n=performance.getEntriesByType&&performance.getEntriesByType('navigation')[0
 if(!n||!(window.CSS&&CSS.supports('height','100svh')&&matchMedia(${JSON.stringify(PINNED)}).matches))return;
 var root=document.documentElement,hash='';
 if(n.type!=='reload'&&n.type!=='back_forward'){
-if(n.name!==location.href||${JSON.stringify(FEATURES.map((feature) => `#${feature.id}`))}.indexOf(location.hash)<0)return;
-hash=window.__blendLinked=location.hash;history.replaceState(history.state,'',location.pathname+location.search);}
+if(!location.hash||n.name!==location.href)return;
+if(${JSON.stringify(INSIDE)}.indexOf(location.hash)>=0){hash=window.__blendLinked=location.hash;history.replaceState(history.state,'',location.pathname+location.search);}}
 root.setAttribute('${PIN}','');
-setTimeout(function(){if(window.__blendTour)return;root.removeAttribute('${PIN}');
-if(hash){history.replaceState(history.state,'',location.pathname+location.search+hash);var t=document.getElementById(hash.slice(1));if(t&&!window.__blendMoved)t.scrollIntoView();}},6000);
+var fall=function(){if(window.__blendTour)return;root.removeAttribute('${PIN}');
+if(hash){history.replaceState(history.state,'',location.pathname+location.search+hash);var t=document.getElementById(hash.slice(1));if(t&&!window.__blendMoved)t.scrollIntoView();}};
+var later=function(){setTimeout(fall,3000);};
+if(document.readyState==='complete')later();else addEventListener('load',later,{once:true});
 }catch(e){}})();`;
 
 /** True when the page was reloaded or reached through the history: the browser puts the scroll position back itself. */
@@ -237,7 +247,7 @@ function Tour(): ReactNode {
     const early = page.__blendLinked;
     page.__blendLinked = undefined;
     if (early) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${early}`);
-    const linked = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
+    const linked = linkedFeature(window.location.hash);
     const opens = first && linked >= 0 && !restored() && !page.__blendMoved;
     if (opens) last.current = {feature: linked};
     update();
