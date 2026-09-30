@@ -949,7 +949,7 @@
 
   /* The index: the features by step, as links. The heading gives its room to the list. */
   main.page .frame .index {
-    padding-block: var(--st-space-8);
+    padding-block: var(--pad-y);
   }
 
   /* The index's eyebrow, a feature's kicker and the bar of its scene share one line. */
@@ -1047,9 +1047,10 @@
 /* A tall track with a frame pinned under the navbar. The scroll position picks the
    feature; the features lie on top of each other and only the one that is picked shows.
    Blend.tsx sets `pins` where its PINNED query matches, which is this one: a landscape
-   screen wide and tall enough, with the heights in `em` because the content grows with
-   the reader's font size. Without the script there is no `pins`, and the features flow. */
-@media (min-width: 1024px) and (min-width: 64em) and (min-height: 40em) and (orientation: landscape) {
+   screen wide and tall enough, and not so tall that one feature would be lost in it,
+   with the heights in `em` because the content grows with the reader's font size.
+   Without the script there is no `pins`, and the features flow. */
+@media (min-width: 1024px) and (min-width: 64em) and (min-height: 40em) and (max-height: 100em) and (orientation: landscape) {
   main.page .tour.pins {
     --frame: calc(100svh - var(--st-navbar-height));
     display: block;
@@ -1065,6 +1066,7 @@
 
   main.page .tour.pins .index {
     position: static;
+    padding-block: var(--st-space-8);
   }
 
   main.page .tour.pins .counter {
@@ -1118,7 +1120,9 @@
 
   /* A feature that is not showing keeps its place in the page, unrendered, so the
      browser's find-in-page still reaches it (Blend.tsx marks it hidden until found; the
-     browser lifts the mark on a match) and nothing in it takes focus or runs. */
+     browser lifts the mark on a match) and nothing in it takes focus or runs. Blend.tsx
+     hides it in a browser that cannot leave it unrendered: an `@supports not` block
+     here would be folded into this rule by the minifier, and hidden text is not found. */
   main.page .tour.pins .feature[hidden] {
     content-visibility: hidden;
     pointer-events: none;
@@ -1149,19 +1153,9 @@
   }
 }
 
-/* A browser that cannot leave a feature unrendered hides it. */
-@supports not (content-visibility: hidden) {
-  @media (min-width: 1024px) and (min-width: 64em) and (min-height: 40em) and (orientation: landscape) {
-    main.page .tour.pins .feature[hidden] {
-      visibility: hidden;
-    }
-  }
-}
-
 /* Reduced motion: the feature that is picked is there at once. The site gives every
-   element a near-zero transition then, and a change that is inherited (the visibility
-   of the fallback above) would still be handed down one level of the scene per frame,
-   so nothing inside a feature transitions. */
+   element a near-zero transition then, and a change that is inherited would still be
+   handed down one level of the scene per frame, so nothing inside a feature transitions. */
 @media (prefers-reduced-motion: reduce) {
   main.page .tour.pins .features .feature,
   main.page .tour.pins .features .feature.featureOn {
@@ -1178,7 +1172,7 @@
 }
 
 /* A frame with room to spare gives the index its full heading back. */
-@media (min-width: 1024px) and (min-width: 64em) and (min-height: 51.25em) and (orientation: landscape) {
+@media (min-width: 1024px) and (min-width: 64em) and (min-height: 51.25em) and (max-height: 100em) and (orientation: landscape) {
   main.page .tour.pins .indexTitle {
     font-size: var(--st-text-serif-legend);
     letter-spacing: var(--st-tracking-serif);
