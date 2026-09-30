@@ -75,7 +75,8 @@ function Arrow(): ReactNode {
   );
 }
 
-// Each step carries the status a ticket has at that point, as the web UI draws it.
+// Each step carries the status a ticket has at that point, as the web UI draws it. The
+// step titles are not headings: the chapters of the walk-through carry the same names.
 const STEPS: {title: string; text: string; status: Status}[] = [
   {title: 'Write the plan.', text: 'The plan you and your agent agreed on: its steps, and what depends on what.', status: 'ready'},
   {title: 'Agents work the tickets.', text: 'Each step is a ticket. An agent claims one, keeps a worklog on it and finishes it.', status: 'active'},
@@ -355,7 +356,7 @@ const FAQ: {question: string; answer: ReactNode; link: {to: string; label: strin
         shipped: today staple does not read from or write to any of them.
       </>
     ),
-    link: {to: '/docs/why-staple', label: 'Why staple'},
+    link: {to: '/docs/why-staple#next-to-linear-github-and-clickup', label: 'Next to Linear, GitHub and ClickUp'},
   },
   {
     question: 'Which agents does it work with?',
@@ -393,18 +394,19 @@ const FAQ: {question: string; answer: ReactNode; link: {to: string; label: strin
     answer: (
       <>
         Each repository keeps its tickets in one SQLite file, <code>.staple/staple.db</code>. There is no account, no
-        server and no network call between an agent and its next ticket, and it works offline. Cloud sync between
-        machines is optional and off until you turn it on.
+        server and no network call between an agent and its next ticket, and it works offline.{' '}
+        <Link to="/docs/cloud-sync">Cloud sync</Link> between machines is optional and off until you turn it on.
       </>
     ),
-    link: {to: '/docs/cloud-sync', label: 'Cloud sync'},
+    link: {to: '/docs/why-staple', label: 'Why staple'},
   },
   {
     question: 'How do I stay in control of what agents do?',
     answer: (
       <>
-        You set the order agents take work in with the pickup queue, make work wait for your sign-off with an approval
-        gate, and follow everything in the local web UI that <code>staple open</code> starts.
+        You set the order agents take work in with the <Link to="/docs/queue">pickup queue</Link>, make work wait for
+        your sign-off with an approval gate, and follow everything in the local <Link to="/docs/web-ui">web UI</Link>{' '}
+        that <code>staple open</code> starts.
       </>
     ),
     link: {to: '/docs/approval-gates', label: 'Approval gates'},
@@ -480,7 +482,7 @@ export default function Walkthrough(): ReactNode {
                     <span className={styles.stepNumber}>{String(i + 1).padStart(2, '0')}</span>
                     <StatusGlyph status={step.status} />
                   </div>
-                  <h3 className={styles.stepTitle}>{step.title}</h3>
+                  <p className={styles.stepTitle}>{step.title}</p>
                   <p className={styles.stepText}>{step.text}</p>
                 </li>
               ))}
@@ -526,7 +528,7 @@ export default function Walkthrough(): ReactNode {
         <section className={clsx(styles.alongside, styles.tinted)} aria-labelledby="wt-alongside">
           <div className={styles.container}>
             <div className={styles.centerHead}>
-              <Pill>Next to Linear, GitHub and ClickUp</Pill>
+              <Pill>Next to Linear, GitHub, ClickUp</Pill>
               <h2 id="wt-alongside" className={styles.title}>
                 <Lines>{['Keep your team’s board.', 'Give agents their own.']}</Lines>
               </h2>
@@ -541,12 +543,9 @@ export default function Walkthrough(): ReactNode {
               </div>
             </div>
             <p className={styles.plannedNote}>
-              <span className={styles.planned}>Planned</span>
-              <span>
-                Integrations that keep the two in sync, with GitHub Issues, ClickUp and Linear, are planned, not shipped.
-                Today staple does not read from or write to any of them: use it alongside them and carry items across
-                yourself.
-              </span>
+              Integrations that keep the two in sync, with GitHub Issues, ClickUp and Linear, are planned, not shipped.
+              Today staple does not read from or write to any of them: use it alongside them and carry items across
+              yourself.
             </p>
             <dl className={styles.compare}>
               {COMPARE.map((row) => (
@@ -581,7 +580,7 @@ export default function Walkthrough(): ReactNode {
               {FAQ.map((item) => (
                 <details key={item.question} className={styles.item}>
                   <summary className={styles.question}>
-                    <span>{item.question}</span>
+                    <span className={styles.questionText}>{item.question}</span>
                     <Chevron />
                   </summary>
                   <div className={styles.answer}>

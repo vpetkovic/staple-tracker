@@ -164,15 +164,14 @@
   /* The walkthrough landing page (src/components/landing/Walkthrough): Geist set heavy
      and tight for its headlines, with their sizes (each follows the width it has, the
      feature headline the width of its column, so a headline keeps its two lines down to
-     a 320 px screen); the radius of the panel a scene sits in; the width of the page. */
-  --st-text-sans-hero: clamp(2rem, 10.8vw, 5.5rem);
-  --st-text-sans-2xl: min(8.1vw, clamp(2.125rem, 1.45rem + 3vw, 3.75rem));
-  --st-text-sans-xl: clamp(1.5rem, 9.4cqw, 2.625rem);
+     a 320 px screen); the radius of the panel a scene sits in. */
+  --st-text-sans-hero: clamp(2rem, 10.6vw, 5.5rem);
+  --st-text-sans-2xl: min(7.9vw, clamp(2.125rem, 1.45rem + 3vw, 3.75rem));
+  --st-text-sans-xl: clamp(1.5rem, 9.2cqw, 2.625rem);
   --st-weight-heavy: 650;
-  --st-tracking-heavy: -0.05em;
+  --st-tracking-heavy: -0.04em;
   --st-leading-heavy: 1.02;
   --st-radius-xl: 20px;
-  --st-container-roomy: 76rem;
 }
 
 [data-theme='dark'] {

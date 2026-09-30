@@ -134,8 +134,14 @@ downloads them: keep `--st-font-serif` out of shared components. The page's piec
   longest one today ("A plan becomes an epic.") needs a smaller factor in the token.
 - `CHAPTERS` is the walk-through: three chapters that follow the three steps, each a
   list of features. `Feature` is one section: a pill, the headline, a paragraph or
-  three points, a docs link, and exactly one scene in a `panel`. The sides alternate
-  from 997 px; below that the order is pill, headline, panel, copy.
+  three points, a docs link, and exactly one scene in a `panel`. On a phone the order
+  is pill, headline, panel, copy, and the panel reaches into the gutter so the scene
+  keeps the 300 px the kit draws for. From 768 px the panel and the copy sit side by
+  side under the headline, and from 997 px the headline joins the copy; the sides
+  alternate in both.
+- Every rule in a media query starts at `main.page`, and media queries that set the
+  same thing cover ranges that do not overlap: the minified CSS can reorder rules of
+  equal weight.
 - The FAQ is native `details`, so it works by keyboard and without JavaScript. Every
   answer says what the docs say and links the page that says it.
 

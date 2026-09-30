@@ -1,9 +1,11 @@
 /*
  * The walkthrough landing page. Geist only, set heavy and tight; pills for the eyebrows
  * and the buttons; one scene per feature in a panel. Colours, sizes, weights and radii
- * are tokens. A rule that changes another (a flipped feature, an open question, a
- * restyled shared component) carries one more class than the rule it changes: the
- * production CSS is minified across files and equal-weight rules can swap places.
+ * are tokens. A rule that changes another outranks it, because the production CSS is
+ * minified across files and equal-weight rules can swap places: a state or a restyled
+ * shared component carries one more class (`.feature.flip`, `.page .cta`), and every
+ * rule in a media query starts at `main.page`. Media queries that set the same thing
+ * cover ranges that do not overlap.
  */
 
 .page {
@@ -14,7 +16,7 @@
 }
 
 .container {
-  max-width: var(--st-container-roomy);
+  max-width: var(--st-container);
   margin-inline: auto;
   padding-inline: var(--st-gutter);
 }
@@ -78,8 +80,10 @@
 /* ---------- Hero ---------- */
 
 .hero {
-  /* The width of the decoration; the copy starts part of the way down it. */
-  --wt-art: clamp(20rem, 70vw, 46rem);
+  /* The width of the decoration; the copy starts part of the way down it. It follows
+     the width of the screen, and on a short screen the height, so the button under the
+     copy stays in view. */
+  --wt-art: min(max(20rem, 70vw), max(12rem, (100vh - 28rem) * 2.38), 46rem);
   position: relative;
   overflow: hidden;
   padding: 0 var(--st-gutter) var(--wt-section);
@@ -95,17 +99,17 @@
   margin-left: calc(var(--wt-art) / -2);
   fill: none;
   stroke: var(--st-accent);
-  -webkit-mask-image: linear-gradient(to bottom, #000 22%, transparent 94%);
-  mask-image: linear-gradient(to bottom, #000 22%, transparent 94%);
+  /* The legs run out as they reach the headline. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 18%, transparent 74%);
+  mask-image: linear-gradient(to bottom, #000 18%, transparent 74%);
   pointer-events: none;
 }
 
 /* Outer staples are faint, inner ones full. Each is driven in from above, once. */
 .staple {
   opacity: calc(0.14 + var(--i) * 0.17);
-  animation: wt-drive var(--st-duration-slow) var(--st-ease) backwards;
-  animation-duration: 900ms;
-  animation-delay: calc(var(--i) * 90ms);
+  animation: wt-drive calc(var(--st-duration-slow) * 2) var(--st-ease) backwards;
+  animation-delay: calc(var(--i) * var(--st-stagger));
 }
 
 @keyframes wt-drive {
@@ -177,8 +181,11 @@
   padding-bottom: var(--wt-section);
 }
 
+/* Each step lays its three lines on the box's rows, so the lines of neighbouring
+   steps stay level when a title wraps. */
 .steps {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -189,6 +196,9 @@
 }
 
 .step {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
   padding: var(--st-space-6) var(--st-space-6) var(--st-space-8);
 }
 
@@ -238,6 +248,7 @@
 /* One box; the gaps between the tiles show the box's colour as hairlines. */
 .tiles {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--st-hairline);
   margin: var(--st-space-10) 0 0;
   padding: 0;
@@ -344,10 +355,13 @@
   text-wrap: balance;
 }
 
-/* The panel: a lighter box with room around the one scene it holds. */
+/* The panel: a lighter box with room around the one scene it holds. On a phone it
+   reaches into the gutter and keeps its padding small, so the scene gets the width
+   the kit draws for. */
 .panel {
   min-width: 0;
-  padding: var(--st-space-4);
+  margin-inline: calc(var(--st-gutter) / -2);
+  padding: var(--st-space-2);
   border: var(--st-hairline) solid var(--st-border);
   border-radius: var(--st-radius-xl);
   background: radial-gradient(70% 55% at 50% 0%, var(--st-glow-faint), transparent), var(--st-bg-muted);
@@ -441,7 +455,7 @@
 
 .panel.panelWide {
   max-width: 58rem;
-  margin: var(--st-space-12) auto 0;
+  margin-top: var(--st-space-12);
 }
 
 .panelWide .stage {
@@ -449,35 +463,20 @@
 }
 
 .plannedNote {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--st-space-3);
-  max-width: 46rem;
+  max-width: 44rem;
   margin: var(--st-space-6) auto 0;
+  text-align: center;
   font-size: var(--st-text-sm);
   line-height: var(--st-leading-relaxed);
   color: var(--st-fg-muted);
-  text-wrap: pretty;
-}
-
-.planned {
-  flex: none;
-  padding: 0 var(--st-space-2);
-  border: var(--st-hairline) dashed var(--st-border-strong);
-  border-radius: var(--st-radius-full);
-  font-family: var(--st-font-mono);
-  font-size: var(--st-text-2xs);
-  font-weight: var(--st-weight-medium);
-  line-height: 1.375rem;
-  letter-spacing: var(--st-tracking-eyebrow);
-  text-transform: uppercase;
-  color: var(--st-fg-muted);
+  text-wrap: balance;
 }
 
 /* Three cells in one box. Each cell lays its three lines on the box's rows, so the
    lines of neighbouring cells stay level whatever wraps. */
 .compare {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0 var(--st-hairline);
   margin: var(--st-space-12) 0 0;
   overflow: hidden;
@@ -513,6 +512,7 @@
   font-size: var(--st-text-base);
   line-height: var(--st-leading-ui);
   color: var(--st-fg-muted);
+  text-wrap: balance;
 }
 
 .compareValue + .compareValue {
@@ -568,6 +568,10 @@
   cursor: pointer;
 }
 
+.questionText {
+  text-wrap: balance;
+}
+
 .question::-webkit-details-marker {
   display: none;
 }
@@ -620,6 +624,12 @@
   line-height: var(--st-leading-relaxed);
   color: var(--st-fg-muted);
   text-wrap: pretty;
+}
+
+/* A link inside an answer is told from the text around it by more than its colour. */
+.page .answer p a {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 
 /* ---------- Get started ---------- */
@@ -680,90 +690,163 @@
   margin-top: var(--st-space-8);
 }
 
-/* ---------- From a large phone ---------- */
+/* ---------- The narrowest phones: the panel runs edge to edge ---------- */
+
+@media (max-width: 340px) {
+  main.page .panel {
+    margin-inline: calc(-1 * var(--st-gutter));
+    border-inline: 0;
+    border-radius: 0;
+  }
+}
+
+/* ---------- From a large phone: the panel sits inside the column ---------- */
+
+@media (min-width: 420px) {
+  main.page .panel {
+    margin-inline: 0;
+  }
+
+  main.page .panel.panelWide {
+    margin-inline: auto;
+  }
+}
+
+@media (min-width: 420px) and (max-width: 599px) {
+  main.page .panel {
+    padding: var(--st-space-4);
+  }
+}
 
 @media (min-width: 600px) {
-  .body,
-  .points {
-    font-size: var(--st-text-lg);
-  }
-
-  .page .cta {
+  main.page .cta {
     padding-inline: var(--st-space-8);
   }
+}
 
-  .panel {
+@media (min-width: 600px) and (max-width: 767px) {
+  main.page .panel {
     padding: var(--st-space-8);
   }
 }
 
-/* ---------- Tablet ---------- */
+/* Where the copy has a wide column: a large phone on its side, and the desktop. */
+@media (min-width: 600px) and (max-width: 767px), (min-width: 997px) {
+  main.page .body,
+  main.page .points {
+    font-size: var(--st-text-lg);
+  }
+}
+
+/* ---------- Tablet and up ---------- */
 
 @media (min-width: 768px) {
-  .page {
-    --wt-section: var(--st-space-24);
-  }
-
-  .heroLead {
+  main.page .heroLead {
     font-size: var(--st-text-xl);
   }
 
-  .steps {
+  main.page .steps {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .step {
+  main.page .step {
     padding: var(--st-space-8) var(--st-space-6) var(--st-space-10);
   }
 
-  .step + .step {
+  main.page .step + .step {
     border-top: 0;
     border-left: var(--st-hairline) solid var(--st-border);
   }
 
-  .tiles {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  main.page .tiles {
     margin-top: var(--st-space-16);
   }
 
-  .tile {
+  main.page .tile {
     padding: var(--st-space-8) var(--st-space-6) var(--st-space-10);
   }
 
-  .compare {
+  main.page .compare {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .compareCell + .compareCell {
+  main.page .compareCell + .compareCell {
     margin-top: 0;
   }
 
-  .chapterHead {
+  main.page .chapterHead {
     margin-bottom: var(--st-space-16);
+  }
+}
+
+/* ---------- Tablet: the headline over the panel and the copy, side by side ---------- */
+
+@media (min-width: 768px) and (max-width: 996px) {
+  main.page {
+    --wt-section: var(--st-space-24);
+  }
+
+  main.page .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  main.page .panel {
+    padding: var(--st-space-6);
+  }
+
+  main.page .feature {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-areas:
+      'head head'
+      'panel copy';
+    column-gap: var(--st-space-8);
+  }
+
+  main.page .feature.flip {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    grid-template-areas:
+      'head head'
+      'copy panel';
+  }
+
+  main.page .featureHead {
+    grid-area: head;
+  }
+
+  main.page .feature .panel {
+    grid-area: panel;
+  }
+
+  main.page .featureCopy {
+    grid-area: copy;
+    align-self: center;
   }
 }
 
 /* ---------- Desktop: copy and panel side by side, the sides alternating ---------- */
 
 @media (min-width: 997px) {
-  .page {
+  main.page {
     --wt-section: var(--st-space-32);
   }
 
-  .tiles {
+  main.page .tiles {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .feature {
+  main.page .panel {
+    padding: var(--st-space-10);
+  }
+
+  main.page .feature {
     grid-template-columns: minmax(0, 6fr) minmax(0, 7fr);
     grid-template-areas:
       'head panel'
       'copy panel';
-    column-gap: clamp(var(--st-space-12), 5.5vw, 5rem);
-    row-gap: var(--st-space-8);
+    column-gap: clamp(var(--st-space-12), 5.5vw, var(--st-space-16));
   }
 
-  .feature.flip {
+  main.page .feature.flip {
     grid-template-columns: minmax(0, 7fr) minmax(0, 6fr);
     grid-template-areas:
       'panel head'
@@ -771,28 +854,27 @@
   }
 
   /* The panel is the taller side; the head and the copy meet at its middle. */
-  .featureHead {
+  main.page .featureHead {
     grid-area: head;
     align-self: end;
   }
 
-  .featureCopy {
+  main.page .featureCopy {
     grid-area: copy;
     align-self: start;
   }
 
-  .feature .panel {
+  main.page .feature .panel {
     grid-area: panel;
     align-self: center;
-    padding: var(--st-space-10);
   }
 
-  .faqGrid {
+  main.page .faqGrid {
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
     gap: clamp(var(--st-space-12), 6vw, var(--st-space-24));
   }
 
-  .faqHead {
+  main.page .faqHead {
     position: sticky;
     top: calc(var(--st-navbar-height) + var(--st-space-12));
     align-self: start;
