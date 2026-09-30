@@ -84,7 +84,7 @@
      the width of the screen, and on a short screen the height, in step with the size of
      the headline (--st-text-sans-hero), so the hero keeps its proportions and the
      button and the link under the copy stay in view. */
-  --wt-art: min(max(20rem, 70vw), max(12rem, (100vh - 19.8rem) * 1.506), 46rem);
+  --wt-art: min(max(min(20rem, 100vw - 2 * var(--st-gutter)), 70vw), max(12rem, (100vh - 19.8rem) * 1.506), 46rem);
   position: relative;
   overflow: hidden;
   padding: 0 var(--st-gutter) var(--wt-section);
@@ -692,15 +692,16 @@
   margin-top: var(--st-space-8);
 }
 
-/* ---------- A phone on its side: the copy alone, so the button is in view ---------- */
+/* ---------- A very short screen (a phone on its side): the copy alone, closer
+   together, so the button and the link are in view ---------- */
 
-@media (max-height: 480px) {
+@media (max-height: 559.98px) {
   main.page .art {
     display: none;
   }
 
   main.page .heroCopy {
-    padding-top: var(--st-space-8);
+    padding-top: var(--st-space-6);
   }
 
   main.page .heroLead {
@@ -708,7 +709,7 @@
   }
 
   main.page .heroActions {
-    margin-top: var(--st-space-6);
+    margin-top: var(--st-space-5);
   }
 }
 
@@ -769,11 +770,13 @@
 
 /* ---------- Tablet and up ---------- */
 
-@media (min-width: 768px) {
+@media (min-width: 768px) and (min-height: 560px) {
   main.page .heroLead {
     font-size: var(--st-text-xl);
   }
+}
 
+@media (min-width: 768px) {
   main.page .steps {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -817,7 +820,7 @@
 
   /* Three steps across a tablet: each title keeps one line. */
   main.page .step {
-    padding-inline: var(--st-space-5);
+    padding-inline: var(--st-space-4);
   }
 
   main.page .stepTitle {

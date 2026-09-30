@@ -129,7 +129,7 @@ downloads them: keep `--st-font-serif` out of shared components. The page's piec
 - The hero's decoration is the staple of the logo, nested (`Staples`): SVG strokes in
   the accent colour, driven in once on load, still under reduced motion. Its width and
   the headline's size both follow the height of a short screen, so the button stays in
-  view; under 480 px of height (a phone on its side) the decoration is left out.
+  view; under 560 px of height (a phone on its side) the decoration is left out.
 - A headline is two lines (`Lines`) at every width, because its size follows the room
   it has: `--st-text-sans-hero` and `--st-text-sans-2xl` follow the viewport, and
   `--st-text-sans-xl` follows the feature's column (`cqw`). A line longer than the
