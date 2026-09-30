@@ -763,6 +763,10 @@
     padding-bottom: var(--pad-y);
   }
 
+  main.page .underneath .legend .eyebrow {
+    grid-column: 1 / -1;
+  }
+
   main.page .underneath .legendText {
     margin-top: 0;
   }
