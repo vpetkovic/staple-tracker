@@ -119,18 +119,29 @@ function pins(): boolean {
 // On a reload, or a return through the history, the script in the page's head sets the
 // attribute before the first paint, so the page is laid out as it was and the browser
 // puts the scroll position back in that layout. A fresh visit stays plain until this
-// component runs: it is readable all along, and the walk-through is out of view. The
-// script also notes the reader's first move, so a fresh visit to an address that names
-// a feature opens on it only if the reader has not moved on. If this component has not
-// run six seconds after a reload (its script did not load), the plain layout comes
-// back, where every feature is reachable.
+// component runs: it is readable all along, and the walk-through is out of view. A fresh
+// visit to an address that names a feature is pinned before the first paint too, or the
+// walk-through, in view, would change layout under the reader when this component runs.
+// The browser would scroll to the feature's section in the server's HTML, which is
+// inside the pinned frame, so the script takes the feature off the address for the
+// moment (`__blendLinked` keeps it) and this component puts it back and opens the
+// feature. The script also notes the reader's first move, so the feature opens only if
+// the reader has not moved on. If this component has not run six seconds later (its
+// script did not load), the plain layout comes back, where every feature is reachable,
+// with the address and the feature as they were. The head manager can insert the script
+// again on hydration, which runs it again: only its first run counts.
 const EARLY = `(function(){try{
+if(window.__blendEarly)return;window.__blendEarly=true;
 ['wheel','touchstart','keydown'].forEach(function(t){addEventListener(t,function(){window.__blendMoved=true;},{capture:true,passive:true,once:true});});
 var n=performance.getEntriesByType&&performance.getEntriesByType('navigation')[0];
-if(!(n&&(n.type==='reload'||n.type==='back_forward')))return;
-if(!(window.CSS&&CSS.supports('height','100svh')&&matchMedia(${JSON.stringify(PINNED)}).matches))return;
-var root=document.documentElement;root.setAttribute('${PIN}','');
-setTimeout(function(){if(!window.__blendTour)root.removeAttribute('${PIN}');},6000);
+if(!n||!(window.CSS&&CSS.supports('height','100svh')&&matchMedia(${JSON.stringify(PINNED)}).matches))return;
+var root=document.documentElement,hash='';
+if(n.type!=='reload'&&n.type!=='back_forward'){
+if(n.name!==location.href||${JSON.stringify(FEATURES.map((feature) => `#${feature.id}`))}.indexOf(location.hash)<0)return;
+hash=window.__blendLinked=location.hash;history.replaceState(history.state,'',location.pathname+location.search);}
+root.setAttribute('${PIN}','');
+setTimeout(function(){if(window.__blendTour)return;root.removeAttribute('${PIN}');
+if(hash){history.replaceState(history.state,'',location.pathname+location.search+hash);var t=document.getElementById(hash.slice(1));if(t&&!window.__blendMoved)t.scrollIntoView();}},6000);
 }catch(e){}})();`;
 
 /** True when the page was reloaded or reached through the history: the browser puts the scroll position back itself. */
@@ -198,7 +209,7 @@ function Tour(): ReactNode {
   }, []);
 
   useEffect(() => {
-    const page = window as Window & {__blendTour?: boolean; __blendMoved?: boolean};
+    const page = window as Window & {__blendTour?: boolean; __blendMoved?: boolean; __blendLinked?: string};
     page.__blendTour = true;
     const first = !arrived;
     arrived = true;
@@ -221,10 +232,16 @@ function Tour(): ReactNode {
     };
     last.current = locate();
     // A fresh visit to an address that names a feature opens on it, unless the reader has
-    // moved on before this ran.
+    // moved on before this ran. If the script in the head pinned the frame for it, the
+    // feature goes back on the address, and the frame opens on it once it is pinned here.
+    const early = page.__blendLinked;
+    page.__blendLinked = undefined;
+    if (early) window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${early}`);
     const linked = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
-    if (first && linked >= 0 && !restored() && !page.__blendMoved) last.current = {feature: linked};
+    const opens = first && linked >= 0 && !restored() && !page.__blendMoved;
+    if (opens) last.current = {feature: linked};
     update();
+    if (opens && early && pins()) place.current = {feature: linked};
     query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
   }, [locate]);

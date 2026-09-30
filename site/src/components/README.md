@@ -177,8 +177,14 @@ edges and the rules between its columns itself. Its pieces:
   sets the attribute before the first paint, so the page is laid out as it was and the
   browser puts the scroll position back in the same layout; if the component has not
   run six seconds later, the script takes it away again. A fresh visit stays plain until
-  the component runs (the walk-through is out of view then), and a fresh visit to an
-  address that names a feature opens on it, unless the reader has scrolled on.
+  the component runs (the walk-through is out of view then). A fresh visit to an address
+  that names a feature (`/blend#milestones`) is pinned before the first paint as well,
+  or the walk-through would change layout in view (a layout shift of about 0.5): the
+  script takes the feature off the address, so the browser does not scroll to its
+  section inside the pinned frame, and the component puts it back and opens the feature,
+  unless the reader has scrolled on. Without the component, six seconds later, the plain
+  layout, the address and the feature come back. The script runs once per document (the
+  head manager can insert it again on hydration).
 - The index is then a vertical tablist (arrow keys, Home and End move and select, Enter
   and Space select; Tab goes on into the panel) and the sections are its tabpanels
   (`blend-panel-<id>`). The ones not showing are left unrendered
@@ -216,7 +222,7 @@ restyle the part's classes (the minified CSS can reorder rules of equal weight).
 
 | Part | Used by | What it is |
 | --- | --- | --- |
-| `SerifFont` | bento, blend | Declares the serif face and preloads its two files. Render it once inside `Layout`. |
+| `SerifFont` | bento, blend | Declares the serif face and preloads its two files (through React's `preload`: links in `Head` were replaced on hydration now and then and fetched twice). Render it once inside `Layout`. |
 | `TicketChips`, `useDrift`, `PauseButton` | bento, blend | The chips that drift through a hero (`chips` gives each its places at three widths), whether they may move, and the control that holds them. The page places the button. |
 | `Steps` | walkthrough, blend | The three steps in one list, with `--steps-*` properties for its box, lines and titles. |
 | `Faq` | walkthrough, blend | The questions as native `details`; `linkClassName` and `linkMark` style the docs link, `--faq-question-*` the questions. |
