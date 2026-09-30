@@ -173,13 +173,12 @@ edges and the rules between its columns itself. Its pieces:
   section shows; its scene is mounted again, so it plays from the start. Picking a
   feature moves the scroll position to its place in the track, which the pinned frame
   hides. `--st-tour-step` is how far the page scrolls for one feature.
-- A small script in the page's head sets the attribute before the first paint, so a
-  reload is laid out as it was and the browser puts the scroll position back in the same
-  layout; the component keeps the attribute in step after that. The script leaves the
-  page plain on a fresh visit to an address that names a feature or a piece of text
-  (the browser scrolls to it, which only works in the flow of the plain layout); the
-  component then opens that feature, unless the reader has scrolled on. If the
-  component has not run six seconds later, the script takes the attribute away again.
+- On a reload, or a return through the history, a small script in the page's head
+  sets the attribute before the first paint, so the page is laid out as it was and the
+  browser puts the scroll position back in the same layout; if the component has not
+  run six seconds later, the script takes it away again. A fresh visit stays plain until
+  the component runs (the walk-through is out of view then), and a fresh visit to an
+  address that names a feature opens on it, unless the reader has scrolled on.
 - The index is then a vertical tablist (arrow keys, Home and End move and select, Enter
   and Space select; Tab goes on into the panel) and the sections are its tabpanels
   (`blend-panel-<id>`). The ones not showing are left unrendered

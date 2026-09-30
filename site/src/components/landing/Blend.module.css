@@ -1133,6 +1133,9 @@
     height: 1px;
     scroll-margin-top: var(--st-navbar-height);
     pointer-events: none;
+    /* Never what the browser keeps the page's place by: on a reload it would look the id up
+       in the server's HTML, where the sections carry it. */
+    overflow-anchor: none;
   }
 
   /* A feature that is not showing keeps its place in the page, unrendered, so the

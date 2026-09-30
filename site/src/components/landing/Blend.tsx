@@ -116,19 +116,19 @@ function pins(): boolean {
   return typeof CSS !== 'undefined' && CSS.supports('height', '100svh') && window.matchMedia(PINNED).matches;
 }
 
-// The script in the page's head sets the attribute before the first paint, so a reload
-// is laid out as it was and the browser puts the scroll position back in that layout.
-// Not on a fresh visit to an address that names a feature or a piece of text: the
-// browser then scrolls to it, and it is in the flow of the page only in the plain
-// layout; this component opens the feature once it runs, unless the reader has moved on
-// by then (which the script notes). If this component has not run a few seconds later (its
-// script did not load), the plain layout comes back, where every feature is reachable.
+// On a reload, or a return through the history, the script in the page's head sets the
+// attribute before the first paint, so the page is laid out as it was and the browser
+// puts the scroll position back in that layout. A fresh visit stays plain until this
+// component runs: it is readable all along, and the walk-through is out of view. The
+// script also notes the reader's first move, so a fresh visit to an address that names
+// a feature opens on it only if the reader has not moved on. If this component has not
+// run six seconds after a reload (its script did not load), the plain layout comes
+// back, where every feature is reachable.
 const EARLY = `(function(){try{
 ['wheel','touchstart','keydown'].forEach(function(t){addEventListener(t,function(){window.__blendMoved=true;},{capture:true,passive:true,once:true});});
-if(!(window.CSS&&CSS.supports('height','100svh')&&matchMedia(${JSON.stringify(PINNED)}).matches))return;
 var n=performance.getEntriesByType&&performance.getEntriesByType('navigation')[0];
-var again=n&&(n.type==='reload'||n.type==='back_forward');
-if(!again&&(${JSON.stringify(FEATURES.map((feature) => `#${feature.id}`))}.indexOf(location.hash)>=0||/:~:/.test(n&&n.name||'')))return;
+if(!(n&&(n.type==='reload'||n.type==='back_forward')))return;
+if(!(window.CSS&&CSS.supports('height','100svh')&&matchMedia(${JSON.stringify(PINNED)}).matches))return;
 var root=document.documentElement;root.setAttribute('${PIN}','');
 setTimeout(function(){if(!window.__blendTour)root.removeAttribute('${PIN}');},6000);
 }catch(e){}})();`;
