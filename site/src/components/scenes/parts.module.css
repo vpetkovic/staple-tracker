@@ -270,6 +270,21 @@
   }
 }
 
+/* The narrowest cells: a ranked row drops its identifier, as the web UI's phone rows do. */
+@container scene (max-width: 20rem) {
+  .row {
+    gap: var(--st-space-1);
+  }
+
+  .row .rowLead + .rowId {
+    display: none;
+  }
+
+  .row .rowLead {
+    margin-right: var(--st-space-1);
+  }
+}
+
 /* ---------- Label ---------- */
 
 .label {

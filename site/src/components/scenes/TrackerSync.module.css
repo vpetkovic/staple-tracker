@@ -80,11 +80,16 @@
   white-space: nowrap;
 }
 
-/* A mid-width cell sets the three trackers in a row, which keeps the stack short. */
-@container scene (min-width: 39rem) and (max-width: 43.99rem) {
+/* A mid-width cell sets the three trackers in a row, which keeps the stack short; the
+   names take the room of the icons. */
+@container scene (min-width: 40rem) and (max-width: 43.99rem) {
   .trackers {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--st-space-2);
+  }
+
+  .tracker .board {
+    display: none;
   }
 }
 

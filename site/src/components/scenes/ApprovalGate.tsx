@@ -4,7 +4,7 @@ import Scene, {type SceneOptions} from './Scene';
 import {Chip, List, Pointer, Row, Swap, Wide} from './parts';
 import styles from './ApprovalGate.module.css';
 
-/** An epic waits on a person. Approve is pressed, and the tickets under it become ready. */
+/** An epic waits on a person. Approve all is pressed, and the tickets under it become ready. */
 export default function ApprovalGate(options: SceneOptions): ReactNode {
   const approved = (step: number) => step >= 3;
   return (

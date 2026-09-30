@@ -52,6 +52,8 @@ export default function Scene({label, title, meta, timeline, children, className
           </div>
         </div>
       </div>
+      {/* A looping scene holds the control's place from the first paint, so nothing moves when it appears. */}
+      {loop && !live && <span className={styles.pauseSpace} aria-hidden="true" />}
       {loop && live && (
         <button type="button" className={styles.pause} onClick={togglePaused} aria-label={paused ? 'Play animation' : 'Pause animation'}>
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">

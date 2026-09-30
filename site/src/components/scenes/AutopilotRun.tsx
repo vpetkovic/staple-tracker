@@ -78,7 +78,7 @@ export default function AutopilotRun(options: SceneOptions): ReactNode {
                 after={
                   <>
                     <Chip tone="warn">Stopped: budget</Chip>
-                    <span className={styles.reason}>3 of 3 tickets used</span>
+                    <span className={styles.reason}>Reached its limit of 3 tickets</span>
                   </>
                 }
                 block

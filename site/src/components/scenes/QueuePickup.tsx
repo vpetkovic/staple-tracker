@@ -22,7 +22,7 @@ export default function QueuePickup({fade = 'bottom', ...options}: SceneOptions)
               <Typed on={step >= 1}>staple queue next</Typed>
             </span>
             <Reveal on={step >= 2} from="left" className={styles.answer}>
-              next APP-2 (position 1) Tenant id on every table
+              next APP-2 (position 1)<Wide> Tenant id on every table</Wide>
             </Reveal>
           </div>
           <List>
@@ -36,7 +36,7 @@ export default function QueuePickup({fade = 'bottom', ...options}: SceneOptions)
                 <Swap
                   on={step >= 3}
                   align="end"
-                  before={<Chip>Next</Chip>}
+                  before={<Chip>Next up</Chip>}
                   after={
                     <>
                       <Wide>
@@ -58,7 +58,7 @@ export default function QueuePickup({fade = 'bottom', ...options}: SceneOptions)
               title="Tenant-aware rate limits"
               trail={
                 <Reveal on={step >= 4} from="none" inline>
-                  <Chip>Next</Chip>
+                  <Chip>Next up</Chip>
                 </Reveal>
               }
             />

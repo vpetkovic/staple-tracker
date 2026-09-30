@@ -107,8 +107,15 @@
 }
 
 /* The pause control of a looping scene: below the panel, so it never covers the UI. */
+.pauseSpace {
+  display: block;
+  height: var(--st-control-sm);
+  margin-top: var(--st-space-2);
+}
+
 .pause {
-  display: inline-flex;
+  display: flex;
+  width: fit-content;
   align-items: center;
   gap: var(--st-space-2);
   min-height: var(--st-control-sm);

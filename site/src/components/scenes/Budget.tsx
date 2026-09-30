@@ -4,7 +4,7 @@ import Scene, {type SceneOptions} from './Scene';
 import {Chip, Label, Reveal, StatusGlyph} from './parts';
 import styles from './Budget.module.css';
 
-// A provider limit: how much of the window is used, and when it resets.
+// A provider limit: how much of the window is used (the gauge), what is left (the figure), and when it resets.
 const LIMITS: {name: string; used: number; resets: string}[] = [
   {name: '5-hour limit', used: 0.62, resets: 'resets in 1h 48m'},
   {name: 'Weekly limit', used: 0.41, resets: 'resets Thursday'},
@@ -14,7 +14,7 @@ const LIMITS: {name: string; used: number; resets: string}[] = [
 export default function Budget(options: SceneOptions): ReactNode {
   return (
     <Scene
-      label="The Usage view: the 5-hour limit is 62% used and the weekly limit 41% used, and both leave the 20% reserve untouched. Below, the ticket APP-2 was estimated at 2 hours and took 1 hour 25 minutes of agent work."
+      label="The Usage view: the 5-hour limit has 38% left and the weekly limit 59% left, and the pace keeps the 20% reserve. Below, the ticket APP-2 was estimated at 2 hours and took 1 hour 25 minutes of agent work."
       title="Usage"
       meta="this computer"
       timeline={[300, 800, 1700, 2500, 3300]}
@@ -34,7 +34,7 @@ export default function Budget(options: SceneOptions): ReactNode {
                 </div>
                 <div className={styles.limitFoot}>
                   <Reveal on={step >= i + 1} from="none" inline className={styles.used}>
-                    {Math.round(limit.used * 100)}% used
+                    {Math.round((1 - limit.used) * 100)}% left
                   </Reveal>
                   <span className={styles.reserveNote}>reserve 20%</span>
                 </div>

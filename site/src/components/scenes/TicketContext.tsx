@@ -31,7 +31,7 @@ export default function TicketContext(options: SceneOptions): ReactNode {
             <div className={styles.state}>
               <Chip tone="info">
                 <StatusGlyph status="active" className={styles.stateGlyph} />
-                In progress
+                In Progress
               </Chip>
               <span className={styles.holder}>
                 <Agent name="claude" />

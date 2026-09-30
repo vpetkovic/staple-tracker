@@ -21,6 +21,7 @@
 }
 
 .answer {
+  white-space: pre;
   overflow: hidden;
   color: var(--st-fg-muted);
   text-overflow: ellipsis;

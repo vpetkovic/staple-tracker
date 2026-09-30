@@ -129,6 +129,13 @@
   }
 }
 
+/* The narrowest cells set the terminal and the tool call a size smaller, whole. */
+@container scene (max-width: 20rem) {
+  .tree .code {
+    font-size: var(--st-text-2xs);
+  }
+}
+
 .codeLine {
   display: flex;
   align-items: center;
