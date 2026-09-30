@@ -1,4 +1,5 @@
-import {Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
+import {Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode} from 'react';
+import {flushSync} from 'react-dom';
 import clsx from 'clsx';
 import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
@@ -32,11 +33,11 @@ const CHIPS: ChipSpec[] = [
   {id: 'APP-2', title: 'Tenant id on every table', status: 'active', depth: 1, at: ['69%', '27%'], tablet: ['30%', '4.25rem'], phone: ['38%', '2.75rem'], drift: [40, -16], seconds: 19, leaves: 'late'},
   {id: 'APP-3', title: 'Scope queries by tenant', status: 'backlog', depth: 1, at: ['85%', '41%'], tablet: ['68%', '6.75rem'], phone: ['60%', '5.5rem'], drift: [-36, 12], seconds: 22, leaves: 'early'},
   {id: 'APP-7', title: 'Backfill tenant_id on invoices', status: 'done', depth: 2, at: ['65%', '50%'], drift: [26, 12], seconds: 23, leaves: 'early'},
-  {id: 'APP-5', title: 'Tenant-aware rate limits', status: 'ready', depth: 1, at: ['78%', '62%'], tablet: ['26%', fromBottom(6.5)], phone: ['38%', fromBottom(7.25)], drift: [-34, -14], seconds: 21, leaves: 'middle'},
+  {id: 'APP-5', title: 'Tenant-aware rate limits', status: 'ready', depth: 1, at: ['78%', '62%'], tablet: ['26%', fromBottom(6.5)], phone: ['38%', fromBottom(8)], drift: [-34, -14], seconds: 21, leaves: 'middle'},
   {id: 'APP-4', title: 'Tenant-aware billing', status: 'blocked', depth: 2, at: ['91%', '73%'], drift: [-22, -12], seconds: 26, leaves: 'middle'},
-  {id: 'APP-8', title: 'Tenant switcher in the admin', status: 'gated', depth: 1, at: ['68%', '80%'], tablet: ['62%', fromBottom(4.25)], phone: ['58%', fromBottom(4.5)], drift: [34, -18], seconds: 20, leaves: 'late'},
-  {id: 'APP-11', title: 'Index tenant_id on payments', status: 'done', depth: 3, at: ['84%', '91%'], drift: [-24, -8], seconds: 28, leaves: 'early'},
-  {id: 'APP-10', title: 'Remove the global admin query', status: 'backlog', depth: 3, at: ['56%', '93%'], tablet: ['84%', fromBottom(8)], drift: [22, -10], seconds: 25, leaves: 'late'},
+  {id: 'APP-8', title: 'Tenant switcher in the admin', status: 'gated', depth: 1, at: ['68%', '80%'], tablet: ['62%', fromBottom(4.25)], phone: ['56%', fromBottom(5.25)], drift: [34, -18], seconds: 20, leaves: 'late'},
+  {id: 'APP-11', title: 'Index tenant_id on payments', status: 'done', depth: 3, at: ['79%', '88%'], drift: [-24, -8], seconds: 28, leaves: 'early'},
+  {id: 'APP-10', title: 'Remove the global admin query', status: 'backlog', depth: 3, at: ['53%', '93%'], tablet: ['84%', fromBottom(8)], drift: [22, -10], seconds: 25, leaves: 'late'},
 ];
 
 function Arrow(): ReactNode {
@@ -53,7 +54,7 @@ function Hero(): ReactNode {
     <section ref={ref} className={styles.hero}>
       <TicketChips chips={CHIPS} motion={motion} wideFrom={1024} />
       <div className={styles.heroCopy}>
-        <p className={styles.eyebrow}>Local-first task tracker for coding agents</p>
+        <p className={styles.eyebrow}>Local-first task tracker</p>
         <h1 className={styles.heroTitle}>
           <span className={styles.line}>From plan</span> <span className={styles.line}>
             to <em>done</em>.
@@ -83,6 +84,8 @@ const FEATURES: TourFeature[] = CHAPTERS.flatMap((chapter, c) => chapter.feature
 
 const two = (n: number): string => String(n).padStart(2, '0');
 
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
 /** A line of a headline, with the feature's accent words in italic. */
 function accented(line: string, accent: string): ReactNode {
   const at = line.indexOf(accent);
@@ -96,18 +99,26 @@ function accented(line: string, accent: string): ReactNode {
   );
 }
 
-// When the walk-through is a pinned frame: a screen wide and tall enough for the index,
-// the copy and the scene side by side, in a browser that runs scripts. The stylesheet
-// lays the frame out under the same query, so the page and its script always agree, and
-// a browser that does not know `scripting` gets the plain layout from both.
-const PINNED = '(min-width: 1024px) and (min-height: 640px) and (scripting: enabled)';
+// When the walk-through is a pinned frame: a landscape screen wide and tall enough for
+// the index, the copy and the scene side by side. The heights are in `em`, which a media
+// query reads as the reader's own font size, because the frame's content grows with it.
+// The stylesheet lays the frame out under the same query, and only on the class this
+// component sets once it runs: without the script, the features flow down the page.
+const PINNED = '(min-width: 1024px) and (min-width: 64em) and (min-height: 40em) and (orientation: landscape)';
+
+/** True when the page was reloaded or reached through the history: the browser puts the scroll position back itself. */
+function restored(): boolean {
+  const [entry] = window.performance?.getEntriesByType?.('navigation') ?? [];
+  const type = (entry as PerformanceNavigationTiming | undefined)?.type;
+  return type === 'reload' || type === 'back_forward';
+}
 
 /**
  * The walk-through. Its markup is a list of nine sections in reading order, which is
- * what a phone shows. Where `PINNED` matches, the stylesheet turns it into a tall track
- * with a frame pinned under the navbar: the scroll position picks the feature, the
- * index marks it, and only that feature's section shows. The index is then a vertical
- * tablist and the sections are its panels.
+ * what a phone shows. Where `PINNED` matches, it becomes a tall track with a frame
+ * pinned under the navbar: the scroll position picks the feature, the index marks it,
+ * and only that feature's section shows. The index is then a vertical tablist and the
+ * sections are its panels.
  */
 function Tour(): ReactNode {
   const [pinned, setPinned] = useState(false);
@@ -115,11 +126,16 @@ function Tour(): ReactNode {
   const track = useRef<HTMLElement | null>(null);
   const frame = useRef<HTMLDivElement | null>(null);
   const tabs = useRef<(HTMLAnchorElement | null)[]>([]);
+  const panels = useRef<(HTMLElement | null)[]>([]);
+  const shown = useRef(0);
+  const opened = useRef(false);
   const count = FEATURES.length;
 
   useEffect(() => {
     const query = window.matchMedia(PINNED);
-    const update = () => setPinned(query.matches);
+    // The frame is as tall as the small viewport: a browser without that unit keeps the plain layout.
+    const able = typeof CSS !== 'undefined' && CSS.supports('height', '100svh');
+    const update = () => setPinned(able && query.matches);
     update();
     query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
@@ -174,27 +190,56 @@ function Tour(): ReactNode {
     [measure, count],
   );
 
-  // A link to a feature (`/blend#handoff`) opens on that feature.
+  // A link to a feature (`/blend#handoff`) opens on that feature: once when the page is
+  // opened by that link, and whenever the hash changes after that.
   useEffect(() => {
     if (!pinned) return undefined;
     const open = () => {
       const i = FEATURES.findIndex((feature) => `#${feature.id}` === window.location.hash);
       if (i >= 0) select(i);
     };
-    open();
+    if (!opened.current) {
+      opened.current = true;
+      if (!restored()) open();
+    }
     window.addEventListener('hashchange', open);
     return () => window.removeEventListener('hashchange', open);
   }, [pinned, select]);
 
+  // The features that are not showing stay in the page for the browser's find-in-page
+  // (`hidden="until-found"`, which React does not write, so it is set here). A match in
+  // one of them shows that feature. Before one is hidden, focus inside it moves to the
+  // feature that takes its place, so a keyboard user who scrolls is not dropped.
+  useIsomorphicLayoutEffect(() => {
+    const before = shown.current;
+    shown.current = active;
+    const inside = pinned && before !== active && Boolean(panels.current[before]?.contains(document.activeElement));
+    panels.current.forEach((panel, i) => {
+      if (!panel) return;
+      if (pinned && i !== active) panel.setAttribute('hidden', 'until-found');
+      else panel.removeAttribute('hidden');
+    });
+    if (inside) panels.current[active]?.focus({preventScroll: true});
+  }, [pinned, active]);
+
+  useEffect(() => {
+    if (!pinned) return undefined;
+    const nodes = panels.current.slice();
+    // The browser scrolls to the match as soon as this returns: the feature has to be on stage by then.
+    const found = nodes.map((_, i) => () => flushSync(() => select(i)));
+    nodes.forEach((panel, i) => panel?.addEventListener('beforematch', found[i]));
+    return () => nodes.forEach((panel, i) => panel?.removeEventListener('beforematch', found[i]));
+  }, [pinned, select]);
+
   const onKeyDown = (event: KeyboardEvent<HTMLAnchorElement>, i: number) => {
-    const to = {ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: count - 1}[event.key];
+    const to = {ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: count - 1, ' ': i}[event.key];
     if (to === undefined) return;
     event.preventDefault();
     select(Math.min(count - 1, Math.max(0, to)), true);
   };
 
   return (
-    <section ref={track} className={clsx(styles.band, styles.tour, styles.pins)} aria-labelledby="blend-tour">
+    <section ref={track} className={clsx(styles.band, styles.tour, pinned && styles.pins)} aria-labelledby="blend-tour">
       <div ref={frame} className={styles.frame}>
         <div className={styles.index}>
           <div className={styles.indexHead}>
@@ -204,15 +249,18 @@ function Tour(): ReactNode {
             </h2>
             <p className={styles.indexLede}>Nine features, in the order a plan meets them.</p>
           </div>
-          <nav className={styles.indexNav} aria-label="Features">
+          {/* A list of links to the features, or, where the frame is pinned, the tabs that show them. */}
+          <div className={styles.indexNav} role={pinned ? undefined : 'navigation'} aria-label={pinned ? undefined : 'Features'}>
             <div className={styles.tabs} role={pinned ? 'tablist' : undefined} aria-orientation={pinned ? 'vertical' : undefined} aria-label={pinned ? 'Features' : undefined}>
               {FEATURES.map((feature, i) => (
                 <Fragment key={feature.id}>
                   {feature.id === feature.chapter.features[0].id && (
                     <p className={styles.group} aria-hidden={pinned || undefined}>
                       <span className={styles.groupNumber}>{two(feature.step)}</span>
-                      <span className={styles.groupTitle}>{feature.chapter.title}</span>
-                      <StatusGlyph status={feature.chapter.status} className={styles.groupGlyph} />
+                      <span>{feature.chapter.title}</span>
+                      <span className={styles.groupGlyph} aria-hidden="true">
+                        <StatusGlyph status={feature.chapter.status} />
+                      </span>
                     </p>
                   )}
                   <a
@@ -240,52 +288,60 @@ function Tour(): ReactNode {
                 </Fragment>
               ))}
             </div>
-          </nav>
+          </div>
           <p className={styles.counter} aria-hidden="true">
             <span className={styles.counterNow}>{two(active + 1)}</span> / {two(count)}
           </p>
         </div>
 
         <div className={styles.features}>
-          {FEATURES.map((feature, i) => (
-            <section
-              key={feature.id}
-              id={feature.id}
-              className={clsx(styles.feature, i === active && styles.featureOn)}
-              role={pinned ? 'tabpanel' : undefined}
-              aria-labelledby={pinned ? `blend-tab-${feature.id}` : undefined}>
-              <div className={styles.featureHead}>
-                <p className={styles.kicker}>
-                  <span className={styles.kickerStep}>
-                    Step {feature.step}: {feature.chapter.title}
-                  </span>
-                  <span className={styles.pill}>{feature.pill}</span>
-                </p>
-                <h3 className={styles.featureTitle}>
-                  <span className={styles.line}>{accented(feature.title[0], feature.accent)}</span>{' '}
-                  <span className={styles.line}>{accented(feature.title[1], feature.accent)}</span>
-                </h3>
-              </div>
-              <div className={styles.featureScene}>
-                {/* A feature that comes on stage plays its scene from the start. */}
-                <Fragment key={i === active ? 'on' : 'off'}>{feature.scene}</Fragment>
-              </div>
-              <div className={styles.featureText}>
-                {feature.body && <p className={styles.body}>{feature.body}</p>}
-                {feature.points && (
-                  <ul className={styles.points}>
-                    {feature.points.map((point, p) => (
-                      <li key={p}>{point}</li>
-                    ))}
-                  </ul>
-                )}
-                <Link to={feature.link.to} className={styles.more}>
-                  {feature.link.label}
-                  <Arrow />
-                </Link>
-              </div>
-            </section>
-          ))}
+          {FEATURES.map((feature, i) => {
+            const on = i === active;
+            return (
+              <section
+                key={feature.id}
+                ref={(node) => {
+                  panels.current[i] = node;
+                }}
+                id={feature.id}
+                className={clsx(styles.feature, on && styles.featureOn)}
+                role={pinned ? 'tabpanel' : undefined}
+                aria-labelledby={pinned ? `blend-tab-${feature.id}` : undefined}
+                aria-hidden={pinned && !on ? true : undefined}
+                tabIndex={pinned && on ? 0 : undefined}>
+                <div className={styles.featureHead}>
+                  <div className={styles.kicker}>
+                    <p className={styles.kickerStep}>
+                      Step {feature.step}: {feature.chapter.title}
+                    </p>
+                    <p className={styles.pill}>{feature.pill}</p>
+                  </div>
+                  <h3 className={styles.featureTitle}>
+                    <span className={styles.line}>{accented(feature.title[0], feature.accent)}</span>{' '}
+                    <span className={styles.line}>{accented(feature.title[1], feature.accent)}</span>
+                  </h3>
+                </div>
+                <div className={styles.featureScene}>
+                  {/* A feature that comes on stage plays its scene from the start. */}
+                  <Fragment key={on ? 'on' : 'off'}>{feature.scene}</Fragment>
+                </div>
+                <div className={styles.featureText}>
+                  {feature.body && <p className={styles.body}>{feature.body}</p>}
+                  {feature.points && (
+                    <ul className={styles.points}>
+                      {feature.points.map((point, p) => (
+                        <li key={p}>{point}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <Link to={feature.link.to} className={styles.more}>
+                    {feature.link.label}
+                    <Arrow />
+                  </Link>
+                </div>
+              </section>
+            );
+          })}
         </div>
       </div>
     </section>
@@ -354,7 +410,10 @@ export default function Blend(): ReactNode {
             <div className={styles.legend}>
               <p className={styles.eyebrow}>Next to Linear, GitHub and ClickUp</p>
               <h2 id="blend-alongside" className={clsx(styles.title, styles.tick)}>
-                Keep your team’s board. Give agents <em>their own</em>.
+                <span className={styles.line}>Keep your team’s board.</span>{' '}
+                <span className={styles.line}>
+                  Give agents <em>their own</em>.
+                </span>
               </h2>
             </div>
             <div className={styles.prose}>
@@ -381,7 +440,10 @@ export default function Blend(): ReactNode {
             <div className={styles.legend}>
               <p className={styles.eyebrow}>Underneath</p>
               <h2 id="blend-underneath" className={clsx(styles.title, styles.tick)}>
-                Small enough to carry. <em>Strict</em> where it counts.
+                <span className={styles.line}>Small enough to carry.</span>{' '}
+                <span className={styles.line}>
+                  <em>Strict</em> where it counts.
+                </span>
               </h2>
               <p className={styles.legendText}>
                 The rules are enforced by the store, not by a prompt, so they hold for every agent and every person.

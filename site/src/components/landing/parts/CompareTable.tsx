@@ -1,5 +1,4 @@
 import type {ReactNode} from 'react';
-import clsx from 'clsx';
 import {COMPARE} from './content';
 import styles from './CompareTable.module.css';
 
@@ -28,6 +27,6 @@ export default function CompareTable(): ReactNode {
 }
 
 /** The chip on anything that is planned, not shipped. */
-export function Planned({className}: {className?: string}): ReactNode {
-  return <span className={clsx(styles.planned, className)}>Planned</span>;
+export function Planned(): ReactNode {
+  return <span className={styles.planned}>Planned</span>;
 }

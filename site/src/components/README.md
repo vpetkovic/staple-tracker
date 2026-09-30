@@ -165,17 +165,22 @@ edges and the rules between its columns itself. Its pieces:
   groups of the index, and the first line of every feature's kicker.
 - `Tour` is the walk-through. Its markup is nine sections in reading order, which is
   what a phone shows: kicker, headline, scene, copy. Where the `PINNED` query matches (a
-  screen at least 1024 px wide and 640 px tall, in a browser that runs scripts), the
-  stylesheet, under the same query, makes it a tall track with a frame pinned under the
-  navbar. The scroll position picks the feature, the index marks it with the sheet's
-  tick, and only that feature's section shows; its scene is mounted again, so it plays
-  from the start. Picking a feature moves the scroll position to its place in the
-  track, which the pinned frame hides. The index is then a vertical tablist (arrow keys,
-  Home and End move and select; Tab goes on into the panel) and the sections are its
-  tabpanels; the ones that are not showing are out of the accessibility tree and the
-  tab order. `--st-tour-step` is how far the page scrolls for one feature.
-- Where the query does not match at that width (no scripting, a short screen, a browser
-  that does not know `scripting`), the index is a list of links beside the features,
+  landscape screen at least 1024 px wide and 40 em tall; the height is in `em` because
+  the content grows with the reader's font size), the component sets the class `pins`,
+  and the stylesheet, under the same query, makes the walk-through a tall track with a
+  frame pinned under the navbar. The scroll position picks the feature, the index marks
+  it with the sheet's tick, and only that feature's section shows; its scene is mounted
+  again, so it plays from the start. Picking a feature moves the scroll position to its
+  place in the track, which the pinned frame hides. `--st-tour-step` is how far the
+  page scrolls for one feature.
+- The index is then a vertical tablist (arrow keys, Home and End move and select, Enter
+  and Space select; Tab goes on into the panel) and the sections are its tabpanels. The
+  ones that are not showing are left unrendered (`content-visibility: hidden`), out of
+  the accessibility tree and the tab order, and marked `hidden="until-found"`, so the
+  browser's find-in-page reaches their text and shows the feature it is in. Focus that
+  is inside a feature when scrolling replaces it moves to the feature that comes.
+- Where the query does not match at that width (a short or upright screen, a large font
+  size) or the script has not run, the index is a list of links beside the features,
   which flow down the page.
 - The headline of a feature is two lines at every width: `--st-text-serif-feature`
   follows its column (`cqw`). A feature's `accent` (in `parts/content.tsx`) is the part

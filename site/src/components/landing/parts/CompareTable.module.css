@@ -1,5 +1,6 @@
-/* The comparison of a team's tracker with staple, and the Planned chip. The width of
-   the label column is `--compare-label`, which a page may set. */
+/* The comparison of a team's tracker with staple, and the Planned chip. A page may set
+   `--compare-label`, the width of the label column (a length: a table takes no share
+   inside calc()), and `--compare-wrap`, how a cell's text wraps. */
 
 .compareTable {
   display: table;
@@ -23,6 +24,7 @@
   background: none;
   text-align: left;
   vertical-align: top;
+  text-wrap: var(--compare-wrap, wrap);
   color: var(--st-fg-muted);
 }
 
