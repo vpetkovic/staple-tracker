@@ -121,6 +121,24 @@ downloads them: keep `--st-font-serif` out of shared components. The page's piec
 - `Cell` is one feature: a serif title, two lines and a scene inside `fragment`, which
   cuts the scene's lower edge off (`cut="row"` cuts a whole row).
 
+## The walkthrough landing page
+
+`landing/Walkthrough.tsx` uses Geist only, set heavy and tight (`--st-weight-heavy`,
+`--st-tracking-heavy`), with pills for its eyebrows and buttons. Its pieces:
+
+- The hero's decoration is the staple of the logo, nested (`Staples`): SVG strokes in
+  the accent colour, driven in once on load, still under reduced motion.
+- A headline is two lines (`Lines`) at every width, because its size follows the room
+  it has: `--st-text-sans-hero` and `--st-text-sans-2xl` follow the viewport, and
+  `--st-text-sans-xl` follows the feature's column (`cqw`). A line longer than the
+  longest one today ("A plan becomes an epic.") needs a smaller factor in the token.
+- `CHAPTERS` is the walk-through: three chapters that follow the three steps, each a
+  list of features. `Feature` is one section: a pill, the headline, a paragraph or
+  three points, a docs link, and exactly one scene in a `panel`. The sides alternate
+  from 997 px; below that the order is pill, headline, panel, copy.
+- The FAQ is native `details`, so it works by keyboard and without JavaScript. Every
+  answer says what the docs say and links the page that says it.
+
 ## Rules
 
 - One accent: `--st-accent` (and its text, hover and background variants). Use

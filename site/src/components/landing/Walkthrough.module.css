@@ -1,0 +1,800 @@
+/*
+ * The walkthrough landing page. Geist only, set heavy and tight; pills for the eyebrows
+ * and the buttons; one scene per feature in a panel. Colours, sizes, weights and radii
+ * are tokens. A rule that changes another (a flipped feature, an open question, a
+ * restyled shared component) carries one more class than the rule it changes: the
+ * production CSS is minified across files and equal-weight rules can swap places.
+ */
+
+.page {
+  /* The space above and below a section, and between two features. */
+  --wt-section: var(--st-space-16);
+  overflow-x: clip;
+  background: var(--st-bg);
+}
+
+.container {
+  max-width: var(--st-container-roomy);
+  margin-inline: auto;
+  padding-inline: var(--st-gutter);
+}
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A headline is two lines at every width: its size follows the room it has. */
+.line {
+  display: block;
+}
+
+/* ---------- Pill eyebrow ---------- */
+
+.pill {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  min-height: 1.75rem;
+  margin: 0 0 var(--st-space-5);
+  padding: var(--st-space-1) var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-accent-ring);
+  border-radius: var(--st-radius-full);
+  background: var(--st-accent-soft);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-accent-text);
+}
+
+/* ---------- Headlines ---------- */
+
+.title {
+  margin: 0;
+  font-size: var(--st-text-sans-2xl);
+  font-weight: var(--st-weight-heavy);
+  line-height: var(--st-leading-heavy);
+  letter-spacing: var(--st-tracking-heavy);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.lead {
+  max-width: var(--st-measure-lead);
+  margin: var(--st-space-6) 0 0;
+  font-size: var(--st-text-lg);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: balance;
+}
+
+/* ---------- Hero ---------- */
+
+.hero {
+  /* The width of the decoration; the copy starts part of the way down it. */
+  --wt-art: clamp(20rem, 70vw, 46rem);
+  position: relative;
+  overflow: hidden;
+  padding: 0 var(--st-gutter) var(--wt-section);
+  text-align: center;
+}
+
+.art {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--wt-art);
+  height: auto;
+  margin-left: calc(var(--wt-art) / -2);
+  fill: none;
+  stroke: var(--st-accent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 22%, transparent 94%);
+  mask-image: linear-gradient(to bottom, #000 22%, transparent 94%);
+  pointer-events: none;
+}
+
+/* Outer staples are faint, inner ones full. Each is driven in from above, once. */
+.staple {
+  opacity: calc(0.14 + var(--i) * 0.17);
+  animation: wt-drive var(--st-duration-slow) var(--st-ease) backwards;
+  animation-duration: 900ms;
+  animation-delay: calc(var(--i) * 90ms);
+}
+
+@keyframes wt-drive {
+  from {
+    opacity: 0;
+    transform: translateY(-3rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .art .staple {
+    animation: none;
+  }
+}
+
+.heroCopy {
+  position: relative;
+  padding-top: calc(var(--wt-art) * 0.42);
+}
+
+.heroTitle {
+  margin: 0;
+  font-size: var(--st-text-sans-hero);
+  font-weight: var(--st-weight-heavy);
+  line-height: var(--st-leading-heavy);
+  letter-spacing: var(--st-tracking-heavy);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.heroLead {
+  max-width: 35rem;
+  margin: var(--st-space-6) auto 0;
+  font-size: var(--st-text-lg);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: balance;
+}
+
+.heroActions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--st-space-5);
+  margin-top: var(--st-space-10);
+}
+
+/* The page's buttons are pills. */
+.page .cta {
+  padding-inline: var(--st-space-6);
+  border-radius: var(--st-radius-full);
+}
+
+.page .quiet {
+  font-size: var(--st-text-sm);
+  color: var(--st-fg-muted);
+  text-decoration: none;
+}
+
+.page .quiet:hover {
+  color: var(--st-fg-strong);
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+
+/* ---------- Three steps in one box ---------- */
+
+.stepsBand {
+  padding-bottom: var(--wt-section);
+}
+
+.steps {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-xl);
+  background: var(--st-bg-subtle);
+  list-style: none;
+}
+
+.step {
+  padding: var(--st-space-6) var(--st-space-6) var(--st-space-8);
+}
+
+.step + .step {
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.stepTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--st-space-5);
+  /* The glyph's check is cut out in the colour of the box. */
+  --glyph-cut: var(--st-bg-subtle);
+}
+
+.stepNumber {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-accent-text);
+}
+
+.stepTitle {
+  margin: 0 0 var(--st-space-2);
+  font-size: var(--st-text-2xl);
+  font-weight: var(--st-weight-semibold);
+  line-height: var(--st-leading-tight);
+  letter-spacing: var(--st-tracking-display);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.stepText {
+  margin: 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+/* ---------- Features overview ---------- */
+
+.overview {
+  padding-bottom: var(--wt-section);
+}
+
+/* One box; the gaps between the tiles show the box's colour as hairlines. */
+.tiles {
+  display: grid;
+  gap: var(--st-hairline);
+  margin: var(--st-space-10) 0 0;
+  padding: 0;
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-xl);
+  background: var(--st-border);
+  list-style: none;
+}
+
+.tile {
+  padding: var(--st-space-6) var(--st-space-6) var(--st-space-8);
+  background: var(--st-bg);
+}
+
+.icon {
+  display: block;
+  margin-bottom: var(--st-space-6);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--st-accent-text);
+}
+
+.tileTitle {
+  margin: 0 0 var(--st-space-2);
+  font-size: var(--st-text-lg);
+  font-weight: var(--st-weight-semibold);
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-heading);
+  color: var(--st-fg-strong);
+}
+
+.tileText {
+  margin: 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+/* ---------- The walk-through ---------- */
+
+.chapter {
+  padding-block: var(--wt-section);
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.tinted {
+  background: var(--st-bg-subtle);
+}
+
+.chapterHead {
+  display: flex;
+  align-items: center;
+  gap: var(--st-space-3);
+  margin: 0 0 var(--st-space-12);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+}
+
+.chapterNumber {
+  color: var(--st-accent-text);
+}
+
+.chapterTitle {
+  color: var(--st-fg-muted);
+}
+
+.chapterRule {
+  flex: 1;
+  height: var(--st-hairline);
+  background: var(--st-border);
+}
+
+.feature {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-8);
+}
+
+.feature + .feature {
+  margin-top: var(--wt-section);
+}
+
+/* The headline is sized from this column (see --st-text-sans-xl). */
+.featureHead {
+  container-type: inline-size;
+}
+
+.featureTitle {
+  margin: 0;
+  font-size: var(--st-text-sans-xl);
+  font-weight: var(--st-weight-heavy);
+  line-height: var(--st-leading-heavy);
+  letter-spacing: var(--st-tracking-heavy);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+/* The panel: a lighter box with room around the one scene it holds. */
+.panel {
+  min-width: 0;
+  padding: var(--st-space-4);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-xl);
+  background: radial-gradient(70% 55% at 50% 0%, var(--st-glow-faint), transparent), var(--st-bg-muted);
+}
+
+.stage {
+  max-width: 34rem;
+  margin-inline: auto;
+}
+
+.featureCopy {
+  max-width: var(--st-measure-lead);
+}
+
+.body {
+  margin: 0 0 var(--st-space-6);
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.points {
+  display: grid;
+  gap: var(--st-space-4);
+  margin: 0 0 var(--st-space-6);
+  padding: 0;
+  list-style: none;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-muted);
+}
+
+.points li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--st-space-3);
+  text-wrap: pretty;
+}
+
+/* The staple of the logo, as the mark of a point. */
+.mark {
+  margin-top: 0.3em;
+  fill: none;
+  stroke: var(--st-accent);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.page .more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  font-size: var(--st-text-sm);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+  text-decoration: none;
+}
+
+.page .more:hover {
+  color: var(--st-accent-text);
+  text-decoration: none;
+}
+
+.arrow {
+  transition: transform var(--st-duration) var(--st-ease);
+}
+
+.more:hover .arrow {
+  transform: translateX(3px);
+}
+
+/* ---------- Next to the team's tracker ---------- */
+
+.alongside {
+  padding-block: var(--wt-section);
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.centerHead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.centerHead .lead {
+  text-wrap: balance;
+}
+
+.panel.panelWide {
+  max-width: 58rem;
+  margin: var(--st-space-12) auto 0;
+}
+
+.panelWide .stage {
+  max-width: none;
+}
+
+.plannedNote {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--st-space-3);
+  max-width: 46rem;
+  margin: var(--st-space-6) auto 0;
+  font-size: var(--st-text-sm);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.planned {
+  flex: none;
+  padding: 0 var(--st-space-2);
+  border: var(--st-hairline) dashed var(--st-border-strong);
+  border-radius: var(--st-radius-full);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: 1.375rem;
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-muted);
+}
+
+/* Three cells in one box. Each cell lays its three lines on the box's rows, so the
+   lines of neighbouring cells stay level whatever wraps. */
+.compare {
+  display: grid;
+  gap: 0 var(--st-hairline);
+  margin: var(--st-space-12) 0 0;
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-xl);
+  background: var(--st-border);
+}
+
+.compareCell {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  padding: var(--st-space-6);
+  background: var(--st-bg);
+}
+
+.compareCell + .compareCell {
+  margin-top: var(--st-hairline);
+}
+
+.compareTerm {
+  margin-bottom: var(--st-space-5);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-accent-text);
+}
+
+.compareValue {
+  margin: 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-muted);
+}
+
+.compareValue + .compareValue {
+  margin-top: var(--st-space-4);
+}
+
+.compareValue.compareStaple {
+  font-weight: var(--st-weight-medium);
+  color: var(--st-fg-strong);
+}
+
+.compareWho {
+  display: block;
+  margin-bottom: var(--st-space-1);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-regular);
+  color: var(--st-fg-subtle);
+}
+
+/* ---------- FAQ ---------- */
+
+.faq {
+  padding-block: var(--wt-section);
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.faqGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-10);
+}
+
+.faqList {
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.item {
+  border-bottom: var(--st-hairline) solid var(--st-border);
+}
+
+.question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-6);
+  padding-block: var(--st-space-5);
+  font-size: var(--st-text-lg);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-heading);
+  color: var(--st-fg-strong);
+  list-style: none;
+  cursor: pointer;
+}
+
+.question::-webkit-details-marker {
+  display: none;
+}
+
+.question:focus-visible {
+  border-radius: var(--st-radius-sm);
+}
+
+.chevron {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--st-fg-subtle);
+  transition: transform var(--st-duration) var(--st-ease), color var(--st-duration) var(--st-ease);
+}
+
+.question:hover .chevron {
+  color: var(--st-fg-strong);
+}
+
+.item[open] .question .chevron {
+  transform: rotate(180deg);
+}
+
+/* Where the browser can size to `auto`, the answer opens and closes smoothly. */
+.item {
+  interpolate-size: allow-keywords;
+}
+
+.item::details-content {
+  block-size: 0;
+  overflow: clip;
+  transition: block-size var(--st-duration-slow) var(--st-ease), content-visibility var(--st-duration-slow) allow-discrete;
+}
+
+.item[open]::details-content {
+  block-size: auto;
+}
+
+.answer {
+  padding: 0 var(--st-space-10) var(--st-space-6) 0;
+}
+
+.answer p {
+  margin: 0 0 var(--st-space-4);
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+/* ---------- Get started ---------- */
+
+.closing {
+  padding-block: var(--wt-section);
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.install {
+  width: 100%;
+  max-width: 30rem;
+  margin-top: var(--st-space-10);
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border-strong);
+  border-radius: var(--st-radius-lg);
+  background: var(--st-bg);
+  text-align: left;
+}
+
+.installBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-3);
+  min-height: var(--st-control-sm);
+  padding: 0 var(--st-space-4);
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  color: var(--st-fg-subtle);
+}
+
+.install .command {
+  display: flex;
+  justify-content: space-between;
+  height: 3.5rem;
+  padding: 0 var(--st-space-3) 0 var(--st-space-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.closingText {
+  max-width: 34rem;
+  margin: var(--st-space-6) 0 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: balance;
+}
+
+.closingActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--st-space-3);
+  margin-top: var(--st-space-8);
+}
+
+/* ---------- From a large phone ---------- */
+
+@media (min-width: 600px) {
+  .body,
+  .points {
+    font-size: var(--st-text-lg);
+  }
+
+  .page .cta {
+    padding-inline: var(--st-space-8);
+  }
+
+  .panel {
+    padding: var(--st-space-8);
+  }
+}
+
+/* ---------- Tablet ---------- */
+
+@media (min-width: 768px) {
+  .page {
+    --wt-section: var(--st-space-24);
+  }
+
+  .heroLead {
+    font-size: var(--st-text-xl);
+  }
+
+  .steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .step {
+    padding: var(--st-space-8) var(--st-space-6) var(--st-space-10);
+  }
+
+  .step + .step {
+    border-top: 0;
+    border-left: var(--st-hairline) solid var(--st-border);
+  }
+
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: var(--st-space-16);
+  }
+
+  .tile {
+    padding: var(--st-space-8) var(--st-space-6) var(--st-space-10);
+  }
+
+  .compare {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .compareCell + .compareCell {
+    margin-top: 0;
+  }
+
+  .chapterHead {
+    margin-bottom: var(--st-space-16);
+  }
+}
+
+/* ---------- Desktop: copy and panel side by side, the sides alternating ---------- */
+
+@media (min-width: 997px) {
+  .page {
+    --wt-section: var(--st-space-32);
+  }
+
+  .tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .feature {
+    grid-template-columns: minmax(0, 6fr) minmax(0, 7fr);
+    grid-template-areas:
+      'head panel'
+      'copy panel';
+    column-gap: clamp(var(--st-space-12), 5.5vw, 5rem);
+    row-gap: var(--st-space-8);
+  }
+
+  .feature.flip {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 6fr);
+    grid-template-areas:
+      'panel head'
+      'panel copy';
+  }
+
+  /* The panel is the taller side; the head and the copy meet at its middle. */
+  .featureHead {
+    grid-area: head;
+    align-self: end;
+  }
+
+  .featureCopy {
+    grid-area: copy;
+    align-self: start;
+  }
+
+  .feature .panel {
+    grid-area: panel;
+    align-self: center;
+    padding: var(--st-space-10);
+  }
+
+  .faqGrid {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(var(--st-space-12), 6vw, var(--st-space-24));
+  }
+
+  .faqHead {
+    position: sticky;
+    top: calc(var(--st-navbar-height) + var(--st-space-12));
+    align-self: start;
+  }
+}
