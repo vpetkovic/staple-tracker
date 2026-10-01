@@ -55,14 +55,19 @@ describe("workspace migration 017", () => {
     db.exec("DROP TRIGGER issues_derived_status_cleared");
     db.exec("DROP TRIGGER issues_derived_status_created");
     db.exec("ALTER TABLE issues DROP COLUMN derived_status");
+    // 018's tables are empty here. Drop them so the walk from 16 can create them again.
+    db.exec("DROP TRIGGER IF EXISTS attachments_drop_bytes");
+    db.exec("DROP TABLE attachments");
+    db.exec("DROP TABLE attachment_bytes");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
-    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17]);
+    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18]);
 
     migrateWorkspace(db);
-    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 17, pending: [] });
+    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 18, pending: [] });
     expect(owned()).toEqual(recorded);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toEqual({ value: "1" });
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()).toEqual([
+      { name: "attachments_drop_bytes" },
       { name: "issues_derived_status_cleared" },
       { name: "issues_derived_status_created" },
     ]);
@@ -76,6 +81,9 @@ describe("workspace migration 017", () => {
     db.exec("DROP TRIGGER issues_derived_status_cleared");
     db.exec("DROP TRIGGER issues_derived_status_created");
     db.exec("ALTER TABLE issues DROP COLUMN derived_status");
+    db.exec("DROP TRIGGER IF EXISTS attachments_drop_bytes");
+    db.exec("DROP TABLE attachments");
+    db.exec("DROP TABLE attachment_bytes");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
     migrateWorkspace(db);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toBeUndefined();

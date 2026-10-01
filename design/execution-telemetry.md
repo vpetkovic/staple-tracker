@@ -1398,11 +1398,12 @@ under its transition-derived key, as every applied operation already does.
 **What protocol 3 means for a fleet.** It follows the standing decision that no
 release stays compatible with old builds and the Worker is deployed first:
 
-- The Worker that understands `attempt` and `attemptTransition` advertises
-  `{ min: 1, max: 3 }` (`PROTOCOL_MAX` in `worker/src/limits.ts`), and is
-  deployed before any client that journals them.
-- The workspace client's `CLIENT_PROTOCOL` is 3 (`src/core/cloud/client.ts`).
-  The hub-registry leg declares 2 (`REGISTRY_PROTOCOL`).
+- The Worker that understands `attempt` and `attemptTransition` is deployed before
+  any client that journals them. It advertises `{ min: 1, max: 4 }` now
+  (`PROTOCOL_MAX` in `worker/src/limits.ts`); protocol 4 added `attachment`
+  ([sync.md](sync.md#protocol-evolution)). Attempts still require protocol 3.
+- The workspace client's `CLIENT_PROTOCOL` is 4 (`src/core/cloud/client.ts`). It was
+  3 when attempts shipped. The hub-registry leg declares 2 (`REGISTRY_PROTOCOL`).
 - A device that has not upgraded **stops converging** on that repository as soon
   as an upgraded device pushes anything, not only an attempt. Attempts are stored
   by a workspace migration (013), so every operation an upgraded device journals

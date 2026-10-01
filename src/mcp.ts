@@ -22,7 +22,8 @@ import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
 import { MILESTONE_STATES, assertNotReservedActor } from "./core/milestones.js";
 import { CRITERION_VERDICTS, PACE_VERDICTS } from "./core/milestone-goal.js";
 import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
-import { dirname } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
 import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
@@ -999,6 +1000,20 @@ const documentMetaShape = {
   body: z.string().optional().describe("Current revision body; only with include_documents"),
 };
 
+/** What get_task and list_files return. Never the bytes. */
+const attachmentMetaShape = {
+  id: z.string(),
+  issueId: z.string(),
+  filename: z.string(),
+  mediaType: z.string(),
+  size: z.number().int(),
+  sha256: z.string(),
+  author: z.string().nullable(),
+  caption: z.string().nullable(),
+  byteSync: z.enum(["inline", "local"]),
+  createdAt: z.string(),
+};
+
 /** Mirrors hub.CrossBlockerState: status null + unresolvable = file not on this machine. */
 const crossBlockerShape = {
   identifier: z.string(),
@@ -1132,7 +1147,7 @@ server.registerTool(
   "get_task",
   {
     description:
-      "Full context for one issue: the issue, ancestors (the why), children, blockers/dependents, latest comments, document list, and cross-workspace blockers from the hub (same view the web UI shows). Pass include_documents to inline document bodies.",
+      "Full context for one issue: the issue, ancestors (the why), children, blockers/dependents, latest comments, document list, file metadata, and cross-workspace blockers from the hub (same view the web UI shows). Pass include_documents to inline document bodies. File bytes are never included.",
     inputSchema: {
       ref: refSchema,
       include_documents: z
@@ -1149,6 +1164,9 @@ server.registerTool(
       blocks: z.array(z.object(issueRefShape)),
       comments: z.array(z.object(commentShape)),
       documents: z.array(z.object(documentMetaShape)),
+      attachments: z
+        .array(z.object(attachmentMetaShape))
+        .describe("Files on this issue. Metadata only; the bytes are a separate call."),
       crossBlockers: z
         .array(z.object(crossBlockerShape))
         .describe("Cross-workspace blockers via the hub; [] when the hub is unavailable"),
@@ -1867,6 +1885,102 @@ server.registerTool(
     annotations: { title: "Read document", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   ({ ref, key, revision, ws }) => run(() => storeFor(ws).getDocument(ref, key, revision)),
+);
+
+server.registerTool(
+  "list_files",
+  {
+    description:
+      "List the files attached to an issue. Metadata only: filename, sniffed media type, size, SHA-256, and whether the bytes travelled. Never the bytes.",
+    inputSchema: { ref: refSchema, ws: wsSchema },
+    outputSchema: { files: z.array(z.object(attachmentMetaShape)) },
+    annotations: { title: "List files", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ref, ws }) => run(() => ({ files: storeFor(ws).listFiles(ref) })),
+);
+
+server.registerTool(
+  "attach_file",
+  {
+    description:
+      "Attach a file to an issue. Pass path (a file on this machine) or bytes_base64, and a filename when the bytes are not a path. The media type is sniffed from the bytes, not the name. A file over 32 MiB is refused and nothing is written. A file small enough to inline syncs its bytes; a larger one syncs metadata only.",
+    inputSchema: {
+      ref: refSchema,
+      path: z.string().optional().describe("Path of the file on this machine"),
+      bytes_base64: z.string().optional().describe("The file, base64, when it is not a path"),
+      filename: z.string().optional().describe("Name to store. Required with bytes_base64; defaults to the path's base name"),
+      caption: z.string().max(280).optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: attachmentMetaShape,
+    annotations: {
+      title: "Attach file",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, path, bytes_base64, filename, caption, actor, ws }) =>
+    run(() => {
+      if ((path === undefined) === (bytes_base64 === undefined)) {
+        throw new StapleError("validation", "attach_file needs a path or bytes_base64, and not both.");
+      }
+      const bytes = path !== undefined ? readFileSync(path) : Buffer.from(bytes_base64!, "base64");
+      const name = filename ?? (path !== undefined ? basename(path) : "");
+      if (!name) throw new StapleError("validation", "attach_file needs a filename when the bytes are base64.");
+      return storeFor(ws).attachFile(ref, {
+        filename: name,
+        bytes,
+        caption: caption ?? null,
+        author: requireActor(actor),
+      });
+    }),
+);
+
+server.registerTool(
+  "export_file",
+  {
+    description:
+      "Write one attachment's bytes to a path on this machine. The result is the metadata plus that path, never the bytes. A file whose bytes did not travel with sync is not_found and says so.",
+    inputSchema: {
+      id: z.string().describe("Attachment id"),
+      out: z.string().describe("Path to write"),
+      ws: wsSchema,
+    },
+    outputSchema: { ...attachmentMetaShape, out: z.string() },
+    annotations: {
+      title: "Export file",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  ({ id, out, ws }) =>
+    run(() => {
+      const file = storeFor(ws).readFile(id);
+      writeFileSync(out, file.bytes);
+      return { ...file.meta, out };
+    }),
+);
+
+server.registerTool(
+  "remove_file",
+  {
+    description: "Remove an attachment. A second call finds nothing and is refused with not_found.",
+    inputSchema: { id: z.string(), actor: actorSchema, ws: wsSchema },
+    outputSchema: attachmentMetaShape,
+    annotations: {
+      title: "Remove file",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ id, actor, ws }) => run(() => storeFor(ws).removeFile(id, requireActor(actor))),
 );
 
 server.registerTool(

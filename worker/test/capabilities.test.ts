@@ -20,7 +20,8 @@ describe("GET /v1/capabilities", () => {
       // working — so this assertion is also the statement that the bump was
       // backwards-compatible. See `worker/src/limits.ts`. MOVED AGAIN to 3 for the
       // execution attempts (`attempt`, `attemptTransition`), on the same terms.
-      protocol: { min: 1, max: 3 },
+      // MOVED AGAIN to 4 for typed file attachments (`attachment`).
+      protocol: { min: 1, max: 4 },
       maxOpBytes: 512 * 1024,
       maxPullLimit: 500,
       defaultPullLimit: 200,

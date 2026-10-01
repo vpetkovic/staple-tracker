@@ -79,6 +79,8 @@ const READS: Record<StoreName, readonly string[]> = {
     "orchestrationSummary",
     // The certified plan reads (`planSummary` on show/get_task, `staple compare`).
     "planSummary", "comparePlans", "timingQuality", "calibration", "remainingForecasts", "forecast",
+    // File metadata and bytes. Writes are attachFile and removeFile below.
+    "listFiles", "readFile",
     // The autopilot run service. Its writes touch only `runs` and `run_tickets`, which are
     // machine-local and never journaled (`run-store.ts`); `test/run-store.test.ts` pins
     // that a run leaves no outbox row on a device that journals. `run continue`'s take
@@ -440,6 +442,27 @@ const SCENARIOS: readonly Scenario[] = [
     name: "remove a project issues are filed under",
     prep: (w) => void w.a.store.projects().assign(w.ids["Filed"]!, w.ids["Docs"]!, "alice"),
     run: (w) => void w.a.store.projects().remove(w.ids["Docs"]!, "alice"),
+  },
+
+  // ---- files
+  {
+    method: "WorkspaceStore.attachFile",
+    name: "attach a file",
+    prep: (w) => void issue(w, "With a file"),
+    run: (w) => {
+      const meta = w.a.store.attachFile(w.ids["With a file"]!, {
+        filename: "note.txt",
+        bytes: Buffer.from("log\n"),
+        caption: "a log",
+        author: "alice",
+      });
+      w.ids["note"] = meta.id;
+    },
+  },
+  {
+    method: "WorkspaceStore.removeFile",
+    name: "remove a file",
+    run: (w) => void w.a.store.removeFile(w.ids["note"]!, "alice"),
   },
 
   // ---- a claim through the service's lease, which checks out and releases through the store

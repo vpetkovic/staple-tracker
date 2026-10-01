@@ -263,6 +263,8 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
   [2, new Set(["registration", "crossLink"])],
   // Execution attempts — `worker/src/envelope.ts`.
   [3, new Set(["attempt", "attemptTransition"])],
+  // Typed file attachments — `worker/src/envelope.ts`.
+  [4, new Set(["attachment"])],
 ];
 const REGISTRY_ENTITIES = new Set(["registration", "crossLink"]);
 const VERBS = new Set(["create", "update", "delete", "replace", "renumber"]);
@@ -367,7 +369,7 @@ export class FakeSyncServer {
       orphanEndReasons: [...ORPHAN_END_REASONS].sort(),
       // Matches `worker/src/limits.ts`. `min` did not move with `max`, which is what
       // keeps every protocol-1 client working.
-      protocol: { min: 1, max: 3 },
+      protocol: { min: 1, max: 4 },
       vocabulary: null,
       enrollmentSecret: null,
       rateLimit: null,
@@ -1156,6 +1158,9 @@ export class FakeSyncServer {
     }
     if (entity === "attemptTransition" && verb !== "create") {
       throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attempt transition: it is immutable once written`);
+    }
+    if (entity === "attachment" && verb !== "create" && verb !== "delete") {
+      throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attachment: it is created or deleted`);
     }
 
     let baseVersion: number | null = null;

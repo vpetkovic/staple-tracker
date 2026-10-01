@@ -84,7 +84,7 @@ describe("workspace migration 015", () => {
         const objects = (): string[] =>
           (db.prepare("SELECT type || ':' || name AS n FROM sqlite_master ORDER BY n").all() as Array<{ n: string }>).map((row) => row.n);
         const before = objects();
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([15, 16, 17]);
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([15, 16, 17, 18]);
         runMigrations(db, { ...WORKSPACE_TARGET, migrations: WORKSPACE_TARGET.migrations.filter((m) => m.version <= 15) });
         expect(describeSchema(db, WORKSPACE_TARGET).current).toBe(15);
         expect(objects().filter((name) => !before.includes(name))).toEqual([

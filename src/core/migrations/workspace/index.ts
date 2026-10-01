@@ -18,6 +18,7 @@ import { migration as m014 } from "./014-lifecycle-capture.js";
 import { migration as m015 } from "./015-autopilot-runs.js";
 import { migration as m016 } from "./016-milestone-goals.js";
 import { migration as m017 } from "./017-derived-status.js";
+import { migration as m018 } from "./018-attachments.js";
 
 /**
  * The workspace database — the per-repo (or global) task store.
@@ -53,13 +54,15 @@ import { migration as m017 } from "./017-derived-status.js";
  * (milestone goal mode) follows: one machine-local table of criterion marks and three
  * nullable `runs` columns, also never named by an operation. 017 (derived status) follows:
  * one nullable `issues` column that replicates as the issue field `derivedStatus`, and the
- * trigger that clears it when anything but derivation moves the row.
+ * trigger that clears it when anything but derivation moves the row. 018 (attachments)
+ * follows: two new tables, the metadata replicating as the `attachment` entity and the
+ * bytes staying local except when a create inlines them.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",
   // `issues` has existed since version 1, so its absence means an empty file.
   sentinelTable: "issues",
-  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017],
+  migrations: [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018],
   consolidated: CONSOLIDATED_DDL,
 };
 

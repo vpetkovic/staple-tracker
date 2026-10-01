@@ -48,11 +48,11 @@ What this page promises holds for a fleet inside these three lines, and is not p
 outside them:
 
 - **The Worker is deployed before any client that needs it** (`worker/README.md`). The
-  client speaks protocol 3 (`CLIENT_PROTOCOL`) and the Worker accepts protocols 1 to 3
+  client speaks protocol 4 (`CLIENT_PROTOCOL`) and the Worker accepts protocols 1 to 4
   (`PROTOCOL_MIN`, `PROTOCOL_MAX`); a client against a Worker that does not advertise
-  protocol 3 is refused before anything is sent, and a client against a Worker that lacks a
+  protocol 4 is refused before anything is sent, and a client against a Worker that lacks a
   later server-side rule degrades where this page says so. Nothing else is supported.
-- **Every device runs a build that understands workspace schema 16.** The rules on this page
+- **Every device runs a build that understands workspace schema 18.** The rules on this page
   that name an older build describe what the current build does when it meets data one
   wrote, and are kept and tested as they stand; nothing further is promised for a fleet that
   still runs one.
@@ -396,6 +396,7 @@ entity's own primary key.
 | `milestone_criterion_marks` | `(milestone_id, position)` | `criterion`, `verdict`, `evidence`, `note`, `marked_by`, `run_id`, `marked_at` — as the milestone's field `criterion<position>` (a JSON object; null clears it), one field per criterion, so concurrent marks of one criterion are a field conflict and of two criteria are not. No new entity and no protocol change: the service folds a milestone's keys one by one, as it always has ([milestones](milestones.md#goal)) |
 | `attempts` | `id` | `issue_id`, `agent`, `role` (workspace migration 014; a create without it is a `worker` attempt), `opened_by`, `resumes_attempt_id`, `started_at`, `device_id`, `claim_scope`, `claim_fencing_token`, `harness`, `provider_binding`, `estimate_at_start`, `idempotency_key`, `provenance`, `missing` on the create; then only the end: `state`, `outcome`, `end_reason`, `end_detection`, `ended_by`, `ended_at`, `ended_at_source`, always all seven together — protocol 3, see [execution telemetry](execution-telemetry.md#where-it-lives-and-what-synchronizes) |
 | `attempt_transitions` | `id` | `attempt_id`, `kind`, `at`, `actor`, `detection`, `reason`, `detail`, `concurrency` — immutable once written, like a document revision; protocol 3 |
+| `attachments` | `id` | `issue_id`, `filename`, `media_type`, `size`, `sha256`, `author`, `caption`, `byte_sync`, `created_at` — protocol 4. `create` and `delete` only. When `byte_sync` is `inline` the bytes travel inside the create as base64 `bytes`. `attachment_bytes` is not an entity: a `local` file's bytes stay on the device that attached it, and another device can say they are not here |
 | `meta` | `key` | **only** rows matching `setting:*` — the repository's prefix travels as one of them, `setting:repository.prefix` ([above](#the-prefix-is-the-repositorys-the-slug-is-the-machines)); `slug` and `prefix` themselves are this workspace's own |
 
 **`derived_status` travels like any other column** (workspace migration 017): it says the
@@ -2742,8 +2743,8 @@ error rather than a truncation.
 Two version numbers, deliberately separate.
 
 **`protocol`** is the wire contract — the envelope, the verbs, the routes. It is
-an integer, currently `3`, sent in every envelope and as a request header. The
-server advertises `{ min, max }`, presently `{ min: 1, max: 3 }`. A client outside
+an integer, currently `4`, sent in every envelope and as a request header. The
+server advertises `{ min, max }`, presently `{ min: 1, max: 4 }`. A client outside
 that range is refused with `protocol_unsupported`, carrying the supported range,
 **before any write** — no partial batch, no half-applied page. The server supports
 the current version and the one before it for at least one release cycle, so a
@@ -2757,7 +2758,7 @@ not yet redeployed, which would turn a hub feature into a total sync outage on
 every repository on the machine.
 
 Protocol 3 adds the execution attempts, `attempt` and `attemptTransition`, and this
-time the workspace client moves: `CLIENT_PROTOCOL` is 3, because every mutation that
+time the workspace client moves: `CLIENT_PROTOCOL` moved to 3, because every mutation that
 opens or ends an attempt journals one, so there is no leg to confine them to. **Every
 device upgrades together, and the Worker goes first.** The Worker that understands the
 new entities is deployed before any client built with them; a client at 3 talking to a
@@ -2774,7 +2775,18 @@ and `create` alone on a transition. The rules every reader of the log shares for
 — are in `src/core/cloud/attempt-ends.ts`, which the Worker imports as it stands, like
 revision placement.
 
-**`schema`** is the workspace migration number, currently 16
+Protocol 4 adds `attachment`. A file's metadata is one entity, created and deleted,
+never updated. Bytes at or under 256 KiB travel inside the create when that payload
+stays under the 512 KiB operation cap (`byteSync: inline`, base64). A larger file, up
+to 32 MiB, syncs its metadata only (`byteSync: local`); the bytes stay on the device
+that attached it. Past 32 MiB nothing is written. `attachment_bytes` is not an entity.
+`CLIENT_PROTOCOL` is 4. **The Worker is deployed before any client that speaks 4.** A
+client at 4 talking to a Worker still at `{ min: 1, max: 3 }` is refused at the
+handshake, before anything is sent. An older client is refused a page or a fold that
+holds an attachment with `protocol_unsupported` and `requiredProtocol: 4`. The same
+release stamps operations `schema: 18`. The Worker admits `create` and `delete` only.
+
+**`schema`** is the workspace migration number, currently 18
 (`WORKSPACE_LATEST_VERSION`). A
 device receiving operations stamped with a schema newer than it understands
 refuses with `schema_ahead` and says which version to upgrade to. It never applies

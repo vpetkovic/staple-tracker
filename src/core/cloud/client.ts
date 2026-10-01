@@ -41,13 +41,13 @@ import { cloudError, isCloudErrorCode } from "./errors.js";
 /**
  * The wire protocol this build's workspace leg speaks. Matches `PROTOCOL_MAX` in the Worker.
  *
- * 3 since execution attempts (`attempt`, `attemptTransition`): a new entity kind is not
- * additive (`design/sync.md`, "Protocol evolution"), so the Worker that understands them is
- * deployed first and advertises `{ min: 1, max: 3 }`, and this build is refused by any
+ * 4 since typed file attachments (`attachment`): a new entity kind is not additive
+ * (`design/sync.md`, "Protocol evolution"), so the Worker that understands them is
+ * deployed first and advertises `{ min: 1, max: 4 }`, and this build is refused by any
  * Worker that has not been — before anything is sent. The hub registry leg still declares 2
  * (`REGISTRY_PROTOCOL`).
  */
-export const CLIENT_PROTOCOL = 3;
+export const CLIENT_PROTOCOL = 4;
 
 /** Bounded so an unreachable endpoint degrades to `offline` instead of hanging. */
 export const DEFAULT_TIMEOUT_MS = 15_000;

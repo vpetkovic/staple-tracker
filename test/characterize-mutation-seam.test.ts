@@ -270,6 +270,7 @@ describe("what every surface's operations have in common", () => {
         "conflict",
         "attempt",
         "attemptTransition",
+        "attachment",
       ]).toContain(entity);
     }
     for (const verb of verbs) {

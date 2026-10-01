@@ -79,6 +79,8 @@ export const SYNC_ENTITIES = [
   // Protocol 3: execution attempts (`design/execution-telemetry.md`, "Where it lives").
   "attempt",
   "attemptTransition",
+  // Protocol 4: typed file attachments. Metadata always; bytes only when they fit.
+  "attachment",
 ] as const;
 export type SyncEntity = (typeof SYNC_ENTITIES)[number];
 
@@ -142,10 +144,10 @@ export const JOURNAL_MAX_OP_BYTES = 512 * 1024;
 
 /**
  * The protocol this build's operations are stamped with: the workspace client's
- * (`CLIENT_PROTOCOL`, `cloud/client.ts`). 3 since the execution attempts — a new entity kind
- * is a protocol change, and the Worker that knows `attempt` is deployed first.
+ * (`CLIENT_PROTOCOL`, `cloud/client.ts`). 4 since typed file attachments — a new entity
+ * kind is a protocol change, and the Worker that knows `attachment` is deployed first.
  */
-export const SYNC_PROTOCOL = 3;
+export const SYNC_PROTOCOL = 4;
 
 /**
  * Derive the operation id.

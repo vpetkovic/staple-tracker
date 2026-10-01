@@ -420,6 +420,10 @@ describe("schema migration against a live database", () => {
       legacyDb.exec("DROP TRIGGER IF EXISTS issues_derived_status_cleared");
       legacyDb.exec("DROP TRIGGER IF EXISTS issues_derived_status_created");
       legacyDb.exec("ALTER TABLE issues DROP COLUMN derived_status");
+      // Migration 018's tables. The trigger goes with `attachments`.
+      legacyDb.exec("DROP TRIGGER IF EXISTS attachments_drop_bytes");
+      legacyDb.exec("DROP TABLE IF EXISTS attachments");
+      legacyDb.exec("DROP TABLE IF EXISTS attachment_bytes");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

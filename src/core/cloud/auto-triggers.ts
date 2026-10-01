@@ -89,6 +89,7 @@ export const CLI_COMMAND_TRIGGERS: Readonly<Record<string, AutoSyncTrigger>> = {
   link: "post-write",
   comment: "post-write",
   doc: "post-write",
+  file: "post-write",
   queue: "post-write",
   statuses: "post-write",
   kinds: "post-write",

@@ -34,6 +34,7 @@
  * the whole local state together.
  */
 import type { DatabaseSync } from "node:sqlite";
+import { attachmentPayload, readAttachment, readAttachmentBytes } from "../attachments.js";
 import { tx } from "../db.js";
 import { moveIdentifier } from "../identifier-moves.js";
 import { newId } from "../ids.js";
@@ -190,6 +191,7 @@ const NOUNS: Record<string, [string, string]> = {
   queue: ["plan", "plans"],
   attempt: ["attempt", "attempts"],
   attemptTransition: ["attempt transition", "attempt transitions"],
+  attachment: ["file", "files"],
 };
 
 function counted(n: number, entity: string): string {
@@ -294,6 +296,7 @@ export function workspaceHoldings(db: DatabaseSync): { total: number; summary: s
     queue: count("SELECT CASE WHEN EXISTS (SELECT 1 FROM queue_entries) THEN 1 ELSE 0 END AS n"),
     attempt: count("SELECT COUNT(*) AS n FROM attempts"),
     attemptTransition: count("SELECT COUNT(*) AS n FROM attempt_transitions"),
+    attachment: count("SELECT COUNT(*) AS n FROM attachments"),
   };
   const total = Object.values(byEntity).reduce((sum, n) => sum + n, 0);
   return { total, summary: breakdown(byEntity) };
@@ -335,6 +338,8 @@ function isComplete(entity: SnapshotEntity): boolean {
       return typeof state.issueId === "string";
     case "attemptTransition":
       return typeof state.attemptId === "string";
+    case "attachment":
+      return typeof state.issueId === "string" && typeof state.filename === "string";
     default:
       return true;
   }
@@ -698,6 +703,25 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       payload: transitionPayload(transition),
       actor: transition.actor,
       at: transition.at,
+    });
+  }
+
+  /**
+   * Files. Metadata always. Bytes only when this device still holds them and the
+   * file was inlined — a local file, or an inlined file whose blob is gone, seeds
+   * as local so a receiver is not told the bytes are coming.
+   */
+  for (const row of db.prepare("SELECT id FROM attachments ORDER BY created_at, id").all() as Array<{ id: string }>) {
+    const meta = readAttachment(db, row.id)!;
+    const bytes = meta.byteSync === "inline" ? readAttachmentBytes(db, meta.sha256) : null;
+    const seeded = bytes === null ? { ...meta, byteSync: "local" as const } : meta;
+    out.push({
+      entity: "attachment",
+      entityId: meta.id,
+      label: `${meta.filename} on ${identifierOf(db, meta.issueId)}`,
+      payload: attachmentPayload(seeded, bytes),
+      actor: meta.author,
+      at: meta.createdAt,
     });
   }
 

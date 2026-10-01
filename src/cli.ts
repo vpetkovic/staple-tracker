@@ -31,6 +31,7 @@ import { runCalibrateCommand } from "./commands/calibrate.js";
 import { runForecastCommand } from "./commands/forecast.js";
 import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
+import { runFileCommand } from "./commands/file.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
 import { EXIT_CODES, exitCodeFor } from "./commands/exit-codes.js";
 import { CLI_COMMAND_TRIGGERS, runCommandTrigger } from "./core/cloud/auto-triggers.js";
@@ -1079,6 +1080,11 @@ Autopilot runs
               (staple run drive --help)
 
 Documents & events
+  file attach <ref> <path> [--caption C] [--filename N]
+              attach a file; the type is sniffed from the bytes
+  file ls <ref>                         list a ticket's files (metadata only)
+  file get <id> --out <path>            write one file's bytes to a path
+  file rm <id>                          remove a file
   doc <ref> <key>                       read (latest)
   doc <ref> <key> --put <file|->        write (--base N for optimistic concurrency)
   doc <ref> <key> --revisions           history
@@ -1532,6 +1538,12 @@ function main() {
       }
       if (ctx.documents.length) {
         console.log(`\ndocuments: ${ctx.documents.map((d) => `${d.key}@r${d.currentRevision}`).join(", ")}`);
+      }
+      if (ctx.attachments.length) {
+        console.log("\nfiles:");
+        for (const file of ctx.attachments) {
+          console.log(`  ${file.filename}  ${file.mediaType}  ${file.size}  ${file.byteSync}  ${file.sha256}`);
+        }
       }
       if (ctx.comments.length) {
         console.log("\ncomments:");
@@ -2272,6 +2284,10 @@ function main() {
       }
       break;
     }
+
+    case "file":
+      runFileCommand(rest);
+      break;
 
     case "doc": {
       const { values, positionals } = parseArgs({

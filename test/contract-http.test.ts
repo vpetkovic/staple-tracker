@@ -268,6 +268,8 @@ describe("read shapes", () => {
       // surface — pinned here and in contract-cli.test.ts, not fixed.
       comments: [commentGolden({ body: "contract comment", authorType: "user" })],
       documents: [],
+      // File metadata, from the store method get_task spreads too. CON-1 has none.
+      attachments: [],
       crossBlockers: [],
       // C1: claim liveness rides with the issue, matching MCP get_task.
       claim: claimGolden(),
