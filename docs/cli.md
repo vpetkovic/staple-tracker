@@ -77,7 +77,7 @@ Guides: [How an agent works a ticket](working-a-ticket.md),
 |---|---|
 | `staple new <title>` | File a ticket. `-d text`, `-p priority`, `--parent R`, `--kind K`, `--blocked-by R1,R2`, `--estimate 2h`, `--criteria "a;b"`, `--assignee A`. |
 | `staple ls` | List open tickets. `--status s1,s2`, `--kind k`, `--assignee A`, `-q text`; `--all` includes finished ones. |
-| `staple show <ref>` | One ticket in full: status, claim, time, parents, blockers, comments and documents. |
+| `staple show <ref>` | One ticket in full: status, claim, time, parents, blockers, comments, documents and files. |
 | `staple tree [ref]` | Tickets as a tree under their epics. |
 | `staple board` | A kanban board in the terminal. |
 | `staple inbox` | What is ready to take, what waits on a person, and what is blocked, in pickup order. `--hub` covers every workspace. |
@@ -87,6 +87,10 @@ Guides: [How an agent works a ticket](working-a-ticket.md),
 | `staple status <ref> <status>` | Move a ticket to any status the rules allow. |
 | `staple comment <ref> <text>` | Add a comment. |
 | `staple doc <ref> <key> --put <file>` | Store a document on a ticket (a plan, a worklog). Without `--put` it prints the latest; `--revisions` lists the history. |
+| `staple file attach <ref> <path>` | Attach a file. The type is sniffed from the bytes. `--caption` and `--filename` are optional. |
+| `staple file ls <ref>` | List a ticket's files. Metadata only: type, size, and hash. |
+| `staple file get <id> --out <path>` | Write one file's bytes to a path. |
+| `staple file rm <id>` | Remove a file. |
 | `staple events [--since N]` | The workspace's event log. `--follow` streams new events; `--exec CMD` runs a command for each. |
 | `staple wait <ref> [--timeout S]` | Wait until a ticket is ready or finished. |
 

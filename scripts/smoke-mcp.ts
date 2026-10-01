@@ -118,13 +118,14 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 25 &&
+    readOnly.length === 26 &&
       [
         "inbox",
         "list_tasks",
         "get_task",
         "list_comments",
         "get_document",
+        "list_files",
         "events_since",
         // STA-140: reading the workspace vocabulary is as read-only as reading a task.
         "list_statuses",
@@ -160,7 +161,7 @@ try {
         // Nor a forecast of completion and budget.
         "forecast",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 25 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 26 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   // Removing budget readings takes rows out of hub.db: destructive, and not idempotent
@@ -866,7 +867,8 @@ try {
   // timing_quality, the cohort quality read, 46, calibration_cohorts, 47, and forecast, 48.
   // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51,
   // and pause_run, resume_run and continue_run, 54, and goal mode's mark_milestone_criterion, 55.
-  assert(wsTargetable.length === 55, `55 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // Typed files added list_files, attach_file, export_file and remove_file, 59.
+  assert(wsTargetable.length === 59, `59 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&
@@ -1059,6 +1061,8 @@ try {
         // the actor, and a plan nobody signed is not a plan.
         "add_milestone_member",
         "approve_task",
+        // Attaching a file records who attached it.
+        "attach_file",
         "checkout_task",
         // S7 (STA-73): settling a conflict emits a NEW operation carrying the
         // choice, so it is a write and is attributed like one.
@@ -1083,6 +1087,8 @@ try {
         // Execution attempts: a report on an attempt is a write and is attributed like one.
         "record_attempt_event",
         "release_task",
+        // Removing a file records who removed it. Export writes a path and takes no actor.
+        "remove_file",
         "remove_milestone_member",
         "reorder_milestone_members",
         "reorder_queue",

@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -407,5 +407,34 @@ CREATE TRIGGER issues_derived_status_created
       WHEN NEW.derived_status IS NOT NULL AND NEW.derived_status IS NOT NEW.status
       BEGIN
         UPDATE issues SET derived_status = NULL WHERE id = NEW.id;
+      END;
+
+CREATE TABLE attachments (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        filename TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        author TEXT,
+        caption TEXT,
+        byte_sync TEXT NOT NULL CHECK (byte_sync IN ('inline', 'local')),
+        created_at TEXT NOT NULL
+      );
+
+CREATE INDEX attachments_issue_idx ON attachments(issue_id);
+
+CREATE INDEX attachments_sha_idx ON attachments(sha256);
+
+CREATE TABLE attachment_bytes (
+        sha256 TEXT PRIMARY KEY,
+        bytes BLOB NOT NULL
+      );
+
+CREATE TRIGGER attachments_drop_bytes
+      AFTER DELETE ON attachments
+      WHEN NOT EXISTS (SELECT 1 FROM attachments WHERE sha256 = OLD.sha256)
+      BEGIN
+        DELETE FROM attachment_bytes WHERE sha256 = OLD.sha256;
       END;
 `;

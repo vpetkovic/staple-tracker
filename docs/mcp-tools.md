@@ -6,7 +6,7 @@ description: Every tool the staple MCP server offers, grouped by what an agent i
 # MCP tools
 
 Use this page to find the tool an agent calls for a job, and the command you would
-type for the same thing. The server offers 65 tools, grouped the same way as the
+type for the same thing. The server offers 69 tools, grouped the same way as the
 [CLI reference](cli.md). A tool and its command follow the same rules, and most
 answer the same object the command prints with `--json`.
 
@@ -35,7 +35,7 @@ The loop an agent follows, described in
 |---|---|---|---|
 | `inbox` | What is ready, waiting on a person, or blocked, in pickup order | `staple inbox` | no |
 | `list_tasks` | List tickets by status, kind, assignee or text | `staple ls` | no |
-| `get_task` | One ticket in full: claim, time, gate, blockers, attempts | `staple show` | no |
+| `get_task` | One ticket in full: claim, time, gate, blockers, attempts, and file metadata | `staple show` | no |
 | `create_task` | File a ticket, with parent, blockers and estimate | `staple new` | yes |
 | `update_task` | Change status or fields; `status: "done"` finishes it | `staple status`, `staple done` | yes |
 | `checkout_task` | Claim a ticket and start it | `staple start` | yes |
@@ -44,6 +44,10 @@ The loop an agent follows, described in
 | `list_comments` | A ticket's comments, oldest first | `staple show` | no |
 | `put_document` | Store a plan, worklog or other document on a ticket | `staple doc --put` | yes |
 | `get_document` | Read a document, latest or by revision | `staple doc` | no |
+| `list_files` | A ticket's files: type, size, and hash. Never the bytes | `staple file ls` | no |
+| `attach_file` | Attach a file from a path or from base64. The type is sniffed from the bytes | `staple file attach` | yes |
+| `export_file` | Write one file's bytes to a path | `staple file get` | yes |
+| `remove_file` | Remove a file | `staple file rm` | yes |
 | `events_since` | What changed since a point in the event log | `staple events --since` | no |
 | `record_attempt_event` | Report a pause, resume, checkpoint or interruption on the ticket you hold | `staple attempt pause` (and `resume`, `milestone`, `interrupt`) | yes |
 

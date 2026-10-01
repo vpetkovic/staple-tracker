@@ -24,6 +24,30 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
   payload: Record<string, unknown>;
 }> = [
   {
+    "entity": "attachment",
+    "verb": "create",
+    "payload": {
+      "issueId": "00000000-0000-4000-8000-000000000000",
+      "filename": "note.txt",
+      "mediaType": "text/plain",
+      "size": 4,
+      "sha256": "9b75290f6a6359a2a3471022cbba4b724e45105b313ae8f6c103a2f79e82a857",
+      "author": "emitter",
+      "caption": "a log",
+      "byteSync": "inline",
+      "createdAt": "2026-09-10T00:00:00.000Z",
+      "bytes": "bG9nCg=="
+    }
+  },
+  {
+    "entity": "attachment",
+    "verb": "delete",
+    "payload": {
+      "issueId": "00000000-0000-4000-8000-000000000000",
+      "filename": "note.txt"
+    }
+  },
+  {
     "entity": "attempt",
     "verb": "create",
     "payload": {

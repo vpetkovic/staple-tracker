@@ -640,12 +640,12 @@ describe("an epoch is a discontinuity, and it is never a silent reset", () => {
 
 describe("unsupported protocol and schema refuse before anything changes", () => {
   it("refuses a protocol outside the advertised range and sends nothing else", async () => {
-    server = new FakeSyncServer({ repositoryId: REPO_ID, protocol: { min: 4, max: 9 } });
+    server = new FakeSyncServer({ repositoryId: REPO_ID, protocol: { min: 5, max: 9 } });
     const a = device("device-a", "token-a");
     a.store.createIssue({ title: "Never sent" });
 
     await expect(a.sync()).rejects.toMatchObject({
-      detail: { cloudCode: "protocol_unsupported", min: 4, max: 9 },
+      detail: { cloudCode: "protocol_unsupported", min: 5, max: 9 },
     });
 
     expect(server.calls).toEqual(["GET /v1/capabilities"]);

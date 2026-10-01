@@ -206,7 +206,7 @@ export function retryQuarantine(
 }
 
 /** The entities a `create` brings whole; the collections — a blocker set, the plan, a milestone — have none. */
-const CREATED: ReadonlySet<string> = new Set(["issue", "comment", "project", "status", "kind", "documentRevision", "attempt", "attemptTransition"]);
+const CREATED: ReadonlySet<string> = new Set(["issue", "comment", "project", "status", "kind", "documentRevision", "attempt", "attemptTransition", "attachment"]);
 
 /**
  * An operation applied out of its place in the log — after operations later than it, because
@@ -327,6 +327,8 @@ function entityHeld(db: DatabaseSync, entity: string, entityId: string): boolean
       return hit("SELECT 1 FROM attempts WHERE id = ?", entityId);
     case "attemptTransition":
       return hit("SELECT 1 FROM attempt_transitions WHERE id = ?", entityId);
+    case "attachment":
+      return hit("SELECT 1 FROM attachments WHERE id = ?", entityId);
     case "documentRevision": {
       const slash = entityId.lastIndexOf("/");
       const document = entityId.slice(0, slash);

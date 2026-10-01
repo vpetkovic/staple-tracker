@@ -52,7 +52,14 @@ import type { Env, Plan } from "./env.js";
  * `requiredProtocol: 3`.
  */
 export const PROTOCOL_MIN = 1;
-export const PROTOCOL_MAX = 3;
+/**
+ * Protocol 4 adds `attachment` (a typed file on an issue). The workspace client moves
+ * to 4 with it: a file has no separate leg to confine it to. This Worker is deployed
+ * first. `PROTOCOL_MIN` stays 1 so an older client's own pushes are still accepted
+ * while it upgrades; a page or fold that holds an attachment is refused to it with
+ * `protocol_unsupported` and `requiredProtocol: 4`.
+ */
+export const PROTOCOL_MAX = 4;
 
 /**
  * The binding constraint on batch size is D1's queries-per-Worker-invocation limit:

@@ -5,7 +5,21 @@ import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, fo
 import { connectionPath } from "./cloud/connection.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
-import { type Journal, journalFor, resolveDeviceId } from "./journal.js";
+import { JOURNAL_MAX_OP_BYTES, type Journal, journalFor, resolveDeviceId } from "./journal.js";
+import {
+  type AttachmentMeta,
+  type ByteSync,
+  assertAttachable,
+  attachmentPayload,
+  byteSyncFor,
+  cleanFilename,
+  insertAttachment,
+  listAttachments,
+  readAttachment,
+  readAttachmentBytes,
+  sha256Hex,
+  sniffMediaType,
+} from "./attachments.js";
 import {
   blockersResolvedDedupKey,
   childrenCompleteDedupKey,
@@ -7271,6 +7285,112 @@ export class WorkspaceStore {
     }));
   }
 
+  // ---------- files (typed attachments, migration 018) ----------
+
+  /**
+   * Attach a file to an issue.
+   *
+   * The media type is sniffed. A file over the cap is refused before any write.
+   * Bytes at or under the inline limit travel in the operation when the payload
+   * fits the journal cap; otherwise the metadata syncs and the bytes stay here.
+   */
+  attachFile(
+    ref: string,
+    input: { filename: string; bytes: Uint8Array; caption?: string | null; author?: string | null },
+  ): AttachmentMeta {
+    assertAttachable(input.bytes);
+    const filename = cleanFilename(input.filename);
+    const caption = input.caption?.trim() ? input.caption.trim() : null;
+    if (caption !== null && caption.length > 280) {
+      throw new StapleError("validation", "A caption is at most 280 characters.");
+    }
+    return this.journaled(() => {
+      const row = this.requireTarget(ref);
+      const now = this.journal.mutationAt();
+      let byteSync: ByteSync = byteSyncFor(input.bytes.byteLength);
+      const meta: AttachmentMeta = {
+        id: newId(),
+        issueId: row.id,
+        filename,
+        mediaType: sniffMediaType(input.bytes),
+        size: input.bytes.byteLength,
+        sha256: sha256Hex(input.bytes),
+        author: input.author ?? null,
+        caption,
+        byteSync,
+        createdAt: now,
+      };
+      let payload = attachmentPayload(meta, byteSync === "inline" ? input.bytes : null);
+      if (byteSync === "inline" && Buffer.byteLength(JSON.stringify(payload), "utf8") > JOURNAL_MAX_OP_BYTES) {
+        byteSync = "local";
+        meta.byteSync = "local";
+        payload = attachmentPayload(meta, null);
+      }
+      insertAttachment(this.db, meta, input.bytes);
+      this.emitEvent({
+        kind: "file_attached",
+        issueId: row.id,
+        actor: input.author ?? null,
+        payload: { id: meta.id, filename: meta.filename, mediaType: meta.mediaType, size: meta.size, byteSync },
+      });
+      this.journal.record({
+        entity: "attachment",
+        entityId: meta.id,
+        verb: "create",
+        payload,
+        actor: input.author ?? null,
+      });
+      return meta;
+    });
+  }
+
+  listFiles(ref: string): AttachmentMeta[] {
+    const row = this.requireRow(ref);
+    return listAttachments(this.db, row.id);
+  }
+
+  /**
+   * The bytes of one attachment.
+   *
+   * Missing bytes are a fact about sync, not a missing row: the metadata arrived
+   * and the file was local-only on the device that attached it.
+   */
+  readFile(id: string): { meta: AttachmentMeta; bytes: Buffer } {
+    const meta = readAttachment(this.db, id);
+    if (!meta) throw new StapleError("not_found", `No file ${id}.`);
+    const bytes = readAttachmentBytes(this.db, meta.sha256);
+    if (!bytes) {
+      throw new StapleError(
+        "not_found",
+        `File ${meta.filename} (${id}) has no bytes on this device. It was stored local-only and did not travel with sync.`,
+        { id, byteSync: meta.byteSync, sha256: meta.sha256 },
+      );
+    }
+    return { meta, bytes };
+  }
+
+  removeFile(id: string, actor?: string | null): AttachmentMeta {
+    return this.journaled(() => {
+      const meta = readAttachment(this.db, id);
+      if (!meta) throw new StapleError("not_found", `No file ${id}.`);
+      this.db.prepare("DELETE FROM attachments WHERE id = ?").run(id);
+      this.emitEvent({
+        kind: "file_removed",
+        issueId: meta.issueId,
+        actor: actor ?? null,
+        payload: { id, filename: meta.filename },
+      });
+      this.journal.record({
+        entity: "attachment",
+        entityId: id,
+        verb: "delete",
+        payload: { issueId: meta.issueId, filename: meta.filename },
+        actor: actor ?? null,
+      });
+      return meta;
+    });
+  }
+
   /**
    * Restore an old revision by writing its body as a new one.
    *
@@ -7534,6 +7654,8 @@ export class WorkspaceStore {
     blocks: Array<{ identifier: string; title: string; status: IssueStatus }>;
     comments: IssueComment[];
     documents: Array<IssueDocumentMeta & { body?: string }>;
+    /** Metadata only. The bytes are never part of this payload. */
+    attachments: AttachmentMeta[];
   } {
     const row = this.requireRow(ref);
     const ancestors: Issue[] = [];
@@ -7569,6 +7691,7 @@ export class WorkspaceStore {
       documents: opts.includeDocuments
         ? documents.map((doc) => ({ ...doc, body: this.getDocument(row.id, doc.key).body }))
         : documents,
+      attachments: listAttachments(this.db, row.id),
     };
   }
 

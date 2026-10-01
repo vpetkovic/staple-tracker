@@ -445,6 +445,9 @@ function operationReferents(entity: string, entityId: string, payload: Record<st
     case "attemptTransition":
       if (typeof payload.attemptId === "string") out.push(["attempt", payload.attemptId]);
       break;
+    case "attachment":
+      issue(payload.issueId);
+      break;
     default:
       break;
   }
@@ -503,6 +506,9 @@ function foldNeeds(entities: readonly SnapshotEntity[]): Set<Key> {
       case "attemptTransition":
         need("attempt", state.attemptId);
         break;
+      case "attachment":
+        need("issue", field(state, "issueId", "issue_id"));
+        break;
       default:
         break;
     }
@@ -530,6 +536,7 @@ function heldEntities(db: DatabaseSync): Array<readonly [SyncEntity, string]> {
   // An attempt outlives its issue by design; it is rewound as an entity of its own.
   for (const id of ids("SELECT id FROM attempts")) out.push(["attempt", id]);
   for (const id of ids("SELECT id FROM attempt_transitions")) out.push(["attemptTransition", id]);
+  for (const id of ids("SELECT id FROM attachments")) out.push(["attachment", id]);
   return out;
 }
 
@@ -564,6 +571,8 @@ function holds(db: DatabaseSync, entity: string, id: string): boolean {
       return hit("SELECT 1 FROM attempts WHERE id = ?", id);
     case "attemptTransition":
       return hit("SELECT 1 FROM attempt_transitions WHERE id = ?", id);
+    case "attachment":
+      return hit("SELECT 1 FROM attachments WHERE id = ?", id);
     default:
       return false;
   }
@@ -597,6 +606,8 @@ function referents(db: DatabaseSync, entity: string, id: string): Array<readonly
       return column("SELECT issue_id AS id FROM attempts WHERE id = ?", id).map((issue) => ["issue", issue] as const);
     case "attemptTransition":
       return column("SELECT attempt_id AS id FROM attempt_transitions WHERE id = ?", id).map((attempt) => ["attempt", attempt] as const);
+    case "attachment":
+      return column("SELECT issue_id AS id FROM attachments WHERE id = ?", id).map((issue) => ["issue", issue] as const);
     default:
       return [];
   }
@@ -655,6 +666,8 @@ function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
       return gone(db.prepare("DELETE FROM attempts WHERE id = ?").run(id).changes);
     case "attemptTransition":
       return gone(db.prepare("DELETE FROM attempt_transitions WHERE id = ?").run(id).changes);
+    case "attachment":
+      return gone(db.prepare("DELETE FROM attachments WHERE id = ?").run(id).changes);
     default:
       return 0;
   }

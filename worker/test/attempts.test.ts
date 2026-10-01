@@ -77,7 +77,7 @@ describe("the attempt vocabulary is protocol 3", () => {
       426,
     );
     expect(body.requiredProtocol).toBe(3);
-    expect(body.max).toBe(3);
+    expect(body.max).toBe(4);
   });
 
   it("refuses a protocol-1 device a page or a fold that holds one, and serves a protocol-3 device", async () => {

@@ -166,10 +166,10 @@ describe("a fresh repo-local `staple init`", () => {
       // 010-sync-metadata, to "11" by 011-sync-field-writes, to "12" by
       // 012-host-binding, to "13" by 013-execution-attempts, to "14" by
       // 014-attempt-role, to "15" by 015-autopilot-runs, to "16" by
-      // 016-milestone-goals and to "17" by 017-derived-status; the TEXT typing
-      // is the characterization, the number
+      // 016-milestone-goals, to "17" by 017-derived-status and to "18" by
+      // 018-attachments; the TEXT typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "17" },
+      { key: "schema_version", value: "18" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -182,6 +182,9 @@ describe("a fresh repo-local `staple init`", () => {
     expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
 
     expect(schemaObjects(join(project, ".staple", "staple.db"))).toEqual([
+      // 018-attachments: an issue's files, and the blob a shared hash points at.
+      "index:attachments_issue_idx",
+      "index:attachments_sha_idx",
       // 013-execution-attempts: an attempt's transitions in order, an issue's attempts
       // in order, the idempotency lookup, and the stored-open attempts the orphan rule
       // and the presence index read.
@@ -215,6 +218,9 @@ describe("a fresh repo-local `staple init`", () => {
       // 015-autopilot-runs: the one-live-run-per-actor-per-scope rule, and the run list's order.
       "index:runs_live_scope_uq",
       "index:runs_started_idx",
+      // 018-attachments: the two tables' primary keys.
+      "index:sqlite_autoindex_attachment_bytes_1",
+      "index:sqlite_autoindex_attachments_1",
       // 013-execution-attempts: the two tables' `id` primary keys.
       "index:sqlite_autoindex_attempt_transitions_1",
       "index:sqlite_autoindex_attempts_1",
@@ -264,6 +270,9 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sync_outbox_pending_idx",
       "index:workspace_kinds_order_idx",
       "index:workspace_statuses_order_idx",
+      // 018-attachments: metadata replicates; the bytes table is local and travels only inside an inline operation.
+      "table:attachment_bytes",
+      "table:attachments",
       // 013-execution-attempts: attempts and their transitions, both replicated.
       "table:attempt_transitions",
       "table:attempts",
@@ -298,6 +307,8 @@ describe("a fresh repo-local `staple init`", () => {
       "table:sync_tombstones",
       "table:workspace_kinds",
       "table:workspace_statuses",
+      // 018-attachments: drop a blob once nothing still names its hash.
+      "trigger:attachments_drop_bytes",
       // 017-derived-status: hold the replicated ownership column to null or the row's status.
       "trigger:issues_derived_status_cleared",
       "trigger:issues_derived_status_created",
@@ -476,9 +487,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 17 since 017-derived-status. The hub beside it
-      // is still 2; the two databases version independently.
-      { key: "schema_version", value: "17" },
+      // WORKSPACE_SCHEMA_VERSION — 18 since 018-attachments. The hub beside it
+      // is still 8; the two databases version independently.
+      { key: "schema_version", value: "18" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

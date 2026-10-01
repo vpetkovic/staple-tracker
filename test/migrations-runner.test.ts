@@ -141,7 +141,8 @@ describe("version detection", () => {
     // machine-local tables), hub still 8. Then workspace 15 -> 16 (016-milestone-goals,
     // the machine-local criterion marks and three run columns), hub still 8. Then workspace
     // 16 -> 17 (017-derived-status, the replicated ownership column and its trigger), hub still 8.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(17);
+    // Then workspace 17 -> 18 (018-attachments, file metadata and its bytes), hub still 8.
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(18);
     expect(latestVersion(HUB_TARGET)).toBe(8);
   });
 });

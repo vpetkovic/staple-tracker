@@ -306,8 +306,9 @@ describe("tool inventory", () => {
   // wrong budget readings added forget_budget_samples: 57 -> 58. Autopilot runs added
   // start_run, run_status and stop_run: 58 -> 61. The run's driver loop added pause_run,
   // resume_run and continue_run: 61 -> 64. Milestone goal mode added
-  // mark_milestone_criterion: 64 -> 65.
-  it("exposes exactly these 65 tools with these annotations and output schemas", async () => {
+  // mark_milestone_criterion: 64 -> 65. Typed files added list_files, attach_file,
+  // export_file and remove_file: 65 -> 69.
+  it("exposes exactly these 69 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -537,6 +538,44 @@ describe("tool inventory", () => {
         name: "get_document",
         annotations: { title: "Read document", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: false,
+      },
+      {
+        name: "list_files",
+        annotations: { title: "List files", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "attach_file",
+        annotations: {
+          title: "Attach file",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "export_file",
+        annotations: {
+          title: "Export file",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "remove_file",
+        annotations: {
+          title: "Remove file",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
       },
       {
         name: "events_since",
@@ -959,7 +998,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty-five read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-six read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -976,6 +1015,7 @@ describe("tool inventory", () => {
       "forecast",
       "list_comments",
       "get_document",
+      "list_files",
       "events_since",
       // STA-140: reading the workspace vocabulary is as read-only as reading a task.
       "list_statuses",
@@ -1250,6 +1290,8 @@ describe("tool response shapes (31/31)", () => {
       documents: [
         { issueId: UUID, key: "plan", currentRevision: 1, title: "Plan", updatedAt: ISO, body: "# plan v1\n" },
       ],
+      // File metadata, never the bytes. CON-1 has none.
+      attachments: [],
       // H9: the hub merge the web UI does, surfaced to agents.
       crossBlockers: [
         { identifier: "CONA-1", workspace: "contract-two", status: "backlog", resolved: false, unresolvable: false },
@@ -1742,6 +1784,11 @@ describe("tool response shapes (31/31)", () => {
       "list_comments",
       "put_document",
       "get_document",
+      // Typed files: pinned in test/attachments.test.ts, against the store, the CLI and these tools.
+      "list_files",
+      "attach_file",
+      "export_file",
+      "remove_file",
       "get_task",
       "list_tasks",
       "inbox",

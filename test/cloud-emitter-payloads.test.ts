@@ -140,6 +140,13 @@ function exerciseTheSeam(store: WorkspaceStore): void {
   store.addComment(child.identifier, "a comment", actor, "agent");
   store.putDocument(child.identifier, "plan", "# plan\n", { author: actor, title: "Plan" });
   store.putDocument(child.identifier, "plan", "# plan, v2\n", { author: actor, baseRevision: 1 });
+  const attached = store.attachFile(child.identifier, {
+    filename: "note.txt",
+    bytes: Buffer.from("log\n"),
+    caption: "a log",
+    author: actor,
+  });
+  store.removeFile(attached.id, actor);
   store.checkoutIssue(blocker.identifier, actor);
   store.releaseIssue(blocker.identifier, actor);
   store.gateIssue(epic.identifier, { owner: "vp", comment: "please look" }, actor);

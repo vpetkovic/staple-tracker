@@ -62,6 +62,11 @@ export const TABLES: Record<string, { readonly key: readonly string[]; readonly 
     key: ["id"],
     sql: "SELECT id, attempt_id, kind, at, actor, detection, reason, detail, concurrency FROM attempt_transitions ORDER BY id",
   },
+  // File metadata (protocol 4). The bytes in attachment_bytes do not travel as a table.
+  attachments: {
+    key: ["id"],
+    sql: "SELECT id, issue_id, filename, media_type, size, sha256, author, caption, byte_sync, created_at FROM attachments ORDER BY id",
+  },
 };
 
 export type State = Record<string, Map<string, Record<string, unknown>>>;

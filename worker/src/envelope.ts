@@ -75,6 +75,13 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
    * protocol change: a client below 3 is refused a page or a fold that holds one.
    */
   [3, new Set(["attempt", "attemptTransition"])],
+  /**
+   * Typed file attachments. `attachment` is keyed by the attachment's UUID. `create`
+   * carries the metadata and, when the file is small enough, the bytes. `delete`
+   * removes it. A new entity kind is a protocol change: a client below 4 is refused
+   * a page or a fold that holds one.
+   */
+  [4, new Set(["attachment"])],
 ];
 
 /** The registry entities, named once so three files can ask about them. */
@@ -291,6 +298,14 @@ export function validateEnvelope(
   }
   if (entity === "attemptTransition" && verb !== "create") {
     throw new SyncError("validation", `${at}.verb '${verb}' is never valid for an attempt transition: it is immutable once written`, { index });
+  }
+  /**
+   * An attachment is created and deleted. There is no edit: a changed file is a new
+   * attachment. Refused here rather than merely not emitted, for the same reason as
+   * an attempt transition — the client is not the only thing that can push.
+   */
+  if (entity === "attachment" && verb !== "create" && verb !== "delete") {
+    throw new SyncError("validation", `${at}.verb '${verb}' is never valid for an attachment: it is created or deleted`, { index });
   }
 
   // `baseVersion` is null for `create` and an integer otherwise. The server records it

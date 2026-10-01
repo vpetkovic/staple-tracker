@@ -16,8 +16,8 @@ describe("protocol negotiation", () => {
   /**
    * GOLDEN MOVED (STA-283): both of these used `protocol: 2` as the out-of-range
    * value, and 2 is now IN range. They moved to 3 and assert `max: 2`. MOVED AGAIN for
-   * execution attempts: 3 is in range now too, so the out-of-range value is 4 and the
-   * range they assert is `max: 3`.
+   * execution attempts: 3 is in range now too. MOVED AGAIN for typed file attachments:
+   * 4 is in range, so the out-of-range value is 5 and the range they assert is `max: 4`.
    *
    * The property under test did not change and is worth restating, because moving a
    * number in a passing test is exactly how a real refusal gets quietly deleted: a
@@ -26,12 +26,12 @@ describe("protocol negotiation", () => {
    */
   it("refuses a version above the supported range with the range attached", async () => {
     const body = await expectError(
-      await call(`/v1/repos/${REPO}/ops`, { token, protocol: 4 }),
+      await call(`/v1/repos/${REPO}/ops`, { token, protocol: 5 }),
       "protocol_unsupported",
       426,
     );
     expect(body.min).toBe(1);
-    expect(body.max).toBe(3);
+    expect(body.max).toBe(4);
     expect(body.retryable).toBe(false);
   });
 
@@ -40,8 +40,9 @@ describe("protocol negotiation", () => {
     // `max` moved by exactly one each time, so this is not a licence for anything above it.
     expect((await call(`/v1/repos/${REPO}/ops`, { token, protocol: 2 })).status).toBe(200);
     expect((await call(`/v1/repos/${REPO}/ops`, { token, protocol: 3 })).status).toBe(200);
+    expect((await call(`/v1/repos/${REPO}/ops`, { token, protocol: 4 })).status).toBe(200);
     await expectError(
-      await call(`/v1/repos/${REPO}/ops`, { token, protocol: 4 }),
+      await call(`/v1/repos/${REPO}/ops`, { token, protocol: 5 }),
       "protocol_unsupported",
       426,
     );
@@ -59,8 +60,8 @@ describe("protocol negotiation", () => {
     // The check runs before the body is read and before any statement is prepared, so
     // there is no partial batch and no half-applied page to reason about.
     const response = await pushOps(
-      [envelope({ clientSeq: 1, protocol: 4 }), envelope({ clientSeq: 2, protocol: 4 })],
-      { token, protocol: 4 },
+      [envelope({ clientSeq: 1, protocol: 5 }), envelope({ clientSeq: 2, protocol: 5 })],
+      { token, protocol: 5 },
     );
     await expectError(response, "protocol_unsupported", 426);
 
