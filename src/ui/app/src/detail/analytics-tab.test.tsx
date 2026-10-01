@@ -77,6 +77,7 @@ function detail(
     blocks: [],
     comments: [],
     documents: [],
+    attachments: [],
     crossBlockers: [],
     claim: null,
     timing: issueTiming,

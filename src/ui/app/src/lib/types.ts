@@ -980,6 +980,20 @@ export interface InboxRow {
   inbox: { ready: InboxIssue[]; queued: InboxIssue[]; blocked: InboxIssue[]; hasMore: boolean };
 }
 
+/** One file on a ticket. Metadata only — the bytes are `GET /api/file`. */
+export interface IssueAttachment {
+  id: string;
+  issueId: string;
+  filename: string;
+  mediaType: string;
+  size: number;
+  sha256: string;
+  author: string | null;
+  caption: string | null;
+  byteSync: "inline" | "local";
+  createdAt: string;
+}
+
 /** GET /api/issue */
 export interface IssueDetail {
   workspace: string;
@@ -990,6 +1004,8 @@ export interface IssueDetail {
   blocks: IssueRef[];
   comments: IssueComment[];
   documents: IssueDocumentMeta[];
+  /** File metadata. Empty when the ticket has no files. The bytes are a separate request. */
+  attachments: IssueAttachment[];
   crossBlockers: CrossBlocker[];
   claim: ClaimActivity | null;
   /** Estimate vs actual for this issue. What the Analytics tab renders. */

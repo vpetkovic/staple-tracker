@@ -5,7 +5,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ATTACH_MAX_BYTES, sha256Hex, sniffMediaType } from "../src/core/attachments.js";
+import { ATTACH_MAX_BYTES, contentDisposition, servedFileHeaders, sha256Hex, sniffMediaType } from "../src/core/attachments.js";
 import { openDb } from "../src/core/db.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
@@ -34,6 +34,25 @@ describe("sniffing", () => {
     expect(sniffMediaType(Uint8Array.from(Buffer.from("<!DOCTYPE html><html></html>")))).toBe("text/html");
     expect(sniffMediaType(Uint8Array.from([0, 1, 2, 3, 4]))).toBe("application/octet-stream");
     expect(sniffMediaType(new Uint8Array())).toBe("application/octet-stream");
+  });
+});
+
+describe("serving", () => {
+  it("keeps images, video, pdf and text inline, and does not serve svg or html as a document", () => {
+    expect(servedFileHeaders("image/png")).toEqual({ contentType: "image/png", disposition: "inline" });
+    expect(servedFileHeaders("video/mp4")).toEqual({ contentType: "video/mp4", disposition: "inline" });
+    expect(servedFileHeaders("application/pdf")).toEqual({ contentType: "application/pdf", disposition: "inline" });
+    expect(servedFileHeaders("text/plain")).toEqual({ contentType: "text/plain; charset=utf-8", disposition: "inline" });
+    expect(servedFileHeaders("image/svg+xml")).toEqual({ contentType: "application/octet-stream", disposition: "attachment" });
+    expect(servedFileHeaders("text/html")).toEqual({ contentType: "application/octet-stream", disposition: "attachment" });
+    expect(servedFileHeaders("application/octet-stream").disposition).toBe("attachment");
+  });
+
+  it("puts a filename in one header line", () => {
+    const header = contentDisposition("attachment", 'shot "a"\r\n.png');
+    expect(header).not.toMatch(/[\r\n]/);
+    expect(header.startsWith('attachment; filename="')).toBe(true);
+    expect(header).toContain("filename*=UTF-8''");
   });
 });
 

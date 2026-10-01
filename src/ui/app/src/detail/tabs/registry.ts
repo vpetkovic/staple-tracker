@@ -40,6 +40,7 @@ export interface TabDefinition {
 
 import { OverviewTab } from "./OverviewTab";
 import { DocumentsTab } from "./DocumentsTab";
+import { FilesTab } from "./FilesTab";
 import { ActivityTab } from "./ActivityTab";
 import { AgentViewTab } from "./AgentViewTab";
 import { AnalyticsTab } from "./AnalyticsTab";
@@ -67,6 +68,12 @@ export const TABS: readonly TabDefinition[] = [
     component: DocumentsTab,
     available: (detail) => detail.documents.length > 0,
   },
+  /**
+   * Always on the strip, including when the ticket has no files. An empty list
+   * is the answer, and a tab that appears only after the first upload makes the
+   * strip jump and hides the place a file would go.
+   */
+  { id: "files", label: "Files", component: FilesTab },
   { id: "activity", label: "Activity", component: ActivityTab },
   { id: "agent", label: "For agents", component: AgentViewTab },
   /**

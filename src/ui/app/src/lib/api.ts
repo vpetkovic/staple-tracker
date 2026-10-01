@@ -700,6 +700,32 @@ export const getIssue = (params: { ws?: string; ref: string }) =>
 export const getDocument = (params: { ws?: string; ref: string; key: string; revision?: number }) =>
   request<IssueDocument>(`/api/document${qs(params)}`);
 
+/**
+ * The bytes of one file. Not JSON: an image, a video, a PDF or a download.
+ * The token rides the header, the same way every other call does, so a file
+ * URL never carries a credential.
+ */
+export async function fetchFile(params: { ws?: string; id: string }): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const res = await fetch(`/api/file${qs({ ws: params.ws, id: params.id })}`, {
+    headers: { "x-staple-token": token },
+  });
+  if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) forgetToken();
+    const envelope = (await res.json().catch(() => ({}))) as Partial<ErrorEnvelope>;
+    const failure = new AuthError(res.status, envelope.code ?? "unauthorized", envelope.message ?? envelope.error ?? res.statusText);
+    window.dispatchEvent(new CustomEvent("staple:auth-error", { detail: failure }));
+    throw failure;
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as Partial<ErrorEnvelope>;
+    throw new ApiError(res.status, body);
+  }
+  return {
+    bytes: await res.arrayBuffer(),
+    contentType: res.headers.get("content-type") ?? "application/octet-stream",
+  };
+}
+
 /** A document's history, newest revision first. */
 export const getRevisions = (params: { ws?: string; ref: string; key: string }) =>
   request<DocumentRevision[]>(`/api/revisions${qs(params)}`);

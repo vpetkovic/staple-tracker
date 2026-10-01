@@ -149,6 +149,42 @@ function formatBytes(n: number): string {
   return `${n} bytes`;
 }
 
+/**
+ * How a file is served to the browser.
+ *
+ * SVG and HTML are real types and are stored as such. Serving either from this
+ * origin would run its script as the app, so those two leave as a download the
+ * browser will not execute. Anything we do not have a viewer for leaves the
+ * same way. Images, video, PDF and text stay inline, with a charset on text.
+ */
+const NON_DOCUMENT_TYPES = new Set(["image/svg+xml", "text/html", "application/xhtml+xml"]);
+const INLINE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "video/mp4",
+  "video/webm",
+  "application/pdf",
+]);
+
+export function servedFileHeaders(mediaType: string): { contentType: string; disposition: "inline" | "attachment" } {
+  if (NON_DOCUMENT_TYPES.has(mediaType)) {
+    return { contentType: "application/octet-stream", disposition: "attachment" };
+  }
+  if (INLINE_TYPES.has(mediaType)) return { contentType: mediaType, disposition: "inline" };
+  if (mediaType === "text/plain" || mediaType === "text/markdown") {
+    return { contentType: `${mediaType}; charset=utf-8`, disposition: "inline" };
+  }
+  return { contentType: "application/octet-stream", disposition: "attachment" };
+}
+
+/** One header line. A filename cannot break out of it. */
+export function contentDisposition(disposition: "inline" | "attachment", filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
+  return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 /** The create payload. Bytes are included only when `byteSync` is `inline` and the caller passed them. */
 export function attachmentPayload(meta: AttachmentMeta, bytes: Uint8Array | null): Record<string, unknown> {
   const fields: Record<string, unknown> = {

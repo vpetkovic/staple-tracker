@@ -12,9 +12,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { issue } from "@/components/task-list/fixtures";
 import { SessionContext, type StapleSession } from "@/lib/session";
-import type { IssueComment, IssueDetail, IssueTiming } from "@/lib/types";
+import type { IssueAttachment, IssueComment, IssueDetail, IssueTiming } from "@/lib/types";
 import { ActivityTab } from "./ActivityTab";
 import { DocumentsTab } from "./DocumentsTab";
+import { FilesTab } from "./FilesTab";
 import { RelationsTab } from "./RelationsTab";
 import type { TabProps } from "./registry";
 
@@ -30,6 +31,7 @@ function detail(over: Partial<IssueDetail> = {}): IssueDetail {
     blocks: [],
     comments: [],
     documents: [],
+    attachments: [],
     crossBlockers: [],
     claim: null,
     timing,
@@ -215,5 +217,61 @@ describe("Documents", () => {
     const line = html.slice(html.indexOf("Updated"), html.indexOf("revision 3") + "revision 3".length).replace(/<[^>]+>/g, "");
     expect(line).toBe("Updated just now · revision 3");
     expect(html).toContain('aria-label="Document view"');
+  });
+});
+
+const file = (over: Partial<IssueAttachment>): IssueAttachment => ({
+  id: "file-1",
+  issueId: "id-50",
+  filename: "shot.png",
+  mediaType: "image/png",
+  size: 1536,
+  sha256: "abc",
+  author: "ada",
+  caption: null,
+  byteSync: "inline",
+  createdAt: "2026-09-01T22:13:04Z",
+  ...over,
+});
+
+describe("Files", () => {
+  it("says so when a ticket has no files", () => {
+    const html = render(FilesTab, detail());
+    expect(html).toContain("No files on this ticket.");
+    expect(html).toContain('data-files=""');
+    expect(html).not.toContain("data-file-group");
+  });
+
+  it("groups files by viewer and prints a count, the name, the size and a before label", () => {
+    const html = render(
+      FilesTab,
+      detail({
+        attachments: [
+          file({ id: "png", filename: "before.png", caption: "before the change", mediaType: "image/png" }),
+          file({ id: "pdf", filename: "notes.pdf", mediaType: "application/pdf", size: 2048 }),
+          file({ id: "log", filename: "build.log", mediaType: "text/plain" }),
+          file({ id: "svg", filename: "mark.svg", mediaType: "image/svg+xml" }),
+          file({ id: "mov", filename: "walk.mp4", mediaType: "video/mp4" }),
+        ],
+      }),
+    );
+    const order = ["images", "videos", "documents", "text", "other"].map((id) => html.indexOf(`data-file-group="${id}"`));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(html).toContain(">Images<");
+    expect(html).toContain(">Videos<");
+    expect(html).toContain(">Documents<");
+    expect(html).toContain(">Text and logs<");
+    expect(html).toContain(">Other<");
+    expect((html.match(/data-file-count=""/g) ?? []).length).toBe(5);
+    expect(html).toContain("before.png");
+    expect(html).toContain('data-evidence-label="before"');
+    expect(html).toContain("1.5 KiB");
+    expect(html).toContain(">ada<");
+    expect(html).toContain('aria-label="Download notes.pdf"');
+    expect(html).toContain('data-file-kind="image"');
+    expect(html).toContain("<video");
+    expect(html).toContain("<iframe");
+    expect(html).toContain(">Copy<");
   });
 });
