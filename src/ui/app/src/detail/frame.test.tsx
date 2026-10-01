@@ -160,6 +160,7 @@ describe("the tab strip", () => {
       ["overview", "Details"],
       ["relations", "Connections"],
       ["documents", "Documents"],
+      ["files", "Files"],
       ["activity", "Activity"],
       ["agent", "For agents"],
       ["analytics", "Time"],

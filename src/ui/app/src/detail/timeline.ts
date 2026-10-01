@@ -210,6 +210,14 @@ export function describeEvent(
       return { kind: "lifecycle", summary: "added it to the queue" };
     case "queue_dequeued":
       return { kind: "lifecycle", summary: "took it off the queue" };
+    case "file_attached": {
+      const name = asString(payload.filename);
+      return { kind: "lifecycle", summary: name ? `attached ${name}` : "attached a file" };
+    }
+    case "file_removed": {
+      const name = asString(payload.filename);
+      return { kind: "lifecycle", summary: name ? `removed ${name}` : "removed a file" };
+    }
 
     default:
       // Fail soft: an unrecognised kind is still history.

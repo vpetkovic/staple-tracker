@@ -81,6 +81,7 @@ export function detail(patch: Partial<IssueDetail> = {}): IssueDetail {
     blocks: [],
     comments: [],
     documents: [],
+    attachments: [],
     crossBlockers: [],
     claim: null,
     timing: timing(),

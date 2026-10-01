@@ -33,6 +33,7 @@ import type { QueueVerb } from "../core/queue-store.js";
 // R6a (STA-176): the settings registry and the global values it defines, served
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
+import { contentDisposition, servedFileHeaders, sniffMediaType } from "../core/attachments.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { MILESTONE_KIND, assertNotReservedActor } from "../core/milestones.js";
 import type { CriterionVerdict } from "../core/milestone-goal.js";
@@ -3953,6 +3954,34 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.searchParams.get("revision") ? Number(url.searchParams.get("revision")) : undefined,
         );
         json(res, 200, doc);
+        return;
+      }
+
+      /**
+       * The bytes of one attachment. Metadata stays on `/api/issue`.
+       *
+       * The type on the response is sniffed again from the bytes, not trusted
+       * from the row. SVG and HTML are stored as what they are and served as a
+       * download (`application/octet-stream` plus `nosniff`), so a file cannot
+       * run script in this origin by being opened here.
+       */
+      if (url.pathname === "/api/file") {
+        const id = url.searchParams.get("id")?.trim() ?? "";
+        if (id === "") throw new StapleError("validation", "A file needs an id.");
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const file = handle.store.readFile(id);
+        const served = servedFileHeaders(sniffMediaType(file.bytes));
+        res.writeHead(200, {
+          "content-type": served.contentType,
+          "content-length": String(file.bytes.length),
+          "content-disposition": contentDisposition(served.disposition, file.meta.filename),
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
+          "referrer-policy": "no-referrer",
+          "cache-control": "private, no-store",
+          "cross-origin-resource-policy": "same-origin",
+        });
+        res.end(file.bytes);
         return;
       }
 

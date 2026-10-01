@@ -12,11 +12,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { issue } from "@/components/task-list/fixtures";
 import { SessionContext, type StapleSession } from "@/lib/session";
-import type { IssueComment, IssueDetail, IssueTiming } from "@/lib/types";
+import type { IssueAttachment, IssueComment, IssueDetail, IssueTiming } from "@/lib/types";
 import { ActivityTab } from "./ActivityTab";
 import { DocumentsTab } from "./DocumentsTab";
+import { FilesTab } from "./FilesTab";
 import { RelationsTab } from "./RelationsTab";
-import type { TabProps } from "./registry";
+import { visibleTabs, type TabProps } from "./registry";
 
 const timing = { subtreePlan: { estimatedSeconds: null, source: "none" } } as unknown as IssueTiming;
 
@@ -30,6 +31,7 @@ function detail(over: Partial<IssueDetail> = {}): IssueDetail {
     blocks: [],
     comments: [],
     documents: [],
+    attachments: [],
     crossBlockers: [],
     claim: null,
     timing,
@@ -191,10 +193,11 @@ describe("Connections", () => {
 });
 
 describe("Documents", () => {
-  it("says there are no documents yet in a sentence", () => {
+  it("says there are no documents yet in a sentence, and stays on the strip", () => {
     const html = render(DocumentsTab, detail());
     expect(html).toContain("data-empty-state");
-    expect(html).toContain("No documents yet.");
+    expect(html).toContain("No plan or notes on this ticket yet. Screenshots and other files are under Files.");
+    expect(visibleTabs(detail()).map((tab) => tab.id)).toContain("documents");
   });
 
   it("names documents by title or key, never as key@revision", () => {
@@ -215,5 +218,77 @@ describe("Documents", () => {
     const line = html.slice(html.indexOf("Updated"), html.indexOf("revision 3") + "revision 3".length).replace(/<[^>]+>/g, "");
     expect(line).toBe("Updated just now · revision 3");
     expect(html).toContain('aria-label="Document view"');
+  });
+});
+
+const file = (over: Partial<IssueAttachment>): IssueAttachment => ({
+  id: "file-1",
+  issueId: "id-50",
+  filename: "shot.png",
+  mediaType: "image/png",
+  size: 1536,
+  sha256: "abc",
+  author: "ada",
+  caption: null,
+  byteSync: "inline",
+  createdAt: "2026-09-01T22:13:04Z",
+  ...over,
+});
+
+describe("Files", () => {
+  it("says so when a ticket has no files", () => {
+    const html = render(FilesTab, detail());
+    expect(html).toContain("No files on this ticket.");
+    expect(html).toContain('data-files=""');
+    expect(html).not.toContain("data-file-group");
+  });
+
+  it("filters by kind and lists files, and does not open a viewer until a row is chosen", () => {
+    const html = render(
+      FilesTab,
+      detail({
+        attachments: [
+          file({ id: "png", filename: "before.png", caption: "before the change", mediaType: "image/png" }),
+          file({ id: "pdf", filename: "notes.pdf", mediaType: "application/pdf", size: 2048 }),
+          file({ id: "log", filename: "build.log", mediaType: "text/plain" }),
+          file({ id: "svg", filename: "mark.svg", mediaType: "image/svg+xml" }),
+          file({ id: "mov", filename: "walk.mp4", mediaType: "video/mp4" }),
+        ],
+      }),
+    );
+    for (const id of ["all", "images", "videos", "pdfs", "text", "other"]) {
+      expect(html).toContain(`data-file-filter="${id}"`);
+    }
+    expect(html).toContain(">All<");
+    expect(html).toContain(">Images<");
+    expect(html).toContain(">Video<");
+    expect(html).toContain(">PDFs<");
+    expect(html).toContain(">Text<");
+    expect(html).toContain(">Other<");
+    expect(html).not.toContain(">Documents<");
+    expect((html.match(/data-file-count=""/g) ?? []).length).toBe(6);
+    expect(html).toContain("before.png");
+    expect(html).toContain('data-file-images=""');
+    expect(html).toContain('data-evidence-label="before"');
+    expect(html).toContain("1.5 KiB");
+    expect(html).toContain(">ada<");
+    expect(html).toContain('data-file-kind="image"');
+    expect(html).toContain('data-file-row=""');
+    expect(html).toContain("notes.pdf");
+    expect(html).toContain("walk.mp4");
+    expect(html).toContain('aria-label="Download notes.pdf"');
+    expect(html).toContain('aria-label="Open walk.mp4"');
+    expect(html).toContain('aria-label="Download before.png"');
+    expect(html).toContain('aria-label="Open mark.svg"');
+    // A download-only file is not a button. A PDF still is.
+    expect(html).toContain('<div data-file-row="" data-file-kind="other"');
+    expect(html).toContain('<button type="button" data-file-row="" data-file-kind="pdf"');
+    expect(html).not.toContain('data-file-kind="other" aria-pressed');
+    // The viewer is a side panel. Nothing is open on the first paint.
+    expect(html).not.toContain("data-file-panel");
+    expect(html).not.toContain("data-file-viewer");
+    expect(html).not.toContain("data-file-split");
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("<video");
   });
 });

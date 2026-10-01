@@ -594,6 +594,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/compare",
       "/api/document",
       "/api/events",
+      // The bytes of one attachment. GET-only. The type is sniffed again on the way out.
+      "/api/file",
       // `staple forecast` / MCP `forecast`: GET-only, a read.
       "/api/forecast",
       "/api/gate/approve",

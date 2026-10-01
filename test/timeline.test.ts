@@ -114,6 +114,10 @@ describe("describeEvent", () => {
     );
     expect(describeEvent(event(1, "attempt_started", "2026-09-01T10:00:00Z"))!.summary).toBe("began a work session");
     expect(describeEvent(event(1, "gate_requested", "2026-09-01T10:00:00Z"))!.summary).toBe("asked for a review");
+    expect(describeEvent(event(1, "file_attached", "2026-09-01T10:00:00Z", { filename: "before.png" }))!.summary).toBe(
+      "attached before.png",
+    );
+    expect(describeEvent(event(1, "file_removed", "2026-09-01T10:00:00Z", {}))!.summary).toBe("removed a file");
   });
 
   it("survives a payload that is missing the fields it expects", () => {
