@@ -57,6 +57,9 @@ const sourcePkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"
   version: string;
   description: string;
   license: string;
+  repository: { type: string; url: string };
+  homepage: string;
+  bugs: { url: string };
   engines: Record<string, string>;
   dependencies?: Record<string, string>;
 };
@@ -160,6 +163,11 @@ function writeArtifactManifest(dir: string, bundledPackages: string[]): void {
         version: sourcePkg.version,
         description: sourcePkg.description,
         license: sourcePkg.license,
+        // npm's provenance check refuses a publish whose repository.url does not match
+        // the GitHub repository the release workflow runs in.
+        repository: sourcePkg.repository,
+        homepage: sourcePkg.homepage,
+        bugs: sourcePkg.bugs,
         type: "module",
         // One executable, one entrypoint. `npx -y staple-cli` and an installed `staple`
         // both land here, per STA-24's key decision.
