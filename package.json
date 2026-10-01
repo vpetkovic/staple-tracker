@@ -4,6 +4,14 @@
   "private": true,
   "description": "Local-first task tracker for coding agents. SQLite workspaces, hub federation, MCP + CLI + local web UI.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vpetkovic/staple-tracker.git"
+  },
+  "homepage": "https://vpetkovic.github.io/staple-tracker/",
+  "bugs": {
+    "url": "https://github.com/vpetkovic/staple-tracker/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.5.0"
