@@ -6,24 +6,23 @@ import {syntaxTheme} from './src/css/prism';
 import githubAlerts from './src/remark/githubAlerts';
 import preloadFonts from './src/plugins/preloadFonts';
 
-// Where the site lives. `url` comes from SITE_URL, which the deploy workflow sets
-// from the SITE_URL repository variable, or else to the Worker's workers.dev
-// address. Set that variable to move the site to a custom domain; no code change.
-// Local builds fall back to a placeholder.
+// Where the site lives. `url` is the origin and `baseUrl` the path under it. The
+// deploy workflow sets both: for GitHub Pages from the Pages settings (today
+// https://vpetkovic.github.io under /staple-tracker/; a custom domain set there
+// moves the site to its root, no code change), and for the dormant Cloudflare
+// deploy from the SITE_URL repository variable or the Worker's workers.dev
+// address, at the root. Local builds fall back to a placeholder at the root.
 const url = (process.env.SITE_URL || 'https://example.com').replace(/\/+$/, '');
-const baseUrl = '/';
+const baseUrl = `/${(process.env.BASE_URL || '').replace(/^\/+|\/+$/g, '')}/`.replace(/^\/\/$/, '/');
 
-// Which landing page `/` serves: `story` (the default) leads with why staple
-// exists; `classic` is the first landing page; `bento` is an experiment with serif
-// headlines and a grid of animated scenes; `walkthrough` is an experiment that walks
-// through the features one section at a time, each with one scene; `blend` is an
-// experiment with the serif and the grid of the one and the pace of the other, and a
-// feature index that stays in view. LANDING_VARIANT picks one at build time, and the
-// deploy workflow passes the LANDING_VARIANT repository variable through, so switching
-// needs no code change. Each stays reachable at its own address (/story, /classic,
-// /bento, /walkthrough, /blend), marked noindex, for comparison.
-const landingVariants = ['story', 'classic', 'bento', 'walkthrough', 'blend'] as const;
-const landingVariant = process.env.LANDING_VARIANT || 'story';
+// Which landing page `/` serves: `blend` (the default) has serif headlines on a
+// drafting grid and walks through the features one at a time beside an index that
+// stays in view; `bento`, kept in reserve, puts the features in a grid of animated
+// scenes. LANDING_VARIANT picks one at build time, and the deploy workflow passes the
+// LANDING_VARIANT repository variable through, so switching needs no code change.
+// Neither has an address of its own.
+const landingVariants = ['blend', 'bento'] as const;
+const landingVariant = process.env.LANDING_VARIANT || 'blend';
 if (!(landingVariants as readonly string[]).includes(landingVariant)) {
   throw new Error(`LANDING_VARIANT must be one of ${landingVariants.join(', ')}; got "${landingVariant}"`);
 }
@@ -109,9 +108,6 @@ const config: Config = {
           beforeDefaultRemarkPlugins: [githubAlerts],
         },
         blog: false,
-        // The comparison copies of the landing page and the scene review page are
-        // noindex, so they stay out of the sitemap.
-        sitemap: {ignorePatterns: ['/story', '/classic', '/bento', '/walkthrough', '/blend', '/scenes']},
         theme: {
           // Fonts first, then the tokens, then the chrome that reads them.
           customCss: [

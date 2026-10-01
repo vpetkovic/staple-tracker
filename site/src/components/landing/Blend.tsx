@@ -119,7 +119,7 @@ function pins(): boolean {
 // The script in the page's head sets the attribute before the first paint when the page
 // does not open at its top: on a reload or a return through the history (the page is
 // laid out as it was, and the browser puts the scroll position back in that layout), and
-// on a fresh visit to an address with a fragment (`/blend#blend-faq`, `/blend#handoff`).
+// on a fresh visit to an address with a fragment (`/#blend-faq`, `/#handoff`).
 // Laid out plain, the walk-through would change layout under the reader when this
 // component runs (a layout shift of 0.5 to 0.9). A fresh visit to the top stays plain
 // until this component runs: it is readable all along, and the walk-through is out of

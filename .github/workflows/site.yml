@@ -1,9 +1,9 @@
 name: Site
 
 # The website (site/, rendering docs/). Pull requests into any branch that touch
-# the site or the docs get a build check; master deploys the site to Cloudflare
-# as the `staple-site` Worker (static assets, site/wrangler.jsonc). The CLI gates
-# live in ci.yml.
+# the site or the docs get a build check; master deploys the site to GitHub Pages.
+# A Cloudflare deploy (the `staple-site` Worker, static assets, site/wrangler.jsonc)
+# sits beside it and skips until its secrets exist. The CLI gates live in ci.yml.
 on:
   pull_request:
     # edited: a stacked PR retargeted to a new base gets checked again.
@@ -24,7 +24,7 @@ on:
       - "design/**"
       - "*.md"
       - ".github/workflows/site.yml"
-  # Deploys master on demand, e.g. once the Cloudflare secrets are added.
+  # Deploys master on demand, e.g. after a Pages setting or a repository variable changes.
   workflow_dispatch:
 
 permissions:
@@ -62,7 +62,7 @@ jobs:
       # Throws on a broken link, anchor or Markdown link.
       - name: Build
         env:
-          # Which landing page / serves (story or classic); unset means story.
+          # Which landing page / serves (blend or bento); unset means blend.
           LANDING_VARIANT: ${{ vars.LANDING_VARIANT }}
         run: npm --prefix site run build
 
@@ -71,6 +71,61 @@ jobs:
       - name: Validate the Worker config
         working-directory: site
         run: npx wrangler deploy --dry-run
+
+  pages-build:
+    name: Build for GitHub Pages
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the docs pages show the date of their last commit.
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Reads the site's address from the Pages settings: the github.io origin and
+      # /staple-tracker as the path, or a custom domain at its root once one is set.
+      - name: Read the Pages settings
+        id: pages
+        uses: actions/configure-pages@v6
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install site dependencies
+        run: npm --prefix site ci
+
+      - name: Build
+        env:
+          SITE_URL: ${{ steps.pages.outputs.origin }}
+          BASE_URL: ${{ steps.pages.outputs.base_path }}
+          LANDING_VARIANT: ${{ vars.LANDING_VARIANT }}
+        run: npm --prefix site run build
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/build
+
+  pages-deploy:
+    name: Deploy to GitHub Pages
+    needs: pages-build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v5
 
   deploy:
     name: Deploy to Cloudflare

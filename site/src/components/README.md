@@ -37,8 +37,9 @@ A page composes them:
 
 `scenes/` holds small animated pieces of staple's web UI, rebuilt in HTML and CSS: one per
 feature, showing only the UI that feature is about. A landing page puts one beside the
-copy for that feature. `/scenes` (noindex, not in the sitemap, not linked) shows all of
-them by name at the widths of the cells they may sit in: check a change there.
+copy for that feature. `scenes/ScenesReview.tsx` shows all of them by name at the widths
+of the cells they may sit in. It has no route; its header comment says how to open it
+while you check a change.
 
 | Scene | Shows |
 | --- | --- |
@@ -98,15 +99,16 @@ To add a scene:
 4. A state class has to outrank the rule it changes (`.row.rowLit`, not `.rowLit`): the
    production CSS is minified across files, and two rules of equal weight can swap
    places. That reaches other components too: new CSS once greyed the status marks of
-   `PlanFlow` on the landing page. After adding CSS, compare `/` and `/classic` from a
-   production build with the build before your change.
+   `PlanFlow` on the landing page of the time. After adding CSS, compare `/` and a docs
+   page from a production build with the build before your change.
 5. Use the landing page's example data (prefix APP, the Multi-tenancy epic) and claim
    nothing the docs do not. An integration that is not shipped carries the Planned chip.
-6. Add it to `scenes/catalog.ts` and `scenes/index.ts`, then look at it on `/scenes` at
-   every width, in both themes, and with reduced motion.
+6. Add it to `scenes/catalog.ts` and `scenes/index.ts`, then look at it on the review
+   page at every width, in both themes, and with reduced motion.
 
 ## The bento landing page
 
+Kept in reserve: it has no route, and `LANDING_VARIANT=bento` makes `/` serve it.
 `landing/Bento.tsx` sets its headlines in a serif display face (Fraunces, SIL Open Font
 License 1.1, from `@fontsource-variable/fraunces`), as the blend page does. Both render
 `SerifFont` (see "Parts the experiment pages share"), so no other page downloads the
@@ -122,37 +124,10 @@ face: keep `--st-font-serif` out of components that other pages use. The page's 
 - `Cell` is one feature: a serif title, two lines and a scene inside `fragment`, which
   cuts the scene's lower edge off (`cut="row"` cuts a whole row).
 
-## The walkthrough landing page
-
-`landing/Walkthrough.tsx` uses Geist only, set heavy and tight (`--st-weight-heavy`,
-`--st-tracking-heavy`), with pills for its eyebrows and buttons. Its pieces:
-
-- The hero's decoration is the staple of the logo, nested (`Staples`): SVG strokes in
-  the accent colour, driven in once on load, still under reduced motion. Its width and
-  the headline's size both follow the height of a short screen, so the button stays in
-  view; under 560 px of height (a phone on its side) the decoration is left out.
-- A headline is two lines (`Lines`) at every width, because its size follows the room
-  it has: `--st-text-sans-hero` and `--st-text-sans-2xl` follow the viewport, and
-  `--st-text-sans-xl` follows the feature's column (`cqw`). A line longer than the
-  longest one today ("A plan becomes an epic.") needs a smaller factor in the token.
-- `CHAPTERS` (in `parts/content.tsx`) is the walk-through: three chapters that follow
-  the three steps, each a list of features. `Feature` is one section: a pill, the headline, a paragraph or
-  three points, a docs link, and exactly one scene in a `panel`. On a phone the order
-  is pill, headline, panel, copy, and the panel reaches into the gutter (edge to edge
-  under 350 px) so the scene keeps the 300 px the kit draws for; the page's other
-  boxes reach into the gutter with it. From 768 px the panel and the copy sit side by
-  side under the headline, and from 997 px the headline joins the copy; the sides
-  alternate in both.
-- Every rule in a media query starts at `main.page`, and media queries that set the
-  same thing cover ranges that do not overlap: the minified CSS can reorder rules of
-  equal weight.
-- The FAQ (`Faq`) is native `details`, so it works by keyboard and without JavaScript.
-  Every answer says what the docs say and links the page that says it.
-
 ## The blend landing page
 
 `landing/Blend.tsx` is one drawing sheet read in order: the serif headlines and dashed
-rules of the bento page, the pace of the walkthrough page, and a layout of its own.
+rules of the bento page, one feature at a time with one scene each, and a layout of its own.
 Every band has a legend on the left (a mono eyebrow and a serif heading with the tick)
 and its content on the right, on twelve columns: 3, 4 and 5 from 1280 px, 3.5, 4 and
 4.5 from 1024 px, two equal columns from 768 px, one below. A band draws the sheet's
@@ -176,8 +151,8 @@ edges and the rules between its columns itself. Its pieces:
 - A small script in the page's head sets the attribute before the first paint whenever
   the page does not open at its top: on a reload or a return through the history (the
   page is laid out as it was and the browser puts the scroll position back in the same
-  layout), and on a fresh visit to an address with a fragment (`/blend#blend-faq`,
-  `/blend#milestones`), where the walk-through would otherwise change layout in view (a
+  layout), and on a fresh visit to an address with a fragment (`/#blend-faq`,
+  `/#milestones`), where the walk-through would otherwise change layout in view (a
   layout shift of 0.5 to 0.9). A fragment that names a feature, its tab or the walk-through (`#blend-tour`, the first feature) is inside the
   pinned frame, where the browser would scroll to the wrong place, so the script takes it
   off the address and the component puts it back and opens the feature, unless the reader
@@ -217,7 +192,8 @@ edges and the rules between its columns itself. Its pieces:
 
 ## Parts the experiment pages share
 
-`landing/parts/` holds what more than one of the experiment pages uses. A page that
+`landing/parts/` holds what more than one landing page uses (blend and bento today; the
+walkthrough page that also used them was removed). A page that
 needs a different look sets the custom properties a part documents; it does not
 restyle the part's classes (the minified CSS can reorder rules of equal weight).
 
@@ -225,9 +201,9 @@ restyle the part's classes (the minified CSS can reorder rules of equal weight).
 | --- | --- | --- |
 | `SerifFont` | bento, blend | Declares the serif face and preloads its two files (through React's `preload`: links in `Head` were replaced on hydration now and then and fetched twice). Render it once inside `Layout`. |
 | `TicketChips`, `useDrift`, `PauseButton` | bento, blend | The chips that drift through a hero (`chips` gives each its places at three widths), whether they may move, and the control that holds them. The page places the button. |
-| `Steps` | walkthrough, blend | The three steps in one list, with `--steps-*` properties for its box, lines and titles. |
-| `Faq` | walkthrough, blend | The questions as native `details`; `linkClassName` and `linkMark` style the docs link, `--faq-question-*` the questions. |
-| `Install` | walkthrough, blend | The install command in a small terminal window with its copy button. |
+| `Steps` | blend | The three steps in one list, with `--steps-*` properties for its box, lines and titles. |
+| `Faq` | blend | The questions as native `details`; `linkClassName` and `linkMark` style the docs link, `--faq-question-*` the questions. |
+| `Install` | blend | The install command in a small terminal window with its copy button. |
 | `PlanFolder` | bento, blend | The folder of plans that point at each other, as a scene. |
 | `CompareTable`, `Planned` | bento, blend | The team's tracker beside staple (`--compare-label` is the width of the label column, a length), and the chip on what is planned. |
 | `content.tsx` | all three | The page title, the three steps, the nine features in three chapters, the comparison, the figures and the FAQ. |

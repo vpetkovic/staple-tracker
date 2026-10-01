@@ -163,19 +163,9 @@
   --st-rule-dash: 8px;
   --st-glow: rgb(5 150 105 / 0.11);
   --st-glow-faint: rgb(5 150 105 / 0.05);
-  /* The walkthrough landing page (src/components/landing/Walkthrough): Geist set heavy
-     and tight for its headlines, with their sizes (each follows the width it has, the
-     feature headline the width of its column, so a headline keeps its two lines down to
-     a 320 px screen; the hero's also follows the height, so the hero fits a short
-     screen); the title of a step where three share a tablet's width; the radius of the
-     panel a scene sits in. */
-  --st-text-sans-hero: clamp(2rem, min(10.4vw, (100vh - 19.8rem) * 0.18), 5.5rem);
-  --st-text-sans-2xl: min(7.7vw, clamp(2.125rem, 1.45rem + 3vw, 3.75rem));
-  --st-text-sans-xl: clamp(1.5rem, 9cqw, 2.625rem);
+  /* The step strip (src/components/landing/parts/Steps): the title of a step where
+     three share a tablet's width, and the radius of its box. */
   --st-text-step: clamp(var(--st-text-lg), 3.1vw - 0.36rem, var(--st-text-2xl));
-  --st-weight-heavy: 650;
-  --st-tracking-heavy: -0.04em;
-  --st-leading-heavy: 1.02;
   --st-radius-xl: 20px;
   /* The blend landing page (src/components/landing/Blend): the serif heading of a
      band's legend column, which follows the screen; the serif headline of a feature,

@@ -153,50 +153,54 @@ storage, internal modules) goes in `design/`, never in `docs/`. The build fails 
 broken Markdown link. A Markdown link from `docs/` to a `.md` file git tracks
 outside `docs/`, such as `../CONTRIBUTING.md`, becomes a link to that file on
 GitHub; link any other repository file by its full GitHub URL, since Docusaurus
-publishes a relative link to a non-Markdown file as a site asset. The base path is
-the `baseUrl` constant at the top of `site/docusaurus.config.ts`; the site URL
-comes from the `SITE_URL` environment variable (see below), and local builds use a
-placeholder.
+publishes a relative link to a non-Markdown file as a site asset. The site's origin
+comes from the `SITE_URL` environment variable and its base path from `BASE_URL`
+(both at the top of `site/docusaurus.config.ts`); the deploy sets them (see below),
+and a local build uses a placeholder origin at the root. To check a build as GitHub
+Pages serves it, build with `BASE_URL=/staple-tracker/`.
 
 ### Choosing the landing page
 
-The site has five landing pages, all in `site/src/components/landing/`:
-`Story.tsx` leads with why staple exists and how a plan becomes tickets,
-`Classic.tsx` is the first landing page, a tour of the features, and three are
-experiments: `Bento.tsx` has serif headlines, a dashed drafting grid and a grid of
-cells that each show one feature with an animated scene, `Walkthrough.tsx`
-has a centred hero in a heavy sans, three steps in one box, and then one feature
-per section, each with one animated scene in a panel beside its copy, and
-`Blend.tsx` sets the serif headlines on the drafting grid and walks through the
-features one at a time beside a feature index that stays in view. The pieces the
-experiments share are in `site/src/components/landing/parts/`. The
-`LANDING_VARIANT` environment variable decides which one `/` serves: `story` (the
-default when it is unset), `classic`, `bento`, `walkthrough` or `blend`. Any other
-value fails the build. Every variant stays reachable for comparison: `/story`,
-`/classic`, `/bento`, `/walkthrough` and `/blend` always serve their variant,
-marked `noindex` and left out of the sitemap.
+The landing page is `site/src/components/landing/Blend.tsx`: serif headlines on a
+dashed drafting grid, three steps, then the features one at a time beside a feature
+index that stays in view. `Bento.tsx` is kept in reserve: the same serif and grid,
+with every feature in a grid of cells, each showing it with an animated scene. The
+pieces both use are in `site/src/components/landing/parts/`. Neither has an
+address of its own; the `LANDING_VARIANT` environment variable decides which one
+`/` serves: `blend` (the default when it is unset) or `bento`. Any other value
+fails the build.
 
 ```bash
-npm run site:build                              # / serves the story page
-LANDING_VARIANT=classic npm run site:build      # / serves the classic page
-LANDING_VARIANT=bento npm run site:build        # / serves the bento page
-LANDING_VARIANT=walkthrough npm run site:build  # / serves the walkthrough page
-LANDING_VARIANT=blend npm run site:build        # / serves the blend page
+npm run site:build                        # / serves the blend page
+LANDING_VARIANT=bento npm run site:build  # / serves the bento page
 ```
 
 To switch the deployed site, set the repository variable `LANDING_VARIANT`
-(Settings, Secrets and variables, Actions) to one of those names and run the
-Site workflow again. The workflow passes it to the build the way it passes
-`SITE_URL`; no code change is needed.
+(Settings, Secrets and variables, Actions) to `blend` or `bento` and run the Site
+workflow again. The workflow passes it to the build; no code change is needed.
 
 ### Deploying the website
 
 `.github/workflows/site.yml` builds the site on every pull request that touches
 `site/`, `docs/`, a Markdown file at the repository root or the workflow itself,
-into any base branch, and runs `wrangler deploy --dry-run` against the output. It never deploys from a pull
-request. On master it builds the site and deploys it to Cloudflare as the
-`staple-site` Worker, which serves `site/build` as static assets
-(`site/wrangler.jsonc`). The sync Worker in `worker/` is separate.
+into any base branch, and runs `wrangler deploy --dry-run` against the output. It
+never deploys from a pull request. On master it deploys the site to GitHub Pages,
+at `https://vpetkovic.github.io/staple-tracker/`. A Cloudflare deploy sits beside
+it, dormant until its secrets exist (below). The sync Worker in `worker/` is
+separate.
+
+GitHub Pages is on with GitHub Actions as its source (Settings, Pages, Build and
+deployment). The Pages job reads the address from those settings, so the build
+gets the right origin and base path without a variable. To serve the site on a
+custom domain, add the domain under Settings, Pages, Custom domain, point a CNAME
+record at `vpetkovic.github.io`, and run the Site workflow again: the next build is
+made for the domain's root.
+
+#### The dormant Cloudflare deploy
+
+The `Deploy to Cloudflare` job deploys the same site as the `staple-site` Worker,
+which serves `site/build` as static assets (`site/wrangler.jsonc`), at the root of
+its own address.
 
 Until the Cloudflare secrets exist, the deploy job skips with a notice and passes.
 To turn it on:

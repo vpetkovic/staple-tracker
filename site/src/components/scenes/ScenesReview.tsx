@@ -6,10 +6,12 @@ import Section from '@site/src/components/Section';
 import Eyebrow from '@site/src/components/Eyebrow';
 import Heading, {Lead} from '@site/src/components/Heading';
 import {SCENES, QueuePickup} from '@site/src/components/scenes';
-import styles from './scenes.module.css';
+import styles from './ScenesReview.module.css';
 
 // The review page for the scene kit: every scene by name, at the width of the cell it
-// may be put in. Not linked from anywhere, noindex, and out of the sitemap.
+// may be put in. It has no route. To look at the scenes, copy this file and its CSS
+// module into src/pages (as scenes.tsx and scenes.module.css, fixing the CSS import),
+// build or start the site, open /scenes, and delete the copy before you commit.
 
 const WIDTHS: {id: string; label: string; width?: string}[] = [
   {id: 'fill', label: 'Fill'},

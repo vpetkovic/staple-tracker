@@ -21,8 +21,8 @@ export type SceneEntry = {
   Component: ComponentType<SceneOptions>;
 };
 
-// Every scene, in the order a landing page would tell the story. The review page at
-// /scenes lists them from here, so a new scene shows up there once it is added.
+// Every scene, in the order a landing page would tell the story. The review page
+// (ScenesReview.tsx) lists them from here, so a new scene shows up there once it is added.
 export const SCENES: SceneEntry[] = [
   {name: 'PlanToTickets', feature: 'Plan to tickets', story: 'A Markdown plan becomes an epic, its tickets and the dependencies between them.', Component: PlanToTickets},
   {name: 'QueuePickup', feature: 'Queue pickup', story: 'An agent asks what is next, gets the top ready ticket and claims it.', Component: QueuePickup},
