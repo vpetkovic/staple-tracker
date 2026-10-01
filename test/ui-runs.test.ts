@@ -19,7 +19,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MILESTONE_KIND } from "../src/core/milestones.js";
 import { clearDriver, writeDriver } from "../src/core/run-attachment.js";
 import { initWorkspace, openWorkspace } from "../src/core/workspace.js";
@@ -104,6 +104,10 @@ beforeAll(async () => {
   await once(ui.server, "listening");
   token = ui.token;
   origin = `http://127.0.0.1:${(ui.server.address() as AddressInfo).port}`;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 afterAll(() => {
@@ -291,6 +295,9 @@ describe("the change fingerprint", () => {
   });
 
   it("moves when a driver attaches and when it leaves, though neither writes an event", async () => {
+    // The taken ticket is started, so the fingerprint also carries a 30s clock bucket. Pin the
+    // clock so crossing a bucket boundary mid-test cannot move it.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
     const { runId } = liveRun("driven");
     const fingerprint = async () => (await get("/api/poll")).body.fingerprint as string;
     const before = await fingerprint();
