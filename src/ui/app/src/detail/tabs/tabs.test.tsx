@@ -243,7 +243,7 @@ describe("Files", () => {
     expect(html).not.toContain("data-file-group");
   });
 
-  it("filters by kind, shows image thumbnails, and opens the first other file", () => {
+  it("filters by kind and lists files, and does not open a viewer until a row is chosen", () => {
     const html = render(
       FilesTab,
       detail({
@@ -272,12 +272,15 @@ describe("Files", () => {
     expect(html).toContain('data-evidence-label="before"');
     expect(html).toContain("1.5 KiB");
     expect(html).toContain(">ada<");
-    expect(html).toContain('aria-label="Download notes.pdf"');
     expect(html).toContain('data-file-kind="image"');
-    expect(html).toContain('data-file-viewer=""');
-    expect(html).toContain("<iframe");
-    // One viewer, and the first file that is not an image is the PDF.
+    expect(html).toContain('data-file-row=""');
+    expect(html).toContain("notes.pdf");
+    expect(html).toContain("walk.mp4");
+    // The viewer is a side panel. Nothing is open on the first paint.
+    expect(html).not.toContain("data-file-panel");
+    expect(html).not.toContain("data-file-viewer");
+    expect(html).not.toContain("data-file-split");
+    expect(html).not.toContain("<iframe");
     expect(html).not.toContain("<video");
-    expect(html).not.toContain(">Copy<");
   });
 });

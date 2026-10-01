@@ -121,45 +121,63 @@ async function openFiles(device: typeof PHONE | typeof DESK, ref: string): Promi
 }
 
 describe.skipIf(Boolean(reason))("the files gallery", () => {
-  it("filters the files on a desk, with one viewer beside the list", async () => {
+  it("opens a file in a side panel beside the ticket, and the edge sets the width", async () => {
     const { page: p, context } = await openFiles(DESK, galleryRef);
     await p.locator('[data-file-kind="image"] img').first().waitFor();
     expect(await p.getByRole("tab", { name: "Documents" }).count()).toBe(1);
     expect(await p.locator("[data-file-filter]").count()).toBe(6);
     const strip = await p.locator("[data-file-images]").evaluate((el) => getComputedStyle(el).display);
     expect(strip).toBe("flex");
-    const direction = await p.locator("[data-file-split]").evaluate((el) => getComputedStyle(el).flexDirection);
-    expect(direction).toBe("row");
-    expect(await p.locator("[data-file-viewer] iframe").count()).toBe(1);
-    expect(await p.locator("video").count()).toBe(0);
+    expect(await p.locator("[data-file-split]").count()).toBe(0);
+    expect(await p.locator("[data-file-panel]").count()).toBe(0);
+    await p.locator('[data-file-row][data-file-kind="pdf"]').click();
+    const panel = p.locator("[data-file-panel]");
+    await panel.waitFor();
+    await p.locator("[data-file-viewer] iframe").waitFor();
+    const task = await p.locator("[data-detail-overlay]").boundingBox();
+    const before = await panel.boundingBox();
+    expect(task).toBeTruthy();
+    expect(before).toBeTruthy();
+    expect(Math.abs(before!.x + before!.width - task!.x)).toBeLessThanOrEqual(2);
+    const handle = p.locator("[data-file-panel-resize]");
+    const grip = await handle.boundingBox();
+    expect(grip).toBeTruthy();
+    await p.mouse.move(grip!.x + grip!.width / 2, grip!.y + 80);
+    await p.mouse.down();
+    await p.mouse.move(grip!.x + grip!.width / 2 - 120, grip!.y + 80, { steps: 8 });
+    await p.mouse.up();
+    const after = await panel.boundingBox();
+    expect(after!.width).toBeGreaterThan(before!.width + 80);
     await p.locator('[data-file-row][data-file-kind="video"]').click();
     await p.locator("[data-file-viewer] video").waitFor();
-    expect(await p.locator("video").count()).toBe(1);
     expect(await p.locator("iframe").count()).toBe(0);
     await p.locator('[data-file-row][data-file-kind="text"]').click();
     await p.locator("[data-file-viewer] pre", { hasText: "build log" }).waitFor();
     expect(await p.locator("video").count()).toBe(0);
-    await p.locator('[data-file-filter="images"]').click();
-    expect(await p.locator("[data-file-viewer]").count()).toBe(0);
-    expect(await p.locator('[data-file-kind="image"]').count()).toBe(2);
+    await p.screenshot({ path: join(home, "files-desk.png"), fullPage: true });
+    await p.keyboard.press("Escape");
+    expect(await p.locator("[data-file-panel]").count()).toBe(0);
+    expect(await p.getByRole("tab", { name: "Files" }).count()).toBe(1);
     const overflow = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
-    await p.screenshot({ path: join(home, "files-desk.png"), fullPage: true });
     await context.close();
   });
 
-  it("puts the viewer under the list on a phone", async () => {
+  it("opens the file across the phone, with no resize edge", async () => {
     const { page: p, context } = await openFiles(PHONE, galleryRef);
     await p.locator('[data-file-kind="image"] img').first().waitFor();
-    const direction = await p.locator("[data-file-split]").evaluate((el) => getComputedStyle(el).flexDirection);
-    expect(direction).toBe("column");
+    await p.locator('[data-file-row][data-file-kind="video"]').evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await p.locator('[data-file-row][data-file-kind="video"]').click();
+    const panel = p.locator("[data-file-panel]");
+    await panel.waitFor();
+    expect(await p.locator("[data-file-panel-resize]").count()).toBe(0);
+    const box = await panel.boundingBox();
+    expect(box!.width).toBeGreaterThan(370);
+    await p.locator("[data-file-viewer] video").waitFor();
     const overflow = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
-    expect(await p.locator("[data-file-viewer] iframe").count()).toBe(1);
-    await p.locator('[data-file-row][data-file-kind="video"]').click();
-    await p.locator("[data-file-viewer] video").waitFor();
-    expect(await p.locator("video").count()).toBe(1);
-    expect(await p.locator("iframe").count()).toBe(0);
+    await p.locator("[data-file-panel]").getByRole("button", { name: "Close file" }).click();
+    expect(await p.locator("[data-file-panel]").count()).toBe(0);
     await p.locator('[data-file-row][data-file-kind="text"]').evaluate((el) => el.scrollIntoView({ block: "center" }));
     await p.locator('[data-file-row][data-file-kind="text"]').click();
     await p.locator("[data-file-viewer] pre", { hasText: "build log" }).waitFor();

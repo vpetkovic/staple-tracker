@@ -2,11 +2,12 @@
  * Files on a ticket: evidence and supporting material, not the ticket's writing.
  *
  * A filter row names the kinds that are actually here. Images sit in one short
- * strip and open in a lightbox. Everything else is one compact list, and the
- * selected row opens in a single viewer — beside the list at desk width, under
- * it on a phone. SVG and HTML stay downloads. The bytes come from `/api/file`.
+ * strip and open in a lightbox. Everything else is one full-width list. The
+ * chosen file opens in its own side panel, beside the ticket, and the left
+ * edge of that panel sets the width. SVG and HTML stay downloads. The bytes
+ * come from `/api/file`.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Copy, Download, File, FileText, Image as ImageIcon, Paperclip, Video, X } from "lucide-react";
 import { DismissableLayerBranch } from "@radix-ui/react-dismissable-layer";
@@ -15,6 +16,14 @@ import { ApiError, fetchFile } from "@/lib/api";
 import { Markdown } from "@/lib/markdown";
 import type { IssueAttachment } from "@/lib/types";
 import { EmptyState, PersonChip, RelativeTime, cn } from "../parts";
+import {
+  FILE_PANEL_MIN,
+  clampFilePanelWidth,
+  filePanelDock,
+  loadFilePanelWidth,
+  saveFilePanelWidth,
+  type FilePanelDock,
+} from "./file-panel";
 import { FILE_GROUPS, evidenceLabel, fileGroupId, formatFileSize, isMarkdownFile, type FileGroupId } from "./files";
 import type { TabProps } from "./registry";
 import "./tabs.css";
@@ -244,16 +253,147 @@ function CopyButton({ text }: { text: string | null }) {
   );
 }
 
-function FileViewer({ file, workspace }: { file: IssueAttachment; workspace: string }) {
-  const group = fileGroupId(file.mediaType);
-  const kind = rowKind(group);
+function readDock(): FilePanelDock {
+  if (typeof window === "undefined") return filePanelDock(0, 0);
+  const task = document.querySelector("[data-detail-overlay]");
+  const left = task ? task.getBoundingClientRect().left : window.innerWidth;
+  return filePanelDock(left, window.innerWidth);
+}
+
+function useTaskDock(): FilePanelDock {
+  const [dock, setDock] = useState(readDock);
+  useEffect(() => {
+    const read = () => setDock(readDock());
+    read();
+    window.addEventListener("resize", read);
+    const task = document.querySelector("[data-detail-overlay]");
+    const observer = task ? new ResizeObserver(read) : null;
+    if (task && observer) observer.observe(task);
+    return () => {
+      window.removeEventListener("resize", read);
+      observer?.disconnect();
+    };
+  }, []);
+  return dock;
+}
+
+function storage(): Storage | undefined {
+  try {
+    return typeof localStorage === "undefined" ? undefined : localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function ResizeHandle({
+  width,
+  available,
+  onWidth,
+}: {
+  width: number;
+  available: number;
+  onWidth: (next: number, done: boolean) => void;
+}) {
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = width;
+    const next = (clientX: number) => clampFilePanelWidth(startWidth + (startX - clientX), available);
+    const move = (ev: PointerEvent) => onWidth(next(ev.clientX), false);
+    const up = (ev: PointerEvent) => {
+      if (handle.hasPointerCapture(ev.pointerId)) handle.releasePointerCapture(ev.pointerId);
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      onWidth(next(ev.clientX), true);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  };
+  const nudge = (delta: number) => onWidth(clampFilePanelWidth(width + delta, available), true);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize file panel"
+      aria-valuemin={FILE_PANEL_MIN}
+      aria-valuemax={Math.round(available)}
+      aria-valuenow={Math.round(width)}
+      tabIndex={0}
+      data-file-panel-resize=""
+      title="Drag to resize"
+      onPointerDown={onPointerDown}
+      onKeyDown={(event) => {
+        const step = event.shiftKey ? 80 : 24;
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          nudge(step);
+        } else if (event.key === "ArrowRight") {
+          event.preventDefault();
+          nudge(-step);
+        }
+      }}
+      className="absolute top-0 bottom-0 -left-1.5 z-10 w-3 cursor-col-resize touch-none"
+    >
+      <span aria-hidden className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-text-tertiary/40" />
+      <span aria-hidden className="absolute top-1/2 left-1/2 h-8 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-text-tertiary" />
+    </div>
+  );
+}
+
+function FilePanel({
+  file,
+  workspace,
+  onClose,
+}: {
+  file: IssueAttachment;
+  workspace: string;
+  onClose: () => void;
+}) {
+  const dock = useTaskDock();
+  const [width, setWidth] = useState(() => loadFilePanelWidth(storage()));
+  const shown = dock.sheet ? dock.available : clampFilePanelWidth(width, dock.available);
   const { loaded, error } = useFileBytes(workspace, file.id);
+  const kind = rowKind(fileGroupId(file.mediaType));
   const markdown = isMarkdownFile(file.filename);
   const text = loaded?.text ?? null;
-  return (
-    <div data-file-viewer="" data-file-kind={kind} className="min-w-0 flex-1">
-      <div className="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // An open picture takes Escape first. Otherwise this panel closes and the ticket stays.
+      if (document.querySelector("[data-file-lightbox]")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  const setWidthTo = (next: number, done: boolean) => {
+    setWidth(next);
+    if (done) saveFilePanelWidth(storage(), next);
+  };
+  return createPortal(
+    // Portaled to body, like the picture lightbox: the open ticket sets
+    // pointer-events: none on body and closes on a press outside its panel.
+    <DismissableLayerBranch
+      role="dialog"
+      aria-label={file.filename}
+      data-file-panel=""
+      data-file-panel-width={shown}
+      className={cn(
+        "fixed z-[60] flex flex-col bg-card text-foreground shadow-xl outline-none",
+        dock.sheet ? "inset-0" : "top-0 bottom-0 border-l",
+      )}
+      style={dock.sheet ? { pointerEvents: "auto" } : { pointerEvents: "auto", right: dock.right, width: shown }}
+    >
+      {dock.sheet ? null : <ResizeHandle width={shown} available={dock.available} onWidth={setWidthTo} />}
+      <div className="flex min-w-0 items-start gap-2 border-b border-border px-4 py-3">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-body font-medium text-foreground" title={file.filename}>
             {file.filename}
           </p>
@@ -263,28 +403,35 @@ function FileViewer({ file, workspace }: { file: IssueAttachment; workspace: str
         <div className="flex shrink-0 items-center gap-1">
           {kind === "text" ? <CopyButton text={text} /> : null}
           <FileActions filename={file.filename} url={loaded?.url ?? null} />
+          <Button type="button" size="sm" variant="ghost" className="max-md:h-10" onClick={onClose} aria-label="Close file">
+            <X aria-hidden />
+          </Button>
         </div>
       </div>
-      {error ? (
-        <Missing message={error} />
-      ) : kind === "video" ? (
-        <video controls preload="metadata" src={loaded?.url} className="max-h-80 w-full rounded-lg border border-border bg-surface-sunken">
-          {file.filename}
-        </video>
-      ) : kind === "pdf" ? (
-        <iframe title={file.filename} src={loaded?.url} className="h-96 w-full rounded-lg border border-border bg-surface-raised" />
-      ) : kind === "text" && text !== null && markdown ? (
-        <div className="tab-prose text-reading">
-          <Markdown text={text} />
-        </div>
-      ) : kind === "text" ? (
-        <pre className="max-h-80 overflow-auto rounded-lg border border-border bg-surface-sunken p-3 font-mono text-label text-foreground max-md:whitespace-pre-wrap max-md:[overflow-wrap:anywhere]">
-          {text ?? ""}
-        </pre>
-      ) : (
-        <p className="text-reading text-text-secondary">This file downloads. It is not shown in the page.</p>
-      )}
-    </div>
+      <div data-file-viewer="" data-file-kind={kind} className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
+        {error ? (
+          <Missing message={error} />
+        ) : kind === "video" ? (
+          <video controls preload="metadata" src={loaded?.url} className="max-h-full w-full rounded-lg border border-border bg-surface-sunken">
+            {file.filename}
+          </video>
+        ) : kind === "pdf" ? (
+          <iframe title={file.filename} src={loaded?.url} className="min-h-96 w-full flex-1 rounded-lg border border-border bg-surface-raised" />
+        ) : kind === "text" && text !== null && markdown ? (
+          <div className="tab-prose text-reading">
+            <Markdown text={text} />
+          </div>
+        ) : kind === "text" ? (
+          <pre className="max-h-full overflow-auto rounded-lg border border-border bg-surface-sunken p-3 font-mono text-label text-foreground max-md:whitespace-pre-wrap max-md:[overflow-wrap:anywhere]">
+            {text ?? ""}
+          </pre>
+        ) : (
+          <p className="text-reading text-text-secondary">This file downloads. It is not shown in the page.</p>
+        )}
+      </div>
+    </DismissableLayerBranch>,
+    // Inside the ticket dialog when it is open, so focus can stay on this panel.
+    document.querySelector("[data-detail-overlay]") ?? document.body,
   );
 }
 
@@ -328,7 +475,7 @@ function Lightbox({
       aria-modal="true"
       aria-label={file.filename}
       data-file-lightbox=""
-      className="fixed inset-0 z-[60] flex flex-col bg-background/95"
+      className="fixed inset-0 z-[70] flex flex-col bg-background/95"
       style={{ pointerEvents: "auto" }}
     >
       <div className="flex items-center gap-2 px-3 py-2 md:px-5">
@@ -386,6 +533,7 @@ export function FilesTab({ detail, workspace }: TabProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const imagesAll = files.filter((file) => fileGroupId(file.mediaType) === "images");
   const openIndex = imagesAll.findIndex((file) => file.id === openId);
+  const selected = files.find((file) => file.id === selectedId && fileGroupId(file.mediaType) !== "images") ?? null;
   if (files.length === 0) {
     return (
       <div data-files="">
@@ -401,7 +549,6 @@ export function FilesTab({ detail, workspace }: TabProps) {
   const visible = filter === "all" ? files : files.filter((file) => fileGroupId(file.mediaType) === filter);
   const images = visible.filter((file) => fileGroupId(file.mediaType) === "images");
   const rest = visible.filter((file) => fileGroupId(file.mediaType) !== "images");
-  const selected = rest.find((file) => file.id === selectedId) ?? rest[0] ?? null;
   return (
     <div data-files="" className="flex min-w-0 flex-col gap-4">
       <div role="group" aria-label="File kinds" className="flex flex-wrap gap-1.5">
@@ -428,16 +575,19 @@ export function FilesTab({ detail, workspace }: TabProps) {
           ))}
         </ul>
       ) : null}
-      {rest.length > 0 && selected ? (
-        <div data-file-split="" className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start">
-          <ul data-file-list="" className="flex min-w-0 flex-col md:w-72 md:shrink-0">
-            {rest.map((file) => (
-              <FileRow key={file.id} file={file} selected={file.id === selected.id} onSelect={setSelectedId} />
-            ))}
-          </ul>
-          <FileViewer key={selected.id} file={selected} workspace={workspace} />
-        </div>
+      {rest.length > 0 ? (
+        <ul data-file-list="" className="flex min-w-0 flex-col">
+          {rest.map((file) => (
+            <FileRow
+              key={file.id}
+              file={file}
+              selected={file.id === selected?.id}
+              onSelect={(id) => setSelectedId((current) => (current === id ? null : id))}
+            />
+          ))}
+        </ul>
       ) : null}
+      {selected ? <FilePanel key={selected.id} file={selected} workspace={workspace} onClose={() => setSelectedId(null)} /> : null}
       {openIndex >= 0 ? (
         <Lightbox
           images={imagesAll}
