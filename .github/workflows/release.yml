@@ -52,18 +52,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # No registry-url here: with it, setup-node writes an .npmrc whose
+      # _authToken=${NODE_AUTH_TOKEN} makes npm think a token is configured, so
+      # it never attempts the OIDC exchange and the publish fails with ENEEDAUTH.
+      # npmjs.org is npm's default registry anyway.
       - name: Setup Node 22 (engines require >= 22.5)
         uses: actions/setup-node@v6
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
           cache: npm
 
-      # npm >= 11.5.1 is required for OIDC trusted publishing; Node 22 ships
-      # an older npm, so upgrade it before publishing.
+      # Trusted publishing needs npm >= 11.5.1 on Node >= 22.14; Node 22 ships
+      # npm 10. Pinned to the 11 line: npm@latest (12.x) narrows its Node range
+      # and can refuse to install on a Node 22 minor.
       - name: Upgrade npm for trusted publishing
         run: |
-          npm install -g npm@latest
+          npm install -g npm@11
           npm --version
 
       - name: Install dependencies

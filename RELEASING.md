@@ -37,26 +37,51 @@ secrets, and none should ever be added.
 
 ## One-time npm setup (VP only, before the first release)
 
-The `staple-cli` name is unclaimed on npm (verified 2026-09-01). Claim it by
-configuring a Trusted Publisher — this both creates the package on first
-publish and removes any need for a token:
+npm cannot attach a Trusted Publisher to a package that does not exist yet:
+the setting lives on the package's own settings page, and there is no
+"pending publisher" for a new name (open request:
+<https://github.com/npm/cli/issues/8544>). So the first version of
+`staple-cli` cannot come from this workflow. The bootstrap below creates the
+package with a placeholder, then hands every real release to CI. The
+placeholder is the only thing ever published from a laptop.
 
-1. Log in to <https://www.npmjs.com> as the account that will own `staple-cli`.
-2. Go to the Trusted Publisher configuration for the `staple-cli` package
-   (for a brand-new package: your account → Packages → "Add Package" /
-   trusted publishing flow; npm lets you pre-register a trusted publisher for
-   a name you have not published yet).
-3. Choose **GitHub Actions** as the publisher and enter exactly:
+`staple-cli` was unclaimed on 2026-10-01 (`npm view staple-cli` → 404), and
+npm's name-similarity rule does not block it (no `staplecli` exists).
+
+1. Log in to <https://www.npmjs.com> as the account that will own
+   `staple-cli`, with two-factor authentication on.
+2. Publish a placeholder `0.0.0` from your own machine (no bin, nothing
+   runnable):
+
+   ```bash
+   d=$(mktemp -d) && cd "$d"
+   printf '{"name":"staple-cli","version":"0.0.0","description":"Placeholder. Install the latest version.","license":"MIT","repository":{"type":"git","url":"git+https://github.com/vpetkovic/staple-tracker.git"}}\n' > package.json
+   printf '# staple-cli\n\nPlaceholder that claims the name. See https://vpetkovic.github.io/staple-tracker/\n' > README.md
+   npm login && npm publish --access public    # asks for your 2FA code
+   ```
+
+   Until the first CI release, `npx staple-cli` resolves to this placeholder
+   and fails with "could not determine executable". Tag `v0.1.0` right after
+   step 4 to keep that window to minutes.
+3. On <https://www.npmjs.com/package/staple-cli/access> → **Trusted
+   Publisher** → **GitHub Actions**, enter exactly:
    - **Organization or user:** `vpetkovic`
    - **Repository:** `staple-tracker`
    - **Workflow filename:** `release.yml`
    - **Environment:** leave blank (the workflow does not use one).
-4. Do NOT create or store an npm automation token. The workflow authenticates
-   via OIDC (`id-token: write`) and requires npm >= 11.5, which the workflow
-   installs itself.
+4. On the same page, under **Publishing access**, choose **Require two-factor
+   authentication and disallow tokens**. OIDC publishing keeps working;
+   token publishing stops.
+5. After `v0.1.0` is live: `npm deprecate staple-cli@0.0.0 "placeholder; use the latest version"`.
 
-That is the entirety of the manual npm-side setup. It is done once; every
-subsequent release is just the tag flow below.
+Never create an npm automation token or add one to the repository's secrets.
+The workflow authenticates through OIDC (`id-token: write`). Trusted
+publishing needs npm >= 11.5.1 on Node >= 22.14, and the workflow installs
+npm 11 itself. Provenance is generated automatically and requires the
+manifest's `repository.url` to match this repository, which
+`npm run build:package` copies from the root `package.json`. References:
+<https://docs.npmjs.com/trusted-publishers>,
+<https://docs.npmjs.com/generating-provenance-statements>.
 
 ## Cutting a release
 
@@ -93,7 +118,12 @@ subsequent release is just the tag flow below.
   Delete the bad tag, fix `package.json`, re-tag.
 - **Publish fails with an auth error:** the trusted publisher on npmjs.com
   does not match `vpetkovic/staple-tracker` + `release.yml`, or npm was
-  somehow < 11.5. Fix the publisher config; never work around it by adding a
+  somehow < 11.5.1. Fix the publisher config; never work around it by adding a
   token secret.
+- **Publish fails with ENEEDAUTH:** something wrote an `_authToken` line into
+  `.npmrc` (for example `registry-url` on `actions/setup-node`), so npm never
+  tried OIDC. Remove it.
+- **Publish fails with E422 about provenance:** the published manifest's
+  `repository.url` does not match `github.com/vpetkovic/staple-tracker`.
 - **Post-publish version check fails after retries:** the registry did not
   serve the new version; investigate on npmjs.com before re-tagging.

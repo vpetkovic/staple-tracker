@@ -123,6 +123,17 @@ describe("the packed artifact", () => {
     expect(pkg.engines.node).toBe(">=22.5.0");
   });
 
+  it("names the GitHub repository, which npm provenance requires to match the publishing repo", () => {
+    const pkg = JSON.parse(
+      readFileSync(join(prefix, "node_modules", "staple-cli", "package.json"), "utf8"),
+    ) as { repository?: { type: string; url: string } };
+
+    expect(pkg.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/vpetkovic/staple-tracker.git",
+    });
+  });
+
   it("declares the workspace schema its bundle understands, from the same migration list", () => {
     const pkg = JSON.parse(
       readFileSync(join(prefix, "node_modules", "staple-cli", "package.json"), "utf8"),
