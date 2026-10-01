@@ -102,18 +102,19 @@ jobs:
       - name: Publish
         run: npm publish ./dist-package --provenance --access public
 
-      # The registry can lag a few seconds after publish; retry briefly.
+      # The registry can take minutes to serve a new version: v0.1.0 appeared
+      # about 4.5 minutes after npm accepted it. Wait up to 10.
       - name: Verify published version matches tag
         run: |
           expected="${GITHUB_REF_NAME#v}"
-          for i in 1 2 3 4 5 6; do
+          for i in $(seq 1 30); do
             actual="$(npm view staple-cli version 2>/dev/null || true)"
             if [ "${actual}" = "${expected}" ]; then
               echo "OK: npm view staple-cli version = ${actual}"
               exit 0
             fi
             echo "attempt ${i}: registry reports '${actual}', want '${expected}'; waiting..."
-            sleep 10
+            sleep 20
           done
           echo "FAIL: npm view staple-cli version never reported ${expected}" >&2
           exit 1
