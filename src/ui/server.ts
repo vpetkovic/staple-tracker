@@ -27,7 +27,7 @@ import {
 } from "../core/types.js";
 // O7b (STA-141): the closed category set and the categories the code writes into,
 // both served verbatim on /api/settings so the browser never hand-keeps a copy.
-import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES } from "../core/types.js";
+import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES, type StatusCategory } from "../core/types.js";
 import type { SettingOp, UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
 import type { QueueVerb } from "../core/queue-store.js";
 // R6a (STA-176): the settings registry and the global values it defines, served
@@ -270,6 +270,16 @@ const QUEUE_WRITE_PATHS = new Set(Object.keys(QUEUE_VERBS));
 
 /** How many ended runs per workspace `/api/runs` answers besides the live ones, unless `limit` says. */
 const RUN_HISTORY_LIMIT = 50;
+
+/**
+ * The categories whose tickets carry a clock that runs without anyone writing: the claim's
+ * idle reading, time in status, the forecast. Their readings are computed at response time,
+ * so while one of these exists the page must refetch on a timer, not only on a write.
+ */
+const STARTED_CATEGORIES: readonly StatusCategory[] = ["active", "review", "gated"];
+
+/** How often those server-side clock readings refresh on an open page while work is started. */
+const STARTED_REFRESH_MS = 30_000;
 
 /**
  * The cloud writes that must NOT arm the post-write sync trigger (S10).
@@ -880,9 +890,27 @@ export function startUiServer(options: UiOptions): UiHandle {
           .prepare("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at),'') AS u FROM issues")
           .get() as { c: number; u: string };
         const comments = h.store.db.prepare("SELECT COUNT(*) AS c FROM comments").get() as { c: number };
-        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}`;
+        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}${clockFingerprint(h)}`;
       })
       .join("|");
+  }
+
+  /**
+   * A time bucket, but only for a workspace with started work. Without it an agent working a
+   * ticket for three hours without a write leaves the page showing the idle time and durations
+   * it read three hours ago. A workspace with nothing started adds nothing, so an idle
+   * tracker still refetches only on a write.
+   */
+  function clockFingerprint(h: StoreHandle): string {
+    const started = h.store
+      .getStatuses()
+      .filter((status) => STARTED_CATEGORIES.includes(status.category))
+      .map((status) => status.id);
+    if (started.length === 0) return "";
+    const row = h.store.db
+      .prepare(`SELECT EXISTS(SELECT 1 FROM issues WHERE status IN (${started.map(() => "?").join(", ")})) AS any`)
+      .get(...started) as { any: number };
+    return row.any ? `:t${Math.floor(Date.now() / STARTED_REFRESH_MS)}` : "";
   }
 
   /**
