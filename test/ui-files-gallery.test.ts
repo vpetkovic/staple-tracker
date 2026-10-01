@@ -5,7 +5,7 @@
  * Skipped, saying why, when the UI bundle is missing (`npm run build:ui`) or
  * this machine has no Chromium for playwright-core. The bytes and the safe
  * content type are pinned in test/ui-file.test.ts; this one checks that a
- * person can see the groups, open an image, and that the page does not grow
+ * person can filter the files, open an image, and that the page does not grow
  * sideways.
  */
 import { once } from "node:events";
@@ -121,28 +121,48 @@ async function openFiles(device: typeof PHONE | typeof DESK, ref: string): Promi
 }
 
 describe.skipIf(Boolean(reason))("the files gallery", () => {
-  it("groups the files on a desk and does not grow sideways", async () => {
+  it("filters the files on a desk, with one viewer beside the list", async () => {
     const { page: p, context } = await openFiles(DESK, galleryRef);
     await p.locator('[data-file-kind="image"] img').first().waitFor();
-    expect(await p.locator("[data-file-group]").count()).toBe(5);
-    const columns = await p.locator('[data-file-group="images"] ul').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(" ").length);
-    expect(columns).toBe(3);
+    expect(await p.getByRole("tab", { name: "Documents" }).count()).toBe(1);
+    expect(await p.locator("[data-file-filter]").count()).toBe(6);
+    const strip = await p.locator("[data-file-images]").evaluate((el) => getComputedStyle(el).display);
+    expect(strip).toBe("flex");
+    const direction = await p.locator("[data-file-split]").evaluate((el) => getComputedStyle(el).flexDirection);
+    expect(direction).toBe("row");
+    expect(await p.locator("[data-file-viewer] iframe").count()).toBe(1);
+    expect(await p.locator("video").count()).toBe(0);
+    await p.locator('[data-file-row][data-file-kind="video"]').click();
+    await p.locator("[data-file-viewer] video").waitFor();
+    expect(await p.locator("video").count()).toBe(1);
+    expect(await p.locator("iframe").count()).toBe(0);
+    await p.locator('[data-file-row][data-file-kind="text"]').click();
+    await p.locator("[data-file-viewer] pre", { hasText: "build log" }).waitFor();
+    expect(await p.locator("video").count()).toBe(0);
+    await p.locator('[data-file-filter="images"]').click();
+    expect(await p.locator("[data-file-viewer]").count()).toBe(0);
+    expect(await p.locator('[data-file-kind="image"]').count()).toBe(2);
     const overflow = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
     await p.screenshot({ path: join(home, "files-desk.png"), fullPage: true });
     await context.close();
   });
 
-  it("holds the same groups on a phone, in two columns", async () => {
+  it("puts the viewer under the list on a phone", async () => {
     const { page: p, context } = await openFiles(PHONE, galleryRef);
     await p.locator('[data-file-kind="image"] img').first().waitFor();
-    const columns = await p.locator('[data-file-group="images"] ul').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(" ").length);
-    expect(columns).toBe(2);
+    const direction = await p.locator("[data-file-split]").evaluate((el) => getComputedStyle(el).flexDirection);
+    expect(direction).toBe("column");
     const overflow = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     expect(overflow).toBeLessThanOrEqual(1);
-    expect(await p.locator('[data-file-kind="text"]').innerText()).toContain("build log");
+    expect(await p.locator("[data-file-viewer] iframe").count()).toBe(1);
+    await p.locator('[data-file-row][data-file-kind="video"]').click();
+    await p.locator("[data-file-viewer] video").waitFor();
     expect(await p.locator("video").count()).toBe(1);
-    expect(await p.locator('[data-file-kind="pdf"] iframe').count()).toBe(1);
+    expect(await p.locator("iframe").count()).toBe(0);
+    await p.locator('[data-file-row][data-file-kind="text"]').evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await p.locator('[data-file-row][data-file-kind="text"]').click();
+    await p.locator("[data-file-viewer] pre", { hasText: "build log" }).waitFor();
     await p.screenshot({ path: join(home, "files-phone.png"), fullPage: true });
     await context.close();
   });
@@ -172,7 +192,9 @@ describe.skipIf(Boolean(reason))("the files gallery", () => {
   it("says when a ticket has no files", async () => {
     const { page: p, context } = await openFiles(PHONE, emptyRef);
     expect(await p.locator("[data-files]").innerText()).toContain("No files on this ticket.");
-    expect(await p.locator("[data-file-group]").count()).toBe(0);
+    expect(await p.locator("[data-file-filter]").count()).toBe(0);
+    await p.getByRole("tab", { name: "Documents" }).click();
+    expect(await p.locator("[data-empty-state]").innerText()).toContain("No plan or notes on this ticket yet.");
     await context.close();
   });
 

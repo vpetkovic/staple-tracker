@@ -1,25 +1,27 @@
 /**
- * Files on a ticket, grouped by the kind of viewer they get.
+ * Files on a ticket: evidence and supporting material, not the ticket's writing.
  *
- * Images open in a lightbox. Video plays in the row. A PDF is embedded. Text
- * and logs are readable, markdown when the name says so. Everything else is a
- * name, a size and a download. The bytes come from `/api/file`, which does not
- * serve SVG or HTML as a document.
+ * A filter row names the kinds that are actually here. Images sit in one short
+ * strip and open in a lightbox. Everything else is one compact list, and the
+ * selected row opens in a single viewer — beside the list at desk width, under
+ * it on a phone. SVG and HTML stay downloads. The bytes come from `/api/file`.
  */
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Download, File, FileText, Image as ImageIcon, Paperclip, X } from "lucide-react";
+import { Copy, Download, File, FileText, Image as ImageIcon, Paperclip, Video, X } from "lucide-react";
 import { DismissableLayerBranch } from "@radix-ui/react-dismissable-layer";
 import { Button } from "@/components/ui/button";
 import { ApiError, fetchFile } from "@/lib/api";
 import { Markdown } from "@/lib/markdown";
 import type { IssueAttachment } from "@/lib/types";
-import { DetailCard, EmptyState, PersonChip, RelativeTime, SectionHeading } from "../parts";
-import { evidenceLabel, fileGroupId, formatFileSize, groupFiles, isMarkdownFile, type FileGroupId } from "./files";
+import { EmptyState, PersonChip, RelativeTime, cn } from "../parts";
+import { FILE_GROUPS, evidenceLabel, fileGroupId, formatFileSize, isMarkdownFile, type FileGroupId } from "./files";
 import type { TabProps } from "./registry";
 import "./tabs.css";
 
 const personKind = (name: string) => (/[-_]/.test(name) ? "agent" : "human");
+
+type Filter = "all" | FileGroupId;
 
 interface LoadedFile {
   url: string;
@@ -65,7 +67,7 @@ function saveFile(url: string, filename: string): void {
 
 function FileMeta({ file }: { file: IssueAttachment }) {
   return (
-    <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-caption text-text-secondary">
+    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-caption text-text-secondary">
       <span className="tabular-nums">{formatFileSize(file.size)}</span>
       {file.author ? (
         <>
@@ -75,7 +77,7 @@ function FileMeta({ file }: { file: IssueAttachment }) {
       ) : null}
       <span aria-hidden>·</span>
       <RelativeTime iso={file.createdAt} />
-    </p>
+    </span>
   );
 }
 
@@ -133,7 +135,19 @@ function Missing({ message }: { message: string }) {
   );
 }
 
-function ImageTile({
+function rowKind(id: FileGroupId): "video" | "pdf" | "text" | "other" {
+  if (id === "videos") return "video";
+  if (id === "pdfs") return "pdf";
+  if (id === "text") return "text";
+  return "other";
+}
+
+function RowIcon({ kind }: { kind: ReturnType<typeof rowKind> }) {
+  const Icon = kind === "video" ? Video : kind === "other" ? File : FileText;
+  return <Icon aria-hidden className="size-4 shrink-0 text-text-tertiary" />;
+}
+
+function ImageThumb({
   file,
   workspace,
   onOpen,
@@ -144,193 +158,133 @@ function ImageTile({
 }) {
   const { loaded, error } = useFileBytes(workspace, file.id);
   return (
-    <li className="min-w-0" data-file={file.id} data-file-kind="image">
+    <li className="shrink-0" data-file={file.id} data-file-kind="image">
       <button
         type="button"
+        aria-label={file.filename}
+        title={file.caption || file.filename}
         onClick={() => loaded && onOpen(file.id)}
         disabled={!loaded}
-        className="focus-ring flex w-full min-w-0 flex-col gap-1.5 rounded-lg text-left"
+        className="focus-ring relative block size-20 overflow-hidden rounded-lg border border-border bg-surface-sunken"
       >
-        <span className="relative block aspect-square overflow-hidden rounded-lg border border-border bg-surface-sunken">
-          {loaded ? (
-            <img src={loaded.url} alt="" className="absolute inset-0 size-full object-cover" />
-          ) : (
-            <ImageIcon aria-hidden className="absolute top-1/2 left-1/2 size-5 -translate-x-1/2 -translate-y-1/2 text-text-tertiary" />
-          )}
-          <span className="absolute top-1.5 left-1.5">
-            <EvidenceBadge file={file} />
-          </span>
-        </span>
-        <span className="truncate text-label text-foreground" title={file.filename}>
-          {file.filename}
+        {loaded ? (
+          <img src={loaded.url} alt="" className="absolute inset-0 size-full object-cover" />
+        ) : (
+          <ImageIcon aria-hidden className="absolute top-1/2 left-1/2 size-5 -translate-x-1/2 -translate-y-1/2 text-text-tertiary" />
+        )}
+        <span className="absolute bottom-1 left-1">
+          <EvidenceBadge file={file} />
         </span>
       </button>
-      {file.caption ? <p className="mt-0.5 truncate text-caption text-text-secondary">{file.caption}</p> : null}
-      <FileMeta file={file} />
       {error ? <Missing message={error} /> : null}
     </li>
   );
 }
 
-function VideoRow({ file, workspace }: { file: IssueAttachment; workspace: string }) {
-  const { loaded, error } = useFileBytes(workspace, file.id);
+function FileRow({
+  file,
+  selected,
+  onSelect,
+}: {
+  file: IssueAttachment;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const kind = rowKind(fileGroupId(file.mediaType));
   return (
-    <li className="min-w-0" data-file={file.id} data-file-kind="video">
-      <div className="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-body font-medium text-foreground" title={file.filename}>
-            {file.filename}
-          </p>
-          <FileMeta file={file} />
-        </div>
-        <FileActions filename={file.filename} url={loaded?.url ?? null} />
-      </div>
-      {error ? (
-        <Missing message={error} />
-      ) : (
-        <video controls preload="metadata" src={loaded?.url} className="max-h-80 w-full rounded-lg border border-border bg-surface-sunken">
-          {file.filename}
-        </video>
-      )}
-    </li>
-  );
-}
-
-function PdfRow({ file, workspace }: { file: IssueAttachment; workspace: string }) {
-  const { loaded, error } = useFileBytes(workspace, file.id);
-  return (
-    <li className="min-w-0" data-file={file.id} data-file-kind="pdf">
-      <div className="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="flex min-w-0 items-center gap-1.5 text-body font-medium text-foreground">
-            <FileText aria-hidden className="size-4 shrink-0 text-text-tertiary" />
-            <span className="truncate" title={file.filename}>
+    <li className="min-w-0" data-file={file.id}>
+      <button
+        type="button"
+        data-file-row=""
+        data-file-kind={kind}
+        aria-pressed={selected}
+        data-selected={selected ? "" : undefined}
+        onClick={() => onSelect(file.id)}
+        className={cn(
+          "focus-ring flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left max-md:min-h-10",
+          selected ? "bg-surface-sunken" : "hover:bg-surface-sunken/70",
+        )}
+      >
+        <RowIcon kind={kind} />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-body text-foreground" title={file.filename}>
               {file.filename}
             </span>
-          </p>
+            <EvidenceBadge file={file} />
+          </span>
           <FileMeta file={file} />
-        </div>
-        <FileActions filename={file.filename} url={loaded?.url ?? null} />
-      </div>
-      {error ? (
-        <Missing message={error} />
-      ) : (
-        <iframe title={file.filename} src={loaded?.url} className="h-96 w-full rounded-lg border border-border bg-surface-raised" />
-      )}
+        </span>
+      </button>
     </li>
   );
 }
 
-function TextRow({ file, workspace }: { file: IssueAttachment; workspace: string }) {
-  const { loaded, error } = useFileBytes(workspace, file.id);
+function CopyButton({ text }: { text: string | null }) {
   const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className="max-md:h-10"
+      disabled={text === null}
+      aria-live="polite"
+      onClick={() => {
+        if (text === null) return;
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      <Copy aria-hidden />
+      {copied ? "Copied" : "Copy"}
+    </Button>
+  );
+}
+
+function FileViewer({ file, workspace }: { file: IssueAttachment; workspace: string }) {
+  const group = fileGroupId(file.mediaType);
+  const kind = rowKind(group);
+  const { loaded, error } = useFileBytes(workspace, file.id);
   const markdown = isMarkdownFile(file.filename);
   const text = loaded?.text ?? null;
   return (
-    <li className="min-w-0" data-file={file.id} data-file-kind="text">
+    <div data-file-viewer="" data-file-kind={kind} className="min-w-0 flex-1">
       <div className="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-body font-medium text-foreground" title={file.filename}>
             {file.filename}
           </p>
+          {file.caption ? <p className="truncate text-caption text-text-secondary">{file.caption}</p> : null}
           <FileMeta file={file} />
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="max-md:h-10"
-            disabled={text === null}
-            aria-live="polite"
-            onClick={() => {
-              if (text === null) return;
-              void navigator.clipboard.writeText(text).then(() => {
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1500);
-              });
-            }}
-          >
-            <Copy aria-hidden />
-            {copied ? "Copied" : "Copy"}
-          </Button>
+          {kind === "text" ? <CopyButton text={text} /> : null}
           <FileActions filename={file.filename} url={loaded?.url ?? null} />
         </div>
       </div>
       {error ? (
         <Missing message={error} />
-      ) : text !== null && markdown ? (
+      ) : kind === "video" ? (
+        <video controls preload="metadata" src={loaded?.url} className="max-h-80 w-full rounded-lg border border-border bg-surface-sunken">
+          {file.filename}
+        </video>
+      ) : kind === "pdf" ? (
+        <iframe title={file.filename} src={loaded?.url} className="h-96 w-full rounded-lg border border-border bg-surface-raised" />
+      ) : kind === "text" && text !== null && markdown ? (
         <div className="tab-prose text-reading">
           <Markdown text={text} />
         </div>
-      ) : (
+      ) : kind === "text" ? (
         <pre className="max-h-80 overflow-auto rounded-lg border border-border bg-surface-sunken p-3 font-mono text-label text-foreground max-md:whitespace-pre-wrap max-md:[overflow-wrap:anywhere]">
           {text ?? ""}
         </pre>
+      ) : (
+        <p className="text-reading text-text-secondary">This file downloads. It is not shown in the page.</p>
       )}
-    </li>
-  );
-}
-
-function OtherRow({ file, workspace }: { file: IssueAttachment; workspace: string }) {
-  const { loaded, error } = useFileBytes(workspace, file.id);
-  return (
-    <li className="flex min-w-0 flex-wrap items-center gap-3 px-3 py-2.5" data-file={file.id} data-file-kind="other">
-      <File aria-hidden className="size-4 shrink-0 text-text-tertiary" />
-      <div className="min-w-0 flex-1">
-        <p className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-body text-foreground" title={file.filename}>
-            {file.filename}
-          </span>
-          <EvidenceBadge file={file} />
-        </p>
-        {file.caption ? <p className="truncate text-caption text-text-secondary">{file.caption}</p> : null}
-        <FileMeta file={file} />
-        {error ? <Missing message={error} /> : null}
-      </div>
-      <FileActions filename={file.filename} url={loaded?.url ?? null} />
-    </li>
-  );
-}
-
-function GroupBody({
-  id,
-  files,
-  workspace,
-  onOpenImage,
-}: {
-  id: FileGroupId;
-  files: IssueAttachment[];
-  workspace: string;
-  onOpenImage: (id: string) => void;
-}) {
-  if (id === "images") {
-    return (
-      <ul className="grid grid-cols-2 gap-3 md:grid-cols-3">
-        {files.map((file) => (
-          <ImageTile key={file.id} file={file} workspace={workspace} onOpen={onOpenImage} />
-        ))}
-      </ul>
-    );
-  }
-  if (id === "other") {
-    return (
-      <DetailCard padded={false}>
-        <ul className="divide-y divide-border">
-          {files.map((file) => (
-            <OtherRow key={file.id} file={file} workspace={workspace} />
-          ))}
-        </ul>
-      </DetailCard>
-    );
-  }
-  const Row = id === "videos" ? VideoRow : id === "documents" ? PdfRow : TextRow;
-  return (
-    <ul className="flex flex-col gap-4">
-      {files.map((file) => (
-        <Row key={file.id} file={file} workspace={workspace} />
-      ))}
-    </ul>
+    </div>
   );
 }
 
@@ -428,8 +382,10 @@ function Lightbox({
 export function FilesTab({ detail, workspace }: TabProps) {
   const files = detail.attachments ?? [];
   const [openId, setOpenId] = useState<string | null>(null);
-  const images = files.filter((file) => fileGroupId(file.mediaType) === "images");
-  const openIndex = images.findIndex((file) => file.id === openId);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const imagesAll = files.filter((file) => fileGroupId(file.mediaType) === "images");
+  const openIndex = imagesAll.findIndex((file) => file.id === openId);
   if (files.length === 0) {
     return (
       <div data-files="">
@@ -437,24 +393,91 @@ export function FilesTab({ detail, workspace }: TabProps) {
       </div>
     );
   }
-  const groups = groupFiles(files);
+  const counts = new Map<FileGroupId, number>();
+  for (const file of files) {
+    const id = fileGroupId(file.mediaType);
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const visible = filter === "all" ? files : files.filter((file) => fileGroupId(file.mediaType) === filter);
+  const images = visible.filter((file) => fileGroupId(file.mediaType) === "images");
+  const rest = visible.filter((file) => fileGroupId(file.mediaType) !== "images");
+  const selected = rest.find((file) => file.id === selectedId) ?? rest[0] ?? null;
   return (
-    <div data-files="" className="flex min-w-0 flex-col gap-6">
-      {groups.map((group) => (
-        <section key={group.id} data-file-group={group.id} className="min-w-0">
-          <SectionHeading action={<span data-file-count="">{group.files.length}</span>}>{group.label}</SectionHeading>
-          <GroupBody id={group.id} files={group.files} workspace={workspace} onOpenImage={setOpenId} />
-        </section>
-      ))}
+    <div data-files="" className="flex min-w-0 flex-col gap-4">
+      <div role="group" aria-label="File kinds" className="flex flex-wrap gap-1.5">
+        <FilterChip id="all" label="All" count={files.length} pressed={filter === "all"} onClick={() => setFilter("all")} />
+        {FILE_GROUPS.flatMap((group) => {
+          const count = counts.get(group.id) ?? 0;
+          if (count === 0) return [];
+          return [
+            <FilterChip
+              key={group.id}
+              id={group.id}
+              label={group.label}
+              count={count}
+              pressed={filter === group.id}
+              onClick={() => setFilter(group.id)}
+            />,
+          ];
+        })}
+      </div>
+      {images.length > 0 ? (
+        <ul data-file-images="" className="flex min-w-0 gap-2 overflow-x-auto pb-1">
+          {images.map((file) => (
+            <ImageThumb key={file.id} file={file} workspace={workspace} onOpen={setOpenId} />
+          ))}
+        </ul>
+      ) : null}
+      {rest.length > 0 && selected ? (
+        <div data-file-split="" className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start">
+          <ul data-file-list="" className="flex min-w-0 flex-col md:w-72 md:shrink-0">
+            {rest.map((file) => (
+              <FileRow key={file.id} file={file} selected={file.id === selected.id} onSelect={setSelectedId} />
+            ))}
+          </ul>
+          <FileViewer key={selected.id} file={selected} workspace={workspace} />
+        </div>
+      ) : null}
       {openIndex >= 0 ? (
         <Lightbox
-          images={images}
+          images={imagesAll}
           index={openIndex}
           workspace={workspace}
-          onIndex={(index) => setOpenId(images[index]?.id ?? null)}
+          onIndex={(index) => setOpenId(imagesAll[index]?.id ?? null)}
           onClose={() => setOpenId(null)}
         />
       ) : null}
     </div>
+  );
+}
+
+function FilterChip({
+  id,
+  label,
+  count,
+  pressed,
+  onClick,
+}: {
+  id: string;
+  label: string;
+  count: number;
+  pressed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-file-filter={id}
+      aria-pressed={pressed}
+      onClick={onClick}
+      className={cn(
+        "text-body focus-ring inline-flex h-8 items-center gap-1.5 rounded-full border px-3 transition-colors duration-150 max-md:h-10",
+        pressed
+          ? "border-foreground/20 bg-surface-sunken text-foreground"
+          : "border-border text-text-secondary hover:text-foreground",
+      )}
+    >
+      {label}<span data-file-count="" className="text-caption tabular-nums text-text-tertiary">{count}</span>
+    </button>
   );
 }

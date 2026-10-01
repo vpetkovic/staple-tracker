@@ -1,5 +1,7 @@
 /**
  * Documents — the plan document as the ticket, not as an attachment to it.
+ * Screenshots, video, PDFs and logs are the Files tab. This tab stays on the
+ * strip when nothing has been written yet.
  *
  * Two modes over one document key:
  *
@@ -260,7 +262,7 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
   if (detail.documents.length === 0) {
     return (
       <EmptyState icon={FileText}>
-        No documents yet. When someone writes a plan or notes for this task, they will show up here.
+        No plan or notes on this ticket yet. Screenshots and other files are under Files.
       </EmptyState>
     );
   }

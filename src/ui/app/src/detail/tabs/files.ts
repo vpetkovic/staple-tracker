@@ -2,16 +2,17 @@
  * How a ticket's files are grouped for the Files tab.
  *
  * The groups are a fixed order. A type with no viewer of its own (SVG, HTML,
- * anything unrecognised) is Other, which is a download. Empty groups are left
- * out so a ticket with one screenshot does not show four blank headings.
+ * anything unrecognised) is Other, which is a download. PDFs are named PDFs:
+ * Documents is the ticket's own writing, on the other tab. Empty groups are
+ * left out so a ticket with one screenshot does not show four blank filters.
  */
 import type { IssueAttachment } from "@/lib/types";
 
 export const FILE_GROUPS = [
   { id: "images", label: "Images" },
-  { id: "videos", label: "Videos" },
-  { id: "documents", label: "Documents" },
-  { id: "text", label: "Text and logs" },
+  { id: "videos", label: "Video" },
+  { id: "pdfs", label: "PDFs" },
+  { id: "text", label: "Text" },
   { id: "other", label: "Other" },
 ] as const;
 
@@ -20,7 +21,7 @@ export type FileGroupId = (typeof FILE_GROUPS)[number]["id"];
 const GROUP_TYPES: Record<Exclude<FileGroupId, "other">, readonly string[]> = {
   images: ["image/png", "image/jpeg", "image/gif", "image/webp"],
   videos: ["video/mp4", "video/webm"],
-  documents: ["application/pdf"],
+  pdfs: ["application/pdf"],
   text: ["text/plain", "text/markdown"],
 };
 

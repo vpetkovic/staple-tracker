@@ -7,7 +7,7 @@ describe("file groups", () => {
     expect(fileGroupId("image/jpeg")).toBe("images");
     expect(fileGroupId("image/svg+xml")).toBe("other");
     expect(fileGroupId("video/mp4")).toBe("videos");
-    expect(fileGroupId("application/pdf")).toBe("documents");
+    expect(fileGroupId("application/pdf")).toBe("pdfs");
     expect(fileGroupId("text/plain")).toBe("text");
     expect(fileGroupId("text/html")).toBe("other");
     expect(fileGroupId("application/octet-stream")).toBe("other");
@@ -20,7 +20,7 @@ describe("file groups", () => {
       { mediaType: "text/plain", filename: "log.txt" },
       { mediaType: "image/webp", filename: "a.webp" },
     ]);
-    expect(groups.map((group) => group.label)).toEqual(["Images", "Text and logs", "Other"]);
+    expect(groups.map((group) => group.label)).toEqual(["Images", "Text", "Other"]);
     expect(groups[0]!.files.map((file) => file.filename)).toEqual(["b.png", "a.webp"]);
     expect(groups.map((group) => group.files.length)).toEqual([2, 1, 1]);
   });

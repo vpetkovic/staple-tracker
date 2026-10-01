@@ -17,7 +17,7 @@ import { ActivityTab } from "./ActivityTab";
 import { DocumentsTab } from "./DocumentsTab";
 import { FilesTab } from "./FilesTab";
 import { RelationsTab } from "./RelationsTab";
-import type { TabProps } from "./registry";
+import { visibleTabs, type TabProps } from "./registry";
 
 const timing = { subtreePlan: { estimatedSeconds: null, source: "none" } } as unknown as IssueTiming;
 
@@ -193,10 +193,11 @@ describe("Connections", () => {
 });
 
 describe("Documents", () => {
-  it("says there are no documents yet in a sentence", () => {
+  it("says there are no documents yet in a sentence, and stays on the strip", () => {
     const html = render(DocumentsTab, detail());
     expect(html).toContain("data-empty-state");
-    expect(html).toContain("No documents yet.");
+    expect(html).toContain("No plan or notes on this ticket yet. Screenshots and other files are under Files.");
+    expect(visibleTabs(detail()).map((tab) => tab.id)).toContain("documents");
   });
 
   it("names documents by title or key, never as key@revision", () => {
@@ -242,7 +243,7 @@ describe("Files", () => {
     expect(html).not.toContain("data-file-group");
   });
 
-  it("groups files by viewer and prints a count, the name, the size and a before label", () => {
+  it("filters by kind, shows image thumbnails, and opens the first other file", () => {
     const html = render(
       FilesTab,
       detail({
@@ -255,23 +256,28 @@ describe("Files", () => {
         ],
       }),
     );
-    const order = ["images", "videos", "documents", "text", "other"].map((id) => html.indexOf(`data-file-group="${id}"`));
-    expect(order.every((at) => at >= 0)).toBe(true);
-    expect(order).toEqual([...order].sort((a, b) => a - b));
+    for (const id of ["all", "images", "videos", "pdfs", "text", "other"]) {
+      expect(html).toContain(`data-file-filter="${id}"`);
+    }
+    expect(html).toContain(">All<");
     expect(html).toContain(">Images<");
-    expect(html).toContain(">Videos<");
-    expect(html).toContain(">Documents<");
-    expect(html).toContain(">Text and logs<");
+    expect(html).toContain(">Video<");
+    expect(html).toContain(">PDFs<");
+    expect(html).toContain(">Text<");
     expect(html).toContain(">Other<");
-    expect((html.match(/data-file-count=""/g) ?? []).length).toBe(5);
+    expect(html).not.toContain(">Documents<");
+    expect((html.match(/data-file-count=""/g) ?? []).length).toBe(6);
     expect(html).toContain("before.png");
+    expect(html).toContain('data-file-images=""');
     expect(html).toContain('data-evidence-label="before"');
     expect(html).toContain("1.5 KiB");
     expect(html).toContain(">ada<");
     expect(html).toContain('aria-label="Download notes.pdf"');
     expect(html).toContain('data-file-kind="image"');
-    expect(html).toContain("<video");
+    expect(html).toContain('data-file-viewer=""');
     expect(html).toContain("<iframe");
-    expect(html).toContain(">Copy<");
+    // One viewer, and the first file that is not an image is the PDF.
+    expect(html).not.toContain("<video");
+    expect(html).not.toContain(">Copy<");
   });
 });

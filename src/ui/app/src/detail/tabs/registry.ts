@@ -34,7 +34,7 @@ export interface TabDefinition {
   /** What a person reads on the strip: plain words, not engineer words. */
   label: string;
   component: ComponentType<TabProps>;
-  /** Hide the tab entirely when it has nothing to show (documents on a doc-less issue). */
+  /** Hide the tab entirely when it has nothing to show. Documents, Files, Connections and Time leave this unset: an empty tab is the answer. */
   available?: (detail: IssueDetail) => boolean;
 }
 
@@ -62,12 +62,13 @@ export const TABS: readonly TabDefinition[] = [
    * rather than an empty canvas, which is the honest version of the same answer.
    */
   { id: "relations", label: "Connections", component: RelationsTab },
-  {
-    id: "documents",
-    label: "Documents",
-    component: DocumentsTab,
-    available: (detail) => detail.documents.length > 0,
-  },
+  /**
+   * Always on the strip, including when nothing has been written. An empty
+   * Documents tab is how a reader learns that a plan lives here and that
+   * screenshots live under Files. A tab that vanishes looks like the feature
+   * is gone.
+   */
+  { id: "documents", label: "Documents", component: DocumentsTab },
   /**
    * Always on the strip, including when the ticket has no files. An empty list
    * is the answer, and a tab that appears only after the first upload makes the
