@@ -28,6 +28,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Same as ci.yml: the browser suites (test/ui-*.test.ts) need Chromium for
+      # playwright-core, and with CI set they fail rather than skip without it.
+      - name: Install Chromium for playwright-core
+        run: npx playwright-core install --with-deps chromium
+
       - name: Unit tests
         run: npm test
 
