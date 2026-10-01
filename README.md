@@ -12,12 +12,6 @@ ClickUp (integrations planned). [Why staple](https://github.com/vpetkovic/staple
 
 Requirements: Node >= 22.5.
 
-`staple-cli` is not on npm until its first release. Until then, build the
-package from a checkout (`npm run pack:package`, see
-[CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md)) and put
-`npx -y file:/absolute/path/to/checkout/dist-package/staple-cli-<version>.tgz`
-wherever this page says `npx staple-cli` or `npx -y staple-cli`.
-
 ```bash
 npx staple-cli                      # set this repository up, then open the web UI
 ```
