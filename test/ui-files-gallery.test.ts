@@ -5,8 +5,9 @@
  * Skipped, saying why, when the UI bundle is missing (`npm run build:ui`) or
  * this machine has no Chromium for playwright-core. The bytes and the safe
  * content type are pinned in test/ui-file.test.ts; this one checks that a
- * person can filter the files, open an image, and that the page does not grow
- * sideways.
+ * person can filter the files, open an image, download from a shortcut, and
+ * that the page does not grow sideways. A file that only downloads is not a
+ * row that opens the panel.
  */
 import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -182,6 +183,40 @@ describe.skipIf(Boolean(reason))("the files gallery", () => {
     await p.locator('[data-file-row][data-file-kind="text"]').click();
     await p.locator("[data-file-viewer] pre", { hasText: "build log" }).waitFor();
     await p.screenshot({ path: join(home, "files-phone.png"), fullPage: true });
+    await context.close();
+  });
+
+  it("downloads and opens from a shortcut, and a download-only row does not open", async () => {
+    const { page: p, context } = await openFiles(DESK, galleryRef);
+    await p.locator('[data-file-kind="image"] img').first().waitFor();
+    const other = p.locator('[data-file-row][data-file-kind="other"]');
+    expect(await other.evaluate((el) => el.tagName)).toBe("DIV");
+    await other.click();
+    expect(await p.locator("[data-file-panel]").count()).toBe(0);
+    expect(await p.locator("[data-file-lightbox]").count()).toBe(0);
+
+    const pdf = p.locator("[data-file]", { has: p.locator('[data-file-row][data-file-kind="pdf"]') });
+    const [download] = await Promise.all([
+      p.waitForEvent("download"),
+      pdf.getByRole("button", { name: "Download notes.pdf" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("notes.pdf");
+    expect(await p.locator("[data-file-panel]").count()).toBe(0);
+
+    const image = p.locator('[data-file-kind="image"]').first();
+    const opened = p.waitForEvent("popup");
+    await image.getByRole("button", { name: "Open before.png" }).click();
+    const popup = await opened;
+    expect(await p.locator("[data-file-lightbox]").count()).toBe(0);
+    expect(await p.locator("[data-file-panel]").count()).toBe(0);
+    await popup.close();
+
+    const htmlOpen = p.waitForEvent("popup");
+    await p.getByRole("button", { name: "Open page.html" }).click();
+    const htmlPopup = await htmlOpen;
+    expect(await p.locator("[data-file-panel]").count()).toBe(0);
+    await htmlPopup.close();
+    expect(await p.getByRole("button", { name: "Download walk.mp4" }).count()).toBe(1);
     await context.close();
   });
 

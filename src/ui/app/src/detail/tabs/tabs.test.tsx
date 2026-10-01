@@ -276,6 +276,14 @@ describe("Files", () => {
     expect(html).toContain('data-file-row=""');
     expect(html).toContain("notes.pdf");
     expect(html).toContain("walk.mp4");
+    expect(html).toContain('aria-label="Download notes.pdf"');
+    expect(html).toContain('aria-label="Open walk.mp4"');
+    expect(html).toContain('aria-label="Download before.png"');
+    expect(html).toContain('aria-label="Open mark.svg"');
+    // A download-only file is not a button. A PDF still is.
+    expect(html).toContain('<div data-file-row="" data-file-kind="other"');
+    expect(html).toContain('<button type="button" data-file-row="" data-file-kind="pdf"');
+    expect(html).not.toContain('data-file-kind="other" aria-pressed');
     // The viewer is a side panel. Nothing is open on the first paint.
     expect(html).not.toContain("data-file-panel");
     expect(html).not.toContain("data-file-viewer");

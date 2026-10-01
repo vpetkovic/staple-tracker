@@ -2,14 +2,14 @@
  * Files on a ticket: evidence and supporting material, not the ticket's writing.
  *
  * A filter row names the kinds that are actually here. Images sit in one short
- * strip and open in a lightbox. Everything else is one full-width list. The
- * chosen file opens in its own side panel, beside the ticket, and the left
- * edge of that panel sets the width. SVG and HTML stay downloads. The bytes
- * come from `/api/file`.
+ * strip and open in a lightbox. A video, PDF, or note opens in its own side
+ * panel, beside the ticket, and the left edge of that panel sets the width.
+ * A file that only downloads is not a row you can open. Every item has
+ * Download and Open, and those fetch the bytes when pressed.
  */
-import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Download, File, FileText, Image as ImageIcon, Paperclip, Video, X } from "lucide-react";
+import { ArrowUpRight, Copy, Download, File, FileText, Image as ImageIcon, Paperclip, Video, X } from "lucide-react";
 import { DismissableLayerBranch } from "@radix-ui/react-dismissable-layer";
 import { Button } from "@/components/ui/button";
 import { ApiError, fetchFile } from "@/lib/api";
@@ -55,7 +55,7 @@ function useFileBytes(workspace: string, id: string): { loaded: LoadedFile | nul
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof ApiError || err instanceof Error ? err.message : "This file could not be loaded.");
+        setError(fileError(err));
       });
     return () => {
       cancelled = true;
@@ -72,6 +72,94 @@ function saveFile(url: string, filename: string): void {
   document.body.append(link);
   link.click();
   link.remove();
+}
+
+function fileError(err: unknown): string {
+  return err instanceof ApiError || err instanceof Error ? err.message : "This file could not be loaded.";
+}
+
+/**
+ * Download and Open beside an item. The bytes are fetched on the press, not
+ * while the list is on screen. Open keeps the new tab from the click itself,
+ * then points it at the file, so the browser does not treat it as a popup.
+ */
+function FileShortcuts({
+  workspace,
+  file,
+  readyUrl = null,
+}: {
+  workspace: string;
+  file: IssueAttachment;
+  readyUrl?: string | null;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  const act = (mode: "download" | "open") => (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (pending) return;
+    if (readyUrl) {
+      if (mode === "download") saveFile(readyUrl, file.filename);
+      else if (!window.open(readyUrl, "_blank")) setError("The browser blocked opening this file.");
+      return;
+    }
+    const popup = mode === "open" ? window.open("about:blank", "_blank") : null;
+    if (mode === "open" && !popup) {
+      setError("The browser blocked opening this file.");
+      return;
+    }
+    setPending(true);
+    setError(null);
+    void fetchFile({ ws: workspace, id: file.id })
+      .then((fetched) => {
+        const type = fetched.contentType.split(";")[0]!.trim();
+        const url = URL.createObjectURL(new Blob([fetched.bytes], { type }));
+        window.setTimeout(() => URL.revokeObjectURL(url), mode === "open" ? 60_000 : 1_000);
+        if (mode === "download") saveFile(url, file.filename);
+        else if (popup) popup.location.href = url;
+      })
+      .catch((err: unknown) => {
+        popup?.close();
+        setError(fileError(err));
+      })
+      .finally(() => setPending(false));
+  };
+
+  const buttonClass = "max-md:size-10 text-text-secondary";
+  return (
+    <span data-file-shortcuts="" className="flex shrink-0 items-center">
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="ghost"
+        className={buttonClass}
+        disabled={pending}
+        title="Download"
+        aria-label={`Download ${file.filename}`}
+        onClick={act("download")}
+      >
+        <Download aria-hidden />
+      </Button>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="ghost"
+        className={buttonClass}
+        disabled={pending}
+        title="Open"
+        aria-label={`Open ${file.filename}`}
+        onClick={act("open")}
+      >
+        <ArrowUpRight aria-hidden />
+      </Button>
+      {error ? (
+        <span role="alert" className="max-w-36 truncate text-caption text-destructive" title={error}>
+          {error}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 function FileMeta({ file }: { file: IssueAttachment }) {
@@ -167,7 +255,7 @@ function ImageThumb({
 }) {
   const { loaded, error } = useFileBytes(workspace, file.id);
   return (
-    <li className="shrink-0" data-file={file.id} data-file-kind="image">
+    <li className="flex shrink-0 flex-col items-center gap-1" data-file={file.id} data-file-kind="image">
       <button
         type="button"
         aria-label={file.filename}
@@ -185,46 +273,63 @@ function ImageThumb({
           <EvidenceBadge file={file} />
         </span>
       </button>
+      <FileShortcuts workspace={workspace} file={file} readyUrl={loaded?.url ?? null} />
       {error ? <Missing message={error} /> : null}
     </li>
   );
 }
 
+function FileIdentity({ file, kind }: { file: IssueAttachment; kind: ReturnType<typeof rowKind> }) {
+  return (
+    <>
+      <RowIcon kind={kind} />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-body text-foreground" title={file.filename}>
+            {file.filename}
+          </span>
+          <EvidenceBadge file={file} />
+        </span>
+        <FileMeta file={file} />
+      </span>
+    </>
+  );
+}
+
 function FileRow({
   file,
+  workspace,
   selected,
   onSelect,
 }: {
   file: IssueAttachment;
+  workspace: string;
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
   const kind = rowKind(fileGroupId(file.mediaType));
+  const opens = kind !== "other";
+  const rowClass = "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left max-md:min-h-10";
   return (
-    <li className="min-w-0" data-file={file.id}>
-      <button
-        type="button"
-        data-file-row=""
-        data-file-kind={kind}
-        aria-pressed={selected}
-        data-selected={selected ? "" : undefined}
-        onClick={() => onSelect(file.id)}
-        className={cn(
-          "focus-ring flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left max-md:min-h-10",
-          selected ? "bg-surface-sunken" : "hover:bg-surface-sunken/70",
-        )}
-      >
-        <RowIcon kind={kind} />
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-body text-foreground" title={file.filename}>
-              {file.filename}
-            </span>
-            <EvidenceBadge file={file} />
-          </span>
-          <FileMeta file={file} />
-        </span>
-      </button>
+    <li className="flex min-w-0 items-center" data-file={file.id}>
+      {opens ? (
+        <button
+          type="button"
+          data-file-row=""
+          data-file-kind={kind}
+          aria-pressed={selected}
+          data-selected={selected ? "" : undefined}
+          onClick={() => onSelect(file.id)}
+          className={cn("focus-ring", rowClass, selected ? "bg-surface-sunken" : "hover:bg-surface-sunken/70")}
+        >
+          <FileIdentity file={file} kind={kind} />
+        </button>
+      ) : (
+        <div data-file-row="" data-file-kind={kind} className={rowClass}>
+          <FileIdentity file={file} kind={kind} />
+        </div>
+      )}
+      <FileShortcuts workspace={workspace} file={file} />
     </li>
   );
 }
@@ -533,7 +638,12 @@ export function FilesTab({ detail, workspace }: TabProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const imagesAll = files.filter((file) => fileGroupId(file.mediaType) === "images");
   const openIndex = imagesAll.findIndex((file) => file.id === openId);
-  const selected = files.find((file) => file.id === selectedId && fileGroupId(file.mediaType) !== "images") ?? null;
+  const selected =
+    files.find((file) => {
+      if (file.id !== selectedId) return false;
+      const group = fileGroupId(file.mediaType);
+      return group !== "images" && group !== "other";
+    }) ?? null;
   if (files.length === 0) {
     return (
       <div data-files="">
@@ -581,6 +691,7 @@ export function FilesTab({ detail, workspace }: TabProps) {
             <FileRow
               key={file.id}
               file={file}
+              workspace={workspace}
               selected={file.id === selected?.id}
               onSelect={(id) => setSelectedId((current) => (current === id ? null : id))}
             />
