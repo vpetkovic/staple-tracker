@@ -69,6 +69,10 @@ npm's name-similarity rule does not block it (no `staplecli` exists).
    - **Repository:** `staple-tracker`
    - **Workflow filename:** `release.yml`
    - **Environment:** leave blank (the workflow does not use one).
+   - **Allowed actions:** tick **Allow npm publish**. A publisher created after
+     2026-09-03 allows only `npm stage publish` by default, and the workflow's
+     `npm publish` then fails with `E403 … OIDC permission denied for this action`
+     (<https://docs.npmjs.com/trusted-publishers/>).
 4. On the same page, under **Publishing access**, choose **Require two-factor
    authentication and disallow tokens**. OIDC publishing keeps working;
    token publishing stops.
@@ -120,6 +124,9 @@ manifest's `repository.url` to match this repository, which
   does not match `vpetkovic/staple-tracker` + `release.yml`, or npm was
   somehow < 11.5.1. Fix the publisher config; never work around it by adding a
   token secret.
+- **Publish fails with E403 "OIDC permission denied for this action":** the
+  trusted publisher does not allow `npm publish` (stage-only). Tick **Allow npm
+  publish** on it, then re-run the failed publish job; no re-tag is needed.
 - **Publish fails with ENEEDAUTH:** something wrote an `_authToken` line into
   `.npmrc` (for example `registry-url` on `actions/setup-node`), so npm never
   tried OIDC. Remove it.

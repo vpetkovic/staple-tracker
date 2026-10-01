@@ -9,13 +9,6 @@ Use this page to go from nothing to a repository your agents can work in: instal
 staple, set the repository up, open the web UI and file your first tickets. It takes
 about five minutes and needs Node 22.5 or later, nothing else.
 
-> [!NOTE]
-> `staple-cli` is not on npm until its first release. Until then, build the package
-> from a checkout with `npm run pack:package` (see
-> [CONTRIBUTING.md](../CONTRIBUTING.md)) and use
-> `npx -y file:/absolute/path/to/checkout/dist-package/staple-cli-<version>.tgz`
-> wherever these docs say `npx staple-cli` or `npx -y staple-cli`.
-
 ## 1. Set up the repository
 
 At the root of a git repository, run:

@@ -10,10 +10,6 @@ through staple's MCP server, the same package started with `mcp`, so there is no
 else to run. Set it up once per machine, then every repository with a `.staple/`
 folder works.
 
-> [!NOTE]
-> Until `staple-cli`'s first release on npm, replace `npx -y staple-cli` below with
-> the package you built, as [Install and first workspace](getting-started.md) describes.
-
 ## 1. Pick a name for the agent
 
 `STAPLE_AGENT` names the agent. Every claim, comment and document it writes is
