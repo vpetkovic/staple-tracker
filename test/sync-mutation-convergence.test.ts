@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { sha256Hex } from "../src/core/attachments.js";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { listConflicts, resolveConflict, type ResolutionChoice } from "../src/core/cloud/conflicts.js";
 import { acquireClaim, releaseClaim } from "../src/core/cloud/lease.js";
@@ -59,6 +60,9 @@ function publicMethods(store: StoreName): string[] {
   return [...names].sort();
 }
 
+/** A 1x1 PNG, the payload of the base64 evidence document an agent used to write. */
+const EVIDENCE_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
 /** Public methods that write nothing: reads, and the scope helper every mutation runs in. */
 const READS: Record<StoreName, readonly string[]> = {
   WorkspaceStore: [
@@ -81,6 +85,8 @@ const READS: Record<StoreName, readonly string[]> = {
     "planSummary", "comparePlans", "timingQuality", "calibration", "remainingForecasts", "forecast",
     // File metadata and bytes. Writes are attachFile and removeFile below.
     "listFiles", "readFile",
+    // A base64 evidence document, checked. Its write is adoptDocumentFile below.
+    "documentEvidence",
     // The autopilot run service. Its writes touch only `runs` and `run_tickets`, which are
     // machine-local and never journaled (`run-store.ts`); `test/run-store.test.ts` pins
     // that a run leaves no outbox row on a device that journals. `run continue`'s take
@@ -458,6 +464,17 @@ const SCENARIOS: readonly Scenario[] = [
       });
       w.ids["note"] = meta.id;
     },
+  },
+  {
+    method: "WorkspaceStore.adoptDocumentFile",
+    name: "adopt a base64 evidence document as a file",
+    prep: (w) => {
+      issue(w, "With evidence");
+      const png = Buffer.from(EVIDENCE_PNG_B64, "base64");
+      const body = `Media type: image/png\nSHA-256: ${sha256Hex(png)}\n\n![shot](data:image/png;base64,${EVIDENCE_PNG_B64})\n`;
+      w.a.store.putDocument(w.ids["With evidence"]!, "evidence-png", body, { author: "alice" });
+    },
+    run: (w) => void w.a.store.adoptDocumentFile(w.ids["With evidence"]!, "evidence-png", { author: "alice" }),
   },
   {
     method: "WorkspaceStore.removeFile",

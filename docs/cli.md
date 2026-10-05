@@ -91,6 +91,7 @@ Guides: [How an agent works a ticket](working-a-ticket.md),
 | `staple file ls <ref>` | List a ticket's files. Metadata only: type, size, and hash. |
 | `staple file get <id> --out <path>` | Write one file's bytes to a path. |
 | `staple file rm <id>` | Remove a file. |
+| `staple file adopt <ref> [<doc-key>]` | Turn a document that holds base64 evidence (a `Media type:` and `SHA-256:` header over base64) into a real file. Without a key it adopts every such document on the ticket. A document whose bytes do not match its SHA-256 or media type is flagged and not converted. The old revision keeps the bytes. The current document becomes a short note naming the file, unless the file is over 256 KB: its bytes stay on this machine, so the document keeps them for other machines. A second run creates nothing. `--revision N` adopts an older revision. |
 | `staple events [--since N]` | The workspace's event log. `--follow` streams new events; `--exec CMD` runs a command for each. |
 | `staple wait <ref> [--timeout S]` | Wait until a ticket is ready or finished. |
 

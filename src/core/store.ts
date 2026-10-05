@@ -20,6 +20,7 @@ import {
   sha256Hex,
   sniffMediaType,
 } from "./attachments.js";
+import { evidenceFilename, movedFileSha, movedToFileNote, parseEvidenceDocument, type ParsedEvidence } from "./legacy-evidence.js";
 import {
   blockersResolvedDedupKey,
   childrenCompleteDedupKey,
@@ -7388,6 +7389,86 @@ export class WorkspaceStore {
         actor: actor ?? null,
       });
       return meta;
+    });
+  }
+
+  /**
+   * A document an agent wrote as base64 evidence, checked (`legacy-evidence.ts`).
+   * Null when the document is not that shape. Reads only.
+   */
+  documentEvidence(
+    ref: string,
+    key: string,
+    revision?: number,
+  ): { document: { key: string; revision: number }; evidence: ParsedEvidence } | null {
+    const doc = this.getDocument(ref, key, revision);
+    const evidence = parseEvidenceDocument(doc.body);
+    return evidence ? { document: { key: doc.key, revision: doc.revision }, evidence } : null;
+  }
+
+  /**
+   * Turn a base64 evidence document into a real file on the same ticket.
+   *
+   * The old revision stays, so the document history still holds the bytes.
+   * When that revision is the current one and the file's bytes sync, the
+   * current body becomes a short note naming the file. A file too large to
+   * sync its bytes leaves the document as it is, so every machine can still
+   * see the evidence.
+   * A document whose bytes do not match the SHA-256 or the media type it
+   * claims is refused and nothing is written. Running it again is a no-op.
+   */
+  adoptDocumentFile(
+    ref: string,
+    key: string,
+    opts: { revision?: number; author?: string | null } = {},
+  ): { file: AttachmentMeta; created: boolean; document: { key: string; revision: number } } {
+    return this.journaled(() => {
+      const row = this.requireRow(ref);
+      if (opts.revision === undefined) {
+        const current = this.getDocument(row.id, key);
+        const sha = movedFileSha(current.body);
+        if (sha) {
+          const existing = listAttachments(this.db, row.id).find((file) => file.sha256 === sha);
+          if (existing) return { file: existing, created: false, document: { key: current.key, revision: current.revision } };
+        }
+      }
+      const found = this.documentEvidence(row.id, key, opts.revision);
+      if (!found) {
+        throw new StapleError(
+          "validation",
+          `Document "${key}" on ${row.identifier} is not base64 evidence (no Media type and SHA-256 header with a base64 body). Nothing was written.`,
+        );
+      }
+      const { evidence, document } = found;
+      if (evidence.status !== "verified" || evidence.bytes === null) {
+        throw new StapleError(
+          "validation",
+          `Document "${document.key}" revision ${document.revision} on ${row.identifier} was not converted: ${evidence.problem} Nothing was written.`,
+          { status: evidence.status, declaredSha256: evidence.declaredSha256, sha256: evidence.sha256 },
+        );
+      }
+      const existing = listAttachments(this.db, row.id).find((file) => file.sha256 === evidence.sha256);
+      const file =
+        existing ??
+        this.attachFile(row.id, {
+          filename: evidenceFilename(document.key, evidence.mediaType!),
+          bytes: evidence.bytes,
+          caption: `From document ${document.key}, revision ${document.revision}`,
+          author: opts.author ?? null,
+        });
+      const current = this.getDocument(row.id, key);
+      // A file whose bytes stay on this machine (over the inline cap) would leave
+      // other machines with neither the bytes nor the document, so the body stays.
+      if (current.revision === document.revision && file.byteSync === "inline") {
+        const note = movedToFileNote(file.filename, file.sha256);
+        if (current.body !== note) {
+          this.putDocument(row.id, key, note, {
+            author: opts.author ?? null,
+            changeSummary: `moved to file ${file.filename}`,
+          });
+        }
+      }
+      return { file, created: existing === undefined, document };
     });
   }
 

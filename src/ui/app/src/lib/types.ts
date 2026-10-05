@@ -684,6 +684,24 @@ export interface IssueDocument {
   title: string | null;
   author: string | null;
   createdAt: string;
+  /** Present when the body is base64 evidence (`core/legacy-evidence.ts`). */
+  evidence?: DocumentEvidence;
+}
+
+/**
+ * A document an agent wrote as a `Media type:` + `SHA-256:` header over base64.
+ * Only `verified` has bytes worth showing: `GET /api/document-file` refuses the rest.
+ */
+export interface DocumentEvidence {
+  status: "verified" | "sha256_mismatch" | "type_mismatch" | "undecodable";
+  declaredMediaType: string;
+  declaredSha256: string;
+  mediaType: string | null;
+  sha256: string | null;
+  size: number | null;
+  problem: string | null;
+  /** What the file downloads as: `evidence-before-png` holding a PNG is `evidence-before.png`. */
+  filename: string;
 }
 
 /**

@@ -593,6 +593,8 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       // The certified plan of named issues: `staple compare` / `compare_plans`. GET, a read.
       "/api/compare",
       "/api/document",
+      // The bytes inside a base64 evidence document, served only when its SHA-256 holds. GET-only.
+      "/api/document-file",
       "/api/events",
       // The bytes of one attachment. GET-only. The type is sniffed again on the way out.
       "/api/file",
