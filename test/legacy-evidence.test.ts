@@ -97,6 +97,18 @@ describe("parseEvidenceDocument", () => {
     expect(parseEvidenceDocument(`We record the SHA-256 and the media type of each file.\n`)).toBeNull();
   });
 
+  it("leaves a plan that records a hash beside a list of commits alone", () => {
+    const commits = "4abee3dd94c301d6bacda21c3bf7843475acf97e\n5f9085d74df6a2a6b217623276333c759bbe903f";
+    expect(parseEvidenceDocument(`# Plan\n\nMedia type: image/png\nSHA-256: ${PNG_SHA}\n\nCommits:\n\n${commits}\n`)).toBeNull();
+    expect(parseEvidenceDocument(`# Plan\n\nMedia type: image/png\nSHA-256: ${PNG_SHA}\n\n${PNG_SHA}\n`)).toBeNull();
+  });
+
+  it("ignores an inline data URI of another type or above the header", () => {
+    const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAA";
+    expect(parseEvidenceDocument(`Media type: image/png\nSHA-256: ${PNG_SHA}\n\n![logo](data:image/gif;base64,${gif})\n`)).toBeNull();
+    expect(parseEvidenceDocument(`![shot](data:image/png;base64,${PNG_B64})\n\nMedia type: image/png\nSHA-256: ${PNG_SHA}\n`)).toBeNull();
+  });
+
   it("names the download after the key and the real type", () => {
     expect(evidenceFilename("evidence-before-png", "image/png")).toBe("evidence-before.png");
     expect(evidenceFilename("screenshot", "image/jpeg")).toBe("screenshot.jpg");
@@ -146,6 +158,20 @@ describe("adoptDocumentFile", () => {
     const issue = store.createIssue({ title: "Evidence" });
     store.putDocument(issue.identifier, "plan", "# Plan\n");
     expect(() => store.adoptDocumentFile(issue.identifier, "plan")).toThrow(/not base64 evidence/);
+  });
+
+  it("keeps the document when the file is too large to sync its bytes", () => {
+    const store = memStore();
+    const issue = store.createIssue({ title: "Evidence" });
+    const big = Buffer.concat([png, Buffer.alloc(300 * 1024)]);
+    const body = aiiShape({ sha: sha256Hex(big), b64: big.toString("base64") });
+    store.putDocument(issue.identifier, "shot", body);
+    const adopted = store.adoptDocumentFile(issue.identifier, "shot");
+    expect(adopted.file).toMatchObject({ byteSync: "local", sha256: sha256Hex(big) });
+    expect(store.getDocument(issue.identifier, "shot").body).toBe(body);
+    expect(store.listDocumentRevisions(issue.identifier, "shot")).toHaveLength(1);
+    expect(store.adoptDocumentFile(issue.identifier, "shot").created).toBe(false);
+    expect(store.listFiles(issue.identifier)).toHaveLength(1);
   });
 
   it("adopts an older revision when asked", () => {
@@ -204,6 +230,32 @@ describe("staple file adopt", () => {
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain("not converted");
   });
+
+  it("reports a document over the file cap and still adopts the rest", () => {
+    const home = tempDir("adopt-cap-home");
+    const repo = tempDir("adopt-cap-repo");
+    dirs.push(home, repo);
+    const env = { STAPLE_HOME: home, STAPLE_AGENT: "ada" };
+    expect(runCliAt(repo, ["init"], env).status).toBe(0);
+    const ref = (JSON.parse(runCliAt(repo, ["new", "Evidence", "--json"], env).stdout) as { identifier: string }).identifier;
+    const huge = Buffer.concat([png, Buffer.alloc(33 * 1024 * 1024)]);
+    for (const [key, body] of [
+      ["a-huge-png", aiiShape({ sha: sha256Hex(huge), b64: huge.toString("base64") })],
+      ["b-shot-png", aiiShape()],
+    ] as const) {
+      const path = join(repo, `${key}.md`);
+      writeFileSync(path, body);
+      expect(runCliAt(repo, ["doc", ref, key, "--put", path], env).status).toBe(0);
+    }
+    const result = runCliAt(repo, ["file", "adopt", ref, "--json"], env);
+    expect(result.status, result.stderr).toBe(0);
+    const out = JSON.parse(result.stdout) as {
+      adopted: Array<{ document: { key: string } }>;
+      flagged: Array<{ key: string; status: string }>;
+    };
+    expect(out.adopted.map((a) => a.document.key)).toEqual(["b-shot-png"]);
+    expect(out.flagged).toEqual([expect.objectContaining({ key: "a-huge-png", status: "payload_too_large" })]);
+  }, 60_000);
 });
 
 describe("GET /api/document and /api/document-file", () => {

@@ -130,7 +130,8 @@ A caption or filename with `before` or `after` gets that label. Over MCP, use th
 file when the hash matches and flags it when the hash does not.
 `staple file adopt STA-42` turns each matching document into a real file. The
 old revision keeps the bytes. The current document becomes a short note naming
-the file. A second run creates nothing.
+the file, unless the file is over 256 KB: its bytes stay on this machine, so
+the document keeps them for other machines. A second run creates nothing.
 
 ## Continuity — resuming someone else's interrupted task
 

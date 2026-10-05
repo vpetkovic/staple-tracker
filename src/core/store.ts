@@ -7410,8 +7410,10 @@ export class WorkspaceStore {
    * Turn a base64 evidence document into a real file on the same ticket.
    *
    * The old revision stays, so the document history still holds the bytes.
-   * When that revision is the current one, the current body becomes a short
-   * note naming the file, and the screenshot is no longer the document.
+   * When that revision is the current one and the file's bytes sync, the
+   * current body becomes a short note naming the file. A file too large to
+   * sync its bytes leaves the document as it is, so every machine can still
+   * see the evidence.
    * A document whose bytes do not match the SHA-256 or the media type it
    * claims is refused and nothing is written. Running it again is a no-op.
    */
@@ -7455,7 +7457,9 @@ export class WorkspaceStore {
           author: opts.author ?? null,
         });
       const current = this.getDocument(row.id, key);
-      if (current.revision === document.revision) {
+      // A file whose bytes stay on this machine (over the inline cap) would leave
+      // other machines with neither the bytes nor the document, so the body stays.
+      if (current.revision === document.revision && file.byteSync === "inline") {
         const note = movedToFileNote(file.filename, file.sha256);
         if (current.body !== note) {
           this.putDocument(row.id, key, note, {

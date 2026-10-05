@@ -13,8 +13,9 @@
  * `adopt` turns a document an agent wrote as base64 evidence (a `Media type:`
  * and `SHA-256:` header over base64) into a real file. With no key it adopts
  * every such document on the ticket. A document whose bytes do not match is
- * reported and skipped. The current body becomes a note naming the file, and
- * the revision that held the bytes stays. A second run creates nothing.
+ * reported and skipped. The current body becomes a note naming the file
+ * (unless the file is too large to sync its bytes), and the revision that held
+ * the bytes stays. A second run creates nothing.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
@@ -166,7 +167,14 @@ function adopt(args: string[]): void {
       flagged.push({ key: doc.key, status: found.evidence.status, problem: found.evidence.problem });
       continue;
     }
-    adopted.push(store.adoptDocumentFile(ref, doc.key, { author: author() }));
+    // One document that cannot be adopted (over the size cap, say) is reported
+    // and the rest still go; each adopt is its own transaction.
+    try {
+      adopted.push(store.adoptDocumentFile(ref, doc.key, { author: author() }));
+    } catch (err) {
+      if (!(err instanceof StapleError)) throw err;
+      flagged.push({ key: doc.key, status: err.code, problem: err.message });
+    }
   }
   if (values.json) {
     console.log(JSON.stringify({ adopted, flagged }));

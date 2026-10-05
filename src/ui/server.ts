@@ -3982,11 +3982,12 @@ export function startUiServer(options: UiOptions): UiHandle {
         const ref = url.searchParams.get("ref")?.trim() ?? "";
         const key = url.searchParams.get("key")?.trim() ?? "";
         if (ref === "" || key === "") throw new StapleError("validation", "A document file needs a ref and a key.");
-        const found = handle.store.documentEvidence(
-          ref,
-          key,
-          url.searchParams.get("revision") ? Number(url.searchParams.get("revision")) : undefined,
-        );
+        const revisionParam = url.searchParams.get("revision");
+        const revision = revisionParam ? Number(revisionParam) : undefined;
+        if (revision !== undefined && (!Number.isInteger(revision) || revision < 1)) {
+          throw new StapleError("validation", "revision is a revision number.");
+        }
+        const found = handle.store.documentEvidence(ref, key, revision);
         if (!found) throw new StapleError("not_found", `Document "${key}" is not base64 evidence.`);
         const { evidence, document } = found;
         if (evidence.status !== "verified" || evidence.bytes === null) {

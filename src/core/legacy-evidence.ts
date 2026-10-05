@@ -40,6 +40,7 @@ const MEDIA_TYPE_LINE = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?Media[ \t]+type(?::(?:\*
 const SHA_LINE = /^[ \t]*(?:[-*][ \t]+)?(?:\*\*)?SHA-?256(?::(?:\*\*)?|(?:\*\*)?:)[ \t]*`?([0-9a-fA-F]{64})`?[ \t]*$/im;
 const DATA_URI = /data:([a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*);base64,([A-Za-z0-9+/=\s]+)/i;
 const BASE64_LINE = /^[A-Za-z0-9+/]+={0,2}$/;
+const HEX_ONLY = /^[0-9a-fA-F]+$/;
 /** A payload shorter than this is a mention, not a file. */
 const MIN_PAYLOAD_CHARS = 64;
 
@@ -50,10 +51,10 @@ export function parseEvidenceDocument(body: string): ParsedEvidence | null {
   const mediaLine = MEDIA_TYPE_LINE.exec(body);
   const shaLine = SHA_LINE.exec(body);
   if (!mediaLine || !shaLine) return null;
-  const payload = findPayload(body, Math.max(mediaLine.index, shaLine.index));
+  const declaredMediaType = mediaLine[1]!.toLowerCase();
+  const payload = findPayload(body, Math.max(mediaLine.index, shaLine.index), declaredMediaType);
   if (payload === null) return null;
 
-  const declaredMediaType = mediaLine[1]!.toLowerCase();
   const declaredSha256 = shaLine[1]!.toLowerCase();
   const bytes = decodeBase64(payload);
   if (bytes === null) {
@@ -88,21 +89,24 @@ export function summarizeEvidence(parsed: ParsedEvidence): EvidenceSummary {
 }
 
 /**
- * The base64 after the header: the first data URI, or else the longest run of
- * consecutive base64-only lines (a fence around it is fine).
+ * The base64 after the header: the first data URI of the declared type, or
+ * else the longest run of consecutive base64-only lines (a fence around it is
+ * fine). A run of hex only is hashes (a SHA-256, a list of commits), never a
+ * payload, so a plan that records a hash beside a `Media type:` line stays a plan.
  */
-function findPayload(body: string, headerAt: number): string | null {
-  const uri = DATA_URI.exec(body);
-  if (uri) {
+function findPayload(body: string, headerAt: number, declaredMediaType: string): string | null {
+  const after = body.slice(headerAt);
+  const uri = DATA_URI.exec(after);
+  if (uri && uri[1]!.toLowerCase() === declaredMediaType) {
     const raw = uri[2]!.replace(/\s+/g, "");
     return raw.length >= MIN_PAYLOAD_CHARS ? raw : null;
   }
-  const lines = body.slice(headerAt).split(/\r?\n/);
+  const lines = after.split(/\r?\n/);
   let best = "";
   let run: string[] = [];
   const close = () => {
     const joined = run.join("");
-    if (joined.length > best.length) best = joined;
+    if (joined.length > best.length && !HEX_ONLY.test(joined)) best = joined;
     run = [];
   };
   for (const line of lines) {
