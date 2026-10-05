@@ -705,8 +705,22 @@ export const getDocument = (params: { ws?: string; ref: string; key: string; rev
  * The token rides the header, the same way every other call does, so a file
  * URL never carries a credential.
  */
-export async function fetchFile(params: { ws?: string; id: string }): Promise<{ bytes: ArrayBuffer; contentType: string }> {
-  const res = await fetch(`/api/file${qs({ ws: params.ws, id: params.id })}`, {
+export function fetchFile(params: { ws?: string; id: string }): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  return fetchBytes(`/api/file${qs({ ws: params.ws, id: params.id })}`);
+}
+
+/** The bytes inside a verified base64 evidence document. Refused for any other. */
+export function fetchDocumentFile(params: {
+  ws?: string;
+  ref: string;
+  key: string;
+  revision?: number;
+}): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  return fetchBytes(`/api/document-file${qs(params)}`);
+}
+
+async function fetchBytes(path: string): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const res = await fetch(path, {
     headers: { "x-staple-token": token },
   });
   if (res.status === 401 || res.status === 403) {

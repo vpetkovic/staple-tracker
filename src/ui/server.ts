@@ -34,6 +34,7 @@ import type { QueueVerb } from "../core/queue-store.js";
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
 import { contentDisposition, servedFileHeaders, sniffMediaType } from "../core/attachments.js";
+import { evidenceFilename, parseEvidenceDocument, summarizeEvidence } from "../core/legacy-evidence.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { MILESTONE_KIND, assertNotReservedActor } from "../core/milestones.js";
 import type { CriterionVerdict } from "../core/milestone-goal.js";
@@ -3953,7 +3954,58 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.searchParams.get("key")!,
           url.searchParams.get("revision") ? Number(url.searchParams.get("revision")) : undefined,
         );
-        json(res, 200, doc);
+        const evidence = parseEvidenceDocument(doc.body);
+        json(
+          res,
+          200,
+          evidence
+            ? {
+                ...doc,
+                evidence: {
+                  ...summarizeEvidence(evidence),
+                  filename: evidenceFilename(doc.key, evidence.mediaType ?? evidence.declaredMediaType),
+                },
+              }
+            : doc,
+        );
+        return;
+      }
+
+      /**
+       * The bytes inside a base64 evidence document (`core/legacy-evidence.ts`),
+       * served the way `/api/file` serves a file. Only a document whose bytes
+       * match the SHA-256 and the media type it claims is served; any other is
+       * refused, so a tampered or mislabelled one never shows as valid evidence.
+       */
+      if (url.pathname === "/api/document-file") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const ref = url.searchParams.get("ref")?.trim() ?? "";
+        const key = url.searchParams.get("key")?.trim() ?? "";
+        if (ref === "" || key === "") throw new StapleError("validation", "A document file needs a ref and a key.");
+        const found = handle.store.documentEvidence(
+          ref,
+          key,
+          url.searchParams.get("revision") ? Number(url.searchParams.get("revision")) : undefined,
+        );
+        if (!found) throw new StapleError("not_found", `Document "${key}" is not base64 evidence.`);
+        const { evidence, document } = found;
+        if (evidence.status !== "verified" || evidence.bytes === null) {
+          throw new StapleError("validation", evidence.problem ?? "This document's bytes do not match what it claims.", {
+            status: evidence.status,
+          });
+        }
+        const served = servedFileHeaders(sniffMediaType(evidence.bytes));
+        res.writeHead(200, {
+          "content-type": served.contentType,
+          "content-length": String(evidence.bytes.length),
+          "content-disposition": contentDisposition(served.disposition, evidenceFilename(document.key, evidence.mediaType!)),
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
+          "referrer-policy": "no-referrer",
+          "cache-control": "private, no-store",
+          "cross-origin-resource-policy": "same-origin",
+        });
+        res.end(evidence.bytes);
         return;
       }
 

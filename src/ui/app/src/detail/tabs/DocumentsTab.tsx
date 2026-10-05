@@ -14,6 +14,10 @@
  * document while you were reading it, the store answers revision_conflict and this tab
  * says so instead of quietly overwriting the agent.
  *
+ * A document an agent wrote as base64 evidence (a `Media type:` and `SHA-256:` header
+ * over base64) reads as the file it holds, or as a flag when the bytes do not match
+ * what it claims: ./EvidenceDocument.tsx.
+ *
  * Diffing itself lives in ../diff.ts (pure) and ../DocumentDiff.tsx (presentation);
  * this file is only the fetch plumbing and the mode switch.
  */
@@ -29,6 +33,7 @@ import { diffBodies } from "../diff";
 import { DocumentDiff } from "../DocumentDiff";
 import { EmptyState, PersonChip, RelativeTime, SectionHeading, cn, personActor } from "../parts";
 import { Dot } from "./Dot";
+import { EvidenceDocument } from "./EvidenceDocument";
 import { restoreWrite } from "./writes";
 import { takePendingDocumentKey, type TabProps } from "./registry";
 import "./tabs.css";
@@ -367,7 +372,17 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
                   <RelativeTime iso={body.data.createdAt} inSentence />
                 </header>
               ) : null}
-              {body.data.body.trim() ? (
+              {body.data.evidence ? (
+                <EvidenceDocument
+                  workspace={workspace}
+                  issueRef={ref}
+                  docKey={body.data.key}
+                  revision={body.data.revision}
+                  evidence={body.data.evidence}
+                  name={meta ? documentName(meta.key, meta.title) : body.data.key}
+                  body={body.data.body}
+                />
+              ) : body.data.body.trim() ? (
                 <Markdown text={body.data.body} className="tab-prose text-reading text-foreground" />
               ) : (
                 <p className="text-reading text-text-secondary">This revision is empty.</p>

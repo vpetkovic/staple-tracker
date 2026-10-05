@@ -322,6 +322,29 @@ staple comment ${ref} "Branch pointer: worktree /path/to/wt on branch feat/${pre
 Without it, the next agent has a perfect description of the work and no idea
 which of six worktrees contains it.
 
+## Evidence is a file, not a document
+
+Screenshots, screen recordings, PDFs and logs that prove the work are **files**.
+Attach the file itself:
+
+\`\`\`bash
+staple file attach ${ref} after.png --caption "after: settings page saved"
+staple file attach ${ref} run.log --caption "test run, 0 failed"
+\`\`\`
+
+The media type comes from the bytes and the SHA-256 is recorded, so task details
+shows an image as an image, plays a video, opens a PDF and renders a log.
+A caption or filename with \`before\` or \`after\` gets that label. Over MCP, use the
+\`attach_file\` tool.
+
+**Never write a binary into a document as base64.** A document is for writing
+(a plan, a worklog, notes). An older ticket may still hold evidence written as a
+\`Media type:\` and \`SHA-256:\` header over base64. Task details shows it as the
+file when the hash matches and flags it when the hash does not.
+\`staple file adopt ${ref}\` turns each matching document into a real file. The
+old revision keeps the bytes. The current document becomes a short note naming
+the file. A second run creates nothing.
+
 ## Approval gates — when the next move is a human's
 
 A **gate** parks a parent on a named person. The parent goes
