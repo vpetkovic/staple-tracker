@@ -3869,11 +3869,21 @@ const queueLanesShape = {
       z.object({
         identifier: z.string().describe("The ticket that carries the gate"),
         title: z.string(),
+        state: z
+          .enum(["pending", "changes_requested"])
+          .nullable()
+          .describe("pending waits on the owner; changes_requested on the rework asked for; null when no gate is recorded"),
         owner: z.string().nullable(),
         requestedBy: z.string().nullable(),
         requestedAt: z.string().nullable(),
-        holds: z.array(z.object(queueLaneRowShape)).describe("The queue rows this gate holds, in effective order"),
-        approve: z.boolean().describe("The gate is pending: approve_task on `identifier` releases it"),
+        resolvedBy: z.string().nullable().describe("Who sent it back, while changes_requested"),
+        behind: z
+          .object({ identifier: z.string(), owner: z.string() })
+          .nullable()
+          .describe("An outer gate this gate's own ticket waits behind: approving this one moves its rows there"),
+        holds: z.array(z.object(queueLaneRowShape)).describe("The queue rows this gate holds, in effective order; at most 20"),
+        heldTotal: z.number().int().describe("How many rows it holds in all"),
+        approve: z.boolean().describe("The gate is active (pending or changes_requested): approve_task on `identifier` releases it"),
       }),
     )
     .describe("Gated rows, grouped by the gate that holds them"),
@@ -3893,8 +3903,15 @@ const queueLanesShape = {
   blocked: z.array(z.object({ identifier: z.string(), title: z.string(), blockers: z.array(z.string()) })),
   unavailable: z.array(z.object({ identifier: z.string(), title: z.string(), status: z.string() })),
   totals: z
-    .object({ ready: z.number().int(), gated: z.number().int(), inProgress: z.number().int(), blocked: z.number().int(), unavailable: z.number().int() })
-    .describe("Each lane's full length; a lane carries at most 20 entries"),
+    .object({
+      ready: z.number().int(),
+      gated: z.number().int(),
+      gates: z.number().int(),
+      inProgress: z.number().int(),
+      blocked: z.number().int(),
+      unavailable: z.number().int(),
+    })
+    .describe("Each lane's full length in tickets (gates: how many gates hold the gated ones); a lane carries at most 20 entries"),
   asOf: z.string(),
 };
 type _QueueLanesShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof queueLanesShape>>, QueueLanes>>;

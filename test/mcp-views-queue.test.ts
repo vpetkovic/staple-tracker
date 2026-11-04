@@ -88,14 +88,14 @@ const refs = {
   scopeChild: "",
 };
 
-async function connect(options: { apps: boolean }): Promise<Client> {
+async function connect(options: { apps: boolean; db?: string }): Promise<Client> {
   // Built from scratch: a STAPLE_DB or STAPLE_WS from the shell must never reach this server.
   const { STAPLE_DB: _db, STAPLE_WS: _ws, ...inherited } = process.env as Record<string, string>;
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [join(testPackageDir(), "staple.mjs"), "mcp"],
     cwd: home,
-    env: { ...inherited, STAPLE_DB: dbPath, STAPLE_AGENT: AGENT, NODE_NO_WARNINGS: "1" },
+    env: { ...inherited, STAPLE_DB: options.db ?? dbPath, STAPLE_AGENT: AGENT, NODE_NO_WARNINGS: "1" },
     stderr: "pipe",
   });
   const client = new Client(
@@ -250,9 +250,13 @@ describe("the queue view over MCP", () => {
           identifier: refs.gate,
           title: "Gift cards",
           owner: "reviewer",
+          state: "pending",
           requestedBy: "pat",
+          resolvedBy: null,
+          behind: null,
           approve: true,
           holds: refs.gateChildren.map((identifier) => ({ identifier, planPosition: 2, path: [refs.gate] })),
+          heldTotal: 2,
         },
       ],
       inProgress: [
@@ -267,7 +271,7 @@ describe("the queue view over MCP", () => {
         { identifier: refs.otherWorking, heldBy: "rio", milestoneCount: 0, lastMilestone: null, timing: { estimatedSeconds: 4 * 3600 } },
       ],
       blocked: [{ identifier: refs.blocked, blockers: [refs.first] }],
-      totals: { ready: 4, gated: 1, inProgress: 2, blocked: 1, unavailable: 0 },
+      totals: { ready: 4, gated: 2, gates: 1, inProgress: 2, blocked: 1, unavailable: 0 },
     });
     const next = (await client.callTool({ name: "next_task", arguments: {} })) as CallToolResult;
     expect((next.structuredContent as { next: { identifier: string } }).next.identifier).toBe(shown.ready[0]!.identifier);
@@ -289,7 +293,7 @@ describe("the queue view over MCP", () => {
     const client = await connect({ apps: false });
     const shown = text((await client.callTool({ name: "show_queue", arguments: {} })) as CallToolResult);
     const lines = shown.split("\n");
-    expect(lines[0]).toBe("Queue (advisory) · 4 ready · 1 gated · 2 in progress · 1 blocked");
+    expect(lines[0]).toBe("Queue (advisory) · 4 ready · 2 gated · 2 in progress · 1 blocked");
     expect(lines[1]).toBe(`Next: ${refs.first} Show the order summary on phones`);
     expect(lines).toContain("Ready, in pickup order:");
     expect(lines).toContain(`  1. ${refs.first} Show the order summary on phones`);
@@ -328,9 +332,70 @@ describe("the queue view over MCP", () => {
       const strictText = text((await client.callTool({ name: "show_queue", arguments: {} })) as CallToolResult);
       expect(strictText).toContain(`Strict queue: checkout takes ${refs.first} now; every other ready row waits for it.`);
       expect(strictText).toContain(`  2. ${refs.second} Add saved cards to checkout (after ${refs.first})`);
+      expect(strictText.split("\n").at(-1)).toBe(`To take one, say "Work ${refs.first}".`);
+      // Scoped to work the plan does not reach first, nothing in view can be taken: the text
+      // sends the person to the row checkout accepts, not to the scope's head.
+      const scopedText = text((await client.callTool({ name: "show_queue", arguments: { scope: refs.scope } })) as CallToolResult);
+      expect(scopedText).toContain(`Strict queue: checkout takes ${refs.first} Show the order summary on phones first, outside this view`);
+      expect(scopedText.split("\n").at(-1)).toBe(`Take ${refs.first} first: say "Work ${refs.first}".`);
     } finally {
       withStore((store) => store.setSetting("queue.policy", "advisory", "pat"));
     }
+  });
+});
+
+describe("gates in the lanes", () => {
+  /** A second workspace: a gate holding more rows than a lane carries, a nested gate, a sent-back gate. */
+  const wide = { db: "", wideGate: "", outer: "", inner: "", innerChild: "", sentBack: "" };
+
+  beforeAll(() => {
+    const ws = initWorkspace({ global: true, slug: "gates" });
+    wide.db = ws.dbPath;
+    const s = ws.store;
+    const epic = s.createIssue({ title: "Launch week", kind: "epic" });
+    for (let i = 1; i <= 23; i++) s.createIssue({ title: `Launch step ${i}`, parent: epic.identifier, status: "todo" });
+    s.gateIssue(epic.identifier, { owner: "reviewer" }, "pat");
+    wide.wideGate = epic.identifier;
+    const outer = s.createIssue({ title: "Payments revamp", kind: "epic" });
+    const inner = s.createIssue({ title: "Card vault", kind: "epic", parent: outer.identifier });
+    wide.innerChild = s.createIssue({ title: "Tokenise cards", parent: inner.identifier, status: "todo" }).identifier;
+    s.gateIssue(inner.identifier, { owner: "vault-owner" }, "pat");
+    s.gateIssue(outer.identifier, { owner: "lead" }, "pat");
+    wide.outer = outer.identifier;
+    wide.inner = inner.identifier;
+    const sentBack = s.createIssue({ title: "Referral codes", kind: "epic" });
+    s.createIssue({ title: "Share a referral link", parent: sentBack.identifier, status: "todo" });
+    s.gateIssue(sentBack.identifier, { owner: "reviewer" }, "pat");
+    s.requestChanges(sentBack.identifier, { comment: "Split the payout out first." }, "reviewer");
+    wide.sentBack = sentBack.identifier;
+    ws.store.db.close();
+  });
+
+  it("caps a gate's rows at twenty and says how many it holds, counts tickets not gates, and approves a sent-back gate", async () => {
+    const client = await connect({ apps: true, db: wide.db });
+    const shown = await lanes(client);
+    const big = shown.gated.find((group) => group.identifier === wide.wideGate)!;
+    expect(big.holds).toHaveLength(20);
+    expect(big.heldTotal).toBe(23);
+    const sentBack = shown.gated.find((group) => group.identifier === wide.sentBack)!;
+    expect(sentBack).toMatchObject({ state: "changes_requested", resolvedBy: "reviewer", owner: "reviewer", approve: true, heldTotal: 1 });
+    expect(shown.totals.gated).toBe(shown.gated.reduce((sum, group) => sum + group.heldTotal, 0));
+    expect(shown.totals.gates).toBe(shown.gated.length);
+    const shownText = text((await client.callTool({ name: "show_queue", arguments: {} })) as CallToolResult);
+    expect(shownText).toMatch(new RegExp(`  ${wide.wideGate} Launch week: waiting on reviewer; holds [A-Z]+-\\d+(, [A-Z]+-\\d+){19} and 3 more\\.`));
+    expect(shownText).toContain(`  ${wide.sentBack} Referral codes: changes requested by reviewer, owner reviewer;`);
+  });
+
+  it("says an inner gate waits on the outer one after it is approved", async () => {
+    const client = await connect({ apps: true, db: wide.db });
+    const shown = await lanes(client);
+    // The resolver reports the NEAREST gate a row is queued behind: the inner one.
+    const inner = shown.gated.find((group) => group.identifier === wide.inner)!;
+    expect(inner.holds.map((row) => row.identifier)).toEqual([wide.innerChild]);
+    expect(inner.behind).toEqual({ identifier: wide.outer, owner: "lead" });
+    expect(text((await client.callTool({ name: "show_queue", arguments: {} })) as CallToolResult)).toContain(
+      `  ${wide.inner} Card vault: waiting on vault-owner; holds ${wide.innerChild}; then waits on ${wide.outer} (lead). Approve with approve_task.`,
+    );
   });
 });
 
@@ -386,6 +451,10 @@ describe.skipIf(Boolean(reason))("the queue view in a host", () => {
       await expect.poll(() => view.frame.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe("dark");
       expect(await view.frame.locator(`[data-row="${refs.second}"] [data-sent]`).count()).toBe(1);
       expect(withStore((store) => store.getIssue(refs.second).checkoutAgent)).toBeNull();
+      // Nobody took it, so a fresh read offers Take again instead of a stale Sent.
+      await view.frame.locator('[data-action="refresh"]').click();
+      await view.frame.locator(`[data-row="${refs.second}"] [data-action="take"]`).waitFor();
+      expect(await view.frame.locator("[data-sent]").count()).toBe(0);
     } finally {
       await view.context.close();
     }

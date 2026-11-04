@@ -512,8 +512,9 @@ url}`. Its text is the status, the time and the milestones as prose.
 `show_queue {scope?, ws?}` answers `{queue}`, built by `queueLanes` in `src/mcp-queue.ts`:
 `{workspace, revision, scope: {identifier, title, kind} | null, policy, expected:
 {identifier, title, position} | null, next, ready: [{identifier, title, position,
-planPosition, path, takeable}], gated: [{identifier, title, owner, requestedBy,
-requestedAt, holds: [row], approve}], inProgress: [{...row, heldBy, idleSeconds, attempt:
+planPosition, path, takeable}], gated: [{identifier, title, state, owner, requestedBy,
+requestedAt, resolvedBy, behind, holds: [row], heldTotal, approve}], inProgress: [{...row,
+heldBy, idleSeconds, attempt:
 {ordinal, state, startedAt} | null, milestoneCount, lastMilestone, timing}], blocked:
 [{identifier, title, blockers}], unavailable: [{identifier, title, status}], totals,
 asOf}`. Its text lists the lanes as prose.
@@ -524,7 +525,13 @@ asOf}`. Its text lists the lanes as prose.
   gate that holds it (`detail.queuedBy`; a ticket awaiting approval itself is its own
   group, with the owner from its gate), `inProgress` every `claimed` row, `blocked` and
   `unavailable` the rest. Resolved rows never reach the resolver's answer. Each lane
-  carries at most 20 entries; `totals` has the full counts.
+  carries at most 20 entries, and a gate group at most 20 held rows (`heldTotal` counts
+  them all); `totals` has the full counts in tickets, with `gates` the number of groups.
+- A gate group's `state` is `pending` (waiting on its owner) or `changes_requested` (sent
+  back; `resolvedBy` says by whom). Approve is offered for both, since `approve_task`
+  ends either. The resolver names the NEAREST gate a row waits behind; `behind` is the
+  outer gate that gate's own ticket waits behind, if any, so approving the inner one moves
+  its rows under the outer one rather than into Ready.
 - `inProgress` reads each row's open attempt: its milestones (`attemptTransitions`, kind
   `attempt_milestone`), the newest label, and the card's `timing`.
 - `policy` is `queue.policy`. Under `strict`, `expected` is the first eligible PLAN row of
@@ -536,7 +543,9 @@ asOf}`. Its text lists the lanes as prose.
   nothing itself; the agent that reads the message takes the ticket. Approve on a gated
   group calls `approve_task {ref: <gate>, comment: "Approved from the queue in the
   thread."}` through the host with no `actor` (the server's `STAPLE_AGENT`), then reads
-  `show_queue` again with the call's `scope` and `ws`. Refresh reads it again on a click;
-  the view does not poll.
+  `show_queue` again with the call's `scope` and `ws`. Refresh reads it again on a click,
+  and stays usable while a Take or an Approve waits on the host; the view does not poll.
+  A Sent mark lasts until the lanes are read again: a ticket nobody took offers Take again.
 - `inbox` and `list_queue` declare the queue view too. Their payloads are not lanes, so
-  the view reads `show_queue` through the host, passing on the call's `ws`.
+  the view reads `show_queue` through the host, passing on the call's `ws` only: an
+  `inbox {assignee}` call still draws the whole queue. A failed read offers Try again.

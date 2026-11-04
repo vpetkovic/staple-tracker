@@ -52,13 +52,25 @@ export interface QueueGateGroup {
   /** The ticket that carries the gate. */
   identifier: string;
   title: string;
-  /** Who must approve; null when the ticket is awaiting approval with no gate recorded. */
+  /**
+   * The gate's state: `pending` waits on its owner, `changes_requested` on the rework a
+   * person asked for (an approval still ends it). Null when the ticket is awaiting approval
+   * with no gate recorded.
+   */
+  state: "pending" | "changes_requested" | null;
+  /** Who must approve; null when no gate is recorded. */
   owner: string | null;
   requestedBy: string | null;
   requestedAt: string | null;
-  /** The queue rows this gate holds, in effective order. A ticket that is its own gate holds itself. */
+  /** Who sent it back, while `changes_requested`. */
+  resolvedBy: string | null;
+  /** An outer gate this gate's own ticket waits behind: approving this one moves its rows there. */
+  behind: { identifier: string; owner: string } | null;
+  /** The queue rows this gate holds, in effective order (at most {@link LANE_LIMIT}). A ticket that is its own gate holds itself. */
   holds: QueueLaneRow[];
-  /** Approve is offered while the gate is pending. */
+  /** How many rows it holds in all. */
+  heldTotal: number;
+  /** Approve is offered while the gate is active (pending, or sent back): approve_task accepts both. */
   approve: boolean;
 }
 
@@ -94,8 +106,11 @@ export interface QueueLanes {
   blocked: Array<{ identifier: string; title: string; blockers: string[] }>;
   /** Rows in a status checkout does not take (say, in review). */
   unavailable: Array<{ identifier: string; title: string; status: string }>;
-  /** Each lane's full length; a lane carries at most {@link LANE_LIMIT} rows. */
-  totals: { ready: number; gated: number; inProgress: number; blocked: number; unavailable: number };
+  /**
+   * Each lane's full length, in tickets; a lane carries at most {@link LANE_LIMIT} rows.
+   * `gated` counts the held tickets, `gates` the gates holding them.
+   */
+  totals: { ready: number; gated: number; gates: number; inProgress: number; blocked: number; unavailable: number };
   asOf: string;
 }
 
@@ -134,25 +149,33 @@ export function queueLanes(store: WorkspaceStore, options: { scope?: string; act
   }));
 
   const groups = new Map<string, QueueGateGroup>();
+  let gatedRows = 0;
   for (const row of answer.rows) {
     if (row.eligibility !== "gated") continue;
+    gatedRows += 1;
     const by = (row.detail?.queuedBy ?? null) as { identifier: string; owner: string } | null;
     const holder = by?.identifier ?? row.identifier;
     let group = groups.get(holder);
     if (!group) {
       const gate = store.gate(holder);
+      const state = gate?.state === "pending" || gate?.state === "changes_requested" ? gate.state : null;
       group = {
         identifier: holder,
         title: by === null ? row.title : store.getIssue(holder).title,
+        state,
         owner: gate?.owner ?? by?.owner ?? null,
         requestedBy: gate?.requestedBy ?? null,
         requestedAt: gate?.requestedAt ?? null,
+        resolvedBy: state === "changes_requested" ? (gate?.resolvedBy ?? null) : null,
+        behind: store.queuedBy(holder),
         holds: [],
-        approve: gate?.state === "pending",
+        heldTotal: 0,
+        approve: state !== null,
       };
       groups.set(holder, group);
     }
-    group.holds.push(laneRow(row));
+    group.heldTotal += 1;
+    if (group.holds.length < LANE_LIMIT) group.holds.push(laneRow(row));
   }
   const gated = [...groups.values()];
 
@@ -201,7 +224,8 @@ export function queueLanes(store: WorkspaceStore, options: { scope?: string; act
     unavailable: unavailableRows.slice(0, LANE_LIMIT).map((row) => ({ identifier: row.identifier, title: row.title, status: row.status })),
     totals: {
       ready: eligible.length,
-      gated: gated.length,
+      gated: gatedRows,
+      gates: gated.length,
       inProgress: claimed.length,
       blocked: blockedRows.length,
       unavailable: unavailableRows.length,
@@ -213,6 +237,12 @@ export function queueLanes(store: WorkspaceStore, options: { scope?: string; act
 /** The message Take posts into the thread: what a person types to hand a ticket to the agent. */
 export function takeMessage(identifier: string): string {
   return `Work ${identifier}`;
+}
+
+/** Who a gate waits on, in words. */
+export function gateWords(group: QueueGateGroup): string {
+  if (group.state === "changes_requested") return `changes requested${group.resolvedBy ? ` by ${group.resolvedBy}` : ""}, owner ${group.owner ?? "unknown"}`;
+  return group.owner ? `waiting on ${group.owner}` : "awaiting approval";
 }
 
 function more(shown: number, total: number): string | null {
@@ -233,8 +263,13 @@ export function queueText(lanes: QueueLanes): string {
   ];
   const head = lanes.ready[0];
   lines.push(head ? `Next: ${head.identifier} ${head.title}` : "Next: nothing is ready.");
+  const shownExpected = lanes.expected !== null && lanes.ready.some((row) => row.identifier === lanes.expected!.identifier);
   if (lanes.policy === "strict" && lanes.expected) {
-    lines.push(`Strict queue: checkout takes ${lanes.expected.identifier} now; every other ready row waits for it.`);
+    lines.push(
+      shownExpected
+        ? `Strict queue: checkout takes ${lanes.expected.identifier} now; every other ready row waits for it.`
+        : `Strict queue: checkout takes ${lanes.expected.identifier} ${lanes.expected.title} first, outside this view; nothing here can be taken before it.`,
+    );
   }
   if (lanes.ready.length > 0) {
     lines.push("Ready, in pickup order:");
@@ -248,11 +283,12 @@ export function queueText(lanes: QueueLanes): string {
     lines.push("Gated, waiting on a person:");
     for (const group of lanes.gated) {
       const held = group.holds.map((row) => row.identifier).filter((id) => id !== group.identifier);
-      lines.push(
-        `  ${group.identifier} ${group.title}: ${group.owner ? `waiting on ${group.owner}` : "awaiting approval"}${held.length > 0 ? `; holds ${held.join(", ")}` : ""}.${group.approve ? " Approve with approve_task." : ""}`,
-      );
+      const others = group.heldTotal - group.holds.length;
+      const holds = held.length > 0 ? `; holds ${held.join(", ")}${others > 0 ? ` and ${others} more` : ""}` : "";
+      const behind = group.behind ? `; then waits on ${group.behind.identifier} (${group.behind.owner})` : "";
+      lines.push(`  ${group.identifier} ${group.title}: ${gateWords(group)}${holds}${behind}.${group.approve ? " Approve with approve_task." : ""}`);
     }
-    const tail = more(lanes.gated.length, totals.gated);
+    const tail = more(lanes.gated.length, totals.gates);
     if (tail) lines.push(tail);
   }
   if (lanes.inProgress.length > 0) {
@@ -277,6 +313,8 @@ export function queueText(lanes: QueueLanes): string {
   if (lanes.unavailable.length > 0) {
     lines.push(`Not takeable now: ${lanes.unavailable.map((row) => `${row.identifier} (${row.status.replace(/_/g, " ")})`).join(", ")}.`);
   }
-  if (head) lines.push(`To take one, say "${takeMessage(head.identifier)}".`);
+  const takeable = lanes.ready.find((row) => row.takeable);
+  if (takeable) lines.push(`To take one, say "${takeMessage(takeable.identifier)}".`);
+  else if (lanes.expected && head) lines.push(`Take ${lanes.expected.identifier} first: say "${takeMessage(lanes.expected.identifier)}".`);
   return lines.join("\n");
 }

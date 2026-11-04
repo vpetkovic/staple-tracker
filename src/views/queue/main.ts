@@ -33,10 +33,14 @@ interface ReadyRow extends LaneRow {
 interface GateGroup {
   identifier: string;
   title: string;
+  state: "pending" | "changes_requested" | null;
   owner: string | null;
   requestedBy: string | null;
   requestedAt: string | null;
+  resolvedBy: string | null;
+  behind: { identifier: string; owner: string } | null;
   holds: LaneRow[];
+  heldTotal: number;
   approve: boolean;
 }
 
@@ -61,7 +65,7 @@ interface Lanes {
   inProgress: WorkingRow[];
   blocked: Array<{ identifier: string; title: string; blockers: string[] }>;
   unavailable: Array<{ identifier: string; title: string; status: string }>;
-  totals: { ready: number; gated: number; inProgress: number; blocked: number; unavailable: number };
+  totals: { ready: number; gated: number; gates: number; inProgress: number; blocked: number; unavailable: number };
   asOf: string;
 }
 
@@ -97,8 +101,10 @@ const state = {
   busy: false,
   note: "",
   noteTone: "info" as "info" | "error",
-  /** Tickets whose Take message the host sent, this session. */
+  /** Tickets whose Take message the host sent, until the lanes are read again. */
   sent: new Set<string>(),
+  /** A Refresh read is in flight. */
+  refreshing: false,
   /** Lanes a person unfolded. */
   unfolded: new Set<string>(),
   /** A show_queue read for a non-lanes result is in flight. */
@@ -151,20 +157,29 @@ function say(host: ViewHost, note: string, tone: "info" | "error" = "info"): voi
   rerender(host);
 }
 
-/** Read the lanes again through the host and show them; `after` is the note to keep showing. */
+/**
+ * Read the lanes again through the host and show them; `after` is the note to keep showing.
+ * Fresh lanes say what is ready now, so the Sent marks of the last read go: a ticket the
+ * agent did not take shows Take again.
+ */
 async function refresh(host: ViewHost, after: string): Promise<void> {
+  state.refreshing = true;
   try {
     const result = await host.callTool("show_queue", readArguments(host));
     state.busy = false;
-    if (result.isError || read(result) === null || !("lanes" in read(result)!)) {
+    state.refreshing = false;
+    const shown = result.isError ? null : read(result);
+    if (shown === null || !("lanes" in shown)) {
       say(host, `${after ? `${after} ` : ""}Reading the queue again failed: ${refusal(result)}`, "error");
       return;
     }
+    state.sent.clear();
     state.note = after;
     state.noteTone = "info";
     host.show(result);
   } catch (error) {
     state.busy = false;
+    state.refreshing = false;
     say(host, `${after ? `${after} ` : ""}Reading the queue again failed: ${errorText(error)}`, "error");
   }
 }
@@ -222,12 +237,17 @@ function whereLine(row: LaneRow): string {
   return parts.join(" · ");
 }
 
-/** A lane: its heading with the count, its rows (folded past {@link FOLDED_ROWS}), or an empty line. */
+/**
+ * A lane: its heading with the count of tickets, its items (folded past {@link FOLDED_ROWS}),
+ * or an empty line. `itemTotal` is how many items the lane has in all (a gate group is one
+ * item holding several tickets); the payload carries at most twenty.
+ */
 function lane(
   host: ViewHost,
   key: string,
   title: string,
-  total: number,
+  count: number,
+  itemTotal: number,
   items: HTMLElement[],
   empty: string,
 ): HTMLElement {
@@ -236,10 +256,10 @@ function lane(
   const section = h(
     "section",
     { class: "queue-lane", "data-lane": key, "aria-label": title },
-    h("h2", { class: "queue-heading" }, title, h("span", { class: "view-muted queue-count", "data-count": String(total) }, String(total))),
+    h("h2", { class: "queue-heading" }, title, h("span", { class: "view-muted queue-count", "data-count": String(count) }, String(count))),
     visible.length > 0 ? h("ul", { class: "queue-rows" }, ...visible) : h("p", { class: "queue-empty view-muted" }, empty),
   );
-  const hidden = total - visible.length;
+  const hidden = itemTotal - visible.length;
   if (hidden > 0) {
     if (items.length > visible.length) {
       const all = h("button", { class: "queue-more", type: "button", "data-action": "show-all" }, `Show ${items.length - visible.length} more`);
@@ -285,14 +305,17 @@ function readyLane(lanes: Lanes, host: ViewHost): HTMLElement {
       h("div", { class: "queue-row-action" }, action),
     );
   });
-  return lane(host, "ready", "Ready", lanes.totals.ready, items, "Nothing is ready to take.");
+  return lane(host, "ready", "Ready", lanes.totals.ready, lanes.totals.ready, items, "Nothing is ready to take.");
 }
 
 function gatedLane(lanes: Lanes, host: ViewHost): HTMLElement {
   const items = lanes.gated.map((group) => {
     const held = group.holds.map((row) => row.identifier).filter((id) => id !== group.identifier);
-    const detail = [group.owner ? `waiting on ${group.owner}` : "awaiting approval"];
-    if (group.requestedBy) detail.push(`asked by ${group.requestedBy}`);
+    const others = group.heldTotal - group.holds.length;
+    const detail =
+      group.state === "changes_requested"
+        ? [`changes requested${group.resolvedBy ? ` by ${group.resolvedBy}` : ""}`, ...(group.owner ? [`owner ${group.owner}`] : [])]
+        : [group.owner ? `waiting on ${group.owner}` : "awaiting approval", ...(group.requestedBy ? [`asked by ${group.requestedBy}`] : [])];
     let action: HTMLElement | null = null;
     if (group.approve) {
       const button = h("button", { class: "view-button view-button-primary", type: "button", "data-action": "approve", title: `Approve the gate on ${group.identifier}` }, "Approve");
@@ -302,7 +325,7 @@ function gatedLane(lanes: Lanes, host: ViewHost): HTMLElement {
     }
     return h(
       "li",
-      { class: "queue-row", "data-gate": group.identifier },
+      { class: "queue-row", "data-gate": group.identifier, "data-gate-state": group.state ?? "" },
       h(
         "div",
         { class: "queue-row-body" },
@@ -312,12 +335,17 @@ function gatedLane(lanes: Lanes, host: ViewHost): HTMLElement {
           { class: "queue-row-detail queue-owner", "data-owner": group.owner ?? "" },
           ...detail.flatMap((part, index) => [index > 0 ? " · " : "", h("span", { class: "queue-nowrap" }, part)]),
         ),
-        held.length > 0 ? h("p", { class: "queue-row-detail view-muted", "data-holds": held.join(",") }, `holds ${held.join(", ")}`) : null,
+        held.length > 0
+          ? h("p", { class: "queue-row-detail view-muted", "data-holds": held.join(",") }, `holds ${held.join(", ")}${others > 0 ? ` and ${others} more` : ""}`)
+          : null,
+        group.behind
+          ? h("p", { class: "queue-row-detail view-muted", "data-behind": group.behind.identifier }, `then waits on ${group.behind.identifier} (${group.behind.owner})`)
+          : null,
       ),
       action ? h("div", { class: "queue-row-action" }, action) : null,
     );
   });
-  return lane(host, "gated", "Gated", lanes.totals.gated, items, "Nothing is waiting on a person.");
+  return lane(host, "gated", "Gated", lanes.totals.gated, lanes.totals.gates, items, "Nothing is waiting on a person.");
 }
 
 function workingLane(lanes: Lanes, host: ViewHost): HTMLElement {
@@ -365,7 +393,7 @@ function workingLane(lanes: Lanes, host: ViewHost): HTMLElement {
       ),
     );
   });
-  return lane(host, "in-progress", "In progress", lanes.totals.inProgress, items, "Nobody is working on anything.");
+  return lane(host, "in-progress", "In progress", lanes.totals.inProgress, lanes.totals.inProgress, items, "Nobody is working on anything.");
 }
 
 function strictLine(lanes: Lanes): HTMLElement | null {
@@ -395,9 +423,10 @@ function footer(lanes: Lanes, host: ViewHost): HTMLElement {
     );
   }
   const refreshButton = h("button", { class: "view-button", type: "button", "data-action": "refresh" }, "Refresh");
-  refreshButton.disabled = state.busy || host.canCallTools === false;
+  // Usable while a Take or an Approve waits on the host: a person who never answers the
+  // host's question can still read the queue again, which ends the wait on this side.
+  refreshButton.disabled = state.refreshing || host.canCallTools === false;
   refreshButton.addEventListener("click", () => {
-    state.busy = true;
     say(host, "Reading the queue again…");
     void refresh(host, "");
   });
@@ -436,15 +465,26 @@ function renderLanes(lanes: Lanes, host: ViewHost): void {
 }
 
 function renderPending(host: ViewHost): void {
+  const failed = state.noteTone === "error";
+  let retry: HTMLElement | null = null;
+  if (failed && host.canCallTools !== false) {
+    retry = h("button", { class: "view-button", type: "button", "data-action": "retry" }, "Try again");
+    retry.addEventListener("click", () => {
+      state.note = "";
+      state.noteTone = "info";
+      rerender(host);
+    });
+  }
   root.replaceChildren(
     h(
       "article",
       { class: "view-card queue", "data-view": "queue", "data-partial": "" },
       h("header", { class: "queue-head" }, h("h1", { class: "queue-name" }, "Queue")),
       h("p", { class: `queue-note queue-note-${state.noteTone}`, role: "status", "data-action-note": "" }, state.note || "Loading the queue…"),
+      retry ? h("footer", { class: "queue-foot" }, h("div", { class: "queue-asides" }), retry) : null,
     ),
   );
-  if (state.fetching || state.noteTone === "error") return;
+  if (state.fetching || failed) return;
   if (host.canCallTools === false) {
     state.note = "This host does not let views read the queue. Ask the agent to call show_queue.";
     state.noteTone = "error";
