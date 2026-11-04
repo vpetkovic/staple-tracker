@@ -369,9 +369,10 @@ describe("a restore materialises the restored state into the new epoch", () => {
     expect(titles(afterUndo.store)).toEqual(["original", "would be lost"]);
   });
 
-  it("takes more than one turn when the backup is larger than one batch", async () => {
+  it("takes more than one turn when the backup is larger than one turn stages", async () => {
     const a = device("device-a", "token-a");
-    for (let n = 0; n < 30; n += 1) a.store.createIssue({ title: `issue ${String(n).padStart(2, "0")}` });
+    // More than the 200 entities one turn stages on the Worker's free plan.
+    for (let n = 0; n < 230; n += 1) a.store.createIssue({ title: `issue ${String(n).padStart(3, "0")}` });
     await a.sync();
     await enable(a);
 
@@ -383,7 +384,7 @@ describe("a restore materialises the restored state into the new epoch", () => {
 
     const fresh = device("device-fresh", "token-fresh");
     await fresh.sync();
-    expect(titles(fresh.store)).toHaveLength(30);
+    expect(titles(fresh.store)).toHaveLength(230);
   });
 });
 

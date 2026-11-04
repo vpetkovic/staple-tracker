@@ -6,6 +6,7 @@
  */
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { restorePage } from "../src/fold-store.js";
 import { REPO, call, envelope, expectError, jsonOf, pushOps, seedRepo } from "./helpers.js";
 
 let token: string;
@@ -140,13 +141,14 @@ describe("the fold: a stored orphan end never overwrites a real end", () => {
     const made = await jsonOf<{ backup: { backupId: string } }>(
       await call(`/v1/repos/${REPO}/backups`, { method: "POST", token, protocol: 3, body: {} }),
     );
-    const row = await env.DB.prepare(`SELECT state, protocol FROM backups WHERE backup_id = ?1`)
+    const row = await env.DB.prepare(`SELECT content, epoch, cutoff_seq, protocol FROM backups WHERE backup_id = ?1`)
       .bind(made.backup.backupId)
-      .first<{ state: string; protocol: number }>();
+      .first<{ content: string; epoch: number; cutoff_seq: number; protocol: number }>();
     // A Worker rolled back to protocol 2 cannot restore it, and says so.
     expect(row!.protocol).toBe(3);
-    const entity = (JSON.parse(row!.state) as { entities: Array<{ entity: string; state: Record<string, unknown> }> }).entities.find(
-      (candidate) => candidate.entity === "attempt",
+    expect(row!.content).toBe("fold");
+    const entity = (await restorePage(env, REPO, row!.epoch, row!.cutoff_seq, null, 100)).find(
+      candidate => candidate.entity === "attempt",
     );
     expect(entity!.state).toMatchObject(realEnd);
   });

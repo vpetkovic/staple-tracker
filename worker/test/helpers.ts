@@ -6,6 +6,7 @@
  */
 import { SELF, env } from "cloudflare:test";
 import { expect } from "vitest";
+import { SyncError } from "../src/errors.js";
 
 export const REPO = "11111111-1111-4111-8111-111111111111";
 export const OTHER_REPO = "22222222-2222-4222-8222-222222222222";
@@ -135,4 +136,17 @@ export async function expectError(
 /** Move a repository's epoch forward, the way a restore would. Non-truncating. */
 export async function bumpEpoch(repoId = REPO): Promise<void> {
   await env.DB.prepare(`UPDATE repos SET epoch = epoch + 1 WHERE repo_id = ?1`).bind(repoId).run();
+}
+
+/** A historical cutoff can need another bounded request. Every refusal must advance it. */
+export async function retryFold<T>(read: () => Promise<T>): Promise<T> {
+  let reached = -1;
+  for (;;) {
+    try { return await read(); }
+    catch (error) {
+      if (!(error instanceof SyncError) || error.code !== "unavailable" || typeof error.detail.foldedSeq !== "number") throw error;
+      expect(error.detail.foldedSeq, "historical fold must make progress").toBeGreaterThan(reached);
+      reached = error.detail.foldedSeq;
+    }
+  }
 }

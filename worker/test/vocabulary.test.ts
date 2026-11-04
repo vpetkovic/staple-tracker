@@ -412,7 +412,8 @@ describe("two concurrent first pushes of different vocabularies", () => {
 
   /** Exactly one winner, and the loser left no trace: no row, no slot, no claim. */
   async function expectOneWinner(outcome: Awaited<ReturnType<typeof race>>): Promise<void> {
-    expect(outcome.batches).toBe(2);
+    // The two push batches, and the winner folding what it wrote (`foldWhatWasWritten`, `push.ts`).
+    expect(outcome.batches).toBe(3);
     const hubWon = outcome.hub.status === 200;
     const workspaceWon = outcome.workspace.status === 200;
     expect([hubWon, workspaceWon].filter(Boolean)).toHaveLength(1);

@@ -1,15 +1,16 @@
 /**
  * A repository whose log is too large for the service to fold still reaches every device.
  *
- * The Worker folds at most `MAX_SNAPSHOT_FOLD_OPS` operations for a snapshot (20,000), and
- * refuses past that. Every snapshot then failed: a new device could not join, a joining
+ * A Worker from before the fold checkpoint folds at most `MAX_SNAPSHOT_FOLD_OPS` operations
+ * for a snapshot (20,000), and refuses past that; the Worker since never does
+ * (`test/cloud-fold-checkpoint.test.ts`), and this is the device against the older one. Every snapshot then failed: a new device could not join, a joining
  * clone with work of its own could not seed, and a device upgraded to this build failed
  * every sync after its push and pull had landed, because its one-time re-read is a
  * snapshot. The operations are all there, served by the pull route in pages with no fold,
  * so the device folds the ordered tail itself (`src/core/cloud/tail-fold.ts`).
  *
- * The fake folds at most 25 here, as the Worker folds at most 20,000 — the same refusal,
- * the same detail. The live proof past 20,000 on real workerd is in the PR.
+ * The fake folds at most 25 here, as that Worker folds at most 20,000 — the same refusal,
+ * the same detail.
  */
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";

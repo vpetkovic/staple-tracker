@@ -124,7 +124,7 @@ describe("every operation has the same shape and refusal on every surface", () =
         acceptanceCriteria: [],
         targetDate: "2026-10-31",
         startDate: null,
-        state: "planned",
+        state: new Date().toISOString().slice(0, 10) > "2026-10-31" ? "overdue" : "planned",
         planPosition: null,
         closedAt: null,
       },

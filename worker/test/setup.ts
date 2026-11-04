@@ -46,6 +46,8 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM leases"),
     env.DB.prepare("DELETE FROM backups"),
     env.DB.prepare("DELETE FROM restores"),
+    env.DB.prepare("DELETE FROM fold_versions"),
+    env.DB.prepare("DELETE FROM fold_marks"),
     env.DB.prepare("DELETE FROM devices"),
     env.DB.prepare("DELETE FROM repos"),
   ]);

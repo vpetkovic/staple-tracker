@@ -29,8 +29,12 @@
  * So a restore materialises the backup's folded state as real operations stamped with
  * the NEW epoch, and only then moves the repository onto it:
  *
- *   1. `begin`  — fold the current epoch and store it as a `pre-restore` backup (the
- *                 undo), write the audit row, decide `toEpoch = epoch + 1`.
+ *   1. `begin`  — record the current epoch at its head as a `pre-restore` backup (the
+ *                 undo), write the audit row, decide `toEpoch = epoch + 1`. Both backups
+ *                 are read from the fold checkpoint (`fold-store.ts`), so `begin` first
+ *                 folds what the checkpoint lacks of the source's cutoff and of the head,
+ *                 and refuses, retryably and changing nothing, while that is more than
+ *                 one request can do.
  *   2. `stage`  — write the backup's entities into `epoch = toEpoch`, in chunks.
  *   3. `commit` — one guarded statement moves `repos.epoch` to `toEpoch`.
  *
@@ -43,11 +47,12 @@
  * re-bootstraps into a half-materialised epoch and hydrates half a repository, which
  * is the same silent loss the ruling forbids, only narrower and harder to notice.
  *
- * **Why it is chunked.** The free plan allows 50 D1 queries per invocation; staging N
- * entities costs N+1. A single-shot restore would work on a demo repository and fail
- * permanently on a real one, so `stage` takes `maxBatchSize` entities at a time — the
- * same ceiling, from the same place, that push sizes its batches from — and progress
- * is durable in D1 rather than held in a request.
+ * **Why it is chunked.** A request has 10 ms of CPU and 50 D1 queries on the free plan,
+ * and a restore stages one operation per entity, so a single-shot restore would work on a
+ * demo repository and fail permanently on a real one. `stage` writes
+ * `restoreStageEntities` at a time (200 free, 1,000 paid), no more than `RESTORE_PAGE_WORK` of
+ * estimated isolate time, in packed statements, folds them into the new epoch's checkpoint with
+ * what the turn has left, and keeps its progress durable in D1 rather than in a request.
  *
  * **Non-truncating, still.** Nothing here deletes an operation. `repos.last_seq`
  * keeps climbing across the flip, so `seq` is never reused, fenced lease tokens stay
@@ -71,9 +76,31 @@ import { entityKey } from "./cursor.js";
 import type { Env } from "./env.js";
 import { protocolForEntities } from "./envelope.js";
 import { SyncError, json } from "./errors.js";
-import { type BackupEntity, foldLog, forBackup, materializedVerb } from "./fold.js";
+import { type BackupEntity, forBackup, materializedVerb } from "./fold.js";
+import {
+  type FoldBudget,
+  advanceFold,
+  entityCount,
+  foldBehind,
+  pinMark,
+  reachFold,
+  restorePage,
+  stageWork,
+  utf8Bytes,
+} from "./fold-store.js";
+import { countEscapes } from "./fold-work.js";
 import { assertBodySize, readJson } from "./http.js";
-import { PROTOCOL_MAX, PROTOCOL_MIN, maxBatchSize, planOf } from "./limits.js";
+import {
+  FOLD_WRITE_BYTES,
+  PAGE_BYTES,
+  PROTOCOL_MAX,
+  RESTORE_PAGE_WORK,
+  PROTOCOL_MIN,
+  ROW_BYTES,
+  planOf,
+  requestFoldBudget,
+  restoreStageEntities,
+} from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
 import {
   type Vocabulary,
@@ -92,6 +119,8 @@ interface RepoRow {
 
 interface BackupRow {
   backup_id: string;
+  /** 'inline' (entities in `state`) or 'fold' (the checkpoint at epoch/cutoff_seq). */
+  content: string;
   epoch: number;
   cutoff_seq: number;
   entity_count: number;
@@ -112,6 +141,9 @@ interface RestoreRow {
   guard_seq: number;
   entity_count: number;
   status: string;
+  /** Staged rows counted up to `staged_seq`; see `stagedCount`. */
+  staged_count: number;
+  staged_seq: number | null;
 }
 
 /**
@@ -240,7 +272,7 @@ export async function createBackup(
   const body = await readJson(request).catch(() => ({}) as Record<string, unknown>);
   const label = typeof body.label === "string" ? body.label : null;
 
-  const backup = await captureBackup(env, session, repo, "manual", label);
+  const backup = await captureBackup(env, session, repo, "manual", label, requestFoldBudget(planOf(env)));
 
   log({
     event: "backup.create",
@@ -273,10 +305,29 @@ export async function createBackup(
 }
 
 /**
- * Fold the current epoch and persist it. Shared by `create` and by the automatic
- * pre-restore capture, because the undo a restore takes must be exactly as good as
- * the backup a human takes deliberately — a weaker one would be a worse undo in the
- * one situation where the undo is the only thing left.
+ * Record the fold of the current epoch at its high-water mark as a backup. Shared by
+ * `create` and by the automatic pre-restore capture, because the undo a restore takes must
+ * be exactly as good as the backup a human takes deliberately — a weaker one would be a
+ * worse undo in the one situation where the undo is the only thing left.
+ *
+ * ## A row, not a copy
+ *
+ * The backup's entities are the fold of (`epoch`, `cutoff_seq`), and that fold is already
+ * kept: `fold-store.ts` holds every entity at every point the checkpoint has passed, and
+ * serves any cutoff exactly. Operations at or below a cutoff never change — the log is
+ * append-only and `seq` only climbs — so the fold at this cutoff is fixed the moment the row
+ * is written. So a backup is ONE row, and copying the entities into it, as the Worker before
+ * this one did, is gone with the fold of the whole log per backup it cost and the 2 MB row
+ * it could not outgrow.
+ *
+ * The checkpoint does have to reach the cutoff first, because what the row records — how
+ * many entities, of which kinds, from how many operations — is the fold's, not the log's:
+ * two revisions written as one number are one key in the log and two entities in the fold,
+ * and a restore stages exactly the fold's. Normally it is within a few hundred operations
+ * of the head (every pull moves it on) and this request's budget covers the rest. When it is
+ * not — a large log straight after this Worker was deployed — the request refuses with
+ * `foldBehind` (`reachFold`), retryable, having moved the fold on by its budget, and
+ * nothing is written.
  */
 async function captureBackup(
   env: Env,
@@ -284,6 +335,7 @@ async function captureBackup(
   repo: RepoRow,
   kind: "manual" | "pre-restore",
   label: string | null,
+  budget: FoldBudget,
 ): Promise<{
   backupId: string;
   entityCount: number;
@@ -291,24 +343,29 @@ async function captureBackup(
   schemaVersion: number;
   createdAt: number;
 }> {
-  const folded = await foldLog(env, session.repoId, repo.epoch, repo.last_seq);
+  await reachFold(env, session.repoId, repo.epoch, repo.last_seq, { budget });
+  // Reached, so this is a mark already — unless a concurrent request's step carried the
+  // checkpoint past the cutoff, when the tail is folded and written. Either way every restore
+  // turn pages the backup in stage order without folding anything on top.
+  const summary = await pinMark(env, session.repoId, repo.epoch, repo.last_seq);
+  const entities = entityCount(summary);
   const backupId = newId();
   const createdAt = Date.now();
 
   await env.DB.prepare(
     `INSERT INTO backups
        (repo_id, backup_id, epoch, cutoff_seq, entity_count, op_count, schema_version,
-        protocol, kind, created_at, created_by_device, state)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+        protocol, kind, created_at, created_by_device, state, content)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'fold')`,
   )
     .bind(
       session.repoId,
       backupId,
       repo.epoch,
       repo.last_seq,
-      folded.entities.length,
-      folded.opCount,
-      folded.schemaVersion,
+      entities,
+      summary.opCount,
+      summary.schemaVersion,
       /**
        * The lowest protocol that can REPLAY this backup, not this build's ceiling.
        *
@@ -326,23 +383,22 @@ async function captureBackup(
        * backup's stamp cannot disagree with what the wire would accept. A workspace
        * backup stamps 1; a hub backup stamps 2 because `registration` requires it.
        */
-      protocolForEntities(folded.entities),
+      protocolForEntities(Object.keys(summary.kinds).map((entity) => ({ entity }))),
       kind,
       createdAt,
       session.deviceId,
-      // `forBackup` drops the per-field provenance and nothing else. It describes THIS
-      // epoch — versions that restart and operation ids that are re-minted the moment a
-      // restore runs — so it is meaningless on the other side of the one operation a
-      // backup exists to serve. Same fold, one field lighter.
-      JSON.stringify({ label, entities: folded.entities.map(forBackup) }),
+      // The label, and how many entities of each kind the fold holds — which is what a
+      // restore's vocabulary check reads (`assertRestorableVocabulary`). Never the
+      // entities: they are the checkpoint's, at this cutoff.
+      JSON.stringify({ label, kinds: summary.kinds }),
     )
     .run();
 
   return {
     backupId,
-    entityCount: folded.entities.length,
-    opCount: folded.opCount,
-    schemaVersion: folded.schemaVersion,
+    entityCount: entities,
+    opCount: summary.opCount,
+    schemaVersion: summary.schemaVersion,
     createdAt,
   };
 }
@@ -363,7 +419,7 @@ export async function listBackups(
   assertBackupConsent(repo);
 
   const rows = await env.DB.prepare(
-    `SELECT backup_id, epoch, cutoff_seq, entity_count, op_count, schema_version,
+    `SELECT backup_id, content, epoch, cutoff_seq, entity_count, op_count, schema_version,
             protocol, kind, created_at, created_by_device
        FROM backups WHERE repo_id = ?1 ORDER BY created_at DESC`,
   )
@@ -465,7 +521,9 @@ export async function deleteBackup(
  * The response always reports `staged`, `entityCount` and `status`, so a caller that
  * lost its place mid-restore recovers by calling again with the same `restoreId` and
  * being told where it actually got to. Progress is read from `ops` rather than from a
- * counter, so it is what happened rather than what was recorded as having happened.
+ * counter, so it is what happened rather than what was recorded as having happened —
+ * counted above the restore's `guard_seq`, so it costs what the restore wrote and not a
+ * read of the whole log (`stagedCount`).
  */
 export async function restoreBackup(
   request: Request,
@@ -490,7 +548,7 @@ export async function restoreBackup(
 
   const restore = await env.DB.prepare(
     `SELECT restore_id, from_backup_id, pre_restore_backup_id, from_epoch, to_epoch,
-            guard_seq, entity_count, status
+            guard_seq, entity_count, status, staged_count, staged_seq
        FROM restores WHERE repo_id = ?1 AND restore_id = ?2`,
   )
     .bind(session.repoId, restoreId)
@@ -516,21 +574,38 @@ export async function restoreBackup(
     throw new SyncError("conflict", `this restore was ${restore.status}`);
   }
 
-  const staged = await stagedCount(env, session.repoId, restore.to_epoch);
+  const staged = await stagedCount(env, session.repoId, restore);
   if (staged < restore.entity_count) {
     return stageRestore(env, session, protocol, repo, restore, staged, startedAt);
   }
   return commitRestore(env, session, protocol, repo, restore, startedAt);
 }
 
-/** How much of the new epoch already exists. The authority on progress. */
-async function stagedCount(env: Env, repoId: string, toEpoch: number): Promise<number> {
+/**
+ * How much of the new epoch already exists. The authority on progress.
+ *
+ * Counted from the rows themselves, so it is what happened rather than what was recorded — but
+ * not counted again from the start on every turn. Every stage turn records, in the same batch as
+ * the rows it writes, how many staged rows there are up to the seq it reserved to
+ * (`restores.staged_count` at `restores.staged_seq`, `stageRestore`), so a turn counts only the
+ * rows above that: the ones a turn wrote after it, which is none unless a turn is in flight
+ * beside this one. Counting every staged row on every turn read the whole restore once per
+ * turn — rows read growing with the square of the restore, against the free plan's 5 million a
+ * day.
+ *
+ * A restore begun before `staged_seq` existed has none, and is counted once from `guard_seq`.
+ * Above `guard_seq` is every row a restore staged — a stage reserves its seqs after `begin` read
+ * the high-water mark — and never the rest of the log; `beginRestore` refuses while the target
+ * epoch holds rows from before.
+ */
+async function stagedCount(env: Env, repoId: string, restore: RestoreRow): Promise<number> {
+  const counted = restore.staged_seq === null ? 0 : restore.staged_count;
   const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM ops WHERE repo_id = ?1 AND epoch = ?2`,
+    `SELECT COUNT(*) AS n FROM ops WHERE repo_id = ?1 AND seq > ?3 AND epoch = ?2`,
   )
-    .bind(repoId, toEpoch)
+    .bind(repoId, restore.to_epoch, restore.staged_seq ?? restore.guard_seq)
     .first<{ n: number }>();
-  return row?.n ?? 0;
+  return counted + (row?.n ?? 0);
 }
 
 /**
@@ -580,7 +655,7 @@ async function beginRestore(
   }
 
   const source = await env.DB.prepare(
-    `SELECT backup_id, epoch, cutoff_seq, entity_count, op_count, schema_version,
+    `SELECT backup_id, content, epoch, cutoff_seq, entity_count, op_count, schema_version,
             protocol, kind, created_at, created_by_device
        FROM backups WHERE repo_id = ?1 AND backup_id = ?2`,
   )
@@ -628,19 +703,92 @@ async function beginRestore(
     );
   }
 
+  /**
+   * A backup kept as a fold is restorable once the checkpoint of its epoch has reached its
+   * cutoff: from then on every stage turn reads a bounded page of it. Taking the backup
+   * usually got it there (`captureBackup`); when it did not — a large log straight after
+   * this Worker was deployed — this request moves it on by its budget, and if that is not
+   * enough it refuses BEFORE anything is changed: no undo, no audit row, no staged row.
+   * The refusal is retryable and carries how far the fold has got, and each attempt moves
+   * it further, so asking again finishes.
+   */
+  const budget: FoldBudget = requestFoldBudget(planOf(env));
+  if (source.content === "fold") {
+    await reachFold(env, session.repoId, source.epoch, source.cutoff_seq, { budget });
+  }
+  // And the undo's: the current epoch at its head, which `captureBackup` needs reached.
+  // Here, before the vocabulary claim below, so a refusal leaves the repository row as it was.
+  try {
+    await reachFold(env, session.repoId, repo.epoch, repo.last_seq, { budget });
+  } catch (err) {
+    /**
+     * One progress for the two folds, so `foldedSeq` still climbs from one refusal to the next —
+     * a client stops asking the first time it does not (`whileFolding`, src/core/cloud/client.ts).
+     * A backup of an older epoch is folded first, and every operation of the current epoch is
+     * above its cutoff: seqs only climb, and a restore commits only when nothing landed in the
+     * old epoch after it began. So once the source is reached, the current epoch's progress
+     * counts from the source's cutoff — even a request whose budget the source used up, and a
+     * current epoch whose checkpoint has no mark yet.
+     */
+    if (err instanceof SyncError && typeof err.detail.foldedSeq === "number" && source.content === "fold" && source.epoch !== repo.epoch) {
+      throw foldBehind(Math.max(err.detail.foldedSeq, source.cutoff_seq), repo.last_seq);
+    }
+    throw err;
+  }
+
+  /**
+   * The epoch this restore will fill must be empty.
+   *
+   * It is, unless a restore's `restores` row was deleted by hand and its staged operations
+   * were not (worker/README.md, "Abandoning a restore", deletes both together). Rows left
+   * like that used to count as this restore's progress, so it skipped that many entities
+   * and committed as though it had staged them all. Refused instead, before anything is
+   * changed, so the progress count above `guard_seq` is exactly the rows this restore wrote.
+   * One scan per restore, and only once the fold is ready.
+   */
+  const orphaned = await env.DB.prepare(`SELECT seq FROM ops WHERE repo_id = ?1 AND epoch = ?2 LIMIT 1`)
+    .bind(session.repoId, repo.epoch + 1)
+    .first<{ seq: number }>();
+  if (orphaned) {
+    throw new SyncError(
+      "conflict",
+      `epoch ${repo.epoch + 1} already holds operations from a restore that was abandoned without ` +
+        "removing them. Remove them first (worker/README.md, \"Abandoning a restore\"). Nothing was changed.",
+      { epoch: repo.epoch + 1 },
+    );
+  }
+
   await assertRestorableVocabulary(env, session.repoId, backupId, repo);
 
-  const undo = await captureBackup(env, session, repo, "pre-restore", null);
+  const undo = await captureBackup(env, session, repo, "pre-restore", null, budget);
 
   const restoreId = newId();
   const toEpoch = repo.epoch + 1;
-  await env.DB.prepare(
-    `INSERT INTO restores
-       (repo_id, restore_id, from_backup_id, pre_restore_backup_id, from_epoch, to_epoch,
-        guard_seq, entity_count, staged_count, status, device_id, actor, began_at, committed_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 'staging', ?9, ?10, ?11, NULL)`,
-  )
-    .bind(
+  /**
+   * The new epoch's checkpoint starts at `guard_seq`: a mark there, holding nothing, is true —
+   * the epoch has no operation at or below it (checked above) and every row this restore
+   * stages is reserved above it. Without it the first fold of the new epoch would read from
+   * seq 0, through every operation of every older epoch, to find its own. Any fold rows the
+   * epoch already has are from a restore abandoned after it staged, whose operations are
+   * gone, so they describe nothing and are cleared first. All of it in one batch with the
+   * audit row, so a restore never exists without its floor.
+   */
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM fold_versions WHERE repo_id = ?1 AND epoch = ?2`).bind(
+      session.repoId,
+      toEpoch,
+    ),
+    env.DB.prepare(`DELETE FROM fold_marks WHERE repo_id = ?1 AND epoch = ?2`).bind(session.repoId, toEpoch),
+    env.DB.prepare(
+      `INSERT INTO fold_marks (repo_id, epoch, seq, op_count, schema_version, kinds)
+       VALUES (?1, ?2, ?3, 0, 0, '{}')`,
+    ).bind(session.repoId, toEpoch, repo.last_seq),
+    env.DB.prepare(
+      `INSERT INTO restores
+         (repo_id, restore_id, from_backup_id, pre_restore_backup_id, from_epoch, to_epoch,
+          guard_seq, entity_count, staged_count, status, device_id, actor, began_at, committed_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 'staging', ?9, ?10, ?11, NULL)`,
+    ).bind(
       session.repoId,
       restoreId,
       backupId,
@@ -652,8 +800,8 @@ async function beginRestore(
       session.deviceId,
       typeof body.actor === "string" ? body.actor : null,
       Date.now(),
-    )
-    .run();
+    ),
+  ]);
 
   log({
     event: "restore.begin",
@@ -716,17 +864,30 @@ async function assertRestorableVocabulary(
   backupId: string,
   repo: RepoRow,
 ): Promise<void> {
+  // An inline backup is counted over its entities in SQL; a fold backup from the counts
+  // of each kind it recorded when it was taken. Neither is parsed whole in the Worker.
   const counted = await env.DB.prepare(
-    `SELECT COUNT(*) AS total,
-            COALESCE(SUM(json_extract(e.value, '$.entity') IN (SELECT value FROM json_each(?3))), 0)
-              AS registry
-       FROM backups b, json_each(b.state, '$.entities') e
+    `SELECT CASE WHEN b.content = 'fold' THEN b.state END AS summary,
+            (SELECT COUNT(*) FROM json_each(b.state, '$.entities')) AS total,
+            (SELECT COALESCE(SUM(json_extract(e.value, '$.entity') IN (SELECT value FROM json_each(?3))), 0)
+               FROM json_each(b.state, '$.entities') e) AS registry
+       FROM backups b
       WHERE b.repo_id = ?1 AND b.backup_id = ?2`,
   )
     .bind(repoId, backupId, registryEntitiesJson())
-    .first<{ total: number; registry: number }>();
-  const total = counted?.total ?? 0;
-  const registry = counted?.registry ?? 0;
+    .first<{ summary: string | null; total: number; registry: number }>();
+  let total = counted?.total ?? 0;
+  let registry = counted?.registry ?? 0;
+  if (typeof counted?.summary === "string") {
+    const kinds = (JSON.parse(counted.summary) as { kinds?: Record<string, number> }).kinds ?? {};
+    const registryKinds = new Set(JSON.parse(registryEntitiesJson()) as string[]);
+    total = 0;
+    registry = 0;
+    for (const [kind, count] of Object.entries(kinds)) {
+      total += count;
+      if (registryKinds.has(kind)) registry += count;
+    }
+  }
   if (total === 0) return;
   if (registry > 0 && registry < total) throw mixedBackupRefusal();
 
@@ -750,6 +911,88 @@ async function assertRestorableVocabulary(
     if (winner === null) throw new SyncError("not_found", "no such repository");
     throw vocabularyRefusal(winner, offered);
   }
+}
+
+/**
+ * The next entities a restore stages, in the order a snapshot pages them.
+ *
+ * An INLINE backup — every backup a Worker before the checkpoint took — holds them in its
+ * `state`, and the chunk is the next slice of that array, as it always was. A FOLD backup
+ * holds them in the checkpoint at its epoch and cutoff, and the chunk is the next page of
+ * that fold after the last entity already staged: the staged rows are the authority on
+ * progress, and their newest seq names the entity the last turn ended on. `beginRestore`
+ * refused to start until the checkpoint had reached the cutoff, so the page is bounded.
+ */
+async function nextChunk(
+  env: Env,
+  repoId: string,
+  restore: RestoreRow,
+  source: { content: string; epoch: number; cutoff_seq: number; state: string | null },
+  staged: number,
+  budget: FoldBudget,
+): Promise<BackupEntity[]> {
+  const size = restoreStageEntities(planOf(env));
+  const room = Math.min(RESTORE_PAGE_WORK, budget.work ?? RESTORE_PAGE_WORK);
+  if (source.content !== "fold") {
+    // At most `size` entities, no more than `PAGE_BYTES` of their state and no more than the turn's
+    // room to stage them (`stageWork`) — at least one.
+    const parsed = JSON.parse(source.state ?? "{}") as { entities?: BackupEntity[] };
+    const chunk: BackupEntity[] = [];
+    let bytes = 0;
+    let work = 0;
+    for (const entity of restoreOrder(parsed.entities ?? []).slice(staged, staged + size)) {
+      const text = JSON.stringify(entity.state);
+      const weight = utf8Bytes(text);
+      const cost = stageWork(weight, countEscapes(text));
+      if (chunk.length > 0 && (bytes + weight > PAGE_BYTES || work + cost > room)) break;
+      chunk.push(entity);
+      bytes += weight;
+      work += cost;
+    }
+    return chunk;
+  }
+  // Normally a no-op: `beginRestore` folded the source to its cutoff and the backup made it a
+  // mark, and a checkpoint only moves forward. Not after an operator cleared it mid-restore
+  // (README, "The fold checkpoint"), when this folds it back a turn at a time instead of
+  // wedging the restore.
+  await reachFold(env, repoId, source.epoch, source.cutoff_seq, { budget });
+  await pinMark(env, repoId, source.epoch, source.cutoff_seq);
+  const last = await env.DB.prepare(
+    `SELECT entity, entity_id FROM ops WHERE repo_id = ?1 AND seq > ?3 AND epoch = ?2 ORDER BY seq DESC LIMIT 1`,
+  )
+    .bind(repoId, restore.to_epoch, restore.guard_seq)
+    .first<{ entity: string; entity_id: string }>();
+  const after = last ? entityKey(last.entity, last.entity_id) : null;
+  const page = await restorePage(env, repoId, source.epoch, source.cutoff_seq, after, size, PAGE_BYTES, {
+    work: Math.min(RESTORE_PAGE_WORK, budget.work ?? RESTORE_PAGE_WORK),
+    atLeastOne: budget.folded !== true,
+  });
+  // Folding the backup's epoch took this turn's room, so it stages nothing and says so; asked again,
+  // there is nothing left to fold and the turn stages.
+  if (page.length === 0 && budget.folded === true) throw foldBehind(source.cutoff_seq, source.cutoff_seq);
+  return page.map(forBackup);
+}
+
+/**
+ * Fold what the restore staged, before the epoch goes live.
+ *
+ * Each turn folds what it staged with what its own budget has left (`stageRestore`), and that is
+ * normally the whole of it. What this is for is the rest: a turn whose staging was expensive enough
+ * to leave a little behind, or a checkpoint an operator cleared mid-restore (worker/README.md, "The
+ * fold checkpoint"). Without it "the restored epoch is folded by the time it goes live" would stop
+ * being true, and the first device to bootstrap onto the new epoch would wait for a fold nobody was
+ * paying for. When one budget cannot finish it the commit refuses retryably with how far it got: the
+ * client asks again while that climbs (`whileFolding`, `src/core/cloud/client.ts`), and no request
+ * is ever asked to fold more than one budget.
+ */
+async function foldWhatWasStaged(env: Env, repoId: string, restore: RestoreRow, budget: FoldBudget): Promise<void> {
+  const staged = await env.DB.prepare(
+    `SELECT seq FROM ops WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 ORDER BY seq DESC LIMIT 1`,
+  )
+    .bind(repoId, restore.to_epoch, restore.guard_seq)
+    .first<{ seq: number }>();
+  if (!staged) return;
+  await reachFold(env, repoId, restore.to_epoch, staged.seq, { budget });
 }
 
 /**
@@ -807,14 +1050,16 @@ async function stageRestore(
   await assertRestorableVocabulary(env, session.repoId, restore.from_backup_id, repo);
 
   const source = await env.DB.prepare(
-    `SELECT state, schema_version FROM backups WHERE repo_id = ?1 AND backup_id = ?2`,
+    `SELECT content, epoch, cutoff_seq, schema_version,
+            CASE WHEN content = 'inline' THEN state END AS state
+       FROM backups WHERE repo_id = ?1 AND backup_id = ?2`,
   )
     .bind(session.repoId, restore.from_backup_id)
-    .first<{ state: string; schema_version: number }>();
+    .first<{ content: string; epoch: number; cutoff_seq: number; schema_version: number; state: string | null }>();
   if (!source) throw new SyncError("not_found", "the backup being restored no longer exists");
 
-  const parsed = JSON.parse(source.state) as { entities: BackupEntity[] };
-  const chunk = restoreOrder(parsed.entities).slice(staged, staged + maxBatchSize(planOf(env)));
+  const budget: FoldBudget = requestFoldBudget(planOf(env));
+  const chunk = await nextChunk(env, session.repoId, restore, source, staged, budget);
   if (chunk.length === 0) {
     throw new SyncError("conflict", "the backup holds fewer entities than the restore expects");
   }
@@ -823,9 +1068,57 @@ async function stageRestore(
   const createdAt = new Date(now).toISOString();
   const statements = [
     env.DB.prepare(
-      `UPDATE repos SET last_seq = last_seq + ?3 WHERE repo_id = ?1 AND epoch = ?2`,
+      `UPDATE repos SET last_seq = last_seq + ?3 WHERE repo_id = ?1 AND epoch = ?2 RETURNING last_seq`,
     ).bind(session.repoId, restore.from_epoch, chunk.length),
   ];
+
+  /**
+   * The chunk's operations, packed into as few statements as a bound value's size allows —
+   * one statement per entity was the free plan's 50-queries ceiling capping a turn at 25
+   * entities, which put a restore of more than 25,000 entities past the client's
+   * 1,000-turn guard. Each row is exactly what one statement per entity wrote. A pack is
+   * closed at `FOLD_WRITE_BYTES`, because a payload escaped inside it can be twice its own
+   * size against D1's 2,000,000-byte bound value, and an operation too large to share one
+   * is written alone with its columns bound as they are (`fold-store.ts`, `writeVersions`).
+   */
+  let packed: string[] = [];
+  let bytes = 0;
+  // What reading and staging the chunk cost, which the fold of it below does not get to spend again.
+  let spent = 0;
+  const flush = () => {
+    if (packed.length === 0) return;
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO ops
+           (repo_id, seq, epoch, op_id, device_id, entity, entity_id, verb, base_version,
+            payload, actor, client_seq, schema_version, created_at, server_ts)
+         SELECT ?1, r.last_seq - ?2 + json_extract(j.value, '$.n'), ?3, json_extract(j.value, '$.o'), ?4,
+                json_extract(j.value, '$.e'), json_extract(j.value, '$.i'), json_extract(j.value, '$.v'),
+                json_extract(j.value, '$.b'), json_extract(j.value, '$.p'), json_extract(j.value, '$.a'),
+                json_extract(j.value, '$.c'), ?5, json_extract(j.value, '$.t'), ?6
+           FROM repos r, json_each(?8) j
+          WHERE r.repo_id = ?1 AND r.epoch = ?7
+            AND NOT EXISTS (
+              SELECT 1 FROM ops o
+               WHERE o.repo_id = ?1 AND o.epoch = ?3 AND o.op_id = json_extract(j.value, '$.o'))`,
+      ).bind(
+        session.repoId,
+        chunk.length,
+        restore.to_epoch,
+        session.deviceId,
+        // Carried from the backup, not from this build. `ops.schema_version` is stored
+        // and never interpreted by the server, and a restored operation describes the
+        // schema its DATA was written under — not the one the restoring device happens
+        // to be running.
+        source.schema_version,
+        now,
+        restore.from_epoch,
+        `[${packed.join(",")}]`,
+      ),
+    );
+    packed = [];
+    bytes = 0;
+  };
 
   for (let index = 0; index < chunk.length; index += 1) {
     const entity = chunk[index]!;
@@ -834,72 +1127,132 @@ async function stageRestore(
       `${session.repoId}\n${restore.to_epoch}\nrestore\n${restore.restore_id}\n` +
         `${entityKey(entity.entity, entity.entityId)}`,
     );
-    statements.push(
-      env.DB.prepare(
-        `INSERT INTO ops
-           (repo_id, seq, epoch, op_id, device_id, entity, entity_id, verb, base_version,
-            payload, actor, client_seq, schema_version, created_at, server_ts)
-         SELECT ?1, r.last_seq - ?2 + ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?17, ?10, ?11, ?12, ?13, ?14, ?15
-           FROM repos r
-          WHERE r.repo_id = ?1 AND r.epoch = ?16
-            AND NOT EXISTS (
-              SELECT 1 FROM ops o
-               WHERE o.repo_id = ?1 AND o.epoch = ?4 AND o.op_id = ?5)`,
-      ).bind(
-        session.repoId,
-        chunk.length,
-        index + 1,
-        restore.to_epoch,
-        opId,
-        session.deviceId,
-        entity.entity,
-        entity.entityId,
-        verb,
-        JSON.stringify(payload),
-        // The original creator when the backup kept one (`fold.ts`, `createdBy`), so the new
-        // epoch attributes what it restores as the old one did; the restore otherwise.
-        entity.createdBy ?? `restore:${restore.restore_id}`,
-        // `client_seq` is a RECORD of which allocation produced an operation, never an
-        // allocator. These rows were not allocated by any device's counter, so the
-        // ordinal within the restore is the honest value — and writing a device's real
-        // `client_seq` here is precisely the collision the epoch in `op_id` exists to
-        // prevent.
-        staged + index + 1,
-        // Carried from the backup, not from this build. `ops.schema_version` is stored
-        // and never interpreted by the server, and a restored operation describes the
-        // schema its DATA was written under — not the one the restoring device happens
-        // to be running.
-        source.schema_version,
-        // The entity's own create time when the backup recorded one, so the new epoch's
-        // fold hands a hydrating device the time the thing was written rather than the
-        // moment it was restored (`fold.ts`, `BackupEntity.createdAt`).
-        entity.createdAt ?? createdAt,
-        now,
-        restore.from_epoch,
-        /**
-         * `baseVersion`: null for `create`, and 0 for everything else.
-         *
-         * The envelope contract requires an integer for every verb except `create`,
-         * and 0 is the honest one here: the new epoch has no prior version of
-         * anything, so there is no earlier version for a restored `replace` or
-         * `delete` to name. Devices hydrate a restored epoch through `/snapshot`,
-         * which carries folded state and no `baseVersion` at all, so this value is
-         * only ever read by something reading the raw log — and what it should read
-         * there is "no prior version", not "this was a create".
-         */
-        verb === "create" ? null : 0,
-      ),
-    );
+    const item = JSON.stringify({
+      // The slot in the window the UPDATE above reserved: the rows take its seqs in order.
+      n: index + 1,
+      o: opId,
+      e: entity.entity,
+      i: entity.entityId,
+      v: verb,
+      /**
+       * `baseVersion`: null for `create`, and 0 for everything else.
+       *
+       * The envelope contract requires an integer for every verb except `create`,
+       * and 0 is the honest one here: the new epoch has no prior version of
+       * anything, so there is no earlier version for a restored `replace` or
+       * `delete` to name. Devices hydrate a restored epoch through `/snapshot`,
+       * which carries folded state and no `baseVersion` at all, so this value is
+       * only ever read by something reading the raw log — and what it should read
+       * there is "no prior version", not "this was a create".
+       */
+      b: verb === "create" ? null : 0,
+      // Inside a JSON string, so `json_extract` hands SQLite exactly these bytes.
+      p: JSON.stringify(payload),
+      // The original creator when the backup kept one (`fold.ts`, `createdBy`), so the new
+      // epoch attributes what it restores as the old one did; the restore otherwise.
+      a: entity.createdBy ?? `restore:${restore.restore_id}`,
+      // `client_seq` is a RECORD of which allocation produced an operation, never an
+      // allocator. These rows were not allocated by any device's counter, so the
+      // ordinal within the restore is the honest value — and writing a device's real
+      // `client_seq` here is precisely the collision the epoch in `op_id` exists to
+      // prevent.
+      c: staged + index + 1,
+      // The entity's own create time when the backup recorded one, so the new epoch's
+      // fold hands a hydrating device the time the thing was written rather than the
+      // moment it was restored (`fold.ts`, `BackupEntity.createdAt`).
+      t: entity.createdAt ?? createdAt,
+    });
+    const size = utf8Bytes(item);
+    spent += stageWork(size, countEscapes(item));
+    if (size > FOLD_WRITE_BYTES) {
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO ops
+             (repo_id, seq, epoch, op_id, device_id, entity, entity_id, verb, base_version,
+              payload, actor, client_seq, schema_version, created_at, server_ts)
+           SELECT ?1, r.last_seq - ?2 + ?8, ?3, ?9, ?4, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?5, ?17, ?6
+             FROM repos r
+            WHERE r.repo_id = ?1 AND r.epoch = ?7
+              AND NOT EXISTS (SELECT 1 FROM ops o WHERE o.repo_id = ?1 AND o.epoch = ?3 AND o.op_id = ?9)`,
+        ).bind(
+          session.repoId,
+          chunk.length,
+          restore.to_epoch,
+          session.deviceId,
+          source.schema_version,
+          now,
+          restore.from_epoch,
+          index + 1,
+          opId,
+          entity.entity,
+          entity.entityId,
+          verb,
+          verb === "create" ? null : 0,
+          JSON.stringify(payload),
+          entity.createdBy ?? `restore:${restore.restore_id}`,
+          staged + index + 1,
+          entity.createdAt ?? createdAt,
+        ),
+      );
+      continue;
+    }
+    if (bytes > 0 && bytes + size > FOLD_WRITE_BYTES) flush();
+    packed.push(item);
+    bytes += size;
+  }
+  flush();
+
+  /**
+   * Progress, counted in the same transaction as the rows: the staged rows up to the seq this turn
+   * reserved to, as the count at the last recorded seq plus the rows above it (`stagedCount`). It
+   * only moves forward, so a turn that ran beside this one and recorded further is left as it is.
+   */
+  statements.push(
+    env.DB.prepare(
+      `UPDATE restores
+          SET staged_count = CASE WHEN staged_seq IS NULL THEN 0 ELSE staged_count END
+                + (SELECT COUNT(*) FROM ops o
+                    WHERE o.repo_id = ?1 AND o.epoch = restores.to_epoch
+                      AND o.seq > COALESCE(restores.staged_seq, restores.guard_seq)
+                      AND o.seq <= (SELECT last_seq FROM repos WHERE repo_id = ?1)),
+              staged_seq = (SELECT last_seq FROM repos WHERE repo_id = ?1)
+        WHERE repo_id = ?1 AND restore_id = ?2
+          AND (staged_seq IS NULL OR staged_seq < (SELECT last_seq FROM repos WHERE repo_id = ?1))`,
+    ).bind(session.repoId, restore.restore_id),
+  );
+
+  const [reserved] = await env.DB.batch<{ last_seq: number }>(statements);
+
+  /**
+   * Fold what this turn staged, so the new epoch's checkpoint is complete by the commit and
+   * every device re-bootstrapping onto it is served its snapshot at once, not told to wait
+   * while the whole epoch is folded. Twice a turn's worth folds this turn's rows and catches
+   * up any a failed turn left behind. The seqs a turn reserved are above every row already in
+   * the new epoch and committed with them, so the mark it writes claims only rows that exist.
+   * Nothing reads the new epoch until the flip.
+   */
+  const stagedTo = reserved?.results[0]?.last_seq;
+  if (typeof stagedTo === "number") {
+    await advanceFold(env, session.repoId, restore.to_epoch, stagedTo, {
+      budget: {
+        remaining: 2 * restoreStageEntities(planOf(env)),
+        bytes: 2 * (PAGE_BYTES + ROW_BYTES),
+        work: Math.max(0, (budget.work ?? 0) - spent),
+        folded: true,
+      },
+    });
   }
 
-  await env.DB.batch(statements);
-
-  const nowStaged = await stagedCount(env, session.repoId, restore.to_epoch);
-  await env.DB.prepare(
-    `UPDATE restores SET staged_count = ?3 WHERE repo_id = ?1 AND restore_id = ?2`,
+  const recorded = await env.DB.prepare(
+    `SELECT staged_count, staged_seq FROM restores WHERE repo_id = ?1 AND restore_id = ?2`,
   )
-    .bind(session.repoId, restore.restore_id, nowStaged)
-    .run();
+    .bind(session.repoId, restore.restore_id)
+    .first<{ staged_count: number; staged_seq: number | null }>();
+  const nowStaged = await stagedCount(env, session.repoId, {
+    ...restore,
+    staged_count: recorded?.staged_count ?? 0,
+    staged_seq: recorded?.staged_seq ?? null,
+  });
 
   log({
     event: "restore.stage",
@@ -955,6 +1308,10 @@ async function commitRestore(
       currentEpoch: repo.epoch,
     });
   }
+
+  // Everything staged is folded before the epoch goes live, or this turn refuses and the next
+  // carries on: what makes "the restored epoch is folded by the time it goes live" true.
+  await foldWhatWasStaged(env, session.repoId, restore, requestFoldBudget(planOf(env)));
 
   const intruder = await env.DB.prepare(
     `SELECT seq FROM ops
@@ -1080,6 +1437,8 @@ export async function purgeRepository(
     env.DB.prepare(`DELETE FROM leases WHERE repo_id = ?1`).bind(session.repoId),
     env.DB.prepare(`DELETE FROM backups WHERE repo_id = ?1`).bind(session.repoId),
     env.DB.prepare(`DELETE FROM restores WHERE repo_id = ?1`).bind(session.repoId),
+    env.DB.prepare(`DELETE FROM fold_versions WHERE repo_id = ?1`).bind(session.repoId),
+    env.DB.prepare(`DELETE FROM fold_marks WHERE repo_id = ?1`).bind(session.repoId),
     env.DB.prepare(`DELETE FROM repos WHERE repo_id = ?1`).bind(session.repoId),
     env.DB.prepare(`DELETE FROM devices WHERE repo_id = ?1`).bind(session.repoId),
   ]);
