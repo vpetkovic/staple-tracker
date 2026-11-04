@@ -41,6 +41,7 @@ the reference pages at the end are for looking things up.
 | [How an agent works a ticket](working-a-ticket.md) | The loop every agent follows: claim, plan, worklog, done |
 | [Plans become tickets](plans-to-tickets.md) | Turn an implementation plan into an epic with tickets agents work through |
 | [Handoff and resume](handoff.md) | Pick up work after a session dies, hits a limit or changes hands |
+| [Views in the thread](mcp-apps.md) | See a ticket, its progress and the queue inside your agent's conversation |
 
 ## Planning
 

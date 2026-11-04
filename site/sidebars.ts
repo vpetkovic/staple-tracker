@@ -18,7 +18,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Working with agents',
       collapsible: false,
-      items: ['working-a-ticket', 'plans-to-tickets', 'handoff'],
+      items: ['working-a-ticket', 'plans-to-tickets', 'handoff', 'mcp-apps'],
     },
     {
       type: 'category',

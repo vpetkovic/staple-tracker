@@ -145,10 +145,10 @@ Change settings, statuses, kinds or the queue order only because a person asked.
 
 Some tools also have a view: a small page that a client supporting
 [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) draws inside the
-conversation instead of showing the tool's text. The view follows the client's light or
-dark theme, and its buttons call staple tools through the client, which may ask you
-first. A client without MCP Apps shows the same answer as text, so every view tool works
-everywhere.
+conversation instead of showing the tool's text. A client without MCP Apps shows the
+same answer as text, so every view tool works everywhere.
+[Views in the thread](mcp-apps.md) shows each view, which clients draw them, and when
+an agent calls them.
 
 | Tool | What it does | View | Writes |
 |---|---|---|---|
@@ -161,51 +161,10 @@ everywhere.
 claims shows in the thread without an extra call. `inbox` and `list_queue` draw the queue
 view the same way. Their answers are unchanged.
 
-When to show what:
-
-- Call `show_ticket` when a person asks to see a ticket, or when work is waiting on them:
-  a ticket you finished, or a parent with a pending gate. While a gate is pending, the card
-  has **Approve** and **Request changes** buttons. They call `approve_task` and
-  `request_changes` through the client, which asks the person first. Request changes asks
-  for a note, which becomes a comment on the ticket.
-- Call `show_progress` when a person asks how a ticket is going, or wants to watch it
-  while an agent works it. Call it once. The view follows the work by itself: while the
-  attempt is open it reads `show_progress` again every few seconds through the client,
-  and each milestone an agent records with `record_attempt_event` shows up without
-  anyone asking. That read changes nothing, so the client asks nobody before it.
-- Call `show_queue` when a person asks what is in the queue, what to work on next, or
-  what is waiting on them. Pass `scope` to show one epic or milestone. **Take** on a ready
-  row posts "Work DEMO-12" into the thread as the person's message (the client asks them
-  first), and the agent that reads it takes the ticket. **Approve** on a gated row calls
-  `approve_task` through the client, which asks first. To choose work for yourself, call
-  `next_task`, not this.
-- Call `show_about` when a person asks which staple this is, or to check that views
-  render in this client.
-
-The card's **Open in Staple** button opens the ticket in the web UI, at
-`<base>?ws=<workspace>&issue=<REF>`. The server cannot see a running UI, so it builds the
-base from `STAPLE_UI_URL` when that is set, and otherwise uses `http://127.0.0.1:<port>/`
-with the port `staple ui` tries first (`staple config set port`). Set
-`STAPLE_UI_URL=off` to leave the button out. The link never carries the UI token: a
-browser on the same computer needs none, and a browser elsewhere asks for it.
-
-The card's branch is the newest branch pointer comment on the ticket (`Branch pointer:
-branch feat/x, base 3f2a1bc.`, see [How an agent works a ticket](working-a-ticket.md)).
-Its criteria show as met once the ticket is done. A milestone's criteria show the goal
-check's marks.
-
-The progress view says when it stops following. It stops when the client refuses its
-reads twice in a row (a client whose agent session has ended does, for example "The app's
-thread is not running"), when the client closes the view, when the attempt ends, and in a
-client that does not let views call tools. A **Check again** button reads once more and
-picks the refresh back up if that works. A client without MCP Apps gets the status, the
-time and the list of milestones as text.
-
-The queue view's lanes are the same order `staple queue next` and `next_task` give: the
-first ready row is what they answer, and every row they step over shows in Gated, In
-progress or the blocked line, with the reason. Under `queue.policy = strict` only the row
-checkout accepts now has a Take button; the others say which row they wait for. A client
-without MCP Apps gets the lanes as text.
+An agent calls `show_ticket` right after a `staple checkout` (it does not follow
+`checkout_task` with it: that claim already drew the card), `show_progress` after it
+records a milestone (once; the view follows later ones), and `show_queue` when you ask
+what is next. To choose its own work it calls `next_task`.
 
 The server lists its views as `ui://staple/<name>` resources (`resources/list`). Each is one
 HTML file with nothing to download, shipped inside `staple-cli`. A tool names its view in

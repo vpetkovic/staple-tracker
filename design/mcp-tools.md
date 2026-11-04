@@ -447,6 +447,18 @@ into one HTML file with its script and styles inlined (the frame has no network)
 - `npm run test:views` renders each view from the packaged payload in a minimal reference
   host (Chromium) at 360px, light and dark, and fails if it does not paint.
 
+When an agent shows a view is agent guidance, kept in two places that must agree: the
+generated `.staple/AGENTS.md` (section "Show your work in the thread" in
+`src/core/agents-template.ts`) and the descriptions of `show_ticket`, `show_progress`,
+`checkout_task`, `record_attempt_event`, `update_task` and `gate_task`, for agents that never
+read the guide.
+After a claim, `show_ticket` follows a CLI checkout only, because `checkout_task` and `get_task` already
+draw the card; `show_progress` follows a milestone unless the ticket's progress was shown
+since the person last wrote, because the view is live; `show_queue` answers a person,
+and `next_task` answers the agent. `test/agents-guide.test.ts` pins the guide's rules,
+the moments each description names, and the view declarations they rely on. The user-facing page is
+[docs/mcp-apps.md](../docs/mcp-apps.md).
+
 `show_about {ws?}` answers `{server: {name, version}, workspace: {slug, prefix, total,
 statuses: [{id, label, category, count}]} | null, views: [{name, uri, title}]}`. The
 workspace is null when none resolves and no `ws` was given; an explicit `ws` that does not

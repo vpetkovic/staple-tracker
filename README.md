@@ -48,6 +48,10 @@ loop your agents follow.
 - **A person in the loop.** The pickup queue sets the order agents take work in,
   and approval gates make work wait for your sign-off
   ([pickup queue](https://github.com/vpetkovic/staple-tracker/blob/master/docs/queue.md), [approval gates](https://github.com/vpetkovic/staple-tracker/blob/master/docs/approval-gates.md)).
+- **Views in the agent's conversation.** In a client with MCP Apps, the agent shows
+  the ticket it took as a card, its progress live as it records milestones, and the
+  pickup queue; you approve a gate or hand out the next ticket from there
+  ([views in the thread](https://github.com/vpetkovic/staple-tracker/blob/master/docs/mcp-apps.md)).
 - **Milestones and autopilot runs.** A date and a definition of done over a set of
   epics, and one agent working a scope ticket after ticket within a budget
   ([milestones](https://github.com/vpetkovic/staple-tracker/blob/master/docs/milestones.md), [autopilot runs](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md)).
@@ -102,7 +106,8 @@ The [documentation](https://github.com/vpetkovic/staple-tracker/blob/master/docs
   [Connect your agent](https://github.com/vpetkovic/staple-tracker/blob/master/docs/connect-your-agent.md)
 - **Working with agents:** [How an agent works a ticket](https://github.com/vpetkovic/staple-tracker/blob/master/docs/working-a-ticket.md),
   [Plans become tickets](https://github.com/vpetkovic/staple-tracker/blob/master/docs/plans-to-tickets.md),
-  [Handoff and resume](https://github.com/vpetkovic/staple-tracker/blob/master/docs/handoff.md)
+  [Handoff and resume](https://github.com/vpetkovic/staple-tracker/blob/master/docs/handoff.md),
+  [Views in the thread](https://github.com/vpetkovic/staple-tracker/blob/master/docs/mcp-apps.md)
 - **Planning:** [Epics and dependencies](https://github.com/vpetkovic/staple-tracker/blob/master/docs/epics-and-dependencies.md),
   [Approval gates](https://github.com/vpetkovic/staple-tracker/blob/master/docs/approval-gates.md), [The pickup queue](https://github.com/vpetkovic/staple-tracker/blob/master/docs/queue.md),
   [Milestones and goals](https://github.com/vpetkovic/staple-tracker/blob/master/docs/milestones.md), [Autopilot runs](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md)

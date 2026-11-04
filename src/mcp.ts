@@ -1492,7 +1492,7 @@ server.registerTool(
   "update_task",
   {
     description:
-      "Patch an issue. Guards: in_progress needs an assignee and zero unresolved blockers; unblock_owner/unblock_action only with status blocked; pass expected_status_version for optimistic concurrency. Optional comment lands in the same transaction.",
+      "Patch an issue. Guards: in_progress needs an assignee and zero unresolved blockers; unblock_owner/unblock_action only with status blocked; pass expected_status_version for optimistic concurrency. Optional comment lands in the same transaction. After you hand a ticket on for review (in_review), show_ticket shows the person what waits on them.",
     inputSchema: {
       ref: refSchema,
       title: z.string().optional(),
@@ -1612,7 +1612,7 @@ server.registerTool(
   "checkout_task",
   {
     description:
-      "Atomically claim an issue (forces in_progress). Re-claiming an issue you already hold is idempotent (crash recovery). Refused while blockers are unresolved. THREE refusals, none of them retryable, each naming what to do instead: `conflict` — somebody got there first, pick a DIFFERENT task now, never retry the same one; `gated` — a human must approve a gate above it, take something else from inbox `ready`; `out_of_order` — under queue.policy = strict, the plan puts an eligible row earlier, so take `detail.expected[0]`. Waiting clears none of them and steal_if_idle_seconds routes around none of them. Call next_task first and you will not see the third. A queued epic or milestone is not claimable work: it expands to its open leaves, which are what you take. Use steal_if_idle_seconds ONLY when a human has told you to take over a task whose holder is dead.",
+      "Atomically claim an issue (forces in_progress). Re-claiming an issue you already hold is idempotent (crash recovery). Refused while blockers are unresolved. THREE refusals, none of them retryable, each naming what to do instead: `conflict` — somebody got there first, pick a DIFFERENT task now, never retry the same one; `gated` — a human must approve a gate above it, take something else from inbox `ready`; `out_of_order` — under queue.policy = strict, the plan puts an eligible row earlier, so take `detail.expected[0]`. Waiting clears none of them and steal_if_idle_seconds routes around none of them. Call next_task first and you will not see the third. A queued epic or milestone is not claimable work: it expands to its open leaves, which are what you take. Use steal_if_idle_seconds ONLY when a human has told you to take over a task whose holder is dead. In a host with MCP Apps the result renders as the ticket card, so do not follow it with show_ticket.",
     inputSchema: {
       ref: refSchema,
       actor: actorSchema,
@@ -1717,7 +1717,7 @@ server.registerTool(
   "record_attempt_event",
   {
     description:
-      "Report on the attempt you hold on an issue (design/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (design/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry.",
+      "Report on the attempt you hold on an issue (design/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (design/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry. After a milestone, show_progress shows the person where the attempt stands (once: the view follows later milestones by itself).",
     inputSchema: {
       ref: refSchema,
       ...recordAttemptEventInput,
@@ -1746,7 +1746,7 @@ server.registerTool(
   "gate_task",
   {
     description:
-      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. A milestone with members is gateable: its gate holds the milestone's own close for review and queues nothing through membership (members stay workable; only issues parented under it are queued). Re-gating after request_changes is how you resubmit for a second read.",
+      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. A milestone with members is gateable: its gate holds the milestone's own close for review and queues nothing through membership (members stay workable; only issues parented under it are queued). Re-gating after request_changes is how you resubmit for a second read. Then show_ticket on the parent shows the person the gate, with Approve and Request changes.",
     inputSchema: {
       ref: refSchema,
       owner: z
@@ -3764,7 +3764,7 @@ server.registerTool(
   "show_ticket",
   {
     description:
-      "Show one ticket to the person in the thread: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer, estimate against time spent, and a link to it in the web UI. In a host with MCP Apps it renders as the ticket card, whose Approve and Request changes buttons (shown while a gate is pending) call approve_task and request_changes through the host, which asks the person first. Any other host gets the same facts as text. Display only: call it when a person asks to see a ticket or to review a pending gate, not to read a ticket for yourself (get_task has the full context).",
+      "Show one ticket to the person in the thread: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer, estimate against time spent, and a link to it in the web UI. In a host with MCP Apps it renders as the ticket card, whose Approve and Request changes buttons (shown while a gate is pending) call approve_task and request_changes through the host, which asks the person first. Any other host gets the same facts as text. Display only. Call it once right after you claim a ticket with the CLI (staple checkout); do not follow checkout_task with it, since that claim already drew this card (get_task draws it too). Call it when work waits on the person (a ticket you hand on for review, a parent you gate), and when a person asks to see a ticket. Not for reading a ticket yourself: get_task has the full context.",
     inputSchema: { ref: refSchema, ws: wsSchema },
     outputSchema: { ticket: z.object(ticketCardShape) },
     annotations: { title: "Show ticket", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -3826,7 +3826,7 @@ server.registerTool(
   "show_progress",
   {
     description:
-      "Show a person, live in the thread, how one ticket's current attempt is going: status, the attempt and its agent, a timeline of the milestones recorded with record_attempt_event (and the comments posted while it runs), estimate against time spent, and the last activity. In a host with MCP Apps it renders as the progress view, which refreshes itself by calling show_progress again through the host (a read, so nobody is asked) while the attempt is open, and says so when the host stops answering. Any other host gets the status and the milestones as text. Display only: call it once when a person asks how a ticket is going or wants to watch it; do not call it again to refresh, the view does that.",
+      "Show a person, live in the thread, how one ticket's current attempt is going: status, the attempt and its agent, a timeline of the milestones recorded with record_attempt_event (and the comments posted while it runs), estimate against time spent, and the last activity. In a host with MCP Apps it renders as the progress view, which refreshes itself by calling show_progress again through the host (a read, so nobody is asked) while the attempt is open, and says so when the host stops answering. Any other host gets the status and the milestones as text. Display only. Call it after you record a milestone, unless you already showed this ticket's progress since the person last wrote (that view picks the milestone up by itself), and when a person asks how a ticket is going or wants to watch it. Never call it again to refresh: the view does that.",
     inputSchema: { ref: refSchema, ws: wsSchema },
     outputSchema: { progress: z.object(progressShape) },
     annotations: { title: "Show progress", readOnlyHint: true, idempotentHint: true, openWorldHint: false },

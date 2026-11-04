@@ -52,6 +52,10 @@ Read this before you touch the repo. It takes a minute.
 2. \`staple checkout ${ref}\` — atomic claim, moves it to \`in_progress\`.
    **A conflict means pick a different task. Never retry the same one.** The
    claim is already held; retrying just burns turns. (Exit code 4 / \`conflict\`.)
+   **Then show the person what you took:** call the MCP tool \`show_ticket\` with
+   the ref, once. Skip it after \`checkout_task\`, which already showed that card,
+   and in a session without staple's MCP tools (see *Show your work in the
+   thread*).
 3. Write the plan: \`staple doc ${ref} plan --put plan.md\`. Documents are keyed
    and revisioned — this replaces a scratch \`plan.md\` nobody else can find.
    **Record your estimate while you are planning** — \`staple estimate ${ref} 2h\`
@@ -69,6 +73,38 @@ Read this before you touch the repo. It takes a minute.
    ran, what passed, what you deliberately left.
 6. \`staple events\` — see what your completion unblocked (\`blockers_resolved\`,
    \`children_complete\`). Then go back to \`inbox\`.
+
+## Show your work in the thread
+
+With staple's MCP server connected, three tools show the person what is going
+on, inside the conversation. In a client that supports MCP Apps each one draws a
+small view in the thread; any other client shows the same answer as text. They
+are display only: they change nothing and need no identity. They are MCP tools,
+not CLI commands: Claude Code and Codex list them as \`mcp__staple__show_ticket\`
+and so on. Call them at these moments:
+
+| When | Call | The person sees |
+|---|---|---|
+| right after you claim with the CLI, \`staple checkout ${ref}\` (not after \`checkout_task\`, which drew the card) | \`show_ticket\` with the ref, once | the ticket card: status, criteria, gate, branch, time against the estimate |
+| after you record a milestone (\`staple attempt milestone ${ref} -m "…"\`, MCP \`record_attempt_event\`) | \`show_progress\` with the ref | the attempt's milestones, refreshing on their own |
+| a person asks what is next, what is queued, or what waits on them | \`show_queue\` (\`scope\` for one epic or milestone) | the queue in lanes: Ready, Gated, In progress |
+
+- **One card per claim.** \`checkout_task\` and \`get_task\` draw the same ticket
+  card by themselves, so do not follow \`checkout_task\` with \`show_ticket\`: the
+  claim already drew it.
+- **One progress view per stretch of work.** The view follows every later
+  milestone by itself. After a milestone, call \`show_progress\` only if you have
+  not shown that ticket's progress since the person last wrote. Never call it to
+  refresh.
+- **Show what waits on the person.** When you hand a ticket on for review, or
+  gate a parent, call \`show_ticket\` on it: the card's Approve and Request
+  changes buttons answer the gate.
+- **\`show_queue\` answers a person.** To choose work for yourself, ask
+  \`staple queue next\` (MCP \`next_task\`), as below.
+- **\`Work ${ref}\` is a request.** The queue view's Take button posts that
+  message as the person's. Take the ticket it names the usual way.
+- **No staple MCP server in this session?** Skip this section. The CLI has no
+  views.
 
 ## The pickup queue — READY is the order, not a suggestion
 
@@ -540,8 +576,9 @@ The MCP tools mirror the CLI: \`inbox\`, \`next_task\` and \`list_queue\` for th
 pickup queue, \`checkout_task\` (with \`steal_if_idle_seconds\` and
 \`override_reason\`), \`put_document\`, \`add_comment\`, \`set_estimate\`, \`update_task\`,
 \`release_task\` (with \`if_idle_seconds\`), \`record_attempt_event\`, \`events_since\`, \`list_statuses\`,
-\`list_kinds\`, \`update_statuses\`, \`update_kinds\`, and the gate verbs
-\`gate_task\` / \`approve_task\` / \`request_changes\`. Writes require an
+\`list_kinds\`, \`update_statuses\`, \`update_kinds\`, the gate verbs
+\`gate_task\` / \`approve_task\` / \`request_changes\`, and the views
+\`show_ticket\`, \`show_progress\` and \`show_queue\`. Writes require an
 identity — pass \`actor\` or set \`STAPLE_AGENT\`; there is no silent default.
 
 ---

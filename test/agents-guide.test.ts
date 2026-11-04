@@ -332,9 +332,69 @@ describe("the guide teaches the whole protocol", () => {
     expect(section).toContain("--no-instructions");
   });
 
+  it("teaches when to show each view in the thread, and when not to", () => {
+    const section = guide.slice(guide.indexOf("## Show your work in the thread"), guide.indexOf("## The pickup queue"));
+    expect(section.length, "the section exists").toBeGreaterThan(100);
+    // The three moments: after a CLI checkout, after a milestone, when a person asks what is next.
+    expect(section).toMatch(/claim with the CLI, `staple checkout DEM-42` \(not after `checkout_task`, which drew the card\) \| `show_ticket`/);
+    expect(section).toMatch(/staple attempt milestone DEM-42[^|]*record_attempt_event[^|]*\| `show_progress`/);
+    expect(section).toMatch(/asks what is next[^|]*\| `show_queue`/);
+    // And the limits: no second card after checkout_task, no refresh loop, next_task for yourself.
+    expect(section).toMatch(/do not follow `checkout_task` with `show_ticket`/);
+    expect(section).toMatch(/only if you have\s+not shown that ticket's progress/);
+    expect(section).toMatch(/Never call it to\s+refresh/);
+    expect(section).toContain("`next_task`");
+    expect(section).toContain("`Work DEM-42`");
+    expect(section).toMatch(/MCP tools,\s+not CLI commands/);
+    // The loop points at it from the checkout step.
+    const loop = guide.slice(guide.indexOf("## The loop"), guide.indexOf("## Show your work in the thread"));
+    expect(loop).toMatch(/Then show the person what you took:\*\* call the MCP tool `show_ticket`/);
+    expect(loop).toMatch(/Skip it after `checkout_task`, which already showed that card/);
+    // And the wiring lists the views.
+    const wiring = guide.slice(guide.indexOf("## Wiring"));
+    for (const tool of ["show_ticket", "show_progress", "show_queue"]) expect(wiring, tool).toContain(`\`${tool}\``);
+  });
+
   it("tells the reader their edits are safe", () => {
     expect(guide).toMatch(/will not\s+overwrite your changes/i);
   });
+});
+
+// The guide's claims about the views are claims about the server: the tools it names exist,
+// and the ones it says draw the ticket card by themselves do.
+describe("the views the guide names are the server's", () => {
+  it("lists show_ticket, show_progress and show_queue with their views, checkout_task and get_task draw the card, and the descriptions carry the guide's moments", async () => {
+    const harness = await startMcpClient({ home, cwd: scratch("views-cwd") });
+    try {
+      const tools = (await harness.client.listTools()).tools;
+      const view = (name: string) => {
+        const tool = tools.find((candidate) => candidate.name === name);
+        expect(tool, name).toBeTruthy();
+        return (tool?._meta?.ui as { resourceUri?: string } | undefined)?.resourceUri;
+      };
+      expect(view("show_ticket")).toBe("ui://staple/ticket");
+      expect(view("show_progress")).toBe("ui://staple/progress");
+      expect(view("show_queue")).toBe("ui://staple/queue");
+      expect(view("checkout_task")).toBe("ui://staple/ticket");
+      expect(view("get_task")).toBe("ui://staple/ticket");
+      expect(view("next_task")).toBeUndefined();
+      expect(view("record_attempt_event")).toBeUndefined();
+      // Agents that never read the guide learn the same moments from the tool descriptions.
+      const description = (name: string) => tools.find((candidate) => candidate.name === name)?.description ?? "";
+      expect(description("show_ticket")).toMatch(/right after you claim a ticket with the CLI/);
+      expect(description("show_ticket")).toMatch(/do not follow checkout_task with it/);
+      expect(description("show_ticket")).toMatch(/hand on for review/);
+      expect(description("show_progress")).toMatch(/after you record a milestone, unless you already showed/);
+      expect(description("show_progress")).toMatch(/Never call it again to refresh/);
+      expect(description("show_queue")).toMatch(/what to work on next[^.]*to pick work for yourself call next_task/);
+      expect(description("checkout_task")).toMatch(/do not follow it with show_ticket/);
+      expect(description("record_attempt_event")).toMatch(/After a milestone, show_progress[^.]*once/);
+      expect(description("update_task")).toMatch(/in_review\), show_ticket/);
+      expect(description("gate_task")).toMatch(/show_ticket on the parent/);
+    } finally {
+      await harness.close();
+    }
+  }, 60_000);
 });
 
 // ------------------------------------------------------------- never clobber
