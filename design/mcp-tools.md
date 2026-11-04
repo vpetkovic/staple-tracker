@@ -10,7 +10,7 @@ Any MCP client can launch `npx -y staple-cli mcp` the same way, with
 `STAPLE_AGENT` naming the agent. There is no separate MCP binary — `staple mcp`
 is the same entrypoint as the CLI.
 
-Seventy stdio tools. The loop they exist for:
+Seventy-one stdio tools. The loop they exist for:
 
 `inbox` (or `next_task`) → `checkout_task` (a conflict means pick another, never
 retry; `out_of_order` means take the one it names) → `put_document` the plan and
@@ -33,7 +33,7 @@ Every tool, by area:
 | Execution telemetry and budget | `list_attempts`, `get_attempt`, `get_budget`, `list_budget_samples`, `record_budget_sample`, `forget_budget_samples` |
 | [Cloud sync](../docs/cloud-sync.md) | `cloud_status`, `conflict_list`, `conflict_resolve` |
 | Workspaces and the hub | `init`, `hub_overview`, `cross_link`, `cross_unlink`, `hub_unregister`, `hub_prune` |
-| [MCP Apps views](#mcp-apps-views) | `show_about` |
+| [MCP Apps views](#mcp-apps-views) | `show_about`, `show_ticket` |
 
 ## Changing an estimate
 
@@ -451,3 +451,30 @@ into one HTML file with its script and styles inlined (the frame has no network)
 statuses: [{id, label, category, count}]} | null, views: [{name, uri, title}]}`. The
 workspace is null when none resolves and no `ws` was given; an explicit `ws` that does not
 resolve is a `not_found` error.
+
+`show_ticket {ref, ws?}` answers `{ticket}`, built by `ticketCard` in
+`src/mcp-ticket-card.ts`: `{workspace, identifier, title, status: {id, label, category},
+kind: {id, label}, priority, assignee, criteria: [{text, mark: met|unmet|open}], gate,
+queuedBy, attempt: {ordinal, agent, state, current, startedAt, endedAt, outcome} | null,
+branch: {name, base, author, at} | null, timing: {estimatedSeconds, elapsedSeconds}, url,
+actions: {approve, requestChanges}}`. Its text is the same card as prose.
+
+- Criterion marks: a milestone's come from its goal check; any other ticket's are `met`
+  once its status is in the done category and `open` before, as the web UI reads them.
+- `branch` is the newest comment whose first line is `Branch pointer: branch <name>, base
+  <base>.` or `working on branch <name> (off <base>)`.
+- `timing.estimatedSeconds` is the subtree plan's estimate, else the ticket's own;
+  `elapsedSeconds` is `activeSeconds`, the figure every surface prints as "ran".
+- `url` is `<base>?ws=<slug>&issue=<REF>`, the link form the web UI opens one ticket from.
+  The base is `STAPLE_UI_URL` (`off`, `none`, `false`, `0` or a non-http value give null),
+  else `http://127.0.0.1:<config port>/`. A `token` parameter and any fragment are
+  removed: the URL is in the agent's context.
+- `actions.approve` and `actions.requestChanges` are true only while the gate is
+  `pending`. The view's buttons call `approve_task` and `request_changes {comment}` through
+  the host with no `actor`, so the write is attributed to the server's `STAPLE_AGENT`.
+  The host asks the person first, because both tools are writes. An approval from the
+  card stores the comment "Approved from the ticket card in the thread." so the history
+  says a person pressed it; a request for changes stores the person's note.
+- `get_task` and `checkout_task` declare the ticket view too. Their payloads are not
+  cards, so the view paints the header from the payload and reads the card with
+  `show_ticket` through the host, passing on the call's `ws`.

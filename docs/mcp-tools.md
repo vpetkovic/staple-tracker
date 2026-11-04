@@ -6,7 +6,7 @@ description: Every tool the staple MCP server offers, grouped by what an agent i
 # MCP tools
 
 Use this page to find the tool an agent calls for a job, and the command you would
-type for the same thing. The server offers 70 tools, grouped the same way as the
+type for the same thing. The server offers 71 tools, grouped the same way as the
 [CLI reference](cli.md). A tool and its command follow the same rules, and most
 answer the same object the command prints with `--json`.
 
@@ -153,6 +153,32 @@ everywhere.
 | Tool | What it does | View | Writes |
 |---|---|---|---|
 | `show_about` | Which staple this is: version, workspace, tickets by status, the views it has | `ui://staple/about` | no |
+| `show_ticket` | One ticket as a card: status, criteria, gate, attempt, branch, time, and a link to it | `ui://staple/ticket` | no |
+
+`get_task` and `checkout_task` draw the same ticket card, so the ticket an agent reads or
+claims shows in the thread without an extra call. Their answers are unchanged.
+
+When to show what:
+
+- Call `show_ticket` when a person asks to see a ticket, or when work is waiting on them:
+  a ticket you finished, or a parent with a pending gate. While a gate is pending, the card
+  has **Approve** and **Request changes** buttons. They call `approve_task` and
+  `request_changes` through the client, which asks the person first. Request changes asks
+  for a note, which becomes a comment on the ticket.
+- Call `show_about` when a person asks which staple this is, or to check that views
+  render in this client.
+
+The card's **Open in Staple** button opens the ticket in the web UI, at
+`<base>?ws=<workspace>&issue=<REF>`. The server cannot see a running UI, so it builds the
+base from `STAPLE_UI_URL` when that is set, and otherwise uses `http://127.0.0.1:<port>/`
+with the port `staple ui` tries first (`staple config set port`). Set
+`STAPLE_UI_URL=off` to leave the button out. The link never carries the UI token: a
+browser on the same computer needs none, and a browser elsewhere asks for it.
+
+The card's branch is the newest branch pointer comment on the ticket (`Branch pointer:
+branch feat/x, base 3f2a1bc.`, see [How an agent works a ticket](working-a-ticket.md)).
+Its criteria show as met once the ticket is done. A milestone's criteria show the goal
+check's marks.
 
 The server lists its views as `ui://staple/<name>` resources (`resources/list`). Each is one
 HTML file with nothing to download, shipped inside `staple-cli`. A tool names its view in

@@ -130,7 +130,7 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 70 tools", async () => {
+  it("still connects and still lists all 71 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
@@ -149,8 +149,8 @@ describe("a server started with no workspace in reach", () => {
     // autopilot runs' start_run, run_status and stop_run (61), and pause_run, resume_run
     // and continue_run (64), and goal mode's mark_milestone_criterion (65), and
     // list_files, attach_file, export_file and remove_file (69), and the MCP Apps
-    // about view's show_about (70).
-    expect(tools).toHaveLength(70);
+    // about view's show_about (70), and the ticket card's show_ticket (71).
+    expect(tools).toHaveLength(71);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

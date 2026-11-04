@@ -28,6 +28,7 @@ import { stapleHome } from "./config/home.js";
 import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
+import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
 import {
   attemptEndFields,
   attemptOpenFields,
@@ -1275,6 +1276,9 @@ server.registerTool(
         ),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    // A host with MCP Apps draws the ticket card for this result (the view fetches the
+    // card with show_ticket); the payload itself is unchanged.
+    _meta: viewToolMeta("ticket"),
   },
   ({ ref, include_documents, run_id, ws }) =>
     run(() => {
@@ -1646,6 +1650,8 @@ server.registerTool(
       idempotentHint: true,
       openWorldHint: false,
     },
+    // The claimed ticket, as a card in a host with MCP Apps; the payload is unchanged.
+    _meta: viewToolMeta("ticket"),
   },
   ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, override_reason, ws, ...attempt }) =>
     run(() => {
@@ -3708,6 +3714,63 @@ server.registerTool(
       `Views: ${views.map((view) => `${view.name} (${view.uri})`).join(", ")}.`,
     ];
     return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: payload };
+  },
+);
+
+const ticketCardShape = {
+  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
+  identifier: z.string(),
+  title: z.string(),
+  status: z.object({ id: z.string(), label: z.string(), category: z.string() }),
+  kind: z.object({ id: z.string(), label: z.string() }),
+  priority: z.string(),
+  assignee: z.string().nullable(),
+  criteria: z
+    .array(z.object({ text: z.string(), mark: z.enum(["met", "unmet", "open"]) }))
+    .describe("Acceptance criteria. A milestone's marks are its goal check; any other ticket's are met once it is done"),
+  ...gateFields,
+  attempt: z
+    .object({
+      ordinal: z.number().int(),
+      agent: z.string(),
+      state: z.string(),
+      current: z.boolean().describe("False when this is the newest ended attempt and none is open"),
+      startedAt: z.string(),
+      endedAt: z.string().nullable(),
+      outcome: z.string().nullable(),
+    })
+    .nullable(),
+  branch: z
+    .object({ name: z.string(), base: z.string().nullable(), author: z.string(), at: z.string() })
+    .nullable()
+    .describe("The newest branch pointer comment (\"Branch pointer: branch <name>, base <sha>.\"), read apart"),
+  timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
+  url: z
+    .string()
+    .nullable()
+    .describe("The web UI deep link, <base>?ws=<slug>&issue=<REF>. The base is STAPLE_UI_URL, else the configured UI port on 127.0.0.1; null when STAPLE_UI_URL=off"),
+  actions: z.object({ approve: z.boolean(), requestChanges: z.boolean() }),
+};
+type _TicketCardShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof ticketCardShape>>, TicketCard>>;
+
+server.registerTool(
+  "show_ticket",
+  {
+    description:
+      "Show one ticket to the person in the thread: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer, estimate against time spent, and a link to it in the web UI. In a host with MCP Apps it renders as the ticket card, whose Approve and Request changes buttons (shown while a gate is pending) call approve_task and request_changes through the host, which asks the person first. Any other host gets the same facts as text. Display only: call it when a person asks to see a ticket or to review a pending gate, not to read a ticket for yourself (get_task has the full context).",
+    inputSchema: { ref: refSchema, ws: wsSchema },
+    outputSchema: { ticket: z.object(ticketCardShape) },
+    annotations: { title: "Show ticket", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: viewToolMeta("ticket"),
+  },
+  ({ ref, ws }) => {
+    try {
+      const card = ticketCard(storeFor(ws), ref);
+      // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
+      return { content: [{ type: "text" as const, text: ticketCardText(card) }], structuredContent: { ticket: card } };
+    } catch (error) {
+      return fail(error);
+    }
   },
 );
 

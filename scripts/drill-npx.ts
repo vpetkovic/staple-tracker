@@ -28,7 +28,7 @@
  *   - `staple --help` exits 0 and prints usage;
  *   - `staple mcp` completes an MCP initialize handshake over stdio;
  *   - `staple mcp` lists its MCP Apps views and serves each as one self-contained
- *     HTML file from the package, and `show_about` links to its view;
+ *     HTML file from the package, and `show_about` and `show_ticket` link to their views;
  *   - in a fresh repo dir with a temp STAPLE_HOME, `staple init --yes` works
  *     and `staple inbox --json` returns valid JSON;
  *   - the installed package.json exposes exactly ONE bin, named `staple`
@@ -397,4 +397,7 @@ async function assertViewsServed(session: McpSession): Promise<void> {
   const tools = await session.request("tools/list", {});
   const about = (tools.result?.tools ?? []).find((tool: any) => tool.name === "show_about");
   assert(about?._meta?.ui?.resourceUri === "ui://staple/about", `show_about does not declare its view: ${preview(JSON.stringify(about))}`);
+  const ticket = (tools.result?.tools ?? []).find((tool: any) => tool.name === "show_ticket");
+  assert(ticket?._meta?.ui?.resourceUri === "ui://staple/ticket", `show_ticket does not declare its view: ${preview(JSON.stringify(ticket))}`);
+  assert(views.some((view: any) => view.uri === "ui://staple/ticket"), "resources/list does not list the ticket view");
 }

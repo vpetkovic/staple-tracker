@@ -12,6 +12,7 @@ import { inflateSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Browser, BrowserContext, Frame, Page } from "playwright-core";
+import { expect } from "vitest";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { HostStart } from "./mcp-apps-host.js";
@@ -67,8 +68,8 @@ export interface RenderedView {
   page: Page;
   context: BrowserContext;
   frame: Frame;
-  /** What `mcp-apps-host.ts` recorded: tool calls, messages, reported sizes. */
-  record(): Promise<{ messages: unknown[]; toolCalls: string[]; sizes: number[] }>;
+  /** What `mcp-apps-host.ts` recorded: tool calls, messages, reported sizes, links opened. */
+  record(): Promise<{ messages: unknown[]; toolCalls: string[]; sizes: number[]; links: string[] }>;
   setTheme(theme: "light" | "dark"): Promise<void>;
 }
 
@@ -116,6 +117,16 @@ export interface PaintReport {
   overflowPx: number;
   /** The view document's computed `color-scheme`. */
   colorScheme: string;
+}
+
+/** The paint report of a view a person can read at `width`, in the host's `theme`. */
+export function expectPainted(report: PaintReport, theme: "light" | "dark", width: number): void {
+  expect(report.ready, "the view rendered a result").toBe(true);
+  expect(report.height, "the view reported a real height").toBeGreaterThan(60);
+  expect(report.colors, "the frame is not one flat colour").toBeGreaterThan(8);
+  expect(report.inked, "a real share of the frame is drawn").toBeGreaterThan(0.2);
+  expect(report.overflowPx, `no sideways scroll at ${width}px`).toBeLessThanOrEqual(0);
+  expect(report.colorScheme, "the view took the host theme").toBe(theme);
 }
 
 /** Wait for the view to paint, then measure it. Never throws on a view that does not paint. */

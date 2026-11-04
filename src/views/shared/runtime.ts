@@ -9,7 +9,8 @@
  *   - connect to the host, and render the tool result the host forwards (and an error result
  *     as an error, never as a blank frame);
  *   - follow the host's theme, style variables and fonts, live, when they change;
- *   - call staple tools and post messages through the host (it may ask the user first);
+ *   - call staple tools, post messages and open links through the host (it may ask the
+ *     user first);
  *   - report the content size, so the host sizes the frame (`autoResize`);
  *   - mark `<body data-ready>` once a result has painted, which tests and captures wait for.
  */
@@ -34,6 +35,8 @@ export interface ViewHost {
   callTool(name: string, args?: Record<string, unknown>): Promise<CallToolResult>;
   /** Post a user message into the thread. Resolves false when the host declines it. */
   sendMessage(text: string): Promise<boolean>;
+  /** Ask the host to open a link (`ui/open-link`). Resolves false when the host declines it. */
+  openLink(url: string): Promise<boolean>;
   /** Render a result the view fetched itself (say, after a button's tool call) as the current one. */
   show(result: CallToolResult): void;
 }
@@ -121,6 +124,10 @@ export function startView<T>(options: ViewOptions<T>): ViewHost {
     callTool: (name, args = {}) => app.callServerTool({ name, arguments: args }),
     sendMessage: async (text) => {
       const answer = await app.sendMessage({ role: "user", content: [{ type: "text", text }] });
+      return answer.isError !== true;
+    },
+    openLink: async (url) => {
+      const answer = await app.openLink({ url });
       return answer.isError !== true;
     },
     show: (result) => show(result),

@@ -72,7 +72,7 @@ const READS: Record<StoreName, readonly string[]> = {
     "kindUsageCount", "getSetting", "settingValue", "settingValues", "unknownSettingKeys", "movedOff", "removedByRestore", "getIssue",
     "listEvents", "blockersOf", "dependentsOf", "unresolvedBlockersOf", "unresolvedBlockersFor", "openDependentsFor",
     "blockingChildrenOf", "gate", "gateFor", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
-    "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "listCommentsPage",
+    "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "latestComments", "listCommentsPage",
     "getDocument", "listDocuments", "listDocumentRevisions", "instructions", "listIssues", "listIssuesPage", "inbox", "context", "tree",
     "edges", "milestones", "queue", "projects", "writeTarget",
     // The attempt ledger the mutators write through; its own writes are the store's methods below.

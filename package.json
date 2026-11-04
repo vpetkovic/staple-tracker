@@ -24,7 +24,7 @@
     "dev:all": "tsx scripts/dev-ui.ts",
     "test": "vitest run",
     "validate:timing": "vitest run test/controlled-runs.test.ts",
-    "test:views": "vitest run test/mcp-views-host.test.ts",
+    "test:views": "vitest run test/mcp-views",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/ui/app/tsconfig.json && tsc --noEmit -p src/views/tsconfig.json",
     "seed-demo": "tsx scripts/seed-demo.ts",
     "smoke:mcp": "tsx scripts/smoke-mcp.ts",

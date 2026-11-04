@@ -308,7 +308,8 @@ describe("tool inventory", () => {
   // resume_run and continue_run: 61 -> 64. Milestone goal mode added
   // mark_milestone_criterion: 64 -> 65. Typed files added list_files, attach_file,
   // export_file and remove_file: 65 -> 69. The MCP Apps about view added show_about: 69 -> 70.
-  it("exposes exactly these 70 tools with these annotations and output schemas", async () => {
+  // The ticket card added show_ticket: 70 -> 71.
+  it("exposes exactly these 71 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -952,6 +953,15 @@ describe("tool inventory", () => {
         hasOutputSchema: true,
       },
       /**
+       * The ticket card: one ticket as a card in a host that renders views, and as text
+       * elsewhere. A read; its buttons call approve_task and request_changes through the host.
+       */
+      {
+        name: "show_ticket",
+        annotations: { title: "Show ticket", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      /**
        * Budget ingestion writes one machine-local row per reading into hub.db. It is
        * idempotent (a replay stores nothing twice, by dedup key) and never destructive
        * (samples are only ever added).
@@ -1010,7 +1020,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty-seven read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-eight read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -1051,6 +1061,8 @@ describe("tool inventory", () => {
       "conflict_list",
       // MCP Apps: the about view reads the server and the workspace's counts.
       "show_about",
+      // MCP Apps: the ticket card reads one ticket.
+      "show_ticket",
       // Execution telemetry: reading attempts and this machine's budget writes nothing,
       // a stored orphan end included.
       "list_attempts",
@@ -1821,6 +1833,8 @@ describe("tool response shapes (31/31)", () => {
       "get_document",
       // The MCP Apps about view: pinned in test/mcp-views-host.test.ts, shape, text and view.
       "show_about",
+      // The ticket card: pinned in test/mcp-views-ticket.test.ts, shape, text and view.
+      "show_ticket",
       // Typed files: pinned in test/attachments.test.ts, against the store, the CLI and these tools.
       "list_files",
       "attach_file",

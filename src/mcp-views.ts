@@ -36,6 +36,12 @@ export const VIEWS: readonly ViewDefinition[] = [
     title: "About this staple server",
     description: "Placeholder view: the server version, the workspace, its tickets by status, and the host it renders in.",
   },
+  {
+    name: "ticket",
+    title: "Ticket card",
+    description:
+      "One ticket: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer and estimate against elapsed. Approve and Request changes while a gate is pending; Open in Staple.",
+  },
 ];
 
 export function viewUri(name: string): string {

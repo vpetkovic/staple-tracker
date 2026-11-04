@@ -22,7 +22,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { initWorkspace } from "../src/core/workspace.js";
 import { testPackageDir } from "./fixtures/package-payload.js";
-import { MCP_APPS_EXTENSION, loadView, measurePaint, renderView, type PaintReport } from "./fixtures/mcp-apps-harness.js";
+import {
+  MCP_APPS_EXTENSION,
+  expectPainted as expectPaintedAt,
+  loadView,
+  measurePaint,
+  renderView,
+  type PaintReport,
+} from "./fixtures/mcp-apps-harness.js";
 
 if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
   const cache =
@@ -97,12 +104,7 @@ async function connect(options: { apps: boolean; unpinned?: boolean }): Promise<
 }
 
 function expectPainted(report: PaintReport, theme: "light" | "dark"): void {
-  expect(report.ready, "the view rendered a result").toBe(true);
-  expect(report.height, "the view reported a real height").toBeGreaterThan(60);
-  expect(report.colors, "the frame is not one flat colour").toBeGreaterThan(8);
-  expect(report.inked, "a real share of the frame is drawn").toBeGreaterThan(0.2);
-  expect(report.overflowPx, `no sideways scroll at ${WIDTH}px`).toBeLessThanOrEqual(0);
-  expect(report.colorScheme, "the view took the host theme").toBe(theme);
+  expectPaintedAt(report, theme, WIDTH);
 }
 
 beforeAll(async () => {
@@ -151,7 +153,10 @@ describe("the views over MCP", () => {
     expect(result.structuredContent).toMatchObject({
       server: { name: "staple", version },
       workspace: { slug, prefix, total: 3 },
-      views: [{ name: "about", uri: "ui://staple/about" }],
+      views: [
+        { name: "about", uri: "ui://staple/about" },
+        { name: "ticket", uri: "ui://staple/ticket" },
+      ],
     });
   });
 
@@ -161,7 +166,7 @@ describe("the views over MCP", () => {
     const text = result.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
     expect(text).toContain(`staple ${version}`);
     expect(text).toContain(`Workspace ${slug} (${prefix}): 3 tickets: 1 todo, 1 in progress, 1 done.`);
-    expect(text).toContain("Views: about (ui://staple/about).");
+    expect(text).toContain("Views: about (ui://staple/about), ticket (ui://staple/ticket).");
     expect(() => JSON.parse(text)).toThrow();
   });
 });

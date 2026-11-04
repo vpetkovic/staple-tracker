@@ -7,7 +7,8 @@
  * Apps host does, in a sandboxed `srcdoc` frame with an opaque origin, and gives it a host
  * context (theme, standard style variables, container width). Tool calls and resource reads
  * from the view are proxied to the real `staple mcp` the test started, through functions the
- * test exposes on `window`. Messages the view posts are recorded, not sent anywhere.
+ * test exposes on `window`. Messages the view posts and links it asks to open are recorded,
+ * not sent or opened anywhere.
  *
  * `test/fixtures/mcp-apps-harness.ts` bundles this file into the page with esbuild.
  */
@@ -62,14 +63,14 @@ declare global {
     hostReadResource(params: ReadResourceRequest["params"]): Promise<ReadResourceResult>;
     startHost(start: HostStart): Promise<void>;
     setHostTheme(theme: Theme): Promise<void>;
-    hostRecord: { messages: unknown[]; toolCalls: string[]; sizes: number[] };
+    hostRecord: { messages: unknown[]; toolCalls: string[]; sizes: number[]; links: string[] };
   }
 }
 
 let bridge: AppBridge | undefined;
 // Read off the method: the package's own type exports do not resolve under NodeNext.
 let context: Parameters<AppBridge["setHostContext"]>[0] = {};
-window.hostRecord = { messages: [], toolCalls: [], sizes: [] };
+window.hostRecord = { messages: [], toolCalls: [], sizes: [], links: [] };
 
 function paintHost(theme: Theme): void {
   document.documentElement.style.colorScheme = theme;
@@ -101,7 +102,7 @@ window.startHost = async ({ html, theme, width, tool, toolInput, toolResult }) =
   const created = new AppBridge(
     null,
     { name: "test-host", version: "0.0.0" },
-    { serverTools: {}, serverResources: {}, message: { text: {} }, logging: {} },
+    { serverTools: {}, serverResources: {}, message: { text: {} }, openLinks: {}, logging: {} },
     { hostContext: context },
   );
   created.oncalltool = async (params) => {
@@ -111,6 +112,10 @@ window.startHost = async ({ html, theme, width, tool, toolInput, toolResult }) =
   created.onreadresource = async (params) => window.hostReadResource(params);
   created.onmessage = async (params) => {
     window.hostRecord.messages.push(params);
+    return {};
+  };
+  created.onopenlink = async ({ url }) => {
+    window.hostRecord.links.push(url);
     return {};
   };
   created.onsizechange = ({ height }) => {

@@ -7107,6 +7107,18 @@ export class WorkspaceStore {
     return rows.map(rowToComment);
   }
 
+  /** The newest `limit` comments, oldest first: what a reader looking for the latest note needs. */
+  latestComments(ref: string, limit: number): IssueComment[] {
+    const row = this.requireRow(ref);
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM comments WHERE issue_id = ? AND deleted_at IS NULL
+         ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      )
+      .all(row.id, limit) as unknown as CommentRow[];
+    return rows.reverse().map(rowToComment);
+  }
+
   /** One page of listComments. Comments are append-only, so offsets stay stable. */
   listCommentsPage(
     ref: string,

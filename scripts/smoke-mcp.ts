@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 27 &&
+    readOnly.length === 28 &&
       [
         "inbox",
         "list_tasks",
@@ -162,8 +162,10 @@ try {
         "forecast",
         // MCP Apps: the about view reads the server and the workspace's counts.
         "show_about",
+        // MCP Apps: the ticket card reads one ticket.
+        "show_ticket",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 27 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 28 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   // A host decides from these hints whether to ask a person first, including for a tool a
   // view's button calls through it.
@@ -180,8 +182,25 @@ try {
   // on the result, and its text content still answers a host that renders no views.
   const resources = (await rpc("resources/list", {})).resources;
   assert(
-    resources.some((r: any) => r.uri === "ui://staple/about" && r.mimeType === "text/html;profile=mcp-app"),
-    `resources/list lists the about view as an MCP Apps resource (${resources.map((r: any) => r.uri).join(", ")})`,
+    ["ui://staple/about", "ui://staple/ticket"].every((uri) =>
+      resources.some((r: any) => r.uri === uri && r.mimeType === "text/html;profile=mcp-app"),
+    ),
+    `resources/list lists the about and ticket views as MCP Apps resources (${resources.map((r: any) => r.uri).join(", ")})`,
+  );
+  const ticketHtml = (await rpc("resources/read", { uri: "ui://staple/ticket" })).contents[0];
+  assert(
+    ticketHtml.mimeType === "text/html;profile=mcp-app" &&
+      /^<!doctype html>/i.test(ticketHtml.text) &&
+      !/<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=/i.test(ticketHtml.text),
+    `resources/read returns the ticket view as one self-contained HTML file (${ticketHtml.text.length} chars)`,
+  );
+  assert(
+    ["show_ticket", "get_task", "checkout_task"].every(
+      (name) =>
+        byName.get(name)._meta?.ui?.resourceUri === "ui://staple/ticket" &&
+        byName.get(name)._meta?.["ui/resourceUri"] === "ui://staple/ticket",
+    ),
+    "show_ticket, get_task and checkout_task declare the ticket view (both _meta spellings)",
   );
   const aboutHtml = (await rpc("resources/read", { uri: "ui://staple/about" })).contents[0];
   assert(
@@ -280,6 +299,16 @@ try {
     "structuredContent matches the text block payload",
   );
   assert(!toolText(claimedResult).includes("\n  "), "text block is compact, not pretty-printed");
+  assert(claimedResult._meta?.ui?.resourceUri === "ui://staple/ticket", "checkout_task's result carries the ticket view");
+
+  const shownTicket = await rpc("tools/call", { name: "show_ticket", arguments: { ref: "SMO-1" } });
+  assert(
+    shownTicket._meta?.ui?.resourceUri === "ui://staple/ticket" &&
+      shownTicket.structuredContent?.ticket?.identifier === "SMO-1" &&
+      shownTicket.structuredContent.ticket.attempt?.agent === "smoke-agent" &&
+      toolText(shownTicket).startsWith("SMO-1 Smoke: implement feature\n"),
+    "show_ticket answers with the card and in text for hosts without views",
+  );
 
   const conflict = await rpc("tools/call", {
     name: "checkout_task",
@@ -908,8 +937,9 @@ try {
   // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51,
   // and pause_run, resume_run and continue_run, 54, and goal mode's mark_milestone_criterion, 55.
   // Typed files added list_files, attach_file, export_file and remove_file, 59, and the MCP
-  // Apps about view's show_about, which reports on one workspace, 60.
-  assert(wsTargetable.length === 60, `60 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // Apps about view's show_about, which reports on one workspace, 60, and the ticket card's
+  // show_ticket, 61.
+  assert(wsTargetable.length === 61, `61 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&

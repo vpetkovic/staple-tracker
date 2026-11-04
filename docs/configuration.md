@@ -78,6 +78,7 @@ Statuses and kinds are workspace settings too, with their own commands:
 | `STAPLE_DB` | Pin commands and the MCP server to one workspace database, such as `/path/to/repo/.staple/staple.db`. It wins over the current directory and over `--ws`. |
 | `STAPLE_WS` | For the MCP server: a workspace slug or prefix to use by default. The CLI takes `--ws` instead. |
 | `STAPLE_HOME` | Where staple keeps this machine's files, instead of `~/.staple`. |
+| `STAPLE_UI_URL` | For the MCP server: the web UI address the ticket card's Open in Staple button links to, such as `http://127.0.0.1:4400/`. Without it the card uses `127.0.0.1` and the port from `staple config`. `off` leaves the button out. A `token` parameter in it is dropped. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | Where Claude Code and Codex keep their files. Budget capture looks there, and falls back to `~/.claude` and `~/.codex`. |
 
 Staple also sets variables for the commands it starts: `STAPLE_EVENT` for
