@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { catchUpFolds } from "../src/catch-up.js";
-import { bodyKey } from "../src/fold-revisions.js";
+import { bodyKey, RevisionPlacer, type PlacementEntry } from "../src/fold-revisions.js";
 import { advanceFold, foldedPage } from "../src/fold-store.js";
 import { foldLog } from "../src/fold.js";
 import { countEscapes, runWork, writeWork } from "../src/fold-work.js";
@@ -98,4 +98,17 @@ it("ranks catch-up by the current epoch backlog rather than previous epochs", as
   await insertOps(env.DB, "busy-repo", Array.from({ length: 400 }, (_, n) => op(n + 1, "issue", `i${n}`, "create", { title: "busy" })));
   const runs = await catchUpFolds(env);
   expect(runs[0]!.repoId).toBe("busy-repo");
+});
+
+it("confirms only the first matching revision body", () => {
+  const body = '"'.repeat(200_000);
+  const payload = { body, revision: 1 };
+  const placer = new RevisionPlacer(new Map<string, PlacementEntry>(), 4096);
+  const request = { doc: "d/", floor: 1, bodyKey: bodyKey(body)!, author: null };
+  const candidates = Array.from({ length: 4 }, (_, n) => ({ key: `documentRevision d/${n + 1}`, rev: n + 1 }));
+  placer.absorbCandidates(request, 4, candidates);
+  const row = { seq: 1, entity: "documentRevision", entity_id: "d/1", payload: JSON.stringify(payload) };
+  expect(placer.place(row, payload)).toEqual({ need: { kind: "bodies", keys: [candidates[0]!.key] } });
+  placer.absorbBody(candidates[0]!.key, { body, author: "alice" });
+  expect(placer.place(row, payload)).toEqual({ row: null });
 });

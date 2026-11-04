@@ -251,7 +251,7 @@ describe("a fold step's work", () => {
       expect(taken.length).toBeGreaterThan(0);
       // The estimate of what it folded fits the step, unless it folded one operation alone.
       const estimate = runWork(
-        taken.map((o) => ({ keys: [`issue ${o.entityId}`], bytes: o.payload.length, escapes: (o.payload.match(/["\\]/g) ?? []).length })),
+        taken.map((o) => ({ keys: [`issue ${o.entityId}`], bytes: o.payload.length, escapes: (o.payload.match(/["\\]/g) ?? []).length, fields: o.verb === "create" ? 0 : Object.keys(JSON.parse(o.payload)).length })),
         () => undefined,
       );
       if (taken.length > 1) expect(estimate[estimate.length - 1]!).toBeLessThanOrEqual(FOLD_STEP_WORK);
@@ -372,7 +372,7 @@ describe("a restore turn", () => {
       if (response.status === 503 && typeof response.json.foldedSeq === "number") continue;
       expect(response.status, JSON.stringify(response.json).slice(0, 200)).toBe(200);
       restoreId = response.json.restoreId;
-      counted.push([...m.rowsRead].filter(([sql]) => sql.includes("COUNT(*)") && sql.includes("FROM ops")).reduce((sum, [, n]) => sum + n, 0));
+      counted.push([...m.rowsRead].filter(([sql]) => /COUNT\(\*\)(?: AS n)? FROM ops/.test(sql.replace(/\s+/g, " "))).reduce((sum, [, n]) => sum + n, 0));
       if (response.json.done) break;
     }
     expect(counted.length).toBeGreaterThan(5);

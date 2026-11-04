@@ -16,7 +16,7 @@ import { entityKey } from "../src/cursor.js";
 import { restoreOrder } from "../src/backups.js";
 import { type FoldedEntity, foldLog, forBackup, materializedVerb } from "../src/fold.js";
 import { advanceFold, foldProgress, foldedPage, pinMark, restorePage } from "../src/fold-store.js";
-import { REPO, call, jsonOf, seedRepo } from "./helpers.js";
+import { REPO, call, jsonOf, retryFold, seedRepo } from "./helpers.js";
 import { type GeneratedOp, generateLog, insertOps, prng } from "./log-generator.js";
 
 const BIG = { remaining: 1_000_000 };
@@ -33,7 +33,7 @@ async function wholeFold(repoId: string, epoch: number, cutoff: number): Promise
   const out: FoldedEntity[] = [];
   let after = "";
   for (;;) {
-    const page = await foldedPage(env, repoId, epoch, cutoff, after, 97);
+    const page = await retryFold(() => foldedPage(env, repoId, epoch, cutoff, after, 97));
     out.push(...page.entities);
     if (!page.hasMore) return out.map((entity) => JSON.stringify(entity));
     const last = page.entities[page.entities.length - 1]!;
@@ -255,7 +255,7 @@ describe("nothing concurrent tears the checkpoint", () => {
           const inside = ops.filter((op) => op.seq > progress && op.seq <= progress + 120);
           if (inside.length === 0) return;
           const cutoff = inside[Math.floor(random() * inside.length)]!.seq;
-          await pinMark(env, repoId, 1, cutoff);
+          await retryFold(() => pinMark(env, repoId, 1, cutoff));
           pinned.push(cutoff);
         },
       });

@@ -22,7 +22,7 @@ import { encodeCursor, entityKey } from "../src/cursor.js";
 import { type FoldedEntity, foldLog, forBackup, materializedVerb } from "../src/fold.js";
 import { restoreOrder } from "../src/backups.js";
 import { advanceFold, entityCount, foldSummary, foldedPage, pinMark, restorePage } from "../src/fold-store.js";
-import { call, jsonOf, seedRepo } from "./helpers.js";
+import { call, jsonOf, retryFold, seedRepo } from "./helpers.js";
 import { type GeneratedOp, generateLog, insertOps, prng } from "./log-generator.js";
 
 async function repoRow(repoId: string): Promise<void> {
@@ -45,7 +45,7 @@ async function checkpointFold(
   for (;;) {
     // Pages cut by count or, as often, by bytes — a byte cap as small as one entity.
     const maxBytes = random() < 0.5 ? 1 + Math.floor(random() * 20_000) : undefined;
-    const page = await foldedPage(env, repoId, epoch, cutoff, after, 1 + Math.floor(random() * 80), maxBytes);
+    const page = await retryFold(() => foldedPage(env, repoId, epoch, cutoff, after, 1 + Math.floor(random() * 80), maxBytes));
     if (page.hasMore) expect(page.entities.length).toBeGreaterThan(0);
     out.push(...page.entities);
     if (!page.hasMore) return out;
@@ -82,7 +82,7 @@ function someCutoff(ops: readonly GeneratedOp[], max: number, random: () => numb
 async function compareAt(repoId: string, epoch: number, cutoff: number, random: () => number, context: string) {
   const expected = await foldLog(env, repoId, epoch, cutoff);
   expectSameFold(await checkpointFold(repoId, epoch, cutoff, random), expected.entities, `${context} cutoff=${cutoff}`);
-  const summary = await foldSummary(env, repoId, epoch, cutoff);
+  const summary = await retryFold(() => foldSummary(env, repoId, epoch, cutoff));
   expect({
     opCount: summary.opCount,
     schemaVersion: summary.schemaVersion,
@@ -106,7 +106,7 @@ async function compareAt(repoId: string, epoch: number, cutoff: number, random: 
       const lengths: number[] = [];
       let after = "";
       for (;;) {
-        const page = await foldedPage(env, repoId, epoch, cutoff, after, 40, 2_000);
+        const page = await retryFold(() => foldedPage(env, repoId, epoch, cutoff, after, 40, 2_000));
         lengths.push(page.entities.length);
         if (!page.hasMore) return lengths;
         const last = page.entities[page.entities.length - 1]!;
@@ -114,7 +114,7 @@ async function compareAt(repoId: string, epoch: number, cutoff: number, random: 
       }
     };
     const before = await cuts();
-    const pinned = await pinMark(env, repoId, epoch, cutoff);
+    const pinned = await retryFold(() => pinMark(env, repoId, epoch, cutoff));
     expect(await cuts(), `${context} page cuts at cutoff=${cutoff}`).toEqual(before);
     expect(pinned.opCount).toBe(expected.opCount);
     const staged: unknown[] = [];
