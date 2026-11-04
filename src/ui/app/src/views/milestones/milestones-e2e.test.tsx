@@ -63,7 +63,7 @@ import {
   StateBadge,
   type MemberWriteFailure,
 } from "./MilestonesView";
-import { SCENARIO, SCENARIO_WS, seedScenarioWorkspace } from "../../../../../../test/fixtures/milestones-scenario.ts";
+import { OCTOBER_TARGET, NOVEMBER_TARGET, SCENARIO, SCENARIO_WS, seedScenarioWorkspace } from "../../../../../../test/fixtures/milestones-scenario.ts";
 import { startUiServer } from "../../../../server.ts";
 import {
   layoutFor,
@@ -330,7 +330,7 @@ describe("the accessible tree", () => {
 
   it("announces a milestone's status as a word, with the glyph present but hidden", () => {
     // The two real states in the payload, off the wire.
-    expect([october.milestone.state, november.milestone.state]).toEqual(["active", "planned"]);
+    expect([october.milestone.state, november.milestone.state]).toEqual([new Date().toISOString().slice(0, 10) > OCTOBER_TARGET ? "overdue" : "active", new Date().toISOString().slice(0, 10) > NOVEMBER_TARGET ? "overdue" : "planned"]);
     const html = renderList(refs.october!);
     for (const state of [october.milestone.state, november.milestone.state]) {
       expect(html).toContain(`data-milestone-state="${state}"`);

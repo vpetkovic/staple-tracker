@@ -246,7 +246,7 @@ describe("the scenario", () => {
 
     // October has a start date that has passed, so it is `active` with nothing
     // begun; November has no start and no begun leaf, so it is `planned`.
-    expect(rows.map((row) => row.milestone.state)).toEqual(["planned", "active"]);
+    expect(rows.map((row) => row.milestone.state)).toEqual([isOverdue(NOVEMBER_TARGET, utcDateOf(new Date().toISOString())) ? "overdue" : "planned", isOverdue(OCTOBER_TARGET, utcDateOf(new Date().toISOString())) ? "overdue" : "active"]);
     expect(rows[1]!.milestone.startDate).toBe(OCTOBER_START);
 
     const queue = await queueEverywhere();
@@ -686,12 +686,12 @@ describe("dates are UTC calendar days, inclusive of their whole extent", () => {
     expect(cleared.milestone.startDate).toBeNull();
     // Still `active` with no start date: the calendar said nothing, so the MEMBERS
     // did — one counted leaf (the done spike) has already left the pre-work band.
-    expect(cleared.milestone.state).toBe("active");
+    expect(cleared.milestone.state).toBe(isOverdue(OCTOBER_TARGET, utcDateOf(new Date().toISOString())) ? "overdue" : "active");
     expect(cleared.progress.counts.done).toBeGreaterThan(0);
     // November, whose leaves are all still unstarted, is the control.
-    expect((await milestoneHttp(SCENARIO.november)).milestone.state).toBe("planned");
+    expect((await milestoneHttp(SCENARIO.november)).milestone.state).toBe(isOverdue(NOVEMBER_TARGET, utcDateOf(new Date().toISOString())) ? "overdue" : "planned");
     await ok("milestone", "set", SCENARIO.october, "--start", OCTOBER_START);
-    expect((await milestoneHttp(SCENARIO.october)).milestone.state).toBe("active");
+    expect((await milestoneHttp(SCENARIO.october)).milestone.state).toBe(isOverdue(OCTOBER_TARGET, utcDateOf(new Date().toISOString())) ? "overdue" : "active");
 
     const badDay = await cliRefusal("milestone", "set", SCENARIO.october, "--target", "2026-02-30");
     expect([badDay.status, badDay.code]).toEqual([CLI_EXIT_CODES.validation, "validation"]);

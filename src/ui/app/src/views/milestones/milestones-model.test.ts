@@ -102,12 +102,12 @@ describe("milestoneRisk", () => {
   it("ignores the status-category counts, which are zero for genuinely blocked work", () => {
     const counted = progress({ counts: { blocked: 9, gated: 9, ready: 3 } });
     const fromQueue = view({ milestone: { identifier: "STA-190", state: "active" }, progress: counted });
-    expect(milestoneRisk(fromQueue, queueRows)).toMatchObject({ overdue: false, blocked: 2, gated: 1 });
-    expect(milestoneRisk(fromQueue, [])).toMatchObject({ overdue: false, blocked: 0, gated: 0, waitingIn: {} });
+    expect(milestoneRisk(fromQueue, queueRows, new Date("2026-09-04T12:00:00Z"))).toMatchObject({ overdue: false, blocked: 2, gated: 1 });
+    expect(milestoneRisk(fromQueue, [], new Date("2026-09-04T12:00:00Z"))).toMatchObject({ overdue: false, blocked: 0, gated: 0, waitingIn: {} });
   });
 
   it("is silent when there is nothing to warn about", () => {
-    const calm = view({ milestone: { identifier: "STA-190", state: "planned" } });
+    const calm = view({ milestone: { identifier: "STA-190", state: "planned", targetDate: null } });
     expect(milestoneRisk(calm, [effective({ identifier: "STA-4", milestonePath: ["STA-190"] })])).toMatchObject({
       overdue: false,
       blocked: 0,
