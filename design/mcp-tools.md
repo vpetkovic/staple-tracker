@@ -33,7 +33,7 @@ Every tool, by area:
 | Execution telemetry and budget | `list_attempts`, `get_attempt`, `get_budget`, `list_budget_samples`, `record_budget_sample`, `forget_budget_samples` |
 | [Cloud sync](../docs/cloud-sync.md) | `cloud_status`, `conflict_list`, `conflict_resolve` |
 | Workspaces and the hub | `init`, `hub_overview`, `cross_link`, `cross_unlink`, `hub_unregister`, `hub_prune` |
-| [MCP Apps views](#mcp-apps-views) | `show_about`, `show_ticket` |
+| [MCP Apps views](#mcp-apps-views) | `show_about`, `show_ticket`, `show_progress` |
 
 ## Changing an estimate
 
@@ -478,3 +478,30 @@ actions: {approve, requestChanges}}`. Its text is the same card as prose.
 - `get_task` and `checkout_task` declare the ticket view too. Their payloads are not
   cards, so the view paints the header from the payload and reads the card with
   `show_ticket` through the host, passing on the call's `ws`.
+
+`show_progress {ref, ws?}` answers `{progress}`, built by `ticketProgress` in
+`src/mcp-progress.ts`: `{workspace, identifier, title, status: {id, label, category},
+assignee, attempt: {id, ordinal, agent, state, current, startedAt, endedAt, outcome,
+endReason} | null, timeline: [{kind, at, actor, text, detail}], earlier, milestoneCount,
+timing: {estimatedSeconds, elapsedSeconds}, lastActivityAt, live, refreshSeconds, asOf,
+url}`. Its text is the status, the time and the milestones as prose.
+
+- The attempt is the open worker attempt, else the newest ended one, as on the card.
+- `timeline` is oldest first: the attempt's transitions (`started`, `milestone` with its
+  label, `paused`, `resumed`, `interrupted`, `ended`) and the comments posted on the
+  ticket while it ran (`comment`, the first line). A milestone that points at a comment
+  carries that comment's first line in `detail` (a document: `document <key> r<n>`), and
+  the comment is not listed again. An end the read derives (an orphaned claim) has no
+  transition and is added from the attempt. Only the newest 20 entries are sent;
+  `earlier` counts the rest.
+- `timing` is the card's; `lastActivityAt` is the attempt's last activity or its newest
+  entry, whichever is later.
+- `live` is true while an attempt is open (running or paused). `refreshSeconds` is 5.
+- The view polls `show_progress` through the host every `refreshSeconds` while `live`,
+  one call in flight at most and none while the page is hidden. The tool is read-only,
+  so a host runs it without a prompt; it is the only call the view makes on its own. It
+  stops, and says why, after two refused or failed reads in a row (the host's error
+  message is shown as given), on `ui/resource-teardown`, when `live` turns false, and
+  when the host's handshake offers no `serverTools`. Check again reads once; one more
+  refusal stops it again at once.
+- The store read behind the timeline is `attemptTransitions(attemptId)`, a pure read.

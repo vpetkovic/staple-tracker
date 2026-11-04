@@ -78,7 +78,7 @@ const READS: Record<StoreName, readonly string[]> = {
     // The attempt ledger the mutators write through; its own writes are the store's methods below.
     "attempts",
     // The attempt read surfaces: pure reads, which write no stored orphan end either.
-    "attemptSummary", "listAttempts", "getAttempt",
+    "attemptSummary", "listAttempts", "getAttempt", "attemptTransitions",
     // The orchestrator lane's read summary (`orchestration` on show/get_task).
     "orchestrationSummary",
     // The certified plan reads (`planSummary` on show/get_task, `staple compare`).

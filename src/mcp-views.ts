@@ -42,6 +42,12 @@ export const VIEWS: readonly ViewDefinition[] = [
     description:
       "One ticket: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer and estimate against elapsed. Approve and Request changes while a gate is pending; Open in Staple.",
   },
+  {
+    name: "progress",
+    title: "Live progress",
+    description:
+      "One ticket's current attempt, live: a timeline of its milestones and comments, estimate against elapsed, status and last activity. Refreshes itself through the host with a read while the attempt is open, and says so when the host stops answering.",
+  },
 ];
 
 export function viewUri(name: string): string {

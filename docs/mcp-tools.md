@@ -154,6 +154,7 @@ everywhere.
 |---|---|---|---|
 | `show_about` | Which staple this is: version, workspace, tickets by status, the views it has | `ui://staple/about` | no |
 | `show_ticket` | One ticket as a card: status, criteria, gate, attempt, branch, time, and a link to it | `ui://staple/ticket` | no |
+| `show_progress` | One ticket's current attempt, live: its milestones, time against the estimate, last activity | `ui://staple/progress` | no |
 
 `get_task` and `checkout_task` draw the same ticket card, so the ticket an agent reads or
 claims shows in the thread without an extra call. Their answers are unchanged.
@@ -165,6 +166,11 @@ When to show what:
   has **Approve** and **Request changes** buttons. They call `approve_task` and
   `request_changes` through the client, which asks the person first. Request changes asks
   for a note, which becomes a comment on the ticket.
+- Call `show_progress` when a person asks how a ticket is going, or wants to watch it
+  while an agent works it. Call it once. The view follows the work by itself: while the
+  attempt is open it reads `show_progress` again every few seconds through the client,
+  and each milestone an agent records with `record_attempt_event` shows up without
+  anyone asking. That read changes nothing, so the client asks nobody before it.
 - Call `show_about` when a person asks which staple this is, or to check that views
   render in this client.
 
@@ -179,6 +185,13 @@ The card's branch is the newest branch pointer comment on the ticket (`Branch po
 branch feat/x, base 3f2a1bc.`, see [How an agent works a ticket](working-a-ticket.md)).
 Its criteria show as met once the ticket is done. A milestone's criteria show the goal
 check's marks.
+
+The progress view says when it stops following. It stops when the client refuses its
+reads twice in a row (a client whose agent session has ended does, for example "The app's
+thread is not running"), when the client closes the view, when the attempt ends, and in a
+client that does not let views call tools. A **Check again** button reads once more and
+picks the refresh back up if that works. A client without MCP Apps gets the status, the
+time and the list of milestones as text.
 
 The server lists its views as `ui://staple/<name>` resources (`resources/list`). Each is one
 HTML file with nothing to download, shipped inside `staple-cli`. A tool names its view in

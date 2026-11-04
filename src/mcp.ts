@@ -29,6 +29,7 @@ import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
+import { progressText, ticketProgress, type TicketProgress } from "./mcp-progress.js";
 import {
   attemptEndFields,
   attemptOpenFields,
@@ -3768,6 +3769,68 @@ server.registerTool(
       const card = ticketCard(storeFor(ws), ref);
       // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
       return { content: [{ type: "text" as const, text: ticketCardText(card) }], structuredContent: { ticket: card } };
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+const progressShape = {
+  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
+  identifier: z.string(),
+  title: z.string(),
+  status: z.object({ id: z.string(), label: z.string(), category: z.string() }),
+  assignee: z.string().nullable(),
+  attempt: z
+    .object({
+      id: z.string(),
+      ordinal: z.number().int(),
+      agent: z.string(),
+      state: z.string(),
+      current: z.boolean().describe("False when this is the newest ended attempt and none is open"),
+      startedAt: z.string(),
+      endedAt: z.string().nullable(),
+      outcome: z.string().nullable(),
+      endReason: z.string().nullable(),
+    })
+    .nullable(),
+  timeline: z
+    .array(
+      z.object({
+        kind: z.enum(["started", "milestone", "paused", "resumed", "interrupted", "ended", "comment"]),
+        at: z.string(),
+        actor: z.string().nullable(),
+        text: z.string().describe("A milestone's label, a comment's first line, or what happened"),
+        detail: z.string().nullable().describe("What a milestone points at: a comment's first line, or document <key> r<n>"),
+      }),
+    )
+    .describe("The attempt's milestones, other transitions and the comments posted while it ran, oldest first; the newest 20"),
+  earlier: z.number().int().describe("How many older timeline entries were left out"),
+  milestoneCount: z.number().int(),
+  timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
+  lastActivityAt: z.string().nullable(),
+  live: z.boolean().describe("True while an attempt is open: a view keeps refreshing"),
+  refreshSeconds: z.number().int().describe("How often a live view reads show_progress again"),
+  asOf: z.string(),
+  url: z.string().nullable().describe("The web UI deep link, as on show_ticket; null when STAPLE_UI_URL=off"),
+};
+type _ProgressShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof progressShape>>, TicketProgress>>;
+
+server.registerTool(
+  "show_progress",
+  {
+    description:
+      "Show a person, live in the thread, how one ticket's current attempt is going: status, the attempt and its agent, a timeline of the milestones recorded with record_attempt_event (and the comments posted while it runs), estimate against time spent, and the last activity. In a host with MCP Apps it renders as the progress view, which refreshes itself by calling show_progress again through the host (a read, so nobody is asked) while the attempt is open, and says so when the host stops answering. Any other host gets the status and the milestones as text. Display only: call it once when a person asks how a ticket is going or wants to watch it; do not call it again to refresh, the view does that.",
+    inputSchema: { ref: refSchema, ws: wsSchema },
+    outputSchema: { progress: z.object(progressShape) },
+    annotations: { title: "Show progress", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: viewToolMeta("progress"),
+  },
+  ({ ref, ws }) => {
+    try {
+      const progress = ticketProgress(storeFor(ws), ref);
+      // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
+      return { content: [{ type: "text" as const, text: progressText(progress) }], structuredContent: { progress } };
     } catch (error) {
       return fail(error);
     }

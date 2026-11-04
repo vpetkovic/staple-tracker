@@ -120,7 +120,7 @@ import { WORK_ORDER, cohortKey, cohortReport, type CohortMember, type TimingQual
 import { parseSince } from "./telemetry/read-budget.js";
 import { qualifyAttempt, qualifyAttempts, type QualifiedAttempt } from "./telemetry/attempt-quality.js";
 import { intersect, partition, union, type CoverageAttempt, type PathEntry } from "./telemetry/wall.js";
-import { readAttempt, transitionsOf, type AttemptRecord } from "./telemetry/attempt-records.js";
+import { readAttempt, transitionsOf, type AttemptRecord, type AttemptTransition } from "./telemetry/attempt-records.js";
 import {
   ANY,
   CALIBRATION_ALGORITHM,
@@ -1037,6 +1037,14 @@ export class WorkspaceStore {
   /** `staple attempt <attempt-id>` / `get_attempt`: the attempt, its transitions, its chain and its burn. */
   getAttempt(attemptId: string, page: PageRequest = {}, home: string = stapleHome()): AttemptDetail {
     return attemptDetail(this.db, attemptId, { ...page, home, device: this.journal.deviceIdentity(), slug: this.slug });
+  }
+
+  /**
+   * One attempt's transitions, oldest first, unbounded: what the progress view draws its
+   * timeline from. A pure read; `getAttempt` pages the same rows and adds the burn.
+   */
+  attemptTransitions(attemptId: string): AttemptTransition[] {
+    return transitionsOf(this.db, attemptId);
   }
 
   /** The issue as the attempt rules read it, from a row read before a mutation. */

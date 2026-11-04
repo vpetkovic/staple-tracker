@@ -39,6 +39,13 @@ export interface ViewHost {
   openLink(url: string): Promise<boolean>;
   /** Render a result the view fetched itself (say, after a button's tool call) as the current one. */
   show(result: CallToolResult): void;
+  /**
+   * Whether the host said, in the handshake, that it proxies a view's tool calls to the
+   * server (`serverTools`). Undefined before the handshake has finished.
+   */
+  readonly canCallTools: boolean | undefined;
+  /** Run `listener` when the host tears the view down (`ui/resource-teardown`). */
+  onTeardown(listener: () => void): void;
 }
 
 export interface ViewOptions<T> {
@@ -110,6 +117,7 @@ function markReady(): void {
 export function startView<T>(options: ViewOptions<T>): ViewHost {
   const app = new App({ name: `staple-${options.name}`, version: "1" }, {}, { autoResize: true });
   let toolArguments: Record<string, unknown> = {};
+  const teardownListeners: Array<() => void> = [];
 
   const host: ViewHost = {
     get hostName() {
@@ -131,6 +139,13 @@ export function startView<T>(options: ViewOptions<T>): ViewHost {
       return answer.isError !== true;
     },
     show: (result) => show(result),
+    get canCallTools() {
+      const capabilities = app.getHostCapabilities();
+      return capabilities === undefined ? undefined : capabilities.serverTools !== undefined;
+    },
+    onTeardown: (listener) => {
+      teardownListeners.push(listener);
+    },
   };
 
   let shown: T | null = null;
@@ -149,6 +164,10 @@ export function startView<T>(options: ViewOptions<T>): ViewHost {
     toolArguments = params.arguments ?? {};
   };
   app.ontoolresult = show;
+  app.onteardown = () => {
+    for (const listener of teardownListeners) listener();
+    return {};
+  };
   app.onhostcontextchanged = () => {
     applyContext(app.getHostContext());
     if (shown !== null) options.render(shown, host);

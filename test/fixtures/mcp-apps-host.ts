@@ -54,6 +54,8 @@ export interface HostStart {
   tool: Tool;
   toolInput: Record<string, unknown>;
   toolResult: CallToolResult;
+  /** False: the host does not offer `serverTools`, so the view cannot call tools. Default true. */
+  serverTools?: boolean;
 }
 
 declare global {
@@ -63,6 +65,8 @@ declare global {
     hostReadResource(params: ReadResourceRequest["params"]): Promise<ReadResourceResult>;
     startHost(start: HostStart): Promise<void>;
     setHostTheme(theme: Theme): Promise<void>;
+    /** Tear the view down (`ui/resource-teardown`), as a host does before it removes the frame. */
+    teardownHost(): Promise<void>;
     hostRecord: { messages: unknown[]; toolCalls: string[]; sizes: number[]; links: string[] };
   }
 }
@@ -77,7 +81,7 @@ function paintHost(theme: Theme): void {
   document.body.style.background = PALETTES[theme]["--color-background-primary"]!;
 }
 
-window.startHost = async ({ html, theme, width, tool, toolInput, toolResult }) => {
+window.startHost = async ({ html, theme, width, tool, toolInput, toolResult, serverTools = true }) => {
   paintHost(theme);
   const holder = document.getElementById("frame-host")!;
   holder.style.width = `${width}px`;
@@ -102,7 +106,7 @@ window.startHost = async ({ html, theme, width, tool, toolInput, toolResult }) =
   const created = new AppBridge(
     null,
     { name: "test-host", version: "0.0.0" },
-    { serverTools: {}, serverResources: {}, message: { text: {} }, openLinks: {}, logging: {} },
+    { ...(serverTools ? { serverTools: {} } : {}), serverResources: {}, message: { text: {} }, openLinks: {}, logging: {} },
     { hostContext: context },
   );
   created.oncalltool = async (params) => {
@@ -139,4 +143,8 @@ window.setHostTheme = async (theme) => {
   paintHost(theme);
   context = { ...context, theme, styles: { variables: PALETTES[theme] } };
   bridge!.setHostContext(context);
+};
+
+window.teardownHost = async () => {
+  await bridge!.teardownResource({});
 };

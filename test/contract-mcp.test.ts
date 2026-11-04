@@ -308,8 +308,8 @@ describe("tool inventory", () => {
   // resume_run and continue_run: 61 -> 64. Milestone goal mode added
   // mark_milestone_criterion: 64 -> 65. Typed files added list_files, attach_file,
   // export_file and remove_file: 65 -> 69. The MCP Apps about view added show_about: 69 -> 70.
-  // The ticket card added show_ticket: 70 -> 71.
-  it("exposes exactly these 71 tools with these annotations and output schemas", async () => {
+  // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
+  it("exposes exactly these 72 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -962,6 +962,15 @@ describe("tool inventory", () => {
         hasOutputSchema: true,
       },
       /**
+       * The progress view: one ticket's attempt, live. A read, which is what lets the view
+       * call it again through the host to refresh without anyone being asked.
+       */
+      {
+        name: "show_progress",
+        annotations: { title: "Show progress", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      /**
        * Budget ingestion writes one machine-local row per reading into hub.db. It is
        * idempotent (a replay stores nothing twice, by dedup key) and never destructive
        * (samples are only ever added).
@@ -1063,6 +1072,8 @@ describe("tool inventory", () => {
       "show_about",
       // MCP Apps: the ticket card reads one ticket.
       "show_ticket",
+      // MCP Apps: the progress view reads one ticket's attempt, and polls itself with it.
+      "show_progress",
       // Execution telemetry: reading attempts and this machine's budget writes nothing,
       // a stored orphan end included.
       "list_attempts",
@@ -1835,6 +1846,8 @@ describe("tool response shapes (31/31)", () => {
       "show_about",
       // The ticket card: pinned in test/mcp-views-ticket.test.ts, shape, text and view.
       "show_ticket",
+      // The progress view: pinned in test/mcp-views-progress.test.ts, shape, text and view.
+      "show_progress",
       // Typed files: pinned in test/attachments.test.ts, against the store, the CLI and these tools.
       "list_files",
       "attach_file",

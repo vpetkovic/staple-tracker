@@ -71,6 +71,8 @@ export interface RenderedView {
   /** What `mcp-apps-host.ts` recorded: tool calls, messages, reported sizes, links opened. */
   record(): Promise<{ messages: unknown[]; toolCalls: string[]; sizes: number[]; links: string[] }>;
   setTheme(theme: "light" | "dark"): Promise<void>;
+  /** Tear the view down (`ui/resource-teardown`). */
+  teardown(): Promise<void>;
 }
 
 /** Open the host page and render the view in it. The caller closes `context`. */
@@ -78,7 +80,7 @@ export async function renderView(
   browser: Browser,
   client: Client,
   view: ViewSource,
-  options: { theme: "light" | "dark"; width: number },
+  options: { theme: "light" | "dark"; width: number; serverTools?: boolean },
 ): Promise<RenderedView> {
   const context = await browser.newContext({
     colorScheme: options.theme,
@@ -91,7 +93,7 @@ export async function renderView(
   );
   await page.exposeFunction("hostReadResource", (params: { uri: string }) => client.readResource(params));
   await page.setContent(await hostPageHtml());
-  const start: HostStart = { ...view, theme: options.theme, width: options.width };
+  const start: HostStart = { ...view, theme: options.theme, width: options.width, serverTools: options.serverTools ?? true };
   await page.evaluate((args) => window.startHost(args), start);
   const frame = await (await page.$("#app-frame"))!.contentFrame();
   if (!frame) throw new Error("the host page has no app frame");
@@ -101,6 +103,7 @@ export async function renderView(
     frame,
     record: () => page.evaluate(() => window.hostRecord),
     setTheme: (theme) => page.evaluate((next) => window.setHostTheme(next), theme),
+    teardown: () => page.evaluate(() => window.teardownHost()),
   };
 }
 
