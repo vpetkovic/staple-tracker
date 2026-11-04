@@ -139,6 +139,12 @@ function fail(reason: string): void {
   }
 }
 
+/** A read for the previous ticket came back: start following the one on screen now. */
+function followSwitched(): void {
+  loop.inFlight = false;
+  schedule();
+}
+
 /** Read the progress once through the host and show it. */
 async function tick(): Promise<void> {
   if (shown === null || host === undefined || loop.inFlight || loop.tornDown) return;
@@ -148,10 +154,12 @@ async function tick(): Promise<void> {
   const identifier = shown.identifier;
   try {
     const result = await host.callTool("show_progress", { ref: identifier, ...wsArgument() });
-    if (loop.tornDown || identifier !== loop.identifier) return;
+    if (loop.tornDown) return;
+    // Another ticket arrived while this read was out: drop the answer, follow that one.
+    if (identifier !== loop.identifier) return followSwitched();
     const next = result.isError ? null : read(result);
     if (next === null) {
-      fail(result.isError ? `The server answered: ${refusal(result)}` : "The server's answer had no progress in it.");
+      fail(result.isError ? `The read failed: ${refusal(result)}` : "The answer had no progress in it.");
     } else {
       loop.failures = 0;
       loop.stopped = null;
@@ -161,7 +169,8 @@ async function tick(): Promise<void> {
       return;
     }
   } catch (error) {
-    if (loop.tornDown || identifier !== loop.identifier) return;
+    if (loop.tornDown) return;
+    if (identifier !== loop.identifier) return followSwitched();
     fail(errorText(error));
   } finally {
     loop.inFlight = false;
@@ -240,10 +249,10 @@ function liveLine(progress: Progress, view: ViewHost): HTMLElement {
   let text: string;
   if (loop.stopped !== null) {
     state = "stopped";
-    text = `Live updates stopped. ${loop.stopped}`;
+    text = `Live updates stopped. ${loop.stopped} Last read ${updated}.`;
   } else if (loop.tornDown) {
     state = "stopped";
-    text = "Live updates stopped: the host closed this view.";
+    text = `Live updates stopped: the host closed this view. Last read ${updated}.`;
   } else if (!progress.live) {
     state = "idle";
     text = progress.attempt === null ? `No attempt yet, so nothing to follow · read ${updated}` : `Attempt ended, so not refreshing · read ${updated}`;

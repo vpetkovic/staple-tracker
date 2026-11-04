@@ -85,6 +85,10 @@ const refs = {
   idle: "",
   /** Forty milestones: the payload keeps the newest twenty. */
   long: "",
+  /** Its claim cleared where nothing swept it (as a synced clear arrives): an end the read derives. */
+  orphaned: "",
+  /** Another in-progress ticket, for a view handed a new ticket mid-read. */
+  next: "",
 };
 
 async function connect(options: { apps: boolean; uiUrl?: string }): Promise<Client> {
@@ -136,7 +140,7 @@ beforeAll(async () => {
   s.recordAttemptEvent(worked.identifier, "milestone", "pat", { label: "Retries visible in the order log", commentId: pointer.id });
   refs.worked = worked.identifier;
 
-  for (const role of ["live", "refused", "torn"] as const) {
+  for (const role of ["live", "refused", "torn", "next"] as const) {
     const issue = s.createIssue({ title: `Gift card balance: ${role}`, estimatedSeconds: 2 * 3600 });
     s.checkoutIssue(issue.identifier, "pat");
     s.recordAttemptEvent(issue.identifier, "milestone", "pat", { label: "Balance endpoint drafted" });
@@ -155,6 +159,17 @@ beforeAll(async () => {
   s.checkoutIssue(long.identifier, "pat");
   for (let i = 1; i <= 40; i++) s.recordAttemptEvent(long.identifier, "milestone", "pat", { label: `Step ${i}` });
   refs.long = long.identifier;
+
+  const orphaned = s.createIssue({ title: "Partial refunds" });
+  s.checkoutIssue(orphaned.identifier, "pat");
+  s.recordAttemptEvent(orphaned.identifier, "milestone", "pat", { label: "Refund ledger drafted" });
+  s.addComment(orphaned.identifier, "Ledger rows carry the original order.", "pat", "agent");
+  const after = s.addComment(orphaned.identifier, "Picked up again later by someone else.", "sam", "agent");
+  // The claim is gone with no mutation here to end the attempt, and the second comment was
+  // posted an hour after: it is not part of the attempt the view shows.
+  s.db.prepare("UPDATE issues SET checkout_agent = NULL WHERE id = ?").run(orphaned.id);
+  s.db.prepare("UPDATE comments SET created_at = ? WHERE id = ?").run(new Date(Date.now() + 3_600_000).toISOString(), after.id);
+  refs.orphaned = orphaned.identifier;
   ws.store.db.close();
   if (!reason) browser = await chromium.launch();
 }, 60_000);
@@ -234,6 +249,18 @@ describe("show_progress over MCP", () => {
     expect(finished.timeline.at(-1)).toMatchObject({ kind: "ended" });
     const idle = progressOf((await client.callTool({ name: "show_progress", arguments: { ref: refs.idle } })) as CallToolResult);
     expect(idle).toMatchObject({ live: false, attempt: null, timeline: [], milestoneCount: 0 });
+  });
+
+  it("ends an attempt the read derives as ended, and leaves out comments posted after it", async () => {
+    const client = await connect({ apps: true });
+    const progress = progressOf((await client.callTool({ name: "show_progress", arguments: { ref: refs.orphaned } })) as CallToolResult);
+    expect(progress).toMatchObject({ live: false, attempt: { state: "ended", current: false } });
+    expect(progress.timeline.map(({ kind, text: line }) => [kind, line])).toEqual([
+      ["started", "Started by pat"],
+      ["milestone", "Refund ledger drafted"],
+      ["comment", "Ledger rows carry the original order."],
+      ["ended", expect.stringMatching(/^Ended/)],
+    ]);
   });
 
   it("answers a host without MCP Apps with the milestones in readable text", async () => {
@@ -365,6 +392,40 @@ describe.skipIf(Boolean(reason))("the progress view in a host", () => {
       await view.frame.locator('[data-live="live"]').waitFor();
       const resumed = (await view.record()).toolCalls.length;
       await expect.poll(async () => (await view.record()).toolCalls.length, { timeout: 5_000 }).toBeGreaterThan(resumed);
+    } finally {
+      await view.context.close();
+    }
+  });
+
+  it("follows the new ticket when the host hands the view another one while a read is out", async () => {
+    const client = await connect({ apps: true });
+    const view = await renderView(browser!, client, fast(await loadView(client, "show_progress", { ref: refs.live })), {
+      theme: "light",
+      width: WIDTH,
+    });
+    try {
+      expectPainted(await measurePaint(view), "light", WIDTH);
+      // The next read is slow to come back; the host hands over another ticket meanwhile.
+      await view.page.evaluate((seconds) => {
+        const forward = window.hostCallTool;
+        let first = true;
+        window.hostCallTool = async (params) => {
+          if (first) {
+            first = false;
+            await new Promise((resolve) => setTimeout(resolve, 1_500));
+          }
+          const result = await forward(params);
+          const progress = (result.structuredContent as { progress?: { refreshSeconds: number } } | undefined)?.progress;
+          if (progress) progress.refreshSeconds = seconds;
+          return result;
+        };
+      }, FAST_REFRESH);
+      await expect.poll(async () => (await view.record()).toolCalls.length, { timeout: 5_000 }).toBeGreaterThan(0);
+      await view.sendResult(fast(await loadView(client, "show_progress", { ref: refs.next })).toolResult);
+      await view.frame.locator(`[data-ticket="${refs.next}"]`).waitFor();
+      withStore((store) => store.recordAttemptEvent(refs.next, "milestone", "pat", { label: "Balance shown on receipts" }));
+      await view.frame.getByText("Balance shown on receipts").waitFor({ timeout: 10_000 });
+      expect(await view.frame.locator('[data-live="live"]').count()).toBe(1);
     } finally {
       await view.context.close();
     }

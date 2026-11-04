@@ -78,7 +78,11 @@ export const TIMELINE_LIMIT = 20;
 /** How often a live view reads the progress again. */
 export const REFRESH_SECONDS = 5;
 
-/** How many of a ticket's newest comments are read for the timeline. */
+/**
+ * How many of a ticket's newest comments are read for the timeline. A ticket with more
+ * comments than this since its attempt began shows the newest ones; `earlier` counts only
+ * what was read.
+ */
 const COMMENT_WINDOW = 200;
 
 /** A comment's first non-blank line, cut to a length a timeline row can hold. */
@@ -147,17 +151,21 @@ export function ticketProgress(store: WorkspaceStore, ref: string, uiBase: strin
           break;
       }
     }
-    // An end the read derives (an orphaned claim) has no transition; the attempt still ended.
-    if (!endRecorded && shown.state === "ended" && shown.endedAt) {
-      entries.push({ kind: "ended", at: shown.endedAt, actor: shown.endedBy, text: shown.outcome ? `Ended: ${words(shown.outcome)}` : "Ended", detail: shown.endReason ? words(shown.endReason) : null });
+    // When the attempt ended. An end the read derives (a claim cleared where no mutation
+    // here swept it: an orphan) stores no end, only its bound, the attempt's last activity.
+    const until = shown.state === "ended" ? (shown.endedAt ?? shown.endedAtBound ?? null) : null;
+    // A derived end has no transition either; the attempt still ended, so the timeline says so.
+    if (!endRecorded && until !== null) {
+      entries.push({ kind: "ended", at: until, actor: shown.endedBy, text: shown.outcome ? `Ended: ${words(shown.outcome)}` : "Ended", detail: shown.endReason ? words(shown.endReason) : null });
     }
-    const until = shown.endedAt ?? null;
     for (const comment of comments) {
       if (pointedAt.has(comment.id) || comment.createdAt < shown.startedAt || (until !== null && comment.createdAt > until)) continue;
       entries.push({ kind: "comment", at: comment.createdAt, actor: comment.author, text: firstLine(comment.body), detail: null });
     }
-    // Stable: a comment and a transition at the same instant keep the order they were read in.
-    entries.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    // By time. At the same instant an end goes last (nothing follows it); otherwise the
+    // sort is stable, so entries keep the order they were read in.
+    const last = (entry: TimelineEntry): number => (entry.kind === "ended" || entry.kind === "interrupted" ? 1 : 0);
+    entries.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : last(a) - last(b)));
     lastActivityAt = [shown.lastActivityAt, entries[entries.length - 1]?.at].filter((at): at is string => typeof at === "string").sort().pop() ?? null;
   }
 

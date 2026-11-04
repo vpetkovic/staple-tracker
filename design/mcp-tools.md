@@ -492,8 +492,9 @@ url}`. Its text is the status, the time and the milestones as prose.
   ticket while it ran (`comment`, the first line). A milestone that points at a comment
   carries that comment's first line in `detail` (a document: `document <key> r<n>`), and
   the comment is not listed again. An end the read derives (an orphaned claim) has no
-  transition and is added from the attempt. Only the newest 20 entries are sent;
-  `earlier` counts the rest.
+  transition: it is added at the attempt's `endedAtBound`, and comments after the end are
+  left out. At the same instant an end sorts last. Comments come from the ticket's newest
+  200. Only the newest 20 entries are sent; `earlier` counts the rest.
 - `timing` is the card's; `lastActivityAt` is the attempt's last activity or its newest
   entry, whichever is later.
 - `live` is true while an attempt is open (running or paused). `refreshSeconds` is 5.
@@ -501,7 +502,9 @@ url}`. Its text is the status, the time and the milestones as prose.
   one call in flight at most and none while the page is hidden. The tool is read-only,
   so a host runs it without a prompt; it is the only call the view makes on its own. It
   stops, and says why, after two refused or failed reads in a row (the host's error
-  message is shown as given), on `ui/resource-teardown`, when `live` turns false, and
-  when the host's handshake offers no `serverTools`. Check again reads once; one more
-  refusal stops it again at once.
+  message is shown as given, with the time of the last good read), on
+  `ui/resource-teardown`, when `live` turns false, and when the host's handshake offers
+  no `serverTools`. Check again reads once; one more refusal stops it again at once. A
+  read that comes back after the host handed the view another ticket is dropped, and the
+  view follows the new one.
 - The store read behind the timeline is `attemptTransitions(attemptId)`, a pure read.

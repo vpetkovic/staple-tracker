@@ -73,6 +73,8 @@ export interface RenderedView {
   setTheme(theme: "light" | "dark"): Promise<void>;
   /** Tear the view down (`ui/resource-teardown`). */
   teardown(): Promise<void>;
+  /** Hand the view another tool result. */
+  sendResult(result: CallToolResult): Promise<void>;
 }
 
 /** Open the host page and render the view in it. The caller closes `context`. */
@@ -104,6 +106,7 @@ export async function renderView(
     record: () => page.evaluate(() => window.hostRecord),
     setTheme: (theme) => page.evaluate((next) => window.setHostTheme(next), theme),
     teardown: () => page.evaluate(() => window.teardownHost()),
+    sendResult: (result) => page.evaluate((next) => window.sendHostResult(next), result),
   };
 }
 

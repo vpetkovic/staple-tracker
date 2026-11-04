@@ -67,6 +67,8 @@ declare global {
     setHostTheme(theme: Theme): Promise<void>;
     /** Tear the view down (`ui/resource-teardown`), as a host does before it removes the frame. */
     teardownHost(): Promise<void>;
+    /** Hand the view another tool result, as a host does when the same tool answers again. */
+    sendHostResult(result: CallToolResult): Promise<void>;
     hostRecord: { messages: unknown[]; toolCalls: string[]; sizes: number[]; links: string[] };
   }
 }
@@ -147,4 +149,8 @@ window.setHostTheme = async (theme) => {
 
 window.teardownHost = async () => {
   await bridge!.teardownResource({});
+};
+
+window.sendHostResult = async (result) => {
+  await bridge!.sendToolResult(result);
 };
