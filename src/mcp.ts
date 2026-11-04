@@ -27,16 +27,7 @@ import { basename, dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
 import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
-import {
-  VIEWS,
-  RESOURCE_MIME_TYPE,
-  declaredViewUri,
-  normalizedViewMeta,
-  readViewHtml,
-  viewForUri,
-  viewToolMeta,
-  viewUri,
-} from "./mcp-views.js";
+import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
 import {
   attemptEndFields,
   attemptOpenFields,
@@ -363,36 +354,14 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
     }
   };
 
-  /**
-   * A tool shows an MCP Apps view by declaring `_meta.ui.resourceUri` (`viewToolMeta`). The URI
-   * must name a view this server serves, or the server refuses to start. The declaration gets
-   * the legacy `ui/resourceUri` key too, and every result carries the same `_meta.ui`, so a
-   * host or proxy that only sees the result still knows which view renders it. The text
-   * content is untouched: it is all a host without MCP Apps shows.
-   */
-  const showingView = (name: string, config: ToolConfig, cb: ToolCallback): [ToolConfig, ToolCallback] => {
-    const uri = declaredViewUri(config._meta);
-    if (uri === undefined) return [config, cb];
-    if (viewForUri(uri) === undefined) throw new Error(`tool ${name} declares ${uri}, which is not a view staple serves`);
-    const stamp = (value: unknown) => {
-      if (value === null || typeof value !== "object") return value;
-      const result = value as { _meta?: Record<string, unknown> };
-      return { ...result, _meta: { ...result._meta, ui: { resourceUri: uri } } };
-    };
-    const stamped: ToolCallback = (...args: unknown[]) => {
-      const result = cb(...args);
-      return result instanceof Promise ? result.then(stamp) : stamp(result);
-    };
-    return [{ ...config, _meta: normalizedViewMeta(config._meta ?? {}, uri) }, stamped];
-  };
-
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
     rawConfig: ToolConfig,
     rawCb: ToolCallback,
   ) => {
     assertAnnotated(name, rawConfig);
-    const [viewConfig, cb] = showingView(name, rawConfig, rawCb);
+    // A tool that declares an MCP Apps view: checked, both meta spellings, results stamped.
+    const [viewConfig, cb] = linkToolView(name, rawConfig, rawCb);
     const config = declaringNotices(viewConfig);
     // A machine-local write (budget samples in hub.db, autopilot runs) changes nothing that
     // synchronizes and writes through no issue number, so it gets neither the renumber flag

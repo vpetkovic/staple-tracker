@@ -33,7 +33,10 @@ function escapeRegExp(text: string): string {
 
 /**
  * Inline the entry chunk and its stylesheet into the page, then drop them from the output.
- * `</script` inside the code is escaped so the inline script cannot end early.
+ * `</script` inside the code is escaped so the inline script cannot end early. `<!--` cannot
+ * be escaped the same way (`\!` is a syntax error in a unicode regex), and with a `<script`
+ * after it the HTML parser would swallow the rest of the page, so code holding it fails the
+ * build instead.
  */
 function singleFile(packages: Set<string>): Plugin {
   return {
@@ -53,6 +56,9 @@ function singleFile(packages: Set<string>): Plugin {
           }
           const tag = new RegExp(`<script\\b[^>]*\\bsrc="(?:\\./|/)?${pattern}"[^>]*></script>`);
           if (!tag.test(html)) throw new Error(`the view build emitted a script the page does not load: ${fileName}`);
+          if (item.code.includes("<!--")) {
+            throw new Error(`${fileName} contains "<!--", which an inline script cannot hold safely`);
+          }
           const code = item.code.replace(/<\/script/gi, "<\\/script");
           html = html.replace(tag, () => `<script type="module">${code}</script>`);
         } else if (fileName.endsWith(".css")) {
@@ -75,7 +81,9 @@ function verifySelfContained(name: string, html: string): void {
   // The markup and the stylesheets, without the script's own text (its strings are not tags).
   const markup = html.replace(/<script type="module">[\s\S]*?<\/script>/g, '<script type="module"></script>');
   if (markup === html) throw new Error(`view "${name}" has no inline script`);
-  const external = /<(?:script|img|iframe|audio|video|source)\b[^>]*\bsrc="(?!data:)[^"]+"|<link\b[^>]*\bhref="(?!data:)[^"]+"/i.exec(markup);
+  // Any attribute that loads something, quoted either way or not at all, unless it is a data: URL.
+  const external =
+    /<[a-z][^>]*?\s(?:src|href|srcset|poster|data|action)\s*=\s*(?:"(?!data:|#)[^"]+"|'(?!data:|#)[^']+'|(?!["'])(?!data:|#)[^\s>]+)/i.exec(markup);
   if (external) throw new Error(`view "${name}" still references a file: ${external[0]}`);
   const styles = [...markup.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((match) => match[1]).join("\n");
   const cssUrl = /url\(\s*['"]?(?!data:|#)[^'")\s]+/i.exec(styles);

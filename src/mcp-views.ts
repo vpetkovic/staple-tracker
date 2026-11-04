@@ -72,6 +72,37 @@ export function normalizedViewMeta(meta: Record<string, unknown>, uri: string): 
   return { ...meta, ui: { ...ui, resourceUri: uri }, [RESOURCE_URI_META_KEY]: uri };
 }
 
+type ToolCallback = (...args: unknown[]) => unknown;
+
+/**
+ * Link a tool to its view, for the `registerTool` wrapper in `src/mcp.ts`.
+ *
+ * A tool shows an MCP Apps view by declaring `_meta.ui.resourceUri` (`viewToolMeta`). The URI
+ * must name a view this server serves, or this throws and the server refuses to start. The
+ * declaration gets the legacy `ui/resourceUri` key too, and every result (an error result
+ * included: the view renders it as an error) carries the same `_meta.ui.resourceUri`, so a
+ * host or proxy that only sees the result still knows which view renders it. Other keys the
+ * result already has under `_meta` and `_meta.ui` are kept. The text content is untouched:
+ * it is all a host without MCP Apps shows. A tool without a view comes back as it went in.
+ */
+export function linkToolView<C extends object>(name: string, config: C, cb: ToolCallback): [C, ToolCallback] {
+  const meta = (config as { _meta?: Record<string, unknown> })._meta;
+  const uri = declaredViewUri(meta);
+  if (uri === undefined) return [config, cb];
+  if (viewForUri(uri) === undefined) throw new Error(`tool ${name} declares ${uri}, which is not a view staple serves`);
+  const stamp = (value: unknown) => {
+    if (value === null || typeof value !== "object") return value;
+    const result = value as { _meta?: Record<string, unknown> };
+    const ui = (result._meta?.ui ?? {}) as Record<string, unknown>;
+    return { ...result, _meta: { ...result._meta, ui: { ...ui, resourceUri: uri } } };
+  };
+  const stamped: ToolCallback = (...args: unknown[]) => {
+    const result = cb(...args);
+    return result instanceof Promise ? result.then(stamp) : stamp(result);
+  };
+  return [{ ...config, _meta: normalizedViewMeta(meta ?? {}, uri) }, stamped];
+}
+
 /**
  * Where the built view files are, given the directory the running module lives in. The
  * packaged layout wins when it holds the first view; otherwise this is a source checkout.
