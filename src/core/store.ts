@@ -1,7 +1,7 @@
 import { type ResolvedInstruction, resolveInstructions } from "./instructions.js";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { EVENT_ORDER, insertEvent } from "./event-log.js";
+import { EVENT_ORDER, EVENT_ORDER_DESC, insertEvent } from "./event-log.js";
 import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
 import { connectionPath } from "./cloud/connection.js";
 import { readLocalLease } from "./cloud/lease-store.js";
@@ -39,6 +39,8 @@ import {
   type IssueComment,
   type IssueDocumentMeta,
   type IssueGate,
+  type GateDecision,
+  type PersonDecision,
   type IssueKind,
   type IssuePriority,
   type IssueStatus,
@@ -4199,9 +4201,11 @@ export class WorkspaceStore {
    */
   approveGate(
     ref: string,
-    opts: { children?: readonly string[]; comment?: string } = {},
+    opts: { children?: readonly string[]; comment?: string; person?: PersonDecision } = {},
     actor?: string | null,
   ): Issue {
+    const via = opts.person ? { via: opts.person.via } : {};
+    const commentAuthorType = opts.person ? "user" : actor ? "agent" : "system";
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       if (!isActiveGate(row.gate_state)) {
@@ -4235,11 +4239,11 @@ export class WorkspaceStore {
             kind: "gate_child_approved",
             issueId: child.id,
             actor,
-            payload: { identifier: child.identifier, gate: row.identifier, owner: row.gate_owner },
+            payload: { identifier: child.identifier, gate: row.identifier, owner: row.gate_owner, ...via },
           });
         }
         if (opts.comment) {
-          this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
+          this.insertComment(row.id, actor ?? "unknown", commentAuthorType, opts.comment);
         }
         // The parent does not move: partial approval is not resolution. Re-read
         // so the caller sees the row as it now stands rather than as it was.
@@ -4334,6 +4338,7 @@ export class WorkspaceStore {
           owner: row.gate_owner,
           releasedDescendants: descendants.length,
           to: next,
+          ...via,
         },
       });
       this.journal.record({
@@ -4344,7 +4349,7 @@ export class WorkspaceStore {
         actor: actor ?? null,
       });
       if (opts.comment) {
-        this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", opts.comment);
+        this.insertComment(row.id, actor ?? "unknown", commentAuthorType, opts.comment);
       }
       /**
        * An approval that CLOSES the parent is a resolution like any other, so it
@@ -4377,7 +4382,7 @@ export class WorkspaceStore {
    * requested" is not "released", and draining the queue on an objection is the
    * opposite of what the reviewer asked for.
    */
-  requestChanges(ref: string, opts: { comment: string }, actor?: string | null): Issue {
+  requestChanges(ref: string, opts: { comment: string; person?: PersonDecision }, actor?: string | null): Issue {
     const comment = opts.comment?.trim();
     if (!comment) {
       throw new StapleError(
@@ -4425,7 +4430,7 @@ export class WorkspaceStore {
         kind: "gate_changes_requested",
         issueId: row.id,
         actor,
-        payload: { identifier: row.identifier, owner: row.gate_owner, comment },
+        payload: { identifier: row.identifier, owner: row.gate_owner, comment, ...(opts.person ? { via: opts.person.via } : {}) },
       });
       this.journal.record({
         entity: "issue",
@@ -4434,10 +4439,45 @@ export class WorkspaceStore {
         payload: this.movedColumns(updated),
         actor: actor ?? null,
       });
-      this.insertComment(row.id, actor ?? "unknown", actor ? "agent" : "system", comment);
+      this.insertComment(row.id, actor ?? "unknown", opts.person ? "user" : actor ? "agent" : "system", comment);
       this.recomputeAncestorStatuses(updated, actor ?? null);
       return rowToIssue(updated);
     });
+  }
+
+  /**
+   * How the decision the gate stands on was made: its state, who it is recorded under and when
+   * (the gate's own columns, which sync), and the view a person made it from (`via`, null for
+   * a decision through approve_task, request_changes, the CLI or the web UI). null while the
+   * gate is pending or was never decided.
+   *
+   * `via` rides on the `gate_approved` / `gate_changes_requested` event, and events do not
+   * replicate. So it is taken only from the event that IS this decision: same state, same
+   * actor, same instant as `gate_resolved_by` / `gate_resolved_at`. A decision pulled from
+   * another device has no such event here and reads `via: null`, never the mark of an older
+   * cycle's click; the comment the click wrote carries the mark on every device.
+   */
+  gateDecision(ref: string): GateDecision | null {
+    const row = this.requireRow(ref);
+    if (row.gate_state !== "approved" && row.gate_state !== "changes_requested") return null;
+    const kind = row.gate_state === "approved" ? "gate_approved" : "gate_changes_requested";
+    const event = this.db
+      .prepare(
+        `SELECT actor, payload, created_at FROM events
+          WHERE issue_id = ? AND kind = ?
+          ORDER BY ${EVENT_ORDER_DESC} LIMIT 1`,
+      )
+      .get(row.id, kind) as { actor: string | null; payload: string; created_at: string } | undefined;
+    let via: string | null = null;
+    if (event && event.actor === row.gate_resolved_by && event.created_at === row.gate_resolved_at) {
+      try {
+        const value = (JSON.parse(event.payload) as Record<string, unknown>).via;
+        if (typeof value === "string" && value !== "") via = value;
+      } catch {
+        // An unreadable payload is a decision with no view recorded.
+      }
+    }
+    return { state: row.gate_state, by: row.gate_resolved_by, via, at: row.gate_resolved_at ?? "" };
   }
 
   // ---------- update ----------

@@ -989,7 +989,18 @@ try {
   // Typed files added list_files, attach_file, export_file and remove_file, 59, and the MCP
   // Apps about view's show_about, which reports on one workspace, 60, and the ticket card's
   // show_ticket, 61, and the progress view's show_progress, 62, and the queue view's show_queue, 63.
-  assert(wsTargetable.length === 63, `63 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // The app-only approve_gate_from_view and request_changes_from_view the views' buttons call
+  // decide a gate in the view's workspace, 65.
+  assert(wsTargetable.length === 65, `65 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // A person's click in a view is recorded under the person only while hosts keep these two
+  // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
+  for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {
+    const tool = coldTools.tools.find((t: any) => t.name === name);
+    assert(
+      JSON.stringify(tool?._meta?.ui?.visibility) === JSON.stringify(["app"]) && tool?.inputSchema?.properties?.actor === undefined,
+      `${name} is app-only (visibility ["app"]) and takes no actor`,
+    );
+  }
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&

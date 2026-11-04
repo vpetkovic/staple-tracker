@@ -6,8 +6,9 @@ description: Every tool the staple MCP server offers, grouped by what an agent i
 # MCP tools
 
 Use this page to find the tool an agent calls for a job, and the command you would
-type for the same thing. The server offers 71 tools, grouped the same way as the
-[CLI reference](cli.md). A tool and its command follow the same rules, and most
+type for the same thing. The server offers 75 tools: 73 for the agent, grouped the
+same way as the [CLI reference](cli.md), and two that only its views call
+([Buttons in a view](#buttons-in-a-view)). A tool and its command follow the same rules, and most
 answer the same object the command prints with `--json`.
 
 1. Add the server once per machine, naming the agent
@@ -169,6 +170,33 @@ what is next. To choose its own work it calls `next_task`.
 The server lists its views as `ui://staple/<name>` resources (`resources/list`). Each is one
 HTML file with nothing to download, shipped inside `staple-cli`. A tool names its view in
 `_meta.ui.resourceUri`, and its results carry the same `_meta.ui`.
+
+### Buttons in a view
+
+Approve and Request changes on the ticket card, and Approve on the queue view, call two
+tools that only a view may call. They declare MCP Apps `_meta.ui.visibility: ["app"]`, so a
+client that follows the standard offers them to the view and leaves them out of the agent's
+tool list.
+
+| Tool | What it does | Called by | Writes |
+|---|---|---|---|
+| `approve_gate_from_view` | Approve the whole gate on `ref` as the person on this machine | the card's and the queue's Approve (`view`: `ticket_card` or `queue`) | yes |
+| `request_changes_from_view` | Send the gate on `ref` back with the person's note, as that person | the card's Request changes (`view`: `ticket_card`) | yes |
+
+They take no `actor`. The decision is recorded under `humanName` from the machine's
+config (`staple config set humanName "Mira Lane"`, see
+[Configuration](configuration.md#your-name-in-the-views)), or under the gate's owner while
+that is unset, never under `STAPLE_AGENT`. The comment they write is the person's (author
+type `user`) and names the view, for example "Approved by Mira Lane from the ticket card.",
+and the `gate_approved` or `gate_changes_requested` event carries `via`. `show_ticket` reports
+the decision as `ticket.decision` (`by`, `via`), and its text says "from the ticket card".
+
+An agent that decides a gate calls `approve_task` or `request_changes`, and is recorded as
+itself, with no `via`.
+
+The client enforces the visibility, not staple: the server cannot tell a view's call from
+an agent's. A client that ignores `visibility` would let an agent call these tools under the
+person's name ([Views in the thread](mcp-apps.md#your-clicks-are-recorded-as-you)).
 
 ## When a tool refuses
 

@@ -482,11 +482,19 @@ actions: {approve, requestChanges}}`. Its text is the same card as prose.
   else `http://127.0.0.1:<config port>/`. A `token` parameter and any fragment are
   removed: the URL is in the agent's context.
 - `actions.approve` and `actions.requestChanges` are true only while the gate is
-  `pending`. The view's buttons call `approve_task` and `request_changes {comment}` through
-  the host with no `actor`, so the write is attributed to the server's `STAPLE_AGENT`.
-  The host asks the person first, because both tools are writes. An approval from the
-  card stores the comment "Approved from the ticket card in the thread." so the history
-  says a person pressed it; a request for changes stores the person's note.
+  `pending`. The view's buttons call the app-only `approve_gate_from_view {ref, view:
+  "ticket_card"}` and `request_changes_from_view {ref, comment, view: "ticket_card"}`
+  through the host (see "A person's decision from a view" below). The host asks the
+  person first, because both tools are writes.
+- `decision` is `{state, by, via, at}` from `store.gateDecision`, while the gate stands
+  decided; null while it is pending or was never decided. `state`, `by` and `at` are the
+  gate's own (synced) columns. `via` is the view a person clicked in, read off the
+  `gate_approved` / `gate_changes_requested` event only when that event has the same
+  actor and instant as the gate's resolution (events do not sync, so a decision pulled
+  from another device reads `via: null`). Null for an agent's `approve_task` /
+  `request_changes`, the CLI or the web UI. The card
+  shows it as "Gate approved by Mira Lane · from the card", the text as "Gate approved by
+  Mira Lane from the ticket card (owner ...)".
 - `get_task` and `checkout_task` declare the ticket view too. Their payloads are not
   cards, so the view paints the header from the payload and reads the card with
   `show_ticket` through the host, passing on the call's `ws`.
@@ -525,7 +533,7 @@ url}`. Its text is the status, the time and the milestones as prose.
 `{workspace, revision, scope: {identifier, title, kind} | null, policy, expected:
 {identifier, title, position} | null, next, ready: [{identifier, title, position,
 planPosition, path, takeable}], gated: [{identifier, title, state, owner, requestedBy,
-requestedAt, resolvedBy, behind, holds: [row], heldTotal, approve}], inProgress: [{...row,
+requestedAt, resolvedBy, resolvedVia, behind, holds: [row], heldTotal, approve}], inProgress: [{...row,
 heldBy, idleSeconds, attempt:
 {ordinal, state, startedAt} | null, milestoneCount, lastMilestone, timing}], blocked:
 [{identifier, title, blockers}], unavailable: [{identifier, title, status}], totals,
@@ -540,8 +548,8 @@ asOf}`. Its text lists the lanes as prose.
   carries at most 20 entries, and a gate group at most 20 held rows (`heldTotal` counts
   them all); `totals` has the full counts in tickets, with `gates` the number of groups.
 - A gate group's `state` is `pending` (waiting on its owner) or `changes_requested` (sent
-  back; `resolvedBy` says by whom). Approve is offered for both, since `approve_task`
-  ends either. The resolver names the NEAREST gate a row waits behind; `behind` is the
+  back; `resolvedBy` says by whom, `resolvedVia` the view a person sent it back from, null
+  for an agent). Approve is offered for both, since an approval ends either. The resolver names the NEAREST gate a row waits behind; `behind` is the
   outer gate that gate's own ticket waits behind, if any, so approving the inner one moves
   its rows under the outer one rather than into Ready.
 - `inProgress` reads each row's open attempt: its milestones (`attemptTransitions`, kind
@@ -553,11 +561,35 @@ asOf}`. Its text lists the lanes as prose.
 - Take on a takeable ready row posts `Work <REF>` into the thread through the host
   (`ui/message`, which the host confirms), as the person's message. The view claims
   nothing itself; the agent that reads the message takes the ticket. Approve on a gated
-  group calls `approve_task {ref: <gate>, comment: "Approved from the queue in the
-  thread."}` through the host with no `actor` (the server's `STAPLE_AGENT`), then reads
-  `show_queue` again with the call's `scope` and `ws`. Refresh reads it again on a click,
+  group calls the app-only `approve_gate_from_view {ref: <gate>, view: "queue"}` through
+  the host, says "Approved <REF> by <person> · from the queue", then reads `show_queue`
+  again with the call's `scope` and `ws`. Refresh reads it again on a click,
   and stays usable while a Take or an Approve waits on the host; the view does not poll.
   A Sent mark lasts until the lanes are read again: a ticket nobody took offers Take again.
 - `inbox` and `list_queue` declare the queue view too. Their payloads are not lanes, so
   the view reads `show_queue` through the host, passing on the call's `ws` only: an
   `inbox {assignee}` call still draws the whole queue. A failed read offers Try again.
+
+### A person's decision from a view
+
+`approve_gate_from_view {ref, view, ws?}` and `request_changes_from_view {ref, comment,
+view, ws?}` (`src/mcp-view-actions.ts`) are what the views' gate buttons call. `view` is
+`ticket_card` or `queue`. Both answer the issue with `gate` and `decision: {by, source,
+via}`, like `approve_task` / `request_changes` plus the decision.
+
+- They declare `_meta.ui.visibility: ["app"]` and no `resourceUri`. A host that follows
+  the MCP Apps spec lets a view of this server call them and leaves them out of the
+  model's tool list.
+- They take no `actor`. The actor is `humanName` from the machine's config.json
+  (`machine.humanName`, `staple config set humanName <name>`), else the gate's owner
+  (`source` says which). Never `STAPLE_AGENT`. An unreadable config is refused, not read
+  as unset. A ticket with no gate is refused with `conflict`.
+- The store call is the ordinary `approveGate` / `requestChanges` with `person: {via}`:
+  the comment is written with author type `user`, and the `gate_approved` /
+  `gate_changes_requested` (and `gate_child_approved`) event payload carries `via`. The
+  comment names the view: "Approved by Mira Lane from the ticket card." for an approval,
+  the note followed by "Sent back by Mira Lane from the ticket card." for a send-back.
+- The agent's `approve_task` / `request_changes` are unchanged: the agent's actor, an
+  `agent` comment, no `via`.
+- Trust: the server cannot tell a view's call from the model's. The guarantee that an
+  agent cannot decide under the person's name is the host's visibility enforcement.

@@ -60,11 +60,12 @@ describe("the registered set", () => {
     }
   });
 
-  it("registers the three machine preferences as global and three workspace field settings", () => {
+  it("registers the four machine preferences as global and three workspace field settings", () => {
     expect(settingDefinitionsFor("global").map((d) => [d.key, d.configKey])).toEqual([
       ["machine.browser", "browser"],
       ["machine.port", "port"],
       ["machine.setupComplete", "setupComplete"],
+      ["machine.humanName", "humanName"],
     ]);
     expect(settingDefinitionsFor("workspace").map((d) => d.key)).toEqual([
       "kinds.default",
@@ -294,7 +295,25 @@ describe("wire views", () => {
       "kinds.appearance",
       "machine.port",
       "machine.setupComplete",
+      "machine.humanName",
     ]);
+  });
+});
+
+describe("machine.humanName", () => {
+  const definition = requireSettingDefinition("machine.humanName", "global");
+
+  it("is unset by default and takes a person's name on one line", () => {
+    expect(definition.default).toBe("");
+    for (const name of ["", "Mira Lane", "VP", "José Ñúñez-O'Hara", "a".repeat(80)]) {
+      expect(coerceSettingInput(definition, name, "config set")).toBe(name);
+    }
+  });
+
+  it("refuses padding, line breaks, more than 80 characters and the reserved goal-run: prefix", () => {
+    for (const name of [" Mira", "Mira ", "Mira\nLane", "Mira\tLane", "Mira\u2028Lane", "Mira\u000bLane", "Mira\u0000", "a".repeat(81), "goal-run:autopilot"]) {
+      expect(() => coerceSettingInput(definition, name, "config set"), JSON.stringify(name)).toThrow(/"humanName" must be one line of at most 80 characters with no spaces at either end \(goal-run: is reserved\)/);
+    }
   });
 });
 

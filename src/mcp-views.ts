@@ -40,7 +40,7 @@ export const VIEWS: readonly ViewDefinition[] = [
     name: "ticket",
     title: "Ticket card",
     description:
-      "One ticket: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer and estimate against elapsed. Approve and Request changes while a gate is pending; Open in Staple.",
+      "One ticket: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer and estimate against elapsed. Approve and Request changes while a gate is pending (app-only tools, recorded under the person, not the agent); Open in Staple.",
   },
   {
     name: "progress",
@@ -52,7 +52,7 @@ export const VIEWS: readonly ViewDefinition[] = [
     name: "queue",
     title: "Queue",
     description:
-      "The pickup queue in lanes: Ready in pickup order, Gated with the gate's owner, In progress with each holder and its attempt. Take posts \"Work <REF>\" into the thread; Approve on a gated row calls approve_task through the host. Shows the one row checkout accepts under a strict queue.",
+      "The pickup queue in lanes: Ready in pickup order, Gated with the gate's owner, In progress with each holder and its attempt. Take posts \"Work <REF>\" into the thread; Approve on a gated row calls the app-only approve_gate_from_view through the host, recorded under the person. Shows the one row checkout accepts under a strict queue.",
   },
 ];
 

@@ -5,8 +5,9 @@
  * `queueLanes` reads everything the view shows, and both halves of a `show_queue` answer
  * come from it: `structuredContent.queue` for a host that renders the view, and `queueText`
  * for a host that does not. The view is a read: Take posts a message into the thread
- * (`ui/message`, which the host confirms), and Approve calls `approve_task` through the
- * host, which asks a person first because that tool writes.
+ * (`ui/message`, which the host confirms), and Approve calls the app-only
+ * `approve_gate_from_view` through the host, which asks a person first because it writes, and
+ * records the approval under that person (src/mcp-view-actions.ts).
  *
  * The lanes are the effective queue (`store.queue().effectiveQueue`, the one resolver
  * `staple queue next` and `next_task` read) split by eligibility, in effective order:
@@ -27,6 +28,7 @@
  * says whether it can be taken now (`takeable`). Under `advisory` every ready row can.
  */
 import { formatDuration } from "./mcp-ticket-card.js";
+import { viaWords } from "./mcp-view-actions.js";
 import type { WorkspaceStore } from "./core/store.js";
 import type { EffectiveQueueRow } from "./core/queue-store.js";
 import type { QueuePolicy } from "./core/settings-registry.js";
@@ -64,6 +66,8 @@ export interface QueueGateGroup {
   requestedAt: string | null;
   /** Who sent it back, while `changes_requested`. */
   resolvedBy: string | null;
+  /** The view a person sent it back from (`ticket_card`), while `changes_requested`; null for an agent. */
+  resolvedVia: string | null;
   /** An outer gate this gate's own ticket waits behind: approving this one moves its rows there. */
   behind: { identifier: string; owner: string } | null;
   /** The queue rows this gate holds, in effective order (at most {@link LANE_LIMIT}). A ticket that is its own gate holds itself. */
@@ -167,6 +171,7 @@ export function queueLanes(store: WorkspaceStore, options: { scope?: string; act
         requestedBy: gate?.requestedBy ?? null,
         requestedAt: gate?.requestedAt ?? null,
         resolvedBy: state === "changes_requested" ? (gate?.resolvedBy ?? null) : null,
+        resolvedVia: state === "changes_requested" ? (store.gateDecision(holder)?.via ?? null) : null,
         behind: store.queuedBy(holder),
         holds: [],
         heldTotal: 0,
@@ -241,7 +246,10 @@ export function takeMessage(identifier: string): string {
 
 /** Who a gate waits on, in words. */
 export function gateWords(group: QueueGateGroup): string {
-  if (group.state === "changes_requested") return `changes requested${group.resolvedBy ? ` by ${group.resolvedBy}` : ""}, owner ${group.owner ?? "unknown"}`;
+  if (group.state === "changes_requested") {
+    const from = viaWords(group.resolvedVia);
+    return `changes requested${group.resolvedBy ? ` by ${group.resolvedBy}` : ""}${from ? ` ${from}` : ""}, owner ${group.owner ?? "unknown"}`;
+  }
   return group.owner ? `waiting on ${group.owner}` : "awaiting approval";
 }
 

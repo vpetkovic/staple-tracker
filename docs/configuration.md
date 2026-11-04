@@ -23,6 +23,7 @@ These stay on this computer and never sync.
 | `browser` | `auto`, `always`, `never` | `auto` | Whether `staple open` opens a browser tab |
 | `port` | 1 to 65535 | `4400` | The port the web UI prefers; a busy one falls back to a free port |
 | `setupComplete` | `true`, `false` | `false` | Whether first-run setup has been done |
+| `humanName` | a name, up to 80 characters on one line | empty | Who you are on this computer: Approve and Request changes clicked in a [view in the thread](mcp-apps.md) are recorded under it. Empty means the gate's owner |
 
 ```bash
 staple config set port 4500
@@ -36,10 +37,36 @@ locator       /Users/you/Library/Application Support/Staple/bootstrap.json  (abs
 browser       auto  (default)
 port          4500  (config)
 setup         incomplete  (default)
+human         (unset: the gate's owner)  (default)
 ```
 
 The label after each value says where it came from: `default` until you set it,
 `config` after.
+
+### Your name in the views
+
+When you click Approve or Request changes on the ticket card, or Approve on the queue
+view, inside an agent's conversation, staple records the decision under your name, not
+the agent's. Tell it your name once per computer:
+
+```bash
+staple config set humanName "Mira Lane"
+```
+
+Until you do, a click is recorded under the gate's owner, the person the gate was
+waiting on. `staple config set humanName ""` goes back to that. The name never comes
+from `STAPLE_AGENT`: that stays the agent's, and an agent that approves with
+`approve_task` is recorded as itself.
+
+The name is checked when it is set and when it is read: one line, at most 80
+characters, no spaces at either end, no control characters, and not starting with
+`goal-run:` (reserved for a goal run's own gate).
+The web UI shows it under **Settings → This computer**, read only like the other
+machine settings.
+
+Only clients that keep view-only tools away from the agent make this safe to rely on
+([Views in the thread](mcp-apps.md#your-clicks-are-recorded-as-you) explains where the
+line is).
 
 ## Workspace settings
 

@@ -309,8 +309,9 @@ describe("tool inventory", () => {
   // mark_milestone_criterion: 64 -> 65. Typed files added list_files, attach_file,
   // export_file and remove_file: 65 -> 69. The MCP Apps about view added show_about: 69 -> 70.
   // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
-  // The queue view added show_queue: 72 -> 73.
-  it("exposes exactly these 73 tools with these annotations and output schemas", async () => {
+  // The queue view added show_queue: 72 -> 73. A person's click in a view added the app-only
+  // approve_gate_from_view and request_changes_from_view: 73 -> 75.
+  it("exposes exactly these 75 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -491,6 +492,34 @@ describe("tool inventory", () => {
           // The TOOL NAME is unchanged — renaming a shipped verb to fix a label
           // would break every agent that calls it.
           title: "Send back with note",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      /**
+       * A person's click in a view: the ticket card's and the queue's Approve, the card's
+       * Request changes. App-only (`_meta.ui.visibility: ["app"]`), so a host keeps them
+       * out of the model's tool list; recorded under the person, never STAPLE_AGENT. The
+       * annotations match approve_task and request_changes: same writes, different actor.
+       */
+      {
+        name: "approve_gate_from_view",
+        annotations: {
+          title: "Approve gate (from a view)",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "request_changes_from_view",
+        annotations: {
+          title: "Send back (from a view)",
           readOnlyHint: false,
           destructiveHint: true,
           idempotentHint: false,
@@ -1882,6 +1911,10 @@ describe("tool response shapes (31/31)", () => {
       "gate_task",
       "approve_task",
       "request_changes",
+      // A person's click in a view: pinned in test/mcp-view-actions.test.ts (actor, fallback,
+      // visibility) and through the views in test/mcp-views-ticket.test.ts and -queue.test.ts.
+      "approve_gate_from_view",
+      "request_changes_from_view",
       "list_statuses",
       "list_kinds",
       "update_statuses",

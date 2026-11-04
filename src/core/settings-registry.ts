@@ -176,6 +176,15 @@ export type BrowserPreference = (typeof BROWSER_PREFERENCES)[number];
  * than restating it.
  */
 export const QUEUE_POLICIES = ["advisory", "strict"] as const;
+
+/**
+ * `machine.humanName`: empty (unset), or one line of at most 80 characters with no padding
+ * and no control characters (line and paragraph separators included).
+ * It becomes an actor name, so the goal run's reserved `goal-run:` prefix is refused here too
+ * (`assertNotReservedActor` in core/milestones.ts says why).
+ */
+export const HUMAN_NAME_PATTERN =
+  /^(?!goal-run:)(?:[^\s\x00-\x1f\x7f](?:[^\x00-\x1f\x7f\u2028\u2029]{0,78}[^\s\x00-\x1f\x7f])?)?$/;
 export type QueuePolicy = (typeof QUEUE_POLICIES)[number];
 
 /** The mutable backing of `SETTING_DEFINITIONS`; grown only by `registerSettingDefinition`. */
@@ -282,6 +291,27 @@ const definitions: SettingDefinition[] = [
       order: 30,
     },
     configKey: "setupComplete",
+  },
+  {
+    key: "machine.humanName",
+    category: "machine",
+    scope: "global",
+    schema: {
+      type: "string",
+      pattern: HUMAN_NAME_PATTERN,
+      patternHint: "one line of at most 80 characters with no spaces at either end (goal-run: is reserved)",
+    },
+    default: "",
+    version: 1,
+    sensitivity: "normal",
+    ui: {
+      label: "Your name",
+      description:
+        "Approve and Request changes clicked in a Staple view inside an agent's thread are recorded under this name, not the agent's. Empty means the gate's owner.",
+      control: "text",
+      order: 40,
+    },
+    configKey: "humanName",
   },
 ];
 

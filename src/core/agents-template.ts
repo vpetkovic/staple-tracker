@@ -580,6 +580,9 @@ pickup queue, \`checkout_task\` (with \`steal_if_idle_seconds\` and
 \`gate_task\` / \`approve_task\` / \`request_changes\`, and the views
 \`show_ticket\`, \`show_progress\` and \`show_queue\`. Writes require an
 identity — pass \`actor\` or set \`STAPLE_AGENT\`; there is no silent default.
+The Approve and Request changes buttons on those views are the person's: they
+are recorded under the person's name, not yours. To decide a gate yourself, call
+\`approve_task\` or \`request_changes\`.
 
 ---
 

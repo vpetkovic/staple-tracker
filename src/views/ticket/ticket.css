@@ -110,6 +110,11 @@
   font-size: 12px;
 }
 
+/* "· from the card": a person decided in a view; kept on one line. */
+.ticket-gate-via {
+  white-space: nowrap;
+}
+
 .ticket-gate-actions {
   display: flex;
   flex-direction: column;

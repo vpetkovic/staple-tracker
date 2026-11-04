@@ -5,9 +5,11 @@
  *
  * `show_ticket` answers with the card, `get_task` and `checkout_task` declare the same view,
  * and a host without MCP Apps gets the card as prose. In the host the card paints at 360px
- * in both themes, and its buttons go through the host: Approve calls approve_task, Request
- * changes calls request_changes with the note, Open in Staple asks the host to open the
- * web UI's deep link. Each write is checked in the workspace afterwards, not only on screen.
+ * in both themes, and its buttons go through the host: Approve and Request changes call the
+ * app-only approve_gate_from_view and request_changes_from_view (the note rides along), which
+ * record the person (the machine's humanName, else the gate's owner), never the server's
+ * STAPLE_AGENT; Open in Staple asks the host to open the web UI's deep link. Each write is
+ * checked in the workspace afterwards, not only on screen.
  *
  * The browser half is skipped, saying why, when this machine has no Chromium for
  * playwright-core (and fails in CI instead). The protocol half always runs.
@@ -21,6 +23,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { initWorkspace, resolveWorkspace } from "../src/core/workspace.js";
+import { updateConfig } from "../src/config/file.js";
 import { testPackageDir } from "./fixtures/package-payload.js";
 import { MCP_APPS_EXTENSION, expectPainted, loadView, measurePaint, renderView, type RenderedView } from "./fixtures/mcp-apps-harness.js";
 
@@ -276,22 +279,31 @@ describe.skipIf(Boolean(reason))("the ticket card in a host", () => {
     });
   }
 
-  it("Approve approves the gate through the host, and the card shows it approved", async () => {
+  it("Approve approves the gate under the gate's owner while no humanName is set, never the agent, and says it came from the card", async () => {
+    updateConfig(process.env.STAPLE_HOME!, { humanName: "" });
     const view = await card(refs.approveGate);
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
       expect(await view.frame.locator('[data-gate="pending"]').innerText()).toContain("waiting on reviewer");
       await view.frame.locator('[data-action="approve"]').click();
       await view.frame.locator('[data-gate="approved"]').waitFor();
-      expect(await view.frame.locator('[data-gate="approved"]').innerText()).toContain(`Gate approved by ${AGENT}`);
+      expect(await view.frame.locator('[data-gate="approved"] .ticket-gate-line').innerText()).toBe("Gate approved by reviewer · from the card");
       expect(await view.frame.locator('[data-action="approve"]').count()).toBe(0);
-      expect((await view.record()).toolCalls).toEqual(["approve_task", "show_ticket"]);
+      expect(await view.frame.locator("[data-action-note]").innerText()).toBe("Approved. Recorded as reviewer.");
+      expect((await view.record()).toolCalls).toEqual(["approve_gate_from_view", "show_ticket"]);
       const now = store();
       try {
-        expect(now.gate(refs.approveGate)).toMatchObject({ state: "approved", resolvedBy: AGENT });
-        expect(now.listComments(refs.approveGate).map((comment) => comment.body)).toContain(
-          "Approved from the ticket card in the thread.",
-        );
+        expect(now.gate(refs.approveGate)).toMatchObject({ state: "approved", resolvedBy: "reviewer" });
+        expect(now.listComments(refs.approveGate).at(-1)).toMatchObject({
+          author: "reviewer",
+          authorType: "user",
+          body: "Approved by reviewer from the ticket card.",
+        });
+        expect(now.gateDecision(refs.approveGate)).toMatchObject({ state: "approved", by: "reviewer", via: "ticket_card" });
+        const issueId = now.getIssue(refs.approveGate).id;
+        const written = now.listEvents(0, 500).filter((event) => event.issueId === issueId && event.kind === "gate_approved");
+        expect(written.map((event) => event.actor)).toEqual(["reviewer"]);
+        expect(now.listEvents(0, 500).some((event) => event.actor === AGENT)).toBe(false);
       } finally {
         now.db.close();
       }
@@ -300,7 +312,8 @@ describe.skipIf(Boolean(reason))("the ticket card in a host", () => {
     }
   });
 
-  it("Request changes sends the note through the host, keeps the draft across a theme change, and shows the gate sent back", async () => {
+  it("Request changes sends the note under the configured humanName, keeps the draft across a theme change, and shows the gate sent back", async () => {
+    updateConfig(process.env.STAPLE_HOME!, { humanName: "Mira Lane" });
     const view = await card(refs.sendBackGate);
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
@@ -313,16 +326,24 @@ describe.skipIf(Boolean(reason))("the ticket card in a host", () => {
       expect(await field.inputValue()).toBe("Split the balance page out first.");
       await view.frame.locator('[data-action="send-back"]').click();
       await view.frame.locator('[data-gate="changes_requested"]').waitFor();
-      expect(await view.frame.locator('[data-gate="changes_requested"]').innerText()).toContain(`Changes requested by ${AGENT}`);
-      expect((await view.record()).toolCalls).toEqual(["request_changes", "show_ticket"]);
+      expect(await view.frame.locator('[data-gate="changes_requested"] .ticket-gate-line').innerText()).toBe(
+        "Changes requested by Mira Lane · from the card",
+      );
+      expect((await view.record()).toolCalls).toEqual(["request_changes_from_view", "show_ticket"]);
       const now = store();
       try {
-        expect(now.gate(refs.sendBackGate)).toMatchObject({ state: "changes_requested", resolvedBy: AGENT });
-        expect(now.listComments(refs.sendBackGate).map((comment) => comment.body)).toContain("Split the balance page out first.");
+        expect(now.gate(refs.sendBackGate)).toMatchObject({ state: "changes_requested", resolvedBy: "Mira Lane" });
+        expect(now.listComments(refs.sendBackGate).at(-1)).toMatchObject({
+          author: "Mira Lane",
+          authorType: "user",
+          body: "Split the balance page out first.\n\nSent back by Mira Lane from the ticket card.",
+        });
+        expect(now.gateDecision(refs.sendBackGate)).toMatchObject({ state: "changes_requested", by: "Mira Lane", via: "ticket_card" });
       } finally {
         now.db.close();
       }
     } finally {
+      updateConfig(process.env.STAPLE_HOME!, { humanName: "" });
       await view.context.close();
     }
   });

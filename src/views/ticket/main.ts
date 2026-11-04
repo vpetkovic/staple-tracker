@@ -7,9 +7,12 @@
  * with `show_ticket` through the host (a read, so no host asks the person first).
  *
  * While the ticket's gate is pending the card offers Approve and Request changes, which
- * call `approve_task` and `request_changes` through the host. Those tools write, so the
- * host asks the person before it runs them; the card then reads the ticket again and shows
- * the gate as it now stands. Open in Staple asks the host to open the web UI's deep link.
+ * call the app-only `approve_gate_from_view` and `request_changes_from_view` through the host
+ * (hidden from the model). They write, so the host asks the person before it runs them, and
+ * the server records the decision under the person (the machine's humanName, else the gate's
+ * owner), never the agent. The card then reads the ticket again and shows the gate as it now
+ * stands: "Gate approved by <person> · from the card". Open in Staple asks the host to open
+ * the web UI's deep link.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "../shared/base.css";
@@ -37,6 +40,8 @@ interface Card {
   assignee: string | null;
   criteria: Array<{ text: string; mark: Mark }>;
   gate: Gate | null;
+  /** How the gate was decided while it stands decided; `via` names the view a person clicked in. */
+  decision: { state: string; by: string | null; via: string | null; at: string } | null;
   queuedBy: { identifier: string; owner: string } | null;
   attempt: {
     ordinal: number;
@@ -88,7 +93,22 @@ function read(result: CallToolResult): Shown | null {
 const root = document.getElementById("view")!;
 
 /** Stored with an approval from the card, so the ticket's history says where it came from. */
-const APPROVE_COMMENT = "Approved from the ticket card in the thread.";
+/** The app-only tools the buttons call; the server records the person, not the agent. */
+const APPROVE_TOOL = "approve_gate_from_view";
+const SEND_BACK_TOOL = "request_changes_from_view";
+type GateTool = typeof APPROVE_TOOL | typeof SEND_BACK_TOOL;
+
+/** `from the card`, `from the queue`: where a person decided, as the card says it. */
+function viaWords(via: string | null | undefined): string | null {
+  if (!via) return null;
+  return via === "ticket_card" ? "from the card" : `from the ${via.replace(/_/g, " ")}`;
+}
+
+/** The person a view decision was recorded under, from the tool's answer. */
+function decidedBy(result: CallToolResult): string | null {
+  const decision = (result.structuredContent as { decision?: { by?: unknown } } | undefined)?.decision;
+  return typeof decision?.by === "string" && decision.by !== "" ? decision.by : null;
+}
 
 /** What survives a re-render (a theme change re-renders): per ticket, the open form and notes. */
 const state = {
@@ -181,13 +201,13 @@ function rerender(host: ViewHost): void {
   if (lastShown) render(lastShown, host);
 }
 
-async function act(host: ViewHost, card: Card, tool: "approve_task" | "request_changes", args: Record<string, unknown>, done: string): Promise<void> {
+async function act(host: ViewHost, card: Card, tool: GateTool, args: Record<string, unknown>, done: string): Promise<void> {
   state.busy = true;
-  state.note = tool === "approve_task" ? "Asking the host to approve the gate…" : "Asking the host to send it back…";
+  state.note = tool === APPROVE_TOOL ? "Asking the host to approve the gate…" : "Asking the host to send it back…";
   state.noteTone = "info";
   rerender(host);
   try {
-    const result = await host.callTool(tool, { ref: card.identifier, ...args, ...wsArgument(host) });
+    const result = await host.callTool(tool, { ref: card.identifier, view: "ticket_card", ...args, ...wsArgument(host) });
     if (result.isError) {
       state.busy = false;
       state.note = refusal(result);
@@ -197,10 +217,11 @@ async function act(host: ViewHost, card: Card, tool: "approve_task" | "request_c
     }
     state.composing = false;
     state.draft = "";
-    await refresh(host, card.identifier, done);
+    const by = decidedBy(result);
+    await refresh(host, card.identifier, by ? `${done} Recorded as ${by}.` : done);
   } catch (error) {
     state.busy = false;
-    state.note = `${tool === "approve_task" ? "Approve" : "Request changes"} did not go through: ${errorText(error)}`;
+    state.note = `${tool === APPROVE_TOOL ? "Approve" : "Request changes"} did not go through: ${errorText(error)}`;
     state.noteTone = "error";
     rerender(host);
   }
@@ -220,12 +241,16 @@ function gateSection(card: Card, host: ViewHost): HTMLElement | null {
       h("p", { class: "ticket-gate-line" }, h("strong", {}, "Queued"), ` behind ${card.queuedBy.identifier}, waiting on ${card.queuedBy.owner}`),
     );
   }
+  const from = gate.state === "pending" ? null : viaWords(card.decision?.via);
+  const decided = (label: string) => [
+    h("strong", {}, label),
+    gate.resolvedBy ? ` by ${gate.resolvedBy}` : "",
+    from ? h("span", { class: "ticket-gate-via", "data-via": card.decision?.via ?? "" }, ` · ${from}`) : "",
+  ];
   const heading =
     gate.state === "pending"
       ? [h("strong", {}, "Gate pending"), ` · waiting on ${gate.owner}`]
-      : gate.state === "approved"
-        ? [h("strong", {}, "Gate approved"), gate.resolvedBy ? ` by ${gate.resolvedBy}` : ""]
-        : [h("strong", {}, "Changes requested"), gate.resolvedBy ? ` by ${gate.resolvedBy}` : ""];
+      : decided(gate.state === "approved" ? "Gate approved" : "Changes requested");
   const detail =
     gate.state === "pending"
       ? `Requested${gate.requestedBy ? ` by ${gate.requestedBy}` : ""} · ${when(gate.requestedAt, host)}`
@@ -263,7 +288,7 @@ function gateActions(card: Card, host: ViewHost): HTMLElement {
     send.addEventListener("click", () => {
       const comment = state.draft.trim();
       if (comment === "") return;
-      void act(host, card, "request_changes", { comment }, "Sent back with your note.");
+      void act(host, card, SEND_BACK_TOOL, { comment }, "Sent back with your note.");
     });
     cancel.addEventListener("click", () => {
       state.composing = false;
@@ -276,9 +301,9 @@ function gateActions(card: Card, host: ViewHost): HTMLElement {
   if (card.actions.approve) {
     const approve = h("button", { class: "view-button view-button-primary", type: "button", "data-action": "approve" }, "Approve");
     approve.disabled = state.busy;
-    // The write is attributed to the server's agent identity; the comment says a person
-    // pressed the button (the host asked them first).
-    approve.addEventListener("click", () => void act(host, card, "approve_task", { comment: APPROVE_COMMENT }, "Approved."));
+    // The server records the person (humanName, else the gate's owner) and writes the
+    // comment that says it came from the card; the host asked them first.
+    approve.addEventListener("click", () => void act(host, card, APPROVE_TOOL, {}, "Approved."));
     buttons.append(approve);
   }
   if (card.actions.requestChanges) {

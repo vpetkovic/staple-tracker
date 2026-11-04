@@ -26,7 +26,8 @@ import { readConfig } from "./config/file.js";
 import { stapleHome } from "./config/home.js";
 import { MILESTONE_KIND } from "./core/milestones.js";
 import type { WorkspaceStore } from "./core/store.js";
-import type { IssueComment, IssueGate, QueuedBy } from "./core/types.js";
+import type { GateDecision, IssueComment, IssueGate, QueuedBy } from "./core/types.js";
+import { DECISION_VIEWS } from "./mcp-view-actions.js";
 
 export type CriterionMark = "met" | "unmet" | "open";
 
@@ -41,6 +42,11 @@ export interface TicketCard {
   assignee: string | null;
   criteria: Array<{ text: string; mark: CriterionMark }>;
   gate: IssueGate | null;
+  /**
+   * How the gate was decided, while it stands decided (approved or sent back): who, and the
+   * view a person clicked in (`via`), null for an agent's approve_task. Null while pending.
+   */
+  decision: GateDecision | null;
   /** The pending gate above this ticket that keeps it out of the queue, if any. */
   queuedBy: QueuedBy | null;
   /** The open worker attempt, else the newest ended one; null before the first claim. */
@@ -166,6 +172,7 @@ export function ticketCard(store: WorkspaceStore, ref: string, uiBase: string | 
     assignee: issue.assignee,
     criteria,
     gate,
+    decision: store.gateDecision(issue.id),
     queuedBy: store.queuedBy(issue.id),
     attempt: shown
       ? {
@@ -205,6 +212,14 @@ const GATE_WORDS: Record<string, string> = {
   changes_requested: "changes requested",
 };
 
+/** ` from the ticket card` when a person decided the gate in a view, else nothing. */
+function decidedFrom(card: TicketCard): string {
+  const via = card.decision?.via;
+  if (!via) return "";
+  const known = (DECISION_VIEWS as Record<string, { phrase: string }>)[via];
+  return ` from ${known ? known.phrase : via.replace(/_/g, " ")}`;
+}
+
 /** The card as prose: the whole answer for a host without MCP Apps. */
 export function ticketCardText(card: TicketCard): string {
   const lines = [`${card.identifier} ${card.title}`];
@@ -216,7 +231,7 @@ export function ticketCardText(card: TicketCard): string {
     lines.push(
       gate.state === "pending"
         ? `Gate pending: waiting on ${gate.owner}${gate.requestedBy ? ` (requested by ${gate.requestedBy})` : ""}. Approve with approve_task, or send it back with request_changes.`
-        : `Gate ${GATE_WORDS[gate.state] ?? gate.state}${gate.resolvedBy ? ` by ${gate.resolvedBy}` : ""} (owner ${gate.owner}).`,
+        : `Gate ${GATE_WORDS[gate.state] ?? gate.state}${gate.resolvedBy ? ` by ${gate.resolvedBy}` : ""}${decidedFrom(card)} (owner ${gate.owner}).`,
     );
   }
   if (card.queuedBy) lines.push(`Queued behind ${card.queuedBy.identifier}, waiting on ${card.queuedBy.owner}.`);

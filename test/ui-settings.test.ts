@@ -468,6 +468,7 @@ describe("registered settings on /api/settings", () => {
       "kinds.appearance:workspace",
       "machine.port:global",
       "machine.setupComplete:global",
+      "machine.humanName:global",
     ]);
   });
 

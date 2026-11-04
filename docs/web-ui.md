@@ -135,7 +135,9 @@ Open **Settings** from the foot of the rail, or `⌘K` then *Settings*.
 
 - **Across all workspaces:** *Cloud account* and *Workspaces on this computer*
   ([cloud sync](cloud-sync.md) and the [hub](hub.md)), *Usage* (provider budget
-  capture) and *This computer* (the default port and whether a browser opens).
+  capture) and *This computer* (the default port, whether a browser opens, and
+  *Your name*, which Approve and Request changes clicked in a
+  [view in an agent's thread](mcp-apps.md) are recorded under).
 - **Per workspace:** *Statuses* and *Task types* (rename, add, reorder; turn on
   milestones here), *Picking up work* (the queue's advisory or strict policy) and
   *Cloud sync* for that workspace.

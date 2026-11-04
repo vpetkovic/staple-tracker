@@ -29,6 +29,7 @@ export interface EffectiveConfig {
     browser: SettingView<StapleConfig["browser"]>;
     port: SettingView<number>;
     setupComplete: SettingView<boolean>;
+    humanName: SettingView<string>;
   };
   connectors: Record<string, ConnectorReceipt>;
   /** Keys written by a newer staple that this binary preserves but cannot interpret. */
@@ -53,6 +54,7 @@ export function effectiveConfig(): EffectiveConfig {
       browser: { value: loaded.config.browser, source: sourceOf("browser") },
       port: { value: loaded.config.port, source: sourceOf("port") },
       setupComplete: { value: loaded.config.setupComplete, source: sourceOf("setupComplete") },
+      humanName: { value: loaded.config.humanName, source: sourceOf("humanName") },
     },
     connectors: loaded.config.connectors,
     unknownKeys: loaded.unknownKeys,

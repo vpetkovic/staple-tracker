@@ -8,9 +8,10 @@
  * eligibility, so they are checked against the resolver `staple queue next` and `next_task`
  * read, not against a hand-written list. Under `queue.policy = strict` only the row checkout
  * accepts offers Take. In the host the view paints at 360px in both themes; Take posts
- * "Work <REF>" into the thread through the host, and Approve calls approve_task through the
- * host, after which the released work shows as ready. Each write is checked in the
- * workspace afterwards, not only on screen.
+ * "Work <REF>" into the thread through the host, and Approve calls the app-only
+ * approve_gate_from_view through the host, which records the person (the machine's
+ * humanName), never the server's STAPLE_AGENT; the released work then shows as ready. Each
+ * write is checked in the workspace afterwards, not only on screen.
  *
  * The browser half is skipped, saying why, when this machine has no Chromium for
  * playwright-core (and fails in CI instead). The protocol half always runs.
@@ -24,6 +25,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { initWorkspace, resolveWorkspace } from "../src/core/workspace.js";
+import { updateConfig } from "../src/config/file.js";
 import type { QueueLanes } from "../src/mcp-queue.js";
 import { testPackageDir } from "./fixtures/package-payload.js";
 import { MCP_APPS_EXTENSION, expectPainted, loadView, measurePaint, renderView, type RenderedView } from "./fixtures/mcp-apps-harness.js";
@@ -346,7 +348,7 @@ describe("the queue view over MCP", () => {
 
 describe("gates in the lanes", () => {
   /** A second workspace: a gate holding more rows than a lane carries, a nested gate, a sent-back gate. */
-  const wide = { db: "", wideGate: "", outer: "", inner: "", innerChild: "", sentBack: "" };
+  const wide = { db: "", wideGate: "", outer: "", inner: "", innerChild: "", sentBack: "", sentBackFromCard: "" };
 
   beforeAll(() => {
     const ws = initWorkspace({ global: true, slug: "gates" });
@@ -368,6 +370,11 @@ describe("gates in the lanes", () => {
     s.gateIssue(sentBack.identifier, { owner: "reviewer" }, "pat");
     s.requestChanges(sentBack.identifier, { comment: "Split the payout out first." }, "reviewer");
     wide.sentBack = sentBack.identifier;
+    const fromCard = s.createIssue({ title: "Store credit", kind: "epic" });
+    s.createIssue({ title: "Refund to store credit", parent: fromCard.identifier, status: "todo" });
+    s.gateIssue(fromCard.identifier, { owner: "reviewer" }, "pat");
+    s.requestChanges(fromCard.identifier, { comment: "Name the expiry rule.", person: { via: "ticket_card" } }, "Mira Lane");
+    wide.sentBackFromCard = fromCard.identifier;
     ws.store.db.close();
   });
 
@@ -378,12 +385,19 @@ describe("gates in the lanes", () => {
     expect(big.holds).toHaveLength(20);
     expect(big.heldTotal).toBe(23);
     const sentBack = shown.gated.find((group) => group.identifier === wide.sentBack)!;
-    expect(sentBack).toMatchObject({ state: "changes_requested", resolvedBy: "reviewer", owner: "reviewer", approve: true, heldTotal: 1 });
+    expect(sentBack).toMatchObject({ state: "changes_requested", resolvedBy: "reviewer", resolvedVia: null, owner: "reviewer", approve: true, heldTotal: 1 });
+    // Sent back by a person from the card: the lane says who and where.
+    expect(shown.gated.find((group) => group.identifier === wide.sentBackFromCard)).toMatchObject({
+      state: "changes_requested",
+      resolvedBy: "Mira Lane",
+      resolvedVia: "ticket_card",
+    });
     expect(shown.totals.gated).toBe(shown.gated.reduce((sum, group) => sum + group.heldTotal, 0));
     expect(shown.totals.gates).toBe(shown.gated.length);
     const shownText = text((await client.callTool({ name: "show_queue", arguments: {} })) as CallToolResult);
     expect(shownText).toMatch(new RegExp(`  ${wide.wideGate} Launch week: waiting on reviewer; holds [A-Z]+-\\d+(, [A-Z]+-\\d+){19} and 3 more\\.`));
     expect(shownText).toContain(`  ${wide.sentBack} Referral codes: changes requested by reviewer, owner reviewer;`);
+    expect(shownText).toContain(`  ${wide.sentBackFromCard} Store credit: changes requested by Mira Lane from the card, owner reviewer;`);
   });
 
   it("says an inner gate waits on the outer one after it is approved", async () => {
@@ -491,26 +505,34 @@ describe.skipIf(Boolean(reason))("the queue view in a host", () => {
     }
   });
 
-  it("Approve approves the gate through the host, and the released work shows as ready", async () => {
+  it("Approve approves the gate under the configured humanName, never the agent, and the released work shows as ready", async () => {
+    updateConfig(process.env.STAPLE_HOME!, { humanName: "Mira Lane" });
     const view = await queueView();
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
       await view.frame.locator(`[data-gate="${refs.gate}"] [data-action="approve"]`).click();
-      await view.frame.getByText(`Approved ${refs.gate}.`).waitFor();
-      expect((await view.record()).toolCalls).toEqual(["approve_task", "show_queue"]);
+      await view.frame.getByText(`Approved ${refs.gate} by Mira Lane · from the queue.`).waitFor();
+      expect((await view.record()).toolCalls).toEqual(["approve_gate_from_view", "show_queue"]);
       expect(await view.frame.locator(`[data-gate="${refs.gate}"]`).count()).toBe(0);
       const ready = await view.frame
         .locator('[data-lane="ready"] [data-row]')
         .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-row")));
       for (const child of refs.gateChildren) expect(ready).toContain(child);
       withStore((store) => {
-        expect(store.gate(refs.gate)).toMatchObject({ state: "approved", resolvedBy: AGENT });
-        expect(store.listComments(refs.gate).map((comment) => comment.body)).toContain("Approved from the queue in the thread.");
+        expect(store.gate(refs.gate)).toMatchObject({ state: "approved", resolvedBy: "Mira Lane" });
+        expect(store.listComments(refs.gate).at(-1)).toMatchObject({
+          author: "Mira Lane",
+          authorType: "user",
+          body: "Approved by Mira Lane from the queue.",
+        });
+        expect(store.gateDecision(refs.gate)).toMatchObject({ state: "approved", by: "Mira Lane", via: "queue" });
+        expect(store.listEvents(0, 1000).some((event) => event.actor === AGENT)).toBe(false);
       });
       // The lanes on screen are the resolver's after the approval, too.
       const client = await connect({ apps: true });
       expectLanesMatchResolver(await lanes(client));
     } finally {
+      updateConfig(process.env.STAPLE_HOME!, { humanName: "" });
       await view.context.close();
     }
   });

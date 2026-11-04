@@ -29,6 +29,7 @@ import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
+import { DECISION_VIEW_IDS, approvalComment, personFor, sendBackComment } from "./mcp-view-actions.js";
 import { queueLanes, queueText, type QueueLanes } from "./mcp-queue.js";
 import { progressText, ticketProgress, type TicketProgress } from "./mcp-progress.js";
 import {
@@ -1850,6 +1851,95 @@ server.registerTool(
       const store = storeFor(ws);
       const issue = store.requestChanges(ref, { comment }, requireActor(actor));
       return { ...issue, gate: store.gate(issue.id) };
+    }),
+);
+
+/**
+ * ---------------------------------------------------------------- a person's click in a view
+ *
+ * The ticket card's Approve and Request changes and the queue's Approve call these two, not
+ * approve_task / request_changes. They are APP-ONLY (`_meta.ui.visibility: ["app"]`): a host
+ * that renders MCP Apps lets the view call them and leaves them out of the model's tool list.
+ * They take no `actor`: the decision is recorded under the machine's `humanName`, else the
+ * gate's owner, never under STAPLE_AGENT. The comment is the person's and says which view it
+ * came from, and the gate event carries `via` (src/mcp-view-actions.ts says why, and where
+ * the trust boundary is). An agent that approves calls approve_task and is recorded as itself.
+ */
+const decisionShape = {
+  ...issueShape,
+  gate: z.object(gateShape).nullable(),
+  decision: z.object({
+    by: z.string().describe("The person the decision is recorded under"),
+    source: z.enum(["config", "gate_owner"]).describe("config: the machine's humanName; gate_owner: humanName is unset"),
+    via: z.enum(DECISION_VIEW_IDS).describe("The view the person clicked in"),
+  }),
+};
+const appOnly = { ui: { visibility: ["app"] } };
+const viewSchema = z.enum(DECISION_VIEW_IDS).describe("The view the person clicked in: ticket_card or queue");
+
+server.registerTool(
+  "approve_gate_from_view",
+  {
+    description:
+      "App-only: the Approve button on the ticket card and the queue view. Approves the whole gate on `ref` and records it under the person on this machine (config humanName, else the gate's owner), never the agent. Hosts hide it from the model; an agent approves with approve_task.",
+    inputSchema: { ref: refSchema, view: viewSchema, ws: wsSchema },
+    outputSchema: decisionShape,
+    annotations: {
+      title: "Approve gate (from a view)",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    _meta: appOnly,
+  },
+  ({ ref, view, ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const person = personFor(store, ref);
+      const issue = store.approveGate(
+        ref,
+        { comment: approvalComment(person.name, view), person: { via: view } },
+        person.name,
+      );
+      return { ...issue, gate: store.gate(issue.id), decision: { by: person.name, source: person.source, via: view } };
+    }),
+);
+
+server.registerTool(
+  "request_changes_from_view",
+  {
+    description:
+      "App-only: Request changes on the ticket card. Sends the gate on `ref` back with the person's note and records it under the person on this machine (config humanName, else the gate's owner), never the agent. Hosts hide it from the model; an agent sends back with request_changes.",
+    inputSchema: {
+      ref: refSchema,
+      comment: z.string().describe("The person's note to the next agent. Required."),
+      view: viewSchema,
+      ws: wsSchema,
+    },
+    outputSchema: decisionShape,
+    annotations: {
+      title: "Send back (from a view)",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    _meta: appOnly,
+  },
+  ({ ref, comment, view, ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      if (!comment?.trim()) {
+        throw new StapleError("validation", "Request changes needs a note: say what has to change, or approve instead.");
+      }
+      const person = personFor(store, ref);
+      const issue = store.requestChanges(
+        ref,
+        { comment: sendBackComment(comment, person.name, view), person: { via: view } },
+        person.name,
+      );
+      return { ...issue, gate: store.gate(issue.id), decision: { by: person.name, source: person.source, via: view } };
     }),
 );
 
@@ -3736,6 +3826,18 @@ const ticketCardShape = {
     .array(z.object({ text: z.string(), mark: z.enum(["met", "unmet", "open"]) }))
     .describe("Acceptance criteria. A milestone's marks are its goal check; any other ticket's are met once it is done"),
   ...gateFields,
+  decision: z
+    .object({
+      state: z.enum(["approved", "changes_requested"]),
+      by: z.string().nullable().describe("Who the decision is recorded under"),
+      via: z
+        .string()
+        .nullable()
+        .describe("The view a person decided in (ticket_card, queue); null for an agent's approve_task / request_changes, the CLI or the web UI"),
+      at: z.string(),
+    })
+    .nullable()
+    .describe("How the gate was decided, while it stands decided; null while pending or never gated"),
   attempt: z
     .object({
       ordinal: z.number().int(),
@@ -3764,7 +3866,7 @@ server.registerTool(
   "show_ticket",
   {
     description:
-      "Show one ticket to the person in the thread: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer, estimate against time spent, and a link to it in the web UI. In a host with MCP Apps it renders as the ticket card, whose Approve and Request changes buttons (shown while a gate is pending) call approve_task and request_changes through the host, which asks the person first. Any other host gets the same facts as text. Display only. Call it once right after you claim a ticket with the CLI (staple checkout); do not follow checkout_task with it, since that claim already drew this card (get_task draws it too). Call it when work waits on the person (a ticket you hand on for review, a parent you gate), and when a person asks to see a ticket. Not for reading a ticket yourself: get_task has the full context.",
+      "Show one ticket to the person in the thread: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer, estimate against time spent, and a link to it in the web UI. In a host with MCP Apps it renders as the ticket card, whose Approve and Request changes buttons (shown while a gate is pending) are the person's: the host asks them first and the decision is recorded under their name, not yours, marked as from the card. To decide a gate yourself, call approve_task or request_changes. Any other host gets the same facts as text. Display only. Call it once right after you claim a ticket with the CLI (staple checkout); do not follow checkout_task with it, since that claim already drew this card (get_task draws it too). Call it when work waits on the person (a ticket you hand on for review, a parent you gate), and when a person asks to see a ticket. Not for reading a ticket yourself: get_task has the full context.",
     inputSchema: { ref: refSchema, ws: wsSchema },
     outputSchema: { ticket: z.object(ticketCardShape) },
     annotations: { title: "Show ticket", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -3877,13 +3979,19 @@ const queueLanesShape = {
         requestedBy: z.string().nullable(),
         requestedAt: z.string().nullable(),
         resolvedBy: z.string().nullable().describe("Who sent it back, while changes_requested"),
+        resolvedVia: z
+          .string()
+          .nullable()
+          .describe("The view a person sent it back from (ticket_card), while changes_requested; null for an agent"),
         behind: z
           .object({ identifier: z.string(), owner: z.string() })
           .nullable()
           .describe("An outer gate this gate's own ticket waits behind: approving this one moves its rows there"),
         holds: z.array(z.object(queueLaneRowShape)).describe("The queue rows this gate holds, in effective order; at most 20"),
         heldTotal: z.number().int().describe("How many rows it holds in all"),
-        approve: z.boolean().describe("The gate is active (pending or changes_requested): approve_task on `identifier` releases it"),
+        approve: z
+          .boolean()
+          .describe("The gate is active (pending or changes_requested): approve_task on `identifier` releases it (the view's Approve calls approve_gate_from_view)"),
       }),
     )
     .describe("Gated rows, grouped by the gate that holds them"),
@@ -3920,7 +4028,7 @@ server.registerTool(
   "show_queue",
   {
     description:
-      "Show a person the pickup queue in the thread, in lanes: Ready in pickup order (the first is what next_task answers), Gated with the gate's owner, and In progress with who holds each ticket and how its attempt is going; blocked work is counted. Under queue.policy strict it shows the one row checkout_task accepts now. In a host with MCP Apps it renders as the queue view: Take on a ready row posts \"Work <REF>\" into the thread as the person's message (the host asks them first), and Approve on a gated row calls approve_task through the host, which asks first. Any other host gets the lanes as text. Display only: call it when a person asks what is in the queue, what to work on next, or what is waiting on them; to pick work for yourself call next_task.",
+      "Show a person the pickup queue in the thread, in lanes: Ready in pickup order (the first is what next_task answers), Gated with the gate's owner, and In progress with who holds each ticket and how its attempt is going; blocked work is counted. Under queue.policy strict it shows the one row checkout_task accepts now. In a host with MCP Apps it renders as the queue view: Take on a ready row posts \"Work <REF>\" into the thread as the person's message (the host asks them first), and Approve on a gated row is the person's: the host asks them first and the approval is recorded under their name, marked as from the queue. Any other host gets the lanes as text. Display only: call it when a person asks what is in the queue, what to work on next, or what is waiting on them; to pick work for yourself call next_task.",
     inputSchema: {
       scope: z
         .string()

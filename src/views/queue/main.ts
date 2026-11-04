@@ -10,8 +10,10 @@
  * Take on a ready row posts "Work <REF>" into the thread as the person's message
  * (`ui/message`; the host confirms it first), which hands the ticket to the agent. Under a
  * strict queue only the row checkout accepts now offers Take. Approve on a gated row calls
- * `approve_task` through the host, which asks the person before it runs it; the view then
- * reads the lanes again. Refresh reads them again on a click.
+ * the app-only `approve_gate_from_view` through the host (hidden from the model), which asks
+ * the person before it runs it; the server records the approval under that person, not the
+ * agent, and the view says so ("Approved DEMO-2 by Mira Lane · from the queue") and reads the
+ * lanes again. Refresh reads them again on a click.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "../shared/base.css";
@@ -38,6 +40,8 @@ interface GateGroup {
   requestedBy: string | null;
   requestedAt: string | null;
   resolvedBy: string | null;
+  /** The view a person sent it back from, while changes_requested; null for an agent. */
+  resolvedVia?: string | null;
   behind: { identifier: string; owner: string } | null;
   holds: LaneRow[];
   heldTotal: number;
@@ -91,7 +95,14 @@ function read(result: CallToolResult): Shown | null {
 const root = document.getElementById("view")!;
 
 /** Stored with an approval from the view, so the ticket's history says where it came from. */
-const APPROVE_COMMENT = "Approved from the queue in the thread.";
+/** The app-only tool Approve calls: the server records the person, not the agent. */
+const APPROVE_TOOL = "approve_gate_from_view";
+
+/** `from the card`, `from the queue`: where a person decided, as the view says it. */
+function viaWords(via: string | null | undefined): string | null {
+  if (!via) return null;
+  return via === "ticket_card" ? "from the card" : `from the ${via.replace(/_/g, " ")}`;
+}
 
 /** How many rows a lane shows before "Show all". */
 const FOLDED_ROWS = 5;
@@ -207,13 +218,15 @@ async function approve(host: ViewHost, group: GateGroup): Promise<void> {
   state.busy = true;
   say(host, `Asking the host to approve ${group.identifier}…`);
   try {
-    const result = await host.callTool("approve_task", { ref: group.identifier, comment: APPROVE_COMMENT, ...wsArgument(host) });
+    const result = await host.callTool(APPROVE_TOOL, { ref: group.identifier, view: "queue", ...wsArgument(host) });
     if (result.isError) {
       state.busy = false;
       say(host, refusal(result), "error");
       return;
     }
-    await refresh(host, `Approved ${group.identifier}.`);
+    const decision = (result.structuredContent as { decision?: { by?: unknown } } | undefined)?.decision;
+    const by = typeof decision?.by === "string" && decision.by !== "" ? decision.by : null;
+    await refresh(host, `Approved ${group.identifier}${by ? ` by ${by} · from the queue` : ""}.`);
   } catch (error) {
     state.busy = false;
     say(host, `Approve did not go through: ${errorText(error)}`, "error");
@@ -314,7 +327,11 @@ function gatedLane(lanes: Lanes, host: ViewHost): HTMLElement {
     const others = group.heldTotal - group.holds.length;
     const detail =
       group.state === "changes_requested"
-        ? [`changes requested${group.resolvedBy ? ` by ${group.resolvedBy}` : ""}`, ...(group.owner ? [`owner ${group.owner}`] : [])]
+        ? [
+            `changes requested${group.resolvedBy ? ` by ${group.resolvedBy}` : ""}`,
+            ...(viaWords(group.resolvedVia) ? [viaWords(group.resolvedVia)!] : []),
+            ...(group.owner ? [`owner ${group.owner}`] : []),
+          ]
         : [group.owner ? `waiting on ${group.owner}` : "awaiting approval", ...(group.requestedBy ? [`asked by ${group.requestedBy}`] : [])];
     let action: HTMLElement | null = null;
     if (group.approve) {

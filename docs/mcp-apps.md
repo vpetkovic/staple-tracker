@@ -30,10 +30,12 @@ One ticket: its status, kind, priority and assignee, the acceptance criteria wit
 their marks, the gate and who it waits on, the current attempt, the branch it is
 on, and time spent against the estimate.
 
-- While a gate is pending, **Approve** and **Request changes** answer it. They call
-  `approve_task` and `request_changes` through your client, which asks you first.
+- While a gate is pending, **Approve** and **Request changes** answer it, as you.
+  Your client asks you first, and the decision is recorded under your name, not
+  the agent's (see [Your clicks are recorded as you](#your-clicks-are-recorded-as-you)).
   Request changes asks for a note, which becomes a comment on the ticket
-  ([Approval gates](approval-gates.md)).
+  ([Approval gates](approval-gates.md)). Once decided, the card says who and
+  where: **Gate approved** by Mira Lane · from the card.
 - **Open in Staple** opens the ticket in the [web UI](web-ui.md), at
   `<base>?ws=<workspace>&issue=<REF>`. The server cannot see a running UI, so it
   builds the base from `STAPLE_UI_URL` when that is set, and otherwise uses
@@ -80,12 +82,47 @@ the lanes to one epic or milestone.
 - **Take** on a ready row posts "Work DEM-5" into the conversation as your
   message (the client asks you first). The agent that reads it takes the ticket.
   The view claims nothing itself.
-- **Approve** on a gated row calls `approve_task` through the client, which asks
-  first, then reads the lanes again.
+- **Approve** on a gated row approves the gate as you, the same way the card
+  does: the client asks first, the view says "Approved DEM-4 by Mira Lane · from
+  the queue", then reads the lanes again. A gate someone sent back from the card
+  says so on its row.
 - Under `queue.policy = strict` only the row checkout accepts now has a Take
   button; the others say which row they wait for.
 
 `inbox` and `list_queue` draw the same view.
+
+## Your clicks are recorded as you
+
+The buttons on the card and the queue do not call the tools an agent uses. They
+call two tools only a view can call, `approve_gate_from_view` and
+`request_changes_from_view`, which record the decision under the person on this
+machine:
+
+1. the name you set with `staple config set humanName "Mira Lane"`
+   ([Configuration](configuration.md#your-name-in-the-views)), or
+2. while that is unset, the gate's owner, the person the gate was waiting on.
+
+They never record the agent's name (`STAPLE_AGENT`), and they take no name from
+whoever calls them. The comment the decision leaves is yours, and says where it
+came from ("Approved by Mira Lane from the ticket card."), and the gate event
+carries the view (`via: ticket_card` or `queue`). The card, the queue, their text
+answers and `events_since` all show it.
+
+An agent you ask to approve calls `approve_task` or `request_changes`, and that
+decision is recorded under the agent, as before.
+
+**Where the line is.** Both tools declare MCP Apps `visibility: ["app"]`. A client
+that follows the standard lets the view call them and leaves them out of the
+agent's tool list, so the agent cannot click for you. The client enforces this,
+not staple: the server cannot tell a call the view made from one the agent made.
+In a client that ignores `visibility`, an agent could call these tools and the
+record would name you, marked as from the card, for its decision. Check your
+client before you rely on the mark.
+
+The name alone proves less than the mark. Every agent write takes an `actor`, so
+an agent can still pass your name to `approve_task`, as it always could. Such a
+decision carries no "from the card" or "from the queue": the mark, not the name,
+is what says a person clicked.
 
 ## When an agent shows each view
 
@@ -168,6 +205,9 @@ Gated, waiting on a person:
 Blocked: DEM-3 (by DEM-1).
 To take one, say "Work DEM-1".
 ```
+
+Once a person decides a gate from a view, the card's text says so:
+`Gate approved by Mira Lane from the ticket card (owner mira.lane).`
 
 `show_progress` lists the status, the time and the milestones the same way.
 

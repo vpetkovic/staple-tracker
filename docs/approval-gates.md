@@ -103,6 +103,12 @@ staple request-changes APP-1 -m "Hash tokens at rest. Fix that first."
 In the web UI these are **Approve all**, **Approve selected** and **Send back**, which
 asks for the note before it sends. Each asks you to type your name as the signer.
 
+In an agent's conversation, the [ticket card and the queue view](mcp-apps.md) have
+**Approve** and **Request changes**. Those clicks are recorded under your name from
+`staple config set humanName` (the gate's owner until you set it), marked as from the
+card or the queue, never under the agent
+([Your name in the views](configuration.md#your-name-in-the-views)).
+
 ## 5. Resubmit after changes
 
 An agent reads your note on the epic, does the fix (usually as a new ticket under it),

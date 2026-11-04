@@ -150,8 +150,9 @@ describe("a server started with no workspace in reach", () => {
     // and continue_run (64), and goal mode's mark_milestone_criterion (65), and
     // list_files, attach_file, export_file and remove_file (69), and the MCP Apps
     // about view's show_about (70), the ticket card's show_ticket (71), the
-    // progress view's show_progress (72), and the queue view's show_queue (73).
-    expect(tools).toHaveLength(73);
+    // progress view's show_progress (72), the queue view's show_queue (73), and the
+    // app-only approve_gate_from_view and request_changes_from_view the views' buttons call (75).
+    expect(tools).toHaveLength(75);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {
