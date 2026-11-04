@@ -1,0 +1,22 @@
+{
+  // The MCP Apps views run in a host's sandboxed frame, not in Node: DOM lib, bundler
+  // resolution. `npm run typecheck` runs this program after the Node and web UI ones.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["vite/client"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["dist"]
+}

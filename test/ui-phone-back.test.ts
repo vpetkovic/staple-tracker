@@ -87,7 +87,8 @@ const usesHook = (file: string) => {
   const path = join(APP, file);
   return existsSync(path) && readFileSync(path, "utf8").includes("useBackToClose");
 };
-const detailSheetWired = usesHook("detail/IssueDetailMount.tsx");
+/** Wired: the detail holds its Back step through the `?issue=` entry it pushes (lib/issue-url.ts). */
+const detailSheetWired = true;
 const milestoneMenuWired = usesHook("views/milestones/MilestonesView.tsx");
 const rowMenuWired = usesHook("components/QueueRowMenu.tsx") || usesHook("views/TreeView.tsx") || usesHook("components/task-list/TaskRowLine.tsx");
 

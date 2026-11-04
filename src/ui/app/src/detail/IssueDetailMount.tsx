@@ -45,9 +45,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog as DialogPrimitive, VisuallyHidden } from "radix-ui";
 import { RunStopNotices } from "@/components/autopilot/RunStopNotices";
 import type { AuthError } from "@/lib/api";
-import { useBackToClose } from "@/lib/back-to-close";
+import {
+  afterHistorySettles,
+  leaveOverlays,
+  overlayEntryIsOpen,
+  popOverlay,
+  pushOverlayEntry,
+  replaceUrl,
+  traversalKind,
+  whenHistoryIsFree,
+} from "@/lib/back-to-close";
+import { issueHistoryStep, readIssueUrl, resolveIssueWorkspace, sameIssue, withIssue } from "@/lib/issue-url";
 import { isTyping } from "@/lib/keyboard";
-import { useSession } from "@/lib/session";
+import { useSession, type Selection, type StapleSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { loadMode, otherMode, panelClass, presentationFor, saveMode, SHEET_BELOW, type DetailMode } from "./drawer";
 import { IssueDetailPanel } from "./IssueDetailPanel";
@@ -93,6 +103,131 @@ function useViewportWidth(): number {
     return () => window.removeEventListener("resize", onResize);
   }, []);
   return width;
+}
+
+/**
+ * THE OPEN TICKET IS IN THE ADDRESS — `?issue=STA-12` (lib/issue-url.ts).
+ *
+ * PHONE BACK CLOSES THE DETAIL. Opening a ticket from the page pushes ONE history entry,
+ * carrying `issue`, whatever the detail goes on to show: Previous/Next and a blocker chip
+ * change the selection, not whether it is open, so they rewrite that entry rather than add
+ * Back steps. Back pops the entry and closes; the Back button, the X and Escape close
+ * through `session.close` and this takes the entry back out.
+ *
+ * A LINK OPENS ITS TICKET. An address that arrives carrying `issue` — a shared link, the
+ * ticket card's "Open in Staple", a reload with the detail open — opens that ticket when
+ * the page starts. There is no entry of ours to pop then, so closing strips the parameter
+ * in place, the way Settings closes after a deep link (SettingsMount.tsx).
+ *
+ * Back and Forward follow the address: an entry without `issue` closes the detail, one
+ * with a different `issue` opens that ticket.
+ */
+function useIssueAddress(session: StapleSession): void {
+  const selection = session.selection;
+  const hub = session.mode === "hub";
+  /** The overlay entry this pushed when the detail opened from the page, or null. */
+  const entry = useRef<string | null>(null);
+  /** The ticket the address was last brought in line with. */
+  const shown = useRef<Selection | null>(null);
+  /** The entry is queued behind a traversal (a menu closing as its Open opened this). */
+  const pushing = useRef(false);
+  const live = useRef(session);
+  live.current = session;
+
+  // Arrival: the address names a ticket. The mount renders only once bootstrap is in, so
+  // the workspace list the ref is resolved against is already known.
+  useEffect(() => {
+    const request = readIssueUrl(window.location.search);
+    if (request) live.current.open(resolveIssueWorkspace(request, live.current), request.ref);
+  }, []);
+
+  useEffect(() => {
+    const before = shown.current;
+    shown.current = selection;
+    const ours = entry.current;
+    const step = issueHistoryStep({
+      before,
+      after: selection,
+      entryOpen: ours !== null && overlayEntryIsOpen(ours),
+      addressHasIssue: readIssueUrl(window.location.search) !== null,
+    });
+    if (step === "push") {
+      const opened = selection;
+      pushing.current = true;
+      whenHistoryIsFree(() => {
+        pushing.current = false;
+        // Closed again before the history was free: nothing to push.
+        if (!sameIssue(shown.current, opened)) return;
+        entry.current = pushOverlayEntry(withIssue(window.location.href, opened, hub));
+      });
+    } else if (step === "replace") {
+      const showing = selection;
+      afterHistorySettles(() => {
+        if (!sameIssue(shown.current, showing)) return;
+        const href = withIssue(window.location.href, showing, hub);
+        if (href !== window.location.href) replaceUrl(href);
+      });
+    } else if (step === "pop") {
+      entry.current = null;
+      popOverlay(ours!);
+    } else if (step === "strip") {
+      entry.current = null;
+      // Out of any overlay entries above the page first (a reload keeps their ids), then
+      // the parameter goes, unless a ticket was opened again in the meantime.
+      leaveOverlays(() => {
+        if (shown.current === null) replaceUrl(withIssue(window.location.href, null, hub));
+      });
+    }
+  }, [selection, hub]);
+
+  /*
+   * The page's workspace changed under an open ticket without a navigation — the address
+   * named a workspace this page does not have, and the page fell back to All workspaces.
+   * `issue-ws` is decided against the page's `ws`, so it is written again once the page has
+   * rewritten the address (after it: `whenHistoryIsFree`), or a reload would look for the
+   * ticket somewhere else.
+   */
+  const pageWs = session.ws;
+  useEffect(() => {
+    whenHistoryIsFree(() => {
+      const showing = shown.current;
+      // A navigation closed the ticket and took `issue` off the address: nothing to redo.
+      if (!showing || readIssueUrl(window.location.search) === null) return;
+      const href = withIssue(window.location.href, showing, hub);
+      if (href !== window.location.href) replaceUrl(href);
+    });
+  }, [pageWs, hub]);
+
+  useEffect(() => {
+    const onPop = () => {
+      /*
+       * Not ours to read: the detail's entry is not in history yet (it waits for the
+       * traversal landing now — the row menu whose Open opened it, stepping out), or an
+       * overlay this page closed is stepping back to the entry beneath it. Neither is the
+       * person leaving the ticket.
+       */
+      if (pushing.current || traversalKind() === "close") return;
+      const request = readIssueUrl(window.location.search);
+      const held = shown.current;
+      if (request === null) {
+        if (held === null) return;
+        // Back took the detail's entry (or stepped past it): close, with nothing to write.
+        shown.current = null;
+        entry.current = null;
+        live.current.close();
+        return;
+      }
+      const target = { workspace: resolveIssueWorkspace(request, live.current), ref: request.ref };
+      if (sameIssue(held, target)) return;
+      // Forward onto an entry that names a ticket: open it as the address says. The entry
+      // is not one this page pushed, so closing it strips in place.
+      shown.current = target;
+      entry.current = null;
+      live.current.open(target.workspace, target.ref);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 }
 
 export function IssueDetailMount() {
@@ -159,13 +294,7 @@ export function IssueDetailMount() {
     [session],
   );
 
-  /**
-   * PHONE BACK CLOSES THE DETAIL. One history entry while the detail is open, whatever it
-   * shows: Previous/Next and a blocker chip change the selection, not whether it is open,
-   * so they add no Back steps. Back pops the entry and closes; the Back button, the X and
-   * Escape close through `session.close` and the hook takes the entry back out.
-   */
-  useBackToClose(selection !== null, session.close);
+  useIssueAddress(session);
 
   /**
    * The task the detail showed last, for focus return. Kept past the close, because the

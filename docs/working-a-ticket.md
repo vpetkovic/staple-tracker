@@ -47,6 +47,11 @@ error(conflict): Checkout refused: status is "in_progress" (held by claude), exp
 Right after claiming, the agent comments where the work lives, so the next session
 can find it: `staple comment APP-1 "Branch pointer: branch feat/health-check, base 3f2a1bc."`
 
+In a client that draws [views in the thread](mcp-apps.md), you see the ticket it took
+as a card: `checkout_task` draws it, and an agent that claimed with the CLI calls
+`show_ticket`. When it records a milestone, it shows its progress with
+`show_progress`, which then follows the work by itself.
+
 **3. Write the plan and an estimate.** The plan is stored on the ticket as a document,
 not in a scratch file nobody else can find. The estimate is recorded now, before the
 work, so it can be compared with what the work took.

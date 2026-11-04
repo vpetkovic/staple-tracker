@@ -55,7 +55,7 @@ afterEach(() => {
  * and the files that ship with it.
  */
 function incompleteness(dir: string): string | null {
-  for (const file of ["staple.mjs", "assets/index.html", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"]) {
+  for (const file of ["staple.mjs", "assets/index.html", "views/about.html", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"]) {
     if (!existsSync(join(dir, file))) return `missing ${file}`;
   }
   try {

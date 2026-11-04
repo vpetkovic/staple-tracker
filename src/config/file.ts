@@ -45,6 +45,8 @@ export interface StapleConfig {
   browser: BrowserPreference;
   port: number;
   setupComplete: boolean;
+  /** The person on this machine (`machine.humanName`); empty when unset. */
+  humanName: string;
   connectors: Record<string, ConnectorReceipt>;
   /**
    * Budget capture and its source bindings (design/execution-telemetry.md). A structured
@@ -73,6 +75,7 @@ export const SETTING_KEYS = GLOBAL_SETTINGS.map((definition) => definition.confi
   "browser",
   "port",
   "setupComplete",
+  "humanName",
 ];
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -205,6 +208,7 @@ export interface ConfigPatch {
   browser?: BrowserPreference;
   port?: number;
   setupComplete?: boolean;
+  humanName?: string;
   /** Merged key-by-key into the existing receipts rather than replacing them. */
   connectors?: Record<string, ConnectorReceipt>;
   /** Replaces the whole `telemetry` value; callers read, change and write it back. */

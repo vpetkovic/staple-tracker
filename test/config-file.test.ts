@@ -63,6 +63,8 @@ describe("reading", () => {
       browser: "auto",
       port: 4400,
       setupComplete: false,
+      // Nobody is named until the person says who they are: a view decision falls back to the gate's owner.
+      humanName: "",
       connectors: {},
       // Budget capture is opt-in: off, and nothing bound, until the operator says so.
       telemetry: { budgetCapture: false, bindings: [] },

@@ -1,0 +1,295 @@
+/*
+ * The ticket card. Colours come from the host's standard variables through base.css; the
+ * status, gate and criterion tones use the host's success / warning / info / danger
+ * variables when it sends them, with a fallback per theme.
+ */
+:root {
+  --ticket-success: var(--color-text-success, light-dark(#15803d, #4ade80));
+  --ticket-warning: var(--color-text-warning, light-dark(#a16207, #facc15));
+  --ticket-info: var(--color-text-info, light-dark(#1d4ed8, #93c5fd));
+  --ticket-warning-bg: var(--color-background-warning, light-dark(#fef9c3, #3a3212));
+  --ticket-warning-border: var(--color-border-warning, light-dark(#fde68a, #5c4d16));
+  --ticket-inverse-bg: var(--color-background-inverse, var(--view-text));
+  --ticket-inverse-text: var(--color-text-inverse, var(--view-bg-raised));
+}
+
+.ticket {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ticket-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ticket-id {
+  color: var(--view-text-muted);
+}
+
+.ticket-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 9px;
+  border: 1px solid var(--view-border);
+  border-radius: 999px;
+  background: var(--view-bg-raised);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ticket-status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--view-text-muted);
+}
+
+.ticket-status[data-category="active"]::before {
+  background: var(--ticket-info);
+}
+
+.ticket-status[data-category="review"]::before,
+.ticket-status[data-category="gated"]::before {
+  background: var(--ticket-warning);
+}
+
+.ticket-status[data-category="blocked"]::before {
+  background: var(--view-danger);
+}
+
+.ticket-status[data-category="done"]::before {
+  background: var(--ticket-success);
+}
+
+.ticket-title {
+  margin: -4px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ticket-meta {
+  margin: -6px 0 0;
+  font-size: 12px;
+}
+
+.ticket-gate {
+  padding: 10px 12px;
+  border: 1px solid var(--view-border);
+  border-radius: var(--view-radius-sm);
+  background: var(--view-bg-raised);
+}
+
+.ticket-gate[data-gate="pending"] {
+  border-color: var(--ticket-warning-border);
+  background: var(--ticket-warning-bg);
+}
+
+.ticket-gate[data-gate="approved"] strong {
+  color: var(--ticket-success);
+}
+
+.ticket-gate[data-gate="changes_requested"] strong {
+  color: var(--ticket-warning);
+}
+
+.ticket-gate-line,
+.ticket-gate-detail {
+  margin: 0;
+}
+
+.ticket-gate-detail {
+  font-size: 12px;
+}
+
+/* "· from the card": a person decided in a view; kept on one line. */
+.ticket-gate-via {
+  white-space: nowrap;
+}
+
+.ticket-gate-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.ticket-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.view-button-primary {
+  border-color: var(--ticket-inverse-bg);
+  background: var(--ticket-inverse-bg);
+  color: var(--ticket-inverse-text);
+  font-weight: 500;
+}
+
+.view-button-primary:hover {
+  background: var(--ticket-inverse-bg);
+  opacity: 0.88;
+}
+
+.ticket-note-field {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 1px solid var(--view-border-strong);
+  border-radius: var(--view-radius-sm);
+  background: var(--view-bg-raised);
+  color: var(--view-text);
+  font: inherit;
+}
+
+.ticket-note-field:focus-visible {
+  outline: 2px solid var(--view-ring);
+  outline-offset: 1px;
+}
+
+.ticket-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ticket-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ticket-count {
+  font-weight: 400;
+}
+
+.ticket-criteria {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ticket-criteria li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.ticket-mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1.5px solid var(--view-text-muted);
+  border-radius: 50%;
+  position: relative;
+}
+
+[data-criterion="open"] .ticket-mark {
+  opacity: 0.6;
+}
+
+[data-criterion="met"] .ticket-mark {
+  border-color: var(--ticket-success);
+  background: var(--ticket-success);
+}
+
+[data-criterion="met"] .ticket-mark::after {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 0.5px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--view-bg);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+[data-criterion="unmet"] .ticket-mark {
+  border-color: var(--view-danger);
+}
+
+[data-criterion="unmet"] .ticket-mark::after {
+  content: "";
+  position: absolute;
+  left: 2.5px;
+  top: 5px;
+  width: 6px;
+  height: 1.5px;
+  background: var(--view-danger);
+}
+
+.ticket-criterion-text {
+  min-width: 0;
+}
+
+.ticket-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 14px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--view-border);
+}
+
+.ticket-facts dt {
+  color: var(--view-text-muted);
+}
+
+.ticket-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.ticket-bar {
+  display: block;
+  height: 4px;
+  margin-top: 5px;
+  max-width: 220px;
+  border-radius: 999px;
+  background: var(--view-border-strong);
+  overflow: hidden;
+}
+
+.ticket-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ticket-info);
+}
+
+.ticket-bar[data-over="true"] .ticket-bar-fill {
+  background: var(--view-danger);
+}
+
+.ticket-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--view-text-muted);
+}
+
+.ticket-note-error {
+  color: var(--view-danger);
+}
+
+.ticket-foot {
+  display: flex;
+  justify-content: flex-end;
+}

@@ -71,14 +71,14 @@ const READS: Record<StoreName, readonly string[]> = {
     "isActiveStatus", "primaryStatusFor", "assertConfiguredStatus", "assertConfiguredKind", "statusUsageCount",
     "kindUsageCount", "getSetting", "settingValue", "settingValues", "unknownSettingKeys", "movedOff", "removedByRestore", "getIssue",
     "listEvents", "blockersOf", "dependentsOf", "unresolvedBlockersOf", "unresolvedBlockersFor", "openDependentsFor",
-    "blockingChildrenOf", "gate", "gateFor", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
-    "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "listCommentsPage",
+    "blockingChildrenOf", "gate", "gateFor", "gateDecision", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
+    "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "latestComments", "listCommentsPage",
     "getDocument", "listDocuments", "listDocumentRevisions", "instructions", "listIssues", "listIssuesPage", "inbox", "context", "tree",
     "edges", "milestones", "queue", "projects", "writeTarget",
     // The attempt ledger the mutators write through; its own writes are the store's methods below.
     "attempts",
     // The attempt read surfaces: pure reads, which write no stored orphan end either.
-    "attemptSummary", "listAttempts", "getAttempt",
+    "attemptSummary", "listAttempts", "getAttempt", "attemptTransitions",
     // The orchestrator lane's read summary (`orchestration` on show/get_task).
     "orchestrationSummary",
     // The certified plan reads (`planSummary` on show/get_task, `staple compare`).

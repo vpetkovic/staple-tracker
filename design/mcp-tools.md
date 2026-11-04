@@ -10,7 +10,7 @@ Any MCP client can launch `npx -y staple-cli mcp` the same way, with
 `STAPLE_AGENT` naming the agent. There is no separate MCP binary — `staple mcp`
 is the same entrypoint as the CLI.
 
-Sixty-five stdio tools. The loop they exist for:
+Seventy-one stdio tools. The loop they exist for:
 
 `inbox` (or `next_task`) → `checkout_task` (a conflict means pick another, never
 retry; `out_of_order` means take the one it names) → `put_document` the plan and
@@ -33,6 +33,7 @@ Every tool, by area:
 | Execution telemetry and budget | `list_attempts`, `get_attempt`, `get_budget`, `list_budget_samples`, `record_budget_sample`, `forget_budget_samples` |
 | [Cloud sync](../docs/cloud-sync.md) | `cloud_status`, `conflict_list`, `conflict_resolve` |
 | Workspaces and the hub | `init`, `hub_overview`, `cross_link`, `cross_unlink`, `hub_unregister`, `hub_prune` |
+| [MCP Apps views](#mcp-apps-views) | `show_about`, `show_ticket`, `show_progress`, `show_queue` |
 
 ## Changing an estimate
 
@@ -422,3 +423,173 @@ snapshot ids:
 
 The rules are in [cli.md](cli.md#forecasts-staple-forecast) and
 [timing-semantics.md](timing-semantics.md#forecasts).
+
+## MCP Apps views
+
+A view is a `ui://staple/<name>` resource (`text/html;profile=mcp-app`) that an MCP Apps
+host renders in a sandboxed frame in the thread when a tool that declares it is called.
+`src/mcp-views.ts` lists the views; `npm run build:views` builds each `src/views/<name>/`
+into one HTML file with its script and styles inlined (the frame has no network), and
+`build:package` ships them as `views/<name>.html` beside `staple.mjs`.
+
+- A tool declares its view with `_meta: viewToolMeta("<name>")`. The `registerTool` wrapper
+  in `src/mcp.ts` refuses a URI that names no view, adds the legacy `ui/resourceUri` key,
+  and puts `_meta.ui.resourceUri` on every result too.
+- The wrapper also refuses a tool without `annotations.readOnlyHint`, and a write without
+  `annotations.destructiveHint`. A view's button calls tools through the host, and the
+  host prompts a person from these hints.
+- A view tool's text content is the whole answer for a host without MCP Apps, so it is
+  prose, not JSON. The view reads `structuredContent`.
+- Views share `src/views/shared/runtime.ts`: connect with the ext-apps `App`, apply the
+  host theme, style variables and fonts, render each result (an error result as an
+  error), call tools and post messages through the host, report size, and set
+  `<body data-ready>` once painted.
+- `npm run test:views` renders each view from the packaged payload in a minimal reference
+  host (Chromium) at 360px, light and dark, and fails if it does not paint.
+
+When an agent shows a view is agent guidance, kept in two places that must agree: the
+generated `.staple/AGENTS.md` (section "Show your work in the thread" in
+`src/core/agents-template.ts`) and the descriptions of `show_ticket`, `show_progress`,
+`checkout_task`, `record_attempt_event`, `update_task` and `gate_task`, for agents that never
+read the guide.
+After a claim, `show_ticket` follows a CLI checkout only, because `checkout_task` and `get_task` already
+draw the card; `show_progress` follows a milestone unless the ticket's progress was shown
+since the person last wrote, because the view is live; `show_queue` answers a person,
+and `next_task` answers the agent. `test/agents-guide.test.ts` pins the guide's rules,
+the moments each description names, and the view declarations they rely on. The user-facing page is
+[docs/mcp-apps.md](../docs/mcp-apps.md).
+
+`show_about {ws?}` answers `{server: {name, version}, workspace: {slug, prefix, total,
+statuses: [{id, label, category, count}]} | null, views: [{name, uri, title}]}`. The
+workspace is null when none resolves and no `ws` was given; an explicit `ws` that does not
+resolve is a `not_found` error.
+
+`show_ticket {ref, ws?}` answers `{ticket}`, built by `ticketCard` in
+`src/mcp-ticket-card.ts`: `{workspace, identifier, title, status: {id, label, category},
+kind: {id, label}, priority, assignee, criteria: [{text, mark: met|unmet|open}], gate,
+queuedBy, attempt: {ordinal, agent, state, current, startedAt, endedAt, outcome} | null,
+branch: {name, base, author, at} | null, timing: {estimatedSeconds, elapsedSeconds}, url,
+actions: {approve, requestChanges}}`. Its text is the same card as prose.
+
+- Criterion marks: a milestone's come from its goal check; any other ticket's are `met`
+  once its status is in the done category and `open` before, as the web UI reads them.
+- `branch` is the newest comment whose first line is `Branch pointer: branch <name>, base
+  <base>.` or `working on branch <name> (off <base>)`.
+- `timing.estimatedSeconds` is the subtree plan's estimate, else the ticket's own;
+  `elapsedSeconds` is `activeSeconds`, the figure every surface prints as "ran".
+- `url` is `<base>?ws=<slug>&issue=<REF>`, the link form the web UI opens one ticket from.
+  The base is `STAPLE_UI_URL` (`off`, `none`, `false`, `0` or a non-http value give null),
+  else `http://127.0.0.1:<config port>/`. A `token` parameter and any fragment are
+  removed: the URL is in the agent's context.
+- `actions.approve` and `actions.requestChanges` are true only while the gate is
+  `pending`. The view's buttons call the app-only `approve_gate_from_view {ref, view:
+  "ticket_card"}` and `request_changes_from_view {ref, comment, view: "ticket_card"}`
+  through the host (see "A person's decision from a view" below). The host asks the
+  person first, because both tools are writes.
+- `decision` is `{state, by, via, at}` from `store.gateDecision`, while the gate stands
+  decided; null while it is pending or was never decided. `state`, `by` and `at` are the
+  gate's own (synced) columns. `via` is the view a person clicked in, read off the
+  `gate_approved` / `gate_changes_requested` event only when that event has the same
+  actor and instant as the gate's resolution (events do not sync, so a decision pulled
+  from another device reads `via: null`). Null for an agent's `approve_task` /
+  `request_changes`, the CLI or the web UI. The card
+  shows it as "Gate approved by Mira Lane · from the card", the text as "Gate approved by
+  Mira Lane from the ticket card (owner ...)".
+- `get_task` and `checkout_task` declare the ticket view too. Their payloads are not
+  cards, so the view paints the header from the payload and reads the card with
+  `show_ticket` through the host, passing on the call's `ws`.
+
+`show_progress {ref, ws?}` answers `{progress}`, built by `ticketProgress` in
+`src/mcp-progress.ts`: `{workspace, identifier, title, status: {id, label, category},
+assignee, attempt: {id, ordinal, agent, state, current, startedAt, endedAt, outcome,
+endReason} | null, timeline: [{kind, at, actor, text, detail}], earlier, milestoneCount,
+timing: {estimatedSeconds, elapsedSeconds}, lastActivityAt, live, refreshSeconds, asOf,
+url}`. Its text is the status, the time and the milestones as prose.
+
+- The attempt is the open worker attempt, else the newest ended one, as on the card.
+- `timeline` is oldest first: the attempt's transitions (`started`, `milestone` with its
+  label, `paused`, `resumed`, `interrupted`, `ended`) and the comments posted on the
+  ticket while it ran (`comment`, the first line). A milestone that points at a comment
+  carries that comment's first line in `detail` (a document: `document <key> r<n>`), and
+  the comment is not listed again. An end the read derives (an orphaned claim) has no
+  transition: it is added at the attempt's `endedAtBound`, and comments after the end are
+  left out. At the same instant an end sorts last. Comments come from the ticket's newest
+  200. Only the newest 20 entries are sent; `earlier` counts the rest.
+- `timing` is the card's; `lastActivityAt` is the attempt's last activity or its newest
+  entry, whichever is later.
+- `live` is true while an attempt is open (running or paused). `refreshSeconds` is 5.
+- The view polls `show_progress` through the host every `refreshSeconds` while `live`,
+  one call in flight at most and none while the page is hidden. The tool is read-only,
+  so a host runs it without a prompt; it is the only call the view makes on its own. It
+  stops, and says why, after two refused or failed reads in a row (the host's error
+  message is shown as given, with the time of the last good read), on
+  `ui/resource-teardown`, when `live` turns false, and when the host's handshake offers
+  no `serverTools`. Check again reads once; one more refusal stops it again at once. A
+  read that comes back after the host handed the view another ticket is dropped, and the
+  view follows the new one.
+- The store read behind the timeline is `attemptTransitions(attemptId)`, a pure read.
+
+`show_queue {scope?, ws?}` answers `{queue}`, built by `queueLanes` in `src/mcp-queue.ts`:
+`{workspace, revision, scope: {identifier, title, kind} | null, policy, expected:
+{identifier, title, position} | null, next, ready: [{identifier, title, position,
+planPosition, path, takeable}], gated: [{identifier, title, state, owner, requestedBy,
+requestedAt, resolvedBy, resolvedVia, behind, holds: [row], heldTotal, approve}], inProgress: [{...row,
+heldBy, idleSeconds, attempt:
+{ordinal, state, startedAt} | null, milestoneCount, lastMilestone, timing}], blocked:
+[{identifier, title, blockers}], unavailable: [{identifier, title, status}], totals,
+asOf}`. Its text lists the lanes as prose.
+
+- The lanes are `store.queue().effectiveQueue({scope})`, the resolver `next_task` and
+  `staple queue next` read, split by eligibility and kept in effective order: `ready` is
+  every `eligible` row (its head is `next`), `gated` every `gated` row grouped under the
+  gate that holds it (`detail.queuedBy`; a ticket awaiting approval itself is its own
+  group, with the owner from its gate), `inProgress` every `claimed` row, `blocked` and
+  `unavailable` the rest. Resolved rows never reach the resolver's answer. Each lane
+  carries at most 20 entries, and a gate group at most 20 held rows (`heldTotal` counts
+  them all); `totals` has the full counts in tickets, with `gates` the number of groups.
+- A gate group's `state` is `pending` (waiting on its owner) or `changes_requested` (sent
+  back; `resolvedBy` says by whom, `resolvedVia` the view a person sent it back from, null
+  for an agent). Approve is offered for both, since an approval ends either. The resolver names the NEAREST gate a row waits behind; `behind` is the
+  outer gate that gate's own ticket waits behind, if any, so approving the inner one moves
+  its rows under the outer one rather than into Ready.
+- `inProgress` reads each row's open attempt: its milestones (`attemptTransitions`, kind
+  `attempt_milestone`), the newest label, and the card's `timing`.
+- `policy` is `queue.policy`. Under `strict`, `expected` is the first eligible PLAN row of
+  the WHOLE queue, scope or not, because checkout checks the whole plan
+  (`queueOrderCheck`); a ready row is `takeable` only when it is `expected`, or when no
+  plan row is eligible. Under `advisory` every ready row is takeable and `expected` is null.
+- Take on a takeable ready row posts `Work <REF>` into the thread through the host
+  (`ui/message`, which the host confirms), as the person's message. The view claims
+  nothing itself; the agent that reads the message takes the ticket. Approve on a gated
+  group calls the app-only `approve_gate_from_view {ref: <gate>, view: "queue"}` through
+  the host, says "Approved <REF> by <person> · from the queue", then reads `show_queue`
+  again with the call's `scope` and `ws`. Refresh reads it again on a click,
+  and stays usable while a Take or an Approve waits on the host; the view does not poll.
+  A Sent mark lasts until the lanes are read again: a ticket nobody took offers Take again.
+- `inbox` and `list_queue` declare the queue view too. Their payloads are not lanes, so
+  the view reads `show_queue` through the host, passing on the call's `ws` only: an
+  `inbox {assignee}` call still draws the whole queue. A failed read offers Try again.
+
+### A person's decision from a view
+
+`approve_gate_from_view {ref, view, ws?}` and `request_changes_from_view {ref, comment,
+view, ws?}` (`src/mcp-view-actions.ts`) are what the views' gate buttons call. `view` is
+`ticket_card` or `queue`. Both answer the issue with `gate` and `decision: {by, source,
+via}`, like `approve_task` / `request_changes` plus the decision.
+
+- They declare `_meta.ui.visibility: ["app"]` and no `resourceUri`. A host that follows
+  the MCP Apps spec lets a view of this server call them and leaves them out of the
+  model's tool list.
+- They take no `actor`. The actor is `humanName` from the machine's config.json
+  (`machine.humanName`, `staple config set humanName <name>`), else the gate's owner
+  (`source` says which). Never `STAPLE_AGENT`. An unreadable config is refused, not read
+  as unset. A ticket with no gate is refused with `conflict`.
+- The store call is the ordinary `approveGate` / `requestChanges` with `person: {via}`:
+  the comment is written with author type `user`, and the `gate_approved` /
+  `gate_changes_requested` (and `gate_child_approved`) event payload carries `via`. The
+  comment names the view: "Approved by Mira Lane from the ticket card." for an approval,
+  the note followed by "Sent back by Mira Lane from the ticket card." for a send-back.
+- The agent's `approve_task` / `request_changes` are unchanged: the agent's actor, an
+  `agent` comment, no `via`.
+- Trust: the server cannot tell a view's call from the model's. The guarantee that an
+  agent cannot decide under the person's name is the host's visibility enforcement.

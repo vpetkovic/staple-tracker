@@ -1,6 +1,7 @@
 /**
- * Phone Back closes the detail and the row menus — lane B's half of "Back closes what is
- * open on top" (lib/back-to-close.ts).
+ * Phone Back closes the row menus — lane B's half of "Back closes what is open on top"
+ * (lib/back-to-close.ts). The detail's Back step is the `?issue=` entry it pushes; its
+ * decisions are pinned in lib/issue-url.test.ts.
  *
  * The suite has no DOM (vitest.config.ts: "DELIBERATELY NOT HERE"), so the history itself is
  * exercised in the browser (lane A's Playwright Back tests, and the evidence scripts in the
@@ -12,9 +13,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionContext, type Selection } from "@/lib/session";
 import { row } from "@/components/task-list/fixtures";
-import { fakeSession } from "@/views/fake-session";
 
 const calls: Array<{ open: boolean; close: () => void }> = [];
 vi.mock("@/lib/back-to-close", () => ({
@@ -23,36 +22,11 @@ vi.mock("@/lib/back-to-close", () => ({
   },
 }));
 
-const { IssueDetailMount } = await import("./IssueDetailMount");
 const { QueueRowMenu, queueRowMenuState } = await import("@/components/QueueRowMenu");
 const { focusRow, rowSelector } = await import("./focus-return");
 
 beforeEach(() => {
   calls.length = 0;
-});
-
-function renderMount(selection: Selection | null, close: () => void): void {
-  renderToStaticMarkup(
-    <SessionContext.Provider value={fakeSession({ selection, close })}>
-      <IssueDetailMount />
-    </SessionContext.Provider>,
-  );
-}
-
-describe("the detail sheet holds one Back step while it is open", () => {
-  it("asks for a Back step exactly when a task is open, and Back closes it through session.close", () => {
-    let closed = 0;
-    renderMount({ workspace: "staple", ref: "STA-60" }, () => closed++);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.open).toBe(true);
-    calls[0]!.close();
-    expect(closed).toBe(1);
-  });
-
-  it("holds none when nothing is open", () => {
-    renderMount(null, () => {});
-    expect(calls.map((call) => call.open)).toEqual([false]);
-  });
 });
 
 describe("the row menu holds one Back step while it is open", () => {

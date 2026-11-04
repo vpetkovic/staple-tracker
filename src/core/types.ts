@@ -354,6 +354,26 @@ export interface IssueGate {
 }
 
 /**
+ * A gate decision a PERSON made by clicking in a Staple view inside an agent's thread (the
+ * ticket card's Approve or Request changes, the queue's Approve). `via` names the view. The
+ * store writes the decision's comment as the person's (author type `user`) and records `via`
+ * on the gate event, so a click is told apart from an agent's approve_task call.
+ */
+export interface PersonDecision {
+  via: string;
+}
+
+/** The newest decision on a gate, as `WorkspaceStore.gateDecision` reads it off the event log. */
+export interface GateDecision {
+  state: "approved" | "changes_requested";
+  /** The actor the decision was recorded under. */
+  by: string | null;
+  /** The view a person decided from, or null for an agent, CLI or web UI decision. */
+  via: string | null;
+  at: string;
+}
+
+/**
  * The gate an issue is QUEUED BEHIND — derived, never stored, computed by
  * walking ancestors (see `WorkspaceStore.queuedByFor`). null means pickable as
  * far as gates are concerned.

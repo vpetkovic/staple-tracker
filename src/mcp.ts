@@ -27,6 +27,11 @@ import { basename, dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
 import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
+import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
+import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
+import { DECISION_VIEW_IDS, approvalComment, personFor, sendBackComment } from "./mcp-view-actions.js";
+import { queueLanes, queueText, type QueueLanes } from "./mcp-queue.js";
+import { progressText, ticketProgress, type TicketProgress } from "./mcp-progress.js";
 import {
   attemptEndFields,
   attemptOpenFields,
@@ -236,7 +241,12 @@ const autoSync = new SurfaceAutoSync({
 // `start_run` is not here: a goal run gates its milestone at start, a write that replicates.
 const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
-  type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown>; outputSchema?: unknown };
+  type ToolConfig = {
+    annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: unknown;
+    _meta?: Record<string, unknown>;
+  };
   type ToolCallback = (...args: unknown[]) => unknown;
   const direct = server.registerTool.bind(server) as unknown as (
     name: string,
@@ -332,12 +342,31 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
     return "renumbered" in (output as Record<string, unknown>) ? config : { ...config, outputSchema: { ...(output as Record<string, unknown>), renumbered: RENUMBERED } };
   };
 
+  /**
+   * Every tool states whether it writes, and every write states whether it can destroy. A host
+   * decides from these hints whether to ask a person first, which matters most for a view: a
+   * button in a rendered view calls a tool through the host, and the host prompts only for a
+   * tool that is not read-only. A tool that leaves either hint out fails here, at startup.
+   */
+  const assertAnnotated = (name: string, config: ToolConfig): void => {
+    const annotations = config.annotations;
+    if (typeof annotations?.readOnlyHint !== "boolean") {
+      throw new Error(`tool ${name} must declare annotations.readOnlyHint`);
+    }
+    if (!annotations.readOnlyHint && typeof annotations.destructiveHint !== "boolean") {
+      throw new Error(`write tool ${name} must declare annotations.destructiveHint`);
+    }
+  };
+
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
     rawConfig: ToolConfig,
-    cb: ToolCallback,
+    rawCb: ToolCallback,
   ) => {
-    const config = declaringNotices(rawConfig);
+    assertAnnotated(name, rawConfig);
+    // A tool that declares an MCP Apps view: checked, both meta spellings, results stamped.
+    const [viewConfig, cb] = linkToolView(name, rawConfig, rawCb);
+    const config = declaringNotices(viewConfig);
     // A machine-local write (budget samples in hub.db, autopilot runs) changes nothing that
     // synchronizes and writes through no issue number, so it gets neither the renumber flag
     // nor a post-write sync.
@@ -1107,6 +1136,9 @@ server.registerTool(
       ...pageTailShape,
     },
     annotations: { title: "Inbox: ready work", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    // A host with MCP Apps draws the queue view for this result (the view reads the lanes
+    // with show_queue); the payload itself is unchanged.
+    _meta: viewToolMeta("queue"),
   },
   ({ assignee, limit, cursor, ws }) =>
     run(() => {
@@ -1250,6 +1282,9 @@ server.registerTool(
         ),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    // A host with MCP Apps draws the ticket card for this result (the view fetches the
+    // card with show_ticket); the payload itself is unchanged.
+    _meta: viewToolMeta("ticket"),
   },
   ({ ref, include_documents, run_id, ws }) =>
     run(() => {
@@ -1458,7 +1493,7 @@ server.registerTool(
   "update_task",
   {
     description:
-      "Patch an issue. Guards: in_progress needs an assignee and zero unresolved blockers; unblock_owner/unblock_action only with status blocked; pass expected_status_version for optimistic concurrency. Optional comment lands in the same transaction.",
+      "Patch an issue. Guards: in_progress needs an assignee and zero unresolved blockers; unblock_owner/unblock_action only with status blocked; pass expected_status_version for optimistic concurrency. Optional comment lands in the same transaction. After you hand a ticket on for review (in_review), show_ticket shows the person what waits on them.",
     inputSchema: {
       ref: refSchema,
       title: z.string().optional(),
@@ -1578,7 +1613,7 @@ server.registerTool(
   "checkout_task",
   {
     description:
-      "Atomically claim an issue (forces in_progress). Re-claiming an issue you already hold is idempotent (crash recovery). Refused while blockers are unresolved. THREE refusals, none of them retryable, each naming what to do instead: `conflict` — somebody got there first, pick a DIFFERENT task now, never retry the same one; `gated` — a human must approve a gate above it, take something else from inbox `ready`; `out_of_order` — under queue.policy = strict, the plan puts an eligible row earlier, so take `detail.expected[0]`. Waiting clears none of them and steal_if_idle_seconds routes around none of them. Call next_task first and you will not see the third. A queued epic or milestone is not claimable work: it expands to its open leaves, which are what you take. Use steal_if_idle_seconds ONLY when a human has told you to take over a task whose holder is dead.",
+      "Atomically claim an issue (forces in_progress). Re-claiming an issue you already hold is idempotent (crash recovery). Refused while blockers are unresolved. THREE refusals, none of them retryable, each naming what to do instead: `conflict` — somebody got there first, pick a DIFFERENT task now, never retry the same one; `gated` — a human must approve a gate above it, take something else from inbox `ready`; `out_of_order` — under queue.policy = strict, the plan puts an eligible row earlier, so take `detail.expected[0]`. Waiting clears none of them and steal_if_idle_seconds routes around none of them. Call next_task first and you will not see the third. A queued epic or milestone is not claimable work: it expands to its open leaves, which are what you take. Use steal_if_idle_seconds ONLY when a human has told you to take over a task whose holder is dead. In a host with MCP Apps the result renders as the ticket card, so do not follow it with show_ticket.",
     inputSchema: {
       ref: refSchema,
       actor: actorSchema,
@@ -1621,6 +1656,8 @@ server.registerTool(
       idempotentHint: true,
       openWorldHint: false,
     },
+    // The claimed ticket, as a card in a host with MCP Apps; the payload is unchanged.
+    _meta: viewToolMeta("ticket"),
   },
   ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, override_reason, ws, ...attempt }) =>
     run(() => {
@@ -1681,7 +1718,7 @@ server.registerTool(
   "record_attempt_event",
   {
     description:
-      "Report on the attempt you hold on an issue (design/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (design/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry.",
+      "Report on the attempt you hold on an issue (design/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (design/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry. After a milestone, show_progress shows the person where the attempt stands (once: the view follows later milestones by itself).",
     inputSchema: {
       ref: refSchema,
       ...recordAttemptEventInput,
@@ -1710,7 +1747,7 @@ server.registerTool(
   "gate_task",
   {
     description:
-      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. A milestone with members is gateable: its gate holds the milestone's own close for review and queues nothing through membership (members stay workable; only issues parented under it are queued). Re-gating after request_changes is how you resubmit for a second read.",
+      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. A milestone with members is gateable: its gate holds the milestone's own close for review and queues nothing through membership (members stay workable; only issues parented under it are queued). Re-gating after request_changes is how you resubmit for a second read. Then show_ticket on the parent shows the person the gate, with Approve and Request changes.",
     inputSchema: {
       ref: refSchema,
       owner: z
@@ -1814,6 +1851,95 @@ server.registerTool(
       const store = storeFor(ws);
       const issue = store.requestChanges(ref, { comment }, requireActor(actor));
       return { ...issue, gate: store.gate(issue.id) };
+    }),
+);
+
+/**
+ * ---------------------------------------------------------------- a person's click in a view
+ *
+ * The ticket card's Approve and Request changes and the queue's Approve call these two, not
+ * approve_task / request_changes. They are APP-ONLY (`_meta.ui.visibility: ["app"]`): a host
+ * that renders MCP Apps lets the view call them and leaves them out of the model's tool list.
+ * They take no `actor`: the decision is recorded under the machine's `humanName`, else the
+ * gate's owner, never under STAPLE_AGENT. The comment is the person's and says which view it
+ * came from, and the gate event carries `via` (src/mcp-view-actions.ts says why, and where
+ * the trust boundary is). An agent that approves calls approve_task and is recorded as itself.
+ */
+const decisionShape = {
+  ...issueShape,
+  gate: z.object(gateShape).nullable(),
+  decision: z.object({
+    by: z.string().describe("The person the decision is recorded under"),
+    source: z.enum(["config", "gate_owner"]).describe("config: the machine's humanName; gate_owner: humanName is unset"),
+    via: z.enum(DECISION_VIEW_IDS).describe("The view the person clicked in"),
+  }),
+};
+const appOnly = { ui: { visibility: ["app"] } };
+const viewSchema = z.enum(DECISION_VIEW_IDS).describe("The view the person clicked in: ticket_card or queue");
+
+server.registerTool(
+  "approve_gate_from_view",
+  {
+    description:
+      "App-only: the Approve button on the ticket card and the queue view. Approves the whole gate on `ref` and records it under the person on this machine (config humanName, else the gate's owner), never the agent. Hosts hide it from the model; an agent approves with approve_task.",
+    inputSchema: { ref: refSchema, view: viewSchema, ws: wsSchema },
+    outputSchema: decisionShape,
+    annotations: {
+      title: "Approve gate (from a view)",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    _meta: appOnly,
+  },
+  ({ ref, view, ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const person = personFor(store, ref);
+      const issue = store.approveGate(
+        ref,
+        { comment: approvalComment(person.name, view), person: { via: view } },
+        person.name,
+      );
+      return { ...issue, gate: store.gate(issue.id), decision: { by: person.name, source: person.source, via: view } };
+    }),
+);
+
+server.registerTool(
+  "request_changes_from_view",
+  {
+    description:
+      "App-only: Request changes on the ticket card. Sends the gate on `ref` back with the person's note and records it under the person on this machine (config humanName, else the gate's owner), never the agent. Hosts hide it from the model; an agent sends back with request_changes.",
+    inputSchema: {
+      ref: refSchema,
+      comment: z.string().describe("The person's note to the next agent. Required."),
+      view: viewSchema,
+      ws: wsSchema,
+    },
+    outputSchema: decisionShape,
+    annotations: {
+      title: "Send back (from a view)",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    _meta: appOnly,
+  },
+  ({ ref, comment, view, ws }) =>
+    run(() => {
+      const store = storeFor(ws);
+      if (!comment?.trim()) {
+        throw new StapleError("validation", "Request changes needs a note: say what has to change, or approve instead.");
+      }
+      const person = personFor(store, ref);
+      const issue = store.requestChanges(
+        ref,
+        { comment: sendBackComment(comment, person.name, view), person: { via: view } },
+        person.name,
+      );
+      return { ...issue, gate: store.gate(issue.id), decision: { by: person.name, source: person.source, via: view } };
     }),
 );
 
@@ -2952,6 +3078,8 @@ server.registerTool(
     },
     outputSchema: queueViewShape,
     annotations: { title: "List queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    // The plan's lanes, as the queue view, in a host with MCP Apps; the payload is unchanged.
+    _meta: viewToolMeta("queue"),
   },
   ({ all, actor, ws }) => run(() => storeFor(ws).queue().view({ all, actor })),
 );
@@ -3582,7 +3710,7 @@ server.registerTool(
       changed: z.boolean(),
       renumbered: z.array(z.object({ issueId: z.string(), from: z.string(), to: z.string() })),
     },
-    annotations: { title: "Resolve conflict", readOnlyHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { title: "Resolve conflict", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   ({ id, take, value, actor, ws }) =>
     run(() => {
@@ -3602,6 +3730,325 @@ server.registerTool(
         actor: requireActor(actor),
       });
     }),
+);
+
+// ---------- MCP Apps views ----------
+
+/**
+ * Each view is a `ui://staple/<name>` resource: one self-contained HTML file an MCP Apps host
+ * renders inline in the thread when a tool that declares it is called (`mcp-views.ts`).
+ * Listing them costs nothing; the file is read on resources/read only.
+ */
+for (const view of VIEWS) {
+  const uri = viewUri(view.name);
+  server.registerResource(
+    view.name,
+    uri,
+    { title: view.title, description: view.description, mimeType: RESOURCE_MIME_TYPE },
+    () => ({ contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: readViewHtml(view.name) }] }),
+  );
+}
+
+/** Replaced at build time by scripts/build-package.ts. Absent when run from source. */
+declare const __STAPLE_VERSION__: string;
+const STAPLE_VERSION = typeof __STAPLE_VERSION__ === "string" ? __STAPLE_VERSION__ : "0.0.0-dev";
+
+const aboutStatusShape = {
+  id: z.string(),
+  label: z.string(),
+  category: z.string(),
+  count: z.number().int(),
+};
+
+server.registerTool(
+  "show_about",
+  {
+    description:
+      "Show what this staple server is: its version, the workspace this call resolves to with its tickets by status, and the views staple can render. In a host with MCP Apps it renders as a card in the thread (the about view); any other host gets the same facts as text. Call it when the user asks which staple this is, or to check that staple's views render in this host.",
+    inputSchema: { ws: wsSchema },
+    outputSchema: {
+      server: z.object({ name: z.string(), version: z.string() }),
+      workspace: z
+        .object({ slug: z.string(), prefix: z.string(), total: z.number().int(), statuses: z.array(z.object(aboutStatusShape)) })
+        .nullable()
+        .describe("Null when no workspace resolves for this call"),
+      views: z.array(z.object({ name: z.string(), uri: z.string(), title: z.string() })),
+    },
+    annotations: { title: "Show about", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: viewToolMeta("about"),
+  },
+  ({ ws }) => {
+    let workspace: { slug: string; prefix: string; total: number; statuses: Array<{ id: string; label: string; category: string; count: number }> } | null;
+    try {
+      const store = storeFor(ws);
+      const statuses = store.getStatuses().map((status) => ({
+        id: status.id,
+        label: status.label,
+        category: status.category,
+        count: store.statusUsageCount(status.id),
+      }));
+      workspace = { slug: store.slug, prefix: store.prefix, total: statuses.reduce((sum, status) => sum + status.count, 0), statuses };
+    } catch (error) {
+      // No workspace here is an answer about this server, not a failure of the call. Any
+      // other error (an explicit ws that does not resolve is still not_found) is a failure.
+      if (ws !== undefined || !(error instanceof StapleError) || error.code !== "not_found") return fail(error);
+      workspace = null;
+    }
+    const views = VIEWS.map((view) => ({ name: view.name, uri: viewUri(view.name), title: view.title }));
+    const payload = { server: { name: "staple", version: STAPLE_VERSION }, workspace, views };
+    // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
+    const lines = [
+      `staple ${STAPLE_VERSION}`,
+      workspace === null
+        ? "No workspace resolves for this server. Call init to create one, or pass ws."
+        : `Workspace ${workspace.slug} (${workspace.prefix}): ${workspace.total} ticket${workspace.total === 1 ? "" : "s"}` +
+          (workspace.total === 0
+            ? "."
+            : `: ${workspace.statuses
+                .filter((status) => status.count > 0)
+                .map((status) => `${status.count} ${status.label.toLowerCase()}`)
+                .join(", ")}.`),
+      `Views: ${views.map((view) => `${view.name} (${view.uri})`).join(", ")}.`,
+    ];
+    return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: payload };
+  },
+);
+
+const ticketCardShape = {
+  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
+  identifier: z.string(),
+  title: z.string(),
+  status: z.object({ id: z.string(), label: z.string(), category: z.string() }),
+  kind: z.object({ id: z.string(), label: z.string() }),
+  priority: z.string(),
+  assignee: z.string().nullable(),
+  criteria: z
+    .array(z.object({ text: z.string(), mark: z.enum(["met", "unmet", "open"]) }))
+    .describe("Acceptance criteria. A milestone's marks are its goal check; any other ticket's are met once it is done"),
+  ...gateFields,
+  decision: z
+    .object({
+      state: z.enum(["approved", "changes_requested"]),
+      by: z.string().nullable().describe("Who the decision is recorded under"),
+      via: z
+        .string()
+        .nullable()
+        .describe("The view a person decided in (ticket_card, queue); null for an agent's approve_task / request_changes, the CLI or the web UI"),
+      at: z.string(),
+    })
+    .nullable()
+    .describe("How the gate was decided, while it stands decided; null while pending or never gated"),
+  attempt: z
+    .object({
+      ordinal: z.number().int(),
+      agent: z.string(),
+      state: z.string(),
+      current: z.boolean().describe("False when this is the newest ended attempt and none is open"),
+      startedAt: z.string(),
+      endedAt: z.string().nullable(),
+      outcome: z.string().nullable(),
+    })
+    .nullable(),
+  branch: z
+    .object({ name: z.string(), base: z.string().nullable(), author: z.string(), at: z.string() })
+    .nullable()
+    .describe("The newest branch pointer comment (\"Branch pointer: branch <name>, base <sha>.\"), read apart"),
+  timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
+  url: z
+    .string()
+    .nullable()
+    .describe("The web UI deep link, <base>?ws=<slug>&issue=<REF>. The base is STAPLE_UI_URL, else the configured UI port on 127.0.0.1; null when STAPLE_UI_URL=off"),
+  actions: z.object({ approve: z.boolean(), requestChanges: z.boolean() }),
+};
+type _TicketCardShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof ticketCardShape>>, TicketCard>>;
+
+server.registerTool(
+  "show_ticket",
+  {
+    description:
+      "Show one ticket to the person in the thread: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer, estimate against time spent, and a link to it in the web UI. In a host with MCP Apps it renders as the ticket card, whose Approve and Request changes buttons (shown while a gate is pending) are the person's: the host asks them first and the decision is recorded under their name, not yours, marked as from the card. To decide a gate yourself, call approve_task or request_changes. Any other host gets the same facts as text. Display only. Call it once right after you claim a ticket with the CLI (staple checkout); do not follow checkout_task with it, since that claim already drew this card (get_task draws it too). Call it when work waits on the person (a ticket you hand on for review, a parent you gate), and when a person asks to see a ticket. Not for reading a ticket yourself: get_task has the full context.",
+    inputSchema: { ref: refSchema, ws: wsSchema },
+    outputSchema: { ticket: z.object(ticketCardShape) },
+    annotations: { title: "Show ticket", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: viewToolMeta("ticket"),
+  },
+  ({ ref, ws }) => {
+    try {
+      const card = ticketCard(storeFor(ws), ref);
+      // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
+      return { content: [{ type: "text" as const, text: ticketCardText(card) }], structuredContent: { ticket: card } };
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+const progressShape = {
+  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
+  identifier: z.string(),
+  title: z.string(),
+  status: z.object({ id: z.string(), label: z.string(), category: z.string() }),
+  assignee: z.string().nullable(),
+  attempt: z
+    .object({
+      id: z.string(),
+      ordinal: z.number().int(),
+      agent: z.string(),
+      state: z.string(),
+      current: z.boolean().describe("False when this is the newest ended attempt and none is open"),
+      startedAt: z.string(),
+      endedAt: z.string().nullable(),
+      outcome: z.string().nullable(),
+      endReason: z.string().nullable(),
+    })
+    .nullable(),
+  timeline: z
+    .array(
+      z.object({
+        kind: z.enum(["started", "milestone", "paused", "resumed", "interrupted", "ended", "comment"]),
+        at: z.string(),
+        actor: z.string().nullable(),
+        text: z.string().describe("A milestone's label, a comment's first line, or what happened"),
+        detail: z.string().nullable().describe("What a milestone points at: a comment's first line, or document <key> r<n>"),
+      }),
+    )
+    .describe("The attempt's milestones, other transitions and the comments posted while it ran, oldest first; the newest 20"),
+  earlier: z.number().int().describe("How many older timeline entries were left out"),
+  milestoneCount: z.number().int(),
+  timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
+  lastActivityAt: z.string().nullable(),
+  live: z.boolean().describe("True while an attempt is open: a view keeps refreshing"),
+  refreshSeconds: z.number().int().describe("How often a live view reads show_progress again"),
+  asOf: z.string(),
+  url: z.string().nullable().describe("The web UI deep link, as on show_ticket; null when STAPLE_UI_URL=off"),
+};
+type _ProgressShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof progressShape>>, TicketProgress>>;
+
+server.registerTool(
+  "show_progress",
+  {
+    description:
+      "Show a person, live in the thread, how one ticket's current attempt is going: status, the attempt and its agent, a timeline of the milestones recorded with record_attempt_event (and the comments posted while it runs), estimate against time spent, and the last activity. In a host with MCP Apps it renders as the progress view, which refreshes itself by calling show_progress again through the host (a read, so nobody is asked) while the attempt is open, and says so when the host stops answering. Any other host gets the status and the milestones as text. Display only. Call it after you record a milestone, unless you already showed this ticket's progress since the person last wrote (that view picks the milestone up by itself), and when a person asks how a ticket is going or wants to watch it. Never call it again to refresh: the view does that.",
+    inputSchema: { ref: refSchema, ws: wsSchema },
+    outputSchema: { progress: z.object(progressShape) },
+    annotations: { title: "Show progress", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: viewToolMeta("progress"),
+  },
+  ({ ref, ws }) => {
+    try {
+      const progress = ticketProgress(storeFor(ws), ref);
+      // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
+      return { content: [{ type: "text" as const, text: progressText(progress) }], structuredContent: { progress } };
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+const queueLaneRowShape = {
+  identifier: z.string(),
+  title: z.string(),
+  position: z.number().int().describe("1-based position in EFFECTIVE order, as next_task and staple queue next speak it"),
+  planPosition: z.number().int().nullable().describe("The plan row this came from; null in the unqueued band"),
+  path: z.array(z.string()).describe("The milestone, then the ancestor epics, outermost first"),
+};
+
+const queueLanesShape = {
+  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
+  revision: z.number().int(),
+  scope: z.object({ identifier: z.string(), title: z.string(), kind: z.string() }).nullable(),
+  policy: z.enum(["advisory", "strict"]).describe("queue.policy: under strict, checkout_task takes only `expected`"),
+  expected: z
+    .object({ identifier: z.string(), title: z.string(), position: z.number().int() })
+    .nullable()
+    .describe("Under strict, the row checkout_task accepts now, checked against the WHOLE plan; null under advisory or when no plan row is ready"),
+  next: z.string().nullable().describe("What next_task answers for the same scope: the first ready row"),
+  ready: z
+    .array(z.object({ ...queueLaneRowShape, takeable: z.boolean().describe("checkout_task accepts it now") }))
+    .describe("Eligible rows in pickup order"),
+  gated: z
+    .array(
+      z.object({
+        identifier: z.string().describe("The ticket that carries the gate"),
+        title: z.string(),
+        state: z
+          .enum(["pending", "changes_requested"])
+          .nullable()
+          .describe("pending waits on the owner; changes_requested on the rework asked for; null when no gate is recorded"),
+        owner: z.string().nullable(),
+        requestedBy: z.string().nullable(),
+        requestedAt: z.string().nullable(),
+        resolvedBy: z.string().nullable().describe("Who sent it back, while changes_requested"),
+        resolvedVia: z
+          .string()
+          .nullable()
+          .describe("The view a person sent it back from (ticket_card), while changes_requested; null for an agent"),
+        behind: z
+          .object({ identifier: z.string(), owner: z.string() })
+          .nullable()
+          .describe("An outer gate this gate's own ticket waits behind: approving this one moves its rows there"),
+        holds: z.array(z.object(queueLaneRowShape)).describe("The queue rows this gate holds, in effective order; at most 20"),
+        heldTotal: z.number().int().describe("How many rows it holds in all"),
+        approve: z
+          .boolean()
+          .describe("The gate is active (pending or changes_requested): approve_task on `identifier` releases it (the view's Approve calls approve_gate_from_view)"),
+      }),
+    )
+    .describe("Gated rows, grouped by the gate that holds them"),
+  inProgress: z
+    .array(
+      z.object({
+        ...queueLaneRowShape,
+        heldBy: z.string(),
+        idleSeconds: z.number().nullable(),
+        attempt: z.object({ ordinal: z.number().int(), state: z.string(), startedAt: z.string() }).nullable(),
+        milestoneCount: z.number().int(),
+        lastMilestone: z.string().nullable(),
+        timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
+      }),
+    )
+    .describe("Claimed rows, with who holds each and how its current attempt is going"),
+  blocked: z.array(z.object({ identifier: z.string(), title: z.string(), blockers: z.array(z.string()) })),
+  unavailable: z.array(z.object({ identifier: z.string(), title: z.string(), status: z.string() })),
+  totals: z
+    .object({
+      ready: z.number().int(),
+      gated: z.number().int(),
+      gates: z.number().int(),
+      inProgress: z.number().int(),
+      blocked: z.number().int(),
+      unavailable: z.number().int(),
+    })
+    .describe("Each lane's full length in tickets (gates: how many gates hold the gated ones); a lane carries at most 20 entries"),
+  asOf: z.string(),
+};
+type _QueueLanesShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof queueLanesShape>>, QueueLanes>>;
+
+server.registerTool(
+  "show_queue",
+  {
+    description:
+      "Show a person the pickup queue in the thread, in lanes: Ready in pickup order (the first is what next_task answers), Gated with the gate's owner, and In progress with who holds each ticket and how its attempt is going; blocked work is counted. Under queue.policy strict it shows the one row checkout_task accepts now. In a host with MCP Apps it renders as the queue view: Take on a ready row posts \"Work <REF>\" into the thread as the person's message (the host asks them first), and Approve on a gated row is the person's: the host asks them first and the approval is recorded under their name, marked as from the queue. Any other host gets the lanes as text. Display only: call it when a person asks what is in the queue, what to work on next, or what is waiting on them; to pick work for yourself call next_task.",
+    inputSchema: {
+      scope: z
+        .string()
+        .optional()
+        .describe("Limit the lanes to one container: an epic, a milestone, or any issue with children (identifier, bare number, or uuid)"),
+      ws: wsSchema,
+    },
+    outputSchema: { queue: z.object(queueLanesShape) },
+    annotations: { title: "Show queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: viewToolMeta("queue"),
+  },
+  ({ scope, ws }) => {
+    try {
+      const lanes = queueLanes(storeFor(ws), { scope });
+      // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
+      return { content: [{ type: "text" as const, text: queueText(lanes) }], structuredContent: { queue: lanes } };
+    } catch (error) {
+      return fail(error);
+    }
+  },
 );
 
 registerBudgetTools(server, { run });

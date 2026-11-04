@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 26 &&
+    readOnly.length === 30 &&
       [
         "inbox",
         "list_tasks",
@@ -160,8 +160,98 @@ try {
         "calibration_cohorts",
         // Nor a forecast of completion and budget.
         "forecast",
+        // MCP Apps: the about view reads the server and the workspace's counts.
+        "show_about",
+        // MCP Apps: the ticket card reads one ticket.
+        "show_ticket",
+        // MCP Apps: the progress view reads one ticket's attempt, and polls itself with it.
+        "show_progress",
+        // MCP Apps: the queue view reads the effective queue in lanes.
+        "show_queue",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 26 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 30 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+  );
+  // A host decides from these hints whether to ask a person first, including for a tool a
+  // view's button calls through it.
+  assert(
+    tools.tools.every(
+      (t: any) =>
+        typeof t.annotations?.readOnlyHint === "boolean" &&
+        (t.annotations.readOnlyHint || typeof t.annotations.destructiveHint === "boolean"),
+    ),
+    `all ${tools.tools.length} tools state readOnlyHint, and every write states destructiveHint`,
+  );
+
+  // MCP Apps: the views are ui:// resources, a view tool links to its view on the tool and
+  // on the result, and its text content still answers a host that renders no views.
+  const resources = (await rpc("resources/list", {})).resources;
+  assert(
+    ["ui://staple/about", "ui://staple/ticket", "ui://staple/progress", "ui://staple/queue"].every((uri) =>
+      resources.some((r: any) => r.uri === uri && r.mimeType === "text/html;profile=mcp-app"),
+    ),
+    `resources/list lists the about, ticket, progress and queue views as MCP Apps resources (${resources.map((r: any) => r.uri).join(", ")})`,
+  );
+  const queueHtml = (await rpc("resources/read", { uri: "ui://staple/queue" })).contents[0];
+  assert(
+    queueHtml.mimeType === "text/html;profile=mcp-app" &&
+      /^<!doctype html>/i.test(queueHtml.text) &&
+      !/<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=/i.test(queueHtml.text),
+    `resources/read returns the queue view as one self-contained HTML file (${queueHtml.text.length} chars)`,
+  );
+  assert(
+    ["show_queue", "inbox", "list_queue"].every(
+      (name) =>
+        byName.get(name)._meta?.ui?.resourceUri === "ui://staple/queue" &&
+        byName.get(name)._meta?.["ui/resourceUri"] === "ui://staple/queue",
+    ),
+    "show_queue, inbox and list_queue declare the queue view (both _meta spellings)",
+  );
+  const progressHtml = (await rpc("resources/read", { uri: "ui://staple/progress" })).contents[0];
+  assert(
+    progressHtml.mimeType === "text/html;profile=mcp-app" &&
+      /^<!doctype html>/i.test(progressHtml.text) &&
+      !/<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=/i.test(progressHtml.text),
+    `resources/read returns the progress view as one self-contained HTML file (${progressHtml.text.length} chars)`,
+  );
+  assert(
+    byName.get("show_progress")._meta?.ui?.resourceUri === "ui://staple/progress" &&
+      byName.get("show_progress")._meta?.["ui/resourceUri"] === "ui://staple/progress",
+    "show_progress declares the progress view (both _meta spellings)",
+  );
+  const ticketHtml = (await rpc("resources/read", { uri: "ui://staple/ticket" })).contents[0];
+  assert(
+    ticketHtml.mimeType === "text/html;profile=mcp-app" &&
+      /^<!doctype html>/i.test(ticketHtml.text) &&
+      !/<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=/i.test(ticketHtml.text),
+    `resources/read returns the ticket view as one self-contained HTML file (${ticketHtml.text.length} chars)`,
+  );
+  assert(
+    ["show_ticket", "get_task", "checkout_task"].every(
+      (name) =>
+        byName.get(name)._meta?.ui?.resourceUri === "ui://staple/ticket" &&
+        byName.get(name)._meta?.["ui/resourceUri"] === "ui://staple/ticket",
+    ),
+    "show_ticket, get_task and checkout_task declare the ticket view (both _meta spellings)",
+  );
+  const aboutHtml = (await rpc("resources/read", { uri: "ui://staple/about" })).contents[0];
+  assert(
+    aboutHtml.mimeType === "text/html;profile=mcp-app" &&
+      /^<!doctype html>/i.test(aboutHtml.text) &&
+      !/<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=/i.test(aboutHtml.text),
+    `resources/read returns the about view as one self-contained HTML file (${aboutHtml.text.length} chars)`,
+  );
+  assert(
+    byName.get("show_about")._meta?.ui?.resourceUri === "ui://staple/about" &&
+      byName.get("show_about")._meta?.["ui/resourceUri"] === "ui://staple/about",
+    "show_about declares its view (both _meta spellings)",
+  );
+  const about = await rpc("tools/call", { name: "show_about", arguments: {} });
+  assert(
+    about._meta?.ui?.resourceUri === "ui://staple/about" &&
+      about.structuredContent?.workspace?.slug === "smoke" &&
+      toolText(about).startsWith("staple ") &&
+      toolText(about).includes("Workspace smoke"),
+    "show_about's result carries its view and answers in text for hosts without views",
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   // Removing budget readings takes rows out of hub.db: destructive, and not idempotent
@@ -240,6 +330,35 @@ try {
     "structuredContent matches the text block payload",
   );
   assert(!toolText(claimedResult).includes("\n  "), "text block is compact, not pretty-printed");
+  assert(claimedResult._meta?.ui?.resourceUri === "ui://staple/ticket", "checkout_task's result carries the ticket view");
+
+  const shownTicket = await rpc("tools/call", { name: "show_ticket", arguments: { ref: "SMO-1" } });
+  assert(
+    shownTicket._meta?.ui?.resourceUri === "ui://staple/ticket" &&
+      shownTicket.structuredContent?.ticket?.identifier === "SMO-1" &&
+      shownTicket.structuredContent.ticket.attempt?.agent === "smoke-agent" &&
+      toolText(shownTicket).startsWith("SMO-1 Smoke: implement feature\n"),
+    "show_ticket answers with the card and in text for hosts without views",
+  );
+  await rpc("tools/call", { name: "record_attempt_event", arguments: { ref: "SMO-1", event: "milestone", label: "Smoke milestone" } });
+  const shownProgress = await rpc("tools/call", { name: "show_progress", arguments: { ref: "SMO-1" } });
+  assert(
+    shownProgress._meta?.ui?.resourceUri === "ui://staple/progress" &&
+      shownProgress.structuredContent?.progress?.live === true &&
+      shownProgress.structuredContent.progress.timeline.some((entry: any) => entry.kind === "milestone" && entry.text === "Smoke milestone") &&
+      toolText(shownProgress).includes("Smoke milestone"),
+    "show_progress answers with the live timeline, and lists the milestone in text for hosts without views",
+  );
+  const shownQueue = await rpc("tools/call", { name: "show_queue", arguments: {} });
+  const nextForQueue = await rpc("tools/call", { name: "next_task", arguments: {} });
+  assert(
+    shownQueue._meta?.ui?.resourceUri === "ui://staple/queue" &&
+      shownQueue.structuredContent?.queue?.inProgress?.some((row: any) => row.identifier === "SMO-1" && row.milestoneCount === 1) &&
+      shownQueue.structuredContent.queue.next === (nextForQueue.structuredContent?.next?.identifier ?? null) &&
+      toolText(shownQueue).startsWith("Queue (advisory)") &&
+      toolText(shownQueue).includes("In progress:"),
+    "show_queue answers with the lanes (its head is next_task's next), and lists them in text for hosts without views",
+  );
 
   const conflict = await rpc("tools/call", {
     name: "checkout_task",
@@ -867,8 +986,21 @@ try {
   // timing_quality, the cohort quality read, 46, calibration_cohorts, 47, and forecast, 48.
   // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51,
   // and pause_run, resume_run and continue_run, 54, and goal mode's mark_milestone_criterion, 55.
-  // Typed files added list_files, attach_file, export_file and remove_file, 59.
-  assert(wsTargetable.length === 59, `59 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // Typed files added list_files, attach_file, export_file and remove_file, 59, and the MCP
+  // Apps about view's show_about, which reports on one workspace, 60, and the ticket card's
+  // show_ticket, 61, and the progress view's show_progress, 62, and the queue view's show_queue, 63.
+  // The app-only approve_gate_from_view and request_changes_from_view the views' buttons call
+  // decide a gate in the view's workspace, 65.
+  assert(wsTargetable.length === 65, `65 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // A person's click in a view is recorded under the person only while hosts keep these two
+  // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
+  for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {
+    const tool = coldTools.tools.find((t: any) => t.name === name);
+    assert(
+      JSON.stringify(tool?._meta?.ui?.visibility) === JSON.stringify(["app"]) && tool?.inputSchema?.properties?.actor === undefined,
+      `${name} is app-only (visibility ["app"]) and takes no actor`,
+    );
+  }
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&

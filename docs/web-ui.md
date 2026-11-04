@@ -111,6 +111,11 @@ When a ticket waits on your approval, a *Review gate* block sits above the tabs:
 approve all, approve some children, or send it back with a note
 ([Approval gates](approval-gates.md)).
 
+The open ticket is part of the address, so a link opens it directly:
+`?issue=APP-12`, or `?ws=app&issue=APP-12` with `staple open --hub`. The ticket
+stays open through a reload, Back closes it, and a ref that does not exist shows
+*not found* instead of an empty drawer.
+
 ## 8. Watch autopilot runs
 
 Once the workspace has had an [autopilot run](runs.md), the rail gains an
@@ -130,7 +135,9 @@ Open **Settings** from the foot of the rail, or `⌘K` then *Settings*.
 
 - **Across all workspaces:** *Cloud account* and *Workspaces on this computer*
   ([cloud sync](cloud-sync.md) and the [hub](hub.md)), *Usage* (provider budget
-  capture) and *This computer* (the default port and whether a browser opens).
+  capture) and *This computer* (the default port, whether a browser opens, and
+  *Your name*, which Approve and Request changes clicked in a
+  [view in an agent's thread](mcp-apps.md) are recorded under).
 - **Per workspace:** *Statuses* and *Task types* (rename, add, reorder; turn on
   milestones here), *Picking up work* (the queue's advisory or strict policy) and
   *Cloud sync* for that workspace.

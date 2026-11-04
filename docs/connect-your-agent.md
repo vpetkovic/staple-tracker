@@ -81,6 +81,20 @@ that `staple inbox` prints. Then give it real work:
 It asks `next_task` which ticket to take, claims it with `checkout_task`, and follows
 the loop. Watch it happen in the web UI (`staple open`).
 
+## 5. See staple in the conversation
+
+In a client that supports MCP Apps, staple draws views inside the conversation: the
+ticket card when the agent claims a ticket, its progress as it records milestones,
+and the pickup queue when you ask what is next. Ask:
+
+> Call staple's show_about tool.
+
+Where views work, a small card with staple's version and your workspace appears in
+the conversation. A terminal agent such as Claude Code or the Codex CLI answers with
+the same facts as text, and every view tool answers that way too.
+[Views in the thread](mcp-apps.md) shows each view, which clients draw them, and
+when an agent shows them.
+
 ## If it doesn't work
 
 | What you see | What to do |

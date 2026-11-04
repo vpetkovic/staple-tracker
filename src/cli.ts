@@ -640,7 +640,10 @@ function runConfigCommand(rest: string[]): void {
         effective.settings.setupComplete.source,
       ),
     );
-    // Kept off stdout so the settings table stays a clean six lines to parse.
+    console.log(
+      configLine("human", effective.settings.humanName.value || "(unset: the gate's owner)", effective.settings.humanName.source),
+    );
+    // Kept off stdout so the settings table stays a clean seven lines to parse.
     if (effective.unknownKeys.length > 0) {
       console.error(
         `note: ${effective.configPath} carries ${effective.unknownKeys.join(", ")} — written by a newer staple, preserved unread.`,
@@ -890,7 +893,9 @@ Workspace
               refused with or without --yes, and --only without --yes previews;
               a failed migration additionally needs --keep legacy|new
   config [show]                         effective machine settings and where each came from
-  config set <key> <value>              browser | port | setupComplete
+  config set <key> <value>              browser | port | setupComplete | humanName (your name:
+              Approve and Request changes clicked in a Staple view are recorded
+              under it; empty falls back to the gate's owner)
   config home <path> --move --yes       relocate ~/.staple, verify, then repoint the
               bootstrap locator; the old home is retained until you delete it
               --home <path> targets a home other than the resolved one

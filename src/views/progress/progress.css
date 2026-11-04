@@ -1,0 +1,313 @@
+/*
+ * The progress view. Colours come from the host's standard variables through base.css; the
+ * status, live and milestone tones use the host's success / warning / info / danger
+ * variables when it sends them, with a fallback per theme (as the ticket card does).
+ */
+:root {
+  --progress-success: var(--color-text-success, light-dark(#15803d, #4ade80));
+  --progress-warning: var(--color-text-warning, light-dark(#a16207, #facc15));
+  --progress-info: var(--color-text-info, light-dark(#1d4ed8, #93c5fd));
+  --progress-warning-bg: var(--color-background-warning, light-dark(#fef9c3, #3a3212));
+  --progress-warning-border: var(--color-border-warning, light-dark(#fde68a, #5c4d16));
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.progress-id {
+  color: var(--view-text-muted);
+}
+
+.progress-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 9px;
+  border: 1px solid var(--view-border);
+  border-radius: 999px;
+  background: var(--view-bg-raised);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.progress-status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--view-text-muted);
+}
+
+.progress-status[data-category="active"]::before {
+  background: var(--progress-info);
+}
+
+.progress-status[data-category="review"]::before,
+.progress-status[data-category="gated"]::before {
+  background: var(--progress-warning);
+}
+
+.progress-status[data-category="blocked"]::before {
+  background: var(--view-danger);
+}
+
+.progress-status[data-category="done"]::before {
+  background: var(--progress-success);
+}
+
+.progress-title {
+  margin: -4px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.progress-meta {
+  margin: -6px 0 0;
+  font-size: 12px;
+}
+
+/* The live line: a dot that says whether the view is following, and why not. */
+.progress-live {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--view-border);
+  border-radius: var(--view-radius-sm);
+  background: var(--view-bg-raised);
+  font-size: 12px;
+}
+
+.progress-live-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--view-text-muted);
+}
+
+.progress-live-text {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.progress-live[data-live="live"] .progress-live-dot {
+  background: var(--progress-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--progress-success) 25%, transparent);
+}
+
+.progress-live[data-live="checking"] .progress-live-dot {
+  background: var(--progress-info);
+}
+
+.progress-live[data-live="stopped"] {
+  border-color: var(--progress-warning-border);
+  background: var(--progress-warning-bg);
+}
+
+.progress-live[data-live="stopped"] .progress-live-dot {
+  background: var(--progress-warning);
+}
+
+.progress-again {
+  flex: none;
+  margin-left: auto;
+}
+
+.progress-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 14px;
+  margin: 0;
+}
+
+.progress-facts dt {
+  color: var(--view-text-muted);
+}
+
+.progress-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.progress-bar {
+  display: block;
+  height: 4px;
+  margin-top: 5px;
+  max-width: 220px;
+  border-radius: 999px;
+  background: var(--view-border-strong);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--progress-info);
+}
+
+.progress-bar[data-over="true"] .progress-bar-fill {
+  background: var(--view-danger);
+}
+
+.progress-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--view-border);
+}
+
+.progress-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.progress-count {
+  font-weight: 400;
+}
+
+.progress-earlier {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* The timeline: a marker per entry on a thin rail, newest last. */
+.progress-timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.progress-entry {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.progress-entry:last-child {
+  padding-bottom: 0;
+}
+
+.progress-entry::before {
+  content: "";
+  position: absolute;
+  left: 4.5px;
+  top: 14px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--view-border-strong);
+}
+
+.progress-entry:last-child::before {
+  display: none;
+}
+
+.progress-marker {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border: 1.5px solid var(--view-text-muted);
+  border-radius: 50%;
+  background: var(--view-bg);
+  position: relative;
+  z-index: 1;
+}
+
+[data-entry="milestone"] .progress-marker {
+  border-color: var(--progress-info);
+  background: var(--progress-info);
+}
+
+[data-entry="started"] .progress-marker,
+[data-entry="resumed"] .progress-marker {
+  border-color: var(--progress-success);
+}
+
+[data-entry="paused"] .progress-marker {
+  border-color: var(--progress-warning);
+}
+
+[data-entry="interrupted"] .progress-marker {
+  border-color: var(--view-danger);
+}
+
+[data-entry="ended"] .progress-marker {
+  border-color: var(--progress-success);
+  background: var(--progress-success);
+}
+
+[data-entry="comment"] .progress-marker {
+  width: 8px;
+  height: 8px;
+  margin: 5px 1px 0;
+  border-width: 1px;
+}
+
+.progress-entry-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.progress-entry-line,
+.progress-entry-detail {
+  margin: 0;
+}
+
+.progress-entry-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.progress-time {
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  min-width: 56px;
+}
+
+.progress-entry-text {
+  min-width: 0;
+}
+
+[data-entry="milestone"] .progress-entry-text {
+  font-weight: 500;
+}
+
+[data-entry="comment"] .progress-entry-text {
+  color: var(--view-text-muted);
+}
+
+.progress-entry-detail {
+  margin-left: 64px;
+  font-size: 12px;
+}
+
+.progress-foot {
+  display: flex;
+  justify-content: flex-end;
+}

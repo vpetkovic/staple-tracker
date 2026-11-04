@@ -23,6 +23,7 @@ These stay on this computer and never sync.
 | `browser` | `auto`, `always`, `never` | `auto` | Whether `staple open` opens a browser tab |
 | `port` | 1 to 65535 | `4400` | The port the web UI prefers; a busy one falls back to a free port |
 | `setupComplete` | `true`, `false` | `false` | Whether first-run setup has been done |
+| `humanName` | a name, up to 80 characters on one line | empty | Who you are on this computer: Approve and Request changes clicked in a [view in the thread](mcp-apps.md) are recorded under it. Empty means the gate's owner |
 
 ```bash
 staple config set port 4500
@@ -36,10 +37,36 @@ locator       /Users/you/Library/Application Support/Staple/bootstrap.json  (abs
 browser       auto  (default)
 port          4500  (config)
 setup         incomplete  (default)
+human         (unset: the gate's owner)  (default)
 ```
 
 The label after each value says where it came from: `default` until you set it,
 `config` after.
+
+### Your name in the views
+
+When you click Approve or Request changes on the ticket card, or Approve on the queue
+view, inside an agent's conversation, staple records the decision under your name, not
+the agent's. Tell it your name once per computer:
+
+```bash
+staple config set humanName "Mira Lane"
+```
+
+Until you do, a click is recorded under the gate's owner, the person the gate was
+waiting on. `staple config set humanName ""` goes back to that. The name never comes
+from `STAPLE_AGENT`: that stays the agent's, and an agent that approves with
+`approve_task` is recorded as itself.
+
+The name is checked when it is set and when it is read: one line, at most 80
+characters, no spaces at either end, no control characters, and not starting with
+`goal-run:` (reserved for a goal run's own gate).
+The web UI shows it under **Settings → This computer**, read only like the other
+machine settings.
+
+Only clients that keep view-only tools away from the agent make this safe to rely on
+([Views in the thread](mcp-apps.md#your-clicks-are-recorded-as-you) explains where the
+line is).
 
 ## Workspace settings
 
@@ -78,6 +105,7 @@ Statuses and kinds are workspace settings too, with their own commands:
 | `STAPLE_DB` | Pin commands and the MCP server to one workspace database, such as `/path/to/repo/.staple/staple.db`. It wins over the current directory and over `--ws`. |
 | `STAPLE_WS` | For the MCP server: a workspace slug or prefix to use by default. The CLI takes `--ws` instead. |
 | `STAPLE_HOME` | Where staple keeps this machine's files, instead of `~/.staple`. |
+| `STAPLE_UI_URL` | For the MCP server: the web UI address the ticket card's Open in Staple button links to, such as `http://127.0.0.1:4400/`. Without it the card uses `127.0.0.1` and the port from `staple config`. `off` leaves the button out. A `token` parameter in it is dropped. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | Where Claude Code and Codex keep their files. Budget capture looks there, and falls back to `~/.claude` and `~/.codex`. |
 
 Staple also sets variables for the commands it starts: `STAPLE_EVENT` for

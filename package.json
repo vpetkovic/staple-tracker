@@ -24,11 +24,13 @@
     "dev:all": "tsx scripts/dev-ui.ts",
     "test": "vitest run",
     "validate:timing": "vitest run test/controlled-runs.test.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p src/ui/app/tsconfig.json",
+    "test:views": "vitest run test/mcp-views",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/ui/app/tsconfig.json && tsc --noEmit -p src/views/tsconfig.json",
     "seed-demo": "tsx scripts/seed-demo.ts",
     "smoke:mcp": "tsx scripts/smoke-mcp.ts",
     "build:ui": "vite build --config src/ui/app/vite.config.ts",
-    "build:package": "npm run build:ui && tsx scripts/build-package.ts",
+    "build:views": "tsx scripts/build-views.ts",
+    "build:package": "npm run build:ui && npm run build:views && tsx scripts/build-package.ts",
     "pack:package": "npm run build:package && npm pack ./dist-package --pack-destination dist-package",
     "drill:npx": "tsx scripts/drill-npx.ts",
     "dev:ui": "vite --config src/ui/app/vite.config.ts",
@@ -39,8 +41,9 @@
     "typecheck:worker": "npm --prefix worker run typecheck"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "zod": "^3.24.0"
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@dagrejs/dagre": "^3.1.1",

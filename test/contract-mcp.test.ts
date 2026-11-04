@@ -307,8 +307,11 @@ describe("tool inventory", () => {
   // start_run, run_status and stop_run: 58 -> 61. The run's driver loop added pause_run,
   // resume_run and continue_run: 61 -> 64. Milestone goal mode added
   // mark_milestone_criterion: 64 -> 65. Typed files added list_files, attach_file,
-  // export_file and remove_file: 65 -> 69.
-  it("exposes exactly these 69 tools with these annotations and output schemas", async () => {
+  // export_file and remove_file: 65 -> 69. The MCP Apps about view added show_about: 69 -> 70.
+  // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
+  // The queue view added show_queue: 72 -> 73. A person's click in a view added the app-only
+  // approve_gate_from_view and request_changes_from_view: 73 -> 75.
+  it("exposes exactly these 75 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -489,6 +492,34 @@ describe("tool inventory", () => {
           // The TOOL NAME is unchanged — renaming a shipped verb to fix a label
           // would break every agent that calls it.
           title: "Send back with note",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      /**
+       * A person's click in a view: the ticket card's and the queue's Approve, the card's
+       * Request changes. App-only (`_meta.ui.visibility: ["app"]`), so a host keeps them
+       * out of the model's tool list; recorded under the person, never STAPLE_AGENT. The
+       * annotations match approve_task and request_changes: same writes, different actor.
+       */
+      {
+        name: "approve_gate_from_view",
+        annotations: {
+          title: "Approve gate (from a view)",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "request_changes_from_view",
+        annotations: {
+          title: "Send back (from a view)",
           readOnlyHint: false,
           destructiveHint: true,
           idempotentHint: false,
@@ -929,14 +960,53 @@ describe("tool inventory", () => {
         annotations: { title: "List conflicts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
+      // The paragraph above always said destructiveHint is false; the tool left the hint out
+      // until the MCP Apps work made every write state it.
       {
         name: "conflict_resolve",
         annotations: {
           title: "Resolve conflict",
           readOnlyHint: false,
+          destructiveHint: false,
           idempotentHint: true,
           openWorldHint: false,
         },
+        hasOutputSchema: true,
+      },
+      /**
+       * The first MCP Apps view tool: what this server is, as a card in a host that
+       * renders views and as text elsewhere. A read.
+       */
+      {
+        name: "show_about",
+        annotations: { title: "Show about", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      /**
+       * The ticket card: one ticket as a card in a host that renders views, and as text
+       * elsewhere. A read; its buttons call approve_task and request_changes through the host.
+       */
+      {
+        name: "show_ticket",
+        annotations: { title: "Show ticket", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      /**
+       * The progress view: one ticket's attempt, live. A read, which is what lets the view
+       * call it again through the host to refresh without anyone being asked.
+       */
+      {
+        name: "show_progress",
+        annotations: { title: "Show progress", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      /**
+       * The queue view: the pickup queue in lanes. A read; Take posts a message through the
+       * host and Approve calls approve_task through it, so the view itself writes nothing.
+       */
+      {
+        name: "show_queue",
+        annotations: { title: "Show queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
       /**
@@ -998,7 +1068,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty-six read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-eight read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -1037,6 +1107,14 @@ describe("tool inventory", () => {
       "cloud_status",
       // Listing what two devices disagree about is a read of one local table.
       "conflict_list",
+      // MCP Apps: the about view reads the server and the workspace's counts.
+      "show_about",
+      // MCP Apps: the ticket card reads one ticket.
+      "show_ticket",
+      // MCP Apps: the progress view reads one ticket's attempt, and polls itself with it.
+      "show_progress",
+      // MCP Apps: the queue view reads the effective queue in lanes.
+      "show_queue",
       // Execution telemetry: reading attempts and this machine's budget writes nothing,
       // a stored orphan end included.
       "list_attempts",
@@ -1052,6 +1130,21 @@ describe("tool inventory", () => {
       expect(tool.annotations?.openWorldHint, tool.name).toBe(false);
       if (tool.annotations?.readOnlyHint === true) {
         expect(tool.annotations?.destructiveHint, tool.name).toBeUndefined();
+      }
+    }
+  });
+
+  /**
+   * A host decides from these two hints whether to ask a person before a call, and a button
+   * in an MCP Apps view calls tools through the host. The registerTool wrapper in
+   * `src/mcp.ts` refuses to start without them; this pins the result.
+   */
+  it("states readOnlyHint on every tool and destructiveHint on every write", async () => {
+    const tools = await harness.listTools();
+    for (const tool of tools) {
+      expect(typeof tool.annotations?.readOnlyHint, tool.name).toBe("boolean");
+      if (tool.annotations?.readOnlyHint === false) {
+        expect(typeof tool.annotations?.destructiveHint, tool.name).toBe("boolean");
       }
     }
   });
@@ -1790,6 +1883,14 @@ describe("tool response shapes (31/31)", () => {
       "list_comments",
       "put_document",
       "get_document",
+      // The MCP Apps about view: pinned in test/mcp-views-host.test.ts, shape, text and view.
+      "show_about",
+      // The ticket card: pinned in test/mcp-views-ticket.test.ts, shape, text and view.
+      "show_ticket",
+      // The progress view: pinned in test/mcp-views-progress.test.ts, shape, text and view.
+      "show_progress",
+      // The queue view: pinned in test/mcp-views-queue.test.ts, against the resolver, text and view.
+      "show_queue",
       // Typed files: pinned in test/attachments.test.ts, against the store, the CLI and these tools.
       "list_files",
       "attach_file",
@@ -1810,6 +1911,10 @@ describe("tool response shapes (31/31)", () => {
       "gate_task",
       "approve_task",
       "request_changes",
+      // A person's click in a view: pinned in test/mcp-view-actions.test.ts (actor, fallback,
+      // visibility) and through the views in test/mcp-views-ticket.test.ts and -queue.test.ts.
+      "approve_gate_from_view",
+      "request_changes_from_view",
       "list_statuses",
       "list_kinds",
       "update_statuses",

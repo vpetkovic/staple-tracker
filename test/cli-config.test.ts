@@ -39,6 +39,7 @@ interface ShowJson {
     browser: { value: unknown; source: string };
     port: { value: unknown; source: string };
     setupComplete: { value: unknown; source: string };
+    humanName: { value: unknown; source: string };
   };
   unknownKeys: string[];
 }
@@ -123,7 +124,7 @@ describe("config show", () => {
       .trimEnd()
       .split("\n")
       .map((l) => l.slice(0, 14).trimEnd());
-    expect(keys).toEqual(["home", "config", "locator", "browser", "port", "setup"]);
+    expect(keys).toEqual(["home", "config", "locator", "browser", "port", "setup", "human"]);
   });
 
   it("lists unknown future keys instead of hiding them", () => {
@@ -167,6 +168,20 @@ describe("config set", () => {
     const home = freshHome("setsetup");
     expect(config(home, ["set", "setupComplete", "true"]).status).toBe(0);
     expect(showJson(home).settings.setupComplete.value).toBe(true);
+  });
+
+  it("sets and clears humanName, the person a view decision is recorded under", () => {
+    const home = freshHome("sethuman");
+    expect(showJson(home).settings.humanName).toEqual({ value: "", source: "default" });
+    expect(config(home, []).stdout).toMatch(/^human {9}\(unset: the gate's owner\) {2}\(default\)$/m);
+    expect(config(home, ["set", "humanName", "Mira Lane"]).status).toBe(0);
+    expect(showJson(home).settings.humanName).toEqual({ value: "Mira Lane", source: "config" });
+    expect(config(home, []).stdout).toMatch(/^human {9}Mira Lane {2}\(config\)$/m);
+    const refused = config(home, ["set", "humanName", "goal-run:me"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("humanName");
+    expect(config(home, ["set", "humanName", ""]).status).toBe(0);
+    expect(showJson(home).settings.humanName).toEqual({ value: "", source: "config" });
   });
 
   it("--json returns the key, the new value, and where it was written", () => {

@@ -19,7 +19,8 @@
  * ── WHAT IT LEAVES ALONE ──────────────────────────────────────────────────────────────
  *
  * `withShellState` rewrites only its own parameters and keeps every other one verbatim:
- * `settings`/`settings-ws` (the settings sheet, see settings/settings-shell.ts), `graph`
+ * `settings`/`settings-ws` (the settings sheet, see settings/settings-shell.ts),
+ * `issue`/`issue-ws` (the open ticket, see lib/issue-url.ts), `graph`
  * (the graph's shareable layout — kept on the Graph only, dropped on every other page) and
  * `token` (which lib/api.ts strips on arrival anyway).
  */

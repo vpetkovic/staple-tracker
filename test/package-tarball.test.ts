@@ -173,6 +173,11 @@ describe("the packed artifact", () => {
       "assets/index.html",
       "package.json",
       "staple.mjs",
+      // The MCP Apps views `staple mcp` serves, one self-contained file each.
+      "views/about.html",
+      "views/progress.html",
+      "views/queue.html",
+      "views/ticket.html",
     ]);
     expect(hashed.length).toBeGreaterThan(0);
     // Three shapes, and only three. The bundle pair (index-<hash>.js/css); the
@@ -360,8 +365,11 @@ describe("the installed binary, run from outside this repository", () => {
       // timing_quality (55), calibration_cohorts (56), and forecast (57), and
       // forget_budget_samples (58), start_run, run_status and stop_run (61), and
       // pause_run, resume_run and continue_run (64), and mark_milestone_criterion (65),
-      // and list_files, attach_file, export_file and remove_file (69).
-      expect(tools).toHaveLength(69);
+      // and list_files, attach_file, export_file and remove_file (69), and the MCP Apps
+      // about view's show_about (70), the ticket card's show_ticket (71), the
+      // progress view's show_progress (72), the queue view's show_queue (73), and the
+      // app-only approve_gate_from_view and request_changes_from_view the views' buttons call (75).
+      expect(tools).toHaveLength(75);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.
