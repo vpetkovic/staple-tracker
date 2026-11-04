@@ -27,6 +27,8 @@
  *   - `staple --version` prints exactly the package version, bare, no banner;
  *   - `staple --help` exits 0 and prints usage;
  *   - `staple mcp` completes an MCP initialize handshake over stdio;
+ *   - `staple mcp` lists its MCP Apps views and serves each as one self-contained
+ *     HTML file from the package, and `show_about` links to its view;
  *   - in a fresh repo dir with a temp STAPLE_HOME, `staple init --yes` works
  *     and `staple inbox --json` returns valid JSON;
  *   - the installed package.json exposes exactly ONE bin, named `staple`
@@ -240,15 +242,30 @@ try {
     JSON.parse(result.stdout); // throws on anything that is not valid JSON
   });
 
-  await (async () => {
+  const session = await (async () => {
     const started = Date.now();
     const name = "`staple mcp` completes an MCP initialize handshake over stdio";
     try {
-      await mcpHandshake();
+      const opened = await mcpSession();
+      console.log(`  ok ${String(++stepCount).padStart(2)}  ${name}  (${Date.now() - started}ms)`);
+      return opened;
+    } catch (error) {
+      console.error(`FAIL     ${name}  (${Date.now() - started}ms)`);
+      throw error;
+    }
+  })();
+
+  await (async () => {
+    const started = Date.now();
+    const name = "`staple mcp` serves its MCP Apps views from the package";
+    try {
+      await assertViewsServed(session);
       console.log(`  ok ${String(++stepCount).padStart(2)}  ${name}  (${Date.now() - started}ms)`);
     } catch (error) {
       console.error(`FAIL     ${name}  (${Date.now() - started}ms)`);
       throw error;
+    } finally {
+      session.close();
     }
   })();
 
@@ -262,11 +279,17 @@ try {
 }
 process.exit(exitCode);
 
+interface McpSession {
+  request(method: string, params: unknown): Promise<any>;
+  close(): void;
+}
+
 /**
  * Speaks just enough MCP to prove the installed bin is a live stdio server:
- * send `initialize`, require a JSON-RPC result carrying serverInfo, close.
+ * send `initialize`, require a JSON-RPC result carrying serverInfo. The session
+ * stays open for the view checks; the caller closes it.
  */
-async function mcpHandshake(): Promise<void> {
+async function mcpSession(): Promise<McpSession> {
   const child = spawn(installedBin, ["mcp"], {
     cwd: projectDir,
     env: cleanEnv,
@@ -276,62 +299,102 @@ async function mcpHandshake(): Promise<void> {
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
 
-  const response = await new Promise<any>((resolvePromise, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`no initialize response within 20s\nserver stderr: ${preview(stderr)}`));
-    }, 20_000);
+  let nextId = 1;
+  const pending = new Map<number, { resolve: (message: any) => void; reject: (error: Error) => void }>();
+  const failAll = (error: Error) => {
+    for (const waiter of pending.values()) waiter.reject(error);
+    pending.clear();
+  };
 
-    let buffer = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString("utf8");
-      let newline;
-      while ((newline = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (!line) continue;
-        try {
-          const message = JSON.parse(line);
-          if (message.id === 1) {
-            clearTimeout(timer);
-            resolvePromise(message);
-            return;
-          }
-        } catch {
-          clearTimeout(timer);
-          reject(new Error(`non-JSON line on MCP stdout: ${preview(line)}`));
-          return;
-        }
+  let buffer = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    let newline;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+      let message: any;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        failAll(new Error(`non-JSON line on MCP stdout: ${preview(line)}`));
+        return;
       }
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`staple mcp exited early (code ${code})\nstderr: ${preview(stderr)}`));
-    });
-
-    child.stdin.write(
-      `${JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "staple-drill", version: "0.0.0" },
-        },
-      })}\n`,
-    );
+      const waiter = pending.get(message.id);
+      if (waiter) {
+        pending.delete(message.id);
+        waiter.resolve(message);
+      }
+    }
   });
+  child.on("error", (error) => failAll(error));
+  child.on("exit", (code) => failAll(new Error(`staple mcp exited early (code ${code})\nstderr: ${preview(stderr)}`)));
 
-  child.removeAllListeners("exit");
-  child.kill();
+  const request = (method: string, params: unknown): Promise<any> => {
+    const id = nextId++;
+    return new Promise((resolvePromise, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`no ${method} response within 20s\nserver stderr: ${preview(stderr)}`));
+      }, 20_000);
+      pending.set(id, {
+        resolve: (message) => {
+          clearTimeout(timer);
+          resolvePromise(message);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    });
+  };
+  const close = () => {
+    child.removeAllListeners("exit");
+    child.kill();
+  };
 
-  assert(response.result, `initialize returned no result: ${preview(JSON.stringify(response))}`);
-  assert(
-    response.result.serverInfo?.name,
-    `initialize result has no serverInfo: ${preview(JSON.stringify(response.result))}`,
-  );
+  try {
+    const response = await request("initialize", {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "staple-drill", version: "0.0.0" },
+    });
+    assert(response.result, `initialize returned no result: ${preview(JSON.stringify(response))}`);
+    assert(
+      response.result.serverInfo?.name,
+      `initialize result has no serverInfo: ${preview(JSON.stringify(response.result))}`,
+    );
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+  } catch (error) {
+    close();
+    throw error;
+  }
+  return { request, close };
+}
+
+/**
+ * The views live in the package as files beside staple.mjs, so this is the check that the
+ * artifact ships them and the installed bin finds them: listed, readable, self-contained.
+ */
+async function assertViewsServed(session: McpSession): Promise<void> {
+  const listed = await session.request("resources/list", {});
+  const views = (listed.result?.resources ?? []).filter((resource: any) => String(resource.uri).startsWith("ui://staple/"));
+  assert(views.length > 0, `resources/list lists no ui://staple/ views: ${preview(JSON.stringify(listed))}`);
+  for (const view of views) {
+    assert(view.mimeType === "text/html;profile=mcp-app", `${view.uri} is listed as ${view.mimeType}`);
+    const read = await session.request("resources/read", { uri: view.uri });
+    const content = read.result?.contents?.[0];
+    assert(content?.mimeType === "text/html;profile=mcp-app", `resources/read ${view.uri}: ${preview(JSON.stringify(read))}`);
+    assert(/^<!doctype html>/i.test(content.text ?? ""), `${view.uri} is not an HTML document`);
+    assert(
+      !/<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=/i.test(content.text),
+      `${view.uri} references a separate file, which a sandboxed host cannot load`,
+    );
+  }
+  const tools = await session.request("tools/list", {});
+  const about = (tools.result?.tools ?? []).find((tool: any) => tool.name === "show_about");
+  assert(about?._meta?.ui?.resourceUri === "ui://staple/about", `show_about does not declare its view: ${preview(JSON.stringify(about))}`);
 }

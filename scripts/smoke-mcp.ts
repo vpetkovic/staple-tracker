@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 26 &&
+    readOnly.length === 27 &&
       [
         "inbox",
         "list_tasks",
@@ -160,8 +160,48 @@ try {
         "calibration_cohorts",
         // Nor a forecast of completion and budget.
         "forecast",
+        // MCP Apps: the about view reads the server and the workspace's counts.
+        "show_about",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 26 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 27 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+  );
+  // A host decides from these hints whether to ask a person first, including for a tool a
+  // view's button calls through it.
+  assert(
+    tools.tools.every(
+      (t: any) =>
+        typeof t.annotations?.readOnlyHint === "boolean" &&
+        (t.annotations.readOnlyHint || typeof t.annotations.destructiveHint === "boolean"),
+    ),
+    `all ${tools.tools.length} tools state readOnlyHint, and every write states destructiveHint`,
+  );
+
+  // MCP Apps: the views are ui:// resources, a view tool links to its view on the tool and
+  // on the result, and its text content still answers a host that renders no views.
+  const resources = (await rpc("resources/list", {})).resources;
+  assert(
+    resources.some((r: any) => r.uri === "ui://staple/about" && r.mimeType === "text/html;profile=mcp-app"),
+    `resources/list lists the about view as an MCP Apps resource (${resources.map((r: any) => r.uri).join(", ")})`,
+  );
+  const aboutHtml = (await rpc("resources/read", { uri: "ui://staple/about" })).contents[0];
+  assert(
+    aboutHtml.mimeType === "text/html;profile=mcp-app" &&
+      /^<!doctype html>/i.test(aboutHtml.text) &&
+      !/<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=/i.test(aboutHtml.text),
+    `resources/read returns the about view as one self-contained HTML file (${aboutHtml.text.length} chars)`,
+  );
+  assert(
+    byName.get("show_about")._meta?.ui?.resourceUri === "ui://staple/about" &&
+      byName.get("show_about")._meta?.["ui/resourceUri"] === "ui://staple/about",
+    "show_about declares its view (both _meta spellings)",
+  );
+  const about = await rpc("tools/call", { name: "show_about", arguments: {} });
+  assert(
+    about._meta?.ui?.resourceUri === "ui://staple/about" &&
+      about.structuredContent?.workspace?.slug === "smoke" &&
+      toolText(about).startsWith("staple ") &&
+      toolText(about).includes("Workspace smoke"),
+    "show_about's result carries its view and answers in text for hosts without views",
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
   // Removing budget readings takes rows out of hub.db: destructive, and not idempotent
@@ -867,8 +907,9 @@ try {
   // timing_quality, the cohort quality read, 46, calibration_cohorts, 47, and forecast, 48.
   // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51,
   // and pause_run, resume_run and continue_run, 54, and goal mode's mark_milestone_criterion, 55.
-  // Typed files added list_files, attach_file, export_file and remove_file, 59.
-  assert(wsTargetable.length === 59, `59 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // Typed files added list_files, attach_file, export_file and remove_file, 59, and the MCP
+  // Apps about view's show_about, which reports on one workspace, 60.
+  assert(wsTargetable.length === 60, `60 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&

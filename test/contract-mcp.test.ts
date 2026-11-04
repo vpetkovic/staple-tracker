@@ -307,8 +307,8 @@ describe("tool inventory", () => {
   // start_run, run_status and stop_run: 58 -> 61. The run's driver loop added pause_run,
   // resume_run and continue_run: 61 -> 64. Milestone goal mode added
   // mark_milestone_criterion: 64 -> 65. Typed files added list_files, attach_file,
-  // export_file and remove_file: 65 -> 69.
-  it("exposes exactly these 69 tools with these annotations and output schemas", async () => {
+  // export_file and remove_file: 65 -> 69. The MCP Apps about view added show_about: 69 -> 70.
+  it("exposes exactly these 70 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -929,14 +929,26 @@ describe("tool inventory", () => {
         annotations: { title: "List conflicts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
+      // The paragraph above always said destructiveHint is false; the tool left the hint out
+      // until the MCP Apps work made every write state it.
       {
         name: "conflict_resolve",
         annotations: {
           title: "Resolve conflict",
           readOnlyHint: false,
+          destructiveHint: false,
           idempotentHint: true,
           openWorldHint: false,
         },
+        hasOutputSchema: true,
+      },
+      /**
+       * The first MCP Apps view tool: what this server is, as a card in a host that
+       * renders views and as text elsewhere. A read.
+       */
+      {
+        name: "show_about",
+        annotations: { title: "Show about", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
       /**
@@ -998,7 +1010,7 @@ describe("tool inventory", () => {
     ]);
   });
 
-  it("marks exactly the twenty-six read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-seven read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
@@ -1037,6 +1049,8 @@ describe("tool inventory", () => {
       "cloud_status",
       // Listing what two devices disagree about is a read of one local table.
       "conflict_list",
+      // MCP Apps: the about view reads the server and the workspace's counts.
+      "show_about",
       // Execution telemetry: reading attempts and this machine's budget writes nothing,
       // a stored orphan end included.
       "list_attempts",
@@ -1052,6 +1066,21 @@ describe("tool inventory", () => {
       expect(tool.annotations?.openWorldHint, tool.name).toBe(false);
       if (tool.annotations?.readOnlyHint === true) {
         expect(tool.annotations?.destructiveHint, tool.name).toBeUndefined();
+      }
+    }
+  });
+
+  /**
+   * A host decides from these two hints whether to ask a person before a call, and a button
+   * in an MCP Apps view calls tools through the host. The registerTool wrapper in
+   * `src/mcp.ts` refuses to start without them; this pins the result.
+   */
+  it("states readOnlyHint on every tool and destructiveHint on every write", async () => {
+    const tools = await harness.listTools();
+    for (const tool of tools) {
+      expect(typeof tool.annotations?.readOnlyHint, tool.name).toBe("boolean");
+      if (tool.annotations?.readOnlyHint === false) {
+        expect(typeof tool.annotations?.destructiveHint, tool.name).toBe("boolean");
       }
     }
   });
@@ -1790,6 +1819,8 @@ describe("tool response shapes (31/31)", () => {
       "list_comments",
       "put_document",
       "get_document",
+      // The MCP Apps about view: pinned in test/mcp-views-host.test.ts, shape, text and view.
+      "show_about",
       // Typed files: pinned in test/attachments.test.ts, against the store, the CLI and these tools.
       "list_files",
       "attach_file",

@@ -171,6 +171,8 @@ __scratch-*
 # The web UI bundle. Not committed: it is generated and large.
 # `npm run build:ui` regenerates it; `staple ui` says so if it is missing.
 src/ui/app/dist/
+# The MCP Apps view files, same reasoning: `npm run build:views` regenerates them.
+src/views/dist/
 # The website build (site/, its own npm package), same reasoning. site/.docusaurus
 # and site/node_modules are covered by the rules above.
 site/build/

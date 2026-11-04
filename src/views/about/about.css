@@ -1,0 +1,49 @@
+.about-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.about-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.about-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 12px 0 0;
+}
+
+.about-facts dt {
+  color: var(--view-text-muted);
+}
+
+.about-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.about-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.about-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.about-status {
+  margin: 0;
+  font-size: 12px;
+}

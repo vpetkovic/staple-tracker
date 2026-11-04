@@ -19,6 +19,9 @@
  * The UI bundle is built too if it is missing, because the payload embeds it. That
  * also used to happen mid-suite inside `package-tarball`, while the UI server suites
  * were reading `src/ui/app/dist/`. Here it finishes before they start.
+ *
+ * The MCP Apps views are rebuilt every run, because the payload embeds them too and they
+ * take a second: the view tests then render the views as the source is now.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -27,6 +30,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TestProject } from "vitest/node";
 import { buildPackage, removeStaleScratch } from "../../scripts/build-package.js";
+import { buildViews } from "../../scripts/build-views.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -43,6 +47,7 @@ export const PAYLOAD_PREFIX = "staple-test-package-";
 
 export default async function setup(project: TestProject): Promise<() => void> {
   ensureUiBundle();
+  await buildViews();
   // A run stopped by Ctrl-C (or killed) never reaches its teardown, and its
   // payload stays in the temp directory. Remove the ones whose run is gone; a
   // run that is still going, in this checkout or another, keeps its own.
@@ -55,6 +60,7 @@ export default async function setup(project: TestProject): Promise<() => void> {
   // watcher started. buildPackage() swaps the new tree in whole.
   project.onTestsRerun(async () => {
     ensureUiBundle();
+    await buildViews();
     await buildPackage({ outDir });
   });
 

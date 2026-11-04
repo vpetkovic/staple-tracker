@@ -28,6 +28,16 @@ import { stapleHome } from "./config/home.js";
 import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import {
+  VIEWS,
+  RESOURCE_MIME_TYPE,
+  declaredViewUri,
+  normalizedViewMeta,
+  readViewHtml,
+  viewForUri,
+  viewToolMeta,
+  viewUri,
+} from "./mcp-views.js";
+import {
   attemptEndFields,
   attemptOpenFields,
   attemptOptionsFromInput,
@@ -236,7 +246,12 @@ const autoSync = new SurfaceAutoSync({
 // `start_run` is not here: a goal run gates its milestone at start, a write that replicates.
 const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
-  type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown>; outputSchema?: unknown };
+  type ToolConfig = {
+    annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+    inputSchema?: Record<string, unknown>;
+    outputSchema?: unknown;
+    _meta?: Record<string, unknown>;
+  };
   type ToolCallback = (...args: unknown[]) => unknown;
   const direct = server.registerTool.bind(server) as unknown as (
     name: string,
@@ -332,12 +347,53 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
     return "renumbered" in (output as Record<string, unknown>) ? config : { ...config, outputSchema: { ...(output as Record<string, unknown>), renumbered: RENUMBERED } };
   };
 
+  /**
+   * Every tool states whether it writes, and every write states whether it can destroy. A host
+   * decides from these hints whether to ask a person first, which matters most for a view: a
+   * button in a rendered view calls a tool through the host, and the host prompts only for a
+   * tool that is not read-only. A tool that leaves either hint out fails here, at startup.
+   */
+  const assertAnnotated = (name: string, config: ToolConfig): void => {
+    const annotations = config.annotations;
+    if (typeof annotations?.readOnlyHint !== "boolean") {
+      throw new Error(`tool ${name} must declare annotations.readOnlyHint`);
+    }
+    if (!annotations.readOnlyHint && typeof annotations.destructiveHint !== "boolean") {
+      throw new Error(`write tool ${name} must declare annotations.destructiveHint`);
+    }
+  };
+
+  /**
+   * A tool shows an MCP Apps view by declaring `_meta.ui.resourceUri` (`viewToolMeta`). The URI
+   * must name a view this server serves, or the server refuses to start. The declaration gets
+   * the legacy `ui/resourceUri` key too, and every result carries the same `_meta.ui`, so a
+   * host or proxy that only sees the result still knows which view renders it. The text
+   * content is untouched: it is all a host without MCP Apps shows.
+   */
+  const showingView = (name: string, config: ToolConfig, cb: ToolCallback): [ToolConfig, ToolCallback] => {
+    const uri = declaredViewUri(config._meta);
+    if (uri === undefined) return [config, cb];
+    if (viewForUri(uri) === undefined) throw new Error(`tool ${name} declares ${uri}, which is not a view staple serves`);
+    const stamp = (value: unknown) => {
+      if (value === null || typeof value !== "object") return value;
+      const result = value as { _meta?: Record<string, unknown> };
+      return { ...result, _meta: { ...result._meta, ui: { resourceUri: uri } } };
+    };
+    const stamped: ToolCallback = (...args: unknown[]) => {
+      const result = cb(...args);
+      return result instanceof Promise ? result.then(stamp) : stamp(result);
+    };
+    return [{ ...config, _meta: normalizedViewMeta(config._meta ?? {}, uri) }, stamped];
+  };
+
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
     rawConfig: ToolConfig,
-    cb: ToolCallback,
+    rawCb: ToolCallback,
   ) => {
-    const config = declaringNotices(rawConfig);
+    assertAnnotated(name, rawConfig);
+    const [viewConfig, cb] = showingView(name, rawConfig, rawCb);
+    const config = declaringNotices(viewConfig);
     // A machine-local write (budget samples in hub.db, autopilot runs) changes nothing that
     // synchronizes and writes through no issue number, so it gets neither the renumber flag
     // nor a post-write sync.
@@ -3582,7 +3638,7 @@ server.registerTool(
       changed: z.boolean(),
       renumbered: z.array(z.object({ issueId: z.string(), from: z.string(), to: z.string() })),
     },
-    annotations: { title: "Resolve conflict", readOnlyHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { title: "Resolve conflict", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   ({ id, take, value, actor, ws }) =>
     run(() => {
@@ -3602,6 +3658,88 @@ server.registerTool(
         actor: requireActor(actor),
       });
     }),
+);
+
+// ---------- MCP Apps views ----------
+
+/**
+ * Each view is a `ui://staple/<name>` resource: one self-contained HTML file an MCP Apps host
+ * renders inline in the thread when a tool that declares it is called (`mcp-views.ts`).
+ * Listing them costs nothing; the file is read on resources/read only.
+ */
+for (const view of VIEWS) {
+  const uri = viewUri(view.name);
+  server.registerResource(
+    view.name,
+    uri,
+    { title: view.title, description: view.description, mimeType: RESOURCE_MIME_TYPE },
+    () => ({ contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: readViewHtml(view.name) }] }),
+  );
+}
+
+/** Replaced at build time by scripts/build-package.ts. Absent when run from source. */
+declare const __STAPLE_VERSION__: string;
+const STAPLE_VERSION = typeof __STAPLE_VERSION__ === "string" ? __STAPLE_VERSION__ : "0.0.0-dev";
+
+const aboutStatusShape = {
+  id: z.string(),
+  label: z.string(),
+  category: z.string(),
+  count: z.number().int(),
+};
+
+server.registerTool(
+  "show_about",
+  {
+    description:
+      "Show what this staple server is: its version, the workspace this call resolves to with its tickets by status, and the views staple can render. In a host with MCP Apps it renders as a card in the thread (the about view); any other host gets the same facts as text. Call it when the user asks which staple this is, or to check that staple's views render in this host.",
+    inputSchema: { ws: wsSchema },
+    outputSchema: {
+      server: z.object({ name: z.string(), version: z.string() }),
+      workspace: z
+        .object({ slug: z.string(), prefix: z.string(), total: z.number().int(), statuses: z.array(z.object(aboutStatusShape)) })
+        .nullable()
+        .describe("Null when no workspace resolves for this call"),
+      views: z.array(z.object({ name: z.string(), uri: z.string(), title: z.string() })),
+    },
+    annotations: { title: "Show about", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: viewToolMeta("about"),
+  },
+  ({ ws }) => {
+    let workspace: { slug: string; prefix: string; total: number; statuses: Array<{ id: string; label: string; category: string; count: number }> } | null;
+    try {
+      const store = storeFor(ws);
+      const statuses = store.getStatuses().map((status) => ({
+        id: status.id,
+        label: status.label,
+        category: status.category,
+        count: store.statusUsageCount(status.id),
+      }));
+      workspace = { slug: store.slug, prefix: store.prefix, total: statuses.reduce((sum, status) => sum + status.count, 0), statuses };
+    } catch (error) {
+      // No workspace here is an answer about this server, not a failure of the call. Any
+      // other error (an explicit ws that does not resolve is still not_found) is a failure.
+      if (ws !== undefined || !(error instanceof StapleError) || error.code !== "not_found") return fail(error);
+      workspace = null;
+    }
+    const views = VIEWS.map((view) => ({ name: view.name, uri: viewUri(view.name), title: view.title }));
+    const payload = { server: { name: "staple", version: STAPLE_VERSION }, workspace, views };
+    // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
+    const lines = [
+      `staple ${STAPLE_VERSION}`,
+      workspace === null
+        ? "No workspace resolves for this server. Call init to create one, or pass ws."
+        : `Workspace ${workspace.slug} (${workspace.prefix}): ${workspace.total} ticket${workspace.total === 1 ? "" : "s"}` +
+          (workspace.total === 0
+            ? "."
+            : `: ${workspace.statuses
+                .filter((status) => status.count > 0)
+                .map((status) => `${status.count} ${status.label.toLowerCase()}`)
+                .join(", ")}.`),
+      `Views: ${views.map((view) => `${view.name} (${view.uri})`).join(", ")}.`,
+    ];
+    return { content: [{ type: "text" as const, text: lines.join("\n") }], structuredContent: payload };
+  },
 );
 
 registerBudgetTools(server, { run });

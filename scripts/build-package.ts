@@ -10,6 +10,7 @@
  *     staple.mjs              esbuild bundle: CLI + MCP server + every non-builtin dep
  *     assets/index.html       the Vite UI bundle, copied beside staple.mjs
  *     assets/assets/*         its hashed js/css
+ *     views/<name>.html       the MCP Apps views `staple mcp` serves, one file each
  *     README.md
  *     LICENSE
  *     THIRD-PARTY-NOTICES.md  the repository's notices + the bundled dependency graph
@@ -48,6 +49,8 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { WORKSPACE_LATEST_VERSION } from "../src/core/migrations/workspace/index.js";
 import { HUB_LATEST_VERSION } from "../src/core/migrations/hub/index.js";
+import { VIEWS } from "../src/mcp-views.js";
+import { VIEW_PACKAGES_FILE, VIEWS_DIST_DIR } from "./build-views.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultOutDir = join(repoRoot, "dist-package");
@@ -154,7 +157,25 @@ function copyUiAssets(dir: string): void {
   cpSync(uiDist, join(dir, "assets"), { recursive: true });
 }
 
-function writeArtifactManifest(dir: string, bundledPackages: string[]): void {
+/**
+ * The MCP Apps views, copied beside staple.mjs as views/ — the layout resolveViewsDir probes
+ * for. Every view the server registers must be there: a missing one would be listed over
+ * resources/list and fail on read, inside someone's thread.
+ */
+function copyViews(dir: string): string[] {
+  const missing = VIEWS.filter((view) => !existsSync(join(VIEWS_DIST_DIR, `${view.name}.html`)));
+  if (missing.length > 0) {
+    throw new Error(
+      `the MCP Apps views are not built (${missing.map((view) => view.name).join(", ")} missing in ${VIEWS_DIST_DIR}). Run \`npm run build:views\` before building the package.`,
+    );
+  }
+  mkdirSync(join(dir, "views"));
+  for (const view of VIEWS) cpSync(join(VIEWS_DIST_DIR, `${view.name}.html`), join(dir, "views", `${view.name}.html`));
+  // The packages compiled into the views, for the notices. Not shipped itself.
+  return JSON.parse(readFileSync(join(VIEWS_DIST_DIR, VIEW_PACKAGES_FILE), "utf8")) as string[];
+}
+
+function writeArtifactManifest(dir: string, bundledPackages: string[], viewPackages: string[]): void {
   writeFileSync(
     join(dir, "package.json"),
     `${JSON.stringify(
@@ -180,7 +201,7 @@ function writeArtifactManifest(dir: string, bundledPackages: string[]): void {
         staple: { workspaceSchema: WORKSPACE_LATEST_VERSION, hubSchema: HUB_LATEST_VERSION },
         // Nothing is left to install: the bundle carries its dependencies inside it.
         dependencies: {},
-        files: ["staple.mjs", "assets/", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"],
+        files: ["staple.mjs", "assets/", "views/", "README.md", "LICENSE", "THIRD-PARTY-NOTICES.md"],
       },
       null,
       2,
@@ -201,6 +222,13 @@ function writeArtifactManifest(dir: string, bundledPackages: string[]): void {
     "their own licenses continue to apply to their code.",
     "",
     ...bundledPackages.map((name) => `- ${name}`),
+    "",
+    "## MCP Apps views",
+    "",
+    "Each `views/*.html` file is a single page with its script inlined. The following",
+    "packages are compiled into them; their own licenses continue to apply to their code.",
+    "",
+    ...viewPackages.map((name) => `- ${name}`),
     "",
     // The fonts are not bundled INTO staple.mjs — they are separate assets served
     // by the UI — so they are not in `bundledPackages` and would otherwise ship
@@ -232,6 +260,7 @@ function verifyNoSourceLeaks(dir: string): void {
     "package.json",
     "staple.mjs",
     "assets",
+    "views",
     "README.md",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",
@@ -368,7 +397,8 @@ export async function buildPackage(options: { outDir?: string } = {}): Promise<{
     verifyNoExternalImports(externals);
     verifyExecutableBin(join(staging, "staple.mjs"));
     copyUiAssets(staging);
-    writeArtifactManifest(staging, bundledPackages);
+    const viewPackages = copyViews(staging);
+    writeArtifactManifest(staging, bundledPackages, viewPackages);
     verifyNoSourceLeaks(staging);
     promote(staging, target);
     return { outDir: target, version: sourcePkg.version, bundledPackages, externals };

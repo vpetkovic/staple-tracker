@@ -1,0 +1,113 @@
+/*
+ * Shared look for staple's MCP Apps views.
+ *
+ * Colours, fonts and radii come from the host's standard MCP Apps style variables
+ * (--color-*, --font-*, --border-radius-*), so a view looks native in each host. Every
+ * variable has a fallback for a host that sends none; light-dark() picks the fallback for
+ * the theme the runtime applied to <html> (applyDocumentTheme sets color-scheme).
+ */
+:root {
+  color-scheme: light dark;
+  --view-bg: var(--color-background-secondary, light-dark(#f7f7f8, #1c1c1f));
+  --view-bg-raised: var(--color-background-primary, light-dark(#ffffff, #121214));
+  --view-bg-muted: var(--color-background-tertiary, light-dark(#ececef, #2a2a2e));
+  --view-text: var(--color-text-primary, light-dark(#18181b, #f4f4f5));
+  --view-text-muted: var(--color-text-secondary, light-dark(#52525b, #a1a1aa));
+  --view-border: var(--color-border-primary, light-dark(#e4e4e7, #34343a));
+  --view-border-strong: var(--color-border-secondary, light-dark(#d4d4d8, #46464d));
+  --view-ring: var(--color-ring-primary, light-dark(#2563eb, #60a5fa));
+  --view-danger: var(--color-text-danger, light-dark(#b91c1c, #f87171));
+  --view-radius: var(--border-radius-md, 10px);
+  --view-radius-sm: var(--border-radius-sm, 6px);
+  --view-font: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  --view-mono: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+}
+
+body {
+  font-family: var(--view-font);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--view-text);
+  overflow-wrap: anywhere;
+}
+
+.view-card {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--view-border);
+  border-radius: var(--view-radius);
+  background: var(--view-bg);
+  max-width: 100%;
+}
+
+.view-message {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--view-border);
+  border-radius: var(--view-radius);
+  background: var(--view-bg);
+  color: var(--view-text-muted);
+}
+
+.view-message-error {
+  color: var(--view-danger);
+}
+
+.view-muted {
+  color: var(--view-text-muted);
+}
+
+.view-mono {
+  font-family: var(--view-mono);
+  font-size: 12px;
+}
+
+.view-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border: 1px solid var(--view-border);
+  border-radius: 999px;
+  background: var(--view-bg-muted);
+  color: var(--view-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.view-button {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: var(--view-radius-sm);
+  border: 1px solid var(--view-border-strong);
+  background: var(--view-bg-raised);
+  color: var(--view-text);
+  cursor: pointer;
+}
+
+.view-button:hover {
+  background: var(--view-bg-muted);
+}
+
+.view-button:focus-visible {
+  outline: 2px solid var(--view-ring);
+  outline-offset: 1px;
+}
+
+.view-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}

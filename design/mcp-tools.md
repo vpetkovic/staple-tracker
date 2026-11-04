@@ -10,7 +10,7 @@ Any MCP client can launch `npx -y staple-cli mcp` the same way, with
 `STAPLE_AGENT` naming the agent. There is no separate MCP binary — `staple mcp`
 is the same entrypoint as the CLI.
 
-Sixty-five stdio tools. The loop they exist for:
+Seventy stdio tools. The loop they exist for:
 
 `inbox` (or `next_task`) → `checkout_task` (a conflict means pick another, never
 retry; `out_of_order` means take the one it names) → `put_document` the plan and
@@ -33,6 +33,7 @@ Every tool, by area:
 | Execution telemetry and budget | `list_attempts`, `get_attempt`, `get_budget`, `list_budget_samples`, `record_budget_sample`, `forget_budget_samples` |
 | [Cloud sync](../docs/cloud-sync.md) | `cloud_status`, `conflict_list`, `conflict_resolve` |
 | Workspaces and the hub | `init`, `hub_overview`, `cross_link`, `cross_unlink`, `hub_unregister`, `hub_prune` |
+| [MCP Apps views](#mcp-apps-views) | `show_about` |
 
 ## Changing an estimate
 
@@ -422,3 +423,31 @@ snapshot ids:
 
 The rules are in [cli.md](cli.md#forecasts-staple-forecast) and
 [timing-semantics.md](timing-semantics.md#forecasts).
+
+## MCP Apps views
+
+A view is a `ui://staple/<name>` resource (`text/html;profile=mcp-app`) that an MCP Apps
+host renders in a sandboxed frame in the thread when a tool that declares it is called.
+`src/mcp-views.ts` lists the views; `npm run build:views` builds each `src/views/<name>/`
+into one HTML file with its script and styles inlined (the frame has no network), and
+`build:package` ships them as `views/<name>.html` beside `staple.mjs`.
+
+- A tool declares its view with `_meta: viewToolMeta("<name>")`. The `registerTool` wrapper
+  in `src/mcp.ts` refuses a URI that names no view, adds the legacy `ui/resourceUri` key,
+  and puts `_meta.ui.resourceUri` on every result too.
+- The wrapper also refuses a tool without `annotations.readOnlyHint`, and a write without
+  `annotations.destructiveHint`. A view's button calls tools through the host, and the
+  host prompts a person from these hints.
+- A view tool's text content is the whole answer for a host without MCP Apps, so it is
+  prose, not JSON. The view reads `structuredContent`.
+- Views share `src/views/shared/runtime.ts`: connect with the ext-apps `App`, apply the
+  host theme, style variables and fonts, render each result (an error result as an
+  error), call tools and post messages through the host, report size, and set
+  `<body data-ready>` once painted.
+- `npm run test:views` renders each view from the packaged payload in a minimal reference
+  host (Chromium) at 360px, light and dark, and fails if it does not paint.
+
+`show_about {ws?}` answers `{server: {name, version}, workspace: {slug, prefix, total,
+statuses: [{id, label, category, count}]} | null, views: [{name, uri, title}]}`. The
+workspace is null when none resolves and no `ws` was given; an explicit `ws` that does not
+resolve is a `not_found` error.

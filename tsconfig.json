@@ -12,8 +12,9 @@
     "noEmit": true
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
-  // The browser app is a separate compilation with its own lib/jsx/resolution — see
-  // src/ui/app/tsconfig.json. `npm run typecheck` runs both; this only keeps the
-  // Node-side check from trying to typecheck DOM code against Node settings.
-  "exclude": ["src/ui/app"]
+  // The browser app and the MCP Apps views are separate compilations with their own
+  // lib/jsx/resolution — see src/ui/app/tsconfig.json and src/views/tsconfig.json.
+  // `npm run typecheck` runs all three; this only keeps the Node-side check from trying
+  // to typecheck DOM code against Node settings.
+  "exclude": ["src/ui/app", "src/views"]
 }

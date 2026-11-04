@@ -6,7 +6,7 @@ description: Every tool the staple MCP server offers, grouped by what an agent i
 # MCP tools
 
 Use this page to find the tool an agent calls for a job, and the command you would
-type for the same thing. The server offers 69 tools, grouped the same way as the
+type for the same thing. The server offers 70 tools, grouped the same way as the
 [CLI reference](cli.md). A tool and its command follow the same rules, and most
 answer the same object the command prints with `--json`.
 
@@ -140,6 +140,23 @@ Turning budget capture on is a person's decision and has no tool
 | `update_kinds` | Add, rename, reorder or remove kinds | `staple kinds add` (and the rest) | yes |
 
 Change settings, statuses, kinds or the queue order only because a person asked.
+
+## Views in the thread
+
+Some tools also have a view: a small page that a client supporting
+[MCP Apps](https://github.com/modelcontextprotocol/ext-apps) draws inside the
+conversation instead of showing the tool's text. The view follows the client's light or
+dark theme, and its buttons call staple tools through the client, which may ask you
+first. A client without MCP Apps shows the same answer as text, so every view tool works
+everywhere.
+
+| Tool | What it does | View | Writes |
+|---|---|---|---|
+| `show_about` | Which staple this is: version, workspace, tickets by status, the views it has | `ui://staple/about` | no |
+
+The server lists its views as `ui://staple/<name>` resources (`resources/list`). Each is one
+HTML file with nothing to download, shipped inside `staple-cli`. A tool names its view in
+`_meta.ui.resourceUri`, and its results carry the same `_meta.ui`.
 
 ## When a tool refuses
 
