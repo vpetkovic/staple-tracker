@@ -31,7 +31,7 @@
  *            thumb reach, above the home indicator.
  */
 import { AutopilotNotice } from "@/components/autopilot/AutopilotBadge";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Maximize2, Minimize2, SearchX, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,8 @@ import type { IssueDetail, UiMode } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "./parts/cn";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
+import { EmptyState } from "@/components/plain/States";
+import { issueNotFoundText } from "@/lib/issue-url";
 import type { DetailMode, DetailPresentation } from "./drawer";
 import type { NavState, NavTarget } from "./navigation";
 import {
@@ -155,7 +157,7 @@ export function IssueDetailPanel({
       <div className="staple-detail-scroll scrollbar-auto-hide min-h-0 flex-1 overflow-y-auto">
         {resource.error ? (
           <div className="px-5 py-4">
-            <ErrorState error={resource.error} />
+            <IssueLoadFailure error={resource.error} selection={selection} onClose={onClose} />
           </div>
         ) : null}
         {!detail && resource.loading ? (
@@ -232,6 +234,33 @@ function prefersReducedMotion(): boolean {
 }
 
 // ───────────────────────────────────────────────────────────────────── bar
+
+/**
+ * WHY THE DETAIL HAS NOTHING TO SHOW. A ticket that is not there — a link to a ref that was
+ * deleted or never existed, or to a workspace this page does not have — gets a plain
+ * not-found state with a way out (lib/issue-url.ts words it). Anything else keeps the
+ * error chip with the server's own sentence.
+ */
+function IssueLoadFailure({ error, selection, onClose }: { error: Error; selection: Selection; onClose: () => void }) {
+  const session = useSession();
+  const notFound = issueNotFoundText(error as Error & { status?: number }, selection, session);
+  if (!notFound) return <ErrorState error={error} />;
+  return (
+    <div data-issue-not-found="">
+      <EmptyState
+        icon={SearchX}
+        title={notFound.title}
+        action={
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+        }
+      >
+        {notFound.body}
+      </EmptyState>
+    </div>
+  );
+}
 
 function DetailBar({
   selection,

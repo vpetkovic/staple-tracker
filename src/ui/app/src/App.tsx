@@ -68,6 +68,7 @@ import {
   type ShellUrlState,
 } from "@/lib/session-url";
 import { rememberWorkspace } from "@/lib/session-workspace";
+import { linkWorkspace, withIssue } from "@/lib/issue-url";
 import {
   afterHistorySettles,
   leaveOverlays,
@@ -154,7 +155,8 @@ export function App() {
    * because it is the second half of one navigation act; see lib/session.ts.
    */
   const [milestoneFocus, setMilestoneFocus] = useState<string | null>(initialUrl?.focus ?? null);
-  const [ws, setWsState] = useState(initialUrl?.ws ?? "");
+  // A short ticket link (`?ws=staple&issue=STA-12`, no `view`) still lands on its workspace.
+  const [ws, setWsState] = useState(() => initialUrl?.ws ?? linkWorkspace(window.location.search));
   const [selection, setSelection] = useState<Selection | null>(null);
 
   /**
@@ -510,17 +512,34 @@ export function App() {
    * the state the address last held, which is what makes a popstate write nothing back.
    */
   const lastSynced = useRef<ShellUrlState | null>(initialUrl);
+  /**
+   * The workspace was corrected, not chosen: the address named one this page does not have
+   * (below). The page it lands on REPLACES the entry — a push would leave a dead Back step
+   * onto the same page.
+   */
+  const correcting = useRef(false);
   const shellState = useMemo<ShellUrlState>(
     () => ({ ws, view, filters, focus: milestoneFocus }),
     [ws, view, filters, milestoneFocus],
   );
   useEffect(() => {
-    const navigating = isNavigation(lastSynced.current, shellState);
+    const navigating = !correcting.current && isNavigation(lastSynced.current, shellState);
+    correcting.current = false;
     lastSynced.current = shellState;
+    /*
+     * GOING SOMEWHERE CLOSES THE OPEN TICKET. A ticket opened from the page closes anyway
+     * (its history entry is stepped past below); one that arrived with the address has no
+     * entry, so it is closed here, and its `issue` does not ride along onto the new page.
+     */
+    if (navigating) setSelection(null);
     // The address is built when the write RUNS, not now: a write queued behind an overlay
     // closing (lib/back-to-close.ts) must see the address the traversal landed on.
     const write = () => {
-      const href = withShellState(window.location.href, shellState);
+      const from = navigating ? withIssue(window.location.href, null, false) : window.location.href;
+      // The page being left forgets the ticket too, the way it does for one opened from the
+      // page (whose entry was stepped past): Back returns to the page, not to the ticket.
+      if (navigating && from !== window.location.href) replaceUrl(from);
+      const href = withShellState(from, shellState);
       if (href === window.location.href) return;
       if (navigating) pushPage(href);
       else replaceUrl(href);
@@ -572,7 +591,10 @@ export function App() {
   const hubMode = bootstrap.data?.mode === "hub";
   useEffect(() => {
     if (!knownWorkspaces || ws === "") return;
-    if (!hubMode || !knownWorkspaces.some((workspace) => workspace.slug === ws)) setWsState("");
+    if (!hubMode || !knownWorkspaces.some((workspace) => workspace.slug === ws)) {
+      correcting.current = true;
+      setWsState("");
+    }
   }, [knownWorkspaces, hubMode, ws]);
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);

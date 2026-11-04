@@ -111,6 +111,11 @@ When a ticket waits on your approval, a *Review gate* block sits above the tabs:
 approve all, approve some children, or send it back with a note
 ([Approval gates](approval-gates.md)).
 
+The open ticket is part of the address, so a link opens it directly:
+`?issue=APP-12`, or `?ws=app&issue=APP-12` with `staple open --hub`. The ticket
+stays open through a reload, Back closes it, and a ref that does not exist shows
+*not found* instead of an empty drawer.
+
 ## 8. Watch autopilot runs
 
 Once the workspace has had an [autopilot run](runs.md), the rail gains an
