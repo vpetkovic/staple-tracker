@@ -48,6 +48,12 @@ export const VIEWS: readonly ViewDefinition[] = [
     description:
       "One ticket's current attempt, live: a timeline of its milestones and comments, estimate against elapsed, status and last activity. Refreshes itself through the host with a read while the attempt is open, and says so when the host stops answering.",
   },
+  {
+    name: "queue",
+    title: "Queue",
+    description:
+      "The pickup queue in lanes: Ready in pickup order, Gated with the gate's owner, In progress with each holder and its attempt. Take posts \"Work <REF>\" into the thread; Approve on a gated row calls approve_task through the host. Shows the one row checkout accepts under a strict queue.",
+  },
 ];
 
 export function viewUri(name: string): string {

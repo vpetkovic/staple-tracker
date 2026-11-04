@@ -33,7 +33,7 @@ Every tool, by area:
 | Execution telemetry and budget | `list_attempts`, `get_attempt`, `get_budget`, `list_budget_samples`, `record_budget_sample`, `forget_budget_samples` |
 | [Cloud sync](../docs/cloud-sync.md) | `cloud_status`, `conflict_list`, `conflict_resolve` |
 | Workspaces and the hub | `init`, `hub_overview`, `cross_link`, `cross_unlink`, `hub_unregister`, `hub_prune` |
-| [MCP Apps views](#mcp-apps-views) | `show_about`, `show_ticket`, `show_progress` |
+| [MCP Apps views](#mcp-apps-views) | `show_about`, `show_ticket`, `show_progress`, `show_queue` |
 
 ## Changing an estimate
 
@@ -508,3 +508,35 @@ url}`. Its text is the status, the time and the milestones as prose.
   read that comes back after the host handed the view another ticket is dropped, and the
   view follows the new one.
 - The store read behind the timeline is `attemptTransitions(attemptId)`, a pure read.
+
+`show_queue {scope?, ws?}` answers `{queue}`, built by `queueLanes` in `src/mcp-queue.ts`:
+`{workspace, revision, scope: {identifier, title, kind} | null, policy, expected:
+{identifier, title, position} | null, next, ready: [{identifier, title, position,
+planPosition, path, takeable}], gated: [{identifier, title, owner, requestedBy,
+requestedAt, holds: [row], approve}], inProgress: [{...row, heldBy, idleSeconds, attempt:
+{ordinal, state, startedAt} | null, milestoneCount, lastMilestone, timing}], blocked:
+[{identifier, title, blockers}], unavailable: [{identifier, title, status}], totals,
+asOf}`. Its text lists the lanes as prose.
+
+- The lanes are `store.queue().effectiveQueue({scope})`, the resolver `next_task` and
+  `staple queue next` read, split by eligibility and kept in effective order: `ready` is
+  every `eligible` row (its head is `next`), `gated` every `gated` row grouped under the
+  gate that holds it (`detail.queuedBy`; a ticket awaiting approval itself is its own
+  group, with the owner from its gate), `inProgress` every `claimed` row, `blocked` and
+  `unavailable` the rest. Resolved rows never reach the resolver's answer. Each lane
+  carries at most 20 entries; `totals` has the full counts.
+- `inProgress` reads each row's open attempt: its milestones (`attemptTransitions`, kind
+  `attempt_milestone`), the newest label, and the card's `timing`.
+- `policy` is `queue.policy`. Under `strict`, `expected` is the first eligible PLAN row of
+  the WHOLE queue, scope or not, because checkout checks the whole plan
+  (`queueOrderCheck`); a ready row is `takeable` only when it is `expected`, or when no
+  plan row is eligible. Under `advisory` every ready row is takeable and `expected` is null.
+- Take on a takeable ready row posts `Work <REF>` into the thread through the host
+  (`ui/message`, which the host confirms), as the person's message. The view claims
+  nothing itself; the agent that reads the message takes the ticket. Approve on a gated
+  group calls `approve_task {ref: <gate>, comment: "Approved from the queue in the
+  thread."}` through the host with no `actor` (the server's `STAPLE_AGENT`), then reads
+  `show_queue` again with the call's `scope` and `ws`. Refresh reads it again on a click;
+  the view does not poll.
+- `inbox` and `list_queue` declare the queue view too. Their payloads are not lanes, so
+  the view reads `show_queue` through the host, passing on the call's `ws`.

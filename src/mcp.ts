@@ -29,6 +29,7 @@ import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
+import { queueLanes, queueText, type QueueLanes } from "./mcp-queue.js";
 import { progressText, ticketProgress, type TicketProgress } from "./mcp-progress.js";
 import {
   attemptEndFields,
@@ -1134,6 +1135,9 @@ server.registerTool(
       ...pageTailShape,
     },
     annotations: { title: "Inbox: ready work", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    // A host with MCP Apps draws the queue view for this result (the view reads the lanes
+    // with show_queue); the payload itself is unchanged.
+    _meta: viewToolMeta("queue"),
   },
   ({ assignee, limit, cursor, ws }) =>
     run(() => {
@@ -2984,6 +2988,8 @@ server.registerTool(
     },
     outputSchema: queueViewShape,
     annotations: { title: "List queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    // The plan's lanes, as the queue view, in a host with MCP Apps; the payload is unchanged.
+    _meta: viewToolMeta("queue"),
   },
   ({ all, actor, ws }) => run(() => storeFor(ws).queue().view({ all, actor })),
 );
@@ -3831,6 +3837,89 @@ server.registerTool(
       const progress = ticketProgress(storeFor(ws), ref);
       // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
       return { content: [{ type: "text" as const, text: progressText(progress) }], structuredContent: { progress } };
+    } catch (error) {
+      return fail(error);
+    }
+  },
+);
+
+const queueLaneRowShape = {
+  identifier: z.string(),
+  title: z.string(),
+  position: z.number().int().describe("1-based position in EFFECTIVE order, as next_task and staple queue next speak it"),
+  planPosition: z.number().int().nullable().describe("The plan row this came from; null in the unqueued band"),
+  path: z.array(z.string()).describe("The milestone, then the ancestor epics, outermost first"),
+};
+
+const queueLanesShape = {
+  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
+  revision: z.number().int(),
+  scope: z.object({ identifier: z.string(), title: z.string(), kind: z.string() }).nullable(),
+  policy: z.enum(["advisory", "strict"]).describe("queue.policy: under strict, checkout_task takes only `expected`"),
+  expected: z
+    .object({ identifier: z.string(), title: z.string(), position: z.number().int() })
+    .nullable()
+    .describe("Under strict, the row checkout_task accepts now, checked against the WHOLE plan; null under advisory or when no plan row is ready"),
+  next: z.string().nullable().describe("What next_task answers for the same scope: the first ready row"),
+  ready: z
+    .array(z.object({ ...queueLaneRowShape, takeable: z.boolean().describe("checkout_task accepts it now") }))
+    .describe("Eligible rows in pickup order"),
+  gated: z
+    .array(
+      z.object({
+        identifier: z.string().describe("The ticket that carries the gate"),
+        title: z.string(),
+        owner: z.string().nullable(),
+        requestedBy: z.string().nullable(),
+        requestedAt: z.string().nullable(),
+        holds: z.array(z.object(queueLaneRowShape)).describe("The queue rows this gate holds, in effective order"),
+        approve: z.boolean().describe("The gate is pending: approve_task on `identifier` releases it"),
+      }),
+    )
+    .describe("Gated rows, grouped by the gate that holds them"),
+  inProgress: z
+    .array(
+      z.object({
+        ...queueLaneRowShape,
+        heldBy: z.string(),
+        idleSeconds: z.number().nullable(),
+        attempt: z.object({ ordinal: z.number().int(), state: z.string(), startedAt: z.string() }).nullable(),
+        milestoneCount: z.number().int(),
+        lastMilestone: z.string().nullable(),
+        timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
+      }),
+    )
+    .describe("Claimed rows, with who holds each and how its current attempt is going"),
+  blocked: z.array(z.object({ identifier: z.string(), title: z.string(), blockers: z.array(z.string()) })),
+  unavailable: z.array(z.object({ identifier: z.string(), title: z.string(), status: z.string() })),
+  totals: z
+    .object({ ready: z.number().int(), gated: z.number().int(), inProgress: z.number().int(), blocked: z.number().int(), unavailable: z.number().int() })
+    .describe("Each lane's full length; a lane carries at most 20 entries"),
+  asOf: z.string(),
+};
+type _QueueLanesShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof queueLanesShape>>, QueueLanes>>;
+
+server.registerTool(
+  "show_queue",
+  {
+    description:
+      "Show a person the pickup queue in the thread, in lanes: Ready in pickup order (the first is what next_task answers), Gated with the gate's owner, and In progress with who holds each ticket and how its attempt is going; blocked work is counted. Under queue.policy strict it shows the one row checkout_task accepts now. In a host with MCP Apps it renders as the queue view: Take on a ready row posts \"Work <REF>\" into the thread as the person's message (the host asks them first), and Approve on a gated row calls approve_task through the host, which asks first. Any other host gets the lanes as text. Display only: call it when a person asks what is in the queue, what to work on next, or what is waiting on them; to pick work for yourself call next_task.",
+    inputSchema: {
+      scope: z
+        .string()
+        .optional()
+        .describe("Limit the lanes to one container: an epic, a milestone, or any issue with children (identifier, bare number, or uuid)"),
+      ws: wsSchema,
+    },
+    outputSchema: { queue: z.object(queueLanesShape) },
+    annotations: { title: "Show queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    _meta: viewToolMeta("queue"),
+  },
+  ({ scope, ws }) => {
+    try {
+      const lanes = queueLanes(storeFor(ws), { scope });
+      // The text is the whole answer for a host without MCP Apps, so it is prose, not JSON.
+      return { content: [{ type: "text" as const, text: queueText(lanes) }], structuredContent: { queue: lanes } };
     } catch (error) {
       return fail(error);
     }

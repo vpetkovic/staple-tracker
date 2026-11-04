@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 29 &&
+    readOnly.length === 30 &&
       [
         "inbox",
         "list_tasks",
@@ -166,8 +166,10 @@ try {
         "show_ticket",
         // MCP Apps: the progress view reads one ticket's attempt, and polls itself with it.
         "show_progress",
+        // MCP Apps: the queue view reads the effective queue in lanes.
+        "show_queue",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 29 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 30 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   // A host decides from these hints whether to ask a person first, including for a tool a
   // view's button calls through it.
@@ -184,10 +186,25 @@ try {
   // on the result, and its text content still answers a host that renders no views.
   const resources = (await rpc("resources/list", {})).resources;
   assert(
-    ["ui://staple/about", "ui://staple/ticket", "ui://staple/progress"].every((uri) =>
+    ["ui://staple/about", "ui://staple/ticket", "ui://staple/progress", "ui://staple/queue"].every((uri) =>
       resources.some((r: any) => r.uri === uri && r.mimeType === "text/html;profile=mcp-app"),
     ),
-    `resources/list lists the about, ticket and progress views as MCP Apps resources (${resources.map((r: any) => r.uri).join(", ")})`,
+    `resources/list lists the about, ticket, progress and queue views as MCP Apps resources (${resources.map((r: any) => r.uri).join(", ")})`,
+  );
+  const queueHtml = (await rpc("resources/read", { uri: "ui://staple/queue" })).contents[0];
+  assert(
+    queueHtml.mimeType === "text/html;profile=mcp-app" &&
+      /^<!doctype html>/i.test(queueHtml.text) &&
+      !/<script\b[^>]*\bsrc=|<link\b[^>]*\bhref=/i.test(queueHtml.text),
+    `resources/read returns the queue view as one self-contained HTML file (${queueHtml.text.length} chars)`,
+  );
+  assert(
+    ["show_queue", "inbox", "list_queue"].every(
+      (name) =>
+        byName.get(name)._meta?.ui?.resourceUri === "ui://staple/queue" &&
+        byName.get(name)._meta?.["ui/resourceUri"] === "ui://staple/queue",
+    ),
+    "show_queue, inbox and list_queue declare the queue view (both _meta spellings)",
   );
   const progressHtml = (await rpc("resources/read", { uri: "ui://staple/progress" })).contents[0];
   assert(
@@ -331,6 +348,16 @@ try {
       shownProgress.structuredContent.progress.timeline.some((entry: any) => entry.kind === "milestone" && entry.text === "Smoke milestone") &&
       toolText(shownProgress).includes("Smoke milestone"),
     "show_progress answers with the live timeline, and lists the milestone in text for hosts without views",
+  );
+  const shownQueue = await rpc("tools/call", { name: "show_queue", arguments: {} });
+  const nextForQueue = await rpc("tools/call", { name: "next_task", arguments: {} });
+  assert(
+    shownQueue._meta?.ui?.resourceUri === "ui://staple/queue" &&
+      shownQueue.structuredContent?.queue?.inProgress?.some((row: any) => row.identifier === "SMO-1" && row.milestoneCount === 1) &&
+      shownQueue.structuredContent.queue.next === (nextForQueue.structuredContent?.next?.identifier ?? null) &&
+      toolText(shownQueue).startsWith("Queue (advisory)") &&
+      toolText(shownQueue).includes("In progress:"),
+    "show_queue answers with the lanes (its head is next_task's next), and lists them in text for hosts without views",
   );
 
   const conflict = await rpc("tools/call", {
@@ -961,8 +988,8 @@ try {
   // and pause_run, resume_run and continue_run, 54, and goal mode's mark_milestone_criterion, 55.
   // Typed files added list_files, attach_file, export_file and remove_file, 59, and the MCP
   // Apps about view's show_about, which reports on one workspace, 60, and the ticket card's
-  // show_ticket, 61, and the progress view's show_progress, 62.
-  assert(wsTargetable.length === 62, `62 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // show_ticket, 61, and the progress view's show_progress, 62, and the queue view's show_queue, 63.
+  assert(wsTargetable.length === 63, `63 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   assert(
     !coldByName.get("get_budget").inputSchema.properties?.ws &&
       !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&

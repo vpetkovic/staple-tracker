@@ -155,9 +155,11 @@ everywhere.
 | `show_about` | Which staple this is: version, workspace, tickets by status, the views it has | `ui://staple/about` | no |
 | `show_ticket` | One ticket as a card: status, criteria, gate, attempt, branch, time, and a link to it | `ui://staple/ticket` | no |
 | `show_progress` | One ticket's current attempt, live: its milestones, time against the estimate, last activity | `ui://staple/progress` | no |
+| `show_queue` | The pickup queue in lanes: Ready in pickup order, Gated with the owner, In progress with who holds what | `ui://staple/queue` | no |
 
 `get_task` and `checkout_task` draw the same ticket card, so the ticket an agent reads or
-claims shows in the thread without an extra call. Their answers are unchanged.
+claims shows in the thread without an extra call. `inbox` and `list_queue` draw the queue
+view the same way. Their answers are unchanged.
 
 When to show what:
 
@@ -171,6 +173,12 @@ When to show what:
   attempt is open it reads `show_progress` again every few seconds through the client,
   and each milestone an agent records with `record_attempt_event` shows up without
   anyone asking. That read changes nothing, so the client asks nobody before it.
+- Call `show_queue` when a person asks what is in the queue, what to work on next, or
+  what is waiting on them. Pass `scope` to show one epic or milestone. **Take** on a ready
+  row posts "Work DEMO-12" into the thread as the person's message (the client asks them
+  first), and the agent that reads it takes the ticket. **Approve** on a gated row calls
+  `approve_task` through the client, which asks first. To choose work for yourself, call
+  `next_task`, not this.
 - Call `show_about` when a person asks which staple this is, or to check that views
   render in this client.
 
@@ -192,6 +200,12 @@ thread is not running"), when the client closes the view, when the attempt ends,
 client that does not let views call tools. A **Check again** button reads once more and
 picks the refresh back up if that works. A client without MCP Apps gets the status, the
 time and the list of milestones as text.
+
+The queue view's lanes are the same order `staple queue next` and `next_task` give: the
+first ready row is what they answer, and every row they step over shows in Gated, In
+progress or the blocked line, with the reason. Under `queue.policy = strict` only the row
+checkout accepts now has a Take button; the others say which row they wait for. A client
+without MCP Apps gets the lanes as text.
 
 The server lists its views as `ui://staple/<name>` resources (`resources/list`). Each is one
 HTML file with nothing to download, shipped inside `staple-cli`. A tool names its view in

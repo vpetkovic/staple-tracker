@@ -1,0 +1,265 @@
+/*
+ * The queue view. Colours come from the host's standard variables through base.css; the
+ * lane accents use the host's warning / info variables when it sends them, with a fallback
+ * per theme (as the ticket card and the progress view do).
+ */
+:root {
+  --queue-warning: var(--color-text-warning, light-dark(#a16207, #facc15));
+  --queue-info: var(--color-text-info, light-dark(#1d4ed8, #93c5fd));
+  --queue-success: var(--color-text-success, light-dark(#15803d, #4ade80));
+  --queue-warning-bg: var(--color-background-warning, light-dark(#fef9c3, #3a3212));
+  --queue-warning-border: var(--color-border-warning, light-dark(#fde68a, #5c4d16));
+  --queue-inverse-bg: var(--color-background-inverse, var(--view-text));
+  --queue-inverse-text: var(--color-text-inverse, var(--view-bg-raised));
+}
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.queue-name {
+  margin: 0;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.queue-scope {
+  font-weight: 400;
+}
+
+.queue-summary {
+  margin: -6px 0 0;
+  font-size: 12px;
+}
+
+.queue-strict {
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--queue-warning-border);
+  border-radius: var(--view-radius-sm);
+  background: var(--queue-warning-bg);
+  font-size: 12px;
+}
+
+.queue-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--view-border);
+}
+
+.queue-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.queue-heading::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--view-text-muted);
+}
+
+[data-lane="ready"] .queue-heading::before {
+  background: var(--queue-success);
+}
+
+[data-lane="gated"] .queue-heading::before {
+  background: var(--queue-warning);
+}
+
+[data-lane="in-progress"] .queue-heading::before {
+  background: var(--queue-info);
+}
+
+.queue-count {
+  font-weight: 400;
+}
+
+.queue-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--view-border);
+  border-radius: var(--view-radius-sm);
+  background: var(--view-bg-raised);
+}
+
+.queue-row[data-gate] {
+  border-color: var(--queue-warning-border);
+}
+
+.queue-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-row-action {
+  flex: none;
+}
+
+.queue-row-head {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.queue-id {
+  flex: none;
+  color: var(--view-text-muted);
+}
+
+.queue-title {
+  min-width: 0;
+  font-weight: 500;
+}
+
+.queue-badge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--queue-inverse-bg);
+  color: var(--queue-inverse-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.queue-row-detail {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+.queue-nowrap {
+  white-space: nowrap;
+}
+
+.queue-wait,
+.queue-sent {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.queue-sent {
+  color: var(--queue-success);
+  font-weight: 500;
+}
+
+.queue-time {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-bar {
+  display: block;
+  flex: 1;
+  height: 4px;
+  max-width: 140px;
+  border-radius: 999px;
+  background: var(--view-border-strong);
+  overflow: hidden;
+}
+
+.queue-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--queue-info);
+}
+
+.queue-bar[data-over="true"] .queue-bar-fill {
+  background: var(--view-danger);
+}
+
+.queue-empty {
+  margin: 0;
+  font-size: 12px;
+}
+
+.queue-more {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--view-ring);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.queue-more:focus-visible {
+  outline: 2px solid var(--view-ring);
+  outline-offset: 1px;
+}
+
+.queue-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--view-text-muted);
+}
+
+.queue-note-error {
+  color: var(--view-danger);
+}
+
+.queue-foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--view-border);
+}
+
+.queue-asides {
+  min-width: 0;
+}
+
+.queue-aside {
+  margin: 0;
+  font-size: 12px;
+}
+
+.view-button-primary {
+  border-color: var(--queue-inverse-bg);
+  background: var(--queue-inverse-bg);
+  color: var(--queue-inverse-text);
+  font-weight: 500;
+}
+
+.view-button-primary:hover {
+  background: var(--queue-inverse-bg);
+  opacity: 0.88;
+}

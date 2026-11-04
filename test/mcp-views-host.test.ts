@@ -157,6 +157,7 @@ describe("the views over MCP", () => {
         { name: "about", uri: "ui://staple/about" },
         { name: "ticket", uri: "ui://staple/ticket" },
         { name: "progress", uri: "ui://staple/progress" },
+        { name: "queue", uri: "ui://staple/queue" },
       ],
     });
   });
@@ -167,7 +168,7 @@ describe("the views over MCP", () => {
     const text = result.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
     expect(text).toContain(`staple ${version}`);
     expect(text).toContain(`Workspace ${slug} (${prefix}): 3 tickets: 1 todo, 1 in progress, 1 done.`);
-    expect(text).toContain("Views: about (ui://staple/about), ticket (ui://staple/ticket), progress (ui://staple/progress).");
+    expect(text).toContain("Views: about (ui://staple/about), ticket (ui://staple/ticket), progress (ui://staple/progress), queue (ui://staple/queue).");
     expect(() => JSON.parse(text)).toThrow();
   });
 });

@@ -28,8 +28,8 @@
  *   - `staple --help` exits 0 and prints usage;
  *   - `staple mcp` completes an MCP initialize handshake over stdio;
  *   - `staple mcp` lists its MCP Apps views and serves each as one self-contained
- *     HTML file from the package, and `show_about`, `show_ticket` and `show_progress` link
- *     to their views;
+ *     HTML file from the package, and `show_about`, `show_ticket`, `show_progress` and
+ *     `show_queue` link to their views;
  *   - in a fresh repo dir with a temp STAPLE_HOME, `staple init --yes` works
  *     and `staple inbox --json` returns valid JSON;
  *   - the installed package.json exposes exactly ONE bin, named `staple`
@@ -404,4 +404,7 @@ async function assertViewsServed(session: McpSession): Promise<void> {
   const progress = (tools.result?.tools ?? []).find((tool: any) => tool.name === "show_progress");
   assert(progress?._meta?.ui?.resourceUri === "ui://staple/progress", `show_progress does not declare its view: ${preview(JSON.stringify(progress))}`);
   assert(views.some((view: any) => view.uri === "ui://staple/progress"), "resources/list does not list the progress view");
+  const queue = (tools.result?.tools ?? []).find((tool: any) => tool.name === "show_queue");
+  assert(queue?._meta?.ui?.resourceUri === "ui://staple/queue", `show_queue does not declare its view: ${preview(JSON.stringify(queue))}`);
+  assert(views.some((view: any) => view.uri === "ui://staple/queue"), "resources/list does not list the queue view");
 }
