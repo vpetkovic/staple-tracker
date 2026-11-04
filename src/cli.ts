@@ -18,6 +18,7 @@ import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
 import { assertNotReservedActor } from "./core/milestones.js";
+import { renderInstructions } from "./core/instructions.js";
 import { runQueueCommand } from "./commands/queue.js";
 import { runRunCommand } from "./commands/run.js";
 import { runDriveCommand } from "./commands/run-drive.js";
@@ -398,6 +399,33 @@ function estimateVerbValue(
 
 /** Read from argv, not parsed values: a parse failure must still honour --json. */
 const jsonMode = process.argv.includes("--json");
+
+/**
+ * The run whose own instructions a read adds: `--run <id>` when given; otherwise, inside a
+ * session `staple run drive` started, its run, but only for the ticket that session was handed
+ * (`STAPLE_RUN_TICKET`), so a session reading some other ticket sees that ticket as it is.
+ */
+function instructionRunId(store: WorkspaceStore, ref: string, run: string | undefined): string | null {
+  if (run !== undefined) return store.runs().get(run).id;
+  const envRun = process.env.STAPLE_RUN?.trim();
+  const envTicket = process.env.STAPLE_RUN_TICKET?.trim();
+  if (!envRun || !envTicket) return null;
+  try {
+    const issue = store.getIssue(ref);
+    if (issue.identifier !== envTicket && issue.id !== envTicket) return null;
+    return store.runs().get(envRun).id;
+  } catch {
+    return null;
+  }
+}
+
+/** Every line of `text` led by `prefix`; blank lines stay blank. */
+function indentBlock(text: string, prefix: string): string {
+  return text
+    .split("\n")
+    .map((row) => (row === "" ? row : `${prefix}${row}`))
+    .join("\n");
+}
 
 function outJson(payload: unknown): void {
   /**
@@ -1061,7 +1089,8 @@ The pickup queue
 
 Autopilot runs
   run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]] [--override -m why]
-              [--gate-owner W] [--goal-cap N]
+              [--gate-owner W] [--goal-cap N] [--instructions <file>]...
+              --instructions: this run's own instructions, handed to every ticket it takes
               one agent working the queue, an epic or parent, or a milestone,
               ticket after ticket; one live run per actor per scope. Under strict
               queue.policy it follows the whole plan unless started with --override.
@@ -1087,7 +1116,12 @@ Documents & events
   file rm <id>                          remove a file
   doc <ref> <key>                       read (latest)
   doc <ref> <key> --put <file|->        write (--base N for optimistic concurrency)
+              --instructions makes it an instruction document, delivered to every
+              ticket beneath <ref> and to runs that take them; --no-instructions
+              stops it being one; neither keeps what the current revision says
   doc <ref> <key> --revisions           history
+  instructions <ref> [--run <id>]       the instructions that apply to a ticket, nearest
+              first: its own, its parents', its milestone's, then the run's
   events [--since N]                    workspace event log (blockers_resolved, ...)
   events --follow [--since N] [--interval MS] [--exec CMD] [--max N]
               tail new events (from the head of the log, or --since N);
@@ -1360,9 +1394,9 @@ function main() {
     }
 
     case "show": {
-      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: common });
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { ...common, run: { type: "string" } } });
       const { store } = getStore(values);
-      const ctx = store.context(positionals[0]!);
+      const ctx = store.context(positionals[0]!, { runId: instructionRunId(store, positionals[0]!, values.run) });
       if (values.json) {
         // Mirrors MCP get_task: claim, the gate pair and the timing pair ride
         // alongside the context, from the same store expressions get_task
@@ -1489,6 +1523,10 @@ function main() {
         console.log("\nacceptance criteria:");
         for (const c of i.acceptanceCriteria) console.log(`  - ${c}`);
       }
+      if (ctx.instructions.length > 0) {
+        console.log("\ninstructions (follow these while you work it):");
+        console.log(indentBlock(renderInstructions(ctx.instructions), "  "));
+      }
       if (i.status === "blocked" && (i.unblockOwner || i.unblockAction)) {
         console.log(`\nunblock: ${i.unblockOwner ?? "?"} must ${i.unblockAction ?? "?"}`);
       }
@@ -1607,8 +1645,9 @@ function main() {
         overrideReason: values.override === true ? (values.message ?? "") : undefined,
         attempt: attemptOptionsFrom(values),
       });
+      const instructions = store.instructions(issue.id);
       if (values.json) {
-        outJson(withAttempt(store, issue));
+        outJson({ ...withAttempt(store, issue), instructions });
         break;
       }
       // Name whose work was taken: a silent "claimed" would hide the takeover.
@@ -1618,6 +1657,10 @@ function main() {
           ? `stole ${line(issue)} (was ${before.heldBy}, silent ${formatAgo(before.idleSeconds)})`
           : `claimed ${line(issue)}`,
       );
+      if (instructions.length > 0) {
+        console.log("\ninstructions (follow these while you work it):");
+        console.log(indentBlock(renderInstructions(instructions), "  "));
+      }
       break;
     }
 
@@ -2299,10 +2342,18 @@ function main() {
           base: { type: "string" },
           summary: { type: "string" },
           revisions: { type: "boolean" },
+          instructions: { type: "boolean" },
+          "no-instructions": { type: "boolean" },
         },
       });
       const { store } = getStore(values);
       const [ref, key] = positionals;
+      if (values.instructions === true && values["no-instructions"] === true) {
+        throw new StapleError("validation", "Pass --instructions or --no-instructions, not both.");
+      }
+      if ((values.instructions === true || values["no-instructions"] === true) && values.put === undefined) {
+        throw new StapleError("validation", "--instructions and --no-instructions set the flag on a new revision: pass them with --put <file|->.");
+      }
       if (values.revisions) {
         if (values.json) {
           outJson(store.listDocumentRevisions(ref!, key!));
@@ -2320,12 +2371,13 @@ function main() {
           baseRevision: values.base ? Number(values.base) : undefined,
           changeSummary: values.summary,
           author: agentName(),
+          instructions: values.instructions === true ? true : values["no-instructions"] === true ? false : undefined,
         });
         if (values.json) {
           outJson(result);
           break;
         }
-        console.log(`${key} @ revision ${result.revision}`);
+        console.log(`${key} @ revision ${result.revision}${result.instructions ? " (instructions)" : ""}`);
         break;
       }
       const doc = store.getDocument(ref!, key!);
@@ -2333,8 +2385,25 @@ function main() {
         outJson(doc);
         break;
       }
-      console.log(`# ${doc.key} @ r${doc.revision} (${doc.createdAt.slice(0, 16)})\n`);
+      console.log(`# ${doc.key} @ r${doc.revision} (${doc.createdAt.slice(0, 16)})${doc.instructions ? " · instructions" : ""}\n`);
       console.log(doc.body);
+      break;
+    }
+
+    case "instructions": {
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { ...common, run: { type: "string" } } });
+      if (!positionals[0]) throw new StapleError("validation", "Usage: staple instructions <ref> [--run <id>] [--json]");
+      const { store } = getStore(values);
+      const list = store.instructions(positionals[0], { runId: instructionRunId(store, positionals[0], values.run) });
+      if (values.json) {
+        outJson({ instructions: list });
+        break;
+      }
+      if (list.length === 0) {
+        console.log(`No instructions apply to ${store.getIssue(positionals[0]).identifier}.`);
+        break;
+      }
+      console.log(renderInstructions(list));
       break;
     }
 

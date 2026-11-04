@@ -1006,6 +1006,11 @@ export interface IssueDocumentMeta {
   currentRevision: number;
   title: string | null;
   updatedAt: string;
+  /**
+   * The head revision is an instruction document: the tracker hands it to every ticket
+   * beneath this issue and to every run that takes one (`core/instructions.ts`).
+   */
+  instructions: boolean;
 }
 
 /**

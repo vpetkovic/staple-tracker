@@ -192,7 +192,8 @@ export function runQueueCommand(rest: string[]): void {
   if (values.scope !== undefined && sub !== "next") {
     throw new StapleError("validation", `--scope applies to "queue next" only, not "queue ${sub}".`);
   }
-  const queue = resolveWorkspace({ db: values.db, ws: values.ws }).store.queue();
+  const { store } = resolveWorkspace({ db: values.db, ws: values.ws });
+  const queue = store.queue();
   const input = {
     ref: first,
     order: first === undefined ? undefined : first.split(",").map((part) => part.trim()).filter(Boolean),
@@ -214,7 +215,9 @@ export function runQueueCommand(rest: string[]): void {
     const result = queue.effectiveQueue({ actor, scope: values.scope });
     if (values.json) {
       const { revision, scope, next, skipped } = result;
-      return console.log(JSON.stringify(scope ? { revision, scope, next, skipped } : { revision, next, skipped }));
+      // What `next` is worked under, as MCP next_task answers it (core/instructions.ts).
+      const instructions = next ? store.instructions(next.issueId) : [];
+      return console.log(JSON.stringify(scope ? { revision, scope, next, skipped, instructions } : { revision, next, skipped, instructions }));
     }
     if (result.scope) console.log(`scope    ${result.scope.identifier} (${result.scope.kind}) ${result.scope.title}`);
     for (const row of result.skipped) console.log(`skipped  ${row.identifier.padEnd(9)} ${row.eligibility.padEnd(9)} ${row.reason ?? ""}`);

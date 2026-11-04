@@ -184,6 +184,41 @@ describe("run drive, end to end", () => {
   }, 120_000);
 });
 
+describe("run drive and instructions", () => {
+  it("stores --instructions on the run it starts, and briefs each session with every instruction the ticket is worked under", async () => {
+    const { dir } = await workspace([]);
+    const epic = JSON.parse((await cli(dir, ["new", "Epic", "--kind", "epic", "--json"], "vp")).stdout) as { identifier: string };
+    const child = JSON.parse((await cli(dir, ["new", "create i.txt", "--parent", epic.identifier, "--json"], "vp")).stdout) as { identifier: string };
+    const rules = join(dir, "epic-rules.md");
+    writeFileSync(rules, "Every PR is stacked on the last.\n");
+    expect((await cli(dir, ["doc", epic.identifier, "rules", "--put", rules, "--instructions", "--json"], "vp")).status).toBe(0);
+    const gates = join(dir, "gates.md");
+    writeFileSync(gates, "Run the gates before handing on.\n");
+
+    const drove = await cli(dir, ["run", "drive", "--scope", epic.identifier, "--max-tickets", "1", "--instructions", gates, ...fake("review"), "--poll", "0.2", "--json"]);
+    expect(drove.status, drove.stderr).toBe(0);
+    const runId = String(lines(drove.stdout)[0]!.runId);
+    const { run } = await runOf(dir, runId);
+    expect(run.instructions).toEqual([{ key: "gates", body: "Run the gates before handing on.\n" }]);
+
+    const logDir = join(dir, ".staple", "runs", runId);
+    const brief = readFileSync(sessionFile(logDir, `001-${child.identifier}`, ".brief.md"), "utf8");
+    expect(brief).toContain("## Instructions for this ticket");
+    expect(brief).toContain(`### rules (parent ${epic.identifier}, r1)`);
+    expect(brief).toContain("Every PR is stacked on the last.");
+    expect(brief).toContain(`### gates (run ${runId.slice(0, 8)})`);
+    // Stored on the run, not appended a second time as this driver's own text.
+    expect(brief).not.toContain("## This repository's instructions");
+
+    const file = sessionFile(logDir, `001-${child.identifier}`, ".instructions.json");
+    const written = JSON.parse(readFileSync(file, "utf8")) as { ref: string; instructions: Array<{ key: string }> };
+    expect(written.ref).toBe(child.identifier);
+    expect(written.instructions.map((entry) => entry.key)).toEqual(["rules", "gates"]);
+    const session = JSON.parse(readFileSync(sessionFile(logDir, `001-${child.identifier}`, ".stdout.log"), "utf8").split("\n")[0]!) as { env: Record<string, string> };
+    expect(session.env.STAPLE_RUN_INSTRUCTIONS).toBe(file);
+  }, 120_000);
+});
+
 describe("run drive outcomes", () => {
   it("a non-zero exit is failed with the exit code; the retry fails too and the run stops on the streak", async () => {
     const { dir, refs } = await workspace(["breaks"]);

@@ -1,3 +1,4 @@
+import { type ResolvedInstruction, resolveInstructions } from "./instructions.js";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { EVENT_ORDER, insertEvent } from "./event-log.js";
@@ -7132,8 +7133,14 @@ export class WorkspaceStore {
       author?: string | null;
       changeSummary?: string | null;
       title?: string | null;
+      /**
+       * Whether the new revision is an instruction document. Left out, it keeps what the
+       * head revision says (a fresh document is not one), so an edit by somebody who never
+       * heard of the flag does not quietly stop a document being instructions.
+       */
+      instructions?: boolean;
     } = {},
-  ): { key: string; revision: number } {
+  ): { key: string; revision: number; instructions: boolean } {
     const cleanKey = key.trim().toLowerCase();
     if (!/^[a-z0-9._-]{1,64}$/.test(cleanKey)) {
       throw new StapleError("validation", "Document key must be 1-64 chars of a-z 0-9 . _ -");
@@ -7141,9 +7148,17 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const current = this.db
-        .prepare("SELECT current_revision FROM documents WHERE issue_id = ? AND key = ?")
-        .get(row.id, cleanKey) as { current_revision: number } | undefined;
+        .prepare(
+          `SELECT d.current_revision, COALESCE(r.instructions, 0) AS instructions
+             FROM documents d
+             LEFT JOIN document_revisions r
+               ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+            WHERE d.issue_id = ? AND d.key = ?`,
+        )
+        .get(row.id, cleanKey) as { current_revision: number; instructions: number } | undefined;
       const currentRevision = current?.current_revision ?? 0;
+      const wasInstructions = current?.instructions === 1;
+      const instructions = opts.instructions ?? wasInstructions;
       if (opts.baseRevision != null && opts.baseRevision !== currentRevision) {
         throw new StapleError(
           "revision_conflict",
@@ -7155,10 +7170,10 @@ export class WorkspaceStore {
       const now = this.journal.mutationAt();
       this.db
         .prepare(
-          `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at)
-           VALUES (?,?,?,?,?,?,?)`,
+          `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at, instructions)
+           VALUES (?,?,?,?,?,?,?,?)`,
         )
-        .run(row.id, cleanKey, revision, body, opts.author ?? null, opts.changeSummary ?? null, now);
+        .run(row.id, cleanKey, revision, body, opts.author ?? null, opts.changeSummary ?? null, now, instructions ? 1 : 0);
       this.db
         .prepare(
           `INSERT INTO documents (issue_id, key, current_revision, title, updated_at)
@@ -7173,8 +7188,21 @@ export class WorkspaceStore {
         kind: "doc_updated",
         issueId: row.id,
         actor: opts.author ?? null,
-        payload: { key: cleanKey, revision, changeSummary: opts.changeSummary ?? null },
+        payload: { key: cleanKey, revision, changeSummary: opts.changeSummary ?? null, instructions },
       });
+      if (instructions || wasInstructions) {
+        /**
+         * Every ticket beneath this issue now reads different instructions, and a live run
+         * reports it on its next take (`RunStore.continue`). Raised for a document that is
+         * or was instructions, so turning the flag off is news too.
+         */
+        this.emitEvent({
+          kind: "instructions_changed",
+          issueId: row.id,
+          actor: opts.author ?? null,
+          payload: { key: cleanKey, revision, instructions, was: wasInstructions },
+        });
+      }
       /**
        * ONE operation, on the revision, not two.
        *
@@ -7203,10 +7231,12 @@ export class WorkspaceStore {
           // operation to take them from. See `applyDocumentRevision`.
           author: opts.author ?? null,
           createdAt: now,
+          // Migration 019. An operation without it, from an older device, reads as false.
+          instructions,
         },
         actor: opts.author ?? null,
       });
-      return { key: cleanKey, revision };
+      return { key: cleanKey, revision, instructions };
     });
   }
 
@@ -7214,7 +7244,16 @@ export class WorkspaceStore {
     ref: string,
     key: string,
     revision?: number,
-  ): { key: string; revision: number; body: string; title: string | null; author: string | null; createdAt: string } {
+  ): {
+    key: string;
+    revision: number;
+    body: string;
+    title: string | null;
+    author: string | null;
+    createdAt: string;
+    /** Whether THIS revision is an instruction document. */
+    instructions: boolean;
+  } {
     const row = this.requireRow(ref);
     const meta = this.db
       .prepare("SELECT * FROM documents WHERE issue_id = ? AND key = ?")
@@ -7228,7 +7267,7 @@ export class WorkspaceStore {
         "SELECT * FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?",
       )
       .get(row.id, meta.key, target) as
-      | { body: string; author: string | null; created_at: string }
+      | { body: string; author: string | null; created_at: string; instructions: number }
       | undefined;
     if (!rev) throw new StapleError("not_found", `No revision ${target} of "${key}"`);
     return {
@@ -7238,19 +7277,27 @@ export class WorkspaceStore {
       title: meta.title,
       author: rev.author,
       createdAt: rev.created_at,
+      instructions: rev.instructions === 1,
     };
   }
 
   listDocuments(ref: string): IssueDocumentMeta[] {
     const row = this.requireRow(ref);
     const rows = this.db
-      .prepare("SELECT * FROM documents WHERE issue_id = ? ORDER BY key")
+      .prepare(
+        `SELECT d.*, COALESCE(r.instructions, 0) AS instructions
+           FROM documents d
+           LEFT JOIN document_revisions r
+             ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+          WHERE d.issue_id = ? ORDER BY d.key`,
+      )
       .all(row.id) as Array<{
       issue_id: string;
       key: string;
       current_revision: number;
       title: string | null;
       updated_at: string;
+      instructions: number;
     }>;
     return rows.map((r) => ({
       issueId: r.issue_id,
@@ -7258,6 +7305,7 @@ export class WorkspaceStore {
       currentRevision: r.current_revision,
       title: r.title,
       updatedAt: r.updated_at,
+      instructions: r.instructions === 1,
     }));
   }
 
@@ -7719,6 +7767,15 @@ export class WorkspaceStore {
   }
 
   /**
+   * Every instruction that reaches this issue, nearest first, with its source and whether it
+   * is in effect for its key (`core/instructions.ts`). With `runId`, the run's own come last.
+   */
+  instructions(ref: string, opts: { runId?: string | null } = {}): ResolvedInstruction[] {
+    const row = this.requireRow(ref);
+    return resolveInstructions(this.db, row.id, { runId: opts.runId ?? null });
+  }
+
+  /**
    * Issue + everything an agent needs to act: ancestry, children, relations,
    * comments, docs. Document BODIES are opt-in (`includeDocuments`) — they are
    * the largest thing in this payload and most callers only need to know which
@@ -7726,7 +7783,7 @@ export class WorkspaceStore {
    */
   context(
     ref: string,
-    opts: { includeDocuments?: boolean } = {},
+    opts: { includeDocuments?: boolean; runId?: string | null } = {},
   ): {
     issue: Issue;
     ancestors: Issue[];
@@ -7737,6 +7794,8 @@ export class WorkspaceStore {
     documents: Array<IssueDocumentMeta & { body?: string }>;
     /** Metadata only. The bytes are never part of this payload. */
     attachments: AttachmentMeta[];
+    /** The instructions that reach this issue, nearest first (`instructions`). */
+    instructions: ResolvedInstruction[];
   } {
     const row = this.requireRow(ref);
     const ancestors: Issue[] = [];
@@ -7773,6 +7832,7 @@ export class WorkspaceStore {
         ? documents.map((doc) => ({ ...doc, body: this.getDocument(row.id, doc.key).body }))
         : documents,
       attachments: listAttachments(this.db, row.id),
+      instructions: resolveInstructions(this.db, row.id, { runId: opts.runId ?? null }),
     };
   }
 

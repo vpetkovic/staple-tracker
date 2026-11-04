@@ -18,7 +18,7 @@ always did. Code: `src/core/run-store.ts`; CLI: `staple run`; MCP: `start_run`,
 
 ```
 staple run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]] [--override -m why]
-                 [--gate-owner W] [--goal-cap N]
+                 [--gate-owner W] [--goal-cap N] [--instructions <file>]...
 staple run status [<run-id>] [--all]
 staple run stop [<run-id>] [-m why]
 staple run pause [<run-id>]
@@ -143,7 +143,8 @@ ticket, or null.
 // take: the ticket is claimed for you; work it, then call continue again
 { "action": "take", "ref": "ABC-13", "issueId": "…", "title": "…",
   "why": "ABC-13 is next in issue ABC-10 by the pickup queue's order.",
-  "resumed": false, "recorded": {…} | null, "run": {…} }
+  "resumed": false, "recorded": {…} | null, "run": {…},
+  "instructions": [ResolvedInstruction…], "instructionsChanged": [InstructionChange…] }
 
 // wait: take nothing now; ask again after retryAfterSeconds, or end the session
 { "action": "wait", "reason": "paused" | "waiting_on_others" | "out_of_order",
@@ -552,6 +553,63 @@ the loop. The same rules hold in every tier: finish (or state the failure)
 before asking, an adversarial review recorded as `review: …` before handing
 on, never merge to master or main, and stop means stop.
 
+## Instruction documents
+
+Rules that hold for a whole scope (a stacking policy, a review policy, the gates to run)
+live in the tracker, where the tickets are, and the tracker hands them to every ticket in
+that scope. Nobody has to paste a pointer into each brief.
+
+**Making one.** A document becomes an instruction document by its revision:
+`staple doc <ref> <key> --put <file> --instructions` (MCP `put_document instructions: true`).
+`--no-instructions` (`instructions: false`) turns it off. A write that names neither keeps
+what the head revision says, so an edit by somebody unaware of the flag does not drop it.
+Any number per issue, on any issue: an epic, a milestone, any parent, the ticket itself.
+Each is revisioned like every document.
+
+**A run's own.** `staple run start --instructions <file>` (repeatable; MCP `start_run
+instructions: [{key, body}]`) gives one run instructions of its own, each keyed by its file
+name (`rules.md` is `rules`). `run drive --scope … --instructions <file>` stores its file
+the same way on the run it starts. With `--run` it only appends the file to the briefs that
+driver writes. A run's instructions are machine-local like the run and end with it.
+`run status` shows them.
+
+**Which apply, nearest first** (`src/core/instructions.ts`):
+
+1. `self`: the ticket's own instruction documents.
+2. `parent`: each ancestor's, by the parent chain, nearest first.
+3. `milestone`: the ticket's effective milestone's. That is its own membership, else its
+   nearest ancestor's, so a member epic's descendants are covered. Membership is not
+   ancestry, which is why this step exists.
+4. `run`: the run's own, when the ticket is read for a run.
+
+**Precedence.** Two sources holding one key conflict, and the nearest wins. The resolved
+list keeps every entry with its `source` (`kind`, `ref`, `title`, `runId`), its `revision`,
+`effective`, and `shadowedBy` naming the winner. A reader sees what was set and where, not
+only the outcome.
+
+**Where they arrive.** The same list is on `staple show --json` / MCP `get_task` (pass
+`run_id` / `--run` to add a run's own), `staple instructions <ref>`, `checkout --json` /
+`checkout_task`, `queue next --json` / `next_task` (for `next`), the `take` of
+`run continue` / `continue_run` (with the run's own), and the web UI's Details tab. Inside a
+driven session, `staple show` of the session's ticket adds the run's own by itself
+(`STAPLE_RUN` and `STAPLE_RUN_TICKET`). `run drive` renders the effective ones into every
+brief under **Instructions for this ticket**. It writes the list beside the brief as
+`<seq>-<ref>-<instant>.instructions.json` and exports its path as `STAPLE_RUN_INSTRUCTIONS`.
+A stop hook names them in its hand-off with the command that prints them.
+
+**Changes mid-run.** Writing a revision that is, or was, instructions raises
+`instructions_changed` (`{key, revision, instructions, was}`) on the issue. So does applying
+one pulled from another device, since events do not replicate. A run keeps a watermark.
+`run status` lists the changes in the run's scope since its last take (the scope issue,
+what it inherits from, and everything inside it; the whole workspace for a queue run). The
+next take reports exactly that list in `instructionsChanged`, then moves the watermark past
+it.
+
+**What syncs.** The flag rides in the `documentRevision` payload as `instructions`, and an
+operation without it, from an older device, reads as `false`. No new entity, no protocol
+change. Migration 019 stamps operations with schema 19, so a device must upgrade before it
+applies them. A run's own instructions never leave the machine.
+
 ## Goal mode
 
 A run over a milestone is a **goal run**: the milestone's own acceptance
@@ -711,7 +769,8 @@ preserved field conflict, settled by a decision like any other.
 
 ## Events
 
-`run_started`, `run_stopped` (with `reason`, `detail`, `by`), `run_state_changed`
+`instructions_changed` (on the issue whose instruction document changed; see
+[Instruction documents](#instruction-documents)). `run_started`, `run_stopped` (with `reason`, `detail`, `by`), `run_state_changed`
 (pause and resume), `run_ticket_taken` and `run_ticket_recorded`, all in
 `staple events --follow`. A goal run adds `run_goal_gated` (the run opened a gate
 on its milestone) and `run_goal_child_created`, and a mark writes

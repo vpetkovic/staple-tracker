@@ -1124,6 +1124,8 @@ describe("tool response shapes (31/31)", () => {
         checkoutAt: ISO,
         startedAt: ISO,
         attempt: attemptGolden(),
+        // The instructions it is worked under (core/instructions.ts). CON-1 inherits none.
+        instructions: [],
       }),
     );
   });
@@ -1231,7 +1233,8 @@ describe("tool response shapes (31/31)", () => {
   });
 
   it("put_document", () => {
-    assertGolden("put_document", { key: "plan", revision: 1 });
+    // `instructions`: whether the new revision is an instruction document (migration 019).
+    assertGolden("put_document", { key: "plan", revision: 1, instructions: false });
   });
 
   it("get_document", () => {
@@ -1242,6 +1245,7 @@ describe("tool response shapes (31/31)", () => {
       title: "Plan",
       author: CONTRACT_AGENT,
       createdAt: ISO,
+      instructions: false,
     });
   });
 
@@ -1288,10 +1292,12 @@ describe("tool response shapes (31/31)", () => {
       blocks: [],
       comments: [commentGolden({ body: "contract comment", idempotencyKey: "c-1" })],
       documents: [
-        { issueId: UUID, key: "plan", currentRevision: 1, title: "Plan", updatedAt: ISO, body: "# plan v1\n" },
+        { issueId: UUID, key: "plan", currentRevision: 1, title: "Plan", updatedAt: ISO, instructions: false, body: "# plan v1\n" },
       ],
       // File metadata, never the bytes. CON-1 has none.
       attachments: [],
+      // The instructions that reach it, nearest first. Its plan is not one, and nothing above it has any.
+      instructions: [],
       // H9: the hub merge the web UI does, surfaced to agents.
       crossBlockers: [
         { identifier: "CONA-1", workspace: "contract-two", status: "backlog", resolved: false, unresolvable: false },

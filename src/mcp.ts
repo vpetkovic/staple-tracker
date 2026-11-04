@@ -50,6 +50,7 @@ import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
+import { INSTRUCTION_SOURCE_KINDS, type InstructionChange, type ResolvedInstruction } from "./core/instructions.js";
 import {
   COMMENT_AUTHOR_TYPES,
   COMMENT_PAGE_LIMITS,
@@ -997,8 +998,54 @@ const documentMetaShape = {
   currentRevision: z.number(),
   title: z.string().nullable(),
   updatedAt: z.string(),
+  instructions: z
+    .boolean()
+    .describe("The head revision is an instruction document: delivered to every ticket beneath this issue and to runs that take them"),
   body: z.string().optional().describe("Current revision body; only with include_documents"),
 };
+
+/** Where one instruction comes from (`core/instructions.ts`). */
+const instructionSourceShape = {
+  kind: z.enum(INSTRUCTION_SOURCE_KINDS).describe("self: this issue's own; parent: an ancestor's; milestone: the issue's milestone's; run: the run's own"),
+  ref: z.string().nullable(),
+  issueId: z.string().nullable(),
+  title: z.string().nullable(),
+  runId: z.string().nullable(),
+};
+
+/** One resolved instruction, proven equal to `ResolvedInstruction` below. */
+const resolvedInstructionShape = {
+  key: z.string(),
+  revision: z.number().nullable(),
+  title: z.string().nullable(),
+  body: z.string(),
+  author: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  source: z.object(instructionSourceShape),
+  effective: z.boolean().describe("False when a nearer source sets the same key; follow the effective one"),
+  shadowedBy: z.object(instructionSourceShape).nullable(),
+};
+type _ResolvedInstructionShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof resolvedInstructionShape>>, ResolvedInstruction>>;
+
+const instructionsField = {
+  instructions: z
+    .array(z.object(resolvedInstructionShape))
+    .describe(
+      "Instruction documents that apply to this ticket, nearest first: its own, its parents' (nearest first), its milestone's, then the run's. On a key two sources share, the nearest wins (effective). Follow them for as long as you work the ticket.",
+    ),
+};
+
+const instructionChangeShape = {
+  seq: z.number(),
+  ref: z.string().nullable(),
+  issueId: z.string(),
+  key: z.string(),
+  revision: z.number().nullable(),
+  instructions: z.boolean().describe("False: the document stopped being instructions"),
+  actor: z.string().nullable(),
+  at: z.string(),
+};
+type _InstructionChangeShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof instructionChangeShape>>, InstructionChange>>;
 
 /** What get_task and list_files return. Never the bytes. */
 const attachmentMetaShape = {
@@ -1154,6 +1201,10 @@ server.registerTool(
         .boolean()
         .optional()
         .describe("Inline the current body of every document (default false: metadata only)"),
+      run_id: z
+        .string()
+        .optional()
+        .describe("A run (full id or 8+ character prefix): its own instructions are added to `instructions`, last. continue_run's take already carries them"),
       ws: wsSchema,
     },
     outputSchema: {
@@ -1167,6 +1218,7 @@ server.registerTool(
       attachments: z
         .array(z.object(attachmentMetaShape))
         .describe("Files on this issue. Metadata only; the bytes are a separate call."),
+      ...instructionsField,
       crossBlockers: z
         .array(z.object(crossBlockerShape))
         .describe("Cross-workspace blockers via the hub; [] when the hub is unavailable"),
@@ -1199,10 +1251,13 @@ server.registerTool(
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ ref, include_documents, ws }) =>
+  ({ ref, include_documents, run_id, ws }) =>
     run(() => {
       const store = storeFor(ws);
-      const context = store.context(ref, { includeDocuments: include_documents });
+      const context = store.context(ref, {
+        includeDocuments: include_documents,
+        runId: run_id === undefined ? null : store.runs().get(run_id).id,
+      });
       return {
         ...context,
         crossBlockers: crossBlockersSafe(context.issue.identifier),
@@ -1545,7 +1600,7 @@ server.registerTool(
       ...attemptOpenFields,
       ws: wsSchema,
     },
-    outputSchema: { ...issueShape, ...attemptOutputField },
+    outputSchema: { ...issueShape, ...attemptOutputField, ...instructionsField },
     /**
      * destructiveHint: TRUE since steal_if_idle_seconds exists. MCP defines the
      * hint as "may perform destructive updates" vs "only additive updates", and
@@ -1575,7 +1630,7 @@ server.registerTool(
         overrideReason: override_reason,
         attempt: attemptOptionsFromInput(attempt),
       });
-      return withAttemptResult(store, issue);
+      return { ...withAttemptResult(store, issue), instructions: store.instructions(issue.id) };
     }),
 );
 
@@ -1854,6 +1909,12 @@ server.registerTool(
       base_revision: z.number().int().optional(),
       change_summary: z.string().optional(),
       title: z.string().optional(),
+      instructions: z
+        .boolean()
+        .optional()
+        .describe(
+          "true: this revision is an instruction document, delivered to every ticket beneath this issue (descendants, milestone members) and to every run that takes one, and an instructions_changed event is raised. false: it stops being one. Omitted: keeps what the current revision says",
+        ),
       actor: actorSchema,
       ws: wsSchema,
     },
@@ -1866,12 +1927,13 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, key, body, base_revision, change_summary, title, actor, ws }) =>
+  ({ ref, key, body, base_revision, change_summary, title, instructions, actor, ws }) =>
     run(() =>
       storeFor(ws).putDocument(ref, key, body, {
         baseRevision: base_revision,
         changeSummary: change_summary,
         title,
+        instructions,
         author: requireActor(actor),
       }),
     ),
@@ -2914,13 +2976,18 @@ server.registerTool(
         .optional(),
       next: z.object(effectiveRowShape).nullable(),
       skipped: z.array(z.object(effectiveRowShape)),
+      instructions: instructionsField.instructions.describe(
+        "The instructions that apply to `next`, nearest first ([] when next is null): what you work it under once you claim it",
+      ),
     },
     annotations: { title: "Next task", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   ({ actor, scope: scopeRef, ws }) =>
     run(() => {
-      const { revision, scope, next, skipped } = storeFor(ws).queue().effectiveQueue({ actor, scope: scopeRef });
-      return scope ? { revision, scope, next, skipped } : { revision, next, skipped };
+      const store = storeFor(ws);
+      const { revision, scope, next, skipped } = store.queue().effectiveQueue({ actor, scope: scopeRef });
+      const instructions = next ? store.instructions(next.issueId) : [];
+      return scope ? { revision, scope, next, skipped, instructions } : { revision, next, skipped, instructions };
     }),
 );
 
@@ -3047,6 +3114,9 @@ const runShape = {
     ceilingAccount: z.string().nullable(),
   }),
   override: z.string().nullable().describe("Why a person let this run step over the pickup plan, or null"),
+  instructions: z
+    .array(z.object({ key: z.string(), body: z.string() }))
+    .describe("The run's own instructions (start_run instructions), handed to every ticket it takes after the ticket's own, its parents' and its milestone's"),
   tickets: z.array(
     z.object({
       seq: z.number(),
@@ -3170,7 +3240,16 @@ const runGoalReportShape = milestoneGoalShape
   .nullable()
   .describe("A goal run's goal check now; null on any other run");
 
-const runStatusShape = { run: z.object(runShape), decision: stopDecisionShape, facts: runFactsShape, driver: runDriverShape, goal: runGoalReportShape };
+const runStatusShape = {
+  run: z.object(runShape),
+  decision: stopDecisionShape,
+  facts: runFactsShape,
+  driver: runDriverShape,
+  goal: runGoalReportShape,
+  instructionsChanged: z
+    .array(z.object(instructionChangeShape))
+    .describe("Instruction documents in the run's scope that changed since its last take; the next take reports them. [] once the run has ended"),
+};
 
 const runWriteAnnotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
 
@@ -3191,13 +3270,19 @@ server.registerTool(
         .string()
         .optional()
         .describe("Under queue.policy strict, let the run step over the pickup plan for this reason; each such take is recorded as queue_overridden. Without it the run follows the whole plan and waits (out_of_order) when its next row is later than an eligible plan row elsewhere"),
+      instructions: z
+        .array(z.object({ key: z.string().describe("Its name, like a document key: rules, review-policy"), body: z.string() }))
+        .optional()
+        .describe(
+          "The run's own instructions, for the life of the run: every ticket it takes carries them in continue_run's take, after the ticket's own, its parents' and its milestone's instruction documents (a nearer source with the same key wins). Machine-local, like the run",
+        ),
       actor: actorSchema,
       ws: wsSchema,
     },
     outputSchema: runShape,
     annotations: { title: "Start run", ...runWriteAnnotations, idempotentHint: false },
   },
-  ({ scope, max_tickets, until, ceiling_percent, ceiling_account, override_reason, gate_owner, goal_cap, actor, ws }) =>
+  ({ scope, max_tickets, until, ceiling_percent, ceiling_account, override_reason, gate_owner, goal_cap, instructions, actor, ws }) =>
     run(() =>
       storeFor(ws)
         .runs()
@@ -3211,6 +3296,7 @@ server.registerTool(
           gateOwner: gate_owner,
           goalChildCap: goal_cap,
           override: override_reason,
+          instructions,
         }),
     ),
 );
@@ -3297,7 +3383,7 @@ server.registerTool(
   "continue_run",
   {
     description:
-      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it, then call continue_run again. wait: {reason: paused | waiting_on_others | out_of_order, message, retryAfterSeconds}; take nothing, ask again later or end your session (out_of_order: under queue.policy strict the run's next row is later than an eligible plan row elsewhere and the run has no override). stop: {reason, detail, message}; the run has ended (stopped_by_human, touched_main_line, budget, failure_streak, scope_gone, vp_blocked, gate_pending, goal_met, scope_empty) or you have no live run (no_run, run null); end your loop. With no live run, your most recently ended run that still has an unsettled ticket is the one continued: the ticket is settled and that run's stop reason answered. Every answer carries `recorded` (the outcome this call recorded, or null), `run`, and `goal`: on a goal run (a run over a milestone) the goal check (each criterion met/unmet/unknown with its evidence, the pace, the run's tickets against its cap, the gate), else null. On a goal run whose scope empties short of its goal, the take is a goal-check ticket the run created: judge each criterion with mark_milestone_criterion (follow_up for unmet ones), comment `review: …`, then close it. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
+      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed, instructions, instructionsChanged} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it under its `instructions` (its own, its parents', its milestone's and the run's instruction documents, nearest first; on a shared key the nearest wins), then call continue_run again. instructionsChanged lists instruction documents in the run's scope that changed since its last take. wait: {reason: paused | waiting_on_others | out_of_order, message, retryAfterSeconds}; take nothing, ask again later or end your session (out_of_order: under queue.policy strict the run's next row is later than an eligible plan row elsewhere and the run has no override). stop: {reason, detail, message}; the run has ended (stopped_by_human, touched_main_line, budget, failure_streak, scope_gone, vp_blocked, gate_pending, goal_met, scope_empty) or you have no live run (no_run, run null); end your loop. With no live run, your most recently ended run that still has an unsettled ticket is the one continued: the ticket is settled and that run's stop reason answered. Every answer carries `recorded` (the outcome this call recorded, or null), `run`, and `goal`: on a goal run (a run over a milestone) the goal check (each criterion met/unmet/unknown with its evidence, the pace, the run's tickets against its cap, the gate), else null. On a goal run whose scope empties short of its goal, the take is a goal-check ticket the run created: judge each criterion with mark_milestone_criterion (follow_up for unmet ones), comment `review: …`, then close it. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
     inputSchema: {
       run_id: z.string().optional().describe("The run; without it, actor's one live run"),
       outcome: z.enum(RUN_TICKET_OUTCOMES).optional().describe("How the current ticket ended, when you know"),
@@ -3321,6 +3407,13 @@ server.registerTool(
         .nullable(),
       run: z.object(runShape).nullable(),
       goal: runGoalReportShape,
+      instructions: instructionsField.instructions
+        .optional()
+        .describe("take only: every instruction you work this ticket under, nearest first, the run's own last. Follow the effective ones"),
+      instructionsChanged: z
+        .array(z.object(instructionChangeShape))
+        .optional()
+        .describe("take only: instruction documents in the run's scope that changed since its last take (what run_status listed as pending); `instructions` already holds the new text for this ticket"),
     },
     annotations: { title: "Continue run", ...runWriteAnnotations, idempotentHint: false },
   },

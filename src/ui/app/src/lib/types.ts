@@ -634,8 +634,50 @@ export interface IssueDocumentMeta {
   currentRevision: number;
   title: string | null;
   updatedAt: string;
+  /** The head revision is an instruction document, handed to every ticket beneath this issue. */
+  instructions: boolean;
   /** Only present when the server was asked for bodies. */
   body?: string;
+}
+
+/** Mirror of `core/instructions.ts`. */
+export type InstructionSourceKind = "self" | "parent" | "milestone" | "run";
+
+export interface InstructionSource {
+  kind: InstructionSourceKind;
+  ref: string | null;
+  issueId: string | null;
+  title: string | null;
+  runId: string | null;
+}
+
+/** One instruction that reaches an issue: what `instructions` on the detail and agent context carry. */
+export interface ResolvedInstruction {
+  key: string;
+  revision: number | null;
+  title: string | null;
+  body: string;
+  author: string | null;
+  updatedAt: string | null;
+  source: InstructionSource;
+  effective: boolean;
+  shadowedBy: InstructionSource | null;
+}
+
+export interface RunInstruction {
+  key: string;
+  body: string;
+}
+
+export interface InstructionChange {
+  seq: number;
+  ref: string | null;
+  issueId: string;
+  key: string;
+  revision: number | null;
+  instructions: boolean;
+  actor: string | null;
+  at: string;
 }
 
 /**
@@ -1024,6 +1066,8 @@ export interface IssueDetail {
   documents: IssueDocumentMeta[];
   /** File metadata. Empty when the ticket has no files. The bytes are a separate request. */
   attachments: IssueAttachment[];
+  /** The instructions that reach this issue, nearest first: its own, its parents', its milestone's. */
+  instructions: ResolvedInstruction[];
   crossBlockers: CrossBlocker[];
   claim: ClaimActivity | null;
   /** Estimate vs actual for this issue. What the Analytics tab renders. */
@@ -1114,6 +1158,8 @@ export interface AgentContext {
   blocks: IssueRef[];
   comments: IssueComment[];
   documents: IssueDocumentMeta[];
+  /** get_task carries the instructions an agent works under, so the pane shows them too. */
+  instructions: ResolvedInstruction[];
   crossBlockers: CrossBlocker[];
   /** get_task carries this, so the "what the agent sees" pane must show it too. */
   claim: ClaimActivity | null;
@@ -3027,6 +3073,8 @@ export interface Run {
   /** Null unless the run is over a milestone. */
   goal: RunGoal | null;
   override: string | null;
+  /** The run's own instructions (`run start --instructions`), handed to every ticket it takes. */
+  instructions: RunInstruction[];
   tickets: RunTicket[];
   /** `tickets` distinct tickets taken (what `--max-tickets` counts); `taken` every take, retries included. */
   counts: { tickets: number; taken: number; done: number; failed: number; open: number };
@@ -3110,4 +3158,6 @@ export interface RunEntry {
   driver: RunDriver | null;
   /** A goal run's goal check now; null on any other run. */
   goal: RunGoalReport | null;
+  /** Instruction documents in scope that changed since the run's last take; [] once it ended. */
+  instructionsChanged: InstructionChange[];
 }

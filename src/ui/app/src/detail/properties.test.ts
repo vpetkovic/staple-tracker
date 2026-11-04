@@ -60,7 +60,7 @@ describe("detailFacts — the spine", () => {
       detail({
         issue: issue({ assignee: "vp", createdBy: "vp", startedAt: "2026-09-01T22:40:00Z", checkoutAgent: "v3-drawer" }),
         claim: claim(),
-        documents: [{ issueId: "uuid-1", key: "plan", currentRevision: 3, title: null, updatedAt: "2026-09-01T22:44:31Z" }],
+        documents: [{ issueId: "uuid-1", key: "plan", currentRevision: 3, title: null, updatedAt: "2026-09-01T22:44:31Z", instructions: false }],
       }),
       "hub",
     );
@@ -122,8 +122,8 @@ describe("detailFacts — the conditional rows", () => {
     expect(ids(detail())).not.toContain("documents");
     const populated = detail({
       documents: [
-        { issueId: "uuid-1", key: "plan", currentRevision: 3, title: null, updatedAt: "2026-09-01T22:44:31Z" },
-        { issueId: "uuid-1", key: "worklog", currentRevision: 1, title: null, updatedAt: "2026-09-01T22:44:31Z" },
+        { issueId: "uuid-1", key: "plan", currentRevision: 3, title: null, updatedAt: "2026-09-01T22:44:31Z", instructions: false },
+        { issueId: "uuid-1", key: "worklog", currentRevision: 1, title: null, updatedAt: "2026-09-01T22:44:31Z", instructions: false },
       ],
       comments: [
         {

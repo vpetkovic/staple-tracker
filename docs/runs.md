@@ -118,6 +118,30 @@ staple run start --scope APP-11 --gate-owner VP --goal-cap 5
    which the run then works. `--goal-cap` limits the tickets it may file (5); at the
    cap it stops `budget` for you to decide.
 
+## Instructions for everything in scope
+
+Rules that hold for the whole run (how to stack branches, what a review must cover, which
+gates to run) go on the scope's epic or milestone as an **instruction document**:
+
+```bash
+staple doc APP-7 rules --put rules.md --instructions    # MCP put_document instructions: true
+staple instructions APP-8                               # what binds APP-8, and from where
+```
+
+Every ticket beneath APP-7 now carries `rules` wherever an agent picks it up: `show`,
+`checkout`, `queue next`, and the `take` a run hands over. For a milestone that means its
+members and everything inside them. You can also give one run instructions of its own:
+
+```bash
+staple run start --scope APP-7 --instructions gates.md    # keyed "gates", for this run only
+```
+
+They apply nearest first: the ticket's own, its parents', its milestone's, then the run's.
+When two set the same key, the nearest wins, and the other is shown as overridden. `run drive`
+puts them in every session's brief. If you edit one mid-run, the next take says so
+(`instructionsChanged`). The ticket's Details tab in the web UI lists them with their
+sources.
+
 ## A run never merges
 
 Each ticket's work stays on its own branch (`autopilot/app-8`), with a draft pull

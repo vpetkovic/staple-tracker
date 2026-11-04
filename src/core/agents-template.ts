@@ -346,6 +346,34 @@ old revision keeps the bytes. The current document becomes a short note naming
 the file, unless the file is over 256 KB: its bytes stay on this machine, so
 the document keeps them for other machines. A second run creates nothing.
 
+## Instructions — rules a parent hands to everything beneath it
+
+Some rules hold for a whole epic, milestone or run: how to stack branches, what a
+review must cover, which gates to run. They are **instruction documents**, and the
+tracker hands them to you with the work. You do not need anyone to paste them into
+your brief.
+
+\`\`\`bash
+staple doc <parent> rules --put rules.md --instructions --json   # make one (put_document instructions: true)
+staple instructions ${ref} --json                                # what binds ${ref}, nearest first
+\`\`\`
+
+Every surface that gives you a ticket also gives you its \`instructions\`:
+\`staple show\` / \`get_task\`, \`checkout\` / \`checkout_task\`, \`queue next\` /
+\`next_task\`, and the \`take\` from \`run continue\` / \`continue_run\`. Nearest first:
+
+1. the ticket's own instruction documents,
+2. its parents', nearest first,
+3. its milestone's (its own membership, else its nearest ancestor's),
+4. the run's own (\`staple run start --instructions <file>\`).
+
+On a key two sources share, the nearest wins (\`effective\`). The farther one is listed
+anyway, with \`shadowedBy\`. **Follow the effective ones for the whole ticket.**
+Editing an instruction document raises \`instructions_changed\`, and a live run lists
+the change in its next take (\`instructionsChanged\`). Read the new text before you go
+on. A plain \`doc --put\` keeps the flag a document already has, and \`--no-instructions\`
+removes it.
+
 ## Approval gates — when the next move is a human's
 
 A **gate** parks a parent on a named person. The parent goes

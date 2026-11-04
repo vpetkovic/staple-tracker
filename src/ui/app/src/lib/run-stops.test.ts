@@ -30,6 +30,7 @@ const run = (over: Partial<Run> = {}): Run => ({
   budget: { maxTickets: null, until: null, ceilingPercent: null, ceilingAccount: null },
   goal: null,
   override: null,
+  instructions: [],
   tickets: [],
   counts: { tickets: 0, taken: 0, done: 0, failed: 0, open: 0 },
   stop: null,

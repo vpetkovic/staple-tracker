@@ -162,7 +162,7 @@ describe("doc_restore", () => {
       { origin },
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ key: "plan", revision: 4 });
+    expect(await res.json()).toEqual({ key: "plan", revision: 4, instructions: false });
 
     // The restore is append-only: r1..r3 are untouched and r4 carries r1's body.
     expect(await bodyAt(1)).toBe(R1);

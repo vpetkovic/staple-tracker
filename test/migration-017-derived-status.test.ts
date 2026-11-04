@@ -59,11 +59,15 @@ describe("workspace migration 017", () => {
     db.exec("DROP TRIGGER IF EXISTS attachments_drop_bytes");
     db.exec("DROP TABLE attachments");
     db.exec("DROP TABLE attachment_bytes");
+    // 019's columns. Dropped so the walk from 16 can add them again.
+    db.exec("ALTER TABLE document_revisions DROP COLUMN instructions");
+    db.exec("ALTER TABLE runs DROP COLUMN instructions");
+    db.exec("ALTER TABLE runs DROP COLUMN instructions_seq");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
-    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18]);
+    expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18, 19]);
 
     migrateWorkspace(db);
-    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 18, pending: [] });
+    expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 19, pending: [] });
     expect(owned()).toEqual(recorded);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toEqual({ value: "1" });
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name").all()).toEqual([
@@ -84,6 +88,10 @@ describe("workspace migration 017", () => {
     db.exec("DROP TRIGGER IF EXISTS attachments_drop_bytes");
     db.exec("DROP TABLE attachments");
     db.exec("DROP TABLE attachment_bytes");
+    // 019's columns. Dropped so the walk from 16 can add them again.
+    db.exec("ALTER TABLE document_revisions DROP COLUMN instructions");
+    db.exec("ALTER TABLE runs DROP COLUMN instructions");
+    db.exec("ALTER TABLE runs DROP COLUMN instructions_seq");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
     migrateWorkspace(db);
     expect(db.prepare("SELECT value FROM meta WHERE key = 'derived_status_publish_owed'").get()).toBeUndefined();

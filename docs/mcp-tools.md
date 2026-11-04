@@ -42,7 +42,7 @@ The loop an agent follows, described in
 | `release_task` | Give a claim back | `staple release` | yes |
 | `add_comment` | Add a comment | `staple comment` | yes |
 | `list_comments` | A ticket's comments, oldest first | `staple show` | no |
-| `put_document` | Store a plan, worklog or other document on a ticket | `staple doc --put` | yes |
+| `put_document` | Store a plan, worklog or other document on a ticket. `instructions: true` makes it an instruction document for everything beneath the ticket | `staple doc --put` | yes |
 | `get_document` | Read a document, latest or by revision | `staple doc` | no |
 | `list_files` | A ticket's files: type, size, and hash. Never the bytes | `staple file ls` | no |
 | `attach_file` | Attach a file from a path or from base64. The type is sniffed from the bytes | `staple file attach` | yes |
@@ -80,8 +80,8 @@ The loop an agent follows, described in
 
 | Tool | What it does | CLI | Writes |
 |---|---|---|---|
-| `start_run` | Start working a scope ticket after ticket | `staple run start` | yes |
-| `continue_run` | After each ticket: take the next, wait, or stop | `staple run continue` | yes |
+| `start_run` | Start working a scope ticket after ticket. `instructions` gives the run its own | `staple run start` | yes |
+| `continue_run` | After each ticket: take the next (with its `instructions`), wait, or stop | `staple run continue` | yes |
 | `run_status` | A run, and whether it would stop now | `staple run status` | no |
 | `pause_run` | Hold a run | `staple run pause` | yes |
 | `resume_run` | Let a held run go on | `staple run resume` | yes |

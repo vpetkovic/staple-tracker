@@ -4556,7 +4556,8 @@ export function startUiServer(options: UiOptions): UiHandle {
              */
             overrideReason: body.overrideReason === undefined ? undefined : String(body.overrideReason),
           });
-          result = { ...claimed, attempt: handle.store.attempts().result() };
+          // The instructions it is worked under, as the CLI and MCP checkouts return them.
+          result = { ...claimed, attempt: handle.store.attempts().result(), instructions: handle.store.instructions(claimed.id) };
         } else if (type === "release") {
           const released = handle.store.releaseIssue(ref, actor, {
             ifIdleSeconds: optionalSeconds(body.ifIdleSeconds, "ifIdleSeconds"),
@@ -5109,7 +5110,9 @@ export function startUiServer(options: UiOptions): UiHandle {
           actor: queryActor(url.searchParams.get("actor")),
           scope: url.searchParams.get("scope") ?? undefined,
         });
-        json(res, 200, scope ? { revision, scope, next, skipped } : { revision, next, skipped });
+        // What `next` is worked under, as MCP next_task and `queue next --json` answer it.
+        const instructions = next ? handle.store.instructions(next.issueId) : [];
+        json(res, 200, scope ? { revision, scope, next, skipped, instructions } : { revision, next, skipped, instructions });
         return;
       }
 

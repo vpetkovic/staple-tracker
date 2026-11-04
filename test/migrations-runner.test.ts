@@ -142,7 +142,8 @@ describe("version detection", () => {
     // the machine-local criterion marks and three run columns), hub still 8. Then workspace
     // 16 -> 17 (017-derived-status, the replicated ownership column and its trigger), hub still 8.
     // Then workspace 17 -> 18 (018-attachments, file metadata and its bytes), hub still 8.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(18);
+    // Then workspace 18 -> 19 (019-instruction-documents, the revision flag and the run's own).
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(19);
     expect(latestVersion(HUB_TARGET)).toBe(8);
   });
 });

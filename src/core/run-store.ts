@@ -91,6 +91,7 @@
  * name no issue, so the journal never re-emits them. Writes still run inside
  * `store.journaled()`, because an event must be written inside a transaction.
  */
+import { type InstructionChange, type ResolvedInstruction, type RunInstruction, instructionChangesSince, instructionSourceIds, latestEventSeq, normalizeRunInstructions, parseRunInstructions, resolveInstructions } from "./instructions.js";
 import type { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
 import { insertEvent } from "./event-log.js";
@@ -222,6 +223,12 @@ export interface Run {
    * recorded as `queue_overridden`; without one such a take waits (`out_of_order`).
    */
   override: string | null;
+  /**
+   * The run's own instructions (`run start --instructions <file>`), handed to every ticket it
+   * takes after the ticket's own, its parents' and its milestone's (`core/instructions.ts`).
+   * Machine-local, like the run; they end when it does.
+   */
+  instructions: RunInstruction[];
   tickets: RunTicket[];
   /**
    * `tickets` is the distinct tickets taken, what `--max-tickets` counts; `taken` counts every
@@ -310,6 +317,11 @@ export interface RunStatus {
   driver: DriverAttachment | null;
   /** A goal run's goal check now; null on any other run. */
   goal: RunGoalReport | null;
+  /**
+   * Instruction documents in the run's scope that changed since its last take, which the next
+   * take reports; [] once the run has ended.
+   */
+  instructionsChanged: InstructionChange[];
 }
 
 /**
@@ -473,6 +485,8 @@ interface RunRow {
   goal_child_cap: number | null;
   goal_gated_at: string | null;
   override_reason: string | null;
+  instructions: string | null;
+  instructions_seq: number | null;
   stop_reason: string | null;
   stop_detail: string;
   stopped_by: string | null;
@@ -511,6 +525,8 @@ export interface StartRunInput {
    * `queue.policy = strict` each out-of-order take is an override checkout with it.
    */
   override?: string;
+  /** The run's own instructions: each a key (`rules`) and its text. Keys are distinct. */
+  instructions?: readonly RunInstruction[];
 }
 
 /** The previous ticket's outcome as one `continue` call recorded it; null when it recorded none. */
@@ -546,6 +562,17 @@ export type ContinueAnswer =
       run: Run;
       /** A goal run's goal check; null on any other run. */
       goal: RunGoalReport | null;
+      /**
+       * Every instruction this ticket is worked under, nearest first: its own, its parents',
+       * its milestone's, then the run's (`core/instructions.ts`).
+       */
+      instructions: ResolvedInstruction[];
+      /**
+       * Instruction documents in the run's scope that changed since the run last took a ticket
+       * (`instructions_changed` events): the rules moved under the run, exactly what `run status`
+       * listed as pending. `instructions` is already the current text for this ticket.
+       */
+      instructionsChanged: InstructionChange[];
     }
   | {
       action: "wait";
@@ -646,10 +673,45 @@ export class RunStore {
     const driver = readDriver(databaseFile(this.db), run.id);
     const goal = this.goalReport(run);
     if (!isLive(run.state)) {
-      return { run, decision: evaluateStopRules(run, { now, workable: [], waiting: [], pendingGates: [], personBlocks: [], ceiling: null, goal: null }), facts: null, driver, goal };
+      return { run, decision: evaluateStopRules(run, { now, workable: [], waiting: [], pendingGates: [], personBlocks: [], ceiling: null, goal: null }), facts: null, driver, goal, instructionsChanged: [] };
     }
     const facts = this.facts(run, now);
-    return { run, decision: evaluateStopRules(run, facts), facts, driver, goal };
+    return { run, decision: evaluateStopRules(run, facts), facts, driver, goal, instructionsChanged: this.pendingInstructionChanges(run) };
+  }
+
+  /**
+   * The `instructions_changed` events after the run's watermark that touch its scope: the scope
+   * issue, what it inherits from, or anything inside it. The whole workspace for a queue run.
+   */
+  private pendingInstructionChanges(run: Run): InstructionChange[] {
+    const row = this.requireRow(run.id);
+    if (row.instructions_seq === null) return [];
+    if (run.scope.kind === "queue" || row.scope_issue_id === null) return instructionChangesSince(this.db, row.instructions_seq);
+    const scopeId = row.scope_issue_id;
+    const sources = instructionSourceIds(this.db, scopeId);
+    let membership: ReturnType<ReturnType<WorkspaceStore["queue"]>["scopeMembership"]> | null = null;
+    try {
+      membership = this.store.queue().scopeMembership(scopeId);
+    } catch {
+      membership = null;
+    }
+    return instructionChangesSince(this.db, row.instructions_seq).filter(
+      (change) => sources.has(change.issueId) || (membership !== null && membership.contains(change.issueId)),
+    );
+  }
+
+  /**
+   * What a take hands over about instructions: the ticket's resolved set with the run's own,
+   * and every change in the run's scope since the last take, the same set `run status` showed
+   * as pending. Then the watermark moves past them. Filtering the take to the ticket's own
+   * sources while moving the watermark past everything would drop, for good, a change to an
+   * instruction document on a sibling the run has not reached yet.
+   */
+  private takeInstructions(row: RunRow, issueId: string, run: Run): { instructions: ResolvedInstruction[]; instructionsChanged: InstructionChange[] } {
+    const instructions = resolveInstructions(this.db, issueId, { runId: row.id });
+    const instructionsChanged = this.pendingInstructionChanges(run);
+    this.db.prepare("UPDATE runs SET instructions_seq = ? WHERE id = ?").run(latestEventSeq(this.db), row.id);
+    return { instructions, instructionsChanged };
   }
 
   /**
@@ -954,15 +1016,16 @@ export class RunStore {
     const now = nowIso();
     return this.store.journaled(() => {
       const { actor, budget, override, scope, key, goal } = this.checkStart(input, now);
+      const instructions = normalizeRunInstructions(input.instructions ?? []);
       const id = newId();
       this.db
         .prepare(
           `INSERT INTO runs (id, actor, scope_kind, scope_key, scope_issue_id, state, max_tickets, until_at, ceiling_percent, ceiling_account, override_reason,
-                             goal_gate_owner, goal_child_cap, started_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                             goal_gate_owner, goal_child_cap, instructions, instructions_seq, started_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(id, actor, scope.kind, key, scope.kind === "queue" ? null : scope.issueId, budget.maxTickets, budget.until, budget.ceilingPercent, budget.ceilingAccount, override, goal?.gateOwner ?? null, goal?.childCap ?? null, now, now);
-      this.emit("run_started", actor, { runId: id, actor, scope: scopeJson(scope), budget, override, goal });
+        .run(id, actor, scope.kind, key, scope.kind === "queue" ? null : scope.issueId, budget.maxTickets, budget.until, budget.ceilingPercent, budget.ceilingAccount, override, goal?.gateOwner ?? null, goal?.childCap ?? null, instructions.length === 0 ? null : JSON.stringify(instructions), latestEventSeq(this.db), now, now);
+      this.emit("run_started", actor, { runId: id, actor, scope: scopeJson(scope), budget, override, goal, instructions: instructions.map((entry) => entry.key) });
       if (goal !== null && scope.kind === "milestone") {
         this.ensureGoalGate(
           this.requireRow(id),
@@ -1228,8 +1291,9 @@ export class RunStore {
         why = `${why} It steps over the plan by this run's override: ${run.override}`;
       }
       this.writeTaken(row, issue.id, issue.identifier);
+      const handed = this.takeInstructions(row, issue.id, run);
       const taken = this.get(row.id);
-      return { action: "take", ref: issue.identifier, issueId: issue.id, title: issue.title, why, resumed: resume !== null, recorded, run: taken, goal: this.goalReport(taken) };
+      return { action: "take", ref: issue.identifier, issueId: issue.id, title: issue.title, why, resumed: resume !== null, recorded, run: taken, goal: this.goalReport(taken), ...handed };
     });
   }
 
@@ -1571,6 +1635,7 @@ export class RunStore {
       state: row.state as RunState,
       budget: { maxTickets: row.max_tickets, until: row.until_at, ceilingPercent: row.ceiling_percent, ceilingAccount: row.ceiling_account },
       override: row.override_reason,
+      instructions: parseRunInstructions(row.instructions),
       goal:
         row.goal_gate_owner === null || row.goal_child_cap === null
           ? null

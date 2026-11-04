@@ -54,6 +54,7 @@ import { unreachableBlockers } from "../IssueActions";
 import { openDetailTab, type TabProps } from "./registry";
 import { MilestoneMembers } from "../MilestoneParts";
 import { MilestoneGoalSection } from "../MilestoneGoal";
+import { InstructionsSection } from "../InstructionsSection";
 
 /**
  * A related task as one quiet row: its status icon, its title, and its reference at the end.
@@ -276,6 +277,9 @@ export function OverviewTab({ detail, workspace, onAuthError }: TabProps) {
           </ul>
         </section>
       ) : null}
+
+      {/* The rules an agent works this ticket under, and where each comes from. */}
+      <InstructionsSection instructions={detail.instructions ?? []} issueKind={issue.kind} issueRef={issue.identifier} workspace={workspace} />
 
       {issue.status === "blocked" && (issue.unblockOwner || issue.unblockAction) ? (
         <Note tone="blocked" icon={Hourglass} data-unblock="">

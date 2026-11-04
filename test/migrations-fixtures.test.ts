@@ -203,19 +203,19 @@ describe.each([
   ["stamped '1'", FIXTURES.workspaceV1],
   ["present but never stamped", FIXTURES.workspaceV1Unstamped],
 ])("a v1 workspace (%s)", (_label, fixture) => {
-  it("is detected as version 1 with migrations 2 through 18 pending", () => {
+  it("is detected as version 1 with migrations 2 through 19 pending", () => {
     withFixture(fixture, (path) => {
       const db = new DatabaseSync(path);
       try {
         const state = describeSchema(db, WORKSPACE_TARGET);
         expect(state.current).toBe(1);
-        expect(state.latest).toBe(18);
+        expect(state.latest).toBe(19);
         // Ordered and complete: a v1 file has to walk BOTH steps, and it has to
         // walk them in this order — 003 assumes 002 already ran. This list
         // grows by one every time a migration is appended, and that is the
         // point: a migration that never reaches an old file is the bug this
         // assertion exists to catch.
-        expect(state.pending).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+        expect(state.pending).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
       } finally {
         db.close();
       }
@@ -300,7 +300,7 @@ describe.each([
     });
   });
 
-  it("is stamped '18' as TEXT, the representation an old binary can still read", () => {
+  it("is stamped '19' as TEXT, the representation an old binary can still read", () => {
     withFixture(fixture, (path) => {
       const db = openDb(path);
       try {
@@ -311,7 +311,7 @@ describe.each([
         // TEXT is the load-bearing half of this assertion, not the number: an
         // older binary reads the stamp as a string, and an INTEGER here would
         // make it unreadable rather than merely too new.
-        expect(row).toEqual({ t: "text", value: "18" });
+        expect(row).toEqual({ t: "text", value: "19" });
       } finally {
         db.close();
       }
@@ -354,14 +354,14 @@ describe.each([
  * than estimated-at-zero.
  */
 describe("a v2 workspace — the last shape before estimates", () => {
-  it("is detected as version 2 with migrations 3 through 18 pending", () => {
+  it("is detected as version 2 with migrations 3 through 19 pending", () => {
     withFixture(FIXTURES.workspaceV2, (path) => {
       const db = new DatabaseSync(path);
       try {
         expect(describeSchema(db, WORKSPACE_TARGET)).toEqual({
           current: 2,
-          latest: 18,
-          pending: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+          latest: 19,
+          pending: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
           detection: "stamped",
         });
       } finally {
@@ -500,7 +500,7 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
         // it walks 003 like any other v2 file — which is the point. A shape the
         // runner "recognises as current" must not become a shape it forgets to
         // migrate the moment a new column is appended.
-        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+        expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
         expect(() => migrateWorkspace(db)).not.toThrow();
 
         // The layout really is the old one: idempotency_key sits in the middle.
@@ -592,7 +592,7 @@ describe("a v6 workspace — the last shape before milestones", () => {
       const db = openDb(path);
       try {
         runMigrations(db, THROUGH_006);
-        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 6, pending: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18] });
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 6, pending: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] });
         const store = new WorkspaceStore(db, "legacyrepo", "LEG");
         store.addKind({ id: "milestone", label: "Milestone" }, "vlad");
         store.addKind({ id: "initiative", label: "Initiative", after: "epic" }, "vlad");
@@ -605,7 +605,7 @@ describe("a v6 workspace — the last shape before milestones", () => {
         expect(kindsBefore.map((k) => k.id)).toContain("milestone");
 
         migrateWorkspace(db);
-        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 18, pending: [] });
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 19, pending: [] });
         expect(store.getKinds()).toEqual(kindsBefore);
         // Every row exactly as it was, plus the one column 009 appends — at NULL,
         // which is what "in no project" reads as for work that predates projects —
@@ -645,7 +645,7 @@ describe("a v7 workspace — the last shape before the pickup queue", () => {
       const db = openDb(path);
       try {
         runMigrations(db, THROUGH_007);
-        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 7, pending: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18] });
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 7, pending: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] });
         const store = new WorkspaceStore(db, "legacyrepo", "LEG");
         const issuesBefore = db.prepare("SELECT * FROM issues ORDER BY identifier").all();
         const metaBefore = db.prepare("SELECT key, value FROM meta ORDER BY key").all();
@@ -653,7 +653,7 @@ describe("a v7 workspace — the last shape before the pickup queue", () => {
 
         migrateWorkspace(db);
 
-        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 18, pending: [] });
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 19, pending: [] });
         // Every row exactly as it was, plus the one column 009 appends — at NULL,
         // which is what "in no project" reads as for work that predates projects.
         expect(db.prepare("SELECT * FROM issues ORDER BY identifier").all()).toEqual(
@@ -667,7 +667,7 @@ describe("a v7 workspace — the last shape before the pickup queue", () => {
         expect(store.queue().revision()).toBe(0);
         expect(db.prepare("SELECT key, value FROM meta ORDER BY key").all()).toEqual(
           metaBefore.map((row) =>
-            (row as { key: string }).key === "schema_version" ? { key: "schema_version", value: "18" } : row,
+            (row as { key: string }).key === "schema_version" ? { key: "schema_version", value: "19" } : row,
           ),
         );
 
@@ -700,14 +700,14 @@ describe("a v8 workspace — the last shape before projects", () => {
       const db = openDb(path);
       try {
         runMigrations(db, THROUGH_008);
-        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 8, pending: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18] });
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 8, pending: [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] });
         const store = new WorkspaceStore(db, "legacyrepo", "LEG");
         const issuesBefore = db.prepare("SELECT * FROM issues ORDER BY identifier").all();
         const commentsBefore = store.listComments("LEG-1").length;
 
         migrateWorkspace(db);
 
-        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 18, pending: [] });
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 19, pending: [] });
         expect(db.prepare("SELECT * FROM issues ORDER BY identifier").all()).toEqual(
           issuesBefore.map((row) => ({ ...(row as Record<string, unknown>), project_id: null, derived_status: null })),
         );

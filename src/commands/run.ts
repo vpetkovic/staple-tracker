@@ -2,7 +2,7 @@
  * `staple run` — autopilot runs (`src/core/run-store.ts`).
  *
  *   run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]] [--override -m why]
- *             [--gate-owner W] [--goal-cap N]
+ *             [--gate-owner W] [--goal-cap N] [--instructions <file>]...
  *   run status [<run-id>] [--all]
  *   run stop [<run-id>] [-m why]
  *   run pause|resume [<run-id>]
@@ -16,7 +16,9 @@
  * answer for `continue` (design/runs.md). Errors are thrown as `StapleError` and
  * formatted by the top-level catch in cli.ts like every other command's.
  */
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { type InstructionChange, type RunInstruction, renderInstructions, runInstructionKey } from "../core/instructions.js";
 import { type ContinueAnswer, type Run, type RunGoalReport, type RunStatus, RUN_TICKET_OUTCOMES, type RunTicketOutcome, scopeLabel } from "../core/run-store.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
@@ -38,7 +40,12 @@ until a stop rule, run by the tracker, says otherwise.
               second start is refused (conflict, exit 4) naming the first.
               A milestone run is a GOAL run (below): --gate-owner W is the
               person it gates the milestone to (default VP), --goal-cap N how many
-              tickets it may create itself (default 5)
+              tickets it may create itself (default 5).
+              --instructions <file> (repeatable) gives the run instructions of its
+              own: each file is one, keyed by its name (rules.md is "rules").
+              Every ticket the run takes carries them after its own, its
+              parents' and its milestone's instruction documents; a nearer one
+              with the same key wins. They end with the run
   run status [<run-id>] [--all]
               a run, whether a stop rule trips now and why, and the facts behind
               it; with no id, your live runs; --all every run, any actor or state
@@ -54,7 +61,8 @@ until a stop rule, run by the tracker, says otherwise.
               ticket ended (stated, else read off your ended attempt, else its
               status; a ticket you still hold is handed back to resume), runs the
               stop rules and answers one action:
-                take  {ref, why, resumed}: already claimed for you, work it
+                take  {ref, why, resumed, instructions, instructionsChanged}:
+                      already claimed for you, work it under its instructions
                 wait  {reason: paused | waiting_on_others | out_of_order,
                       retryAfterSeconds}
                 stop  {reason}: a stop reason below, or no_run (you have no live
@@ -97,6 +105,15 @@ past it the run stops budget (detail.budget goal_children). Each answer of a
 goal run carries goal: the criteria with verdicts and evidence, the pace, the
 run's tickets against its cap, and the gate.
 
+Instructions. A document becomes an instruction document with
+"staple doc <ref> <key> --put <file> --instructions". It then reaches every
+ticket beneath <ref>: its descendants, and for a milestone its members and
+their descendants. Nearest first: the ticket's own, its parents' (nearest
+first), its milestone's, then the run's own; on a key two of them share, the
+nearest wins. "staple instructions <ref>" prints what applies to a ticket.
+Editing one raises instructions_changed, and a live run reports the change on
+its next take (instructionsChanged) and in run status.
+
 Runs are local to this machine and never synchronized; their events
 (run_started, run_stopped, run_state_changed, run_ticket_taken,
 run_ticket_recorded) show in staple events --follow.
@@ -104,6 +121,24 @@ run_ticket_recorded) show in staple events --follow.
   --actor A        who acts; else $STAPLE_AGENT, else $USER
   --json           the run, {runs: [{run, decision, facts, driver}]} for status, or
                    {action, ...} for continue (design/runs.md)`;
+
+/** `--instructions <file>` files as run instructions, each keyed by its file name. */
+export function readRunInstructionFiles(files: readonly string[]): RunInstruction[] {
+  return files.map((file) => {
+    let body: string;
+    try {
+      body = readFileSync(file, "utf8");
+    } catch (error) {
+      throw new StapleError("validation", `--instructions ${file}: ${(error as Error).message}`);
+    }
+    return { key: runInstructionKey(file), body };
+  });
+}
+
+function instructionChangeLine(change: InstructionChange): string {
+  const what = change.instructions ? `r${change.revision ?? "?"}` : "no longer instructions";
+  return `instructions changed: ${change.ref ?? change.issueId} ${change.key} ${what}${change.actor ? ` by ${change.actor}` : ""} at ${change.at}`;
+}
 
 export function positiveInteger(raw: string | undefined, flag: string): number | undefined {
   if (raw === undefined) return undefined;
@@ -141,6 +176,7 @@ function printRun(run: Run): void {
   console.log(`run ${run.id}  ${run.state}  ${run.actor} over ${scopeLabel(run.scope)}`);
   console.log(`  started ${run.startedAt} · ${budgetText(run)} · ${run.counts.done} done, ${run.counts.failed} failed, ${run.counts.open} open`);
   if (run.override) console.log(`  steps over the plan: ${run.override}`);
+  if (run.instructions.length > 0) console.log(`  instructions: ${run.instructions.map((entry) => entry.key).join(", ")} (this run's own)`);
   if (run.goal) {
     const refs = run.goal.children.map((child) => child.identifier).join(", ");
     console.log(`  goal run: gated to ${run.goal.gateOwner}${run.goal.gatedAt ? ` (gate opened ${run.goal.gatedAt})` : ""} · created ${run.goal.children.length}/${run.goal.childCap}${refs ? `: ${refs}` : ""}`);
@@ -162,6 +198,7 @@ function printStatus(status: RunStatus): void {
     console.log(`  driver ${driver.agent} pid ${driver.pid} on ${driver.host}: ${state}, heartbeat ${driver.heartbeatAt}${driver.ticket ? `, working ${driver.ticket}` : ""}`);
   }
   if (status.goal) printGoal(status.goal);
+  for (const change of status.instructionsChanged) console.log(`  ${instructionChangeLine(change)} (reported on the next take)`);
   if (status.facts === null) return;
   const decision = status.decision;
   console.log(
@@ -207,6 +244,7 @@ export function runRunCommand(rest: string[]): void {
       outcome: { type: "string" },
       reason: { type: "string" },
       override: { type: "boolean" },
+      instructions: { type: "string", multiple: true },
     },
   });
   const [sub, id] = positionals;
@@ -221,6 +259,9 @@ export function runRunCommand(rest: string[]): void {
   }
   if (sub !== "continue" && (values.run !== undefined || values.outcome !== undefined || values.reason !== undefined)) {
     throw new StapleError("validation", `--run, --outcome and --reason apply to "run continue" only, not "run ${sub}".`);
+  }
+  if (sub !== "start" && values.instructions !== undefined) {
+    throw new StapleError("validation", `--instructions applies to "run start" only, not "run ${sub}".`);
   }
   if (sub !== "start" && values.override !== undefined) {
     throw new StapleError("validation", `--override applies to "run start" only, not "run ${sub}".`);
@@ -240,6 +281,7 @@ export function runRunCommand(rest: string[]): void {
       goalChildCap: positiveOrZero(values["goal-cap"], "--goal-cap"),
       // `--override` alone reaches the store as an empty reason and is refused there, as on checkout.
       override: values.override === true ? (values.message ?? "") : undefined,
+      instructions: readRunInstructionFiles(values.instructions ?? []),
     });
     if (values.json) return console.log(JSON.stringify(run));
     return printRun(run);
@@ -291,7 +333,14 @@ function printAnswer(answer: ContinueAnswer): void {
     const { ref, outcome, reason, source } = answer.recorded;
     console.log(`recorded ${ref} ${outcome} (${source})${reason ? `: ${reason}` : ""}`);
   }
-  if (answer.action === "take") console.log(`take     ${answer.ref} ${answer.title}\n  ${answer.why}`);
+  if (answer.action === "take") {
+    console.log(`take     ${answer.ref} ${answer.title}\n  ${answer.why}`);
+    for (const change of answer.instructionsChanged) console.log(`  ${instructionChangeLine(change)}`);
+    if (answer.instructions.length > 0) {
+      console.log("  instructions (follow these while you work it):");
+      console.log(renderInstructions(answer.instructions).split("\n").map((row) => (row === "" ? row : `    ${row}`)).join("\n"));
+    }
+  }
   else if (answer.action === "wait") console.log(`wait     ${answer.reason}: ${answer.message} (ask again in ${answer.retryAfterSeconds}s)`);
   else console.log(`stop     ${answer.reason}: ${answer.message}`);
   if (answer.goal) printGoal(answer.goal);

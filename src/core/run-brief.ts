@@ -9,6 +9,7 @@
  * at all (`run-driver.ts`; a test holds both halves).
  */
 
+import { type InstructionChange, type ResolvedInstruction, renderInstructions } from "./instructions.js";
 import type { RunGoalReport } from "./run-store.js";
 
 /** Where a finished session moves its ticket. */
@@ -24,8 +25,18 @@ export interface BriefInput {
   runId: string;
   actor: string;
   finish: DriveFinish;
-  /** Extra instructions from `--instructions <file>`: this repository's gates, conventions. */
+  /**
+   * Extra text from `run drive --run <id> --instructions <file>`, for this driver's sessions
+   * only. A drive that starts its run stores the file on the run instead, and it arrives in
+   * `ticketInstructions` like every other instruction.
+   */
   instructions: string | null;
+  /** The take's `instructions`: every instruction the ticket is worked under, nearest first. */
+  ticketInstructions?: readonly ResolvedInstruction[];
+  /** The take's `instructionsChanged`: what moved since the run's last take. */
+  instructionsChanged?: readonly InstructionChange[];
+  /** The file the driver wrote `ticketInstructions` to, exported as STAPLE_RUN_INSTRUCTIONS. */
+  instructionsFile?: string | null;
   /** An earlier session worked this ticket and ended without finishing it. */
   resumed?: boolean;
   /** A goal run's goal, from the take answer; null on any other run. */
@@ -81,6 +92,28 @@ Mark only what your work shows. The run checks the goal itself once every ticket
 `;
 }
 
+/**
+ * The instructions a ticket is worked under, from the tracker (`core/instructions.ts`): the
+ * ticket's own instruction documents, its parents', its milestone's, then the run's.
+ */
+function instructionSection(input: BriefInput): string {
+  const list = input.ticketInstructions ?? [];
+  if (list.length === 0) return "";
+  const changed = input.instructionsChanged ?? [];
+  const changedText =
+    changed.length === 0
+      ? ""
+      : `\nChanged since the run's last ticket: ${changed.map((change) => `${change.ref ?? change.issueId} ${change.key}${change.instructions ? ` r${change.revision ?? "?"}` : " (no longer instructions)"}`).join(", ")}. The text below is the current one.\n`;
+  const file = input.instructionsFile ? ` The same list, as JSON, is in $STAPLE_RUN_INSTRUCTIONS (${input.instructionsFile}).` : "";
+  return `
+## Instructions for this ticket
+
+These come from the tracker, nearest first: the ticket's own instruction documents, its parents', its milestone's, then this run's. They bind you for the whole ticket, alongside the steps above; where one contradicts a step, the instruction wins. On a key two sources share, the nearer one is the one in effect. \`staple instructions ${input.ref}\` prints them again.${file}
+${changedText}
+${renderInstructions(list)}
+`;
+}
+
 /** The branch a ticket's work goes on. Sessions run one after another in one checkout, so each branches off the last: a stack. */
 export function ticketBranch(ref: string): string {
   return `autopilot/${ref.toLowerCase()}`;
@@ -126,5 +159,5 @@ Run:       ${input.runId} (actor ${input.actor})
    NEVER merge anything into master or main, never push to master or main, and never run \`git merge\`, \`gh pr merge\` or anything else that lands work on them. Merging is a person's decision; leave the branch (and its pull request) for them.
 7. Finish. Comment the evidence (what you ran and what it showed, the branch and commit), then move the ticket: ${finishStep}.
    If you cannot finish, comment exactly why and what is left, leave the ticket where it is, and end the session: the run records it failed and a person looks.
-${goalSection(input)}${extra}`;
+${goalSection(input)}${instructionSection(input)}${extra}`;
 }
