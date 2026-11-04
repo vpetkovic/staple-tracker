@@ -1,5 +1,5 @@
 /**
- * The Queue destination — R2d (STA-169), docs/queue.md, redesigned.
+ * The Queue destination — R2d (STA-169), design/queue.md, redesigned.
  *
  * ── WHAT THIS VIEW IS, AND THE TWO THINGS IT USED TO BE ───────────────────────────────
  *
@@ -35,7 +35,7 @@
  * ── WORK THAT IS ALREADY IN FLIGHT ────────────────────────────────────────────────────
  *
  * An agent claiming a row while you are looking at it changes NOTHING about where the row is.
- * docs/queue.md: "Rows are never dropped for being ineligible", and `queue-store.ts` gives it
+ * design/queue.md: "Rows are never dropped for being ineligible", and `queue-store.ts` gives it
  * `eligibility: "claimed"` with the store's own sentence (`held by codex-1`) and the holder in
  * `detail`. So the row keeps its place, wears the app's existing live treatment, and its
  * ordinal dims — a number that is no longer a turn that is coming. Nothing moves under the
@@ -80,10 +80,12 @@
  * The presentational pieces take everything as props and read no context, so
  * `queue-render.test.tsx` renders them to static markup.
  */
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, ListOrdered, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { QueueRowMenu, queueRowMenuState } from "@/components/QueueRowMenu";
+import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
+import { useRowPlan } from "@/components/task-list/useRowPlan";
 import {
   clampIndex,
   resolveTaskListConfig,
@@ -110,6 +112,9 @@ import type { EffectiveQueueRow, IssueRow, QueueEligibility, QueueView as QueueV
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingState } from "@/views/ViewChrome";
+import { ChooseWorkspace } from "@/views/ChooseWorkspace";
+import "./queue.css";
+import { workspaceScope } from "@/views/workspace-scope";
 import {
   effectivePreview,
   ELIGIBILITY_PRESENTATION,
@@ -125,6 +130,10 @@ import {
   type PlanRow,
 } from "./queue-model";
 import { knownRows, queueTreeRows, type QueueTreeRow } from "./queue-tree";
+import { BUCKET_ORDER, BUCKET_WORDS, queueSummary, summarySentence, type QueueBucket } from "./queue-summary";
+import { ProgressStrip } from "@/views/ProgressStrip";
+import { PROGRESS_COLOR } from "@/views/progress-palette";
+import { EmptyState as PlainEmptyState } from "@/components/plain/States";
 import { idsOf, pinnedRef } from "@/lib/write-ref";
 
 /**
@@ -135,9 +144,34 @@ import { idsOf, pinnedRef } from "@/lib/write-ref";
  * two overrides are both subtractions — there is no multi-select here, and the `⋯` would be
  * a second way to reach actions the rail already owns for the selected row.
  */
-const QUEUE_ROW_CONFIG = resolveTaskListConfig("tree", {
-  columns: { select: false, disclosure: true, actions: true },
-});
+const QUEUE_ROW_COLUMNS = { select: false, disclosure: true, actions: true } as const;
+
+/** The queue row at this width — the tree's own ladder (row-layout.ts), so the two agree. */
+function useQueueRowConfig() {
+  const plan = useRowPlan();
+  // `desk`: the tree's desktop row on a line plan, so the two lists read as one system.
+  return useMemo(() => resolveTaskListConfig("tree", { columns: QUEUE_ROW_COLUMNS, plan, desk: true }), [plan]);
+}
+
+/**
+ * The resolver's sentence for a row, as its caption — except, on the desk row, what the row
+ * already says: a claim (the who cue: "Working", "Quiet 1h") and a blocker (the "Blocked by 1"
+ * cue). "STA-313 is held by dux-shell" beside the holder's avatar would say it twice.
+ */
+export function queueCaption(
+  effective: EffectiveQueueRow | null,
+  config: { desk?: boolean; plan?: { layout: string } },
+  row: Pick<TaskRow, "claim" | "issue"> & { deps?: TaskRow["deps"] },
+): string | undefined {
+  if (!effective) return undefined;
+  const desk = config.desk && config.plan?.layout === "line";
+  // Only when the who cue really names the holder; a row built from the plan alone may not.
+  const whoSaysIt = Boolean(row.claim?.heldBy ?? row.issue.checkoutAgent);
+  if (desk && effective.eligibility === "claimed" && whoSaysIt) return undefined;
+  // Likewise a blocker: the row's "Blocked by 1" cue says it, and names them on hover.
+  if (desk && effective.eligibility === "blocked" && (row.deps?.blockedBy.length ?? 0) > 0) return undefined;
+  return reasonLabel(effective) ?? undefined;
+}
 
 /** What the view shows when a write went wrong, and how it went wrong. */
 export interface QueueWriteFailure {
@@ -148,7 +182,7 @@ export interface QueueWriteFailure {
 }
 
 /** Everything the `⋯` on a queue row can do. Built by the view, one closure per row. */
-export type QueueRowActions = (row: TaskRow, trigger: ReactNode) => ReactNode;
+export type QueueRowActions = (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => ReactNode;
 
 /** Is somebody holding this row right now — the resolver's answer, or the page's claim. */
 function inFlight(effective: EffectiveQueueRow | null, row: TaskRow): boolean {
@@ -200,7 +234,7 @@ function Gutter({ children, dim = false }: { children?: ReactNode; dim?: boolean
     <span
       aria-hidden={children ? undefined : true}
       className={cn(
-        "w-12 shrink-0 pr-2 text-right font-mono text-[11px] tabular-nums text-text-tertiary",
+        "staple-queue-gutter w-12 shrink-0 pr-2 text-right font-mono text-[11px] tabular-nums text-text-tertiary",
         // IN FLIGHT: somebody is holding this row, so its number is not a turn that is
         // coming. The number stays — it is still where the row sits — it just stops
         // advertising. See the header.
@@ -221,10 +255,57 @@ function Gutter({ children, dim = false }: { children?: ReactNode; dim?: boolean
 export function NextUpBand({
   next,
   onOpen,
+  desk = false,
 }: {
   next: EffectiveQueueRow | null;
   onOpen: (identifier: string) => void;
+  /** The desktop card: the same fact, with a sentence saying what it means. */
+  desk?: boolean;
 }) {
+  if (desk) {
+    return (
+      <section
+        data-queue-next-up
+        data-queue-next={next ? "eligible" : "none"}
+        className="staple-queue-next flex min-w-0 items-center gap-4 rounded-xl border bg-card px-4 py-3"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="text-label font-medium text-muted-foreground">Next up</div>
+          {next ? (
+            <>
+              <div className="mt-0.5 flex min-w-0 items-baseline gap-2">
+                <span className="min-w-0 truncate text-title font-medium" title={next.title}>
+                  {next.title}
+                </span>
+                <span data-queue-next-ref className="shrink-0 text-label tabular-nums text-text-tertiary">
+                  {next.identifier}
+                </span>
+              </div>
+              <p className="mt-0.5 text-label text-muted-foreground">
+                An agent asking for work right now would get this task.
+              </p>
+            </>
+          ) : (
+            <p className="mt-0.5 text-body text-muted-foreground">
+              Nothing can be picked up right now: every task in the plan is waiting on something.
+            </p>
+          )}
+        </div>
+        {next ? (
+          /* The same drawn 24px and touch target as the phone band's Open. */
+          <Button
+            variant="outline"
+            size="xs"
+            data-queue-next-open
+            className="relative px-3 pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[11px] pointer-coarse:before:content-['']"
+            onClick={() => onOpen(next.identifier)}
+          >
+            Open
+          </Button>
+        ) : null}
+      </section>
+    );
+  }
   return (
     <section
       data-queue-next-up
@@ -240,7 +321,8 @@ export function NextUpBand({
             {next.identifier}
           </span>
           <span className="min-w-0 flex-1 truncate text-[13px]">{next.title}</span>
-          <Button variant="outline" size="xs" onClick={() => onOpen(next.identifier)}>
+          {/* Drawn at 24px so the strip stays one line; on touch a ::before carries a 46px target. */}
+          <Button variant="outline" size="xs" data-queue-next-open className="relative pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-[11px] pointer-coarse:before:content-['']" onClick={() => onOpen(next.identifier)}>
             Open
           </Button>
         </>
@@ -287,6 +369,7 @@ export function QueueTreeLine({
 }) {
   const identifier = entry.row.issue.identifier;
   const live = inFlight(entry.effective, entry.row);
+  const config = useQueueRowConfig();
   return (
     <div
       data-queue-tree-row={identifier}
@@ -306,7 +389,7 @@ export function QueueTreeLine({
         */}
         <TaskRowLine
           row={entry.row}
-          config={QUEUE_ROW_CONFIG}
+          config={config}
           semantics="list"
           now={now}
           isExpanded={entry.row.isExpanded}
@@ -318,12 +401,12 @@ export function QueueTreeLine({
            * question a reader asks while SCANNING, and an answer that needs a click first is
            * an answer they will not get.
            */
-          caption={entry.effective ? reasonLabel(entry.effective) ?? undefined : undefined}
+          caption={queueCaption(entry.effective, config, entry.row)}
           onOpen={onOpen}
           onFocus={onFocus}
           onKeyDown={onKeyDown}
           onToggleExpand={onToggle}
-          actionsMenu={actions ? (trigger) => actions(entry.row, trigger) : undefined}
+          actionsMenu={actions ? (trigger, control) => actions(entry.row, trigger, control) : undefined}
           registerRef={registerRef}
         />
       </div>
@@ -460,7 +543,7 @@ function PlanRowExpansion({
 /**
  * NOT PLANNED — the unqueued band, folded.
  *
- * docs/queue.md: "the queue is a prefix, not a filter", and this is that sentence as a
+ * design/queue.md: "the queue is a prefix, not a filter", and this is that sentence as a
  * control. Folded by default because it is every other open leaf in the workspace and would
  * otherwise be most of the screen; open it and the rows are the same tree rows, so a reader
  * comparing planned work to unplanned work is comparing like with like.
@@ -571,6 +654,7 @@ function PlanRowContent({
     ? { ...plan.row, hasChildren: true, isExpanded: expanded, childCount: plan.expansion.length }
     : plan.row;
   const live = inFlight(plan.effective, plan.row);
+  const config = useQueueRowConfig();
   return (
     <div
       data-queue-entry={entry.identifier}
@@ -605,14 +689,14 @@ function PlanRowContent({
         <div className="min-w-0 flex-1">
           <TaskRowLine
             row={row}
-            config={QUEUE_ROW_CONFIG}
+            config={config}
             semantics="bare"
             now={now}
             isExpanded={expanded}
-            caption={plan.effective ? reasonLabel(plan.effective) ?? undefined : undefined}
+            caption={queueCaption(plan.effective, config, row)}
             onOpen={() => onOpen(plan.row.workspace, entry.identifier)}
             onToggleExpand={foldable ? onToggleExpand : undefined}
-            actionsMenu={actions ? (trigger) => actions(row, trigger) : undefined}
+            actionsMenu={actions ? (trigger, control) => actions(row, trigger, control) : undefined}
           />
         </div>
       </div>
@@ -645,6 +729,7 @@ export function QueueBoard({
   onReload,
   onRetry,
   onDismissFailure,
+  desk = false,
 }: {
   view: QueueViewData;
   rows: readonly PlanRow[];
@@ -668,10 +753,60 @@ export function QueueBoard({
   onReload: () => void;
   onRetry: () => void;
   onDismissFailure: () => void;
+  /** The desktop page (the shell's desk breakpoint and up): a centred column, plain words and a progress summary. */
+  desk?: boolean;
 }) {
   const resolved = view.entries.filter((entry) => entry.resolved).length;
+  const summary = useMemo(() => queueSummary(view.effective), [view.effective]);
   return (
-    <div data-queue-board className="flex h-full min-h-0 w-full flex-col gap-3 px-4 py-3">
+    <div
+      data-queue-board
+      data-desk={desk ? "" : undefined}
+      className={cn(
+        "flex h-full min-h-0 w-full flex-col",
+        desk ? "staple-queue-desk mx-auto max-w-wide gap-4 px-page pt-6 pb-3" : "gap-3 px-4 py-3",
+      )}
+    >
+      {desk ? (
+        <header className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-heading font-semibold">Pickup order</h2>
+            <p className="mt-1 text-body text-muted-foreground">
+              The order your agents take work in. They start at the top and skip anything that is
+              waiting on something else.
+            </p>
+          </div>
+          {resolved > 0 ? (
+            <Button variant="outline" size="sm" disabled={busy} onClick={onPrune} title="Remove finished tasks from the plan">
+              Clear {resolved} finished
+            </Button>
+          ) : null}
+        </header>
+      ) : null}
+      {desk ? (
+        <section
+          data-queue-summary
+          aria-label="How the plan stands"
+          className="rounded-xl border bg-card px-4 py-3.5"
+        >
+          <p data-queue-summary-sentence className={cn("text-reading", summary.planned > 0 && "mb-3")}>
+            {summarySentence(summary)}
+          </p>
+          {summary.planned === 0 ? null : (
+          <ProgressStrip
+            testId="queue-progress"
+            label={summarySentence(summary)}
+            segments={BUCKET_ORDER.map((bucket) => ({
+              key: bucket,
+              count: summary.counts[bucket],
+              word: BUCKET_WORDS[bucket],
+              color: BUCKET_COLOR[bucket],
+            }))}
+          />
+          )}
+        </section>
+      ) : null}
+      {desk ? null : (
       <header className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <h2 className="text-[15px] font-semibold tracking-[var(--tracking-heading)]">Pickup order</h2>
@@ -688,14 +823,17 @@ export function QueueBoard({
           </Button>
         ) : null}
       </header>
+      )}
 
-      <NextUpBand next={preview.next} onOpen={(identifier) => onOpen(workspace, identifier)} />
+      <NextUpBand next={preview.next} onOpen={(identifier) => onOpen(workspace, identifier)} desk={desk} />
 
       {/* The one sentence that answers "so what happens to these" without a tour. */}
-      <p data-queue-legend className="text-[12px] text-muted-foreground">
-        Agents take work from the top down. Rows nested under an entry are what that entry
-        expands to — its own open descendants.
-      </p>
+      {desk ? null : (
+        <p data-queue-legend className="text-[12px] text-muted-foreground">
+          Agents take work from the top down. Rows nested under an entry are what that entry
+          expands to — its own open descendants.
+        </p>
+      )}
 
       {failure ? (
         failure.kind === "conflict" ? (
@@ -755,7 +893,7 @@ export function QueueBoard({
           }}
           placeholder="Queue a task, epic or milestone…"
           actionLabel="Queue another…"
-          searchPlaceholder="search or type an identifier…"
+          searchPlaceholder={desk ? "Search by title or reference…" : "search or type an identifier…"}
           emptyText="nothing matches — or it is already in the plan"
           disabled={busy}
           mono
@@ -764,10 +902,25 @@ export function QueueBoard({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {desk && rows.length > 0 ? (
+          <p data-queue-legend className="mb-2 text-label text-muted-foreground">
+            Drag a row, or use Alt and the arrow keys, to change the order. Rows nested under an
+            entry are the open tasks inside it.
+          </p>
+        ) : null}
         {rows.length === 0 ? (
-          <EmptyState>
-            nothing is queued — agents take work in presentation order until you put something here
-          </EmptyState>
+          desk ? (
+            <div data-queue-empty>
+              <PlainEmptyState compact icon={ListOrdered} title="Nothing is in the plan yet">
+                Until you add something above, agents take open work in list order. Add a task, an
+                epic or a milestone to put it first.
+              </PlainEmptyState>
+            </div>
+          ) : (
+            <EmptyState>
+              nothing is queued — agents take work in presentation order until you put something here
+            </EmptyState>
+          )
         ) : (
           <ReorderList
             items={rows}
@@ -821,15 +974,55 @@ export function QueueBoard({
           onToggleOpen={onToggleUnqueued}
           onOpen={(identifier) => onOpen(workspace, identifier)}
         />
+        {desk ? (
+          <details className="mt-4 text-label text-muted-foreground" data-technical-details="">
+            <summary className="cursor-pointer select-none py-1">Show details</summary>
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+              <dt>Plan entries</dt>
+              <dd className="tabular-nums">{view.entries.length}</dd>
+              <dt>Plan revision</dt>
+              <dd className="font-mono" data-queue-revision={view.revision}>
+                {view.revision}
+              </dd>
+            </dl>
+          </details>
+        ) : null}
       </div>
     </div>
   );
 }
 
+/** The shared palette (`views/progress-palette.ts`): the same colour means the same thing everywhere. */
+const BUCKET_COLOR: Readonly<Record<QueueBucket, string>> = {
+  done: PROGRESS_COLOR.done,
+  active: PROGRESS_COLOR.active,
+  ready: PROGRESS_COLOR.ready,
+  waiting: PROGRESS_COLOR.waiting,
+};
+
 // ---------- the view ----------
 
 export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  const scope = workspaceScope(session.mode, session.ws, session.workspaces);
+  if (scope.kind === "choose") {
+    return (
+      <ChooseWorkspace
+        page="Queue"
+        sentence="Each workspace keeps its own pickup order, so there is no single queue for all of them. Choose a workspace to see and change its order."
+        workspaces={scope.workspaces}
+        onChoose={session.setWs}
+      />
+    );
+  }
+  // Keyed, so switching workspace starts the page clean (collapsed rows, a failed write).
+  return <WorkspaceQueue key={scope.slug} workspace={scope.slug} onAuthError={onAuthError} />;
+}
+
+function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthError: (error: AuthError) => void }) {
+  const session = useSession();
+  // The desktop page from 720px up; the phone keeps the board exactly as it shipped.
+  const desk = useRowPlan().layout === "line";
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<QueueWriteFailure | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
@@ -837,8 +1030,8 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
   /** The last write's answer, shown until the next read lands — a writer redraws from its result. */
   const [written, setWritten] = useState<QueueViewData | null>(null);
 
-  const ws = session.ws || undefined;
-  const workspace = session.ws || session.workspaces[0]?.slug || "";
+  // Always the workspace the page names — never the server's own first (workspace-scope.ts).
+  const ws = workspace || undefined;
 
   /*
    * `all: true`, ALWAYS — see the file header. The plan's positions are the plan's, and a view
@@ -864,7 +1057,7 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
    * there is no query state left in this view.
    *
    * Restricted to the workspace because a plan IS one: `/api/queue` answers for a single
-   * workspace (docs/queue.md), so a foreign identifier is a ref the store would refuse.
+   * workspace (design/queue.md), so a foreign identifier is a ref the store would refuse.
    *
    * Excluding what is queued is not a policy the store shares — enqueuing twice is a replay
    * it answers with `replayed: true` and no write. Offering it would be offering a no-op.
@@ -997,12 +1190,22 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
    * THE `⋯`, on every row of this view — the same menu the tree hangs, plus the two moves,
    * which are offered here because here there IS an order on screen to move within.
    */
+  /**
+   * On a phone the row's own up/down arrows are not drawn (queue.css) — they cost the title
+   * its width — so the one-step moves join the `⋯`, which long-press also opens.
+   */
+  const compact = useRowPlan().layout === "compact";
+
   const actions = useCallback<QueueRowActions>(
-    (row, trigger) => {
+    (row, trigger, control) => {
       const ref = row.issue.identifier;
+      const at = compact ? indexOf(ref) : -1;
+      const count = view?.entries.length ?? 0;
       return (
         <QueueRowMenu
           trigger={trigger}
+          open={control?.open}
+          onOpenChange={control?.onOpenChange}
           identifier={ref}
           state={queueRowMenuState(row, queuedIds)}
           disabled={busy || view === null}
@@ -1012,10 +1215,12 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
           onDequeue={() => onRemove(ref)}
           onMoveToTop={() => onMoveToEdge(ref, "first")}
           onMoveToBottom={() => onMoveToEdge(ref, "last")}
+          onMoveUp={at > 0 ? () => onMove(at, at - 1) : undefined}
+          onMoveDown={at >= 0 && at < count - 1 ? () => onMove(at, at + 1) : undefined}
         />
       );
     },
-    [busy, onAdd, onMoveToEdge, onOpen, onRemove, queuedIds, view],
+    [busy, compact, indexOf, onAdd, onMove, onMoveToEdge, onOpen, onRemove, queuedIds, view],
   );
 
   if (queue.error) return <ErrorState error={queue.error} />;
@@ -1045,6 +1250,7 @@ export function QueueView({ onAuthError }: { onAuthError: (error: AuthError) => 
       onReload={onReload}
       onRetry={onRetry}
       onDismissFailure={() => setFailure(null)}
+      desk={desk}
     />
   );
 }

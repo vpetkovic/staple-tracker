@@ -1,0 +1,87 @@
+/* The FAQ: native details, one hairline between questions. */
+
+.faqList {
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.item {
+  border-bottom: var(--st-hairline) solid var(--st-border);
+  /* Where the browser can size to `auto`, the answer opens and closes smoothly. */
+  interpolate-size: allow-keywords;
+}
+
+.question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-6);
+  padding-block: var(--st-space-5);
+  font-family: var(--faq-question-font, inherit);
+  font-size: var(--faq-question-size, var(--st-text-lg));
+  font-weight: var(--faq-question-weight, var(--st-weight-medium));
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-heading);
+  color: var(--st-fg-strong);
+  list-style: none;
+  cursor: pointer;
+}
+
+.questionText {
+  text-wrap: balance;
+}
+
+.question::-webkit-details-marker {
+  display: none;
+}
+
+.question:focus-visible {
+  border-radius: var(--st-radius-sm);
+}
+
+.chevron {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--st-fg-subtle);
+  transition: transform var(--st-duration) var(--st-ease), color var(--st-duration) var(--st-ease);
+}
+
+.question:hover .chevron {
+  color: var(--st-fg-strong);
+}
+
+.item[open] .question .chevron {
+  transform: rotate(180deg);
+}
+
+.item::details-content {
+  block-size: 0;
+  overflow: clip;
+  transition: block-size var(--st-duration-slow) var(--st-ease), content-visibility var(--st-duration-slow) allow-discrete;
+}
+
+.item[open]::details-content {
+  block-size: auto;
+}
+
+.answer {
+  padding: 0 var(--st-space-10) var(--st-space-6) 0;
+}
+
+.answer p {
+  max-width: var(--st-measure-lead);
+  margin: 0 0 var(--st-space-4);
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+/* A link inside an answer is told from the text around it by more than its colour. */
+.item .answer p a {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}

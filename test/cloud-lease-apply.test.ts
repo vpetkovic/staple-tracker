@@ -1,7 +1,7 @@
 /**
  * Pulled lease operations, projected onto the checkout model.
  *
- * Contract: `docs/sync.md` — *"Pulled lease operations project deterministically
+ * Contract: `design/sync.md` — *"Pulled lease operations project deterministically
  * onto `checkout_agent` and `checkout_at`, so `ls`, `show` and `inbox` keep
  * rendering the fields they already render; the token and the server expiry live
  * in the sync tables, not in new `issues` columns."*

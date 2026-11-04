@@ -1,7 +1,7 @@
 /**
  * What names something this device does not hold waits here, and the rest applies.
  *
- * Contract: `docs/sync.md`, "No entity can stop a sync".
+ * Contract: `design/sync.md`, "No entity can stop a sync".
  *
  * A snapshot page or a page of the ordered tail used to fail whole when one entity named
  * something that never arrived — a comment on an issue the repository does not hold, an
@@ -206,7 +206,7 @@ export function retryQuarantine(
 }
 
 /** The entities a `create` brings whole; the collections — a blocker set, the plan, a milestone — have none. */
-const CREATED: ReadonlySet<string> = new Set(["issue", "comment", "project", "status", "kind", "documentRevision"]);
+const CREATED: ReadonlySet<string> = new Set(["issue", "comment", "project", "status", "kind", "documentRevision", "attempt", "attemptTransition", "attachment"]);
 
 /**
  * An operation applied out of its place in the log — after operations later than it, because
@@ -317,7 +317,18 @@ function entityHeld(db: DatabaseSync, entity: string, entityId: string): boolean
     case "relation":
       return hit("SELECT 1 FROM relations WHERE blocked_id = ? AND type = 'blocks'", entityId);
     case "milestone":
-      return hit("SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ?", entityId, entityId);
+      return hit(
+        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ?",
+        entityId,
+        entityId,
+        entityId,
+      );
+    case "attempt":
+      return hit("SELECT 1 FROM attempts WHERE id = ?", entityId);
+    case "attemptTransition":
+      return hit("SELECT 1 FROM attempt_transitions WHERE id = ?", entityId);
+    case "attachment":
+      return hit("SELECT 1 FROM attachments WHERE id = ?", entityId);
     case "documentRevision": {
       const slash = entityId.lastIndexOf("/");
       const document = entityId.slice(0, slash);

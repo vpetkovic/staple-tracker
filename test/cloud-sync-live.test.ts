@@ -28,7 +28,8 @@
  * `npm test`, which is not a thing a test suite should be able to do by accident.
  *
  * ```bash
- * STAPLE_LIVE_SYNC=1 npx vitest run test/cloud-sync-live.test.ts
+ * STAPLE_LIVE_SYNC=1 STAPLE_LIVE_ENDPOINT=https://<worker>.<subdomain>.workers.dev \
+ *   npx vitest run test/cloud-sync-live.test.ts
  * ```
  */
 import { describe, expect, it } from "vitest";
@@ -36,8 +37,17 @@ import { CLIENT_PROTOCOL, fetchCapabilities } from "../src/core/cloud/client.js"
 import { parseEndpoint } from "../src/core/cloud/endpoint.js";
 
 const LIVE = process.env.STAPLE_LIVE_SYNC === "1";
-const ENDPOINT =
-  process.env.STAPLE_LIVE_ENDPOINT ?? "https://staple-sync-dev.vptkvc.workers.dev";
+
+// The endpoint is not defaulted. This repository is public and a `workers.dev` URL
+// carries the account subdomain, so a live run names its own target. Missing it while
+// LIVE is a collection error rather than a skip, because a silent skip of the one test
+// that talks to the real service is indistinguishable from it passing.
+if (LIVE && !process.env.STAPLE_LIVE_ENDPOINT) {
+  throw new Error(
+    "STAPLE_LIVE_SYNC=1 requires STAPLE_LIVE_ENDPOINT, e.g. https://<worker>.<subdomain>.workers.dev",
+  );
+}
+const ENDPOINT = process.env.STAPLE_LIVE_ENDPOINT ?? "";
 
 describe.skipIf(!LIVE)("the deployed dev Worker", () => {
   it("advertises a capabilities document this client can size itself from", async () => {

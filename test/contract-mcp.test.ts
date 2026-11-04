@@ -34,7 +34,10 @@ import {
   UUID_RE,
   asStructured,
   claimGolden,
+  openAttemptsGolden,
+  noOrchestrationGolden,
   timingGolden,
+  parentBucketsGolden,
   commentGolden,
   decodeCursorForAssertion,
   issueGolden,
@@ -80,6 +83,51 @@ function assertGolden(label: string, expected: Record<string, unknown>): void {
   expect(result.isError, `${label} unexpectedly failed: ${JSON.stringify(result.content)}`).toBeFalsy();
   expect(norm(result.structuredContent), `${label} structuredContent`).toEqual(expected);
   expect(norm(asStructured(toolPayload(result))), `${label} text block`).toEqual(expected);
+}
+
+/**
+ * The attempt a claim tool returns beside its unchanged issue payload
+ * (`design/execution-telemetry.md`, "Surfaces"): as it reads, every derived field included.
+ */
+function attemptGolden(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: UUID,
+    issueId: UUID,
+    identifier: "CON-1",
+    agent: CONTRACT_AGENT,
+    role: "worker",
+    ordinal: 1,
+    state: "running",
+    storedState: "running",
+    outcome: null,
+    endReason: null,
+    endDetection: null,
+    endedBy: null,
+    openedBy: "checkout",
+    resumesAttemptId: null,
+    startedAt: ISO,
+    endedAt: null,
+    endedAtSource: null,
+    deviceId: null,
+    claim: { scope: "local", fencingToken: null },
+    harness: null,
+    providerBinding: null,
+    estimateAtStart: { estimatedSeconds: null, source: "none" },
+    idempotencyKey: null,
+    provenance: "recorded",
+    lastActivityAt: ISO,
+    activeSeconds: SECONDS,
+    pausedSeconds: 0,
+    countedThrough: ISO,
+    idleSeconds: SECONDS,
+    contested: false,
+    chain: [UUID],
+    missing: { harness: "not_supplied", providerBinding: "not_supplied" },
+    // Claimed and read within the same few milliseconds: under the floor.
+    effortSeconds: SECONDS,
+    quality: { state: "timing-floor", reasons: ["timing_floor"] },
+    ...over,
+  };
 }
 
 beforeAll(async () => {
@@ -152,6 +200,7 @@ beforeAll(async () => {
 
   // Read views, captured while CON-1 is held so the claim fields are non-null.
   await call("get_task", "get_task", { ref: "CON-1", include_documents: true, ws: WS });
+  await call("compare_plans", "compare_plans", { refs: ["CON-1", "CON-4"], ws: WS });
   await call("list_tasks", "list_tasks", { ws: WS, limit: 2 });
   page1Cursor = (toolPayload(got("list_tasks")) as { nextCursor: string }).nextCursor;
   await call("list_tasks_p2", "list_tasks", { ws: WS, limit: 2, cursor: page1Cursor });
@@ -214,6 +263,16 @@ beforeAll(async () => {
   // moves the source from default to workspace, captured in that order.
   await call("get_setting", "get_setting", { key: "queue.policy", ws: WS });
   await call("set_setting", "set_setting", { key: "queue.policy", value: "strict", ws: WS });
+
+  /**
+   * The explicit estimate write, last and on CON-2 (backlog, unclaimed) so no golden
+   * above reads an estimate it wrote. A set, the identical repeat, the clear, and the
+   * store's refusal of zero.
+   */
+  await call("set_estimate", "set_estimate", { ref: "CON-2", estimate_seconds: 7200, ws: WS });
+  await call("set_estimate_repeat", "set_estimate", { ref: "CON-2", estimate_seconds: 7200, ws: WS });
+  await call("set_estimate_clear", "set_estimate", { ref: "CON-2", estimate_seconds: null, ws: WS });
+  await call("err_estimate_zero", "set_estimate", { ref: "CON-2", estimate_seconds: 0, ws: WS });
 }, 60_000);
 
 afterAll(async () => {
@@ -238,7 +297,18 @@ describe("tool inventory", () => {
   // `characterize-mcp-startup` and `package-tarball`, which both pin 46. The
   // array was always right; only the sentence was stale. Corrected, not moved:
   // this ticket adds no tool.
-  it("exposes exactly these 46 tools with these annotations and output schemas", async () => {
+  // Budget ingestion added record_budget_sample: 46 -> 47. Execution attempts added
+  // record_attempt_event: 47 -> 48. The telemetry reads added list_attempts,
+  // get_attempt, get_budget and list_budget_samples: 48 -> 52. The explicit estimate
+  // write added set_estimate: 52 -> 53. The certified plan read added compare_plans: 53 -> 54.
+  // The timing quality read added timing_quality: 54 -> 55. The calibration read added
+  // calibration_cohorts: 55 -> 56. The forecast read added forecast: 56 -> 57. Removing
+  // wrong budget readings added forget_budget_samples: 57 -> 58. Autopilot runs added
+  // start_run, run_status and stop_run: 58 -> 61. The run's driver loop added pause_run,
+  // resume_run and continue_run: 61 -> 64. Milestone goal mode added
+  // mark_milestone_criterion: 64 -> 65. Typed files added list_files, attach_file,
+  // export_file and remove_file: 65 -> 69.
+  it("exposes exactly these 69 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -259,6 +329,30 @@ describe("tool inventory", () => {
       {
         name: "get_task",
         annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // The certified plan of named issues: labor, coverage, critical path. A read.
+      {
+        name: "compare_plans",
+        annotations: { title: "Compare plans", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // One quality state per timing record and cohort coverage. A read.
+      {
+        name: "timing_quality",
+        annotations: { title: "Timing quality", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // Calibration cohorts over trusted samples. A read.
+      {
+        name: "calibration_cohorts",
+        annotations: { title: "Calibration cohorts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // Completion and budget forecasts, side by side. A read.
+      {
+        name: "forecast",
+        annotations: { title: "Forecast", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: true,
       },
       {
@@ -282,6 +376,22 @@ describe("tool inventory", () => {
           openWorldHint: false,
         },
         hasOutputSchema: false,
+      },
+      /**
+       * The explicit estimate write. Idempotent by value: the identical repeat is a
+       * no-op answering changed: false. Not destructive, like update_task, which can
+       * clear an estimate too.
+       */
+      {
+        name: "set_estimate",
+        annotations: {
+          title: "Set estimate",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
       },
       /**
        * C1 moved BOTH claim tools to destructiveHint: true. With
@@ -314,6 +424,22 @@ describe("tool inventory", () => {
           title: "Release task",
           readOnlyHint: false,
           destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: false,
+      },
+      /**
+       * Execution attempts: a report on the attempt the caller holds. Never destructive —
+       * it opens and clears no claim — and not idempotent: a second milestone is a
+       * second transition.
+       */
+      {
+        name: "record_attempt_event",
+        annotations: {
+          title: "Record attempt event",
+          readOnlyHint: false,
+          destructiveHint: false,
           idempotentHint: false,
           openWorldHint: false,
         },
@@ -412,6 +538,44 @@ describe("tool inventory", () => {
         name: "get_document",
         annotations: { title: "Read document", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: false,
+      },
+      {
+        name: "list_files",
+        annotations: { title: "List files", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "attach_file",
+        annotations: {
+          title: "Attach file",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "export_file",
+        annotations: {
+          title: "Export file",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        name: "remove_file",
+        annotations: {
+          title: "Remove file",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
       },
       {
         name: "events_since",
@@ -543,13 +707,25 @@ describe("tool inventory", () => {
         hasOutputSchema: false,
       },
       {
-        // idempotentHint: setting the same dates twice is the same state.
+        // idempotentHint: setting the same dates (or goal) twice is the same state.
         name: "update_milestone",
         annotations: {
-          title: "Update milestone dates",
+          title: "Update milestone",
           readOnlyHint: false,
           destructiveHint: false,
           idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      {
+        // A mark is replaced, not appended, but a follow-up creates a ticket each time.
+        name: "mark_milestone_criterion",
+        annotations: {
+          title: "Mark milestone criterion",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
           openWorldHint: false,
         },
         hasOutputSchema: true,
@@ -689,12 +865,45 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      // Autopilot runs: start and stop write this machine's run record, status reads it.
+      // A second stop changes nothing, so stop is idempotent and start is not.
+      {
+        name: "start_run",
+        annotations: { title: "Start run", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "run_status",
+        annotations: { title: "Run status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "stop_run",
+        annotations: { title: "Stop run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      // Pausing twice changes nothing; continue takes a new ticket each time it answers take.
+      {
+        name: "pause_run",
+        annotations: { title: "Pause run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "resume_run",
+        annotations: { title: "Resume run", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "continue_run",
+        annotations: { title: "Continue run", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+        hasOutputSchema: true,
+      },
       /**
        * STA-71: the ONE cloud tool, and deliberately the only one.
        *
        * Connect, disconnect, revoke and purge are not exposed over MCP. Each is
        * a human consent decision whose preview or typed confirmation only means
-       * something to a person at a terminal — `docs/sync.md` makes the connect
+       * something to a person at a terminal — `design/sync.md` makes the connect
        * preview the consent mechanism, and an MCP tool has no human to show it
        * to. So an agent can ask whether this repository is connected, and
        * everything that changes that answer needs a person.
@@ -708,7 +917,7 @@ describe("tool inventory", () => {
        * The conflict lane's two, and the ONE cloud write an agent may make.
        *
        * The paragraph above holds because connect, disconnect, revoke and purge
-       * are consents. Resolving is not: `docs/sync.md` says outright that
+       * are consents. Resolving is not: `design/sync.md` says outright that
        * *"resolving it is a decision a human or an agent makes on the record"*.
        * It touches the local database only, spends no credential, and destroys
        * nothing — the losing value stays on the record — so `destructiveHint` is
@@ -730,18 +939,83 @@ describe("tool inventory", () => {
         },
         hasOutputSchema: true,
       },
+      /**
+       * Budget ingestion writes one machine-local row per reading into hub.db. It is
+       * idempotent (a replay stores nothing twice, by dedup key) and never destructive
+       * (samples are only ever added).
+       */
+      {
+        name: "record_budget_sample",
+        annotations: {
+          title: "Record budget sample",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      /**
+       * Removing readings from hub.db: destructive (rows go, and a window a reading
+       * opened goes with its last one) and not idempotent (the second call finds
+       * nothing and is refused with not_found). Without confirm it only previews.
+       */
+      {
+        name: "forget_budget_samples",
+        annotations: {
+          title: "Forget budget samples",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        hasOutputSchema: true,
+      },
+      /**
+       * The telemetry reads (design/execution-telemetry.md, "Surfaces"): two per workspace
+       * (attempts), two per machine (budget). All read-only, all bounded.
+       */
+      {
+        name: "list_attempts",
+        annotations: { title: "List attempts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "get_attempt",
+        annotations: { title: "Get attempt", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "get_budget",
+        annotations: { title: "Get budget", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
+      {
+        name: "list_budget_samples",
+        annotations: { title: "List budget samples", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: true,
+      },
     ]);
   });
 
-  it("marks exactly the sixteen read tools readOnlyHint: true", async () => {
+  it("marks exactly the twenty-six read tools readOnlyHint: true", async () => {
     const tools = await harness.listTools();
     const readOnly = tools.filter((t) => t.annotations?.readOnlyHint === true).map((t) => t.name);
     expect(readOnly).toEqual([
       "inbox",
       "list_tasks",
       "get_task",
+      // The certified plan of named issues: a read.
+      "compare_plans",
+      // Timing quality and cohort coverage: a read.
+      "timing_quality",
+      // Calibration cohorts: a read.
+      "calibration_cohorts",
+      // Forecasts: a read.
+      "forecast",
       "list_comments",
       "get_document",
+      "list_files",
       "events_since",
       // STA-140: reading the workspace vocabulary is as read-only as reading a task.
       "list_statuses",
@@ -756,11 +1030,19 @@ describe("tool inventory", () => {
       // nothing — `next_task` resolves the order, it does not claim anything.
       "list_queue",
       "next_task",
+      // Autopilot runs: reading a run and its stop decision ends nothing.
+      "run_status",
       // STA-71: reading whether this MACHINE has connected the repository is as
       // read-only as reading a task, and it makes no network request either.
       "cloud_status",
       // Listing what two devices disagree about is a read of one local table.
       "conflict_list",
+      // Execution telemetry: reading attempts and this machine's budget writes nothing,
+      // a stored orphan end included.
+      "list_attempts",
+      "get_attempt",
+      "get_budget",
+      "list_budget_samples",
     ]);
   });
 
@@ -841,6 +1123,7 @@ describe("tool response shapes (31/31)", () => {
         checkoutAgent: CONTRACT_AGENT,
         checkoutAt: ISO,
         startedAt: ISO,
+        attempt: attemptGolden(),
       }),
     );
   });
@@ -861,8 +1144,31 @@ describe("tool response shapes (31/31)", () => {
         checkoutAgent: CONTRACT_AGENT,
         checkoutAt: ISO,
         startedAt: ISO,
+        // A priority edit opens, ends and keeps no attempt.
+        attempt: null,
       }),
     );
+  });
+
+  it("set_estimate: the issue plus what the call did to its estimate", () => {
+    const con2 = { identifier: "CON-2", title: "Contract idempotent", idempotencyKey: "idem-1" };
+    assertGolden(
+      "set_estimate",
+      issueGolden({ ...con2, estimatedSeconds: 7200, estimateChange: { from: null, to: 7200, changed: true } }),
+    );
+    // The identical repeat writes nothing and says so.
+    assertGolden(
+      "set_estimate_repeat",
+      issueGolden({ ...con2, estimatedSeconds: 7200, estimateChange: { from: 7200, to: 7200, changed: false } }),
+    );
+    assertGolden(
+      "set_estimate_clear",
+      issueGolden({ ...con2, estimatedSeconds: null, estimateChange: { from: 7200, to: null, changed: true } }),
+    );
+    const refused = mcpEnvelope(got("err_estimate_zero"));
+    expect(refused.code).toBe("validation");
+    expect(String(refused.message)).toMatch(/positive whole number of seconds/);
+    expect(refused.retryable).toBe(false);
   });
 
   it("release_task", () => {
@@ -880,6 +1186,18 @@ describe("tool response shapes (31/31)", () => {
         labels: ["contract", "golden"],
         acceptanceCriteria: ["shape is pinned"],
         startedAt: ISO,
+        attempt: attemptGolden({
+          state: "ended",
+          storedState: "ended",
+          outcome: "yielded",
+          endReason: "released",
+          endDetection: "reported",
+          endedBy: CONTRACT_AGENT,
+          endedAt: ISO,
+          endedAtSource: "mutation",
+          countedThrough: null,
+          idleSeconds: null,
+        }),
       }),
     );
   });
@@ -927,6 +1245,27 @@ describe("tool response shapes (31/31)", () => {
     });
   });
 
+  const UNPLANNED_CON1 = {
+    labor: { seconds: null, source: "none", ownSeconds: null, descendantsSeconds: null },
+    coverage: { planned: 0, unplanned: 1, units: 1, partial: true, unplannedRefs: ["CON-4"], cancelled: 0 },
+    criticalPath: {
+      seconds: null,
+      partial: true,
+      missing: ["no_plan"],
+      // No plan, so no chain: a null path names no units.
+      chain: [],
+      chainLength: 0,
+      exceedsLabor: false,
+      edgeCount: 0,
+      cycle: [],
+      // CON-4 waits on CON-3, outside CON-1's subtree: listed, not followed.
+      crossSubtreeBlockers: [{ blocked: "CON-4", blocker: "CON-3", blockerStatus: "backlog", resolved: false }],
+      crossSubtreeBlockerCount: 1,
+      unresolvedCrossSubtreeBlockerCount: 1,
+    },
+    remainingPath: { seconds: null, partial: true, missing: ["no_plan"], chain: [], chainLength: 0, exceedsLabor: false },
+  };
+
   it("get_task", () => {
     assertGolden("get_task", {
       issue: issueGolden({
@@ -951,6 +1290,8 @@ describe("tool response shapes (31/31)", () => {
       documents: [
         { issueId: UUID, key: "plan", currentRevision: 1, title: "Plan", updatedAt: ISO, body: "# plan v1\n" },
       ],
+      // File metadata, never the bytes. CON-1 has none.
+      attachments: [],
       // H9: the hub merge the web UI does, surfaced to agents.
       crossBlockers: [
         { identifier: "CONA-1", workspace: "contract-two", status: "backlog", resolved: false, unresolvable: false },
@@ -1000,11 +1341,50 @@ describe("tool response shapes (31/31)", () => {
           source: "none",
           descendantsEstimatedSeconds: null,
           contributingCount: 0,
+          unplannedCount: 1,
           totalCount: 1,
         },
+        // A parent's work is its children's, and its one child never started: nothing owed.
+        // Its own checkout is an attempt of its own (ownWorkSeconds), and its elapsed span
+        // runs in the parent buckets.
+        ownWorkSeconds: SECONDS,
+        leadSeconds: SECONDS,
+        wall: { startAt: ISO, endAt: null, through: ISO, seconds: SECONDS, buckets: parentBucketsGolden() },
+        quality: {
+          work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: { known: 0, total: 0, partial: false }, missingInputs: [] },
+          wall: { state: "exact", inputs: [], reasons: [] },
+        },
+        missing: { workSeconds: "never_started", orchestrationSeconds: "no_orchestrator_attempt" },
       }),
       // Keyed by IDENTIFIER, not uuid — which is why this line is readable.
       childrenTiming: { "CON-4": timingGolden() },
+      /**
+       * Execution attempts, worker lane, as they read now (design/execution-telemetry.md,
+       * "Surfaces"). CON-1's checkout opened one; it is running, so it is `current`,
+       * and nothing has ended, so `last` is null rather than omitted. The agent
+       * reported no harness and no account, so both are null with `not_supplied`.
+       */
+      attempts: openAttemptsGolden("CON-1"),
+      orchestration: noOrchestrationGolden(),
+      // The certified plan of a parent: its one child is an unplanned unit, so labor and
+      // path are null with a reason, never 0.
+      planSummary: UNPLANNED_CON1,
+    });
+  });
+
+  it("compare_plans: each ref's labor, coverage and path, and the overlap", () => {
+    assertGolden("compare_plans", {
+      plans: [
+        { ref: "CON-1", title: "Contract root task", kind: "task", status: "in_progress", ...UNPLANNED_CON1 },
+        {
+          ref: "CON-4",
+          title: "Contract child",
+          kind: "task",
+          status: "backlog",
+          ...UNPLANNED_CON1,
+        },
+      ],
+      overlaps: [{ ref: "CON-4", within: "CON-1" }],
     });
   });
 
@@ -1384,8 +1764,19 @@ describe("tool response shapes (31/31)", () => {
     const tools = (await harness.listTools()).map((t) => t.name);
     const covered = new Set([
       "init",
+      "compare_plans",
+      // Pinned in test/timing-quality-surfaces.test.ts, value for value against
+      // `staple timing quality --json` and `/api/timing/quality`.
+      "timing_quality",
+      // Pinned in test/calibration-surfaces.test.ts, value for value against
+      // `staple calibrate --json` and `/api/calibration`.
+      "calibration_cohorts",
+      // Pinned in test/forecast-surfaces.test.ts, value for value against
+      // `staple forecast --json` and `/api/forecast`.
+      "forecast",
       "create_task",
       "update_task",
+      "set_estimate",
       "checkout_task",
       "release_task",
       "set_blocked_by",
@@ -1393,6 +1784,11 @@ describe("tool response shapes (31/31)", () => {
       "list_comments",
       "put_document",
       "get_document",
+      // Typed files: pinned in test/attachments.test.ts, against the store, the CLI and these tools.
+      "list_files",
+      "attach_file",
+      "export_file",
+      "remove_file",
       "get_task",
       "list_tasks",
       "inbox",
@@ -1422,6 +1818,8 @@ describe("tool response shapes (31/31)", () => {
       "remove_milestone_member",
       "move_milestone_member",
       "reorder_milestone_members",
+      // Goal mode: pinned in test/milestone-goal-surfaces.test.ts against `milestone criterion --json`.
+      "mark_milestone_criterion",
       "get_setting",
       "set_setting",
       // STA-168: the seven queue tools are pinned in test/queue-surfaces.test.ts,
@@ -1433,6 +1831,14 @@ describe("tool response shapes (31/31)", () => {
       "move_queue_entry",
       "reorder_queue",
       "prune_queue",
+      // Autopilot runs: the six tools are pinned in test/run-surfaces.test.ts, against
+      // the CLI's `staple run ... --json` payloads from the same `RunStore`.
+      "start_run",
+      "run_status",
+      "stop_run",
+      "pause_run",
+      "resume_run",
+      "continue_run",
       // STA-71: the cloud status projection is pinned in test/cloud-connect.test.ts
       // against the same `localCloudStatus` the CLI and HTTP surfaces render.
       //
@@ -1449,6 +1855,21 @@ describe("tool response shapes (31/31)", () => {
       // no surface will resolve without an explicit choice.
       "conflict_list",
       "conflict_resolve",
+      // Budget ingestion is pinned in test/budget-surfaces.test.ts, against the CLI's
+      // `staple budget ingest --json` payload from the same `ingestBudget`.
+      "record_budget_sample",
+      // Removing readings is pinned in test/budget-forget.test.ts: the MCP preview equals
+      // the CLI's and the HTTP route's, all from the same `forgetBudgetSamples`.
+      "forget_budget_samples",
+      // Execution attempts: pinned in test/attempts-surfaces.test.ts, against the CLI's
+      // `staple attempt ... --json` payload from the same `recordAttemptEvent`.
+      "record_attempt_event",
+      // The telemetry reads: pinned in test/telemetry-read-surfaces.test.ts, value for
+      // value against `staple attempts|attempt|budget|budget history --json`.
+      "list_attempts",
+      "get_attempt",
+      "get_budget",
+      "list_budget_samples",
     ]);
     expect([...covered].sort()).toEqual([...tools].sort());
   });

@@ -1,7 +1,7 @@
 /**
  * The scheduler: one bounded, coalesced, cancellable automatic sync at a time.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * Contract: `design/sync.md`, "Three consents" — *"After automatic — bounded
  * triggers only: startup, post-write, long-running session … Coalesced, jittered
  * backoff, cancellable, bounded timeout. **A tracker command never blocks
  * indefinitely on Cloudflare**; sync failure degrades to manual and reports, it

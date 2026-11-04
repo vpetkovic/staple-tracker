@@ -4,6 +4,14 @@
   "private": true,
   "description": "Local-first task tracker for coding agents. SQLite workspaces, hub federation, MCP + CLI + local web UI.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vpetkovic/staple-tracker.git"
+  },
+  "homepage": "https://vpetkovic.github.io/staple-tracker/",
+  "bugs": {
+    "url": "https://github.com/vpetkovic/staple-tracker/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.5.0"
@@ -15,6 +23,7 @@
     "dev": "npm run build:ui && tsx src/cli.ts ui --hub --no-open",
     "dev:all": "tsx scripts/dev-ui.ts",
     "test": "vitest run",
+    "validate:timing": "vitest run test/controlled-runs.test.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/ui/app/tsconfig.json",
     "seed-demo": "tsx scripts/seed-demo.ts",
     "smoke:mcp": "tsx scripts/smoke-mcp.ts",
@@ -23,8 +32,9 @@
     "pack:package": "npm run build:package && npm pack ./dist-package --pack-destination dist-package",
     "drill:npx": "tsx scripts/drill-npx.ts",
     "dev:ui": "vite --config src/ui/app/vite.config.ts",
-    "site": "vite --config vite.site.config.ts",
-    "site:build": "vite build --config vite.site.config.ts",
+    "site:install": "npm --prefix site ci",
+    "site": "npm --prefix site start --",
+    "site:build": "npm --prefix site run build --",
     "test:worker": "npm --prefix worker test",
     "typecheck:worker": "npm --prefix worker run typecheck"
   },

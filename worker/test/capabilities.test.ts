@@ -18,8 +18,10 @@ describe("GET /v1/capabilities", () => {
       // ignoring it, so the widening is a protocol change rather than an additive one.
       // `min` deliberately does not move — that is what keeps every existing client
       // working — so this assertion is also the statement that the bump was
-      // backwards-compatible. See `worker/src/limits.ts`.
-      protocol: { min: 1, max: 2 },
+      // backwards-compatible. See `worker/src/limits.ts`. MOVED AGAIN to 3 for the
+      // execution attempts (`attempt`, `attemptTransition`), on the same terms.
+      // MOVED AGAIN to 4 for typed file attachments (`attachment`).
+      protocol: { min: 1, max: 4 },
       maxOpBytes: 512 * 1024,
       maxPullLimit: 500,
       defaultPullLimit: 200,
@@ -27,6 +29,9 @@ describe("GET /v1/capabilities", () => {
     // The test config declares PLAN = "free" in wrangler.toml. A push costs N+4 D1
     // statements against a free ceiling of 50 queries per invocation, so 25.
     expect(body.maxBatchSize).toBe(25);
+    // The stored orphan-end reasons this fold settles as subordinate: a client writes an
+    // orchestrator attempt's stored end only to a Worker that lists the lane's two.
+    expect(body.orphanEndReasons).toEqual(expect.arrayContaining(["issue_resolved", "superseded_by_newer", "claim_moved", "left_active"]));
   });
 
   it("is answerable without a credential", async () => {

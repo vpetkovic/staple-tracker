@@ -7,7 +7,7 @@ import { WorkspaceStore } from "../src/core/store.js";
 import { StapleError } from "../src/core/types.js";
 
 /**
- * STA-172 — milestones in the store, the database half of docs/milestones.md.
+ * STA-172 — milestones in the store, the database half of design/milestones.md.
  *
  * The pure rules (dates, ranks, refusals, the count-once rollup) are pinned in
  * `milestones.test.ts` and are not re-proved here. What is pinned here is what
@@ -15,7 +15,7 @@ import { StapleError } from "../src/core/types.js";
  * relation and never a re-parent, that order is durable and independent, that
  * the CAS refuses a stale base and leaves the order standing, that progress
  * reads categories, and that deletion cascades through the two tables and
- * touches nothing else. Every test name below is the one docs/milestones.md
+ * touches nothing else. Every test name below is the one design/milestones.md
  * says pins the paragraph.
  */
 
@@ -166,14 +166,355 @@ describe("identity", () => {
     expect(store.getIssue(m).kind).toBe("task");
   });
 
-  it("a member landing does not move the milestone's status", () => {
+  it("the last member landing closes the milestone, and a member reopening reopens it", () => {
     const m = newMilestone();
     const t = store.createIssue({ title: "t" }).identifier;
     milestones.addMember(m, t, {}, "vp");
     land(t);
-    expect(store.getIssue(m).status).toBe("backlog");
+    expect(store.getIssue(m).status).toBe("done");
     expect(milestones.get(m).progress).toMatchObject({ total: 1, countable: 1, percent: 100, complete: true });
-    expect(milestones.get(m).milestone.state).toBe("active");
+    expect(milestones.get(m).milestone.state).toBe("done");
+
+    store.updateIssue(t, { status: "todo" }, "someone");
+    expect(store.getIssue(m).status).toBe("backlog");
+  });
+});
+
+describe("status derived from members", () => {
+  function start(ref: string): void {
+    store.updateIssue(ref, { assignee: "someone" }, "someone");
+    store.updateIssue(ref, { status: "in_progress" }, "someone");
+  }
+
+  it("goes in progress when a task under a member epic starts", () => {
+    const m = newMilestone();
+    const epic = store.createIssue({ title: "e", kind: "epic" });
+    const task = store.createIssue({ title: "t", parent: epic.id }).identifier;
+    milestones.addMember(m, epic.identifier, {}, "vp");
+    expect(store.getIssue(m).status).toBe("backlog");
+
+    start(task);
+
+    expect(store.getIssue(epic.identifier).status).toBe("in_progress");
+    expect(store.getIssue(m).status).toBe("in_progress");
+    const flip = eventsOf(m).find((e) => e.kind === "status_changed");
+    expect(flip?.payload).toMatchObject({ from: "backlog", to: "in_progress", derivedFrom: task });
+  });
+
+  it("reads the epic after the epic moved, when it holds both the epic and its task", () => {
+    const m = newMilestone();
+    const epic = store.createIssue({ title: "e", kind: "epic" });
+    const task = store.createIssue({ title: "t", parent: epic.id }).identifier;
+    const other = store.createIssue({ title: "o" }).identifier;
+    milestones.addMember(m, task, {}, "vp");
+    milestones.addMember(m, epic.identifier, {}, "vp");
+    milestones.addMember(m, other, {}, "vp");
+    start(task);
+    land(task);
+    // The task is done and the epic derived done; `other` is still unstarted.
+    expect(store.getIssue(epic.identifier).status).toBe("done");
+    expect(store.getIssue(m).status).toBe("backlog");
+  });
+
+  it("re-derives when a member joins, leaves, or moves to another milestone", () => {
+    const m = newMilestone();
+    const n = newMilestone("November cut");
+    const busy = store.createIssue({ title: "busy" }).identifier;
+    start(busy);
+
+    milestones.addMember(m, busy, {}, "vp");
+    expect(store.getIssue(m).status).toBe("in_progress");
+
+    milestones.moveMember(busy, { to: n }, "vp");
+    expect(store.getIssue(n).status).toBe("in_progress");
+    // m has no members left: a milestone with nothing under it keeps what it has.
+    expect(store.getIssue(m).status).toBe("in_progress");
+
+    const idle = store.createIssue({ title: "idle" }).identifier;
+    milestones.addMember(n, idle, {}, "vp");
+    milestones.removeMember(n, busy, {}, "vp");
+    expect(store.getIssue(n).status).toBe("backlog");
+  });
+
+  it("derives on creation from an epic that is already under way", () => {
+    const epic = store.createIssue({ title: "e", kind: "epic" });
+    const task = store.createIssue({ title: "t", parent: epic.id }).identifier;
+    start(task);
+    const view = milestones.create({ title: "cut", fromEpic: epic.identifier }, "vp");
+    if (view.preview) throw new Error("not a preview");
+    expect(store.getIssue(view.milestone.identifier).status).toBe("in_progress");
+  });
+
+  it("leaves a milestone a person parked or closed alone", () => {
+    const m = newMilestone();
+    const t = store.createIssue({ title: "t" }).identifier;
+    milestones.addMember(m, t, {}, "vp");
+    store.updateIssue(m, { status: "cancelled" }, "vp");
+    start(t);
+    expect(store.getIssue(m).status).toBe("cancelled");
+  });
+
+  it("lands where its members say when a gate on it is approved", () => {
+    const m = store.createIssue({ title: "cut", kind: MILESTONE_KIND });
+    store.createIssue({ title: "child", parent: m.id });
+    const busy = store.createIssue({ title: "busy" }).identifier;
+    milestones.addMember(m.identifier, busy, {}, "vp");
+    store.gateIssue(m.id, { owner: "VP" }, "runner");
+    start(busy);
+    expect(store.getIssue(m.identifier).status).toBe("awaiting_approval");
+    store.approveGate(m.id, {}, "VP");
+    expect(store.getIssue(m.identifier).status).toBe("in_progress");
+  });
+
+  it("re-derives an ancestor that reads a milestone which moved after it", () => {
+    // P holds epic E2 and milestone M3; T2 sits under E2 and is a member of M3. P is
+    // reached before M3 moves, so one pass would leave it open with every child done.
+    const p = store.createIssue({ title: "p", kind: "epic" });
+    const e2 = store.createIssue({ title: "e2", kind: "epic", parent: p.id });
+    const m3 = store.createIssue({ title: "m3", kind: MILESTONE_KIND, parent: p.id });
+    const t2 = store.createIssue({ title: "t2", parent: e2.id }).identifier;
+    milestones.addMember(m3.identifier, t2, {}, "vp");
+    start(t2);
+    land(t2);
+    expect(store.getIssue(e2.identifier).status).toBe("done");
+    expect(store.getIssue(m3.identifier).status).toBe("done");
+    expect(store.getIssue(p.identifier).status).toBe("done");
+  });
+
+  it("closes a parent whose milestone child is reached at the same depth as the parent", () => {
+    // T is P's child AND a member of M, which is also P's child: P and M are both one
+    // hop from T, so whichever is derived first reads the other's old status.
+    const p = store.createIssue({ title: "p", kind: "epic" });
+    const m = store.createIssue({ title: "m", kind: MILESTONE_KIND, parent: p.id });
+    const t = store.createIssue({ title: "t", parent: p.id }).identifier;
+    milestones.addMember(m.identifier, t, {}, "vp");
+    start(t);
+    land(t);
+    expect(store.getIssue(m.identifier).status).toBe("done");
+    expect(store.getIssue(p.identifier).status).toBe("done");
+  });
+
+  it("wakes the milestone's owner before it closes, as an epic's is", () => {
+    const m = newMilestone();
+    store.updateIssue(m, { assignee: "owner" }, "vp");
+    const a = store.createIssue({ title: "a" }).identifier;
+    milestones.addMember(m, a, {}, "vp");
+    land(a);
+    const kinds = eventsOf(m).map((e) => e.kind);
+    expect(kinds).toContain("children_complete");
+    expect(kinds.lastIndexOf("children_complete")).toBeLessThan(kinds.lastIndexOf("status_changed"));
+    expect(store.getIssue(m).status).toBe("done");
+  });
+
+  it("never closes on a membership edit, only when a member lands", () => {
+    const m = newMilestone();
+    const landed = store.createIssue({ title: "landed" }).identifier;
+    land(landed);
+    milestones.addMember(m, landed, {}, "vp");
+    expect(store.getIssue(m).status).toBe("backlog");
+
+    const open = store.createIssue({ title: "open" }).identifier;
+    milestones.addMember(m, open, {}, "vp");
+    start(open);
+    expect(store.getIssue(m).status).toBe("in_progress");
+    milestones.removeMember(m, open, {}, "vp");
+    // Only landed work is left, but descoping is not finishing: a person closes it.
+    expect(store.getIssue(m).status).not.toBe("done");
+  });
+
+  /** Put a leaf at a status the way the guards allow. */
+  function put(ref: string, status: string): void {
+    if (status === "backlog") return;
+    if (status === "cancelled") return void store.updateIssue(ref, { status }, "someone");
+    if (status === "blocked") {
+      return void store.updateIssue(ref, { status, unblockOwner: "vp", unblockAction: "decide" }, "someone");
+    }
+    start(ref);
+    if (status !== "in_progress") store.updateIssue(ref, { status }, "someone");
+  }
+
+  it("reads an epic member in review, with a cancelled task under it", () => {
+    const m = newMilestone();
+    const epic = store.createIssue({ title: "e", kind: "epic" });
+    const tasks = ["a", "b", "c"].map((title) => store.createIssue({ title, parent: epic.id }).identifier);
+    milestones.addMember(m, epic.identifier, {}, "vp");
+    put(tasks[0]!, "in_review");
+    put(tasks[1]!, "cancelled");
+    put(tasks[2]!, "in_review");
+    expect(store.getIssue(epic.identifier).status).toBe("in_review");
+    expect(store.getIssue(m).status).toBe("in_review");
+  });
+
+  it("reads its members exactly as an epic reads the same children", () => {
+    const cases: string[][] = [
+      ["in_progress", "in_review"],
+      ["in_review", "cancelled"],
+      ["blocked", "blocked"],
+      ["blocked", "backlog"],
+      ["done", "cancelled"],
+      ["cancelled", "cancelled"],
+      ["in_review", "done"],
+    ];
+    for (const statuses of cases) {
+      const m = newMilestone(statuses.join("+"));
+      const epic = store.createIssue({ title: `${statuses.join("+")} epic`, kind: "epic" });
+      for (const [index, status] of statuses.entries()) {
+        const member = store.createIssue({ title: `${statuses.join("+")} member ${index}` }).identifier;
+        milestones.addMember(m, member, {}, "vp");
+        put(member, status);
+        put(store.createIssue({ title: `${statuses.join("+")} child ${index}`, parent: epic.id }).identifier, status);
+      }
+      expect([statuses.join("+"), store.getIssue(m).status]).toEqual([statuses.join("+"), store.getIssue(epic.identifier).status]);
+    }
+  });
+
+  it("an upgraded workspace re-derives every milestone once, at its first mutation", () => {
+    // A milestone as a build before this one left it: its member went to review, and it
+    // still reads what it was given.
+    const m = newMilestone();
+    const epic = store.createIssue({ title: "e", kind: "epic" });
+    const task = store.createIssue({ title: "t", parent: epic.id }).identifier;
+    milestones.addMember(m, epic.identifier, {}, "vp");
+    put(task, "in_review");
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+
+    // A read writes nothing.
+    milestones.get(m);
+    store.getIssue(m);
+    expect(store.getIssue(m).status).toBe("backlog");
+
+    // The first mutation, on anything, repairs it with an ordinary derived move.
+    store.addComment(task, "unrelated", "someone");
+    expect(store.getIssue(m).status).toBe("in_review");
+    const flips = eventsOf(m).filter((e) => e.kind === "status_changed");
+    expect(flips.at(-1)?.payload).toMatchObject({ from: "backlog", to: "in_review", derived: "child_in_review", derivedFrom: epic.identifier });
+
+    // Once: set back by hand, it stays where the person put it.
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.addComment(task, "again", "someone");
+    expect(store.getIssue(m).status).toBe("backlog");
+    // And idempotent when run again: nothing is left to move.
+    store.updateIssue(m, { status: "in_review" }, "vp");
+    expect(store.rederiveEveryMilestone()).toBe(0);
+  });
+
+  it("an upgrade's repair closes a milestone whose members all landed", () => {
+    const m = newMilestone();
+    const t = store.createIssue({ title: "t" }).identifier;
+    milestones.addMember(m, t, {}, "vp");
+    land(t);
+    store.updateIssue(m, { status: "in_review" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    expect(store.rederiveEveryMilestone()).toBe(0); // set by hand: the reversibility law holds
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    expect(store.rederiveEveryMilestone()).toBe(1);
+    expect(store.getIssue(m).status).toBe("done");
+  });
+
+  it("an upgrade's repair leaves a gate on the milestone as it stands, pending or sent back", () => {
+    // A gate needs something to queue, so each carries a child as well as its member.
+    const pending = store.createIssue({ title: "pending cut", kind: MILESTONE_KIND });
+    store.createIssue({ title: "pending child", parent: pending.id });
+    const busy = store.createIssue({ title: "busy" }).identifier;
+    milestones.addMember(pending.identifier, busy, {}, "vp");
+    store.gateIssue(pending.id, { owner: "VP" }, "runner");
+    start(busy);
+
+    const sentBack = store.createIssue({ title: "sent-back cut", kind: MILESTONE_KIND });
+    const child = store.createIssue({ title: "sent-back child", parent: sentBack.id }).identifier;
+    const landed = store.createIssue({ title: "landed" }).identifier;
+    milestones.addMember(sentBack.identifier, landed, {}, "vp");
+    store.gateIssue(sentBack.id, { owner: "VP" }, "runner");
+    store.requestChanges(sentBack.id, { comment: "not yet" }, "VP");
+    land(landed);
+    land(child);
+    const before = [store.getIssue(pending.identifier), store.getIssue(sentBack.identifier)];
+    // Sent back, it did not close when its work landed: the review is the remaining work.
+    expect(before.map((row) => row.status)).toEqual(["awaiting_approval", "in_progress"]);
+
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    expect(store.rederiveEveryMilestone()).toBe(0);
+    expect(store.gate(pending.id)?.state).toBe("pending");
+    expect(store.getIssue(pending.identifier).status).toBe("awaiting_approval");
+    // Nor does the repair close it.
+    expect(store.gate(sentBack.id)?.state).toBe("changes_requested");
+    expect(store.getIssue(sentBack.identifier).status).toBe("in_progress");
+  });
+
+  it("an upgrade's repair never cancels a milestone whose members were all cancelled", () => {
+    const m = newMilestone();
+    const t = store.createIssue({ title: "t" }).identifier;
+    milestones.addMember(m, t, {}, "vp");
+    store.updateIssue(t, { status: "cancelled" }, "someone");
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    expect(store.rederiveEveryMilestone()).toBe(0);
+    expect(store.getIssue(m).status).toBe("backlog");
+  });
+
+  it("an upgrade's repair names the member that moved last, and its actor, as a member's move does", () => {
+    const m = newMilestone();
+    const a = store.createIssue({ title: "a" }).identifier;
+    const b = store.createIssue({ title: "b" }).identifier;
+    milestones.addMember(m, a, {}, "vp");
+    milestones.addMember(m, b, {}, "vp");
+    start(a);
+    store.updateIssue(b, { assignee: "reviewer" }, "reviewer");
+    store.updateIssue(b, { status: "in_progress" }, "reviewer");
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    store.rederiveEveryMilestone();
+    const flip = eventsOf(m).filter((e) => e.kind === "status_changed").at(-1);
+    expect(flip?.payload).toMatchObject({ from: "backlog", to: "in_progress", derivedFrom: b });
+    const actor = store.listEvents(0, 1000).filter((e) => e.issueId === store.getIssue(m).id && e.kind === "status_changed").at(-1)?.actor;
+    expect(actor).toBe("reviewer");
+  });
+
+  it("an upgrade's repair that throws is logged and skipped, and the write that ran it lands", () => {
+    const m = newMilestone();
+    const t = store.createIssue({ title: "t" }).identifier;
+    milestones.addMember(m, t, {}, "vp");
+    start(t);
+    store.updateIssue(m, { status: "backlog" }, "vp");
+    store.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+    const walk = store as unknown as { deriveOneAncestor: (...args: unknown[]) => boolean };
+    const original = walk.deriveOneAncestor;
+    walk.deriveOneAncestor = () => {
+      throw new Error("forced");
+    };
+    const logged: string[] = [];
+    const error = console.error;
+    console.error = (...args: unknown[]) => void logged.push(args.join(" "));
+    try {
+      const comment = store.addComment(t, "still lands", "someone");
+      expect(store.listComments(t).map((c) => c.id)).toContain(comment.id);
+      store.addComment(t, "and again", "someone");
+    } finally {
+      walk.deriveOneAncestor = original;
+      console.error = error;
+    }
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain("could not re-derive milestone statuses (forced)");
+    // Taken back whole: nothing moved, nothing stamped.
+    expect(store.getIssue(m).status).toBe("backlog");
+    expect(store.db.prepare("SELECT 1 FROM meta WHERE key = 'milestone_status_rederived'").get()).toBeUndefined();
+  });
+
+  it("does not loop when a milestone is filed under its own member", () => {
+    const epic = store.createIssue({ title: "e", kind: "epic" });
+    const task = store.createIssue({ title: "t", parent: epic.id }).identifier;
+    const m = store.createIssue({ title: "cut", kind: MILESTONE_KIND, parent: epic.id }).identifier;
+    milestones.addMember(m, epic.identifier, {}, "vp");
+    expect(store.getIssue(m).parentId).toBe(epic.id);
+    start(task);
+    expect(store.getIssue(epic.identifier).status).toBe("in_progress");
+    // The milestone does not read the epic it is filed under, so the two cannot hold
+    // each other active once the work under them has landed.
+    land(task);
+    expect(store.getIssue(epic.identifier).status).not.toBe("in_progress");
+    expect(store.getIssue(m).status).not.toBe("in_progress");
   });
 });
 
@@ -190,7 +531,7 @@ describe("dates", () => {
     expect(view.milestone).toMatchObject({ targetDate: "2026-10-31", startDate: null });
     expect(refused(() => milestones.update(m, { targetDate: "2026-02-30" }, "vp"), "validation").message).toContain("YYYY-MM-DD");
     expect(refused(() => milestones.update(m, { startDate: "2026-11-01" }, "vp"), "validation").message).toContain("after target");
-    expect(refused(() => milestones.update(m, {}, "vp"), "validation").message).toContain("targetDate or startDate");
+    expect(refused(() => milestones.update(m, {}, "vp"), "validation").message).toContain("requires targetDate, startDate");
     // A refused write leaves the dates as they were.
     expect(milestones.get(m).milestone).toMatchObject({ targetDate: "2026-10-31", startDate: null });
   });

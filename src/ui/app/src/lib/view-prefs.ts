@@ -8,7 +8,7 @@
  * the page — and three shipped behaviours read it that way:
  *
  *   1. `countActive(filters)` drives the badge on the Filter button and the sentence in
- *      `NoMatchesState` ("2 filters are narrowing this view"). "Grouped by status" narrows
+ *      `FilterEmptyState` ("2 filters are narrowing this view"). "Grouped by status" narrows
  *      nothing. Every consumer of that number would need a special case for one field.
  *   2. `clearFilters()` is wired to both "Clear filters" buttons. Clearing your filters
  *      would also reset your layout, which is not what either button says it does.
@@ -106,7 +106,7 @@ export const GROUP_BY_OPTIONS: readonly { id: GroupBy; label: string; hint: stri
     // The label the trigger shows as "Group: Pickup order". Named for the QUESTION it
     // answers rather than the mechanism, which is why it is not "Readiness".
     label: "Pickup order",
-    hint: "what to grab next — up next, in flight, waiting; the inbox's own ordering",
+    hint: "What to pick up next: up next first, then in progress, then waiting.",
   },
   {
     id: "parent",

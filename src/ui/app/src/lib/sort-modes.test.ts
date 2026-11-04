@@ -15,7 +15,7 @@
  *   5. THE DEFAULT DRIFTING. `activity` ascending IS the app's pre-R4a `compareRows`. A
  *      change to it is a change to every list in the product, so the legacy chain is written
  *      out below and the registry is asserted against it directly.
- *   6. SORTING REACHING THE QUEUE. `docs/queue.md`: presentation sort is not the queue. The
+ *   6. SORTING REACHING THE QUEUE. `design/queue.md`: presentation sort is not the queue. The
  *      last block sorts a fixture through every mode and every direction and asserts the
  *      queue, eligibility and dependency fields on every row are byte-identical afterwards.
  */
@@ -400,7 +400,7 @@ describe("the default mode is the pre-R4a comparator, step for step", () => {
   });
 });
 
-describe("sorting cannot reach the queue — docs/queue.md", () => {
+describe("sorting cannot reach the queue — design/queue.md", () => {
   /**
    * The criterion is "changing sort never changes queue rank, checkout eligibility or
    * dependency order". Those three live on the row as `queuePosition`/`planPosition`,

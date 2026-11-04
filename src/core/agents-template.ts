@@ -1,6 +1,5 @@
 import { existsSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
 /**
  * The onboarding guide `staple init` drops next to a repo workspace, so the next
@@ -12,15 +11,6 @@ import { fileURLToPath } from "node:url";
  */
 
 export const AGENTS_GUIDE_FILENAME = "AGENTS.md";
-
-/** Absolute path to this checkout's MCP entry point, for a copy-pasteable wiring line. */
-function mcpEntryPath(): string {
-  // .../src/core/agents-template.(ts|js) -> .../src/mcp.(ts|js). There is no build
-  // step for the server today (everything runs through tsx), but keep the extension
-  // derived rather than hardcoded so a compiled layout still points somewhere real.
-  const here = fileURLToPath(import.meta.url);
-  return join(dirname(dirname(here)), here.endsWith(".ts") ? "mcp.ts" : "mcp.js");
-}
 
 export interface AgentsGuideContext {
   /** Workspace slug, e.g. `staple`. */
@@ -64,10 +54,11 @@ Read this before you touch the repo. It takes a minute.
    claim is already held; retrying just burns turns. (Exit code 4 / \`conflict\`.)
 3. Write the plan: \`staple doc ${ref} plan --put plan.md\`. Documents are keyed
    and revisioned — this replaces a scratch \`plan.md\` nobody else can find.
-   **Record your estimate while you are planning** — \`staple status ${ref} in_progress
-   --estimate 2h\`, or \`--estimate\` on \`staple new\`. An estimate written after the
-   work is a memory of how long it took, not a prediction, and the whole
-   estimate-vs-actual comparison is worthless the moment it becomes one.
+   **Record your estimate while you are planning** — \`staple estimate ${ref} 2h\`
+   (whatever the status; \`--clear\` removes one), or \`--estimate\` on
+   \`staple new\`. An estimate written after the work is a memory of how long it
+   took, not a prediction, and the whole estimate-vs-actual comparison is
+   worthless the moment it becomes one.
 4. Work. Leave progress as you go: \`staple comment ${ref} "…"\`.
    **Your comments are the clock.** Time worked is measured as the span from your
    claim to your newest event or comment — never to "now" — so a task you hold in
@@ -189,6 +180,52 @@ stealable to the next agent that walks past. Set it once, at the top:
 export STAPLE_AGENT=your-name
 \`\`\`
 
+## Report your attempt
+
+Every claim you hold is an **attempt**, recorded for you: checkout opens one, and
+\`done\`, a status change or \`release\` ends it. Three things only you can add:
+
+- **A per-session identity** is better than a shared one:
+  \`STAPLE_AGENT=claude-<short session id>\`. Two sessions under one name cannot be
+  told apart, so a crashed session's successor re-claims in silence. Staple still
+  accepts a shared name.
+- **Your harness session**, on checkout:
+  \`staple checkout ${ref} --harness claude_code --harness-session <session id>\`
+  (Codex: the rollout's \`session_meta\` id). It is stored hashed.
+- **What happened**, when it is not a status change:
+
+\`\`\`bash
+staple attempt pause ${ref} --reason checkpoint_before_reset   # after the worklog, before a usage-limit reset
+staple attempt resume ${ref}
+staple attempt interrupt ${ref} --reason harness_exit          # your previous session died; then check out again
+staple release ${ref} --outcome failed --reason "why"          # only when you conclude you cannot do it
+\`\`\`
+
+MCP: \`record_attempt_event\`, and \`harness\` / \`harness_session\` / \`outcome\` on the
+claim tools.
+
+**A blocker appears while you work:** checkout refuses a blocked issue only on entry,
+so your attempt stays open and the wait would read as your work. Yield or pause:
+
+\`\`\`bash
+staple release ${ref}                                          # yield: the wait reads as blocked, not as your work
+staple attempt pause ${ref} --reason awaiting_input            # or pause, if you keep the claim and wait
+\`\`\`
+
+**Coordinating, not claiming:** an orchestrator (dispatching, reviewing a result,
+merging) opens its own lane on the issue it coordinates, usually the parent or
+epic, and never checks out work it only coordinates. That time is orchestration,
+reported apart from agent work:
+
+\`\`\`bash
+staple attempt open <epic> --role orchestrator    # at the start of a coordination session
+staple attempt end <epic> --role orchestrator     # when you hand off; opening another one also ends it
+\`\`\`
+
+MCP: \`record_attempt_event\` with \`event: "open"\` or \`"end"\` and \`role: "orchestrator"\`.
+If you hold a worker attempt and an orchestrator attempt on the same issue, pass
+\`--role\` on \`attempt pause|resume|milestone|interrupt\`.
+
 ## The worklog protocol — checkpoint as you go
 
 Keep a document keyed \`worklog\` on every task you hold, and **revise it at every
@@ -284,6 +321,30 @@ staple comment ${ref} "Branch pointer: worktree /path/to/wt on branch feat/${pre
 
 Without it, the next agent has a perfect description of the work and no idea
 which of six worktrees contains it.
+
+## Evidence is a file, not a document
+
+Screenshots, screen recordings, PDFs and logs that prove the work are **files**.
+Attach the file itself:
+
+\`\`\`bash
+staple file attach ${ref} after.png --caption "after: settings page saved"
+staple file attach ${ref} run.log --caption "test run, 0 failed"
+\`\`\`
+
+The media type comes from the bytes and the SHA-256 is recorded, so task details
+shows an image as an image, plays a video, opens a PDF and renders a log.
+A caption or filename with \`before\` or \`after\` gets that label. Over MCP, use the
+\`attach_file\` tool.
+
+**Never write a binary into a document as base64.** A document is for writing
+(a plan, a worklog, notes). An older ticket may still hold evidence written as a
+\`Media type:\` and \`SHA-256:\` header over base64. Task details shows it as the
+file when the hash matches and flags it when the hash does not.
+\`staple file adopt ${ref}\` turns each matching document into a real file. The
+old revision keeps the bytes. The current document becomes a short note naming
+the file, unless the file is over 256 KB: its bytes stay on this machine, so
+the document keeps them for other machines. A second run creates nothing.
 
 ## Approval gates — when the next move is a human's
 
@@ -388,16 +449,69 @@ The rules, and they do not bend:
 When you do resume someone's task, read their \`worklog\` and their branch pointer
 comment first. That is what they left you. Leave the same for the next one.
 
+## Autopilot runs — the tracker says what is next
+
+A person can set you to work a scope ticket after ticket: the whole queue, an
+epic, or a milestone (a goal run over its acceptance criteria). That is a
+**run**, and **the tracker decides whether it goes on, never you.** After every
+ticket you ask one question and do what the answer says:
+
+\`\`\`bash
+staple run continue --json      # MCP: continue_run
+\`\`\`
+
+- \`take\` — the ticket in \`ref\` is **already checked out to you**. Do not check
+  it out again. Work it the way this guide says, then ask again.
+- \`wait\` — nothing to take now (the run is paused, or what is left is held by
+  others). Take nothing: end your session, or ask again after
+  \`retryAfterSeconds\`.
+- \`stop\` — the run is over and \`reason\` says why (\`scope_empty\`, \`goal_met\`,
+  \`budget\`, \`failure_streak\`, \`gate_pending\`, \`vp_blocked\`,
+  \`stopped_by_human\`, …). Stop, and tell the person the reason.
+
+It exits 0 for all three: read \`action\`, not the exit code.
+
+A run is worked in one of three ways:
+
+1. **A: \`staple run drive\`** (the default). A driver starts one fresh headless
+   session per ticket (\`--agent claude|codex|custom\`) with a brief. If
+   \`STAPLE_RUN_TICKET\` is set, you are one of those sessions: work that one
+   ticket, then exit. Do not call any \`staple run\` command; the driver does.
+2. **B: a stop hook**, for a session a person is already in, where the agent
+   CLI has one. \`staple run hook install claude --print\` prints the settings
+   stanza; \`staple run hook bind\` binds this session to the live run. From then
+   on, each time you end your turn the hook asks \`run continue\` for you: it
+   hands you the next ticket, or holds you to the one you have not finished.
+3. **C: these instructions.** No driver and no hook: call
+   \`staple run continue --json\` yourself after every ticket you hand on.
+
+The rules, whichever way the run is worked:
+
+- **Finish before you ask.** Hand the ticket on (\`staple status ${ref} in_review\`
+  with the evidence in a comment), or say why you cannot:
+  \`staple run continue --outcome failed --reason "…" --json\`. Two failures in
+  a row stop the run.
+- **Review before you hand on.** An adversarial review, reproduced rather than
+  read, by a separate reviewer if you can start one, recorded as a comment that
+  starts with \`review:\`. The driver fails a ticket handed on without one
+  (\`no_review\`), and the hook sends you back to write it. Green gates are not
+  evidence.
+- **Never merge to master or main**, and never push to them. A merge is a
+  deploy and a person's decision: leave your work on a branch (and a draft pull
+  request), stacked on the last one.
+- **Stop means stop.** On a \`stop\` answer, or a person's \`staple run stop\`, end
+  the loop. Never start a new run to keep going.
+
 ## Wiring
 
 \`\`\`bash
-claude mcp add staple -e STAPLE_AGENT=your-name -- npx tsx ${mcpEntryPath()}
+claude mcp add staple -e STAPLE_AGENT=your-name -- staple mcp
 \`\`\`
 
 The MCP tools mirror the CLI: \`inbox\`, \`next_task\` and \`list_queue\` for the
 pickup queue, \`checkout_task\` (with \`steal_if_idle_seconds\` and
-\`override_reason\`), \`put_document\`, \`add_comment\`, \`update_task\`,
-\`release_task\` (with \`if_idle_seconds\`), \`events_since\`, \`list_statuses\`,
+\`override_reason\`), \`put_document\`, \`add_comment\`, \`set_estimate\`, \`update_task\`,
+\`release_task\` (with \`if_idle_seconds\`), \`record_attempt_event\`, \`events_since\`, \`list_statuses\`,
 \`list_kinds\`, \`update_statuses\`, \`update_kinds\`, and the gate verbs
 \`gate_task\` / \`approve_task\` / \`request_changes\`. Writes require an
 identity — pass \`actor\` or set \`STAPLE_AGENT\`; there is no silent default.

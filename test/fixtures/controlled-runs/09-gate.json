@@ -1,0 +1,34 @@
+{
+  "title": "a parent's gate: awaiting_approval is gated, approval re-derives it, and its active time is its children's",
+  "covers": [
+    "a parent's elapsed partition follows its derived category, derived flips included",
+    "gate parks the parent in gated from t; approve re-derives it by the ladder",
+    "the parent's work is the sum of its children's, with coverage"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "p", "title": "parent" },
+    { "at": "0s", "do": "create", "ref": "c1", "parent": "p" },
+    { "at": "0s", "do": "create", "ref": "c2", "parent": "p" },
+    { "at": "0s", "do": "checkout", "ref": "c1", "agent": "w1" },
+    { "at": "5m", "do": "comment", "ref": "c1", "agent": "w1" },
+    { "at": "10m", "do": "status", "ref": "c1", "to": "done", "agent": "w1" },
+    { "at": "15m", "do": "gate", "ref": "p", "owner": "vp", "agent": "lead" },
+    { "at": "45m", "do": "approve", "ref": "p", "agent": "vp" },
+    { "at": "50m", "do": "checkout", "ref": "c2", "agent": "w2" },
+    { "at": "55m", "do": "comment", "ref": "c2", "agent": "w2" },
+    { "at": "60m", "do": "status", "ref": "c2", "to": "done", "agent": "w2" }
+  ],
+  "expect": [
+    {
+      "asOf": "70m",
+      "ref": "p",
+      "intervals": 2,
+      "workSeconds": "20m",
+      "coverage": { "known": 2, "total": 2, "partial": false },
+      "quality": { "work": "exact", "wall": "exact" },
+      "wall": { "startAt": "0s", "endAt": "60m", "buckets": { "active": "20m", "queued": "10m", "gated": "30m" } }
+    }
+  ]
+}

@@ -1,0 +1,94 @@
+.command {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-1);
+  height: var(--st-control-lg);
+  padding: 0 var(--st-space-1) 0 var(--st-space-5);
+  border: var(--st-hairline) solid transparent;
+  border-radius: var(--st-radius-md);
+  max-width: 100%;
+}
+
+.primary {
+  background: var(--st-accent-bg);
+  color: var(--st-on-accent);
+}
+
+.secondary {
+  background: var(--st-bg);
+  border-color: var(--st-border-strong);
+  color: var(--st-fg-strong);
+}
+
+.text {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-sm);
+  font-weight: var(--st-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The prompt is text and meets AA like the command: it sets itself apart by weight on
+   the accent, and by the accent text colour on the plain surface, as in Terminal. */
+.prompt {
+  margin-right: 1ch;
+  font-weight: var(--st-weight-regular);
+  user-select: none;
+}
+
+.secondary .prompt {
+  color: var(--st-accent-text);
+}
+
+.copy {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--st-control-sm);
+  height: var(--st-control-sm);
+  margin-left: var(--st-space-2);
+  padding: 0;
+  border: 0;
+  border-radius: var(--st-radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color var(--st-duration-fast) var(--st-ease);
+  position: relative;
+}
+
+/* The button is drawn at the small control size and taps as a 44 px target. */
+.copy::after {
+  content: '';
+  position: absolute;
+  inset: calc((var(--st-control-sm) - var(--st-target-min)) / 2);
+}
+
+.primary .copy:hover {
+  background: var(--st-accent-bg-hover);
+}
+
+.secondary .copy:hover {
+  background: var(--st-bg-muted);
+}
+
+/* Announced to screen readers, not shown. */
+.status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The global accent ring would be green on green here: use the text colour instead. */
+.primary .copy:focus-visible {
+  outline-color: var(--st-on-accent);
+  outline-offset: calc(-1 * var(--st-focus-ring));
+}

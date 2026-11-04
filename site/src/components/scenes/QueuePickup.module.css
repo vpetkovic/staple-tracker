@@ -1,0 +1,28 @@
+/* What the agent asks and what it is told: the command, and the line it prints. */
+.ask {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--st-space-1);
+  margin-bottom: var(--st-space-3);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-xs);
+  white-space: nowrap;
+}
+
+.command {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  color: var(--st-fg-strong);
+}
+
+.prompt {
+  color: var(--st-accent-text);
+}
+
+.answer {
+  white-space: pre;
+  overflow: hidden;
+  color: var(--st-fg-muted);
+  text-overflow: ellipsis;
+}

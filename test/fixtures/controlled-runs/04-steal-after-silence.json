@@ -1,0 +1,30 @@
+{
+  "title": "a steal after silence: the old tenure ends at its last activity, the silence becomes interrupted",
+  "covers": [
+    "checkout --steal-if-stale ends the old attempt at L (its last activity), and [L, t) is interrupted",
+    "the stealer's attempt resumes the stolen one: resumeGapSeconds = t - L",
+    "silent time before the steal is never work"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x", "estimate": "1h" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "60m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m" },
+    { "at": "70m", "do": "comment", "ref": "x", "agent": "w2" },
+    { "at": "80m", "do": "status", "ref": "x", "to": "done", "agent": "w2" }
+  ],
+  "expect": [
+    {
+      "asOf": "90m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "30m",
+      "activeSeconds": "80m",
+      "quality": { "work": "exact", "wall": "exact" },
+      "wall": { "startAt": "0s", "endAt": "80m", "buckets": { "work": "30m", "interrupted": "50m" } },
+      "resumeGaps": ["50m"]
+    }
+  ]
+}

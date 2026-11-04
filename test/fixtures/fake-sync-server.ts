@@ -45,6 +45,9 @@ import {
   revisionSlot,
 } from "../../worker/src/fold-revisions.js";
 import { countEscapes, parseWork, runWork, serveWork, writeWork } from "../../worker/src/fold-work.js";
+
+import { ORPHAN_END_REASONS, settleAttemptEnd } from "../../src/core/cloud/attempt-ends.js";
+import { withoutNarration } from "../../src/core/cloud/narration.js";
 import { ORIGIN_RELEASING_STATUSES } from "../../src/core/types.js";
 
 /** `settleRevision` in `worker/src/fold.ts`, on this fixture's operation shape: the same placement (`revision-placement.ts`). */
@@ -196,6 +199,8 @@ export interface FakeRestore {
   entityCount: number;
   staged: number;
   status: "staging" | "committed";
+  /** When the commit ran (`restores.committed_at`), as the Worker's snapshot reports it. */
+  committedAt?: string;
 }
 
 export interface FakeServerOptions {
@@ -205,6 +210,8 @@ export interface FakeServerOptions {
   maxPullLimit?: number;
   defaultPullLimit?: number;
   maxSnapshotPageSize?: number;
+  /** The orphan-end reasons advertised; null plays a Worker that advertises none. */
+  orphanEndReasons?: string[] | null;
   protocol?: { min: number; max: number };
   /**
    * The repository's vocabulary as PROVISIONED — `repos.vocabulary`, migration 0005.
@@ -277,7 +284,7 @@ export interface FakeServerOptions {
 }
 
 /** The Worker's step and read constants (`worker/src/limits.ts`), reproduced: that file reaches the Worker's types. */
-const FOLD_RETRY_MS = 200;
+const FOLD_RETRY_MS = 1_000;
 const FOLD_STEP_OPS = 500;
 const FOLD_STEP_BYTES = 1024 * 1024;
 const FOLD_STEP_READS = 4;
@@ -338,6 +345,10 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
     ]),
   ],
   [2, new Set(["registration", "crossLink"])],
+  // Execution attempts — `worker/src/envelope.ts`.
+  [3, new Set(["attempt", "attemptTransition"])],
+  // Typed file attachments — `worker/src/envelope.ts`.
+  [4, new Set(["attachment"])],
 ];
 const REGISTRY_ENTITIES = new Set(["registration", "crossLink"]);
 const VERBS = new Set(["create", "update", "delete", "replace", "renumber"]);
@@ -442,9 +453,10 @@ export class FakeSyncServer {
       maxPullLimit: 500,
       defaultPullLimit: 200,
       maxSnapshotPageSize: 500,
+      orphanEndReasons: [...ORPHAN_END_REASONS].sort(),
       // Matches `worker/src/limits.ts`. `min` did not move with `max`, which is what
       // keeps every protocol-1 client working.
-      protocol: { min: 1, max: 2 },
+      protocol: { min: 1, max: 4 },
       vocabulary: null,
       enrollmentSecret: null,
       rateLimit: null,
@@ -614,6 +626,8 @@ export class FakeSyncServer {
       maxPullLimit: this.options.maxPullLimit,
       defaultPullLimit: this.options.defaultPullLimit,
       maxSnapshotPageSize: this.options.maxSnapshotPageSize,
+      // `worker/src/limits.ts`: absent when a test plays a Worker from before the orchestrator lane.
+      ...(this.options.orphanEndReasons !== null ? { orphanEndReasons: this.options.orphanEndReasons } : {}),
     };
   }
 
@@ -1249,6 +1263,16 @@ export class FakeSyncServer {
         `${at}.verb 'delete' is never valid for a registry entity — a retraction is a field`,
       );
     }
+    // An attempt is created then updated; a transition is immutable — `worker/src/envelope.ts`.
+    if (entity === "attempt" && verb !== "create" && verb !== "update") {
+      throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attempt: it is created, then updated`);
+    }
+    if (entity === "attemptTransition" && verb !== "create") {
+      throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attempt transition: it is immutable once written`);
+    }
+    if (entity === "attachment" && verb !== "create" && verb !== "delete") {
+      throw new ServerError(400, "validation", `${at}.verb '${verb}' is never valid for an attachment: it is created or deleted`);
+    }
 
     let baseVersion: number | null = null;
     if (op.baseVersion !== null && op.baseVersion !== undefined) {
@@ -1416,6 +1440,8 @@ export class FakeSyncServer {
 
     return this.ok(protocol, {
       epoch: this.epoch,
+      // `worker/src/snapshot.ts`: when the restore that made this epoch committed.
+      restoredAt: this.restores.find((restore) => restore.status === "committed" && restore.toEpoch === this.epoch)?.committedAt ?? null,
       cutoffSeq: cutoff,
       tailCursor: b64url(JSON.stringify({ v: 1, r: session.repoId, e: this.epoch, s: cutoff })),
       /**
@@ -1564,7 +1590,10 @@ export class FakeSyncServer {
       // One field, whichever spelling wrote it — `worker/src/fold.ts`. Not on the Worker
       // from before this build, which kept both.
       // A payload in both spellings keeps the column's — `columnSpellingWins`, `worker/src/fold.ts`.
-      const carried = this.legacyFold ? (op.payload as Record<string, unknown>) : columnSpellingWins(op.payload as Record<string, unknown>);
+      const spelled = this.legacyFold ? (op.payload as Record<string, unknown>) : columnSpellingWins(op.payload as Record<string, unknown>);
+      // An orphan end never overwrites a real end, and leaves no provenance when dropped —
+      // `settleAttemptEnd`, as `worker/src/fold.ts` calls it.
+      const carried = withoutNarration(op.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled);
       for (const key of this.legacyFold ? [] : Object.keys(carried)) {
         const other = key.includes("_")
           ? key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())
@@ -1747,7 +1776,7 @@ export class FakeSyncServer {
     const cumulative = runWork(
       rows.map((op, index) => {
         const payload = measured(op.payload);
-        return { keys: keysOf[index]!, bytes: payload.size, escapes: payload.escapes };
+        return { keys: keysOf[index]!, bytes: payload.size, escapes: payload.escapes, fields: op.verb === "create" || op.payload === null || typeof op.payload !== "object" ? 0 : Object.keys(op.payload).length };
       }),
       (key) => {
         const entity = stored.get(key);
@@ -1874,7 +1903,7 @@ export class FakeSyncServer {
             placer.walkLimit = Number.POSITIVE_INFINITY;
             continue;
           }
-          if (!must && reads >= limits.reads) break folding;
+          if (reads >= (must ? Math.max(limits.reads, FOLD_STEP_READS) : limits.reads)) break folding;
           reads += 1;
           read(placed.need);
         }
@@ -2167,6 +2196,7 @@ export class FakeSyncServer {
     }
     this.epoch = restore.toEpoch;
     restore.status = "committed";
+    restore.committedAt = new Date().toISOString();
     return this.ok(protocol, {
       restoreId: restore.restoreId,
       status: "committed",

@@ -24,8 +24,8 @@
 // either way, but the convention (see lib/graph-lineage.ts) is that a pure module
 // stays resolvable without the alias — so a later edit that needs a VALUE from here
 // cannot quietly make this file untestable.
-import { STALE_CLAIM_SECONDS, formatAgo } from "../lib/claim";
-import type { IssueStatus, IssueTiming, SubtreePlan } from "../lib/types";
+import { STALE_CLAIM_SECONDS } from "../lib/claim";
+import type { IssueStatus, IssueTiming, SubtreePlan, TimingQualityReport, WorkQualityState } from "../lib/types";
 
 /**
  * Durations for estimate-vs-actual prose: `45s`, `20m`, `3h10m`, `2d4h`.
@@ -55,6 +55,53 @@ export function formatDuration(seconds: number): string {
   }
   const rest = Math.floor((s % 86400) / 3600);
   return rest ? `${Math.floor(s / 86400)}d${rest}h` : `${Math.floor(s / 86400)}d`;
+}
+
+/**
+ * The same duration in words, for the Time tab: `45 seconds`, `20 minutes`,
+ * `3 hours 10 minutes`, `2 days 4 hours`.
+ *
+ * As precise as `formatDuration` above it — two units at most, largest first —
+ * because "2 hours" and "2 hours 55 minutes" are still the difference between
+ * hitting an estimate and blowing it. What changes is only the voice: a reader
+ * who is not an engineer should not have to decode `5h56m`. Minutes are rounded
+ * to the nearest one (`3m51s` reads "4 minutes"); seconds are said only under a
+ * minute.
+ */
+export function spokenDuration(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "0 seconds";
+  const s = Math.max(0, Math.floor(seconds));
+  const unit = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (s < 60) return unit(s, "second");
+  const minutes = Math.round(s / 60);
+  if (minutes < 60) return unit(minutes, "minute");
+  if (minutes < 1440) {
+    const rest = minutes % 60;
+    return rest ? `${unit(Math.floor(minutes / 60), "hour")} ${unit(rest, "minute")}` : unit(minutes / 60, "hour");
+  }
+  const hours = Math.round(s / 3600);
+  const rest = hours % 24;
+  return rest ? `${unit(Math.floor(hours / 24), "day")} ${unit(rest, "hour")}` : unit(hours / 24, "day");
+}
+
+/**
+ * The difference between plan and actual as a sentence, never as `5h56m under (99%)`.
+ *
+ * `running` changes the tense, because an unfinished task has not come in under
+ * anything: 4 minutes into a 6-hour plan it has 5 hours 56 minutes LEFT, which is a
+ * different claim from "finished 5 hours 56 minutes under".
+ */
+export function plainDelta(delta: Delta, running: boolean): string {
+  const amount = spokenDuration(Math.abs(delta.differenceSeconds));
+  if (delta.direction === "on") return running ? "Right at the plan so far" : "Right on the plan";
+  if (delta.direction === "under") return running ? `${amount} left in the plan` : `Finished ${amount} under the plan`;
+  return running ? `${amount} over the plan so far` : `Took ${amount} longer than planned`;
+}
+
+/** The same difference, short, for a sub-task row: `2 hours under`, `20 minutes over`, `on plan`. */
+export function shortDelta(delta: Delta): string {
+  if (delta.direction === "on") return "right on the plan";
+  return `${spokenDuration(Math.abs(delta.differenceSeconds))} ${delta.direction} the plan`;
 }
 
 /**
@@ -133,12 +180,12 @@ export function explainMissingDelta(
   actualSeconds: number | null,
 ): string {
   if (estimatedSeconds === null && actualSeconds === null) {
-    return "No estimate and no time recorded yet.";
+    return "Nothing to compare yet: there is no estimate and no time spent.";
   }
   if (estimatedSeconds === null) {
-    return "No estimate recorded, so there is nothing to compare this against.";
+    return "There is no estimate, so there is nothing to compare the time with.";
   }
-  return "Not started yet, so there is no actual to compare against.";
+  return "Nobody has worked on it yet, so there is nothing to compare with the plan.";
 }
 
 // ------------------------------------------------------------- provisional-ness
@@ -220,8 +267,23 @@ export function activityState(
  */
 export function activityHint(state: ActivityState): string | null {
   if (state.kind === "stopped") return null;
-  if (state.kind === "running") return "still running";
-  return `idle ${formatAgo(state.idleSeconds)} — clock stopped at last activity`;
+  if (state.kind === "running") return "still being worked on";
+  return `quiet for ${roughly(state.idleSeconds)}, so the clock has stopped`;
+}
+
+/** A pause, said roughly: `20 minutes`, `2 hours`, `3 days`. */
+function roughly(seconds: number): string {
+  const s = Math.max(0, seconds);
+  if (s < 3600) {
+    const minutes = Math.max(1, Math.floor(s / 60));
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  if (s < 86_400) {
+    const hours = Math.floor(s / 3600);
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  const days = Math.floor(s / 86_400);
+  return `${days} ${days === 1 ? "day" : "days"}`;
 }
 
 /**
@@ -229,7 +291,7 @@ export function activityHint(state: ActivityState): string | null {
  * an aggregation of its children and has no clock of its own to be running.
  */
 export function aggregationHint(childCount: number): string {
-  return `aggregated from ${childCount} ${childCount === 1 ? "child" : "children"}`;
+  return `added up from its ${childCount} ${childCount === 1 ? "sub-task" : "sub-tasks"}`;
 }
 
 /**
@@ -276,6 +338,12 @@ export interface ChildRow {
   activity: ActivityState;
   /** True when this child's numbers came from the two-timestamp fallback. */
   approximate: boolean;
+  /** The child's work state, as the server gave it; null for a cancelled child or a missing entry. */
+  workState: WorkQualityState | null;
+  /** The figure that state qualifies: agent work from attempts, not the `ran` category time. */
+  workSeconds: number | null;
+  /** The reasons behind the state, as the server gave them. */
+  workReasons: string[];
 }
 
 /** The minimum an issue must expose to become a row. */
@@ -320,8 +388,132 @@ export function buildChildRows(
       running: isStillRunning(child.status),
       activity: activityState(timing?.countedThrough ?? null, nowMs),
       approximate: timing?.approximate ?? false,
+      workState: timing?.quality?.work.state ?? null,
+      workSeconds: timing?.workSeconds ?? null,
+      workReasons: timing?.quality?.work.reasons ?? [],
     };
   });
+}
+
+// ------------------------------------------------------------------ quality states
+
+/**
+ * The state words the tab prints. The server decides the state (`quality.work.state`,
+ * `quality.wall.state`); this only names it. `timing-floor` reads as what it means.
+ */
+export const QUALITY_LABEL: Record<string, string> = {
+  exact: "exact",
+  "timing-floor": "under a minute",
+  approximate: "approximate",
+  reconstructed: "reconstructed",
+  missing: "not measured",
+  "provider-unavailable": "not reported by the provider",
+};
+
+/** Each reason code in a few words; an unknown code from a newer server is shown verbatim. */
+export const REASON_TEXT: Record<string, string> = {
+  sparse: "silences over 30 min",
+  capture_gap: "work before the first attempt",
+  contested: "contested between devices",
+  partial: "some children not measured",
+  orphan_provisional: "end not yet recorded",
+  end_unbounded: "end not bounded",
+  clock_skew: "device clocks disagree",
+  timing_floor: "under a minute",
+  reconstructed: "rebuilt from history",
+  never_started: "never started",
+  no_worker_attempt: "no attempt recorded",
+  input_missing: "no child measured",
+  not_applicable_cancelled: "cancelled",
+  unattributed: "time no attempt covers",
+  edge_history_incomplete: "blocker history incomplete",
+  conflict_resolved: "a resolved conflict",
+  replay_unavailable: "no history on this device",
+  timing_approximate: "a child's time is approximate",
+};
+
+/**
+ * The same states and reasons as a person would say them, for the Time tab. The two tables
+ * above stay as they are: the forecast and estimate-accuracy views print them in their own
+ * technical detail sections.
+ */
+export const PLAIN_QUALITY: Record<string, string> = {
+  exact: "measured exactly",
+  "timing-floor": "took under a minute",
+  approximate: "approximate",
+  reconstructed: "rebuilt from history",
+  missing: "not measured",
+  "provider-unavailable": "not reported by the AI provider",
+};
+
+export const PLAIN_REASON: Record<string, string> = {
+  sparse: "it had pauses of over 30 minutes",
+  capture_gap: "some work happened before tracking started",
+  contested: "two devices disagree",
+  partial: "some sub-tasks were not measured",
+  orphan_provisional: "the end is not recorded yet",
+  end_unbounded: "the end is not known",
+  clock_skew: "device clocks disagree",
+  timing_floor: "it took under a minute",
+  reconstructed: "rebuilt from history",
+  never_started: "never started",
+  no_worker_attempt: "no work session was recorded",
+  input_missing: "no sub-task was measured",
+  not_applicable_cancelled: "it was cancelled",
+  unattributed: "some time is not tied to a work session",
+  edge_history_incomplete: "the history of what it waited on is incomplete",
+  conflict_resolved: "a conflict between devices was resolved",
+  replay_unavailable: "this device has no history for it",
+  timing_approximate: "a sub-task's time is approximate",
+};
+
+/**
+ * The word for a state. `missing` says why when the reason is that nothing started: an issue
+ * that was never worked is "not started", which "not measured" would misdescribe.
+ */
+export function stateLabel(state: string, reasons: readonly string[]): string {
+  if (state === "missing" && reasons[0] === "never_started") return "not started";
+  return PLAIN_QUALITY[state] ?? state.replace(/[-_]/g, " ");
+}
+
+/**
+ * A child row's quality: the work figure beside the state that qualifies it (`work 16m50s ·
+ * reconstructed`), because the row's own `ran` is category time and the state says nothing
+ * about it. Null for a cancelled child.
+ */
+export function childQualityText(row: Pick<ChildRow, "workState" | "workSeconds" | "workReasons">): string | null {
+  if (row.workState === null) return null;
+  const label = stateLabel(row.workState, row.workReasons);
+  // A timing-floor state IS the duration ("took under a minute"); a figure beside it would
+  // only say "0 seconds" in front of the same fact.
+  if (row.workSeconds === null || row.workState === "timing-floor") return label;
+  return `${spokenSpent(row.workSeconds)} of agent work, ${label}`;
+}
+
+/** `"approximate · silences over 30 min"`: the state and why, in words. Null when there is no state. */
+export function qualityText(quality: { state: string | null; reasons: readonly string[] } | undefined): string | null {
+  if (!quality || quality.state === null) return null;
+  const label = stateLabel(quality.state, quality.reasons);
+  // The state's own reason code (`timing_floor` for timing-floor, `reconstructed`) would only repeat it.
+  const own = quality.state.replace("-", "_");
+  const reasons = quality.reasons.filter((reason) => reason !== own && !(label === "not started" && reason === "never_started")).map((reason) => PLAIN_REASON[reason] ?? reason.replace(/_/g, " "));
+  return reasons.length > 0 ? `${label}, because ${reasons.join(" and ")}` : label;
+}
+
+/**
+ * The cohort beneath a parent in one line: how many done leaves (the denominator), how many
+ * of them exact, and the others by state, zeros left out. Null when nothing beneath is done.
+ */
+export function cohortLine(report: TimingQualityReport): string | null {
+  const eligible = report.population.eligible;
+  if (eligible === 0) return null;
+  const percent = (count: number): string => `${Math.round((count / eligible) * 100)}%`;
+  const counts = report.work.counts;
+  const parts = [`${counts.exact} measured exactly (${percent(counts.exact)})`];
+  for (const state of ["timing-floor", "approximate", "reconstructed", "missing"] as const) {
+    if (counts[state] > 0) parts.push(`${counts[state]} ${PLAIN_QUALITY[state]}`);
+  }
+  return `Of the ${eligible} finished ${eligible === 1 ? "task" : "tasks"} under it: ${parts.join(", ")}.`;
 }
 
 // -------------------------------------------------------------------- the totals
@@ -391,21 +583,21 @@ export function computeTotals(timing: IssueTiming, rows: readonly ChildRow[]): T
  * mean opposite things to a reader: an INHERITED plan is a total nobody typed
  * and must say what it was built from, while an OWN plan sitting over planned
  * work must show the bottom-up number beside it rather than let one side win
- * quietly. Coverage is over descendants at every depth — not the direct-child
+ * quietly. Coverage is over plan units at every depth — not the direct-child
  * count the totals row reports — because that is the population the sum was
- * actually drawn from.
+ * actually drawn from (see `planCoverage`).
  */
 export function subtreePlanHint(plan: SubtreePlan): string | null {
   const coverage = planCoverage(plan);
-  if (plan.source === "descendants") return `inherited from ${coverage}`;
+  if (plan.source === "descendants") return `planned from the estimates of the tasks under it (${coverage})`;
   if (plan.source === "own" && plan.descendantsEstimatedSeconds !== null) {
-    return `own estimate; descendants add up to ${formatDuration(plan.descendantsEstimatedSeconds)} (${coverage})`;
+    return `its own estimate; the tasks under it add up to ${spokenDuration(plan.descendantsEstimatedSeconds)} (${coverage})`;
   }
   return null;
 }
 
 /** The provenance a leaf's plan gets when there is nothing beneath it to compare against. */
-const OWN_PLAN = "own estimate";
+const OWN_PLAN = "its own estimate";
 
 /**
  * The provenance of a CHILD's `est` figure (R7c, STA-194), for its tooltip.
@@ -421,9 +613,16 @@ export function childPlanHint(plan: SubtreePlan): string | null {
   return subtreePlanHint(plan) ?? OWN_PLAN;
 }
 
-/** `3 of 9 descendants` — the population the recursive sum was drawn from. */
+/**
+ * `3 of 9 units` — coverage over PLAN UNITS (`SubtreePlan.unplannedCount`): planned units of
+ * planned plus unplanned. Not over descendants: an unestimated epic over planned leaves, or
+ * leaves shadowed by an estimated parent, are covered, and counting them as gaps made a fully
+ * planned subtree read as partly planned.
+ */
 function planCoverage(plan: SubtreePlan): string {
-  return `${plan.contributingCount} of ${plan.totalCount} descendants`;
+  const total = plan.contributingCount + plan.unplannedCount;
+  if (total > 0 && plan.contributingCount === total) return total === 1 ? "it has an estimate" : `all ${total} have one`;
+  return `${plan.contributingCount} of ${total} ${plan.contributingCount === 1 ? "has" : "have"} one`;
 }
 
 // ---------------------------------------------------------- the spoken headline
@@ -446,16 +645,40 @@ export function summarySentence(
   hints: { actual?: string | null; difference?: string | null } = {},
 ): string {
   const qualify = (text: string, hint: string | null | undefined) => (hint ? `${text} (${hint})` : text);
-  const coverage = plan.totalCount === 0 ? "no descendants" : `${planCoverage(plan)} planned`;
-  const source =
-    plan.source === "own" ? OWN_PLAN : plan.source === "descendants" ? "inherited from descendants" : "no plan";
-  return [
-    `Planned ${formatOptionalDuration(summary.plannedSeconds, NO_ESTIMATE)}.`,
-    `Actual ${qualify(formatOptionalDuration(summary.actualSeconds, NOT_STARTED), hints.actual)}.`,
-    `Difference ${qualify(summary.delta ? summary.delta.label : "No comparison", hints.difference)}.`,
-    `Coverage ${coverage}.`,
-    `Source ${source}.`,
-  ].join(" ");
+  const total = plan.contributingCount + plan.unplannedCount;
+  const sentences: string[] = [];
+  // 1. The plan. An absence is said as a fact, never as a plan that "comes from no estimate".
+  sentences.push(summary.plannedSeconds === null ? "No estimate yet." : `Planned ${spokenDuration(summary.plannedSeconds)}.`);
+  // 2. The time spent, as a person would say a few seconds: "less than a minute", not "0 seconds".
+  sentences.push(
+    summary.actualSeconds === null
+      ? "No time spent yet."
+      : `${qualify(`${upper(spokenSpent(summary.actualSeconds))} spent`, hints.actual)}.`,
+  );
+  // 3. The difference, only when there are two sides to compare.
+  if (summary.delta) sentences.push(`${qualify(upper(shortDelta(summary.delta)), hints.difference)}.`);
+  // 4. How much of the work under it is estimated, only when there is work under it.
+  if (plan.totalCount > 0) {
+    sentences.push(
+      total === 0
+        ? "None of the tasks under it is still open."
+        : `${plan.contributingCount} of the ${total} tasks under it ${plan.contributingCount === 1 ? "has" : "have"} an estimate.`,
+    );
+  }
+  // 5. Where the plan came from, only when there is a plan.
+  if (plan.source === "own") sentences.push("The plan is its own estimate.");
+  if (plan.source === "descendants") sentences.push("The plan comes from the estimates of the tasks under it.");
+  return sentences.join(" ");
+}
+
+const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * Time spent, as a person says it: anything under a minute is "less than a minute", never
+ * "0 seconds" (a figure that reads as "nothing happened" when the clock simply rounded down).
+ */
+export function spokenSpent(seconds: number): string {
+  return !Number.isFinite(seconds) || seconds < 60 ? "less than a minute" : spokenDuration(seconds);
 }
 
 /**
@@ -485,26 +708,28 @@ export function totalsCaveat(totals: Totals): string | null {
   // may still hold this issue's OWN estimate — explainMissingDelta says the
   // rest when it does not.
   if (totals.plannedCount === 0 && totals.childCount > 0) {
-    return `None of the ${totals.childCount} ${totals.childCount === 1 ? "child" : "children"} has a plan.`;
+    return totals.childCount === 1
+      ? "Its sub-task has no estimate."
+      : `None of its ${totals.childCount} sub-tasks has an estimate.`;
   }
   if (totals.plannedCount < totals.childCount) {
     const missing = totals.childCount - totals.plannedCount;
     notes.push(
-      `${missing} of ${totals.childCount} ${missing === 1 ? "child has" : "children have"} no plan, so the plan and the actual cover different work.`,
+      `${missing} of its ${totals.childCount} sub-tasks ${missing === 1 ? "has" : "have"} no estimate, so the plan leaves some of the work out.`,
     );
   }
   if (totals.runningCount > 0) {
     notes.push(
-      `${totals.runningCount} still running, so the actual is still growing.`,
+      `${totals.runningCount} ${totals.runningCount === 1 ? "sub-task is" : "sub-tasks are"} still being worked on, so the time spent is still growing.`,
     );
   }
   if (totals.idleCount > 0) {
     notes.push(
-      `${totals.idleCount} unfinished but idle, so ${totals.idleCount === 1 ? "its clock has" : "their clocks have"} stopped at the last sign of work.`,
+      `${totals.idleCount} unfinished ${totals.idleCount === 1 ? "sub-task has" : "sub-tasks have"} gone quiet, so ${totals.idleCount === 1 ? "its clock has" : "their clocks have"} stopped.`,
     );
   }
   if (totals.approximate) {
-    notes.push("Some children have no usable history, so their time is approximate.");
+    notes.push("Some sub-tasks have an incomplete history, so their time is approximate.");
   }
   return notes.length > 0 ? notes.join(" ") : null;
 }
@@ -571,28 +796,31 @@ export interface BreakdownRow {
 export function buildBreakdown(timing: IssueTiming): BreakdownRow[] {
   if (!isAggregated(timing)) return [];
   const plan = timing.subtreePlan;
-  const descendants = `${plan.contributingCount} of ${plan.totalCount} descendants`;
+  const descendants = planCoverage(plan);
+  // When a figure is missing its source line IS the sentence, so nothing is said twice.
   return [
     {
-      label: "This issue",
+      label: "This task itself",
       plannedSeconds: timing.estimatedSeconds,
       planSource:
         timing.estimatedSeconds === null
-          ? "no estimate set on this issue"
-          : "top-down, set on this issue",
+          ? "No estimate of its own"
+          : "its own estimate",
       actualSeconds: timing.ownActiveSeconds,
       actualSource:
         timing.ownActiveSeconds === null
-          ? "never worked directly"
-          : "worked directly — not in the headline",
+          ? "No time spent on it directly"
+          : "time spent on this task itself, not counted at the top",
     },
     {
-      label: "Children",
+      label: "Its sub-tasks",
       plannedSeconds: plan.descendantsEstimatedSeconds,
       planSource:
         plan.descendantsEstimatedSeconds === null
-          ? `no estimate among ${plan.totalCount} descendants`
-          : `bottom-up, from ${descendants}`,
+          ? plan.unplannedCount === 0
+            ? "No open tasks under it"
+            : `None of the ${plan.unplannedCount} tasks under it has an estimate`
+          : `from the tasks under it (${descendants})`,
       actualSeconds: timing.childrenActiveSeconds,
       actualSource: aggregationHint(timing.childCount),
     },

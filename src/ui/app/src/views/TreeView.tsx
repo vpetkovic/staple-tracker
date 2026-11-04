@@ -24,7 +24,20 @@
  * prev/next arrows would keep paging a list that is no longer on the page.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { dequeueTask, enqueueTask, getInbox, getQueue, isRevisionConflict, type AuthError } from "@/lib/api";
+import { action, dequeueTask, enqueueTask, getInbox, getQueue, getSettings, isRevisionConflict, type AuthError } from "@/lib/api";
+import { RowStatusMenu } from "@/components/task-list/RowStatusMenu";
+import { RowNotice } from "@/components/task-list/RowNotice";
+import { StatusSubmenu } from "@/components/QueueRowMenu";
+import { useRowPlan } from "@/components/task-list/useRowPlan";
+import {
+  applyRowStatus,
+  plainRowRefusal,
+  rowStatusChoices,
+  rowWriteTarget,
+  type RowRefusalWords,
+  type RowStatusChoice,
+  type StatusChoice,
+} from "@/components/task-list/row-status";
 import {
   attachRowCues,
   buildRowCueIndex,
@@ -33,15 +46,19 @@ import {
 } from "@/components/task-list";
 import { GuardRefusal } from "@/components/GuardRefusal";
 import { QueueRowMenu, queueRowMenuState } from "@/components/QueueRowMenu";
+import type { RowMenuControl } from "@/components/task-list/TaskRowLine";
 import { buildGateCaptions } from "@/lib/derived-queued";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { FilterEmptyState } from "@/components/filters/FilterEmptyState";
 import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
+import { placeUnderMilestones } from "./tree/milestone-placement";
+import { AutopilotTreeContext, autopilotAncestors, useRuns } from "@/lib/runs";
 import { useSession } from "@/lib/session";
-import type { InboxRow, QueueView } from "@/lib/types";
+import type { InboxRow, IssueStatus, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
+import { rowQueueMenu, type RowQueue } from "./tree/row-queue";
 import { TreeGrid } from "./tree/TreeGrid";
 import { EmptyState, ViewState } from "./ViewChrome";
 
@@ -96,6 +113,118 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   );
 
   /**
+   * CHANGING A TASK'S STATUS FROM ITS ROW — the desktop row's quick action, `S` on a focused
+   * row, and the "Change status" submenu of the row's `⋯` (the keyboard's and a finger's way).
+   *
+   * THE ROW'S WORKSPACE, twice over. The choices are that workspace's own statuses (read on
+   * first open and kept), not the page's: in All workspaces the page's vocabulary can offer a
+   * status the row's workspace does not have. And the write goes to that workspace
+   * (`applyRowStatus` → `rowWriteTarget`), never the page's scope.
+   *
+   * A REFUSAL IS SHOWN AT THE ROW, in plain words, with the fix when there is one ("Assign
+   * me"), and it is cleared by the next thing the reader does. It used to go to the banner at
+   * the top of the scrolled list, where nobody looking at the row could see it.
+   */
+  const desk = useRowPlan().layout === "line";
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [vocabularies, setVocabularies] = useState<Record<string, StatusChoice[] | "loading" | "failed">>({});
+  const loadVocabulary = useCallback((ws: string) => {
+    setVocabularies((current) => {
+      if (current[ws] !== undefined && current[ws] !== "failed") return current;
+      getSettings({ ws }).then(
+        (settings) =>
+          setVocabularies((now) => ({
+            ...now,
+            [ws]: settings.statuses.map((status) => ({ id: status.id, label: status.label, category: status.category })),
+          })),
+        () => setVocabularies((now) => ({ ...now, [ws]: "failed" })),
+      );
+      return { ...current, [ws]: "loading" };
+    });
+  }, []);
+  const choicesFor = useCallback(
+    (row: TaskRow): RowStatusChoice[] | null => {
+      const vocabulary = vocabularies[row.workspace];
+      if (vocabulary === undefined || vocabulary === "loading") return null;
+      if (vocabulary === "failed") return [];
+      return rowStatusChoices(vocabulary, row.issue.status);
+    },
+    [vocabularies],
+  );
+
+  const [notice, setNotice] = useState<RowNoticeState | null>(null);
+  const changeStatus = useCallback(
+    async (row: TaskRow, status: string, label: string) => {
+      setNotice(null);
+      setQueueRefusal(null);
+      setStatusBusy(true);
+      try {
+        await applyRowStatus(row, status, (target, payload) =>
+          action(target, { type: "status", status: payload.status as IssueStatus }),
+        );
+        session.refresh();
+      } catch (error) {
+        setNotice({ key: row.issue.id, row, status, label, words: plainRowRefusal(describeRefusal(error), { label }) });
+      } finally {
+        setStatusBusy(false);
+      }
+    },
+    [session],
+  );
+  const assignAndRetry = useCallback(
+    async (state: RowNoticeState) => {
+      const name = askName();
+      if (!name) return;
+      setStatusBusy(true);
+      try {
+        await action(rowWriteTarget(state.row), { type: "assignee", assignee: name });
+      } catch (error) {
+        setNotice({ ...state, words: { sentence: plainRowRefusal(describeRefusal(error), state).sentence, needsAssignee: false } });
+        setStatusBusy(false);
+        return;
+      }
+      setStatusBusy(false);
+      await changeStatus(state.row, state.status, state.label);
+    },
+    [changeStatus],
+  );
+  const rowStatusMenu = useCallback(
+    (row: TaskRow, trigger: ReactNode, control: RowMenuControl) => (
+      <RowStatusMenu
+        trigger={trigger}
+        identifier={row.issue.identifier}
+        choices={choicesFor(row)}
+        disabled={statusBusy}
+        open={control.open}
+        onOpenChange={(open) => {
+          if (open) loadVocabulary(row.workspace);
+          control.onOpenChange(open);
+        }}
+        onPick={(status, label) => void changeStatus(row, status, label)}
+      />
+    ),
+    [choicesFor, statusBusy, loadVocabulary, changeStatus],
+  );
+  const rowNotice = useCallback(
+    (row: TaskRow) =>
+      notice && !row.ghost && notice.key === row.issue.id ? (
+        <RowNotice
+          identifier={row.issue.identifier}
+          sentence={notice.words.sentence}
+          needsAssignee={notice.words.needsAssignee}
+          busy={statusBusy}
+          onAssign={() => void assignAndRetry(notice)}
+          onOpen={() => {
+            setNotice(null);
+            session.open(row.workspace, row.issue.identifier);
+          }}
+          onDismiss={() => setNotice(null)}
+        />
+      ) : null,
+    [notice, statusBusy, assignAndRetry, session],
+  );
+
+  /**
    * THE ROW MENU'S WRITES — the `⋯` slot, wired to the queue.
    *
    * Every one of them is the SAME `POST /api/queue/…` the Queue view sends, carrying the
@@ -115,6 +244,8 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   const queueWrite = useCallback(
     async (run: (baseRevision: number) => Promise<unknown>) => {
       if (queueRevision === undefined) return;
+      setNotice(null);
+      setQueueRefusal(null);
       setQueueBusy(true);
       try {
         await run(queueRevision);
@@ -152,28 +283,108 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
     [queue.data],
   );
 
+  /**
+   * ALL WORKSPACES: THE ROW QUEUES INTO ITS OWN WORKSPACE.
+   *
+   * There is no cross-workspace plan to read here (see the note on `wantQueue`), but every
+   * row knows which workspace it lives in, and that workspace's plan is one request away. So
+   * instead of a menu of greyed-out queue actions, opening the menu reads the row's own
+   * workspace plan, and the actions write to it. Read on every open, not polled: the list
+   * can hold rows from many workspaces and only the one being acted on needs a plan.
+   */
+  const [rowQueues, setRowQueues] = useState<Record<string, RowQueue>>({});
+  const loadRowQueue = useCallback(
+    (ws: string) => {
+      setRowQueues((current) => ({ ...current, [ws]: { kind: "loading" } }));
+      getQueue({ ws, all: true }).then(
+        (view) => setRowQueues((current) => ({ ...current, [ws]: { kind: "ready", view } })),
+        (error: unknown) =>
+          setRowQueues((current) => ({ ...current, [ws]: { kind: "failed", refusal: describeRefusal(error) } })),
+      );
+    },
+    [],
+  );
+  const rowQueueWrite = useCallback(
+    async (ws: string, run: (baseRevision: number) => Promise<unknown>) => {
+      const { revision } = rowQueueMenu(rowQueues[ws], ws);
+      if (revision === null) return;
+      setNotice(null);
+      setQueueRefusal(null);
+      setQueueBusy(true);
+      try {
+        await run(revision);
+        session.refresh();
+      } catch (error) {
+        setQueueRefusal(describeRefusal(error));
+      } finally {
+        setQueueBusy(false);
+        loadRowQueue(ws);
+      }
+    },
+    [rowQueues, loadRowQueue, session],
+  );
+
+  /** The `⋯` menu's "Change status" submenu, on the desk only: the phone menu is unchanged. */
+  const statusSubmenu = useCallback(
+    (row: TaskRow) =>
+      desk && !row.ghost ? (
+        <StatusSubmenu
+          choices={choicesFor(row)}
+          disabled={statusBusy}
+          onOpen={() => loadVocabulary(row.workspace)}
+          onPick={(status, label) => void changeStatus(row, status, label)}
+        />
+      ) : undefined,
+    [desk, choicesFor, statusBusy, loadVocabulary, changeStatus],
+  );
+
   const rowActionsMenu = useCallback(
-    (row: TaskRow, trigger: ReactNode) => {
+    (row: TaskRow, trigger: ReactNode, control?: RowMenuControl) => {
       const ref = row.issue.identifier;
+      if (!wantQueue) {
+        const ws = row.workspace;
+        const menu = rowQueueMenu(rowQueues[ws], ws);
+        return (
+          <QueueRowMenu
+            trigger={trigger}
+            open={control?.open}
+            onOpenChange={(open) => {
+              if (open) loadRowQueue(ws);
+              control?.onOpenChange(open);
+            }}
+            identifier={ref}
+            queueWorkspace={ws}
+            state={queueRowMenuState(row, menu.planIds)}
+            disabled={queueBusy || menu.revision === null}
+            disabledReason={menu.reason}
+            onOpen={() => session.open(ws, ref)}
+            onQueueNext={() => void rowQueueWrite(ws, (baseRevision) => enqueueTask({ ws, ref: row.issue.id, at: 1, baseRevision }))}
+            onQueueLast={() => void rowQueueWrite(ws, (baseRevision) => enqueueTask({ ws, ref: row.issue.id, baseRevision }))}
+            onDequeue={() => void rowQueueWrite(ws, (baseRevision) => dequeueTask({ ws, ref: row.issue.id, baseRevision }))}
+            statusSubmenu={statusSubmenu(row)}
+          />
+        );
+      }
       const ws = session.ws || undefined;
       return (
         <QueueRowMenu
           trigger={trigger}
+          open={control?.open}
+          onOpenChange={control?.onOpenChange}
           identifier={ref}
           state={queueRowMenuState(row, queuedIds)}
           disabled={queueBusy || queueRevision === undefined}
           onOpen={() => session.open(row.workspace, ref)}
-          // `at: 1` is the wire's own "put it in front", not a reorder computed here.
-          // Writes by the row's id, never its number (`lib/write-ref.ts`).
           onQueueNext={() =>
             void queueWrite((baseRevision) => enqueueTask({ ws, ref: row.issue.id, at: 1, baseRevision }))
           }
           onQueueLast={() => void queueWrite((baseRevision) => enqueueTask({ ws, ref: row.issue.id, baseRevision }))}
           onDequeue={() => void queueWrite((baseRevision) => dequeueTask({ ws, ref: row.issue.id, baseRevision }))}
+          statusSubmenu={statusSubmenu(row)}
         />
       );
     },
-    [queuedIds, queueBusy, queueRevision, queueWrite, session],
+    [wantQueue, rowQueues, loadRowQueue, rowQueueWrite, queuedIds, queueBusy, queueRevision, queueWrite, session, statusSubmenu],
   );
 
   /**
@@ -200,8 +411,13 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
    * page whose queue has not landed) pays nothing and re-renders nothing.
    */
   const all = useMemo(
-    () => attachRowCues(session.issues.data ?? [], cueIndex),
-    [session.issues.data, cueIndex],
+    // Then milestones become the top of the tree — see views/tree/milestone-placement.ts —
+    // except when grouped by epic, whose axis IS the epics a milestone would fold together.
+    () => {
+      const cued = attachRowCues(session.issues.data ?? [], cueIndex);
+      return groupBy === "parent" ? cued : placeUnderMilestones(cued);
+    },
+    [session.issues.data, cueIndex, groupBy],
   );
   /*
    * R4b (STA-187). `applyFilterDimensions` is `applyFilters` plus the three dimensions that
@@ -209,6 +425,13 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
    * runs the V4 predicate first and narrows what survived, so nothing V4 argued changes and
    * the two registries never have to know about each other.
    */
+  /**
+   * Which folded rows hide a ticket a live autopilot run is working, over `all`: the parent
+   * links as this list nests them, milestone placement included (lib/runs.ts).
+   */
+  const { claimed } = useRuns();
+  const autopilotTree = useMemo(() => autopilotAncestors(all, claimed), [all, claimed]);
+
   const rows = useMemo(
     () => applyFilterDimensions(all, filters, filterContext),
     [all, filters, filterContext],
@@ -306,61 +529,85 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
             return <FilterEmptyState rows={all} state={filters} context={filterContext} />;
           }
           return (
-            <TreeGrid
-              rows={rows}
-              /*
-               * O3b (STA-127). The UNFILTERED list, for the collapsed-parent rollup's counts
-               * and nothing else — `rows` above still decides membership, order and
-               * everything the keyboard walks.
-               *
-               * It has to be this array rather than `rows`, because `done` is hidden by the
-               * default filter: a rollup computed from what is on screen would tell an epic
-               * with three finished children and two open ones that it is `0/2`, which is
-               * not a partial answer but the wrong one. No new fetch — `/api/issues` is
-               * unpaged and `session.issues.data` IS the whole list.
-               */
-              allRows={all}
-              mode={mode}
-              groupBy={groupBy}
-              /*
-               * R4a (STA-186). The active sort for THIS workspace and view, resolved by App
-               * from `staple:view:v1`. It reaches the model as `BuildOptions.sort` and does
-               * nothing else — it cannot reach the queue, the inbox, or a write. See
-               * `lib/sort-modes.ts` and docs/queue.md's "Presentation sort is not the queue".
-               */
-              sort={sort}
-              pickup={pickup}
-              captions={captions}
-              currentRef={selection?.ref ?? null}
-              /*
-               * TRUE, and this is the rewiring the spec asked for rather than a
-               * disabled gate. `lib/filters.ts` is now the single authority on whether
-               * resolved work is on the page, and its rule is subtler than a boolean:
-               * selecting the "Done" status is itself the opt-in. Re-applying a
-               * hide-resolved default here would throw those rows away again and show
-               * an empty list to someone who explicitly asked for done tasks.
-               */
-              showResolved
-              hiddenParents={orphanedBy}
-              onOpen={session.open}
-              /*
-               * R4c (STA-188). The milestone marker's destination — the Milestones view,
-               * with that milestone focused. The routing is the session's, the same one the
-               * header tabs and the palette's "Go to …" commands use; the row knows only
-               * that it has somewhere to send a click.
-               */
-              onOpenMilestone={session.focusMilestone}
-              /*
-               * The `⋯` menu, built per row. Passed as a BUILDER rather than as data so the
-               * grid never has to know what a menu is — see `TaskRowLine.actionsMenu`.
-               */
-              rowActionsMenu={rowActionsMenu}
-              onCloseDrawer={session.close}
-              onVisibleOrder={publishVisibleOrder}
-            />
+            // The fold's autopilot map, over `all`: the parent links as this list nests them.
+            <AutopilotTreeContext value={autopilotTree}>
+              <TreeGrid
+                rows={rows}
+                /*
+                 * O3b (STA-127). The UNFILTERED list, for the collapsed-parent rollup's counts
+                 * and nothing else — `rows` above still decides membership, order and
+                 * everything the keyboard walks.
+                 *
+                 * It has to be this array rather than `rows`, because `done` is hidden by the
+                 * default filter: a rollup computed from what is on screen would tell an epic
+                 * with three finished children and two open ones that it is `0/2`, which is
+                 * not a partial answer but the wrong one. No new fetch — `/api/issues` is
+                 * unpaged and `session.issues.data` IS the whole list.
+                 */
+                allRows={all}
+                mode={mode}
+                groupBy={groupBy}
+                /*
+                 * R4a (STA-186). The active sort for THIS workspace and view, resolved by App
+                 * from `staple:view:v1`. It reaches the model as `BuildOptions.sort` and does
+                 * nothing else — it cannot reach the queue, the inbox, or a write. See
+                 * `lib/sort-modes.ts` and design/queue.md's "Presentation sort is not the queue".
+                 */
+                sort={sort}
+                pickup={pickup}
+                captions={captions}
+                currentRef={selection?.ref ?? null}
+                /*
+                 * TRUE, and this is the rewiring the spec asked for rather than a
+                 * disabled gate. `lib/filters.ts` is now the single authority on whether
+                 * resolved work is on the page, and its rule is subtler than a boolean:
+                 * selecting the "Done" status is itself the opt-in. Re-applying a
+                 * hide-resolved default here would throw those rows away again and show
+                 * an empty list to someone who explicitly asked for done tasks.
+                 */
+                showResolved
+                hiddenParents={orphanedBy}
+                onOpen={session.open}
+                /*
+                 * R4c (STA-188). The milestone marker's destination — the Milestones view,
+                 * with that milestone focused. The routing is the session's, the same one the
+                 * header tabs and the palette's "Go to …" commands use; the row knows only
+                 * that it has somewhere to send a click.
+                 */
+                onOpenMilestone={session.focusMilestone}
+                /*
+                 * The `⋯` menu, built per row. Passed as a BUILDER rather than as data so the
+                 * grid never has to know what a menu is — see `TaskRowLine.actionsMenu`.
+                 */
+                rowActionsMenu={rowActionsMenu}
+                rowStatusMenu={rowStatusMenu}
+                rowNotice={rowNotice}
+                onCloseDrawer={session.close}
+                onVisibleOrder={publishVisibleOrder}
+              />
+            </AutopilotTreeContext>
           );
         }}
       </ViewState>
     </div>
   );
+}
+
+/** A refused row status change, and what to say about it. */
+interface RowNoticeState {
+  key: string;
+  row: TaskRow;
+  status: string;
+  label: string;
+  words: RowRefusalWords;
+}
+
+/** Who "Assign me" assigns: the name this browser remembers, or asked once. */
+function askName(): string | null {
+  const remembered = localStorage.getItem("staple:actor") ?? "";
+  if (remembered.trim()) return remembered.trim();
+  const name = window.prompt("Who should this be assigned to? Type your name.", "")?.trim();
+  if (!name) return null;
+  localStorage.setItem("staple:actor", name);
+  return name;
 }

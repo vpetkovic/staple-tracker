@@ -70,7 +70,7 @@ const noop = () => {};
 /**
  * A session with the fields these three components read and nothing else.
  *
- * `FilterBar` and `NoMatchesState` read the session rather than taking props, so the only
+ * `FilterBar` and `FilterEmptyState` read the session rather than taking props, so the only
  * way to ask what they PUT IN THE DOM is to supply one. Everything not read is a throwing
  * stub in spirit and a no-op in practice — the point of the object is that a test cannot
  * accidentally depend on a field the component does not use.
@@ -215,7 +215,7 @@ describe("the active filter state is announced, not only drawn", () => {
       { filters: state },
     );
 
-    expect(markup).toContain("no tasks match these filters");
+    expect(markup).toContain("No tasks match these filters");
     expect(markup).toContain("2 filters are narrowing this view");
     expect(markup).toContain("done tasks are hidden");
     // And the sentence that names WHICH chip to take off, with the number it would restore.
@@ -288,8 +288,10 @@ describe("every row cue word reaches a screen reader", () => {
 
     expect(row).toContain(`aria-label="${sentence}"`);
     expect(row).toContain(`title="${sentence}"`);
-    // The diamond itself says nothing out loud — it is the button's name that does.
-    expect(row).toContain(`<span aria-hidden="true">${MILESTONE_CUE_GLYPH}</span>`);
+    // The list draws the desktop row, which names the milestone in a chip instead of the
+    // diamond; the chip's text is decoration beside its accessible name.
+    expect(row).toContain(`<span class="staple-row-milestone-name">${MILESTONE.title}</span>`);
+    expect(row).not.toContain(`<span aria-hidden="true">${MILESTONE_CUE_GLYPH}</span>`);
     expect(row).toContain('data-milestone="M-1"');
   });
 

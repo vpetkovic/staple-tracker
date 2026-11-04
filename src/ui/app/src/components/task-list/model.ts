@@ -8,6 +8,7 @@
  *
  * Nothing here renders, reads a clock, or touches storage.
  */
+import { LINE_GEOMETRY, type RowGeometry } from "./row-layout";
 import { isStaleClaim } from "@/lib/claim";
 import type {
   ClaimActivity,
@@ -50,8 +51,8 @@ export const INDENT_STEP = 20;
  */
 export const MAX_INDENT_DEPTH = 6;
 
-export function indentPx(depth: number): number {
-  return Math.min(Math.max(depth, 0), MAX_INDENT_DEPTH) * INDENT_STEP;
+export function indentPx(depth: number, geometry: RowGeometry = LINE_GEOMETRY): number {
+  return Math.min(Math.max(depth, 0), geometry.maxIndentDepth) * geometry.indentStep;
 }
 
 /**
@@ -90,9 +91,17 @@ export const COL_GAP = 8;
  * Handling it here rather than at each call site is the difference between one arithmetic
  * fact and three copies of it.
  */
-export function guideX(level: number, hasSelectColumn = true): number {
+export function guideX(level: number, hasSelectColumn = true, geometry: RowGeometry = LINE_GEOMETRY): number {
   const select = hasSelectColumn ? COL_SELECT + COL_GAP : 0;
-  return ROW_PAD_LEFT + indentPx(level) + select + COL_DISCLOSURE / 2;
+  return ROW_PAD_LEFT + indentPx(level, geometry) + select + geometry.disclosure / 2;
+}
+
+/**
+ * How far the elbow runs right from a parent's rail: to the left edge of the child's
+ * disclosure column. 12px on desktop (20 − 16/2), 8px on a phone (14 − 12/2).
+ */
+export function elbowWidth(geometry: RowGeometry = LINE_GEOMETRY): number {
+  return geometry.indentStep - geometry.disclosure / 2;
 }
 
 /** The parent chip a cross-group child wears instead of an indent. */
@@ -364,7 +373,15 @@ export interface RollupOptions {
  *
  * `issue.id -> ParentRollup`, strict descendants only, at EVERY depth — a grandchild counts
  * exactly as much as a child, because an epic's progress is the progress of everything
- * under it and a task is not less finished for being one level further down. That falls out
+ * under it and a task is not less finished for being one level further down.
+ *
+ * ── LEAVES ONLY, like a milestone's progress ─────────────────────────────────────────
+ *
+ * A descendant that has children of its own is NOT counted: its status is derived from
+ * theirs, so counting it and them counts the same work twice (an epic under a milestone
+ * made a milestone of 11 tasks read 0/12). A childless descendant is its own leaf. This is
+ * `milestoneProgress`'s rule (core/milestones.ts, design/milestones.md "Progress"), so a
+ * milestone's row and its detail count the same leaves. That falls out
  * of `forEachAncestor` for free: every row walks up to all of its ancestors, so a
  * grandparent is reached on the same pass as a parent, with no recursion and no depth bound.
  *
@@ -400,6 +417,9 @@ export function parentRollups(
 ): Map<string, ParentRollup> {
   const { categoryOf } = options;
   const acc = new Map<string, Accumulator>();
+  const present = new Set(rows.map((r) => r.issue.id));
+  // A row some other row names as its parent is not a leaf: its children stand for it.
+  const hasChildren = new Set(rows.map((r) => r.issue.parentId).filter((id): id is string => id !== null && present.has(id)));
 
   forEachAncestor(rows, (row, ancestorId) => {
     let into = acc.get(ancestorId);
@@ -408,7 +428,7 @@ export function parentRollups(
       acc.set(ancestorId, into);
     }
 
-    const segment = rollupSegmentOf(row.issue.status, categoryOf);
+    const segment = hasChildren.has(row.issue.id) ? null : rollupSegmentOf(row.issue.status, categoryOf);
     if (segment !== null) {
       into.segments[segment] += 1;
       into.total += 1;

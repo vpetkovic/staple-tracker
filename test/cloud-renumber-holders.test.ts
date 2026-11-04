@@ -7,7 +7,7 @@
  * learned the number before and uses it after — `staple wait`, an agent between `checkout`
  * and `done`, a lease renewal, an MCP session — used to reach the other issue.
  *
- * The rule (`docs/sync.md`, "A number that moved under a caller"), and nothing in it depends
+ * The rule (`design/sync.md`, "A number that moved under a caller"), and nothing in it depends
  * on who the actor is — the step that learned the number and the step that writes can be
  * different actors, `$STAPLE_AGENT` unset and `$USER` whoever is logged in:
  *

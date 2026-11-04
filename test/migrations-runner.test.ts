@@ -129,9 +129,21 @@ describe("version detection", () => {
     // target deliberately unmoved at 12. Hub 003 is the first migration in this
     // series that the workspace did not also need, which is exactly the
     // divergence this assertion exists to make visible. Moved again by STA-287:
-    // hub 3 -> 4 (004-cross-link-changes), workspace still 12.
-    expect(latestVersion(WORKSPACE_TARGET)).toBe(12);
-    expect(latestVersion(HUB_TARGET)).toBe(4);
+    // hub 3 -> 4 (004-cross-link-changes), workspace still 12. Moved again by
+    // hub 005 (limit windows and budget samples, machine state that never
+    // replicates): hub 4 -> 5, workspace still 12. Then workspace 12 -> 13
+    // (013-execution-attempts, which replicates) and hub 5 -> 6 (006-attempt-presence,
+    // the machine-local index of attempts this machine started). Then workspace
+    // 13 -> 14 (014-attempt-role, the attempt's lane) and hub 6 -> 7
+    // (007-presence-role, the lane in the presence index). Then hub 7 -> 8
+    // (008-budget-forgotten, the removed readings a replay must not restore),
+    // workspace still 14. Then workspace 14 -> 15 (015-autopilot-runs, two
+    // machine-local tables), hub still 8. Then workspace 15 -> 16 (016-milestone-goals,
+    // the machine-local criterion marks and three run columns), hub still 8. Then workspace
+    // 16 -> 17 (017-derived-status, the replicated ownership column and its trigger), hub still 8.
+    // Then workspace 17 -> 18 (018-attachments, file metadata and its bytes), hub still 8.
+    expect(latestVersion(WORKSPACE_TARGET)).toBe(18);
+    expect(latestVersion(HUB_TARGET)).toBe(8);
   });
 });
 

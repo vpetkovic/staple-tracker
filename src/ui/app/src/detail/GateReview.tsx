@@ -103,7 +103,7 @@ import type { GateQueueEntry, IssueGate } from "@/lib/types";
  * So the action is named for what it does to the ticket — it sends it back — and the
  * three consequences are printed above the box rather than discovered afterwards. The
  * SAME sentence is the CLI's `request-changes --help`, the MCP `request_changes`
- * description and the paragraph in docs/semantics.md. One wording, four surfaces: if the
+ * description and the paragraph in design/semantics.md. One wording, four surfaces: if the
  * behaviour ever changes, the grep that finds one finds them all.
  *
  * The COMMAND is still `request-changes` / `request_changes`. Renaming a shipped verb to
@@ -220,12 +220,36 @@ export function gateStateSummary(gate: IssueGate, now: Date): string {
  * does not move when it opens. A disclosure that pushes the thing you were just reading
  * off the screen is a disclosure people learn not to press.
  */
+/**
+ * WHAT APPROVING WILL DO when nothing is queued behind the gate — said by its outcome, because
+ * the store's approval re-derives the parent (`approveGate`): it closes only when everything
+ * under it has landed, and otherwise follows its work. `open` is the work still open under the
+ * parent, `noun` what it is counted in, `kind` what the parent is ("milestone", "epic").
+ */
+export interface GateOutcome {
+  open: number;
+  noun: "task" | "item";
+  kind: string;
+}
+
+/** The sentence and the button for an empty queue, by outcome. */
+export function gateOutcomeWords(outcome: GateOutcome): { sentence: string; button: string } {
+  if (outcome.open === 0) return { sentence: "All work here is finished.", button: `Approve and close ${outcome.kind}` };
+  const one = outcome.open === 1;
+  return {
+    sentence: `${outcome.open} ${outcome.noun}${one ? " is" : "s are"} still open. Approving lifts the hold; the ${outcome.kind} closes on its own when ${one ? "it is" : "they are"} done.`,
+    button: "Approve and continue",
+  };
+}
+
 export function GateReview({
   identifier,
   gate,
   queue,
+  outcome = { open: 0, noun: "task", kind: "task" },
   busy,
   now = new Date(),
+  showState = true,
   onApproveAll,
   onApproveSelected,
   onRequestChanges,
@@ -239,12 +263,20 @@ export function GateReview({
    * `lib/derived-queued.ts` on why the browser does not re-derive eligibility.
    */
   queue: readonly GateQueueEntry[];
+  /** What approving does when the queue is empty (`GateOutcome`). */
+  outcome?: GateOutcome;
   busy: boolean;
   /** Injected so the header's age is a pure function of props in tests. */
   now?: Date;
+  /**
+   * The "awaiting VP · 2h" line. Off where the surrounding page already says who the gate
+   * waits for (the detail's status line), so it is said once.
+   */
+  showState?: boolean;
   onApproveAll: (comment?: string) => void;
   onApproveSelected: (children: string[]) => void;
-  onRequestChanges: (comment: string) => void;
+  /** May resolve to whether it went through; on success the note box clears and closes. */
+  onRequestChanges: (comment: string) => void | Promise<boolean>;
 }) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [objection, setObjection] = useState<string | null>(null);
@@ -285,8 +317,8 @@ export function GateReview({
   return (
     <section aria-label="Review gate" className="staple-gate">
       <div className="staple-gate-head">
-        <span className="staple-gate-eyebrow">Review gate</span>
-        <span className="staple-gate-state">{gateStateSummary(gate, now)}</span>
+        <h3 className="staple-gate-eyebrow m-0">Approval</h3>
+        {showState ? <span className="staple-gate-state">{gateStateSummary(gate, now)}</span> : null}
       </div>
 
       {count > 0 ? (
@@ -380,22 +412,24 @@ export function GateReview({
         /*
           THE EMPTY STATE — rule (d) of VP's review.
 
-          Reached two ways that mean the same thing to the reviewer: everything queued has
-          been released one by one, or there was never anything open under this parent to
-          queue. Either way the only remaining decision is whether the gate stays open, so
-          the block offers exactly that and nothing else. An "Approve all" beside "Nothing
-          left to release" is a button whose noun is not on the screen.
+          Nothing is queued: everything queued has been released one by one, or the open work
+          under this parent is past the queue (in progress, in review). Approving then lifts the
+          hold, and what follows depends on that work — the store re-derives the parent and
+          closes it only when all of it has landed. So the sentence and the button say the
+          outcome (`gateOutcomeWords`): "Approve and continue" while work is open, "Approve and
+          close milestone" when none is. VP read the old "Approve and close gate" as "close this
+          unfinished milestone".
         */
-        <p className="staple-gate-empty">
-          Nothing left to release — no open work is queued behind this gate.
+        <p className="staple-gate-empty" data-gate-outcome={outcome.open === 0 ? "closes" : "continues"}>
+          {gateOutcomeWords(outcome).sentence}
         </p>
       )}
 
       <div className="staple-gate-actions">
         {/*
           "Approve all" ONLY while the list is non-empty. When it is empty the same store
-          call is still the right one, but it is a different decision — closing the review
-          rather than releasing a queue — so it says so.
+          call is still the right one, but it is a different decision — lifting the hold rather
+          than releasing a queue — so it says what it will do.
         */}
         {count > 0 ? (
           <Button size="sm" disabled={busy} onClick={() => onApproveAll()}>
@@ -403,7 +437,7 @@ export function GateReview({
           </Button>
         ) : (
           <Button size="sm" disabled={busy} onClick={() => onApproveAll()}>
-            Approve and close gate
+            {gateOutcomeWords(outcome).button}
           </Button>
         )}
         {/*
@@ -478,7 +512,12 @@ export function GateReview({
             <Button
               size="sm"
               disabled={busy || objection.trim().length === 0}
-              onClick={() => onRequestChanges(objection.trim())}
+              onClick={() => {
+                // Cleared and closed once it went through, so a second tap cannot resend it.
+                void Promise.resolve(onRequestChanges(objection.trim())).then((ok) => {
+                  if (ok !== false) setObjection(null);
+                });
+              }}
             >
               Send back with note
             </Button>

@@ -1,0 +1,43 @@
+{
+  "title": "orchestrator attempts beside a worker: orchestration is its own figure and never work or a bucket",
+  "covers": [
+    "an orchestrator attempt opens only by attempt open --role orchestrator and holds no claim",
+    "orchestrationSeconds sums the issue's own orchestrator attempts plus its children's",
+    "workSeconds counts the worker lane only, and the worker's wall is unchanged by the orchestrator"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "e", "title": "epic" },
+    { "at": "0s", "do": "create", "ref": "x", "parent": "e", "estimate": "1h" },
+    { "at": "0s", "do": "orchestrate", "ref": "e", "agent": "o1" },
+    { "at": "1m", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "20m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "25m", "do": "comment", "ref": "x", "agent": "o1" },
+    { "at": "30m", "do": "orchestrate", "ref": "x", "agent": "o2" },
+    { "at": "35m", "do": "comment", "ref": "x", "agent": "o2" },
+    { "at": "40m", "do": "orchestrateEnd", "ref": "x", "agent": "o2" },
+    { "at": "45m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "48m", "do": "orchestrateEnd", "ref": "e", "agent": "o1" },
+    { "at": "50m", "do": "status", "ref": "x", "to": "done", "agent": "w1" }
+  ],
+  "expect": [
+    {
+      "asOf": "60m",
+      "ref": "x",
+      "workSeconds": "49m",
+      "orchestrationSeconds": "10m",
+      "estimateRatio": 0.8167,
+      "wall": { "startAt": "1m", "endAt": "50m", "buckets": { "work": "49m" } }
+    },
+    {
+      "asOf": "60m",
+      "ref": "e",
+      "workSeconds": "49m",
+      "orchestrationSeconds": "58m",
+      "intervals": 2,
+      "coverage": { "known": 1, "total": 1, "partial": false },
+      "wall": { "startAt": "1m", "endAt": "50m", "buckets": { "active": "49m" } }
+    }
+  ]
+}

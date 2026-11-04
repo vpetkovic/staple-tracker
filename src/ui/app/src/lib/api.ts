@@ -5,12 +5,15 @@
  *   1. the token — captured from the URL `staple ui` printed, kept in sessionStorage,
  *      scrubbed from the address bar, and sent as X-Staple-Token on every request;
  *   2. the 401/403 contract — those become a typed AuthError, never an unhandled
- *      rejection, so the shell can render the token screen instead of a blank page;
+ *      rejection, so the shell can render the token screen instead of a blank page
+ *      (except a 403 from the Origin check, `detail.reason: "cross_origin"`, which is a
+ *      refusal of one write and not of the token: see `isCrossOriginRefusal`);
  *   3. the error envelope — the server answers { error, message, code, retryable } for
  *      every failure, and this turns that into an Error with those fields attached.
  *
  * WAVE 2: import from here. Adding an endpoint means adding a function here.
  */
+import { replaceUrl } from "./back-to-close";
 import type {
   ActionPayload,
   AgentContext,
@@ -51,10 +54,28 @@ import type {
   ProjectRow,
   QueueView,
   RemoteBackup,
+  RunEntry,
   RemoteDevice,
   StapleEvent,
   VocabularyOp,
+  TimingQualityReport,
+  CalibrationReport,
+  ForecastReport,
+  BudgetView,
 } from "./types";
+import type {
+  BindInput,
+  BindingHomeInput,
+  BudgetConfigView,
+  CollectResult,
+  CollectionOutcome,
+  CollectionPlanResponse,
+  CollectionSetupOptions,
+  CollectionStatus,
+  PlanConsentTicket,
+  PollingStatus,
+  RefreshResult,
+} from "./telemetry-types";
 // Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
 import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
 
@@ -138,7 +159,7 @@ let token: string = (() => {
   writeSession(fromUrl);
   params.delete("token");
   const qs = params.toString();
-  history.replaceState({}, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
+  replaceUrl(location.pathname + (qs ? `?${qs}` : "") + location.hash);
   return fromUrl;
 })();
 
@@ -157,6 +178,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { ...(init?.headers ?? {}), "x-staple-token": token },
   });
+
+  if (res.status === 403) {
+    /**
+     * A write refused by the Origin check is not a credential failure: the token is fine,
+     * the page is being served through something other than this computer's loopback
+     * address (a phone on the tailnet, through a forwarder), which can read and not write.
+     * So it is an ordinary refusal the view that asked renders, not the token screen.
+     */
+    const envelope = (await res.clone().json().catch(() => ({}))) as Partial<ErrorEnvelope>;
+    if (envelope.detail?.["reason"] === "cross_origin") throw new ApiError(res.status, envelope);
+  }
 
   if (res.status === 401 || res.status === 403) {
     // 401 is almost always a restarted server: the old token died with the old
@@ -205,7 +237,8 @@ export const getPoll = () => request<Poll>("/api/poll");
  * poll — connection state changes when a human runs a command, not while they
  * read a page.
  */
-export const getCloudStatus = () => request<CloudSurfaceReport>("/api/cloud/status");
+export const getCloudStatus = (params: { ws?: string } = {}) =>
+  request<CloudSurfaceReport>(`/api/cloud/status${qs({ ws: params.ws })}`);
 
 /**
  * `GET /api/cloud/workspaces` — every registered workspace with its own
@@ -667,6 +700,46 @@ export const getIssue = (params: { ws?: string; ref: string }) =>
 export const getDocument = (params: { ws?: string; ref: string; key: string; revision?: number }) =>
   request<IssueDocument>(`/api/document${qs(params)}`);
 
+/**
+ * The bytes of one file. Not JSON: an image, a video, a PDF or a download.
+ * The token rides the header, the same way every other call does, so a file
+ * URL never carries a credential.
+ */
+export function fetchFile(params: { ws?: string; id: string }): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  return fetchBytes(`/api/file${qs({ ws: params.ws, id: params.id })}`);
+}
+
+/** The bytes inside a verified base64 evidence document. Refused for any other. */
+export function fetchDocumentFile(params: {
+  ws?: string;
+  ref: string;
+  key: string;
+  revision?: number;
+}): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  return fetchBytes(`/api/document-file${qs(params)}`);
+}
+
+async function fetchBytes(path: string): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const res = await fetch(path, {
+    headers: { "x-staple-token": token },
+  });
+  if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) forgetToken();
+    const envelope = (await res.json().catch(() => ({}))) as Partial<ErrorEnvelope>;
+    const failure = new AuthError(res.status, envelope.code ?? "unauthorized", envelope.message ?? envelope.error ?? res.statusText);
+    window.dispatchEvent(new CustomEvent("staple:auth-error", { detail: failure }));
+    throw failure;
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as Partial<ErrorEnvelope>;
+    throw new ApiError(res.status, body);
+  }
+  return {
+    bytes: await res.arrayBuffer(),
+    contentType: res.headers.get("content-type") ?? "application/octet-stream",
+  };
+}
+
 /** A document's history, newest revision first. */
 export const getRevisions = (params: { ws?: string; ref: string; key: string }) =>
   request<DocumentRevision[]>(`/api/revisions${qs(params)}`);
@@ -679,6 +752,35 @@ export const getAgentContext = (params: { ws?: string; ref: string; documents?: 
   request<AgentContext>(
     `/api/agent-context${qs({ ws: params.ws, ref: params.ref, documents: params.documents ? "1" : undefined })}`,
   );
+
+/**
+ * `GET /api/timing/quality` — the quality states of the done leaves beneath `parent` and their
+ * coverage (the same payload as `staple timing quality --json` and MCP `timing_quality`).
+ */
+export const getTimingQuality = (params: { ws?: string; parent?: string; limit?: number }) =>
+  request<TimingQualityReport>(`/api/timing/quality${qs(params)}`);
+
+/**
+ * `GET /api/budget` — this machine's provider limits, each with its provisional pressure
+ * (`staple budget --json`, MCP `get_budget`). Machine-level: no `ws`. Rendered as returned.
+ */
+export const getBudget = (params: { account?: string; reserve?: string } = {}) =>
+  request<BudgetView>(`/api/budget${qs(params)}`);
+
+/**
+ * `GET /api/forecast` — the completion forecast of `ref` and, apart from it, the budget forecast
+ * of that work on this machine (`staple forecast --json`, MCP `forecast`). Rendered as returned.
+ */
+export const getForecast = (params: { ws?: string; ref: string }) =>
+  request<ForecastReport>(`/api/forecast${qs(params)}`);
+
+/**
+ * `GET /api/calibration` — the workspace's calibration cohorts (`staple calibrate --json`, MCP
+ * `calibration_cohorts`). `include: "reconstructed"` adds the reconstructed set beside the exact
+ * one, never pooled; `cursor` reads the next page of the same selection.
+ */
+export const getCalibration = (params: { ws?: string; include?: "reconstructed"; limit?: number; cursor?: string }) =>
+  request<CalibrationReport>(`/api/calibration${qs(params)}`);
 
 export const getGraph = () => request<Graph>("/api/graph");
 
@@ -829,16 +931,31 @@ export const addMilestoneMember = (target: {
   after?: string;
   at?: number;
   note?: string;
+  actor?: string;
 }) => milestoneWrite("add", target);
 
-export const removeMilestoneMember = (target: { ws?: string; milestone: string; ref: string; baseRevision: number }) =>
+export const removeMilestoneMember = (target: { ws?: string; milestone: string; ref: string; baseRevision: number; actor?: string }) =>
   milestoneWrite("remove", target);
+
+/**
+ * Set or clear a milestone's own dates (`staple milestone set`, MCP `update_milestone`).
+ * `null` clears one; a field left out is left alone. Answers the milestone view.
+ */
+export const updateMilestoneDates = (target: {
+  ws?: string;
+  ref: string;
+  targetDate?: string | null;
+  startDate?: string | null;
+  /** The person, as every detail write names them (`personActor`); absent, the server says "ui". */
+  actor?: string;
+}) => milestoneWrite("update", target);
 
 export const reorderMilestoneMembers = (target: {
   ws?: string;
   milestone: string;
   order: readonly string[];
   baseRevision: number;
+  actor?: string;
 }) => milestoneWrite("reorder", target);
 
 // ---------- the glyph sanitiser (R5d / STA-184) ----------
@@ -875,7 +992,7 @@ export const getQueue = (params: { ws?: string; all?: boolean } = {}) =>
  * which is what lets the editor restore the server order and offer a deliberate retry
  * rather than silently replaying a write against an order it has not seen.
  *
- * The route names are the HTTP spelling from docs/queue.md "Operations, by surface"
+ * The route names are the HTTP spelling from design/queue.md "Operations, by surface"
  * (`enqueue`/`remove`), NOT the CLI's shorter verbs (`add`/`rm`). `/api/queue/move` and
  * `/api/queue/next` have no function here because nothing calls them: the editor's every
  * move is a bulk `reorder` (see views/queue/QueueView.tsx), and with no actor the next
@@ -946,3 +1063,76 @@ export const deleteProject = (target: { ws?: string; ref: string }) =>
  */
 export const assignProject = (target: { ws?: string; ref: string; project: string | null }) =>
   projectWrite<IssueDetail>("assign", target);
+
+// ---------- autopilot runs (design/runs.md) ----------
+
+/**
+ * Every live run and the recent ended ones, each the object `staple run status --json`
+ * prints plus its workspace. With no `ws` in hub mode, every workspace's.
+ */
+export const getRuns = (params: { ws?: string; limit?: number } = {}) =>
+  request<{ runs: RunEntry[]; now: string }>(`/api/runs${qs(params)}`);
+
+/**
+ * The page's run verbs. It watches and stops runs and never starts or continues one: only
+ * an agent does that. `actor` is the person using this page (`personActor()`), recorded as
+ * who stopped the run; without one the server records "ui".
+ */
+const runWrite = (route: "stop" | "pause" | "resume", body: { ws?: string; id: string; actor?: string; note?: string }) =>
+  request<RunEntry>(`/api/run/${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+export const stopRun = (target: { ws?: string; id: string; actor?: string; note?: string }) => runWrite("stop", target);
+export const pauseRun = (target: { ws?: string; id: string; actor?: string }) => runWrite("pause", target);
+export const resumeRun = (target: { ws?: string; id: string; actor?: string }) => runWrite("resume", target);
+
+// ---------- budget collection, capture and bindings (machine-local) ----------
+
+/**
+ * True for the refusal of a write made from a page this server does not consider its own
+ * origin: on the tailnet, from a phone. Reading works there; writing is refused by design.
+ */
+export function isCrossOriginRefusal(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403 && error.detail?.["reason"] === "cross_origin";
+}
+
+const postJson = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+/** `staple budget status --json`: capture, bindings, each source's newest reading, wrapper and watcher, problems. */
+export const getBudgetCollection = () => request<CollectionStatus>("/api/budget/collection");
+
+/** What setup or unsetup would change, and a single-use consent ticket bound to that plan. Reads only. */
+export const planBudgetCollection = (action: "setup" | "unsetup", options: CollectionSetupOptions = {}) =>
+  postJson<CollectionPlanResponse>("/api/budget/collection/plan", { action, ...options });
+
+/** Apply the plan that ticket was minted with. The body carries nothing else: the options are the ticket's. */
+export const applyBudgetCollection = (action: "setup" | "unsetup", consent: PlanConsentTicket) =>
+  postJson<CollectionOutcome>(`/api/budget/collection/${action}`, { consent: consent.id, digest: consent.digest });
+
+/** One collect run now (`staple budget collect`). */
+export const collectBudgetNow = () => postJson<CollectResult>("/api/budget/collection/collect", {});
+
+/** `staple budget live --json`: live polling on or off, and each bound account's last check. A read; it asks nobody. */
+export const getBudgetPolling = () => request<PollingStatus>("/api/budget/polling");
+
+/**
+ * The Usage page's Refresh: one collection now, the passive scan and, when live polling is on,
+ * one check with each bound provider. The one write the server accepts from the tailnet too.
+ */
+export const refreshBudget = () => postJson<RefreshResult>("/api/budget/collection/refresh", {});
+
+/** `staple budget live on|off`. */
+export const setLivePolling = (enabled: boolean) => postJson<BudgetConfigView>("/api/budget/live", { enabled });
+
+/** `staple budget capture on|off`. */
+export const setBudgetCapture = (enabled: boolean) => postJson<BudgetConfigView>("/api/budget/capture", { enabled });
+
+/** `staple budget bind`; with `replacing`, an edit that swaps one binding for another in one write. */
+export const bindBudgetSource = (input: BindInput) => postJson<BudgetConfigView>("/api/budget/bindings/bind", input);
+
+/** `staple budget unbind`. */
+export const unbindBudgetSource = (input: BindingHomeInput) => postJson<BudgetConfigView>("/api/budget/bindings/unbind", input);

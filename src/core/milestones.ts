@@ -1,5 +1,5 @@
 /**
- * Milestones — the pure half of the contract in `docs/milestones.md` (STA-171, R3a).
+ * Milestones — the pure half of the contract in `design/milestones.md` (STA-171, R3a).
  *
  * A milestone is an issue of the reserved `milestone` kind that owns two calendar
  * dates and an ORDERED MEMBERSHIP of other issues, without re-parenting any of
@@ -15,7 +15,7 @@ import { STATUS_CATEGORIES, StapleError, type StatusCategory } from "./types.js"
  * The reserved kind id. A milestone is identified by its kind and by nothing
  * else — there is no flag column — which is why this is an id and not a
  * category: kinds have no categories, and the one behaviour a milestone carries
- * is confined to the milestone tables (see "Identity" in docs/milestones.md).
+ * is confined to the milestone tables (see "Identity" in design/milestones.md).
  */
 export const MILESTONE_KIND = "milestone";
 
@@ -117,7 +117,7 @@ export function assertMilestoneDates(dates: { startDate: string | null; targetDa
 
 // ---------- membership order: sparse integer ranks ----------
 
-/** The gap between two ranks; the queue's step (docs/queue.md, "Storage"). */
+/** The gap between two ranks; the queue's step (design/queue.md, "Storage"). */
 export const MEMBER_RANK_STEP = 1024;
 
 /**
@@ -187,6 +187,38 @@ export function assertMembershipAllowed(
   }
 }
 
+/**
+ * How a goal run's gate on its milestone is told apart from a person's, on every device: its
+ * `gate_requested_by` is `goal-run:<actor>`. That column replicates with the gate, so any run
+ * on any machine recognises the gate as a run's, where a machine-local run id would not. A
+ * goal-run gate holds the milestone's CLOSE for its owner's review and nothing else: it
+ * queues no work beneath it (`WorkspaceStore.queuedByIn`), is not a `gate_pending` stop for a
+ * goal run, and may stand on a milestone that holds nothing yet. A person's gate is unchanged.
+ */
+export const GOAL_RUN_GATE_PREFIX = "goal-run:";
+
+export function goalRunGateRequester(actor: string): string {
+  return `${GOAL_RUN_GATE_PREFIX}${actor}`;
+}
+
+export function isGoalRunGate(requestedBy: string | null | undefined): boolean {
+  return typeof requestedBy === "string" && requestedBy.startsWith(GOAL_RUN_GATE_PREFIX);
+}
+
+/**
+ * The prefix is reserved: an actor named `goal-run:…` could otherwise open a gate that holds
+ * nothing, on any issue. Refused wherever an actor is named (CLI, MCP, and the store's gate).
+ */
+export function assertNotReservedActor(actor: string | null | undefined): void {
+  if (typeof actor === "string" && actor.trim().startsWith(GOAL_RUN_GATE_PREFIX)) {
+    throw new StapleError(
+      "validation",
+      `"${actor.trim()}" is not a usable actor name: the "${GOAL_RUN_GATE_PREFIX}" prefix is reserved for the gate a goal run opens.`,
+      { actor: actor.trim() },
+    );
+  }
+}
+
 /** The command that turns the feature on; every surface names it the same way. */
 export const MILESTONE_KIND_MISSING_MESSAGE =
   "No `milestone` kind is configured in this workspace. Run `staple kinds add milestone --label Milestone` to enable milestones.";
@@ -244,6 +276,29 @@ function emptyCounts(): Record<StatusCategory, number> {
 }
 
 /**
+ * The LEAVES reachable from the members, each once: what `milestoneProgress` counts and what
+ * the milestone's remaining work is summed over. An issue is a leaf when nothing in the
+ * reachable set names it as parent.
+ */
+export function milestoneLeaves(
+  members: readonly ProgressNode[],
+  descendantsByMember: ReadonlyMap<string, readonly ProgressNode[]>,
+): ProgressNode[] {
+  const reachable = new Map<string, ProgressNode>();
+  for (const member of members) {
+    reachable.set(member.id, member);
+    for (const descendant of descendantsByMember.get(member.id) ?? []) {
+      reachable.set(descendant.id, descendant);
+    }
+  }
+  const parents = new Set<string>();
+  for (const node of reachable.values()) {
+    if (node.parentId !== null) parents.add(node.parentId);
+  }
+  return [...reachable.values()].filter((node) => !parents.has(node.id));
+}
+
+/**
  * Roll up the LEAVES reachable from the members, each counted once.
  *
  * `members` are the direct members in any order; `descendantsByMember` holds
@@ -257,22 +312,9 @@ export function milestoneProgress(
   members: readonly ProgressNode[],
   descendantsByMember: ReadonlyMap<string, readonly ProgressNode[]>,
 ): MilestoneProgress {
-  const reachable = new Map<string, ProgressNode>();
-  for (const member of members) {
-    reachable.set(member.id, member);
-    for (const descendant of descendantsByMember.get(member.id) ?? []) {
-      reachable.set(descendant.id, descendant);
-    }
-  }
-  const parents = new Set<string>();
-  for (const node of reachable.values()) {
-    if (node.parentId !== null) parents.add(node.parentId);
-  }
-
   const counts = emptyCounts();
   let total = 0;
-  for (const node of reachable.values()) {
-    if (parents.has(node.id)) continue;
+  for (const node of milestoneLeaves(members, descendantsByMember)) {
     counts[node.category] += 1;
     total += 1;
   }

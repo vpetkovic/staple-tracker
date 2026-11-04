@@ -1,7 +1,7 @@
 /**
  * The second consent, and the gate that spends it.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"**A successful connection leaves
+ * Contract: `design/sync.md`, "Three consents" — *"**A successful connection leaves
  * sync manual.** Manual is the default and stays the default … Automatic mode is
  * a second, separately named decision, and turning it off does not disconnect."*
  * And: *"After automatic — bounded triggers only: startup, post-write,
@@ -46,7 +46,7 @@ import {
 } from "./auto-state.js";
 
 /**
- * The four trigger points `docs/sync.md` names, minus one.
+ * The four trigger points `design/sync.md` names, minus one.
  *
  * `pre-checkout` is **deliberately absent from this union**, and its absence is
  * the decision rather than an omission to be filled in later.

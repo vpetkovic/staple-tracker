@@ -1,6 +1,6 @@
 /**
  * An issue put on a stand-in again after a restore is on the record again, and takes its number
- * back when it is freed (`docs/sync.md`, "Identifiers and other unique values").
+ * back when it is freed (`design/sync.md`, "Identifiers and other unique values").
  *
  * A stand-in's record is one per issue (`identifier:<id>`). A device that had held an issue on a
  * stand-in, and seen the record closed by the settlement, read a restore that rewound the

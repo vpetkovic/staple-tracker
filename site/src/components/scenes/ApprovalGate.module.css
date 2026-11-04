@@ -1,0 +1,103 @@
+/* The gated epic and the request under it, as one card. */
+.gate {
+  margin-bottom: var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+}
+
+.gate .gateRow {
+  border: 0;
+  border-radius: var(--st-radius-md) var(--st-radius-md) 0 0;
+}
+
+.ask {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--st-space-3);
+  padding: var(--st-space-3);
+  border-top: var(--st-hairline) solid var(--st-border);
+}
+
+.note {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--st-text-xs);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+/* The button and what replaces it once it is pressed share one box. */
+.action {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  align-items: center;
+  justify-items: end;
+}
+
+.button,
+.signed {
+  grid-area: 1 / 1;
+  transition:
+    transform var(--st-duration) var(--st-ease),
+    background-color var(--st-duration) var(--st-ease),
+    opacity var(--st-duration-scene) var(--st-ease);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  height: 2rem;
+  padding: 0 var(--st-space-3);
+  border-radius: var(--st-radius-md);
+  background: var(--st-accent-bg);
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-on-accent);
+}
+
+.button.pressed {
+  transform: scale(0.94);
+  background: var(--st-accent-bg-hover);
+}
+
+.button.gone {
+  opacity: 0;
+  transform: scale(0.94);
+}
+
+.signed {
+  font-size: var(--st-text-xs);
+  font-weight: var(--st-weight-medium);
+  color: var(--st-accent-text);
+  white-space: nowrap;
+  opacity: 0;
+}
+
+.signed.signedOn {
+  opacity: 1;
+}
+
+/* The pointer comes in from below the button and rests on it. */
+.pointer {
+  right: 0.5rem;
+  bottom: -0.625rem;
+  opacity: 0;
+  transform: translate(1.75rem, 2.25rem);
+  transition:
+    opacity var(--st-duration-scene) var(--st-ease),
+    transform var(--st-duration-slow) var(--st-ease);
+}
+
+.pointer.pointerOn {
+  opacity: 1;
+  transform: none;
+}
+
+.pointer.pointerOn.pointerDown {
+  transform: scale(0.88);
+}

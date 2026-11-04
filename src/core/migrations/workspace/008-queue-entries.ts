@@ -2,11 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Migration } from "../types.js";
 
 /**
- * Version 8 — the pickup queue (STA-167, R2b; contract in docs/queue.md).
+ * Version 8 — the pickup queue (STA-167, R2b; contract in design/queue.md).
  *
  * ## Why 8
  *
- * `docs/queue.md` was written when 006 was the latest and said "007 at the time
+ * `design/queue.md` was written when 006 was the latest and said "007 at the time
  * of writing; R2b takes whatever number is next at merge". 007 (milestones,
  * STA-172) merged first, so this is 008. The rule in `index.ts` still applies:
  * if another branch merges an 008 before this one, this renumbers to latest+1
@@ -30,7 +30,7 @@ import type { Migration } from "../types.js";
  * `UNIQUE (rank)` plus a midpoint computed inside an immediate transaction is
  * what makes concurrent inserts unable to collide. `rank` is the sparse-integer
  * encoding migration 004 already uses for statuses and kinds and 007 uses for
- * milestone membership, with the queue's wider step of 1024 (docs/queue.md,
+ * milestone membership, with the queue's wider step of 1024 (design/queue.md,
  * "Storage"); the shared implementation is `rankBetween` / `renumberedRanks` in
  * `src/core/milestones.ts`. There is no separate rank index: `UNIQUE (rank)`
  * already builds one, and every read of the plan is an `ORDER BY rank` it

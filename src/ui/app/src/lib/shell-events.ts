@@ -24,9 +24,14 @@ const COMMAND_PALETTE = "staple:open-command-palette";
 /** O7b (STA-141) — the workspace vocabulary editor. Third verb, same idiom. */
 const SETTINGS = "staple:open-settings";
 
+/** What the create dialog opens with: a kind chosen in advance (the Milestones page asks for a milestone). */
+export interface CreateIssueRequest {
+  kind?: string;
+}
+
 /** Ask whatever owns the create dialog to open it. No-op if nothing is listening. */
-export function openCreateIssue(): void {
-  window.dispatchEvent(new CustomEvent(CREATE_ISSUE));
+export function openCreateIssue(request: CreateIssueRequest = {}): void {
+  window.dispatchEvent(new CustomEvent<CreateIssueRequest>(CREATE_ISSUE, { detail: request }));
 }
 
 /** Ask whatever owns the palette to open it. No-op if nothing is listening. */
@@ -35,9 +40,10 @@ export function openCommandPalette(): void {
 }
 
 /** Subscribe a mount to its verb. Returns the unsubscribe, shaped for useEffect. */
-export function onOpenCreateIssue(handler: () => void): () => void {
-  window.addEventListener(CREATE_ISSUE, handler);
-  return () => window.removeEventListener(CREATE_ISSUE, handler);
+export function onOpenCreateIssue(handler: (request: CreateIssueRequest) => void): () => void {
+  const listener = (event: Event) => handler((event as CustomEvent<CreateIssueRequest | null>).detail ?? {});
+  window.addEventListener(CREATE_ISSUE, listener);
+  return () => window.removeEventListener(CREATE_ISSUE, listener);
 }
 
 export function onOpenCommandPalette(handler: () => void): () => void {
@@ -45,14 +51,24 @@ export function onOpenCommandPalette(handler: () => void): () => void {
   return () => window.removeEventListener(COMMAND_PALETTE, handler);
 }
 
-/** Ask whatever owns the settings dialog to open it. No-op if nothing is listening. */
-export function openSettings(): void {
-  window.dispatchEvent(new CustomEvent(SETTINGS));
+/**
+ * Where Settings should open: a section id (`statuses`, `telemetry`, `cloud`, …) and, for a
+ * per-workspace section, which workspace. Both optional — the gear opens on the list.
+ */
+export interface SettingsRequest {
+  section?: string;
+  workspace?: string;
 }
 
-export function onOpenSettings(handler: () => void): () => void {
-  window.addEventListener(SETTINGS, handler);
-  return () => window.removeEventListener(SETTINGS, handler);
+/** Ask whatever owns the settings dialog to open it. No-op if nothing is listening. */
+export function openSettings(request: SettingsRequest = {}): void {
+  window.dispatchEvent(new CustomEvent<SettingsRequest>(SETTINGS, { detail: request }));
+}
+
+export function onOpenSettings(handler: (request: SettingsRequest) => void): () => void {
+  const listener = (event: Event) => handler((event as CustomEvent<SettingsRequest | null>).detail ?? {});
+  window.addEventListener(SETTINGS, listener);
+  return () => window.removeEventListener(SETTINGS, listener);
 }
 
 /**
@@ -74,4 +90,25 @@ export function onOpenProjectDialog(handler: (request: ProjectDialogRequest) => 
   const listener = (event: Event) => handler((event as CustomEvent<ProjectDialogRequest>).detail);
   window.addEventListener(PROJECT_DIALOG, listener);
   return () => window.removeEventListener(PROJECT_DIALOG, listener);
+}
+
+/**
+ * The autopilot run history — the fifth verb. The rail's "Run history" row and a banner's
+ * "Details" open it; a banner names the run to scroll to. Same idiom: the mount owns the flag.
+ */
+const RUN_HISTORY = "staple:open-run-history";
+
+export interface RunHistoryRequest {
+  /** The run to bring into view, when a banner asked. */
+  runId?: string;
+}
+
+export function openRunHistory(request: RunHistoryRequest = {}): void {
+  window.dispatchEvent(new CustomEvent<RunHistoryRequest>(RUN_HISTORY, { detail: request }));
+}
+
+export function onOpenRunHistory(handler: (request: RunHistoryRequest) => void): () => void {
+  const listener = (event: Event) => handler((event as CustomEvent<RunHistoryRequest | null>).detail ?? {});
+  window.addEventListener(RUN_HISTORY, listener);
+  return () => window.removeEventListener(RUN_HISTORY, listener);
 }

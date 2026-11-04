@@ -532,7 +532,7 @@ export interface ClaimActivity {
   /** Wall-clock seconds since the holder last did anything here ("silent for"). */
   idleSeconds: number;
   /**
-   * How exclusive this claim actually is — `docs/sync.md`, "Claims: a local
+   * How exclusive this claim actually is — `design/sync.md`, "Claims: a local
    * checkout is not a global lease".
    *
    * `"local"` means THIS DATABASE only: the claim still refuses a fresher holder
@@ -725,6 +725,113 @@ export interface IssueTiming {
    * instead of — the depth-1 `childrenEstimatedSeconds` above. See `SubtreePlan`.
    */
   subtreePlan: SubtreePlan;
+  /**
+   * AGENT WORK, the estimate ratio's actual (`design/timing-semantics.md`, "Work"): worker-lane
+   * attempts only, from replicated data only, so it reads the same on every device. Leaf:
+   * `ownWorkSeconds`. Parent: the sum of the direct children's `workSeconds`, with
+   * `quality.work.coverage`. `cancelled`: null (`not_applicable_cancelled`). Null reasons
+   * are in `missing.workSeconds`.
+   */
+  workSeconds: number | null;
+  /** The measurement behind `workSeconds`: this issue's own worker attempts, any status. */
+  ownWorkSeconds: number | null;
+  /**
+   * Orchestrator-lane attempts on this issue plus its children's `orchestrationSeconds`.
+   * Never part of `workSeconds`. Null with `no_orchestrator_attempt` when no issue in the
+   * subtree has one.
+   */
+  orchestrationSeconds: number | null;
+  /** `createdAt` to `wall.startAt`: time before any work began. Null as `wall` is. */
+  leadSeconds: number | null;
+  /**
+   * `workSeconds / estimatedSeconds` for an eligible issue: its own estimate, resolved
+   * `done`, and `workSeconds` of quality `exact`. Null otherwise.
+   */
+  estimateRatio: number | null;
+  /** The elapsed partition, device-local (`design/timing-semantics.md`). Null reasons in `missing.wall`. */
+  wall: WallTiming | null;
+  /**
+   * The issue's own worker-lane chain links, oldest first: each interrupted attempt that has
+   * been resumed, with its `resumeGapSeconds`. Empty when nothing was resumed; null only on a
+   * read that skipped the effort and elapsed fields (`timingFor(…, { telemetry: false })`),
+   * like every other field it skips.
+   */
+  resumeGaps: ResumeGap[] | null;
+  /** The quality state of each axis, and what it was derived from. */
+  quality: TimingQuality;
+  /** Why each null new field is null: `never_started`, `no_worker_attempt`, `replay_unavailable`, … */
+  missing: Record<string, string>;
+}
+
+/**
+ * One link of a worker-lane chain (`design/timing-semantics.md`, `resumeGapSeconds`): an
+ * attempt that ended `interrupted` or reads `orphaned`, and the attempt that resumed it.
+ */
+export interface ResumeGap {
+  /** The attempt that was interrupted. */
+  attemptId: string;
+  /** The attempt whose `resumesAttemptId` names it. */
+  resumedByAttemptId: string;
+  /** The interrupted attempt's end as this device reads it: the stored `endedAt`, or the orphan's `endedAtBound`. */
+  endedAt: string;
+  /** The resuming attempt's `startedAt`. */
+  resumedAt: string;
+  /**
+   * `resumedAt − endedAt`, whole seconds: how long the interrupted work waited, across whatever
+   * buckets that spans. An inverted gap (the resuming device's clock reads earlier) counts 0.
+   */
+  resumeGapSeconds: number;
+  /** The gap is inverted by more than one second: two devices' clocks disagree, and 0 is a clamp, not a measurement. */
+  clockSkew: boolean;
+}
+
+/** An issue's elapsed span and its partition into buckets that never overlap. */
+export interface WallTiming {
+  startAt: string;
+  /** The last entry into `done`/`cancelled` when the issue is in one now; else null. */
+  endAt: string | null;
+  /** The read's `asOf` while the issue is open; else null. */
+  through: string | null;
+  seconds: number;
+  /**
+   * Whole seconds per bucket, each floored once. A leaf: `work`, `paused`, `silent`,
+   * `interrupted`, `unattributed`, `review`, `gated`, `blocked`, `queued`, `resolved`. A
+   * parent: `active`, `review`, `gated`, `blocked`, `queued`, `resolved`.
+   */
+  buckets: Record<string, number>;
+}
+
+/** `missing` > `reconstructed` > `approximate` > `timing-floor` > `exact`. Null for a cancelled issue. */
+export type WorkQualityState = "missing" | "reconstructed" | "approximate" | "timing-floor" | "exact";
+
+/**
+ * One state per record (`design/timing-semantics.md`, "Quality states"), with `reasons`: every
+ * reason that holds, highest precedence first (`src/core/telemetry/quality.ts`).
+ */
+export interface TimingQuality {
+  work: {
+    state: WorkQualityState | null;
+    /** Replicated inputs only: `sparse`, `capture_gap`, `end_unbounded`, `contested`, `orphan_provisional`, `clock_skew`, `partial`. */
+    inputs: string[];
+    /**
+     * Everything that produced `state`, highest precedence first: the `missing.workSeconds`
+     * code, `reconstructed`, the approximate `inputs`, `timing_floor`. Empty for `exact` and
+     * for a cancelled issue.
+     */
+    reasons: string[];
+    /** A parent's: direct children not cancelled and not `never_started`, and how many of them have `workSeconds`. */
+    coverage: { known: number; total: number; partial: boolean } | null;
+    /** A parent's children counted in `coverage.total` whose `workSeconds` is null, by identifier. */
+    missingInputs: string[];
+  };
+  wall: {
+    /** `missing` when `wall` is null (the reason is in `reasons` and `missing.wall`); null only on a read that skipped telemetry. */
+    state: "missing" | "approximate" | "exact" | null;
+    /** `unattributed`, `edge_history_incomplete`, `conflict_resolved`, `clock_skew`: device-local, never read by the work state. */
+    inputs: string[];
+    /** `missing.wall`'s code when `wall` is null, else the sorted `inputs`. */
+    reasons: string[];
+  };
 }
 
 /** Where a `SubtreePlan.estimatedSeconds` came from. */
@@ -765,21 +872,35 @@ export interface SubtreePlan {
   /** Which of the two fed `estimatedSeconds`; `none` when it is null. */
   source: PlanSource;
   /**
-   * BOTTOM-UP: the sum of the DIRECT children's effective plans — the recursive
+   * BOTTOM-UP: the sum of the DIRECT children's contributions — the recursive
    * counterpart of `childrenEstimatedSeconds`, and equal to it whenever every
-   * child carries its own estimate. Null when no descendant at any depth does.
-   * Present even when `source` is `own`, so a top-down plan and the work
-   * beneath it can be compared.
+   * child carries its own estimate and none is cancelled. Null when no live
+   * descendant at any depth has one. Present even when `source` is `own`, so a
+   * top-down plan and the work beneath it can be compared.
+   *
+   * A CANCELLED child's own estimate contributes nothing: it owes no work. But
+   * cancelling a parent cancels none of its children, so a cancelled child with
+   * live work beneath it passes that work's plan up like an unestimated parent.
+   * Only a subtree cancelled throughout drops out entirely.
    */
   descendantsEstimatedSeconds: number | null;
   /**
-   * Descendants at ANY depth whose own estimate is a term of
+   * PLANNED UNITS: descendants at any depth whose own estimate is a term of
    * `descendantsEstimatedSeconds`. A descendant shadowed by an estimated
    * ancestor below this issue is not counted here — and not lost: it is still
-   * on that issue's own timing. Coverage is this over `totalCount`.
+   * on that issue's own timing, and it is covered by that ancestor's estimate.
    */
   contributingCount: number;
-  /** Descendants at any depth, whatever their status. 0 for a leaf. */
+  /**
+   * UNPLANNED UNITS: live descendants with no live work beneath them, no own
+   * estimate and no estimated ancestor below this issue — the work nobody
+   * planned. Cancelled issues are neither. COVERAGE is `contributingCount` over
+   * `contributingCount + unplannedCount`: every unit of work is exactly one of
+   * the two, so a fully planned subtree reads n of n however deep its shadowed
+   * estimates go.
+   */
+  unplannedCount: number;
+  /** Descendants at any depth, whatever their status, shadowed and cancelled included. 0 for a leaf. */
   totalCount: number;
 }
 
@@ -795,14 +916,15 @@ export const MAX_ESTIMATE_SECONDS = 365 * 86400;
 /**
  * Estimates are positive whole seconds. Zero is refused rather than accepted as
  * a clear: "estimated at nothing" and "no estimate" are different claims, and
- * every surface has an explicit way to say the second one (`--no-estimate`, or
- * an explicit null).
+ * every surface has an explicit way to say the second one (`staple estimate
+ * <ref> --clear` or `--no-estimate` on the CLI, an explicit null on MCP and HTTP),
+ * and the refusal names it for zero, a negative and a fraction alike.
  */
 export function assertEstimateSeconds(value: number): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new StapleError(
       "validation",
-      `estimate must be a positive whole number of seconds (got ${value}); clear it explicitly instead of passing 0`,
+      `estimate must be a positive whole number of seconds (got ${value}); to remove an estimate, clear it: \`staple estimate <ref> --clear\` on the CLI, null on MCP and HTTP`,
     );
   }
   if (value > MAX_ESTIMATE_SECONDS) {
@@ -969,7 +1091,7 @@ export type StapleErrorCode =
    */
   | "out_of_order"
   /**
-   * The cloud sync taxonomy (STA-251, `docs/sync.md`, "Error taxonomy"). A sync failure
+   * The cloud sync taxonomy (STA-251, `design/sync.md`, "Error taxonomy"). A sync failure
    * carries the service's own code, never the nearest store code: `validation`,
    * `not_found` and `conflict` above are shared with it, and these are the rest.
    * `src/core/cloud/errors.ts` builds them; `offline` is the client-side one, a request
@@ -1004,7 +1126,7 @@ export class StapleError extends Error {
  * input. A checkout conflict is NOT retryable — pick a different task.
  *
  * Of the sync codes, the three the protocol marks retryable: `rate_limited` and
- * `unavailable` from the service, `offline` from the client (`docs/sync.md`,
+ * `unavailable` from the service, `offline` from the client (`design/sync.md`,
  * "Error taxonomy"). Everything else there is a decision for a human.
  *
  * Unknown (non-StapleError) failures are NOT retryable: a caller honoring the bit
@@ -1185,6 +1307,25 @@ export function normalizeTitle(title: string): string {
   return title.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/**
+ * The write clock: the one seam every recorded instant reads. The store, the event writer
+ * (`Journal.mutationAt`, `event-row.ts`) and the attempt ledger all take their instants from
+ * `nowIso`, so a run that installs a clock here controls every instant a mutation stamps
+ * (`design/timing-semantics.md`, "Controlled runs"). Production installs nothing and reads the
+ * real clock.
+ */
+let clockSource: (() => number) | null = null;
+
+/** Install a clock (milliseconds since the epoch), or `null` for the real one again. */
+export function setClock(source: (() => number) | null): void {
+  clockSource = source;
+}
+
+/** The write clock in milliseconds. */
+export function nowMs(): number {
+  return clockSource === null ? Date.now() : clockSource();
+}
+
 export function nowIso(): string {
-  return new Date().toISOString();
+  return new Date(nowMs()).toISOString();
 }

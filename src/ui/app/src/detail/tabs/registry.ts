@@ -29,28 +29,31 @@ export interface TabProps {
 }
 
 export interface TabDefinition {
+  /** Stable: code, tests and the open-tab event key off it. Never rename. */
   id: string;
+  /** What a person reads on the strip: plain words, not engineer words. */
   label: string;
   component: ComponentType<TabProps>;
-  /** Hide the tab entirely when it has nothing to show (documents on a doc-less issue). */
+  /** Hide the tab entirely when it has nothing to show. Documents, Files, Connections and Time leave this unset: an empty tab is the answer. */
   available?: (detail: IssueDetail) => boolean;
 }
 
 import { OverviewTab } from "./OverviewTab";
 import { DocumentsTab } from "./DocumentsTab";
+import { FilesTab } from "./FilesTab";
 import { ActivityTab } from "./ActivityTab";
 import { AgentViewTab } from "./AgentViewTab";
 import { AnalyticsTab } from "./AnalyticsTab";
 import { RelationsTab } from "./RelationsTab";
 
 export const TABS: readonly TabDefinition[] = [
-  { id: "overview", label: "Overview", component: OverviewTab },
+  { id: "overview", label: "Details", component: OverviewTab },
   /**
    * O2b (STA-132) — the ticket's place in the plan, on a mini canvas.
    *
-   * SECOND, straight after Overview, because it answers the question a reader has while
-   * still looking at Overview: "what is this attached to?". Overview lists the relations
-   * as chips; this draws them, and the two belong next to each other rather than either
+   * SECOND, straight after Details, because it answers the question a reader has while
+   * still looking at Details: "what is this attached to?". Details lists the relations
+   * as rows; this draws them, and the two belong next to each other rather than either
    * side of the activity feed.
    *
    * NO `available` predicate, deliberately, and for the same reason Analytics has none:
@@ -58,17 +61,24 @@ export const TABS: readonly TabDefinition[] = [
    * that vanishes teaches nobody that the feature exists. The tab renders "no relations"
    * rather than an empty canvas, which is the honest version of the same answer.
    */
-  { id: "relations", label: "Relations", component: RelationsTab },
-  {
-    id: "documents",
-    label: "Documents",
-    component: DocumentsTab,
-    available: (detail) => detail.documents.length > 0,
-  },
-  { id: "activity", label: "Activity", component: ActivityTab },
-  { id: "agent", label: "Agent view", component: AgentViewTab },
+  { id: "relations", label: "Connections", component: RelationsTab },
   /**
-   * STA-82 — estimate vs actual. LAST, after "Agent view", per the epic.
+   * Always on the strip, including when nothing has been written. An empty
+   * Documents tab is how a reader learns that a plan lives here and that
+   * screenshots live under Files. A tab that vanishes looks like the feature
+   * is gone.
+   */
+  { id: "documents", label: "Documents", component: DocumentsTab },
+  /**
+   * Always on the strip, including when the ticket has no files. An empty list
+   * is the answer, and a tab that appears only after the first upload makes the
+   * strip jump and hides the place a file would go.
+   */
+  { id: "files", label: "Files", component: FilesTab },
+  { id: "activity", label: "Activity", component: ActivityTab },
+  { id: "agent", label: "For agents", component: AgentViewTab },
+  /**
+   * STA-82 — estimate vs actual. LAST, after "For agents", per the epic.
    *
    * Deliberately has NO `available` predicate. It is tempting to hide the tab
    * when nothing is estimated, but that is exactly backwards: an issue with no
@@ -77,7 +87,7 @@ export const TABS: readonly TabDefinition[] = [
    * teaches nobody that the feature exists. Hiding it would also make the tab
    * strip's width jump around as work moves through statuses.
    */
-  { id: "analytics", label: "Analytics", component: AnalyticsTab },
+  { id: "analytics", label: "Time", component: AnalyticsTab },
 ];
 
 export function visibleTabs(detail: IssueDetail): TabDefinition[] {
@@ -108,11 +118,15 @@ export function visibleTabs(detail: IssueDetail): TabDefinition[] {
  */
 const OPEN_TAB = "staple:detail-open-tab";
 
-let pendingDocumentKey: string | null = null;
+/** The document key a Documents tab should open on, and the issue it is for (null: whichever mounts next). */
+let pendingDocument: { ref: string | null; key: string } | null = null;
 
-/** Ask the detail panel to show `tabId`, optionally pinning a document key on arrival. */
-export function openDetailTab(tabId: string, documentKey?: string): void {
-  pendingDocumentKey = documentKey ?? null;
+/**
+ * Ask the detail panel to show `tabId`, optionally pinning a document key on arrival. `ref`
+ * ties the key to that issue, so a Documents tab of any other issue drops it unread.
+ */
+export function openDetailTab(tabId: string, documentKey?: string, ref: string | null = null): void {
+  pendingDocument = documentKey ? { ref, key: documentKey } : null;
   window.dispatchEvent(new CustomEvent(OPEN_TAB, { detail: tabId }));
 }
 
@@ -127,11 +141,37 @@ export function onOpenDetailTab(handler: (tabId: string) => void): () => void {
 }
 
 /**
- * The key a tab was asked to open on, or null. CONSUMES it: a reader who later returns
- * to Documents on their own should get their own default, not last week's pin.
+ * The key a tab was asked to open on for issue `ref`, or null. CONSUMES it whichever issue
+ * asks: a reader who later returns to Documents on their own should get their own default,
+ * not last week's pin, and a pin meant for one issue must never open another's.
  */
-export function takePendingDocumentKey(): string | null {
-  const key = pendingDocumentKey;
-  pendingDocumentKey = null;
-  return key;
+export function takePendingDocumentKey(ref: string): string | null {
+  const pending = pendingDocument;
+  pendingDocument = null;
+  return pending !== null && (pending.ref === null || pending.ref === ref) ? pending.key : null;
+}
+
+/**
+ * A tab to open on ANOTHER issue once its detail mounts: a goal's evidence citing
+ * `ABC-12:plan` opens ABC-12 on its Documents tab with `plan` pinned. The event above cannot
+ * do it (the new panel is not mounted when the link is pressed), so the request waits here
+ * for the next panel to mount, which takes it if it is for that issue and drops it either
+ * way. Evidence on the issue already open is not an arrival: `openDetailTab` switches in place.
+ */
+let arrival: { ref: string; tabId: string } | null = null;
+
+export function openTabOnArrival(ref: string, tabId: string, documentKey?: string): void {
+  arrival = { ref, tabId };
+  pendingDocument = documentKey ? { ref, key: documentKey } : null;
+}
+
+/** The tab asked for this issue, or null; consumed by whichever panel mounts first. */
+export function takeArrivalTab(ref: string): string | null {
+  const pending = arrival;
+  arrival = null;
+  if (pending === null) return null;
+  if (pending.ref === ref) return pending.tabId;
+  // Another issue mounted first: the request and its pinned document go together.
+  if (pendingDocument?.ref === pending.ref) pendingDocument = null;
+  return null;
 }

@@ -3,7 +3,7 @@ import type { Migration } from "../types.js";
 
 /**
  * Version 12 — which machine minted this workspace's identity (contract in
- * `docs/sync.md`, "A copied home is not a second device").
+ * `design/sync.md`, "A copied home is not a second device").
  *
  * ## Why 12
  *

@@ -163,10 +163,13 @@ describe("a fresh repo-local `staple init`", () => {
       // Bumped to "6" by STA-143 (006-approval-gates), after STA-140's 004 and
       // STA-124's 005, to "7" by STA-172 (007-milestones), to "8" by STA-167
       // (008-queue-entries), to "9" by 009-projects, to "10" by
-      // 010-sync-metadata, to "11" by 011-sync-field-writes and to "12" by
-      // 012-host-binding; the TEXT typing is the characterization, the number
+      // 010-sync-metadata, to "11" by 011-sync-field-writes, to "12" by
+      // 012-host-binding, to "13" by 013-execution-attempts, to "14" by
+      // 014-attempt-role, to "15" by 015-autopilot-runs, to "16" by
+      // 016-milestone-goals, to "17" by 017-derived-status and to "18" by
+      // 018-attachments; the TEXT typing is the characterization, the number
       // just tracks the migration list.
-      { key: "schema_version", value: "12" },
+      { key: "schema_version", value: "18" },
       { key: "slug", value: "metarepo" },
     ]);
   }, 30_000);
@@ -179,6 +182,16 @@ describe("a fresh repo-local `staple init`", () => {
     expect(runCliAt(project, ["init"], { STAPLE_HOME: home }).status).toBe(0);
 
     expect(schemaObjects(join(project, ".staple", "staple.db"))).toEqual([
+      // 018-attachments: an issue's files, and the blob a shared hash points at.
+      "index:attachments_issue_idx",
+      "index:attachments_sha_idx",
+      // 013-execution-attempts: an attempt's transitions in order, an issue's attempts
+      // in order, the idempotency lookup, and the stored-open attempts the orphan rule
+      // and the presence index read.
+      "index:attempt_transitions_attempt_idx",
+      "index:attempts_idempotency_idx",
+      "index:attempts_issue_idx",
+      "index:attempts_stored_open_idx",
       "index:comments_idempotency_uq",
       "index:comments_issue_idx",
       "index:events_dedup_uq",
@@ -202,12 +215,23 @@ describe("a fresh repo-local `staple init`", () => {
       "index:milestone_members_milestone_idx",
       "index:relations_blocked_idx",
       "index:relations_blocker_idx",
+      // 015-autopilot-runs: the one-live-run-per-actor-per-scope rule, and the run list's order.
+      "index:runs_live_scope_uq",
+      "index:runs_started_idx",
+      // 018-attachments: the two tables' primary keys.
+      "index:sqlite_autoindex_attachment_bytes_1",
+      "index:sqlite_autoindex_attachments_1",
+      // 013-execution-attempts: the two tables' `id` primary keys.
+      "index:sqlite_autoindex_attempt_transitions_1",
+      "index:sqlite_autoindex_attempts_1",
       "index:sqlite_autoindex_comments_1",
       "index:sqlite_autoindex_document_revisions_1",
       "index:sqlite_autoindex_documents_1",
       "index:sqlite_autoindex_issues_1",
       "index:sqlite_autoindex_issues_2",
       "index:sqlite_autoindex_meta_1",
+      // 016-milestone-goals: the criterion marks' (milestone, position) primary key.
+      "index:sqlite_autoindex_milestone_criterion_marks_1",
       "index:sqlite_autoindex_milestone_members_1",
       "index:sqlite_autoindex_milestone_members_2",
       "index:sqlite_autoindex_milestone_meta_1",
@@ -219,6 +243,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_queue_entries_1",
       "index:sqlite_autoindex_queue_entries_2",
       "index:sqlite_autoindex_relations_1",
+      "index:sqlite_autoindex_run_tickets_1",
+      "index:sqlite_autoindex_runs_1",
       // 010-sync-metadata: the primary keys of the eight local sync tables, plus
       // `sync_outbox`'s `UNIQUE (client_seq)`. `sync_state` is absent from this
       // group deliberately — its `id INTEGER PRIMARY KEY` is a rowid alias and
@@ -244,17 +270,28 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sync_outbox_pending_idx",
       "index:workspace_kinds_order_idx",
       "index:workspace_statuses_order_idx",
+      // 018-attachments: metadata replicates; the bytes table is local and travels only inside an inline operation.
+      "table:attachment_bytes",
+      "table:attachments",
+      // 013-execution-attempts: attempts and their transitions, both replicated.
+      "table:attempt_transitions",
+      "table:attempts",
       "table:comments",
       "table:document_revisions",
       "table:documents",
       "table:events",
       "table:issues",
       "table:meta",
+      // 016-milestone-goals: machine-local, never synchronized.
+      "table:milestone_criterion_marks",
       "table:milestone_members",
       "table:milestone_meta",
       "table:projects",
       "table:queue_entries",
       "table:relations",
+      // 015-autopilot-runs: machine-local, never synchronized.
+      "table:run_tickets",
+      "table:runs",
       "table:sqlite_sequence",
       // 010-sync-metadata: this device's record of its relationship to a shared
       // log. Created empty by every `init` and read by nothing until a
@@ -270,6 +307,11 @@ describe("a fresh repo-local `staple init`", () => {
       "table:sync_tombstones",
       "table:workspace_kinds",
       "table:workspace_statuses",
+      // 018-attachments: drop a blob once nothing still names its hash.
+      "trigger:attachments_drop_bytes",
+      // 017-derived-status: hold the replicated ownership column to null or the row's status.
+      "trigger:issues_derived_status_cleared",
+      "trigger:issues_derived_status_created",
     ]);
   }, 30_000);
 
@@ -345,20 +387,36 @@ describe("the machine home", () => {
      * the consolidated fresh-create snapshot had to reproduce.
      */
     expect(schemaObjects(join(home, "hub.db"))).toEqual([
+      // Hub migration 006: the presence index of attempts this machine started.
+      "index:attempt_presence_open_idx",
+      "index:budget_samples_limit_idx",
+      "index:budget_samples_window_session_idx",
       "index:cross_links_blocked_idx",
       "index:cross_links_blocker_idx",
       "index:hub_events_dedup_uq",
+      "index:limit_windows_limit_idx",
       // Hub migration 004 (STA-287): this machine's own cross-link changes.
+      "index:sqlite_autoindex_attempt_presence_1",
+      // Hub migration 008: the dedup keys of readings removed with budget forget.
+      "index:sqlite_autoindex_budget_forgotten_1",
+      "index:sqlite_autoindex_budget_samples_1",
+      "index:sqlite_autoindex_budget_samples_2",
       "index:sqlite_autoindex_cross_link_changes_1",
       "index:sqlite_autoindex_cross_links_1",
+      "index:sqlite_autoindex_limit_windows_1",
       "index:sqlite_autoindex_meta_1",
       "index:sqlite_autoindex_registry_optouts_1",
       "index:sqlite_autoindex_workspaces_1",
       "index:sqlite_autoindex_workspaces_2",
       "index:workspaces_repository_id_idx",
+      // Hub migration 005: provider limit windows and budget samples, machine state.
+      "table:attempt_presence",
+      "table:budget_forgotten",
+      "table:budget_samples",
       "table:cross_link_changes",
       "table:cross_links",
       "table:hub_events",
+      "table:limit_windows",
       "table:meta",
       "table:registry_optouts",
       "table:sqlite_sequence",
@@ -372,14 +430,18 @@ describe("the machine home", () => {
     //
     // GOLDEN, moved by S22 (STA-283): version 2 -> 3. Hub migration 003 adds
     // `workspaces.repository_id` and `registry_optouts`. Moved again by STA-287:
-    // 3 -> 4. Hub migration 004 adds `cross_link_changes`.
+    // 3 -> 4. Hub migration 004 adds `cross_link_changes`. Moved again: 4 -> 5.
+    // Hub migration 005 adds `limit_windows` and `budget_samples`. Moved again:
+    // 5 -> 6. Hub migration 006 adds `attempt_presence`. Moved again: 6 -> 7.
+    // Hub migration 007 adds its `role` column (a column, not a schema object).
+    // Moved again: 7 -> 8. Hub migration 008 adds `budget_forgotten`.
     //
     // `schema_version` is still the only key a FRESHLY INITIALISED hub holds —
     // slug and prefix remain authoritative in each workspace file, not here. It
     // is no longer the only key the hub can ever hold: `hub_id` is minted, once,
     // the first time something asks the hub to identify itself (a hub backup).
     // Lazily on purpose, so that no existing hub grows one until it is used.
-    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "4" }]);
+    expect(metaRows(join(home, "hub.db"))).toEqual([{ key: "schema_version", value: "8" }]);
   }, 30_000);
 
   it("mints ~/.staple/ui-token at 0600 the first time the UI is asked for", () => {
@@ -425,9 +487,9 @@ describe("global workspaces", () => {
     ]);
     expect(metaRows(join(home, "workspaces", "solo.db"))).toEqual([
       { key: "prefix", value: "SOL" },
-      // WORKSPACE_SCHEMA_VERSION — 12 since 012-host-binding. The hub beside it
-      // is still 2; the two databases version independently.
-      { key: "schema_version", value: "12" },
+      // WORKSPACE_SCHEMA_VERSION — 18 since 018-attachments. The hub beside it
+      // is still 8; the two databases version independently.
+      { key: "schema_version", value: "18" },
       { key: "slug", value: "solo" },
     ]);
   }, 30_000);

@@ -1,0 +1,206 @@
+import {execFileSync} from 'node:child_process';
+import path from 'node:path';
+import type {Config} from '@docusaurus/types';
+import type * as Preset from '@docusaurus/preset-classic';
+import {syntaxTheme} from './src/css/prism';
+import githubAlerts from './src/remark/githubAlerts';
+import preloadFonts from './src/plugins/preloadFonts';
+
+// Where the site lives. `url` is the origin and `baseUrl` the path under it. The
+// deploy workflow sets both: for GitHub Pages from the Pages settings (today
+// https://vpetkovic.github.io under /staple-tracker/; a custom domain set there
+// moves the site to its root, no code change), and for the dormant Cloudflare
+// deploy from the SITE_URL repository variable or the Worker's workers.dev
+// address, at the root. Local builds fall back to a placeholder at the root.
+const url = (process.env.SITE_URL || 'https://example.com').replace(/\/+$/, '');
+const baseUrl = `/${(process.env.BASE_URL || '').replace(/^\/+|\/+$/g, '')}/`.replace(/^\/\/$/, '/');
+
+// Which landing page `/` serves: `blend` (the default) has serif headlines on a
+// drafting grid and walks through the features one at a time beside an index that
+// stays in view; `bento`, kept in reserve, puts the features in a grid of animated
+// scenes. LANDING_VARIANT picks one at build time, and the deploy workflow passes the
+// LANDING_VARIANT repository variable through, so switching needs no code change.
+// Neither has an address of its own.
+const landingVariants = ['blend', 'bento'] as const;
+const landingVariant = process.env.LANDING_VARIANT || 'blend';
+if (!(landingVariants as readonly string[]).includes(landingVariant)) {
+  throw new Error(`LANDING_VARIANT must be one of ${landingVariants.join(', ')}; got "${landingVariant}"`);
+}
+
+const repo = 'https://github.com/vpetkovic/staple-tracker';
+const repoRoot = path.resolve(__dirname, '..');
+const docsDir = path.join(repoRoot, 'docs');
+
+// True when git tracks exactly this path (same case), so the GitHub link resolves.
+function tracked(relative: string): boolean {
+  try {
+    const out = execFileSync('git', ['ls-files', '--', relative], {cwd: repoRoot, encoding: 'utf8'});
+    return out.split('\n').includes(relative);
+  } catch {
+    return false;
+  }
+}
+
+// docs/*.md is the single source of truth and links to repository files outside
+// docs/ (CONTRIBUTING.md, RELEASING.md, the design documents in design/). Those
+// links point at the file on GitHub; the site never renders design/.
+// Any other unresolvable Markdown link fails the build.
+function linkOutsideDocs({sourceFilePath, url: target}: {sourceFilePath: string; url: string}): string {
+  const match = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(target);
+  const filePart = match?.[1] ?? '';
+  const suffix = `${match?.[2] ?? ''}${match?.[3] ?? ''}`;
+  const source = path.resolve(__dirname, sourceFilePath);
+  const resolved = path.resolve(path.dirname(source), decodeURIComponent(filePart));
+  const relative = path.relative(repoRoot, resolved).split(path.sep).join('/');
+  const inDocs = resolved.startsWith(docsDir + path.sep);
+  if (!inDocs && !relative.startsWith('../') && tracked(relative)) {
+    return `${repo}/blob/master/${relative}${suffix}`;
+  }
+  throw new Error(`Broken Markdown link "${target}" in ${sourceFilePath}`);
+}
+
+const config: Config = {
+  title: 'staple',
+  tagline: 'Local-first task tracking for coding agents.',
+  favicon: 'img/favicon.svg',
+  headTags: [
+    // A PNG beside the SVG favicon, for browsers that do not take SVG icons.
+    {
+      tagName: 'link',
+      attributes: {rel: 'icon', type: 'image/png', sizes: '32x32', href: `${baseUrl}img/favicon-32.png`},
+    },
+    {tagName: 'link', attributes: {rel: 'apple-touch-icon', href: `${baseUrl}img/apple-touch-icon.png`}},
+  ],
+  url,
+  baseUrl,
+  trailingSlash: false,
+  customFields: {landingVariant},
+
+  onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
+  markdown: {
+    // .md files are CommonMark, .mdx files are MDX: docs/*.md render as written.
+    format: 'detect',
+    hooks: {
+      onBrokenMarkdownLinks: linkOutsideDocs,
+      onBrokenMarkdownImages: 'throw',
+    },
+  },
+
+  i18n: {
+    defaultLocale: 'en',
+    locales: ['en'],
+  },
+
+  presets: [
+    [
+      'classic',
+      {
+        docs: {
+          path: '../docs',
+          routeBasePath: 'docs',
+          sidebarPath: './sidebars.ts',
+          // docPath is relative to ../docs, the repository's docs/ directory.
+          editUrl: ({docPath}) => `${repo}/edit/master/docs/${docPath}`,
+          // The date of the last commit to docs/<page>.md. A shallow clone has one
+          // commit, which would date every page the same: build from full history.
+          showLastUpdateTime: true,
+          beforeDefaultRemarkPlugins: [githubAlerts],
+        },
+        blog: false,
+        theme: {
+          // Fonts first, then the tokens, then the chrome that reads them.
+          customCss: [
+            './src/css/fonts.css',
+            './src/css/tokens.css',
+            './src/css/custom.css',
+            './src/css/search.css',
+          ],
+        },
+      } satisfies Preset.Options,
+    ],
+  ],
+
+  plugins: [preloadFonts],
+
+  themes: [
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        // A local index built with the site: no external search service.
+        hashed: true,
+        indexDocs: true,
+        docsDir: '../docs',
+        docsRouteBasePath: 'docs',
+        indexBlog: false,
+        indexPages: false,
+        language: ['en'],
+        highlightSearchTermsOnTargetPage: false,
+        searchResultLimits: 8,
+        searchBarShortcutHint: true,
+        explicitSearchResultPath: true,
+      },
+    ],
+  ],
+
+  themeConfig: {
+    // The social card (1200 x 630): og:image and twitter:image on every page.
+    image: 'img/og.png',
+    colorMode: {
+      respectPrefersColorScheme: true,
+    },
+    navbar: {
+      title: 'staple',
+      logo: {src: 'img/logo.svg', srcDark: 'img/logo-dark.svg', alt: 'staple logo', width: 24, height: 24},
+      items: [
+        // A plain link, not a `doc` item: a doc item reads as active on every
+        // page of the sidebar, which would highlight both entries in the docs.
+        {to: '/docs/getting-started', label: 'Get started', position: 'left', activeBaseRegex: '^$'},
+        {type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs'},
+        {href: repo, label: 'GitHub', position: 'right'},
+      ],
+    },
+    footer: {
+      style: 'light',
+      logo: {src: 'img/logo.svg', srcDark: 'img/logo-dark.svg', alt: 'staple', width: 20, height: 20, href: '/'},
+      links: [
+        {
+          title: 'Docs',
+          items: [
+            {label: 'Overview', to: '/docs'},
+            {label: 'Why staple', to: '/docs/why-staple'},
+            {label: 'Get started', to: '/docs/getting-started'},
+            {label: 'CLI', to: '/docs/cli'},
+            {label: 'MCP tools', to: '/docs/mcp-tools'},
+          ],
+        },
+        {
+          title: 'Work',
+          items: [
+            {label: 'How an agent works a ticket', to: '/docs/working-a-ticket'},
+            {label: 'Plans become tickets', to: '/docs/plans-to-tickets'},
+            {label: 'Handoff and resume', to: '/docs/handoff'},
+            {label: 'Pickup queue', to: '/docs/queue'},
+            {label: 'Autopilot runs', to: '/docs/runs'},
+          ],
+        },
+        {
+          title: 'Project',
+          items: [
+            {label: 'GitHub', href: repo},
+            {label: 'Contributing', href: `${repo}/blob/master/CONTRIBUTING.md`},
+            {label: 'License', href: `${repo}/blob/master/LICENSE`},
+          ],
+        },
+      ],
+      copyright: 'staple is MIT licensed.',
+    },
+    prism: {
+      theme: syntaxTheme,
+      darkTheme: syntaxTheme,
+      additionalLanguages: ['bash', 'json'],
+    },
+  } satisfies Preset.ThemeConfig,
+};
+
+export default config;

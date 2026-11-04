@@ -34,7 +34,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initWorkspace } from "../src/core/workspace.js";
 import { readStoredRepositoryId } from "../src/core/repo-identity.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
-import { asStructured, runCli, startMcpClient, type McpHarness } from "./fixtures/contract-support.js";
+import { asStructured, runCliAsync, startMcpClient, type McpHarness } from "./fixtures/contract-support.js";
 
 const AGENT = "cloud-surface-agent";
 const ENDPOINT = "https://staple-sync-dev.example.workers.dev";
@@ -49,13 +49,13 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]) {
-  return runCli([...args, "--db", dbPath], { STAPLE_HOME: home, STAPLE_AGENT: AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync([...args, "--db", dbPath], { STAPLE_HOME: home, STAPLE_AGENT: AGENT });
 }
 
 /** `staple cloud status --json` — the CLI's projection of the report. */
-function cliReport(): Record<string, unknown> {
-  const result = cli("cloud", "status", "--json");
+async function cliReport(): Promise<Record<string, unknown>> {
+  const result = await cli("cloud", "status", "--json");
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
@@ -167,7 +167,7 @@ describe("every surface reports the same state", () => {
   for (const [name, arrange, expected, mode] of STATES) {
     it(`${name}: CLI, MCP and HTTP agree, key for key`, async () => {
       arrange();
-      const [fromCli, fromMcp, fromHttp] = [cliReport(), await mcpReport(), await httpReport()];
+      const [fromCli, fromMcp, fromHttp] = [await cliReport(), await mcpReport(), await httpReport()];
 
       expect(fromCli.state).toBe(expected);
       expect(fromCli.mode).toBe(mode);
@@ -185,7 +185,7 @@ describe("every surface reports the same state", () => {
   it("the three surfaces expose the same key set, so none can grow a private field", async () => {
     connect();
     const keys = (o: Record<string, unknown>) => Object.keys(o).sort();
-    const fromCli = keys(cliReport());
+    const fromCli = keys(await cliReport());
     expect(keys(await mcpReport())).toEqual(fromCli);
     expect(keys(await httpReport())).toEqual(fromCli);
     // The `hint` that `/api/cloud/status` used to add for itself is now on the
@@ -210,7 +210,7 @@ describe("the numbers the criteria name reach every surface", () => {
       db.close();
     }
 
-    for (const report of [cliReport(), await mcpReport(), await httpReport()]) {
+    for (const report of [await cliReport(), await mcpReport(), await httpReport()]) {
       expect(report.cursor).toBe("cur-11");
       expect(report.epoch).toBe(5);
       expect(report.lastSyncAt).toBe("2026-09-05T03:00:00.000Z");
@@ -245,7 +245,7 @@ describe("the numbers the criteria name reach every surface", () => {
       db.close();
     }
 
-    for (const report of [cliReport(), await mcpReport(), await httpReport()]) {
+    for (const report of [await cliReport(), await mcpReport(), await httpReport()]) {
       expect(report.state).toBe("disconnected");
       expect(report.conflicts).toEqual({ open: 1, resolved: 0 });
     }
@@ -262,18 +262,18 @@ describe("the numbers the criteria name reach every surface", () => {
 // ------------------------------------------------------- the human rendering
 
 describe("the CLI's human output is the same report, rendered", () => {
-  it("names mode, device, pending, cursor and epoch", () => {
+  it("names mode, device, pending, cursor and epoch", async () => {
     connect();
-    const result = cli("cloud", "status");
+    const result = await cli("cloud", "status");
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("manual");
     expect(result.stdout).toContain(DEVICE);
     expect(result.stdout).toMatch(/pending\s+0/);
   });
 
-  it("a disconnected repository gets the static hint and no probe", () => {
+  it("a disconnected repository gets the static hint and no probe", async () => {
     disconnect();
-    const result = cli("cloud", "status");
+    const result = await cli("cloud", "status");
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("not connected");
     expect(result.stdout).toContain("staple cloud connect");
@@ -281,9 +281,9 @@ describe("the CLI's human output is the same report, rendered", () => {
     expect(result.stdout).toContain("local files only");
   });
 
-  it("an actionable failure prints its remedy, not just its name", () => {
+  it("an actionable failure prints its remedy, not just its name", async () => {
     connect({ credential: false });
-    const result = cli("cloud", "status");
+    const result = await cli("cloud", "status");
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("NOT FOUND");
     expect(result.stdout).toContain("Re-connect with `staple cloud connect`");

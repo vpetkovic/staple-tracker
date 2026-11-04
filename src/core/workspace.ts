@@ -384,7 +384,7 @@ export function initWorkspace(options: {
      *
      * This is local file and local row work: it makes no network call, and it is
      * not `connect`. A workspace carrying an identity has not consented to
-     * anything — see docs/sync.md, "Three consents".
+     * anything — see design/sync.md, "Three consents".
      */
     const repository = reconcileWorkspaceIdentity(db, dbPath);
 
@@ -429,7 +429,7 @@ export function initWorkspace(options: {
      *
      * Local row work only. It makes no network call and it is not `connect`; a workspace
      * carrying an identity has consented to nothing. See the comment above and
-     * `docs/sync.md`, "Three consents".
+     * `design/sync.md`, "Three consents".
      */
     if (hubRow?.repositoryId !== repository.repositoryId) {
       hub.recordRepositoryId(storedSlug, repository.repositoryId);

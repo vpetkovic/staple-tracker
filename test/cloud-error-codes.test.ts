@@ -2,7 +2,7 @@
  * STA-251: every cloud sync failure surfaces with its TRUE code.
  *
  * The sync protocol has thirteen wire codes and one client-side one (`offline`), and three
- * of the fourteen are retryable (`docs/sync.md`, "Error taxonomy"). `StapleErrorCode` used to
+ * of the fourteen are retryable (`design/sync.md`, "Error taxonomy"). `StapleErrorCode` used to
  * have none of the sync-only members, so the client folded each into the nearest store code
  * — `auth`, `forbidden`, `revoked` and five others became `validation` (exit 2), while
  * `rate_limited`, `unavailable` and `offline` became a NON-retryable `conflict` (exit 4) — and
@@ -667,16 +667,16 @@ describe("backup disable: the remote half fails, and the exit code says how", ()
 
 describe("the documented retry test retries exactly the retryable sync codes", () => {
   /**
-   * `docs/cli.md` gives a shell snippet for "try again later". It is run here, as written,
+   * `docs/errors.md` gives a shell snippet for "try again later". It is run here, as written,
    * for every exit status 0-255, and must match exactly the exit codes of the retryable
    * sync codes, derived from the source rather than restated. A range such as `-ge 19` also
    * matched 70 (the installed launcher with no runtime) and 128+n (a signal), and a loop
    * built on it spun for ever on a broken install.
    */
   it("matches 19, 20 and 21 and nothing else", () => {
-    const docs = readFileSync(join(REPO_ROOT, "docs", "cli.md"), "utf8");
+    const docs = readFileSync(join(REPO_ROOT, "docs", "errors.md"), "utf8");
     const block = /```sh\n(staple cloud sync\ncase \$\? in[\s\S]*?esac)\n```/.exec(docs)?.[1];
-    expect(block, "docs/cli.md no longer has the retry snippet").toBeDefined();
+    expect(block, "docs/errors.md no longer has the retry snippet").toBeDefined();
     const body = block!.replace(/^staple cloud sync$/m, "(exit $c)").replace(/echo "try again later"/, 'echo "$c"');
     const run = spawnSync("sh", ["-c", `for c in $(seq 0 255); do\n${body}\ndone`], { encoding: "utf8" });
     const matched = run.stdout.trim().split("\n").filter(Boolean).map(Number);

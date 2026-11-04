@@ -1,0 +1,61 @@
+.figure {
+  margin: 0;
+  min-width: 0;
+}
+
+/* Two hairlines: the outer frame on the subtle surface, and the image's own edge. */
+.frame {
+  padding: var(--st-space-2);
+  background: var(--st-bg-subtle);
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: calc(var(--st-radius-lg) + var(--st-space-2));
+}
+
+.crop {
+  overflow: hidden;
+  border: var(--st-hairline) solid var(--st-border);
+  border-radius: var(--st-radius-lg);
+  background: var(--st-bg);
+}
+
+.image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.caption {
+  margin-top: var(--st-space-3);
+  font-size: var(--st-text-sm);
+  color: var(--st-fg-subtle);
+  text-align: center;
+}
+
+@media (max-width: 767px) {
+  .frame {
+    padding: var(--st-space-1);
+    border-radius: calc(var(--st-radius-md) + var(--st-space-1));
+  }
+
+  /* Without a phone capture: a legible crop of the desk capture, not the whole desk shrunk to a thumbnail. */
+  .figure:not(.hasPhone) .crop {
+    aspect-ratio: 5 / 4;
+    border-radius: var(--st-radius-md);
+  }
+
+  .figure:not(.hasPhone) .image {
+    width: 250%;
+    max-width: none;
+    transform: translate(var(--focus-x), var(--focus-y));
+  }
+
+  /* With one: the web UI's own phone layout, at about the size of a phone. */
+  .hasPhone .frame {
+    max-width: 22rem;
+    margin-inline: auto;
+  }
+
+  .hasPhone .crop {
+    border-radius: var(--st-radius-md);
+  }
+}

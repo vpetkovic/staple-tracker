@@ -1,7 +1,7 @@
 /**
  * Fenced server leases — the client half.
  *
- * Contract: `docs/sync.md`, "Claims: a local checkout is not a global lease".
+ * Contract: `design/sync.md`, "Claims: a local checkout is not a global lease".
  * Every describe block below is one of STA-74's acceptance criteria.
  *
  * The service is `test/fixtures/fake-sync-server.ts`, extended with the lease

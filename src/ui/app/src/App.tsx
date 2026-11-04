@@ -22,7 +22,7 @@
  * graph need — sticky group headers and a canvas that fills its parent — are both
  * properties of the scroll container, and a shell that owns it owns those decisions too.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { CommandPaletteMount } from "@/components/CommandPaletteMount";
 import { CreateIssueMount } from "@/components/CreateIssueMount";
@@ -37,8 +37,11 @@ import {
   getMilestone,
   getMilestones,
   getProjects,
+  getRuns,
   hasToken,
 } from "@/lib/api";
+import { buildRunsState, RunsContext } from "@/lib/runs";
+import { RunHistoryMount } from "@/components/autopilot/RunHistoryMount";
 import { buildFilterContext, type MilestoneFacts, type ProjectFacts } from "@/lib/filter-dimensions";
 import {
   loadFilters,
@@ -47,6 +50,7 @@ import {
   withDimension,
   type FilterState,
 } from "@/lib/filters";
+import { readMilestoneList } from "@/lib/milestone-list";
 import { projectsForWorkspace } from "@/lib/projects";
 import {
   DEFAULT_VIEW,
@@ -56,6 +60,22 @@ import {
   type StapleSession,
   type ViewName,
 } from "@/lib/session";
+import {
+  afterWorkspaceSwitch,
+  isNavigation,
+  readShellUrl,
+  withShellState,
+  type ShellUrlState,
+} from "@/lib/session-url";
+import { rememberWorkspace } from "@/lib/session-workspace";
+import {
+  afterHistorySettles,
+  leaveOverlays,
+  pushPage,
+  replaceUrl,
+  traversalKind,
+  whenHistoryIsFree,
+} from "@/lib/back-to-close";
 import { useWorkspaceSettings } from "@/lib/settings";
 import type { SortPref } from "@/lib/sort-modes";
 import type { MilestoneListRow, MilestoneView, ProjectRow } from "@/lib/types";
@@ -72,11 +92,13 @@ import {
   type ViewPrefs,
 } from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
+import { BudgetView } from "@/views/budget/BudgetView";
+import { CalibrationView } from "@/views/calibration/CalibrationView";
 import { GraphView } from "@/views/GraphView";
 import { MilestonesView } from "@/views/milestones/MilestonesView";
 import { QueueView } from "@/views/queue/QueueView";
 import { TreeView } from "@/views/TreeView";
-import { ErrorState, LoadingState } from "@/views/ViewChrome";
+import { LoadingState, ProblemState } from "@/components/plain/States";
 
 /**
  * The only place a view name becomes a component. One entry per member of `VIEWS`, and
@@ -89,6 +111,8 @@ const VIEW_COMPONENTS: Record<ViewName, typeof TreeView> = {
   graph: GraphView,
   milestones: MilestonesView,
   queue: QueueView,
+  calibration: CalibrationView,
+  budget: BudgetView,
 };
 
 /**
@@ -116,13 +140,21 @@ export function App() {
     return () => window.removeEventListener("staple:auth-error", onBroadcast);
   }, [onAuthError]);
 
-  const [view, setView] = useState<ViewName>(DEFAULT_VIEW);
+  /**
+   * THE ADDRESS, read once before the first render — lib/session-url.ts. When it describes a
+   * page (it carries `view`), the workspace, the view, the milestone focus and that scope's
+   * filters all start from it; a bare address starts from what this browser remembered.
+   */
+  const [initialUrl] = useState<ShellUrlState | null>(() =>
+    typeof window === "undefined" ? null : readShellUrl(window.location.search),
+  );
+  const [view, setView] = useState<ViewName>(initialUrl?.view ?? DEFAULT_VIEW);
   /**
    * R4c (STA-188). Which milestone the page was pointed at, and by what. Beside `view`
    * because it is the second half of one navigation act; see lib/session.ts.
    */
-  const [milestoneFocus, setMilestoneFocus] = useState<string | null>(null);
-  const [ws, setWs] = useState("");
+  const [milestoneFocus, setMilestoneFocus] = useState<string | null>(initialUrl?.focus ?? null);
+  const [ws, setWsState] = useState(initialUrl?.ws ?? "");
   const [selection, setSelection] = useState<Selection | null>(null);
 
   /**
@@ -138,9 +170,12 @@ export function App() {
    * `filtersForScope` in lib/view-prefs.ts.
    */
   const [legacyFilters, setLegacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
-  const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(
-    () => loadViewPrefs(window.localStorage).filters,
-  );
+  const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(() => {
+    const stored = loadViewPrefs(window.localStorage).filters;
+    // An address that describes a page decides that page's filters, whatever was stored.
+    if (!initialUrl) return stored;
+    return withFiltersForScope(stored, sortScopeKey(initialUrl.ws, initialUrl.view), initialUrl.filters);
+  });
 
   /**
    * How the list is arranged — R1 (STA-100). Seeded during the FIRST render for the same
@@ -249,7 +284,25 @@ export function App() {
    * `version` re-runs it on the fingerprint poll, so a vocabulary changed by an agent
    * through MCP or by a shell through the CLI reaches an open page within 1.5s.
    */
-  const settings = useWorkspaceSettings({ ws: ws || undefined, version, onAuthError });
+  /**
+   * All workspaces paints every workspace's rows, so it gets every workspace's vocabulary —
+   * their union, with the first workspace in hub order deciding a shared id's label and
+   * category (`mergeWorkspaceVocabularies`) — rather than the first workspace's alone.
+   */
+  const vocabularyOfAll = useMemo(
+    () =>
+      bootstrap.data?.mode === "hub" && ws === "" ? bootstrap.data.workspaces.map((entry) => entry.slug) : undefined,
+    [bootstrap.data, ws],
+  );
+  // Nothing is asked before the workspace list is known (see `wait`): never a per-workspace
+  // read for a workspace nobody chose.
+  const settings = useWorkspaceSettings({
+    ws: ws || undefined,
+    all: vocabularyOfAll,
+    version,
+    onAuthError,
+    wait: bootstrap.data === undefined,
+  });
 
   /**
    * THE MILESTONES, FOR THE FILTER — R4b (STA-187).
@@ -269,26 +322,43 @@ export function App() {
    * finished work is on the page — the same default, asked once.
    */
   const showDone = filters.showDone;
-  const loadMilestoneList = useCallback(() => getMilestones({ ws, all: showDone }), [ws, showDone]);
-  const milestoneList = useResource<MilestoneListRow[]>(
+  /** All workspaces asks every workspace: `readMilestoneList` in lib/milestone-list.ts. */
+  const booted = bootstrap.data !== undefined;
+  const allWorkspaces = bootstrap.data?.mode === "hub" && ws === "";
+  const workspaceSlugs = (bootstrap.data?.workspaces ?? []).map((entry) => entry.slug).join(",");
+  const loadMilestoneList = useCallback(
+    () =>
+      readMilestoneList(
+        { booted, allWorkspaces, ws, workspaces: workspaceSlugs ? workspaceSlugs.split(",") : [], showDone },
+        getMilestones,
+      ),
+    [ws, showDone, booted, allWorkspaces, workspaceSlugs],
+  );
+  const milestoneList = useResource<{ row: MilestoneListRow; ws: string }[]>(
     loadMilestoneList,
-    [ws, showDone, version],
+    [ws, showDone, booted, allWorkspaces, workspaceSlugs, version],
     onAuthError,
   );
 
   const selectedMilestones = (filters.dims.milestone ?? []).join(",");
-  const loadMilestoneMembers = useCallback(
-    () =>
-      Promise.all(
-        (selectedMilestones ? selectedMilestones.split(",") : []).map((ref) =>
-          getMilestone({ ws, ref }),
-        ),
-      ),
-    [ws, selectedMilestones],
+  /** Which workspace each listed milestone lives in, so a selected one is read from there. */
+  const milestoneHomes = useMemo(
+    () => (milestoneList.data ?? []).map((entry) => `${entry.row.milestone.identifier}=${entry.ws}`).join(","),
+    [milestoneList.data],
   );
+  const loadMilestoneMembers = useCallback(() => {
+    const homes = new Map(
+      (milestoneHomes ? milestoneHomes.split(",") : []).map((pair) => pair.split("=") as [string, string]),
+    );
+    return Promise.all(
+      (selectedMilestones ? selectedMilestones.split(",") : []).map((ref) =>
+        getMilestone({ ws: homes.get(ref) ?? ws, ref }),
+      ),
+    );
+  }, [ws, selectedMilestones, milestoneHomes]);
   const milestoneMembers = useResource<MilestoneView[]>(
     loadMilestoneMembers,
-    [ws, selectedMilestones, version],
+    [ws, selectedMilestones, milestoneHomes, version],
     onAuthError,
   );
 
@@ -304,7 +374,7 @@ export function App() {
         view.members.map((member) => member.identifier),
       ]),
     );
-    return (milestoneList.data ?? []).map((row) => ({
+    return (milestoneList.data ?? []).map(({ row }) => ({
       identifier: row.milestone.identifier,
       title: row.milestone.title,
       memberCount: row.memberCount,
@@ -330,6 +400,19 @@ export function App() {
       })),
     [projects.data, ws],
   );
+
+  /**
+   * THE AUTOPILOT RUNS — one read per fingerprint change, like the projects above, scoped by
+   * the workspace (All workspaces reads every workspace's). The rail banner, the phone strip,
+   * the row badges, the detail's notice and the run history all read this one answer through
+   * `RunsContext` (lib/runs.ts). Every run write emits an event and a driver attaching or
+   * dying is in the fingerprint, so a run shows here within one refresh.
+   */
+  const loadRuns = useCallback(() => getRuns({ ws }), [ws]);
+  const runs = useResource(loadRuns, [ws, version], onAuthError);
+  const runEntries = runs.data?.runs;
+  const runsNow = runs.data?.now ?? null;
+  const runsState = useMemo(() => buildRunsState(runEntries ?? [], bump, runsNow), [runEntries, bump, runsNow]);
 
   /**
    * A DELETED PROJECT LEAVES NO FILTER BEHIND. Its id may still be selected in any saved
@@ -399,6 +482,98 @@ export function App() {
     },
     [ws, legacyFilters],
   );
+
+  /**
+   * SWITCHING WORKSPACE KEEPS THE PAGE — `afterWorkspaceSwitch` in lib/session-url.ts. The
+   * view stays; the milestone focus (a milestone of the workspace being left) does not; the
+   * filters are the target scope's own, which `filtersForScope` resolves on the next render.
+   * A chosen workspace is also remembered as the default for "which workspace?" questions
+   * asked later from All workspaces (lib/session-workspace.ts).
+   */
+  const setWs = useCallback(
+    (next: string) => {
+      const landing = afterWorkspaceSwitch({ view }, next, () => filters);
+      setWsState(landing.ws);
+      setMilestoneFocus(landing.focus);
+      if (next) rememberWorkspace(next);
+    },
+    [view, filters],
+  );
+
+  /**
+   * THE URL MIRRORS THE PAGE, and the page follows the URL on Back and Forward.
+   *
+   * Every change to the workspace, the view, the focus or the filters on screen is written
+   * into the address. Going somewhere (another workspace or view) pushes a history entry, so
+   * Back — the phone's back gesture included — returns from it; narrowing the list replaces
+   * the entry, so Back does not replay every keystroke typed into search. `lastSynced` is
+   * the state the address last held, which is what makes a popstate write nothing back.
+   */
+  const lastSynced = useRef<ShellUrlState | null>(initialUrl);
+  const shellState = useMemo<ShellUrlState>(
+    () => ({ ws, view, filters, focus: milestoneFocus }),
+    [ws, view, filters, milestoneFocus],
+  );
+  useEffect(() => {
+    const navigating = isNavigation(lastSynced.current, shellState);
+    lastSynced.current = shellState;
+    // The address is built when the write RUNS, not now: a write queued behind an overlay
+    // closing (lib/back-to-close.ts) must see the address the traversal landed on.
+    const write = () => {
+      const href = withShellState(window.location.href, shellState);
+      if (href === window.location.href) return;
+      if (navigating) pushPage(href);
+      else replaceUrl(href);
+    };
+    // Going somewhere closes whatever is open on top first, so Back from the new page
+    // returns to the old page and not to a stale overlay entry of it.
+    if (navigating) leaveOverlays(write);
+    else afterHistorySettles(write);
+  }, [shellState]);
+
+  useEffect(() => {
+    const onPop = () => {
+      /*
+       * AN OVERLAY CLOSING IS NOT A NAVIGATION. Stepping back past overlays before a
+       * navigation lands on the page being left, and the new page follows: nothing to read.
+       * An overlay closed (by Back or from the UI) lands on the entry beneath it, which is
+       * this same page — but that entry can be STALE: a filter chosen inside an open menu
+       * was written onto the menu's entry. So the page keeps what it has and writes it back
+       * onto the address, rather than rewinding to what the entry beneath remembered.
+       */
+      const kind = traversalKind();
+      if (kind === "navigation") return;
+      if (kind === "close" || kind === "overlay-back") {
+        // Behind anything already queued — the overlay may have closed FOR a navigation
+        // whose new page is about to be pushed — and with the state as it is then.
+        whenHistoryIsFree(() => {
+          const keep = lastSynced.current;
+          if (keep) replaceUrl(withShellState(window.location.href, keep));
+        });
+        return;
+      }
+      const next = readShellUrl(window.location.search);
+      if (!next) return;
+      lastSynced.current = next;
+      setWsState(next.ws);
+      setView(next.view);
+      setMilestoneFocus(next.focus);
+      setFilterPrefs((current) => withFiltersForScope(current, sortScopeKey(next.ws, next.view), next.filters));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  /**
+   * An address naming a workspace this hub does not have (a link from another machine, a
+   * workspace unregistered since) lands on All workspaces rather than on an error.
+   */
+  const knownWorkspaces = bootstrap.data?.workspaces;
+  const hubMode = bootstrap.data?.mode === "hub";
+  useEffect(() => {
+    if (!knownWorkspaces || ws === "") return;
+    if (!hubMode || !knownWorkspaces.some((workspace) => workspace.slug === ws)) setWsState("");
+  }, [knownWorkspaces, hubMode, ws]);
 
   const open = useCallback((workspace: string, ref: string) => setSelection({ workspace, ref }), []);
   const pin = useCallback(
@@ -478,16 +653,16 @@ export function App() {
 
   if (bootstrap.error) {
     return (
-      <div className="p-6">
-        <ErrorState error={bootstrap.error} />
+      <div className="flex h-dvh items-start justify-center bg-sidebar p-6">
+        <ProblemState title="staple could not start this page" message={bootstrap.error.message} />
       </div>
     );
   }
 
   if (!session) {
     return (
-      <div className="p-6">
-        <LoadingState />
+      <div className="h-dvh bg-sidebar p-6">
+        <LoadingState label="Opening staple" />
       </div>
     );
   }
@@ -496,27 +671,31 @@ export function App() {
 
   return (
     <SessionContext value={session}>
-      {/*
-        All four mounts sit above the shell on purpose. A palette has to outlive view
-        switches, a create dialog has to be triggerable from the header or a keystroke
-        without either owning it, and the detail drawer portals out of the layout
-        entirely. None of them are affected by what the shell does below.
-      */}
-      <CommandPaletteMount />
-      <CreateIssueMount />
-      <IssueDetailMount />
-      {/*
-        O7b (STA-141). A fourth mount for the same reason as the other three: the
-        workspace vocabulary editor has to be openable from the header and from the
-        palette without either owning its open flag, and it must survive a view switch.
-      */}
-      <SettingsMount />
-      {/* The project dialog (migration 009): opened from the rail's `+` and each project's gear. */}
-      <ProjectDialogMount />
+      <RunsContext value={runsState}>
+        {/*
+          All four mounts sit above the shell on purpose. A palette has to outlive view
+          switches, a create dialog has to be triggerable from the header or a keystroke
+          without either owning it, and the detail drawer portals out of the layout
+          entirely. None of them are affected by what the shell does below.
+        */}
+        <CommandPaletteMount />
+        <CreateIssueMount />
+        <IssueDetailMount />
+        {/*
+          O7b (STA-141). A fourth mount for the same reason as the other three: the
+          workspace vocabulary editor has to be openable from the header and from the
+          palette without either owning its open flag, and it must survive a view switch.
+        */}
+        <SettingsMount />
+        {/* The project dialog (migration 009): opened from the rail's `+` and each project's gear. */}
+        <ProjectDialogMount />
+        {/* The autopilot run history: opened from the rail, the phone strip and a task's detail. */}
+        <RunHistoryMount />
 
-      <AppShell>
-        <View onAuthError={onAuthError} />
-      </AppShell>
+        <AppShell>
+          <View onAuthError={onAuthError} />
+        </AppShell>
+      </RunsContext>
     </SessionContext>
   );
 }

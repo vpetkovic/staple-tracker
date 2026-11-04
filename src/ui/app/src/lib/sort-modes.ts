@@ -7,7 +7,7 @@
  * the right shape for a list with one order. The moment the order becomes a CHOICE, three
  * things have to agree about it: the comparator, the menu that names it, and the docs that
  * promise a tie-break chain. A switch inside the model can only be the first of those, so
- * the menu would retype the names and `docs/web-ui.md` would retype the chains, and the day
+ * the menu would retype the names and `design/web-ui.md` would retype the chains, and the day
  * a mode's tie-break changes, two of the three would keep saying the old thing.
  *
  * So a mode is DATA: an id, both of its direction labels, the chain written out as the list
@@ -32,7 +32,7 @@
  *
  * ── PRESENTATION ONLY. THIS FILE CANNOT REACH THE QUEUE ───────────────────────────────
  *
- * `docs/queue.md` is explicit that presentation sort is not the queue: queue position is a
+ * `design/queue.md` is explicit that presentation sort is not the queue: queue position is a
  * thing the list may DISPLAY and order by, and never a thing it may set. Nothing here
  * writes: the module exports pure comparators over `readonly` rows, it reads `queuePosition`
  * off the row payload and reads nothing else about the queue, and `sort-modes.test.ts` sorts

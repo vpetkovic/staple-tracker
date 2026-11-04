@@ -42,7 +42,7 @@
  * For the same reason the row transitions `background-color` and `opacity` only, never a
  * transform and never a layout property.
  */
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { DependencyBadges } from "./DependencyBadges";
 import { KindGlyph } from "./KindGlyph";
@@ -50,13 +50,18 @@ import { LabelPills } from "./LabelPills";
 import { ParentRollupBar } from "./ParentRollup";
 import { PrBadge } from "./PrBadge";
 import { PrioritySignal } from "./PrioritySignal";
-import { MilestoneCue, PickupCue } from "./RowCues";
+import { DeskPickupCue, MilestoneCue, PickupCue, PickupPill } from "./RowCues";
 import { StatusIcon } from "./StatusIcon";
 import { Avatar, RowClaimSlot } from "./WorkingPill";
+import { AutopilotBadge } from "@/components/autopilot/AutopilotBadge";
 import { WorklogCue } from "./WorklogCue";
+import { WhoCue } from "./WhoCue";
+import "./desktop-row.css";
 import type { TaskListConfig } from "./config";
-import { guideX, indentPx, isSubtask, ROW_PAD_LEFT, type TaskRow } from "./model";
+import { useLongPress } from "./long-press";
+import { elbowWidth, guideX, indentPx, isSubtask, ROW_PAD_LEFT, type TaskRow } from "./model";
 import { formatRowDate } from "./row-date";
+import { FULL_ROW_PLAN, type RowGeometry } from "./row-layout";
 
 function Chevron() {
   return (
@@ -84,6 +89,30 @@ function ActionsDots() {
       <circle cx="3" cy="7" r="1.2" fill="currentColor" />
       <circle cx="7" cy="7" r="1.2" fill="currentColor" />
       <circle cx="11" cy="7" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+/**
+ * The desktop row's labels: a label that only restates the priority the row already draws
+ * (`p1`, `priority:high`) is left off when the priority column is on. It stays on the task.
+ */
+export function deskLabels(labels: readonly string[], priorityShown: boolean): string[] {
+  return priorityShown ? labels.filter((label) => !/^(p[0-4]|priority[:=/-].+)$/i.test(label.trim())) : [...labels];
+}
+
+/** "Open this task" — the desktop row's second quick action. */
+function OpenArrow() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+      <path
+        d="M4.5 9.5 L9.5 4.5 M5.2 4.5 H9.5 V8.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -128,7 +157,15 @@ function SubtaskGlyph() {
  * this row's own level: true means more siblings follow, so the vertical carries on past
  * the elbow to the bottom of the row. False is what makes the elbow read as a terminal.
  */
-function Connectors({ guides, hasSelectColumn }: { guides: boolean[]; hasSelectColumn: boolean }) {
+function Connectors({
+  guides,
+  hasSelectColumn,
+  geometry,
+}: {
+  guides: boolean[];
+  hasSelectColumn: boolean;
+  geometry: RowGeometry;
+}) {
   if (guides.length === 0) return null;
   const own = guides.length - 1;
 
@@ -139,16 +176,16 @@ function Connectors({ guides, hasSelectColumn }: { guides: boolean[]; hasSelectC
           <span
             key={level}
             className="staple-guide-rail"
-            style={{ left: guideX(level, hasSelectColumn) }}
+            style={{ left: guideX(level, hasSelectColumn, geometry) }}
           />
         ) : null,
       )}
-      <span className="staple-guide-elbow" style={{ left: guideX(own, hasSelectColumn) }} />
+      <span className="staple-guide-elbow" style={{ left: guideX(own, hasSelectColumn, geometry) }} />
       {guides[own] ? (
         <span
           key="own"
           className="staple-guide-rail staple-guide-rail-lower"
-          style={{ left: guideX(own, hasSelectColumn) }}
+          style={{ left: guideX(own, hasSelectColumn, geometry) }}
         />
       ) : null}
     </span>
@@ -164,6 +201,15 @@ function Connectors({ guides, hasSelectColumn }: { guides: boolean[]; hasSelectC
  *          already owns focus; adding a second role would nest two options.
  */
 export type TaskRowSemantics = "grid" | "list" | "bare";
+
+/**
+ * The row's own hold on its menu, so a long-press on a phone can open the same menu the `⋯`
+ * opens. A caller that ignores it still gets a working `⋯`; it only loses the long-press.
+ */
+export interface RowMenuControl {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
 
 export interface TaskRowLineProps {
   row: TaskRow;
@@ -216,7 +262,13 @@ export interface TaskRowLineProps {
    * Absent means the `⋯` keeps its original behaviour exactly: it opens the detail drawer,
    * which is what every surface without a menu still wants.
    */
-  actionsMenu?: (trigger: ReactNode) => ReactNode;
+  actionsMenu?: (trigger: ReactNode, control: RowMenuControl) => ReactNode;
+  /**
+   * The desktop row's quick status action. Like `actionsMenu`, a builder: the row hands over
+   * a ready-made trigger and the caller wraps it in a menu that knows how to write. Absent
+   * means the row draws no status action (a read-only surface).
+   */
+  statusMenu?: (trigger: ReactNode, control: RowMenuControl) => ReactNode;
   onToggleSelect?: () => void;
   onFocus?: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -239,6 +291,7 @@ export function TaskRowLine({
   onOpenMilestone,
   onToggleExpand,
   actionsMenu,
+  statusMenu,
   onToggleSelect,
   onFocus,
   onKeyDown,
@@ -253,6 +306,27 @@ export function TaskRowLine({
    */
   const cues = row.cues ?? null;
   const { columns, labelMax } = config;
+  /**
+   * What this width keeps — row-layout.ts. Every element below that the ladder can drop is
+   * gated on the plan AND its column: the column is the container's decision ("this surface
+   * never shows a date"), the plan is the width's ("not at 390px").
+   */
+  const plan = config.plan ?? FULL_ROW_PLAN;
+  /**
+   * On a compact row the claim is an avatar, and when the holder IS the assignee the second
+   * avatar would repeat the same initials beside it. One is drawn; the claim's carries more.
+   */
+  const claimHolder = claim?.heldBy ?? issue.checkoutAgent;
+  const geometry = plan.geometry;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuControl: RowMenuControl = { open: menuOpen, onOpenChange: setMenuOpen };
+  const [statusOpen, setStatusOpen] = useState(false);
+  const statusControl: RowMenuControl = { open: statusOpen, onOpenChange: setStatusOpen };
+  // Long-press opens the row's menu on touch. Only where there IS a menu: a row whose `⋯`
+  // would only open the drawer already does that on a plain tap.
+  // `bare` rows get it too: the Queue's plan rows are bare (the reorder list owns their
+  // role) and they are the rows whose menu carries the moves.
+  const longPress = useLongPress(actionsMenu ? () => setMenuOpen(true) : null);
   const collapsedParent = columns.disclosure && hasChildren && !isExpanded;
   const bare = semantics === "bare";
   /**
@@ -287,6 +361,30 @@ export function TaskRowLine({
    * liveness is written down. See views/tree/tree-model.ts.
    */
   const ghost = row.ghost === true;
+  /**
+   * PHONE ROWS (row-layout.ts, the 480px rung): the identifier column goes — the sheet's
+   * header carries it and the row keeps it as screen-reader text — and a plain task's kind
+   * glyph goes with it. Any other kind keeps its glyph, moved to the front of the title.
+   */
+  const idColumn = columns.identifier && plan.identifier;
+  /**
+   * THE DESKTOP ROW (config.ts `desk`). Only on a `line` plan: a compact plan is the phone,
+   * and the phone row stays exactly as shipped.
+   */
+  const desk = config.desk === true && plan.layout === "line";
+  const kindGlyph = plan.plainKindGlyph || issue.kind !== "task" ? <KindGlyph kind={issue.kind} /> : null;
+  /**
+   * On the desktop row the identifier column holds the identifier alone, so every
+   * identifier in the list shares one left edge. A kind that says something (an epic, a
+   * bug) leads the title instead; a plain task says nothing and draws nothing.
+   */
+  const deskKind = desk && issue.kind !== "task" ? <KindGlyph kind={issue.kind} /> : null;
+  const relationText = (
+    <>
+      {isSubtask(row) ? <span className="sr-only">Subtask</span> : null}
+      {ghost ? <span className="sr-only"> parent shown for context</span> : null}
+    </>
+  );
 
   const cell = (
     <div role={semantics === "grid" ? "gridcell" : undefined} className="staple-row-cell">
@@ -367,7 +465,7 @@ export function TaskRowLine({
         therefore sits one glyph right of a top-level one until O1b (STA-125) gives every row
         a real kind glyph and restores the edge by filling the space rather than reserving it.
       */}
-      {columns.identifier ? (
+      {idColumn ? (
         <span className="staple-row-id">
           {/*
             THE KIND GLYPH — O1b (STA-125). First child, so it is left of everything.
@@ -387,12 +485,17 @@ export function TaskRowLine({
             preset that draws an identifier wants the type of the thing it identifies,
             and the palette (R5) gets it through this component with no code of its own.
           */}
-          <KindGlyph kind={issue.kind} />
+          {desk ? null : kindGlyph}
           {isSubtask(row) ? (
             <>
-              <span className="staple-row-kin" data-testid="subtask-glyph" aria-hidden="true">
-                <SubtaskGlyph />
-              </span>
+              {/* Compact rows drop the glyph: the indent and the guide line already draw the
+                  relation, and 15px of identifier cluster is 15px of title on a phone. The
+                  desktop row drops it for the same reason: the guide line says it. */}
+              {plan.subtaskGlyph && !desk ? (
+                <span className="staple-row-kin" data-testid="subtask-glyph" aria-hidden="true">
+                  <SubtaskGlyph />
+                </span>
+              ) : null}
               {/* The glyph is decoration; THIS is the relation. A flat surface (the pickup
                   queue, the palette) has no indent and may have no breadcrumb chip, so
                   without this a screen reader gets no parent signal at all. */}
@@ -417,8 +520,24 @@ export function TaskRowLine({
           them and the only place they can go without a new grid track. They cost no
           height: see RowCues.tsx.
         */}
-        {cues?.pickup ? <PickupCue cue={cues.pickup} /> : null}
-        {cues?.milestone ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
+        {columns.identifier && !idColumn ? (
+          <>
+            {kindGlyph ? <span className="staple-row-kind-lead">{kindGlyph}</span> : null}
+            <span className="sr-only">{issue.identifier} </span>
+            {relationText}
+          </>
+        ) : null}
+        {/* A fixed slot on the desktop row, empty for a plain task, so every title in the
+            list starts at one left edge whatever its kind. */}
+        {desk ? (
+          <span className="staple-row-kind-lead" data-kind-slot="">
+            {deskKind}
+          </span>
+        ) : null}
+        {/* The desktop row says where a task stands in the plan with the phone's plain pill
+            ("Next", "Queued"), after the title, never with the marks before it. */}
+        {cues?.pickup && plan.cues === "marks" && !desk ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
+        {cues?.milestone && plan.milestoneMark && !desk ? <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
             {row.workspace}
@@ -446,7 +565,21 @@ export function TaskRowLine({
         {/* A collapsed parent still declares what it is hiding. `+N` is DIRECT children in
             this bucket — literally the rows the fold removed — and it stays collapsed-only,
             because "+3" printed above three visible children would be a lie. */}
-        {collapsedParent ? <span className="staple-row-childcount">+{childCount}</span> : null}
+        {cues?.pickup && desk ? <DeskPickupCue cue={cues.pickup} /> : null}
+        {cues?.pickup && plan.cues === "pill" && !desk ? <PickupPill cue={cues.pickup} /> : null}
+        {collapsedParent ? (
+          desk ? (
+            <span
+              className="staple-row-childcount"
+              data-testid="row-childcount"
+              title={`${childCount} ${childCount === 1 ? "task is" : "tasks are"} folded inside this one. Open the arrow to show ${childCount === 1 ? "it" : "them"}.`}
+            >
+              {childCount} inside
+            </span>
+          ) : (
+            <span className="staple-row-childcount">+{childCount}</span>
+          )
+        ) : null}
         {/*
           O3b (STA-127). Immediately after `+N` and inside the title cell, which is the slot
           the ticket names and the only one that can take it: the meta cluster is fixed
@@ -461,13 +594,20 @@ export function TaskRowLine({
           A leaf has no `rollup` at all and this is absent from the DOM, per the column rule
           at the top of this file.
         */}
-        {columns.disclosure && hasChildren && rollup ? (
+        {/*
+          A parent whose children the filter hid all of (a milestone whose epic is done while one
+          of its tasks is not) still has a count to declare: the rows are elsewhere or hidden, so
+          it reads as folded — the count and the bar, the way the milestone's own page counts it.
+        */}
+        {columns.disclosure && rollup && (hasChildren || rollup.total > 0) ? (
           <ParentRollupBar
             rollup={rollup}
-            collapsed={collapsedParent}
+            collapsed={collapsedParent || !hasChildren}
             // R7c (STA-194): the rolled-up plan rides beside the bar only where density
             // permits — the comfortable preset. Compact rows keep the count and the bar.
-            showPlan={config.density === "comfortable"}
+            showPlan={config.density === "comfortable" && plan.rollupPlan}
+            plainPlan={desk}
+            progress={plan.rollup}
           />
         ) : null}
         {/* Last in the cell, so it reads as an aside on the title and never as part of it —
@@ -479,6 +619,102 @@ export function TaskRowLine({
         ) : null}
       </span>
 
+      {desk ? (
+        <span className="staple-row-meta" data-cue-cluster="">
+          {/*
+            ONE CUE CLUSTER. The facts that vary per row (blockers, pull request, labels, the
+            handoff note) sit together and right-aligned; the two slots after them have fixed
+            widths, so who is on each task and when it last moved form columns down the list.
+          */}
+          <span className="staple-row-signals">
+            {/* A live autopilot run holds this row, works through it, or (folded) works inside it (lib/runs.ts); a ghost row shows no claim. */}
+            {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} folded={collapsedParent} /> : null}
+            {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} words /> : null}
+            {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
+            {cues?.milestone && plan.milestoneMark ? (
+              <MilestoneCue cue={cues.milestone} onOpen={onOpenMilestone} chip />
+            ) : null}
+            {columns.labels && plan.labels !== "none" ? (
+              <LabelPills labels={deskLabels(issue.labels, columns.priority)} max={labelMax} />
+            ) : null}
+            {columns.worklog && plan.worklog ? (
+              <WorklogCue worklog={row.worklog} claim={claim} checkoutAgent={issue.checkoutAgent} now={now} />
+            ) : null}
+          </span>
+          {columns.claim || columns.assignee ? (
+            <WhoCue
+              claim={columns.claim ? claim : null}
+              checkoutAgent={columns.claim ? issue.checkoutAgent : null}
+              assignee={columns.assignee ? issue.assignee : null}
+              showWord={plan.workingLabel}
+            />
+          ) : null}
+          {/*
+            THE TRAILING SLOT. The date, and in the same fixed box the quick actions, which
+            fade in over it on hover, keyboard focus, and on the open and selected rows.
+            Swapping two things inside one box is what keeps the row from moving.
+          */}
+          <span className="staple-row-trail">
+            {columns.date && plan.date ? (
+              <time className="staple-row-date" dateTime={issue.updatedAt} title={`Last changed ${issue.updatedAt}`}>
+                {formatRowDate(issue.updatedAt, now)}
+              </time>
+            ) : null}
+            {columns.actions && !ghost ? (
+              <span className="staple-row-quick" data-testid="row-quick-actions">
+                {statusMenu
+                  ? statusMenu(
+                      <button
+                        type="button"
+                        className="staple-row-quick-btn"
+                        data-quick="status"
+                        aria-label={`Change status of ${issue.identifier}`}
+                        aria-keyshortcuts="S"
+                        title="Change status (S)"
+                        // Pointer shortcuts: the keyboard opens the task with Enter and changes
+                        // it there, so these do not add a tab stop to every row.
+                        tabIndex={-1}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <StatusIcon status={issue.status} />
+                      </button>,
+                      statusControl,
+                    )
+                  : null}
+                <button
+                  type="button"
+                  className="staple-row-quick-btn"
+                  data-quick="open"
+                  aria-label={`Open details for ${issue.identifier}`}
+                  title="Open"
+                  tabIndex={-1}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpen?.();
+                  }}
+                >
+                  <OpenArrow />
+                </button>
+                {actionsMenu
+                  ? actionsMenu(
+                      <button
+                        type="button"
+                        className="staple-row-actions staple-row-quick-btn"
+                        data-quick="menu"
+                        aria-label={`Actions for ${issue.identifier}`}
+                        title="More actions"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <ActionsDots />
+                      </button>,
+                      menuControl,
+                    )
+                  : null}
+              </span>
+            ) : null}
+          </span>
+        </span>
+      ) : (
       <span className="staple-row-meta">
         {/*
           FIRST in the meta cluster — O6 (STA-138), and therefore the element nearest the
@@ -488,9 +724,9 @@ export function TaskRowLine({
           trailing it. It also puts the two most diagnostic elements on the row furthest from
           the edge that gets clipped first.
         */}
-        {columns.deps ? <DependencyBadges row={row} /> : null}
-        {columns.pr ? <PrBadge pullRequests={row.pullRequests} /> : null}
-        {columns.labels ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
+        {columns.deps ? <DependencyBadges row={row} merged={plan.deps === "merged"} /> : null}
+        {columns.pr && plan.prBadge ? <PrBadge pullRequests={row.pullRequests} showNumber={plan.prNumber} /> : null}
+        {columns.labels && plan.labels !== "none" ? <LabelPills labels={issue.labels} max={labelMax} /> : null}
         {/*
           W4 (STA-116). Immediately LEFT of the claim slot, which is where §3C's mockup
           puts it and where its §14 drop position says it belongs: more diagnostic than a
@@ -502,7 +738,7 @@ export function TaskRowLine({
           different fact from a different clock, and the moment one component owned both
           they would start agreeing with each other instead of with the server.
         */}
-        {columns.worklog ? (
+        {columns.worklog && plan.worklog ? (
           <WorklogCue
             worklog={row.worklog}
             claim={claim}
@@ -510,11 +746,21 @@ export function TaskRowLine({
             now={now}
           />
         ) : null}
-        {columns.claim ? <RowClaimSlot claim={claim} checkoutAgent={issue.checkoutAgent} /> : null}
-        {columns.assignee && issue.assignee ? (
+        {/* Beside the claim it qualifies: the holder is a run. The glyph alone on a phone row. */}
+        {columns.claim && !ghost ? <AutopilotBadge workspace={row.workspace} issueId={issue.id} folded={collapsedParent} compact={plan.claim === "avatar"} /> : null}
+        {columns.claim ? (
+          <RowClaimSlot
+            claim={claim}
+            checkoutAgent={issue.checkoutAgent}
+            variant={plan.claim}
+            showLabel={plan.workingLabel}
+            staleShort={plan.staleClaim === "short"}
+          />
+        ) : null}
+        {columns.assignee && issue.assignee && !(plan.claim === "avatar" && claimHolder === issue.assignee) ? (
           <Avatar name={issue.assignee} kind="human" size={20} className="staple-row-assignee" />
         ) : null}
-        {columns.date ? (
+        {columns.date && plan.date ? (
           <time className="staple-row-date" dateTime={issue.updatedAt} title={issue.updatedAt}>
             {formatRowDate(issue.updatedAt, now)}
           </time>
@@ -528,7 +774,7 @@ export function TaskRowLine({
           and it will be where a real menu hangs the day one exists. Off in every narrow
           preset, where the whole row is already a single-purpose target.
         */}
-        {columns.actions && ghost ? (
+        {columns.actions && ghost && plan.layout === "line" ? (
           /* Reserved, never drawn: the `⋯` is a second way to do the one thing the whole
              ghost row already does, but its 20px is what keeps this row's date aligned
              with the dates above and below it. */
@@ -547,8 +793,10 @@ export function TaskRowLine({
               >
                 <ActionsDots />
               </button>,
+              menuControl,
             )
-          ) : (
+          ) : plan.layout === "compact" ? /* The whole row opens the details on a phone; a
+               second `⋯` that does the same would only take width from the title. */ null : (
             <button
               type="button"
               className="staple-row-actions"
@@ -563,6 +811,7 @@ export function TaskRowLine({
           )
         ) : null}
       </span>
+      )}
     </div>
   );
 
@@ -589,6 +838,9 @@ export function TaskRowLine({
       // Also on the row, not only on the list root, so a row rendered `bare` inside a host
       // that knows nothing about this module (cmdk) still gets its own geometry.
       data-density={config.density}
+      data-layout={plan.layout}
+      data-desk={desk ? "" : undefined}
+      data-id-column={columns.identifier && !idColumn ? "off" : undefined}
       aria-level={semantics === "grid" ? depth + 1 : undefined}
       aria-expanded={semantics === "grid" && hasChildren ? isExpanded : undefined}
       // A ghost is not in this bucket, so it cannot be part of a selection made in it, and
@@ -599,17 +851,59 @@ export function TaskRowLine({
       // arrow keys do the moving — the standard treegrid/listbox contract.
       tabIndex={bare ? undefined : isFocused ? 0 : -1}
       onClick={bare ? undefined : onOpen}
+      onClickCapture={longPress.onClickCapture}
+      onPointerDown={longPress.onPointerDown}
+      onPointerMove={longPress.onPointerMove}
+      onPointerUp={longPress.onPointerEnd}
+      onPointerCancel={longPress.onPointerEnd}
+      onContextMenu={longPress.onContextMenu}
       onFocus={bare ? undefined : onFocus}
-      onKeyDown={bare ? undefined : onKeyDown}
+      onKeyDown={
+        bare
+          ? undefined
+          : (event) => {
+              /*
+               * S changes the status of the focused row, on the desk row that offers it: the
+               * keyboard's way to the quick action the pointer gets on hover. Only a bare
+               * key on the row itself, so typing in a field inside it is never taken.
+               */
+              if (
+                desk &&
+                statusMenu &&
+                !ghost &&
+                event.target === event.currentTarget &&
+                (event.key === "s" || event.key === "S") &&
+                !event.metaKey &&
+                !event.ctrlKey &&
+                !event.altKey
+              ) {
+                event.preventDefault();
+                event.stopPropagation();
+                setStatusOpen(true);
+                return;
+              }
+              onKeyDown?.(event);
+            }
+      }
       className={cn(
         "staple-row",
         anySelected && !ghost && "staple-row-selecting",
         bare && "staple-row-bare",
         ghost && "staple-row-ghost",
       )}
-      style={{ paddingLeft: ROW_PAD_LEFT + indentPx(columns.disclosure ? depth : 0) } as CSSProperties}
+      style={
+        {
+          paddingLeft: ROW_PAD_LEFT + indentPx(columns.disclosure ? depth : 0, geometry),
+          // The geometry the rails were positioned from, handed to the grid, so the chevron
+          // column and the elbow cannot disagree with `guideX` at any width.
+          "--col-disclosure-w": `${geometry.disclosure}px`,
+          "--guide-elbow-w": `${elbowWidth(geometry)}px`,
+        } as CSSProperties
+      }
     >
-      {columns.disclosure ? <Connectors guides={guides} hasSelectColumn={columns.select} /> : null}
+      {columns.disclosure ? (
+        <Connectors guides={guides} hasSelectColumn={columns.select} geometry={geometry} />
+      ) : null}
       {cell}
     </div>
   );

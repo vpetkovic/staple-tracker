@@ -1,7 +1,7 @@
 /**
  * A workspace's history reaches the service when it first synchronizes (STA-293).
  *
- * Contract: `docs/sync.md`, "A workspace's history reaches the service when it first
+ * Contract: `design/sync.md`, "A workspace's history reaches the service when it first
  * synchronizes".
  *
  * Every repository that existed before it connected was written while the journal was

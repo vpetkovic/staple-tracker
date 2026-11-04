@@ -1,7 +1,7 @@
 /**
  * `staple cloud sync` — explicit, human-triggered synchronization.
  *
- * Contract: `docs/sync.md`, "Ordering, cursors and epochs" and "Three consents".
+ * Contract: `design/sync.md`, "Ordering, cursors and epochs" and "Three consents".
  *
  * ## Nothing here runs on an ordinary command path
  *
@@ -28,6 +28,7 @@
  *
  * There is no fifth state where some operations quietly did not go.
  */
+import { beforeApply, reemitEvents } from "./reemit.js";
 import type { DatabaseSync } from "node:sqlite";
 import { tx } from "../db.js";
 import { assertOwnHost } from "../repo-identity.js";
@@ -59,7 +60,9 @@ import { applyConflictOperation, countOpenConflicts, screenForConflicts } from "
 import { applySnapshotEntity, hydrate } from "./hydrate.js";
 import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
-import { reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
+import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
+import { owedMilestoneRederive, publishDerivedStatuses, rederiveMilestonesAfterPull } from "../store.js";
+import { blockerSets, narrateRewoundSets, reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsStillFolding, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
 import {
@@ -76,6 +79,7 @@ import {
   readTailSurvey,
   reconciledEpoch,
   recordWithheld,
+  recordHeadReached,
   recordSyncedAt,
   requireSyncState,
   writeTailSurvey,
@@ -441,6 +445,21 @@ async function negotiate(session: Session, options: SyncOptions): Promise<Capabi
   return capabilities;
 }
 
+/**
+ * What the service's fold settles as a stored orphan end, as it last said: the attempt ledger
+ * writes an orchestrator attempt's stored end only when both of that lane's reasons are there
+ * (`AttemptLedger.writeOrphanEnds`). Machine state, in `meta` outside `setting:*`: never sent.
+ */
+function noteServiceOrphanReasons(db: DatabaseSync, capabilities: Capabilities): void {
+  if (Array.isArray(capabilities.orphanEndReasons)) {
+    db.prepare("INSERT INTO meta (key, value) VALUES ('service_orphan_end_reasons', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+      JSON.stringify(capabilities.orphanEndReasons),
+    );
+  } else {
+    db.prepare("DELETE FROM meta WHERE key = 'service_orphan_end_reasons'").run();
+  }
+}
+
 /** The migration number this database is at. An operation stamped above it is refused. */
 function localSchemaVersion(db: DatabaseSync): number {
   const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as
@@ -602,6 +621,8 @@ export async function syncRepository(
     clearTailSurvey(db);
     if (seed?.prefix) restampHubPrefix(options.home, db, seed.prefix.to);
     if (seed?.mode === "join") {
+      // What it repaired at a write was its own; what it joins has not been, here.
+      owedMilestoneRederive(db);
       joined = { entities: survey.entities.length, pages: survey.pages, cutoffSeq: survey.cutoffSeq, resumed: false, ...(survey.fromTail ? { fromTail: true } : {}) };
     }
   }
@@ -609,6 +630,17 @@ export async function syncRepository(
   await pushAll();
 
   const pull = await pullEverything(db, journal, session, capabilities, options);
+
+  /**
+   * A sync is a mutating command: with the pull at the head of the log, this device writes
+   * down the end of any attempt it opened that the read-time rule now closes — a steal or a
+   * status change another device made, arriving here (`writeOwnOrphanEnds`). Before the
+   * second push, so it goes out in this sync. What the service's fold settles is noted first,
+   * here, where the sync has written everything else it writes: a join refused earlier writes
+   * nothing at all.
+   */
+  noteServiceOrphanReasons(db, capabilities);
+  writeOwnOrphanEnds(db, journal);
 
   /**
    * What the pull made this device owe goes out in the same sync.
@@ -633,6 +665,18 @@ export async function syncRepository(
     const ledger = catchUpOwed ? `applier-${APPLIER_VERSION}` : `reconcile-${requireSyncState(db).epoch}`;
     caughtUp = (await recoverFromSnapshot(db, journal, session, capabilities, options, ledger)).bootstrap;
   }
+  // And what migration 017 backfilled, which the service has never been sent (`publishDerivedStatuses`).
+  publishDerivedStatuses(db);
+  /**
+   * And the one-shot milestone repair an upgrade owes (`rederiveMilestonesAfterPull`): here,
+   * with the members every other device holds, and never at a write before the pull — a
+   * device that last reached the head a week ago would re-derive from a week-old member and
+   * push the regression. After the catch-up and the reconcile, not before: a reconcile owed
+   * rewinds members the repair would otherwise read. Sent in this sync, after any repair a
+   * device that synchronized first has already sent.
+   */
+  rederiveMilestonesAfterPull(db);
+  if (pendingCount(db) > 0) await pushAll();
   /**
    * Recorded only when what this database holds came through the fold this applier needs.
    * A snapshot from the older one — hydrated from, joined on, or re-read — leaves it owed,
@@ -662,6 +706,8 @@ export async function syncRepository(
   }
   // The identifiers this sync moved, carried to this machine's hub cross-links (`hub-follow.ts`).
   carryIdentifierMovesToHub(db, options.home);
+  // And the attempts it changed, to this machine's presence index — after commit, best effort.
+  refreshPresence(db, options.home);
 
   const conflicts = countOpenConflicts(db);
   const quarantined = countQuarantined(db);
@@ -845,7 +891,7 @@ async function surveySnapshot(
     pages += 1;
     entities.push(...page.entities);
     if (page.nextCursor === null) {
-      return { epoch: page.epoch, cutoffSeq: page.cutoffSeq, tailCursor: page.tailCursor, entities, pages };
+      return { epoch: page.epoch, cutoffSeq: page.cutoffSeq, tailCursor: page.tailCursor, entities, pages, restoredAt: page.restoredAt ?? null };
     }
     cursor = page.nextCursor;
   }
@@ -1174,11 +1220,15 @@ async function readReconciled(
   const current = hydratedFromOlderFold.get(db) !== true;
   tx(db, () => {
     // What waits already waits across this rewind: still waiting after it, it is a divergence.
-    if (current && readRewind(db) !== null) markWaitingAcrossRewind(db);
+    const rewinding = current && readRewind(db) !== null;
+    if (rewinding) markWaitingAcrossRewind(db);
+    // The blocker sets as they stood, so what the rewind changes in them is narrated after it.
+    const setsBefore = rewinding ? blockerSets(db) : null;
     const plan = current ? reconcileBeforeRead(db, survey.entities) : null;
     hydrate(db, journal, survey.entities, [], survey.cutoffSeq, nowIso(), true, sameTimeline, ledger, current);
     clearTailSurvey(db);
     if (plan !== null) reconcileAfterRead(db, journal, plan, survey.epoch);
+    if (setsBefore !== null) narrateRewoundSets(db, setsBefore, survey.epoch, survey.restoredAt ?? null);
     clearRewind(db);
     retryQuarantined(db, journal, session.deviceId);
     completeSnapshot(db, survey.tailCursor, survey.epoch);
@@ -1389,7 +1439,10 @@ async function drainTail(
     // The cursor advances even for an empty page: the server's `nextCursor` is
     // still the correct place to resume from, and writing it records the epoch
     // and the watermark this device has now seen.
-    tx(db, () => advanceCursor(db, page.nextCursor, page.serverHighWatermark, page.epoch));
+    tx(db, () => {
+      advanceCursor(db, page.nextCursor, page.serverHighWatermark, page.epoch);
+      if (!page.hasMore) recordHeadReached(db, page.nextCursor);
+    });
 
     if (!page.hasMore) break;
   }
@@ -1524,8 +1577,14 @@ function applyOne(
        * it sits on, and `null` means every contentful field was contested and
        * there is nothing left to write.
        */
+      const before = beforeApply(db, op);
       const screened = screenForConflicts(db, op, localDeviceId);
       if (screened !== null) applyToDatabase(db, screened);
+      /**
+       * The events the operation narrates, dated at its origin, as local rows under this
+       * suppressed scope: nothing journaled (`reemit.ts`).
+       */
+      reemitEvents(db, op, before, localDeviceId);
       /**
        * The local entity version moves because, as far as this database is
        * concerned, this entity just changed. Not set to the remote's

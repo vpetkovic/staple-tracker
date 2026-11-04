@@ -178,7 +178,23 @@ describe("buildCommands", () => {
      * meaning "every view switch". The action type is what this test was always about.
      */
     const views = buildCommands(context({ view: "tree" })).filter((c) => c.action.type === "view");
-    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones"]);
+    expect(views.map((c) => c.id)).toEqual(["view:queue", "view:graph", "view:milestones", "view:calibration", "view:budget"]);
+  });
+
+  it("names the calibration view in plain words, and still finds it by its old name", () => {
+    const command = buildCommands(context({ view: "tree" })).find((c) => c.id === "view:calibration")!;
+    // One name everywhere: the rail, the tab bar, the header and the palette say "Estimates".
+    expect(command.label).toBe("Go to Estimates");
+    // The view id stays `calibration`, and the page's former name still reaches it.
+    expect(command.keywords).toContain("calibration");
+    expect(command.keywords).toContain("estimate accuracy");
+  });
+
+  it("offers no issue filter commands on the Estimates report, which is not an issue list", () => {
+    const onCalibration = buildCommands(context({ view: "calibration" })).map((c) => c.id);
+    expect(onCalibration.filter((id) => id.startsWith("filter:"))).toEqual([]);
+    const onTasks = buildCommands(context({ view: "tree" })).map((c) => c.id);
+    expect(onTasks).toContain("filter:assignee");
   });
 
   it("names the views as the rail does, and still answers to the internal value", () => {
@@ -377,8 +393,18 @@ describe("filterCommands", () => {
   );
 
   it("matches on keywords the label never shows", () => {
-    // "claim" is what an agent calls it; the label says "Check out as…".
+    // "claim" is what an agent calls it; the label says "Start working on it as…".
     expect(filterCommands(commands, "claim").map((c) => c.id)).toContain("checkout");
+  });
+
+  it("says what the drawer says, in plain words, with the old jargon kept as keywords", () => {
+    const label = (id: string) => commands.find((c) => c.id === id)?.label;
+    expect(label("checkout")).toBe("Start working on it as…");
+    expect(label("release")).toBe("Stop working on it");
+    for (const command of commands) expect(command.label, command.id).not.toMatch(/check ?out|checkout|release the|handoff|worklog/i);
+    // Still found by the words an agent uses.
+    expect(filterCommands(commands, "release").map((c) => c.id)).toContain("release");
+    expect(filterCommands(commands, "worklog").length).toBeGreaterThan(0);
   });
 
   it("narrows to one command for an unambiguous query", () => {

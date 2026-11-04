@@ -154,10 +154,10 @@ function readInRepo(name: string): string {
 
 /**
  * The usage-limit death, in SQL. Backdates the claim AND every trace `agent`
- * left on this issue — events and comments both, since liveness is derived from
- * `checkout_at` plus the newest of either BY THE HOLDER. Backdating only events
- * would leave the branch-pointer comment reading as fresh activity and the
- * holder would still look alive.
+ * left on this issue — events, comments and document revisions, since liveness is
+ * derived from `checkout_at` plus the newest of them BY THE HOLDER. Backdating only
+ * events would leave the branch-pointer comment or the worklog revision reading as
+ * fresh activity and the holder would still look alive.
  */
 function backdate(seconds: number, agent: string): void {
   const at = new Date(Date.now() - seconds * 1000).toISOString();
@@ -167,6 +167,7 @@ function backdate(seconds: number, agent: string): void {
     db.prepare("UPDATE issues SET checkout_at = ? WHERE id = ?").run(at, row.id);
     db.prepare("UPDATE events SET created_at = ? WHERE issue_id = ? AND actor = ?").run(at, row.id, agent);
     db.prepare("UPDATE comments SET created_at = ? WHERE issue_id = ? AND author = ?").run(at, row.id, agent);
+    db.prepare("UPDATE document_revisions SET created_at = ? WHERE issue_id = ? AND author = ?").run(at, row.id, agent);
   } finally {
     db.close();
   }

@@ -1,0 +1,22 @@
+{
+  "title": "a newer orchestrator attempt by the same agent ends the older one at its evidence before the newer start",
+  "covers": [
+    "clause 3 (superseded_by_newer): the older attempt's end is the evidence before the newer attempt's start, never the start itself",
+    "one agent's orchestration never overlaps itself"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "e" },
+    { "at": "0s", "do": "create", "ref": "f" },
+    { "at": "0s", "do": "orchestrate", "ref": "e", "agent": "o1" },
+    { "at": "10m", "do": "comment", "ref": "e", "agent": "o1" },
+    { "at": "20m", "do": "orchestrate", "ref": "f", "agent": "o1" },
+    { "at": "30m", "do": "comment", "ref": "f", "agent": "o1" },
+    { "at": "40m", "do": "orchestrateEnd", "ref": "f", "agent": "o1" }
+  ],
+  "expect": [
+    { "asOf": "50m", "ref": "e", "orchestrationSeconds": "10m", "workSeconds": null, "wall": null, "missing": { "workSeconds": "never_started", "wall": "never_started" } },
+    { "asOf": "50m", "ref": "f", "orchestrationSeconds": "20m" }
+  ]
+}

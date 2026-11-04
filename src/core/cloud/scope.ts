@@ -1,7 +1,7 @@
 /**
  * Is this claim exclusive on one machine, or across all of them?
  *
- * `docs/sync.md`, "Claims: a local checkout is not a global lease": *"the claim
+ * `design/sync.md`, "Claims: a local checkout is not a global lease": *"the claim
  * payload grows a scope, and every surface reports it"* — `local` for "this
  * database only, no global exclusivity is claimed", `lease` for "a server lease
  * is held; the claim is globally exclusive". *"An agent that reads `local` and
@@ -22,7 +22,7 @@
  *
  * `store.ts` is on the path of `staple ls`, `staple show` and `staple inbox` —
  * the most-used commands in the product, and precisely the ones
- * `docs/sync.md` requires to be silent: *"a `staple ls` on a connected
+ * `design/sync.md` requires to be silent: *"a `staple ls` on a connected
  * repository in manual mode is as silent as a `staple ls` on a disconnected
  * one, and that is a tested assertion, not an intention."* `src/commands/cloud.ts`
  * already guards the same property in prose on its own non-refresh path: *"The
@@ -44,7 +44,7 @@
  *
  * ## Why a resolver object and not a function per issue
  *
- * `claimActivityFor` batches a whole page — `docs/queue.md`'s 114-row list
+ * `claimActivityFor` batches a whole page — `design/queue.md`'s 114-row list
  * against a UI that polls every 1.5s. A per-issue `claimScopeOf` would be one
  * connection-file read and one `sync_leases` query per ROW. This reads each
  * source ONCE and then answers from a map, which is the same N+1 argument

@@ -23,7 +23,7 @@
  *
  *   1. the live revisions at or above the floor holding the same body: found by the index on
  *      `(doc, body_key, rev)`, where equal bodies have equal keys ({@link bodyKey}) and a string
- *      key is only a sample, so each match is confirmed on the stored body before it counts;
+ *      key hashes the full body, so each match is confirmed on the stored body before it counts;
  *   2. whether each number from the claim upward is held, up to the first that is not: read from
  *      the index on `(doc, rev)` as RUNS of consecutive held numbers, so a document numbered
  *      1..5,000 answers "1 to 5,000 held" in one row.
@@ -45,6 +45,8 @@
  *
  * NO WORKER IMPORTS, so the fake sync server can place revisions with this same code.
  */
+
+import { createHash } from "node:crypto";
 
 import { sameRevision, summaryAt, writtenAs } from "../../src/core/cloud/revision-placement.js";
 
@@ -88,30 +90,15 @@ function comparable(body: unknown): boolean {
   return body === null || typeof body !== "object";
 }
 
-/** How much of a string body its key samples, from each end. */
-const SAMPLED = 1024;
-
-/**
- * A key two `===` bodies always share. Exact for everything but a string, whose key is its length
- * and a hash of its first and last {@link SAMPLED} code units: cheap however long the body, and
- * confirmed against the stored body whenever it matches ({@link RevisionPlacer}), so two bodies
- * that share a key and differ are never taken for one. Null for an object or array, which `===`
- * never finds equal to anything parsed from another payload.
- */
+/** A full-body digest avoids adversarial collisions between equal-length edits. */
 export function bodyKey(body: unknown): string | null {
   if (body === undefined) return "u";
   if (body === null) return "z";
   if (typeof body === "boolean") return `b:${body}`;
   if (typeof body === "number") return `n:${String(body)}`;
   if (typeof body !== "string") return null;
-  // FNV-1a over UTF-16 code units: the first and last `SAMPLED`, or all of a short body.
-  const length = body.length;
-  const head = Math.min(length, SAMPLED);
-  const tail = Math.max(head, length - SAMPLED);
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < head; index += 1) hash = Math.imul(hash ^ body.charCodeAt(index), 0x01000193);
-  for (let index = tail; index < length; index += 1) hash = Math.imul(hash ^ body.charCodeAt(index), 0x01000193);
-  return `s:${length}:${(hash >>> 0).toString(36)}`;
+  // UTF-16 preserves lone surrogates too, matching JavaScript string equality.
+  return `s:${createHash("sha256").update(body, "utf16le").digest("hex")}`;
 }
 
 /**
@@ -288,9 +275,18 @@ export class RevisionPlacer {
       if (!found) return { need: { kind: "candidates", request, limit: CANDIDATES_READ } };
       // D1's rows at the base mark, less every revision the step knows better (read above).
       const unknown = found.rows.filter((candidate) => !this.fold.has(candidate.key));
-      const unconfirmed = typeof incoming.body === "string" ? unknown.filter((candidate) => !this.bodies.has(candidate.key)) : [];
-      if (unconfirmed.length > 0) return { need: { kind: "bodies", keys: unconfirmed.map((candidate) => candidate.key) } };
-      const same = unknown.find((candidate) => typeof incoming.body !== "string" || sameRevision(this.bodies.get(candidate.key)!, incoming));
+      let same: { key: string; rev: number } | undefined;
+      for (const candidate of unknown) {
+        // Confirm in revision order and stop at the first match. Loading every candidate's
+        // full state can parse several maximum-size bodies just to discard a duplicate.
+        if (typeof incoming.body === "string" && !this.bodies.has(candidate.key)) {
+          return { need: { kind: "bodies", keys: [candidate.key] } };
+        }
+        if (typeof incoming.body !== "string" || sameRevision(this.bodies.get(candidate.key)!, incoming)) {
+          same = candidate;
+          break;
+        }
+      }
       if (same) {
         if (again === null || same.rev < again) again = same.rev;
       } else if (!found.complete) {

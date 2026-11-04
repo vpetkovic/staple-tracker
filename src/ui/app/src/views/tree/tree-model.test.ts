@@ -1304,7 +1304,8 @@ describe("the collapsed-parent rollup", () => {
     const flat = flattenFlat(rows, { isExpanded: () => false });
 
     expect(flat[0]!.childCount).toBe(1);
-    expect(flat[0]!.rollup).toMatchObject({ total: 3, resolved: 2 });
+    // Leaves only: k2 and k3 have children, so the one leaf is k4, two levels down.
+    expect(flat[0]!.rollup).toMatchObject({ total: 1, resolved: 1 });
   });
 
   it("carries a LIVE descendant claim and refuses a stale one", () => {

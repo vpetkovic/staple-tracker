@@ -1,7 +1,7 @@
 /**
  * The HTTP client for `staple-sync`. **The only outbound call site in the tree.**
  *
- * That is a design constraint, not a description. `docs/sync.md`, "The network
+ * That is a design constraint, not a description. `design/sync.md`, "The network
  * rule": *"Today the runtime contains zero outbound network call sites … The
  * invariant is therefore not a reduction to be achieved — it is a floor to be
  * held, and the assertion is literally zero rather than an allowlist."* Keeping
@@ -14,7 +14,7 @@
  * disconnected one, and the cheapest way to guarantee that is for the code that
  * could speak to not be loaded at all.
  *
- * ## The Worker is the API; `docs/sync.md` is the contract
+ * ## The Worker is the API; `design/sync.md` is the contract
  *
  * Where they disagree the Worker wins, because the Worker is what is deployed.
  * Every such divergence is marked `DIVERGENCE:` below.
@@ -38,8 +38,16 @@ import { StapleError } from "../types.js";
 import { endpointUrl, type CloudEndpoint } from "./endpoint.js";
 import { cloudCodeOf, cloudError, isCloudErrorCode } from "./errors.js";
 
-/** The wire protocol this build speaks. Matches `PROTOCOL_MAX` in the Worker. */
-export const CLIENT_PROTOCOL = 1;
+/**
+ * The wire protocol this build's workspace leg speaks. Matches `PROTOCOL_MAX` in the Worker.
+ *
+ * 4 since typed file attachments (`attachment`): a new entity kind is not additive
+ * (`design/sync.md`, "Protocol evolution"), so the Worker that understands them is
+ * deployed first and advertises `{ min: 1, max: 4 }`, and this build is refused by any
+ * Worker that has not been — before anything is sent. The hub registry leg still declares 2
+ * (`REGISTRY_PROTOCOL`).
+ */
+export const CLIENT_PROTOCOL = 4;
 
 /** Bounded so an unreachable endpoint degrades to `offline` instead of hanging. */
 export const DEFAULT_TIMEOUT_MS = 15_000;
@@ -51,6 +59,8 @@ export interface Capabilities {
   maxPullLimit: number;
   defaultPullLimit: number;
   maxSnapshotPageSize: number;
+  /** The stored orphan-end reasons the service's fold settles as subordinate; absent from an older Worker. */
+  orphanEndReasons?: string[];
 }
 
 export interface ConnectResult {
@@ -358,7 +368,7 @@ export function fetchCapabilities(
 /**
  * `POST /v1/repos/{repoId}/connect` — bind this device and mint its credential.
  *
- * DIVERGENCE from `docs/sync.md`: the contract defines no provisioning route and
+ * DIVERGENCE from `design/sync.md`: the contract defines no provisioning route and
  * no account model, so the Worker did not invent one. The bearer presented here
  * is an **enrollment credential** — either an existing non-revoked device token
  * for this repository (how a second machine is added by a first) or the
@@ -597,7 +607,7 @@ export async function whileFolding<T>(
  */
 function foldingWait(detail: Record<string, unknown> | undefined): number {
   const ms = Number(detail?.retryAfterMs);
-  if (Number.isFinite(ms) && ms >= 0) return Math.min(ms, 5_000);
+  if (Number.isFinite(ms) && ms > 0) return Math.min(ms, 5_000);
   const seconds = Number(detail?.retryAfter);
   return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 5) * 1000 : 1000;
 }

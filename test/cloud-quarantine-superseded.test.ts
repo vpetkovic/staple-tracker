@@ -1,5 +1,5 @@
 /**
- * RR2. What was set aside is never replayed over a newer write (`quarantine.ts`, `docs/sync.md`
+ * RR2. What was set aside is never replayed over a newer write (`quarantine.ts`, `design/sync.md`
  * "No entity can stop a sync").
  *
  * An older build sends a blocker set, the plan or a milestone's members naming an issue whose

@@ -28,14 +28,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # No `build:package` first: the suite builds its own payload before any
-      # file loads (test/setup/package-payload.ts), so the install and tarball
-      # suites always run, against this commit's source.
-      - name: Unit tests
-        run: npm test
+      - name: Install Worker dependencies
+        run: npm ci --prefix worker
+
+      # The browser suites (test/ui-*.test.ts) drive the built app in Chromium through
+      # playwright-core, which brings no browser of its own. Without this they would skip; with
+      # CI set they fail instead, so the gate never passes having pressed nothing.
+      - name: Install Chromium for playwright-core
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Build package
+        run: npm run build:package
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Typecheck Worker
+        run: npm run typecheck:worker
+
+      - name: Unit tests
+        run: env -u STAPLE_DB -u STAPLE_AGENT -u STAPLE_RUN -u STAPLE_RUN_TICKET HOME=$(mktemp -d) npm test
+
+      - name: Worker tests
+        run: env -u STAPLE_DB -u STAPLE_AGENT -u STAPLE_RUN -u STAPLE_RUN_TICKET HOME=$(mktemp -d) npm run test:worker
 
       - name: MCP smoke test
         run: npm run smoke:mcp

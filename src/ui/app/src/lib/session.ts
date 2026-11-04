@@ -27,7 +27,7 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "graph", "milestones"] as const;
+export const VIEWS = ["tree", "queue", "graph", "milestones", "calibration", "budget"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /** The human name of each view — the rail row, the content header, the palette command. */
@@ -36,10 +36,112 @@ export const VIEW_LABELS: Record<ViewName, string> = {
   queue: "Queue",
   graph: "Graph",
   milestones: "Milestones",
+  // The ids stay `calibration` and `budget` (routes, saved preferences, commands key off them);
+  // readers see one plain name for each, the same in the rail, the tab bar, the header and
+  // the palette, and the same word Settings uses for the matching section ("Usage").
+  calibration: "Estimates",
+  budget: "Usage",
 };
+
+/**
+ * The views that are about THIS MACHINE, not a workspace: the provider budget is read from the
+ * machine's hub, never synchronizes, and is the same whichever workspace is picked. The rail
+ * lists them in their own "Machine" group (`components/nav/nav-model.ts`), apart from the
+ * workspace's views.
+ */
+export const MACHINE_VIEWS: readonly ViewName[] = ["budget"];
+
+export function isMachineView(view: ViewName): boolean {
+  return MACHINE_VIEWS.includes(view);
+}
+
+/**
+ * WHICH HEADER CONTROLS A VIEW HONOURS — and so which it shows. A control on a page where it
+ * does nothing is a promise the page breaks: a quick filter on the Queue that leaves the
+ * queue unchanged teaches the reader that filters do not work.
+ *
+ *   Tasks       — everything: how the rows are arranged (Group, Sort), which rows (the
+ *                 filters, the quick filters, search), and whether finished work shows.
+ *   Graph       — the filters and search decide which nodes it draws; it has no rows to
+ *                 group or sort, and finished work has its own control in the graph's View
+ *                 menu (show, fade, hide), so a second Done here would be a duplicate.
+ *   Milestones  — Done alone: it lists finished milestones when finished work is shown.
+ *   Queue, Estimates, Usage — none. The queue is the pickup order itself, and the two
+ *                 reports read a workspace's (or the machine's) whole history.
+ */
+export interface ViewControls {
+  /** Group and Sort. */
+  arrange: boolean;
+  /** The Filter menu, the quick filters under the header, and search. */
+  filter: boolean;
+  /** The Done toggle. */
+  done: boolean;
+}
+
+const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
+  tree: { arrange: true, filter: true, done: true },
+  graph: { arrange: false, filter: true, done: false },
+  milestones: { arrange: false, filter: false, done: true },
+  queue: { arrange: false, filter: false, done: false },
+  calibration: { arrange: false, filter: false, done: false },
+  budget: { arrange: false, filter: false, done: false },
+};
+
+export function viewControls(view: ViewName): ViewControls {
+  return VIEW_CONTROLS[view];
+}
+
+/** Does the view narrow its issues by the filters (the menu, the quick filters, search)? */
+export function viewUsesIssueFilters(view: ViewName): boolean {
+  return VIEW_CONTROLS[view].filter;
+}
 
 export function viewLabel(view: ViewName): string {
   return VIEW_LABELS[view];
+}
+
+/**
+ * The name a view wears on the phone's bottom tab bar (six tabs across 360px). The SAME as
+ * `VIEW_LABELS`: every name was chosen short enough to fit, so a view is never called one
+ * thing on the tab bar and another in the rail. Kept as its own export for the tab bar.
+ */
+export const VIEW_SHORT_LABELS: Record<ViewName, string> = VIEW_LABELS;
+
+// ---------------------------------------------------------------- the workspace in scope
+
+/** What the page calls the "every workspace" selection, everywhere a human reads it. */
+export const ALL_WORKSPACES_LABEL = "All workspaces";
+
+/** The two session fields every scope question is answered from. */
+export type WorkspaceScope = Pick<StapleSession, "mode" | "ws" | "workspaces">;
+
+/**
+ * Is the page showing every workspace at once? Its own state, not "the first workspace":
+ * only a hub has it, and there it is `ws === ""`. Anything that must act on ONE workspace
+ * asks this first and, when it is true, asks the person which one (see
+ * `lib/session-workspace.ts`) instead of reaching for `workspaces[0]`.
+ */
+export function isAllWorkspaces(scope: Pick<WorkspaceScope, "mode" | "ws">): boolean {
+  return scope.mode === "hub" && scope.ws === "";
+}
+
+/**
+ * The one workspace the page is on, or `null` when it is on all of them.
+ *
+ * Single-workspace mode has exactly one workspace and it IS current — that is the only
+ * case in which the first entry of the list is the answer. In a hub, the answer is the
+ * selected slug or nothing; never the first registered workspace.
+ */
+export function currentWorkspace(scope: WorkspaceScope): WorkspaceRef | null {
+  if (scope.mode !== "hub") return scope.workspaces[0] ?? null;
+  if (scope.ws === "") return null;
+  return scope.workspaces.find((workspace) => workspace.slug === scope.ws) ?? null;
+}
+
+/** What a header says the page is scoped to: the workspace's name, or "All workspaces". */
+export function scopeName(scope: WorkspaceScope): string {
+  if (isAllWorkspaces(scope)) return ALL_WORKSPACES_LABEL;
+  return currentWorkspace(scope)?.slug ?? scope.ws;
 }
 
 /**
@@ -111,7 +213,11 @@ export interface StapleSession {
    */
   focusProject: (projectId: string) => void;
 
-  /** "" means every workspace, and is only reachable in hub mode. */
+  /**
+   * "" means every workspace, and is only reachable in hub mode. It is its OWN state:
+   * read it through `isAllWorkspaces` / `currentWorkspace` / `scopeName` above, never by
+   * falling back to `workspaces[0]`.
+   */
   ws: string;
   setWs: (ws: string) => void;
 
@@ -212,6 +318,15 @@ export interface StapleSession {
 }
 
 export const SessionContext = createContext<StapleSession | null>(null);
+
+/**
+ * The session when there is one: null outside `<App/>`. For a component that is also rendered on
+ * its own (a detail tab under `react-dom/server` in a test) and only needs the session to
+ * navigate or to follow the refresh fingerprint.
+ */
+export function useOptionalSession(): StapleSession | null {
+  return useContext(SessionContext);
+}
 
 export function useSession(): StapleSession {
   const session = useContext(SessionContext);

@@ -1,6 +1,6 @@
 /**
  * An issue's create sent again after a restore leaves its blocker set as the log holds it
- * (`docs/sync.md`, "A restore rewinds").
+ * (`design/sync.md`, "A restore rewinds").
  *
  * A create carries the blockers the issue was made with. A device whose create reached the log
  * with its answer lost sends it again, as it is, into the epoch a restore makes. The log's fold

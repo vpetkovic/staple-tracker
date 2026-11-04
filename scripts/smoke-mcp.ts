@@ -118,13 +118,14 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 16 &&
+    readOnly.length === 26 &&
       [
         "inbox",
         "list_tasks",
         "get_task",
         "list_comments",
         "get_document",
+        "list_files",
         "events_since",
         // STA-140: reading the workspace vocabulary is as read-only as reading a task.
         "list_statuses",
@@ -139,15 +140,38 @@ try {
         // nothing — next_task resolves the order, it never claims anything.
         "list_queue",
         "next_task",
+        // Autopilot runs: reading a run and its stop decision ends nothing.
+        "run_status",
         // S5 (STA-71) and S7 (STA-73): reading whether THIS machine is connected,
         // and reading what two devices disagree about, are both local reads. The
         // cloud one is emphatically so — it makes no request and cannot be made to.
         "cloud_status",
         "conflict_list",
+        // Execution telemetry: reading attempts, and this machine's budget, writes nothing.
+        "list_attempts",
+        "get_attempt",
+        "get_budget",
+        "list_budget_samples",
+        // Comparing the certified plans of named issues writes nothing.
+        "compare_plans",
+        // Nor does reading how much of a population's timing can be trusted.
+        "timing_quality",
+        // Nor calibration cohorts over the trusted samples.
+        "calibration_cohorts",
+        // Nor a forecast of completion and budget.
+        "forecast",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 16 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 26 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   assert(byName.get("checkout_task").annotations.idempotentHint === true, "checkout_task flagged idempotent");
+  // Removing budget readings takes rows out of hub.db: destructive, and not idempotent
+  // (a second call finds nothing and is refused with not_found).
+  assert(
+    byName.get("forget_budget_samples").annotations.destructiveHint === true &&
+      byName.get("forget_budget_samples").annotations.idempotentHint === false &&
+      byName.get("forget_budget_samples").annotations.readOnlyHint === false,
+    "forget_budget_samples is flagged destructive and not idempotent",
+  );
   assert(
     byName.get("update_task").annotations.destructiveHint === false,
     "update_task is not flagged destructive",
@@ -299,6 +323,30 @@ try {
     })),
   );
   assert(updated.status === "done" && updated.completedAt, "update_task done stamps completedAt");
+
+  // The explicit estimate write: no status restated, and a repeat is a stated no-op.
+  assert(
+    byName.get("set_estimate").annotations.idempotentHint === true &&
+      byName.get("set_estimate").annotations.destructiveHint === false,
+    "set_estimate is flagged idempotent and not destructive",
+  );
+  const estimated = JSON.parse(
+    toolText(await rpc("tools/call", { name: "set_estimate", arguments: { ref: "SMO-1", estimate_seconds: 5400 } })),
+  );
+  assert(
+    estimated.status === "done" &&
+      estimated.estimatedSeconds === 5400 &&
+      estimated.estimateChange?.changed === true &&
+      estimated.estimateChange.from === null,
+    "set_estimate sets the estimate without touching the status",
+  );
+  const estimatedAgain = JSON.parse(
+    toolText(await rpc("tools/call", { name: "set_estimate", arguments: { ref: "SMO-1", estimate_seconds: 5400 } })),
+  );
+  assert(
+    estimatedAgain.estimateChange?.changed === false && estimatedAgain.updatedAt === estimated.updatedAt,
+    "the identical set_estimate is a no-op that says changed: false",
+  );
 
   const eventsResult = await rpc("tools/call", { name: "events_since", arguments: { since: 0 } });
   const events = JSON.parse(toolText(eventsResult));
@@ -604,6 +652,79 @@ try {
     closedEpic.status === "done" && closedEpic.completedAt,
     "the last child landing closes the epic on the wire, with completedAt",
   );
+  // The certified plan of that epic: one unit, unplanned, so no labor and no path, never 0.
+  const compared = JSON.parse(
+    toolText(await rpc("tools/call", { name: "compare_plans", arguments: { refs: [epic.identifier] } })),
+  );
+  assert(
+    compared.plans.length === 1 &&
+      compared.plans[0].ref === epic.identifier &&
+      compared.plans[0].labor.seconds === null &&
+      compared.plans[0].coverage.unplanned === 1 &&
+      compared.plans[0].criticalPath.missing.includes("no_plan") &&
+      Array.isArray(compared.overlaps),
+    "compare_plans reports labor, coverage and the path of a named epic, null rather than 0 when unplanned",
+  );
+  // The epic's one leaf went to done without ever starting: one eligible record, missing.
+  const quality = JSON.parse(
+    toolText(await rpc("tools/call", { name: "timing_quality", arguments: { parent: epic.identifier } })),
+  );
+  const qualityExcluded = JSON.parse(
+    toolText(await rpc("tools/call", { name: "timing_quality", arguments: { parent: epic.identifier, exclude: ["missing"] } })),
+  );
+  assert(
+    quality.population.eligible === 1 &&
+      quality.work.counts.missing === 1 &&
+      quality.work.coverage.missing === 1 &&
+      quality.items.length === 1 &&
+      quality.items[0].identifier === onlyChild.identifier &&
+      quality.items[0].work.state === "missing" &&
+      quality.items[0].work.reasons[0] === "never_started" &&
+      qualityExcluded.items.length === 0 &&
+      qualityExcluded.excluded.count === 1 &&
+      qualityExcluded.work.counts.missing === 1,
+    "timing_quality gives each record one state, coverage over the eligible leaves, and excludes explicitly without moving the counts",
+  );
+  // Nothing beneath the epic was worked, so nothing is a calibration sample: the read says
+  // so, still names its snapshot, and refuses an approximate set.
+  const calibration = JSON.parse(toolText(await rpc("tools/call", { name: "calibration_cohorts", arguments: { parent: epic.identifier, for: [epic.identifier] } })));
+  const approximateSet = await rpc("tools/call", { name: "calibration_cohorts", arguments: { include: ["approximate"] } });
+  assert(
+    calibration.sets.length === 1 &&
+      calibration.sets[0].set === "exact" &&
+      calibration.sets[0].samples === 0 &&
+      calibration.items.length === 0 &&
+      typeof calibration.missing.items === "string" &&
+      /^calibration2:[0-9a-f]{32}$/.test(calibration.snapshot.id) &&
+      calibration.method.minSamples === 5 &&
+      calibration.method.confidence === 0.9 &&
+      calibration.forecasts.length === 1 &&
+      calibration.forecasts[0].seconds === null &&
+      calibration.forecasts[0].warnings.includes("no_samples") &&
+      approximateSet.isError === true &&
+      toolError(approximateSet).code === "validation",
+    "calibration_cohorts reads trusted samples only, names its snapshot, forecasts with the reason it has no seconds, and refuses an approximate set",
+  );
+  // The epic's only unit is done: nothing is left, which reads 0 and certain, not unknown. The
+  // budget half, apart, reads this scratch home's missing budget with the contract's reason.
+  const forecast = JSON.parse(toolText(await rpc("tools/call", { name: "forecast", arguments: { ref: epic.identifier } })));
+  const badReserve = await rpc("tools/call", { name: "forecast", arguments: { ref: epic.identifier, reserve: "120%" } });
+  assert(
+    /^forecast2:[0-9a-f]{32}$/.test(forecast.snapshot.id) &&
+      /^calibration2:[0-9a-f]{32}$/.test(forecast.snapshot.calibration.id) &&
+      forecast.completion.units.done === forecast.completion.units.total &&
+      forecast.completion.labor.expectedSeconds === 0 &&
+      forecast.completion.labor.partial === false &&
+      forecast.completion.path.expectedSeconds === 0 &&
+      forecast.completion.confidence.label === "high" &&
+      forecast.budget.missing.accounts === "source_unavailable" &&
+      forecast.budget.machineLocal === true &&
+      forecast.budget.reserve.source === "provisional_default" &&
+      Array.isArray(forecast.budget.accounts) &&
+      badReserve.isError === true &&
+      toolError(badReserve).code === "validation",
+    "forecast keeps completion and budget apart, reads nothing left as 0, names its snapshots, reads a missing budget with its reason, and refuses a reserve over 100%",
+  );
   const epicEvents = JSON.parse(
     toolText(await rpc("tools/call", { name: "events_since", arguments: { since: 0 } })),
   ).filter((e: any) => e.payload?.identifier === epic.identifier);
@@ -738,8 +859,23 @@ try {
   // milestone tools, STA-179 get_setting / set_setting and STA-168 the seven
   // queue tools. All of them act on ONE workspace — a queue belongs to one
   // workspace file and references only its own issues — so all of them take `ws`
-  // like every other workspace tool.
-  assert(wsTargetable.length === 40, `40 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // like every other workspace tool. Execution attempts added record_attempt_event: 41,
+  // and it routes by ws exactly as they do (the cold phase below proves it). The
+  // attempt reads list_attempts and get_attempt make 43; the budget reads, like
+  // record_budget_sample, read this machine's hub and take no ws. set_estimate, the
+  // explicit estimate write, makes 44, compare_plans, the certified plan read, 45, and
+  // timing_quality, the cohort quality read, 46, calibration_cohorts, 47, and forecast, 48.
+  // The autopilot runs live in the workspace file too: start_run, run_status and stop_run, 51,
+  // and pause_run, resume_run and continue_run, 54, and goal mode's mark_milestone_criterion, 55.
+  // Typed files added list_files, attach_file, export_file and remove_file, 59.
+  assert(wsTargetable.length === 59, `59 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  assert(
+    !coldByName.get("get_budget").inputSchema.properties?.ws &&
+      !coldByName.get("list_budget_samples").inputSchema.properties?.ws &&
+      !coldByName.get("record_budget_sample").inputSchema.properties?.ws &&
+      !coldByName.get("forget_budget_samples").inputSchema.properties?.ws,
+    "machine-level budget tools (get_budget, list_budget_samples, record_budget_sample, forget_budget_samples) take no ws",
+  );
   assert(
     !coldByName.get("cross_link").inputSchema.properties?.ws &&
       !coldByName.get("hub_overview").inputSchema.properties?.ws,
@@ -803,6 +939,74 @@ try {
     "ws-targeted inbox sees the task written through the cached store",
   );
 
+  // An attempt event routes by ws like every other workspace tool: into the named
+  // workspace, and never into a cwd default (which has no workspace at all here).
+  const coldClaim = await cold.rpc("tools/call", {
+    name: "checkout_task",
+    arguments: { ref: targetedIssue.identifier, ws: "cold" },
+  });
+  assert(!coldClaim.isError, "ws-targeted checkout_task opens an attempt in the named workspace");
+  const coldPause = await cold.rpc("tools/call", {
+    name: "record_attempt_event",
+    arguments: { ref: targetedIssue.identifier, event: "pause", reason: "awaiting_reset", ws: "cold" },
+  });
+  assert(!coldPause.isError, "ws-targeted record_attempt_event reaches the attempt in the named workspace");
+  assert(
+    JSON.parse(toolText(coldPause)).state === "paused" && JSON.parse(toolText(coldPause)).identifier === targetedIssue.identifier,
+    "the attempt event paused that workspace's attempt",
+  );
+  const coldPauseUntargeted = await cold.rpc("tools/call", {
+    name: "record_attempt_event",
+    arguments: { ref: targetedIssue.identifier, event: "resume" },
+  });
+  assert(
+    coldPauseUntargeted.isError && toolError(coldPauseUntargeted).code === "not_found",
+    "without ws, record_attempt_event resolves the cwd default, not the last workspace named",
+  );
+
+  // The attempt reads route the same way, and read the attempt the pause just wrote.
+  const coldList = await cold.rpc("tools/call", {
+    name: "list_attempts",
+    arguments: { ref: targetedIssue.identifier, ws: "cold" },
+  });
+  const coldListed = coldList.isError ? null : JSON.parse(toolText(coldList));
+  assert(
+    coldListed !== null &&
+      coldListed.items.length === 1 &&
+      coldListed.items[0].state === "paused" &&
+      coldListed.truncated === false &&
+      coldListed.nextCursor === null &&
+      coldListed.coverage.itemCount === 1,
+    "ws-targeted list_attempts reads that workspace's attempts, bounded, with coverage",
+  );
+  const coldGet = await cold.rpc("tools/call", {
+    name: "get_attempt",
+    arguments: { attempt_id: coldListed?.items[0]?.id ?? "none", ws: "cold" },
+  });
+  assert(
+    !coldGet.isError && JSON.parse(toolText(coldGet)).burn.missing.limits === "no_provider_binding",
+    "get_attempt returns the attempt with its burn unknown for a named reason, never 0",
+  );
+  const coldListUntargeted = await cold.rpc("tools/call", {
+    name: "list_attempts",
+    arguments: { ref: targetedIssue.identifier },
+  });
+  assert(
+    coldListUntargeted.isError && toolError(coldListUntargeted).code === "not_found",
+    "without ws, list_attempts resolves the cwd default, not the last workspace named",
+  );
+  const coldBudget = await cold.rpc("tools/call", { name: "get_budget", arguments: {} });
+  assert(
+    !coldBudget.isError && Array.isArray(JSON.parse(toolText(coldBudget)).accounts),
+    "get_budget answers with no workspace resolved: budget is machine state",
+  );
+  // An id this home does not hold is refused whole, with no workspace resolved either.
+  const coldForget = await cold.rpc("tools/call", { name: "forget_budget_samples", arguments: { ids: ["0000dead"], confirm: true } });
+  assert(
+    coldForget.isError && toolError(coldForget).code === "not_found",
+    "forget_budget_samples refuses an unknown reading id with not_found and no workspace resolved",
+  );
+
   const reInit = await cold.rpc("tools/call", {
     name: "init",
     arguments: { global: true, slug: "cold" },
@@ -838,8 +1042,9 @@ try {
    * are READS. It is not an attribution there but a POINT OF VIEW — whose claims
    * count as somebody else's — so they are excluded here rather than added to
    * the write list, and the assertion below keeps saying what it always said.
+   * `run_status` is the same: its actor is whose live runs to list.
    */
-  const QUEUE_POINT_OF_VIEW_READS = ["list_queue", "next_task"];
+  const QUEUE_POINT_OF_VIEW_READS = ["list_queue", "next_task", "run_status"];
   const actorTools = anonTools.tools
     .filter((t: any) => t.inputSchema?.properties?.actor && !QUEUE_POINT_OF_VIEW_READS.includes(t.name))
     .map((t: any) => t.name)
@@ -856,10 +1061,14 @@ try {
         // the actor, and a plan nobody signed is not a plan.
         "add_milestone_member",
         "approve_task",
+        // Attaching a file records who attached it.
+        "attach_file",
         "checkout_task",
         // S7 (STA-73): settling a conflict emits a NEW operation carrying the
         // choice, so it is a write and is attributed like one.
         "conflict_resolve",
+        // Autopilot runs: continue records an outcome and claims as the run's actor.
+        "continue_run",
         "create_milestone",
         "create_task",
         // STA-168: a queue mutation is an actor-attributed event, which is what
@@ -867,18 +1076,32 @@ try {
         "dequeue_task",
         "enqueue_task",
         "gate_task",
+        // Goal mode: a criterion's verdict names who judged it.
+        "mark_milestone_criterion",
         "move_milestone_member",
         "move_queue_entry",
+        // Pausing a run records who paused it, as resuming does.
+        "pause_run",
         "prune_queue",
         "put_document",
+        // Execution attempts: a report on an attempt is a write and is attributed like one.
+        "record_attempt_event",
         "release_task",
+        // Removing a file records who removed it. Export writes a path and takes no actor.
+        "remove_file",
         "remove_milestone_member",
         "reorder_milestone_members",
         "reorder_queue",
         "request_changes",
+        "resume_run",
         "set_blocked_by",
+        // The explicit estimate write names who changed the plan.
+        "set_estimate",
         // STA-179: a setting write is attributed like one too.
         "set_setting",
+        // Autopilot runs: starting and stopping one is attributed; stop records who.
+        "start_run",
+        "stop_run",
         // STA-140: a vocabulary edit is a write and is attributed like one.
         "update_kinds",
         "update_milestone",

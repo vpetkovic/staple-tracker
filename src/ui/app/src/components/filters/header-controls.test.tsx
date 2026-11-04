@@ -112,12 +112,12 @@ describe("the header row", () => {
     expect(narrow.match(/data-compact=""/g)).toHaveLength(5);
   });
 
-  it("wears one recipe on every control: 28px, 13px, a 16px icon, 6px gap", () => {
-    for (const cls of ["h-7", "text-[13px]", "gap-1.5", "[&_svg:not([class*='size-'])]:size-4"]) {
+  it("wears one recipe on every control: 32px, the body size, a 16px icon, 6px gap, the one focus ring", () => {
+    for (const cls of ["h-control-md", "text-body", "gap-1.5", "rounded-lg", "focus-ring", "[&_svg:not([class*='size-'])]:size-4"]) {
       expect(HEADER_BUTTON_CLASS).toContain(cls);
     }
     const wide = atWidth(1440);
-    expect(wide.match(/class="[^"]*\bh-7\b[^"]*"/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
+    expect(wide.match(/class="[^"]*\bh-control-md\b[^"]*"/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
   });
 
   it("folds the search into an icon when narrow, and keeps the field while it holds text", () => {
@@ -143,5 +143,46 @@ describe("the header row", () => {
 
   it("puts nothing in the tab order out of sequence", () => {
     expect(atWidth(420)).not.toContain("tabindex");
+  });
+});
+
+describe("each view shows only the controls it honours", () => {
+  // DELIBERATELY CHANGED: the graph's View menu owns finished work (show, fade, hide), so the
+  // header's Done — a second control for the same thing — is gone there.
+  it("Graph: filter and search — no Group, Sort or duplicate Done", () => {
+    const graph = atWidth(1440, { view: "graph" });
+    expect(graph).not.toContain('aria-label="Group tasks"');
+    expect(graph).not.toContain("Sort:");
+    expect(graph).toContain('aria-label="Add a filter"');
+    expect(graph).not.toContain("data-filter-done");
+    expect(graph).toContain('aria-label="Search tasks"');
+  });
+
+  it("Milestones: Done alone, named for what it shows there", () => {
+    const milestones = atWidth(1440, { view: "milestones" });
+    expect(milestones).toContain('aria-label="Show finished milestones"');
+    for (const absent of ['aria-label="Group tasks"', "Sort:", 'aria-label="Add a filter"', 'aria-label="Search tasks"']) {
+      expect(milestones).not.toContain(absent);
+    }
+  });
+
+  it("Queue: nothing — a filter there would change nothing", () => {
+    const queue = atWidth(1440, { view: "queue" });
+    expect(queue).not.toContain("<button");
+    expect(queue).not.toContain("<input");
+  });
+});
+
+describe("a phone searches on its own row", () => {
+  it("while a query is held, the field takes the whole header row and the other controls step aside", () => {
+    const typing = atWidth(390, { filters: withText(emptyFilters(), "login") as FilterState });
+    expect(typing).toContain("data-search-mode");
+    expect(typing).toMatch(/data-search-mode[^>]*class="[^"]*\babsolute\b[^"]*\binset-0\b/);
+    const field = typing.slice(typing.lastIndexOf("<", typing.indexOf('data-filter-search="true"')), typing.indexOf(">", typing.indexOf('data-filter-search="true"')));
+    expect(field).toMatch(/class="[^"]*\bw-full\b/);
+    expect(typing).not.toContain('aria-label="Group tasks"');
+    expect(typing).not.toContain('aria-label="Add a filter"');
+    // A desk keeps its one row: the field sits at the end of it.
+    expect(atWidth(1440, { filters: withText(emptyFilters(), "login") as FilterState })).not.toContain("data-search-mode");
   });
 });

@@ -1,0 +1,32 @@
+{
+  "title": "the latest attempt decides: active time after a yielded attempt is unattributed, not the earlier interruption's",
+  "covers": [
+    "a millisecond in active with no attempt covering it takes its bucket from the LATEST worker attempt started at or before it",
+    "an interrupted attempt, a resumed one that yields, then a status recategorised into active (no event, no attempt): unattributed from the yield, and wall is approximate",
+    "the recategorisation re-buckets that stretch retroactively (Q9)"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "addStatus", "id": "parked", "category": "ready", "agent": "vp" },
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "5m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "interrupt", "ref": "x", "agent": "w1", "reason": "provider_limit" },
+    { "at": "20m", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "25m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "30m", "do": "status", "ref": "x", "to": "parked", "agent": "w1" },
+    { "at": "40m", "do": "recategorize", "id": "parked", "category": "active", "agent": "vp" }
+  ],
+  "expect": [
+    {
+      "asOf": "60m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "20m",
+      "quality": { "wall": "approximate", "wallInputs": ["unattributed"] },
+      "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "20m", "interrupted": "10m", "unattributed": "30m" } },
+      "resumeGaps": ["10m"]
+    }
+  ]
+}

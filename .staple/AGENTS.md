@@ -2,30 +2,57 @@
 
 This repo tracks its work in **staple**, a local-first tracker. The workspace is
 `staple`; its tasks are identified `STA-1`, `STA-2`, …  State lives in
-`.tasks/tasks.db` next to this file. Nothing here is optional politeness — the
+`.staple/staple.db` next to this file. Nothing here is optional politeness — the
 protocol below is what makes an interrupted task resumable by whoever comes next.
 
 Read this before you touch the repo. It takes a minute.
 
+## Supported runtime and recovery
+
+Use the installed `~/.local/bin/staple` for live work. It is deployed from this
+repository's `master` and is the runtime whose schema is known to match the
+live workspace. Do not run a checkout through `npx tsx` against the live database;
+a branch can contain an unreleased migration. The old prototype checkout is
+retired and its `.tasks/tasks.db` is not this workspace.
+
+From this repository's main checkout, the default database is
+`/Users/vpetkovic/VPDrive/Workshop/personal/projects/oss-libs/staple-tracker/.staple/staple.db`.
+From a worktree, pass that absolute path as `--db` after the command's other
+arguments. Use `--json` for every live tracker read and write.
+
+If the runtime and database disagree, run `~/.local/bin/staple doctor --json`
+from the **main checkout**. Doctor is read-only and does not accept `--db`.
+Read the `schema` check's `data.database`, `data.running`, `data.selected`, and
+`data.repair` fields. When `data.repair.command` is present, use that exact
+command only after checking its named runtime understands the database schema.
+An installed compatible runtime may direct you back to the launcher; a retained
+compatible runtime may direct `staple install --rollback --yes`. If no local
+runtime can open the database, doctor names the required schema and prints
+`staple install --from <dir|tarball> --yes`; replace the placeholder with a
+verified compatible payload. Do not run `doctor --fix --only schema`: schema
+repair is an install choice, not a doctor fix.
+
 ## The loop
 
-1. `staple inbox` — what is ready, in pickup order. Blocked work is listed
-   separately with the blocker that must land first. Do not invent work that is
-   not a task; make a task.
-2. `staple checkout STA-42` — atomic claim, moves it to `in_progress`.
+1. `staple queue next --actor <name> --json` — the one actionable leaf, in
+   pickup order. Blocked and gated work is skipped with a reason. Do not invent
+   work that is not a task; make a task.
+2. `staple show STA-42 --json`, then `staple checkout STA-42 --json` — verify
+   the leaf and claim it atomically, moving it to `in_progress`.
    **A conflict means pick a different task. Never retry the same one.** The
    claim is already held; retrying just burns turns. (Exit code 4 / `conflict`.)
-3. Write the plan: `staple doc STA-42 plan --put plan.md`. Documents are keyed
+3. Record a branch pointer comment immediately. Write the plan with
+   `staple doc STA-42 plan --put plan.md --json`. Documents are keyed
    and revisioned — this replaces a scratch `plan.md` nobody else can find.
-4. Work. Leave progress as you go: `staple comment STA-42 "…"`.
-5. `staple done STA-42 -m "<evidence>"` — evidence, not a victory lap. What you
+4. Work. Leave progress as you go: `staple comment STA-42 "…" --json`.
+5. `staple done STA-42 -m "<evidence>" --json` — evidence, not a victory lap. What you
    ran, what passed, what you deliberately left.
-6. `staple events` — see what your completion unblocked (`blockers_resolved`,
-   `children_complete`). Then go back to `inbox`.
+6. `staple events --json` — see what your completion unblocked
+   (`blockers_resolved`, `children_complete`). Then go back to `queue next`.
 
 ## Act under one identity, all session
 
-Set `STAPLE_AGENT` (or pass `--agent` / `--author` / MCP `actor`) and **use the
+Set `STAPLE_AGENT` (or MCP `actor`) and **use the
 same value you claimed with for the entire session.**
 
 This is not bookkeeping. Liveness is derived from your claim plus the newest
@@ -43,9 +70,9 @@ Keep a document keyed `worklog` on every task you hold, and **revise it at every
 milestone**, not at the end.
 
 ```bash
-staple doc STA-42 worklog --put worklog.md
-staple doc STA-42 worklog              # read the latest
-staple doc STA-42 worklog --revisions  # the history, checkpoint by checkpoint
+staple doc STA-42 worklog --put worklog.md --json
+staple doc STA-42 worklog --json              # read the latest
+staple doc STA-42 worklog --revisions --json  # checkpoint history
 ```
 
 Three sections, always:
@@ -76,11 +103,35 @@ The task says what; it does not say where. **At checkout, comment where the
 physical work lives** — branch, worktree path, and the base commit:
 
 ```bash
-staple comment STA-42 "Branch pointer: worktree /path/to/wt on branch feat/sta-42, base a1b2c3d."
+staple comment STA-42 "Branch pointer: worktree /path/to/wt on branch feat/sta-42, base a1b2c3d." --json
 ```
 
 Without it, the next agent has a perfect description of the work and no idea
 which of six worktrees contains it.
+
+## Evidence is a file, not a document
+
+Screenshots, screen recordings, PDFs and logs that prove the work are **files**.
+Attach the file itself:
+
+```bash
+staple file attach STA-42 after.png --caption "after: settings page saved"
+staple file attach STA-42 run.log --caption "test run, 0 failed"
+```
+
+The media type comes from the bytes and the SHA-256 is recorded, so task details
+shows an image as an image, plays a video, opens a PDF and renders a log.
+A caption or filename with `before` or `after` gets that label. Over MCP, use the
+`attach_file` tool.
+
+**Never write a binary into a document as base64.** A document is for writing
+(a plan, a worklog, notes). An older ticket may still hold evidence written as a
+`Media type:` and `SHA-256:` header over base64. Task details shows it as the
+file when the hash matches and flags it when the hash does not.
+`staple file adopt STA-42` turns each matching document into a real file. The
+old revision keeps the bytes. The current document becomes a short note naming
+the file, unless the file is over 256 KB: its bytes stay on this machine, so
+the document keeps them for other machines. A second run creates nothing.
 
 ## Continuity — resuming someone else's interrupted task
 
@@ -116,10 +167,66 @@ The rules, and they do not bend:
 When you do resume someone's task, read their `worklog` and their branch pointer
 comment first. That is what they left you. Leave the same for the next one.
 
+## Autopilot runs — the tracker says what is next
+
+A person can set you to work a scope ticket after ticket: the whole queue, an
+epic, or a milestone (a goal run over its acceptance criteria). That is a
+**run**, and **the tracker decides whether it goes on, never you.** After every
+ticket you ask one question and do what the answer says:
+
+```bash
+staple run continue --json      # MCP: continue_run
+```
+
+- `take` — the ticket in `ref` is **already checked out to you**. Do not check
+  it out again. Work it the way this guide says, then ask again.
+- `wait` — nothing to take now (the run is paused, or what is left is held by
+  others). Take nothing: end your session, or ask again after
+  `retryAfterSeconds`.
+- `stop` — the run is over and `reason` says why (`scope_empty`, `goal_met`,
+  `budget`, `failure_streak`, `gate_pending`, `vp_blocked`,
+  `stopped_by_human`, …). Stop, and tell the person the reason.
+
+It exits 0 for all three: read `action`, not the exit code.
+
+A run is worked in one of three ways:
+
+1. **A: `staple run drive`** (the default). A driver starts one fresh headless
+   session per ticket (`--agent claude|codex|custom`) with a brief. If
+   `STAPLE_RUN_TICKET` is set, you are one of those sessions: work that one
+   ticket, then exit. Do not call any `staple run` command; the driver does.
+2. **B: a stop hook**, for a session a person is already in, where the agent
+   CLI has one. `staple run hook install claude --print` prints the settings
+   stanza; `staple run hook bind` binds this session to the live run. From then
+   on, each time you end your turn the hook asks `run continue` for you: it
+   hands you the next ticket, or holds you to the one you have not finished.
+3. **C: these instructions.** No driver and no hook: call
+   `staple run continue --json` yourself after every ticket you hand on.
+
+The rules, whichever way the run is worked:
+
+- **Finish before you ask.** Hand the ticket on (`staple status STA-42 in_review`
+  with the evidence in a comment), or say why you cannot:
+  `staple run continue --outcome failed --reason "…" --json`. Two failures in
+  a row stop the run.
+- **Review before you hand on.** An adversarial review, reproduced rather than
+  read, by a separate reviewer if you can start one, recorded as a comment that
+  starts with `review:`. The driver fails a ticket handed on without one
+  (`no_review`), and the hook sends you back to write it. Green gates are not
+  evidence.
+- **Never merge to master or main**, and never push to them. A merge is a
+  deploy and a person's decision: leave your work on a branch (and a draft pull
+  request), stacked on the last one.
+- **Stop means stop.** On a `stop` answer, or a person's `staple run stop`, end
+  the loop. Never start a new run to keep going.
+
 ## Wiring
 
 ```bash
-claude mcp add staple -e STAPLE_AGENT=your-name -- npx tsx /Users/vpetkovic/VPDrive/Workshop/prototypes/2026-08-30-staple-agent-task-tracker/src/mcp.ts
+claude mcp add staple \
+  -e STAPLE_AGENT=your-name \
+  -e STAPLE_DB=/Users/vpetkovic/VPDrive/Workshop/personal/projects/oss-libs/staple-tracker/.staple/staple.db \
+  -- /Users/vpetkovic/.local/bin/staple mcp
 ```
 
 The MCP tools mirror the CLI: `inbox`, `checkout_task` (with

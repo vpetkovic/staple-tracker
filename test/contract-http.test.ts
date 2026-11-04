@@ -29,13 +29,17 @@ import {
   SECONDS,
   UUID,
   claimGolden,
+  openAttemptsGolden,
+  noOrchestrationGolden,
   timingGolden,
+  leafBucketsGolden,
   commentGolden,
   issueGolden,
   normalize,
-  runCli,
+  runCliAsync,
 } from "./fixtures/contract-support.js";
 import { ERROR_CONTRACT, httpStatusFor, tripleOf, type ErrorTriple } from "./fixtures/error-contract.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 const WS = "contract";
 
@@ -44,8 +48,8 @@ let ui: UiHandle;
 let origin: string;
 let token: string;
 
-function cli(...args: string[]) {
-  return runCli(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+async function cli(...args: string[]) {
+  return await runCliAsync(args, { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
 function get(path: string): Promise<Response> {
@@ -55,7 +59,7 @@ function get(path: string): Promise<Response> {
 function post(body: Record<string, unknown>, headers: Record<string, string> = {}): Promise<Response> {
   return fetch(`${origin}/api/action`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-staple-token": token, ...headers },
+    headers: asForeignPage({ "content-type": "application/json", "x-staple-token": token, ...headers }, origin),
     body: JSON.stringify(body),
   });
 }
@@ -67,18 +71,18 @@ beforeAll(async () => {
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
 
-  expect(cli("init", "--global", WS).status).toBe(0);
-  expect(cli("new", "Contract root task", "--ws", WS).status).toBe(0);
-  expect(cli("start", "CON-1", "--agent", CONTRACT_AGENT, "--ws", WS).status).toBe(0);
-  expect(cli("comment", "CON-1", "contract comment", "--ws", WS).status).toBe(0);
+  expect((await cli("init", "--global", WS)).status).toBe(0);
+  expect((await cli("new", "Contract root task", "--ws", WS)).status).toBe(0);
+  expect((await cli("start", "CON-1", "--agent", CONTRACT_AGENT, "--ws", WS)).status).toBe(0);
+  expect((await cli("comment", "CON-1", "contract comment", "--ws", WS)).status).toBe(0);
 
   // CON-2 carries a document, so the revision_conflict projection has something to
   // conflict with. It has to be a different issue from CON-1: the "not_found
   // (document revision)" case above depends on CON-1 having no `plan`.
-  expect(cli("new", "Contract documented task", "--ws", WS).status).toBe(0);
+  expect((await cli("new", "Contract documented task", "--ws", WS)).status).toBe(0);
   const docFile = join(home, "plan.md");
   writeFileSync(docFile, "# plan\n\nrevision one\n");
-  expect(cli("doc", "CON-2", "plan", "--put", docFile, "--summary", "first", "--ws", WS).status).toBe(0);
+  expect((await cli("doc", "CON-2", "plan", "--put", docFile, "--summary", "first", "--ws", WS)).status).toBe(0);
 
   ui = startUiServer({ port: 0, hub: false, ws: WS });
   await once(ui.server, "listening");
@@ -203,15 +207,23 @@ describe("transport denials keep the envelope shape", () => {
       label: "403 from a cross-origin POST",
       status: 403,
       code: "forbidden",
+      /**
+       * The one denial with a `detail`: `{reason: "cross_origin"}`, so the page can tell a
+       * write refused for its origin (a phone on the tailnet) from a dead token.
+       * `test/budget-bindings-http.test.ts` and `settings/telemetry-e2e.test.tsx` pin it.
+       */
+      detail: { reason: "cross_origin" },
       send: () => post({ type: "checkout", ref: "CON-1" }, { origin: "http://evil.example" }),
     },
   ];
 
-  it.each(denials)("$label answers {error, message, code, retryable}", async ({ status, code, send }) => {
+  it.each(denials)("$label answers {error, message, code, retryable}", async ({ status, code, send, ...rest }) => {
+    const detail = "detail" in rest ? rest.detail : undefined;
     const response = await send();
     expect(response.status).toBe(status);
     const body = (await response.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["code", "error", "message", "retryable"]);
+    expect(Object.keys(body).sort()).toEqual(detail === undefined ? ["code", "error", "message", "retryable"] : ["code", "detail", "error", "message", "retryable"]);
+    expect(body.detail).toEqual(detail);
     expect(body.code).toBe(code);
     expect(body.retryable).toBe(false);
     expect(body.error).toBe(body.message);
@@ -256,6 +268,8 @@ describe("read shapes", () => {
       // surface — pinned here and in contract-cli.test.ts, not fixed.
       comments: [commentGolden({ body: "contract comment", authorType: "user" })],
       documents: [],
+      // File metadata, from the store method get_task spreads too. CON-1 has none.
+      attachments: [],
       crossBlockers: [],
       // C1: claim liveness rides with the issue, matching MCP get_task.
       claim: claimGolden(),
@@ -285,8 +299,24 @@ describe("read shapes", () => {
         ownActiveSeconds: SECONDS,
         activeSeconds: SECONDS,
         countedThrough: ISO,
+        // Checked out, so a worker attempt measures its work, and the partition has a span.
+        workSeconds: SECONDS,
+        ownWorkSeconds: SECONDS,
+        leadSeconds: SECONDS,
+        wall: { startAt: ISO, endAt: null, through: ISO, seconds: SECONDS, buckets: leafBucketsGolden() },
+        quality: { work: { state: "timing-floor", inputs: [], reasons: ["timing_floor"], coverage: null, missingInputs: [] }, wall: { state: "exact", inputs: [], reasons: [] } },
+        missing: { orchestrationSeconds: "no_orchestrator_attempt" },
       }),
       childrenTiming: {},
+      // Execution attempts, from the store method get_task spreads too.
+      attempts: openAttemptsGolden("CON-1"),
+      orchestration: noOrchestrationGolden(),
+      // The certified plan, from the store method get_task spreads too: null for a leaf.
+      planSummary: null,
+      // Milestone membership, UI-only like childrenQueued: CON-1 belongs to no milestone
+      // and is not one, so both are null.
+      milestone: null,
+      milestonePlan: null,
     });
   });
 
@@ -294,6 +324,7 @@ describe("read shapes", () => {
     expect(await (await get("/api/bootstrap")).json()).toEqual({
       mode: "workspace",
       workspaces: [{ slug: WS, prefix: "CON" }],
+      writeOrigins: [origin, origin.replace("127.0.0.1", "localhost")],
     });
   });
 
@@ -374,6 +405,54 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
+      // `staple budget` / MCP `get_budget`: GET-only, a read of this machine's hub, no `ws`.
+      "/api/budget",
+      /**
+       * Budget capture and source bindings, the web Settings' "Usage & budget":
+       * `staple budget bindings|bind|unbind|capture`, one store method each. The GET is
+       * the read; the three POSTs are named in `BUDGET_CONFIG_WRITES`, POST-only and
+       * skipped by the post-write sync trigger (config.json is machine-local).
+       * `test/budget-bindings-http.test.ts` pins their parity with the CLI.
+       */
+      "/api/budget/bindings",
+      "/api/budget/bindings/bind",
+      "/api/budget/bindings/unbind",
+      "/api/budget/capture",
+      /**
+       * Automatic budget collection, machine-local. The GET is the status
+       * read; the four POSTs are named in `BUDGET_COLLECTION_WRITES`, which the method
+       * gate pins as POST-only and the post-write sync trigger skips (collection makes
+       * no network call). setup and unsetup need `consent: true` in the body.
+       * `test/budget-collection-http.test.ts` pins them.
+       */
+      "/api/budget/collection",
+      "/api/budget/collection/collect",
+      "/api/budget/collection/plan",
+      /**
+       * The Usage page's Refresh: `collectBudgetNow`, what `staple budget collect` runs
+       * (the passive scan, then one live poll when it is on). POST, input-free, skipped by
+       * the sync trigger, and THE ONE WRITE EXEMPT FROM THE ORIGIN CHECK, so the phone on
+       * the tailnet can press it. `test/budget-refresh-http.test.ts` pins that exemption
+       * and that every other write still refuses a foreign Origin.
+       */
+      "/api/budget/collection/refresh",
+      "/api/budget/collection/setup",
+      "/api/budget/collection/unsetup",
+      /**
+       * `staple budget forget` / MCP `forget_budget_samples`: POST-only, machine-local,
+       * never arms the sync trigger. `{ ids }` previews and `confirm: true` removes.
+       * `test/budget-forget.test.ts` pins it.
+       */
+      "/api/budget/forget",
+      /**
+       * Live polling (`staple budget live on|off`, a network consent of its own): the
+       * POST is named in `BUDGET_CONFIG_WRITES` beside capture; the GET reads config.json
+       * and the poll state file and asks nobody. `test/budget-refresh-http.test.ts` pins both.
+       */
+      "/api/budget/live",
+      "/api/budget/polling",
+      // `staple calibrate` / MCP `calibration_cohorts`: GET-only, a read.
+      "/api/calibration",
       /**
        * STA-71. GET-only, read-only, and network-free: it renders whether THIS
        * MACHINE has connected the repository, from local files, so the page can
@@ -511,8 +590,16 @@ describe("KNOWN: logical errors this surface cannot project", () => {
        * refresh parameter ever appears on this route, that is the review moment.
        */
       "/api/cloud/workspaces",
+      // The certified plan of named issues: `staple compare` / `compare_plans`. GET, a read.
+      "/api/compare",
       "/api/document",
+      // The bytes inside a base64 evidence document, served only when its SHA-256 holds. GET-only.
+      "/api/document-file",
       "/api/events",
+      // The bytes of one attachment. GET-only. The type is sniffed again on the way out.
+      "/api/file",
+      // `staple forecast` / MCP `forecast`: GET-only, a read.
+      "/api/forecast",
       "/api/gate/approve",
       "/api/gate/request",
       "/api/gate/request-changes",
@@ -696,6 +783,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/milestone",
       "/api/milestone/add",
       "/api/milestone/create",
+      "/api/milestone/criterion",
       "/api/milestone/move",
       "/api/milestone/remove",
       "/api/milestone/reorder",
@@ -720,7 +808,18 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/queue/remove",
       "/api/queue/reorder",
       "/api/revisions",
+      /**
+       * Autopilot runs (design/runs.md): the page watches and stops, nothing more. One read
+       * (plural, GET-only) and three verbs under the singular prefix, the milestone
+       * family's shape; no start and no continue, which only an agent does.
+       * `test/ui-runs.test.ts` pins them.
+       */
+      "/api/run/pause",
+      "/api/run/resume",
+      "/api/run/stop",
+      "/api/runs",
       "/api/settings",
+      "/api/timing/quality",
     ]);
   });
 
@@ -827,5 +926,30 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       deletedAt: null,
       createdAt: ISO,
     });
+  });
+});
+
+describe("the reserved goal-run actor name", () => {
+  /** Every HTTP field that names who acts refuses `goal-run:…`, as the CLI and MCP do. */
+  async function refused(response: Response): Promise<void> {
+    // A thrown StapleError: the server's catch-all answers 409 with the store's code.
+    expect(response.status).toBe(409);
+    const body = JSON.stringify(await response.json());
+    expect(body).toContain('"validation"');
+    expect(body).toContain("reserved");
+  }
+
+  it("is refused in /api/action, the gate routes, the queue writes and the queue reads", async () => {
+    const actor = "goal-run:mallory";
+    await refused(await post({ type: "comment", ref: "CON-1", body: "sneaky", actor }));
+    await refused(await post({ type: "checkout", ref: "CON-2", actor }));
+    const write = (path: string, body: Record<string, unknown>) =>
+      fetch(`${origin}${path}`, { method: "POST", headers: { "content-type": "application/json", "x-staple-token": token }, body: JSON.stringify(body) });
+    await refused(await write("/api/gate/request", { ref: "CON-1", owner: "VP", actor }));
+    await refused(await write("/api/queue/enqueue", { ref: "CON-2", actor }));
+    await refused(await get(`/api/queue/next?actor=${encodeURIComponent(actor)}`));
+    // Nothing was written under it.
+    const issue = (await (await get("/api/issue?ref=CON-1")).json()) as { comments: Array<{ author: string }> };
+    expect(issue.comments.map((comment) => comment.author)).not.toContain(actor);
   });
 });

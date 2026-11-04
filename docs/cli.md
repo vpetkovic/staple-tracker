@@ -1,682 +1,276 @@
+---
+title: CLI
+description: Every staple command, grouped by what you are doing, with its main flags and a short example.
+---
+
 # CLI
 
-## At a glance
+Use this page to find the command for what you are doing. Commands are grouped by
+task: tickets, planning, runs, sync, several repositories, the web UI, budget and
+estimates, and setup. Each group links to the guide that walks through it.
 
-```
-staple init [--global <slug>]         staple start|done|cancel|release <ref>
-       (repo-local also writes .staple/AGENTS.md, never clobbering an edited one)
-staple new <title> [--parent R]       staple block <ref> --owner O --action TEXT
-       [--blocked-by R1,R2] [-p prio] staple blocked-by <ref> R1,R2 | --none
-staple ls | show <ref> | tree | board staple link <blocker> <blocked>   (cross-ws)
-staple inbox [--hub] [--assignee A]   staple doc <ref> <key> [--put f --base N]
-staple events [--since N]             staple hub [ls|links|events]
-                                      staple hub unregister <slug|prefix> | prune | unlink
-staple open [--port 4400] [--hub]     staple config [show|set|home]
-staple migrate [--yes]                staple doctor [--json] [--fix --only <check>]
-staple install [status|--rollback]    staple add <path> --yes | discover <root>
-staple settings [get <key>|set <key> <value>]       this workspace's registered settings
+To look something up from the terminal:
 
-staple wait <ref> [--timeout s] [--interval ms]     block until ready or finished
-staple events --follow [--since N] [--max N]        stream events as they land
-       [--exec CMD]                                 run CMD per event (JSON arg + $STAPLE_EVENT)
+1. `staple help` lists every command and flag.
+2. `staple <command> --help` prints one command's part of it, and does nothing else.
+   `run`, `queue`, `cloud`, `budget`, `attempt`, `attempts`, `compare`, `timing`,
+   `calibrate` and `forecast` have a page of their own, and so do `staple run drive --help` and
+   `staple run hook --help`.
+3. Every command that has an [MCP tool](mcp-tools.md) behaves the same through it.
 
-staple start <ref> --steal-if-stale <30m|2h|3600>   take over a dead agent's claim
-staple release <ref> --if-stale <dur>               free a dead agent's claim
-staple start|done|cancel|status|release … --agent A who acts; else $STAPLE_AGENT, else $USER
-staple <any write> … --ack-renumber                 write through a number sync renumbered here
-                                                    (docs/sync.md, "A number that moved under a caller")
+## Global flags and `--json`
 
-staple gate <ref> --owner O [-m text]               park a PARENT on a human; queue its subtree
-staple approve <ref> [--children R1,R2] [-m text]   release the whole queue, or only what you name
-staple request-changes <ref> -m text                send it back; the children stay queued
+| Flag | What it does |
+|---|---|
+| `--json` | Machine-readable output: the full objects, ISO-8601 timestamps. `events` prints one JSON object per line. An error is one JSON line on stderr. |
+| `--db <path>` | Use this workspace database instead of the one found by walking up from the current directory. |
+| `--ws <slug\|prefix>` | Use a registered workspace by name or prefix, from anywhere. `STAPLE_DB`, when set, wins over it. |
 
-staple milestone ls | show <ref>                    dated, ordered plans (needs the `milestone` kind)
-staple milestone new <title> [--target D] [--from-epic R] [--preview]
-staple milestone add|rm <milestone> <ref> [--base N] | mv <ref> --to M | reorder M <r1,r2>
+Writes are recorded under `STAPLE_AGENT`, else `$USER`. `start`, `done`, `cancel`,
+`status`, `estimate` and `release` also take `--agent <name>` to say who acts.
 
-staple queue [--all] [--effective]                  the plan, and the order agents receive
-staple queue next [--actor A]                       the one row to take, and what it skipped
-staple queue add|rm <ref> [--at N] [--base N] | mv <ref> --at N | reorder <r1,r2> | prune
-staple checkout <ref> --override -m <why>           take a row out of turn, on the record
+Durations (`--estimate`, `--if-stale`, `--steal-if-stale`) are `90s`, `30m`, `2h`,
+`3d`, or a number of seconds. `run start --until` takes a duration or an ISO time with
+a zone. An error under `--json` looks like this:
+
+```json
+{"code":"conflict","message":"Checkout refused: status is \"in_progress\" (held by claude), expected one of todo, backlog, blocked. Pick a different task — do not retry.","detail":{"currentStatus":"in_progress","heldBy":"claude","blockers":[]},"retryable":false}
 ```
 
-`staple help` has the full option list. `checkout` is an alias for `start`, and
-`staple ui` is a compatibility alias for `staple open`.
+Every `code`, its exit status and what to do about it is in
+[Errors and exit codes](errors.md).
 
-## The machine registry
+## Set up and diagnose
 
-`staple init` adds a row to `~/.staple/hub.db`; three verbs take one back out.
+Guide: [Install and first workspace](getting-started.md).
+
+| Command | What it does |
+|---|---|
+| `staple` | Set this repository up if it needs it, then open the web UI. `--yes` takes the defaults. |
+| `staple init [--yes] [--slug s]` | Create and register a workspace, write `.staple/AGENTS.md` for agents, and exit. `--global <slug>` makes one outside any repository. |
+| `staple install [--yes] [--update-path]` | Install a runtime so `staple` is on your PATH. `install status` shows it; `--rollback` returns to the previous one. |
+| `staple doctor [--json]` | Check the home, config, workspace, UI port and runtime, read-only. Exits 1 when a check fails and prints the repair. |
+| `staple doctor --fix --only <check> --yes` | Apply one named repair. |
+| `staple mcp` | Start the MCP server on stdio. Your agent's client runs it ([Connect your agent](connect-your-agent.md)). |
+| `staple config` | This machine's settings and where each came from. |
+| `staple config set <key> <value>` | Set `browser`, `port` or `setupComplete`. |
+| `staple config home <path> --move --yes` | Move the staple home, verify it, then switch to it. |
+| `staple settings` | This workspace's settings. `settings get <key>` and `settings set <key> <value>` read and write one. |
+| `staple statuses ls` | This workspace's statuses, in order. `add`, `rename`, `recategorize`, `reorder` and `rm` change them. |
+| `staple kinds ls` | This workspace's kinds (`epic`, `task`, `bug`, `chore`, `spike`). Same verbs as `statuses`, except `recategorize`. |
 
 ```bash
-staple hub ls                              # what is registered, and whether its file is there
-staple hub unregister <slug|prefix>        # drop ONE row, releasing its prefix
-staple hub prune                           # preview every row whose path is gone
-staple hub prune --yes                     # …and remove them
-staple hub unlink <blocker> <blocked>      # drop ONE cross-workspace link
-```
-
-**Unregistering removes a registry row and nothing else.** The workspace
-database and every file beside it are left untouched — byte-for-byte, not merely
-present — so nothing is lost by unregistering a workspace you still want. The
-prefix it held becomes available again for the next workspace that derives the
-same base.
-
-**A workspace that is still on disk will register itself again.** The hub is
-*derived* state: the authoritative slug and prefix live in the workspace file,
-and the next staple command run inside that repository re-registers it from
-them. Unregister is for tidying the registry, not for hiding a workspace from
-it. For the rows it is really for — scratch directories that have since been
-deleted — there is nothing left to re-register, so `prune` is permanent.
-
-`prune` previews by default: it prints the rows it would remove, writes nothing,
-exits 0, and names the command that would do it. Only `--yes` removes anything.
-A row is a candidate only when its recorded file is absent; a workspace that is
-present is never touched, whichever of macOS's two spellings its path uses.
-
-Cross-workspace links are the one thing that can refuse an unregistration.
-A link naming a workspace the hub no longer knows would report as an
-unresolvable blocker, which the readiness rule treats as *blocked* — so the
-issue on the other side would be blocked permanently with nothing to explain
-why. Rather than dangle it or delete it silently, staple refuses and lists the
-links (exit 4, `conflict`). Two ways forward: remove them individually with
-`staple hub unlink`, or pass `--with-links` to remove them along with the
-registration. `staple hub prune` applies the same rule per row — an encumbered
-dead row is *kept and reported* while the rest are removed, so one stubborn
-entry cannot block the whole cleanup.
-
-The same three verbs are on MCP as `hub_unregister`, `hub_prune` (which previews
-unless you pass `apply`) and `cross_unlink`.
-
-`staple doctor` is read-only. Its `schema` check names the database schema, the
-running build's schema (and whether that build is a checkout, a bundle or an
-installed runtime), the launcher's selected runtime, and the config schema; on a
-mismatch it prints ONE repair command under `REPAIRS`, derived from what
-`staple install` accepts, and previews whether the next open migrates the
-database and where the snapshot goes. Under `--json` the reason is
-`data.code` (`database_newer_than_runtime`, `config_newer_than_runtime`,
-`selected_runtime_older_than_database`, `migration_pending`, or `null`). See
-`docs/migration.md`.
-
-## Workspace vocabulary
-
-Statuses and kinds are per-workspace configuration, not constants. Every
-subcommand takes `--json`, and every write prints the full new list — a reorder
-is only verifiable against the whole thing.
-
-```bash
-staple statuses ls                       # id, category, label, in configured order
+staple init --yes
+staple settings set queue.policy strict
 staple statuses add needs_qa --category review --after in_review
-staple statuses rename todo --label "Ready"
-staple statuses recategorize in_review --category gated
-staple statuses reorder in_progress,in_review,awaiting_approval,blocked,todo,backlog,done,cancelled
-staple statuses rm on_hold --migrate-to backlog
-
-staple kinds ls | add | rename | reorder | rm     # same verbs, no categories
+staple kinds add milestone --label Milestone      # turns milestones on
 ```
 
-`--category` is required on `add` and is one of `unstarted`, `ready`, `active`,
-`review`, `gated`, `blocked`, `done`, `cancelled`. That category is where a
-status's behaviour comes from — see [semantics.md](semantics.md#categories--why-a-configurable-status-set-is-still-safe).
-`--label` is optional: `needs_qa` becomes `Needs Qa`.
+What each setting does is in [Configuration](configuration.md).
 
-The configured order is the canonical order everywhere — `board` columns, group
-headers, tree sort — so a reorder changes what everyone in the repo sees.
+## Tickets
 
-`rm` refuses with exit 4 while issues still carry the status (pass
-`--migrate-to`), and with exit 2 when it is the last status of a category staple
-writes into.
+Guides: [How an agent works a ticket](working-a-ticket.md),
+[Handoff and resume](handoff.md).
 
-## Workspace settings
-
-Registered workspace settings (see
-[configuration.md](configuration.md#the-settings-registry)) have the
-workspace twin of `config`: `settings` reads and writes the values this
-workspace stores, never the machine's `config.json`.
+| Command | What it does |
+|---|---|
+| `staple new <title>` | File a ticket. `-d text`, `-p priority`, `--parent R`, `--kind K`, `--blocked-by R1,R2`, `--estimate 2h`, `--criteria "a;b"`, `--assignee A`. |
+| `staple ls` | List open tickets. `--status s1,s2`, `--kind k`, `--assignee A`, `-q text`; `--all` includes finished ones. |
+| `staple show <ref>` | One ticket in full: status, claim, time, parents, blockers, comments, documents and files. |
+| `staple tree [ref]` | Tickets as a tree under their epics. |
+| `staple board` | A kanban board in the terminal. |
+| `staple inbox` | What is ready to take, what waits on a person, and what is blocked, in pickup order. `--hub` covers every workspace. |
+| `staple start <ref>` | Claim a ticket and move it to `in_progress`. `checkout` is the same command. |
+| `staple done <ref> [-m text]` | Finish it. `cancel` drops it. |
+| `staple release <ref>` | Give the claim back; the ticket returns to `todo`. |
+| `staple status <ref> <status>` | Move a ticket to any status the rules allow. |
+| `staple comment <ref> <text>` | Add a comment. |
+| `staple doc <ref> <key> --put <file>` | Store a document on a ticket (a plan, a worklog). Without `--put` it prints the latest; `--revisions` lists the history. |
+| `staple file attach <ref> <path>` | Attach a file. The type is sniffed from the bytes. `--caption` and `--filename` are optional. |
+| `staple file ls <ref>` | List a ticket's files. Metadata only: type, size, and hash. |
+| `staple file get <id> --out <path>` | Write one file's bytes to a path. |
+| `staple file rm <id>` | Remove a file. |
+| `staple file adopt <ref> [<doc-key>]` | Turn a document that holds base64 evidence (a `Media type:` and `SHA-256:` header over base64) into a real file. Without a key it adopts every such document on the ticket. A document whose bytes do not match its SHA-256 or media type is flagged and not converted. The old revision keeps the bytes. The current document becomes a short note naming the file, unless the file is over 256 KB: its bytes stay on this machine, so the document keeps them for other machines. A second run creates nothing. `--revision N` adopts an older revision. |
+| `staple events [--since N]` | The workspace's event log. `--follow` streams new events; `--exec CMD` runs a command for each. |
+| `staple wait <ref> [--timeout S]` | Wait until a ticket is ready or finished. |
 
 ```bash
-staple settings                          # every registered value:  key = value  (source)
-staple settings get queue.policy         # queue.policy = advisory  (default)
-staple settings set queue.policy strict  # queue.policy = strict  (workspace)
-staple settings get queue.policy --json  # {"key":"queue.policy","scope":"workspace","value":"strict","source":"workspace","version":1}
+staple new "Reset email" --parent APP-1 --blocked-by APP-2 --estimate 90m
+staple start APP-2
+staple doc APP-2 plan --put plan.md
+staple done APP-2 -m "merged"
 ```
 
-`source` says where the effective value came from — `default` until someone
-sets it, `workspace` after. `--json` prints the same object `/api/settings`
-serves and the `get_setting` tool answers. A value the schema refuses
-(`queue.policy` takes `advisory` or `strict`) exits 2 naming the key; a global
-key exits 2 naming `staple config set`. Every write is attributed to
-`STAPLE_AGENT` and logged as a `setting_changed` event with the previous and
-new value.
-
-## Kinds
-
-Every issue declares a **kind** — `epic`, `task`, `bug`, `chore` or `spike` out
-of the box, plus whatever else `staple kinds add` put in this workspace.
+Taking over from an agent that died:
 
 ```bash
-staple new "Login 500s on retry" --kind bug
-staple new "Q3 billing rework" --kind epic
-staple ls --kind epic                 # only epics
-staple ls --kind bug,chore            # comma-separated, like --status
+staple start APP-3 --steal-if-stale 30m        # take over a silent claim
+staple release APP-3 --if-stale 2h             # or just free it
 ```
 
-The default is `task`, and an unconfigured kind is refused with exit 2 naming
-the valid set. **Kind is declared, never derived**: a task that grows subtasks
-stays a task until somebody re-declares it (`update_task` over MCP, or the UI).
-The one exception was a one-shot backfill in migration 005, which marked every
-issue that already had children as an `epic` at upgrade time.
+## Planning
 
-`ls`, `tree` and `inbox` print the kind only when it is *not* `task` — a bare
-row is a task — so an epic or a bug stands out without a column of noise on
-every other line. `staple show` always names it.
+### Epics and dependencies
 
-Every kind also has an **appearance** — the web icon it wears, its accessible
-label, and the character a terminal prints instead. `ls`, `tree` and `show`
-**lead each row with that terminal fallback**, one character then a space, so a
-kind is legible without colour and `staple ls | grep '^◆'` is the epic filter:
+Guides: [Plans become tickets](plans-to-tickets.md),
+[Epics and dependencies](epics-and-dependencies.md).
 
-```
-◆ ◌  STA-31    backlog     Q3 billing rework · epic
-  ◇ ◌! STA-66  backlog     Split the invoice job
-✱ ⊘  STA-72    blocked     Login 500s on retry · bug
-```
+| Command | What it does |
+|---|---|
+| `staple new <title> --kind epic` | File an epic; give tickets `--parent` to put them under it. |
+| `staple blocked-by <ref> R1,R2` | Replace a ticket's blockers. `--none` clears them. |
+| `staple block <ref> --owner O --action TEXT` | Mark a ticket blocked on a person, saying who and what. |
+| `staple link <blocker> <blocked>` | Make a ticket wait on a ticket in another repository. |
 
-`show` leads its header line and its child rows the same way. The confirmation
-lines of the write commands (`new`, `done`, `status`, `checkout`, `release`,
-`block`) and the `inbox`/`board` sections are deliberately left bare: they
-render one known ticket, not a list to scan, and their column offsets are a
-de-facto contract. `staple kinds ls` leads
-each row with that terminal fallback (`◆ epic`, `◇ task`, `✱ bug`, `↻ chore`,
-`↯ spike`, `⚑ milestone`; `•` for a kind nobody has given a mark), and
-`--json` carries the whole record on each row as `appearance:
-{ source, value, label, fallback }` — the same record MCP `list_kinds` and
-`/api/settings` serve. It is stored as the workspace setting
-`kinds.appearance` (see [configuration.md](configuration.md#the-settings-registry));
-the CLI only reads it. `staple show --json` carries the resolved record for the
-issue's own kind as `kindAppearance`, beside the string `kind` — the same record,
-joined once, so a consumer that draws a ticket need not fetch the vocabulary to
-do it. List rows do not repeat it: an appearance belongs to the kind, not to the
-issue.
+### Approval gates
 
-`source` names where the web icon comes from, and each source bounds its
-`value`:
+Guide: [Approval gates](approval-gates.md).
 
-| `source` | `value` | bound |
-| --- | --- | --- |
-| `lucide` | a canonical Lucide key (`triangle-alert`) | lowercase words joined by dashes, at most 64 characters |
-| `emoji` | an emoji or short Unicode glyph (`🚀`, `→→`) | 1 to 2 **grapheme clusters** (a joined family or a flag is one), at most 32 UTF-16 units, no whitespace or control characters, at least one visible code point |
-| `svg` | the sanitiser's **canonical** SVG document | at most 8 KiB, one `<svg>` root with a `viewBox` within ±4096, sanitised as described in [web-ui.md](web-ui.md#custom-glyphs) |
-| `none` | `""` | draw the built-in mark |
+| Command | What it does |
+|---|---|
+| `staple gate <ref> --owner O [-m text]` | Hold an epic for a person's review. Its open tickets wait until they approve. |
+| `staple approve <ref>` | Release the whole epic. `--children R1,R2` releases only those. |
+| `staple request-changes <ref> -m text` | Send it back with a note. The tickets under it stay held. |
 
-An `svg` value is accepted only as the sanitiser's own output — a raw document,
-however clean, is refused with a sentence saying to sanitise it first, and a
-hostile one (a `<script>`, an event handler, an external `href`, an oversized
-document) is refused with the reason. So the database, `kinds ls --json`,
-`list_kinds` and `/api/settings` never carry anything but canonical, inert
-markup, and the human `kinds ls` prints the terminal `fallback`, never the
-document. A stored record that no longer validates — one hand-edited on disk,
-say — is refused at read with the key in the sentence rather than served.
+### The pickup queue
 
-`kinds rm milestone` is the one removal `--migrate-to` cannot force: it is
-refused with exit 2 naming every milestone that still owns members or dates
-(clear them with `staple milestone rm` and `staple milestone set --target none`
-first) — see [milestones.md](milestones.md).
+Guide: [The pickup queue](queue.md).
 
-## Milestones
+| Command | What it does |
+|---|---|
+| `staple queue` | The plan as you ordered it. `--effective` shows the order agents receive. |
+| `staple queue next` | The one ticket to take next, and what it skipped and why. `--scope <ref>` stays inside one epic or milestone. |
+| `staple queue add <ref>` | Queue a ticket, an epic or a milestone. `--before R`, `--after R`, `--at N` place it. |
+| `staple queue mv <ref> --at N` | Move an entry. `queue reorder r1,r2,…` sets the whole order. |
+| `staple queue rm <ref>` | Take an entry out. `queue prune` drops the finished ones. |
+| `staple start <ref> --override -m <why>` | Take a ticket out of turn when `queue.policy` is `strict`. Recorded with your reason. |
 
-A milestone is a dated, human-ordered plan that may contain epics and tasks
-from anywhere in the tree **without moving them** — the full contract is
-[milestones.md](milestones.md). It is an ordinary issue of the reserved
-`milestone` kind, which is not seeded: run `staple kinds add milestone --label
-Milestone` once per workspace, or every command below is refused with exit 2
-naming that command.
+`--base N` on a queue change refuses it if someone changed the queue since you
+last listed it.
+
+### Milestones
+
+Guide: [Milestones and goals](milestones.md). Run
+`staple kinds add milestone --label Milestone` once per workspace first.
+
+| Command | What it does |
+|---|---|
+| `staple milestone new <title>` | Create one. `--target 2026-10-31`, `--start D`, `--criteria "a;b"`, `--from-epic R`; `--preview` writes nothing. |
+| `staple milestone ls` | Milestones in progress. `--all` includes finished ones. |
+| `staple milestone show <ref>` | Progress, members, the goal criteria and the pace against the date. |
+| `staple milestone add <milestone> <ref>` | Add an epic or ticket. `rm` removes it; `mv <ref> --to M` moves it to another milestone. |
+| `staple milestone reorder <milestone> r1,r2,…` | Set the members' order. |
+| `staple milestone set <ref>` | Change the dates (`none` clears one), the description or the criteria. |
+| `staple milestone criterion <ref> <n> --met --evidence E` | Judge goal criterion `n`: `--met`, `--unmet` or `--unknown`. Evidence is a ticket, `REF:doc` or text. |
 
 ```bash
-staple milestone new "October cut" --target 2026-10-31 --from-epic STA-66 --preview
-staple milestone new "October cut" --target 2026-10-31 --from-epic STA-66
-staple milestone add STA-190 STA-146                 # appended
-staple milestone add STA-190 STA-68 --before STA-66  # pulled forward; also --after R, --at N
-staple milestone mv STA-68 --after STA-146           # or --to <milestone> to move it out
-staple milestone reorder STA-190 STA-68,STA-66,STA-146 --base 3
-staple milestone rm STA-190 STA-146
-staple milestone set STA-190 --start 2026-10-01 --target none
-staple milestone ls [--all]                          # --all includes done and cancelled
-staple milestone show STA-190
+staple milestone new "Launch" --target 2026-10-31 --from-epic APP-1 --criteria "Users can reset;Emails send"
+staple milestone criterion APP-7 1 --met --evidence APP-4
 ```
 
-- **`--from-epic` adds the epic as the one member.** Its children come along
-  by descent — through progress and through the queue — and are never copied
-  in, so the epic's hierarchy is the milestone's structure and nothing is
-  re-parented. `--preview` prints the exact plan (`+ member STA-66 at 1`,
-  `hierarchy changes: none`) and writes nothing; the commit makes exactly those
-  changes. The title defaults to the epic's.
-- **Membership is not hierarchy.** `add` changes nothing about the member —
-  parent, depth, blockers, status, claim, gate — and `staple tree` is
-  unchanged. An issue is a direct member of at most one milestone; adding it to
-  a second is refused naming the first, and `mv --to` is the move. A milestone
-  cannot be a member.
-- **Dates are UTC calendar days**, `YYYY-MM-DD`, inclusive: a target of
-  `2026-10-31` is due by the end of that day and overdue from the next UTC
-  midnight. `none` clears one. `set` takes only the dates; title, description,
-  assignee and status are edited with the ordinary commands.
-- **Order is durable and independent** — a column, not a sort; priority,
-  creation time and tree position never reorder it. `show` prints the members
-  revision; `--base N` on `add`/`rm`/`mv`/`reorder` refuses a stale one with
-  exit 7 (`revision_conflict`, retryable) and leaves the order standing. Without
-  `--base` the CLI writes blind.
-- **Progress counts each leaf once**: `done/countable percent` over the leaves
-  reachable from the members, a parent never counted, a task reached through
-  its epic and as a direct member counted once, cancelled leaves out of the
-  denominator. `state` is derived — `done`, `cancelled`, `overdue`, `active`,
-  `planned` — never stored.
-- A non-milestone given where a milestone is expected is exit 2 naming its
-  kind (`STA-66 is an epic, not a milestone.`); an unknown reference is exit 3;
-  `rm` of a non-member is exit 3.
+## Autopilot runs
 
-`--json` on every subcommand prints the one shape MCP and the UI server
-return: `{milestone, progress, revision, members, next}` — see
-[milestones.md](milestones.md#operations-by-surface).
+Guide: [Autopilot runs](runs.md).
 
-## The pickup queue
-
-An explicit, human-ordered plan of what agents pick up next, separate from
-status, priority and display grouping — the full contract is
-[queue.md](queue.md). Nothing is seeded and nothing changes until somebody
-queues something: an empty plan leaves `inbox` exactly as it was.
+| Command | What it does |
+|---|---|
+| `staple run start --scope <queue\|ref>` | Start one agent working the queue, an epic or a milestone, ticket after ticket. `--max-tickets N`, `--until 4h`, `--ceiling P` (stop at P% of a usage limit). |
+| `staple run continue` | After each ticket: `take` the next (already claimed), `wait`, or `stop`. `--outcome failed --reason R` records a failure. |
+| `staple run status [--all]` | A run, and whether it would stop now and why. |
+| `staple run pause` / `resume` | Hold a run without ending it, then let it go on. |
+| `staple run stop [-m why]` | End a run. |
+| `staple run drive --agent claude` | Drive a run headless: a fresh `claude`, `codex` or custom session per ticket. `--dry-run` shows the next brief. |
+| `staple run hook install claude --project` | Keep the session you are in working the run instead. `run hook bind` ties it to the run. |
 
 ```bash
-staple queue add STA-66                      # appended; an epic or a milestone is fine
-staple queue add STA-146 --before STA-66     # also --after R, --at N (1-based plan position)
-staple queue mv STA-146 --at 1 --base 4
-staple queue reorder STA-31,STA-66,STA-146 --base 5
-staple queue rm STA-31
-staple queue prune                           # drop the done and cancelled entries
-staple queue                                 # PLAN order, expansions indented
-staple queue --effective                     # EFFECTIVE order, with the eligibility column
-staple queue next --actor codex-1            # what to take, and what it stepped over
+staple run start --scope APP-1 --max-tickets 5 --until 4h
+staple run continue
 ```
 
-- **Two orders, both shown.** `queue` prints PLAN order — the rows a human put
-  there — with each queued container's expansion indented under it and a
-  `→ n eligibility` cue giving every leaf its effective position. `--effective`
-  prints the order an AGENT receives. A container is never a row an agent can
-  take: a queued epic expands depth-first to its open leaf work, and a
-  milestone expands to its members in membership order. `--effective` adds a
-  `path` column — the milestone the row is planned under, then its ancestor
-  epics — which `--json` carries as `milestonePath` and `epicPath` on every row.
-- **The plan is a prefix, not a filter.** Everything not queued follows the plan
-  in the ordinary presentation sort, so unqueued work is still work — just
-  later. `--all` keeps resolved entries visible; by default they are hidden and
-  `prune` removes them.
-- **Every row is classified, and none is dropped**: `resolved`, `gated`,
-  `blocked`, `claimed`, else `eligible` — the first that matches, with a reason.
-  A blocker, a gate, a live claim and a resolved status refuse exactly as they
-  always have; rank cannot lift any of them.
-- **Order is durable and independent** — nothing about it derives from priority,
-  `created_at` or the configured status order. `queue` prints the revision;
-  `--base N` on any mutation refuses a stale one with exit 7
-  (`revision_conflict`, retryable) and leaves the order standing. Without
-  `--base` the CLI writes blind, which is the human's own risk to take.
-- **`queue.policy` decides whether the plan BINDS agents.** `advisory` (the
-  default, `staple settings get queue.policy`) orders and explains and never
-  refuses. Under `strict`, an agent claiming a row later than an eligible one is
-  refused with exit 10 and `out_of_order`, and the refusal names what to take:
+```text
+take     APP-3 Reset email
+  APP-3 is next in issue APP-1 by the pickup queue's order.
+```
 
-  ```json
-  {"code":"out_of_order","message":"STA-146 is later in the queue than STA-67, which is ready. Take STA-67, or ask a human to reorder or override.","detail":{"policy":"strict","expected":["STA-67"],"position":14,"expectedPosition":2},"retryable":false}
-  ```
+A run over a milestone works toward its goal criteria; `--gate-owner` and
+`--goal-cap` shape it.
 
-  It is not a `conflict` (somebody got there first — pick another *now*) and not
-  `gated` (a person must act) but a third instruction: *the plan says something
-  else comes first*. Retrying never clears it; taking `expected[0]` does.
-- **A human may step over the plan, on the record.** `staple checkout <ref>
-  --override -m "<why>"` skips ONLY the order check — blockers, gates and live
-  claims still refuse — and writes a `queue_overridden` event with the actor,
-  the reason and the rows it displaced. The reason is mandatory: `--override`
-  without `-m` is exit 2. The plan is unchanged, so the displaced row is still
-  the head for the next agent.
+## Cloud sync
 
-- **Diagnostics.** `staple doctor` carries a read-only `queue` check: the plan's
-  revision and entry count, plus a warning for the two states no listing can
-  show — an entry whose issue no longer exists (every listing joins to `issues`,
-  so such a row is invisible and still holds a rank) and an exhausted rank gap,
-  where the next insert renumbers the whole plan in its own transaction. Neither
-  is repairable with `--fix`.
+Guide: [Cloud sync](cloud-sync.md). Off until you connect.
 
-`staple queue --help` prints the same distinction at command level: which of the
-two orders each subcommand shows or edits, the classification ladder, and the
-four refusal codes. `--json` on every subcommand prints the one shape MCP and
-the UI server return: `{revision, entries, effective}`, with `queue next`
-answering `{revision, next, skipped}` — see
-[queue.md](queue.md#operations-by-surface).
+| Command | What it does |
+|---|---|
+| `staple cloud` | This machine's connection, read from local files. `--refresh` asks the service. |
+| `staple cloud connect --endpoint U --token S` | Connect after showing what will be sent. Automatic sync stays off. |
+| `staple cloud sync` | Send this machine's changes and fetch the others'. `--all` does every connected workspace. |
+| `staple cloud auto on\|off` | Let this machine sync without being asked. |
+| `staple cloud conflicts` | Fields two machines set differently. `cloud resolve <id> --take local\|remote` settles one. |
+| `staple cloud devices` | Machines connected to this repository. `devices revoke <id>` cuts one off. |
+| `staple cloud backup enable` | Allow backups on the service. `backup create`, `backup ls`, `backup rm`; `cloud restore <id> --confirm <repo>` rewinds. |
+| `staple cloud lease acquire <ref>` | Claim a ticket across machines, not only on this one. |
+| `staple cloud disconnect` | Remove this machine's credential. Local data stays. |
 
-## Estimates vs actuals
+`staple cloud --help` covers the rest, including `fork-id` and `purge`.
 
-One stored number and a handful of read-time derivations, so you can say what
-agentic execution actually cost against the plan-time human figure.
+## Several repositories
+
+Guide: [Several repositories](hub.md).
+
+| Command | What it does |
+|---|---|
+| `staple hub` | Every workspace registered on this machine. `hub links` and `hub events` cover the ones between them. |
+| `staple discover <root>` | Find workspaces under a folder; `--all-found --yes` or `--select a,b --yes` registers them. |
+| `staple add <path> --yes` | Register one repository. |
+| `staple hub unregister <slug>` | Drop one entry. The workspace itself is untouched. |
+| `staple hub prune [--yes]` | Drop entries whose folder is gone. Without `--yes` it only shows them. |
+| `staple hub unlink <blocker> <blocked>` | Remove a cross-repository link. |
+| `staple hub registry` | Share this machine's list of workspaces through the sync service: `connect`, `publish --enable`, `adopt --apply`. |
+
+## The web UI
+
+Guide: [Tour](web-ui.md).
+
+| Command | What it does |
+|---|---|
+| `staple open` | Serve the web UI and open it. `--port 4400`, `--no-browser`; `--hub` shows every workspace. Ctrl-C stops it. |
+
+## Budget and estimates
+
+Guide: [Budget and estimates](budget-and-estimates.md).
+
+| Command | What it does |
+|---|---|
+| `staple estimate <ref> <dur>` | Change only the estimate. `--clear` removes it. |
+| `staple compare <ref> [<ref>…]` | Total labor, how much of it is estimated, and the longest dependency chain, side by side. |
+| `staple forecast <ref>` | How much work is left, from how long similar work took, and what it costs your usage limits. |
+| `staple calibrate` | How long each kind of work takes against its estimate. `--for <ref>` forecasts one ticket. |
+| `staple timing quality` | How much of the recorded time can be trusted. |
+| `staple attempts <ref>` | Every agent session on a ticket. `staple attempt <id>` shows one. |
+| `staple attempt pause <ref> --reason R` | Report a pause on the ticket you hold. `resume`, `milestone -m label` and `interrupt` too. |
+| `staple budget` | Each account's usage limits: what is left, when it resets, and your pace. |
+| `staple budget setup --claude-account A --yes` | Turn on capture of Claude Code and Codex usage in one step. Without `--yes` it shows the plan. `budget unsetup --yes` reverses it. |
+| `staple budget status` | Whether capture is working, and what is missing. |
+| `staple budget capture on\|off` | Turn capture on or off by hand. `budget bind` names the account a harness spends from; `budget bindings` lists them and `budget unbind` removes one. |
+| `staple budget ingest --source S` | Record a reading by hand (`manual`), from a Claude Code status line, or from a Codex session file. `budget setup` wires this up for you. |
+| `staple budget collect` | Read new Codex session files now; setup runs it every few minutes. |
+| `staple budget live on --yes` | Also ask the provider for current usage. Off by default. |
+| `staple budget history --account A` | One account's readings. `budget forget <id> --yes` removes a wrong one. |
 
 ```bash
-staple new "Port the claim guard" --estimate 90m   # record it WHEN YOU PLAN
-staple status STA-42 in_progress --estimate 2h     # re-estimate
-staple status STA-42 backlog --no-estimate         # clear it
+staple compare APP-1
 ```
 
-Durations use the same vocabulary as `--if-stale`: `90s`, `30m`, `2h`, `3d`, or
-a bare number of seconds. An estimate must be a positive whole number of
-seconds and at most 365 days — `--estimate 0` is refused, because "estimated at
-nothing" and "no estimate recorded" are different facts and only one of them
-has a dedicated flag.
-
-**Only the estimate is stored.** The actual is `activeSeconds`, reconstructed
-at read time by replaying the event log into `in_progress` **intervals** —
-entering opens one, leaving closes one. Three things follow, and each was a
-real complaint about the earlier two-timestamp version:
-
-- **Blocked and parked time is free.** `in_progress → blocked → in_progress` is
-  two intervals, and the week in between is simply not one. No special case
-  needed; a `now − startedAt` span had no way to express it.
-- **The clock stops when the agents do.** An open interval ends at the holder's
-  `lastActivityAt` — the same derivation the stale-claim badge uses — and never
-  at `now`. An agent that died on Friday is not several days deeper into its
-  estimate by Monday. `countedThrough` reports where the clock stopped.
-- **An epic has no stopwatch.** An interval opened by staple's own "a child
-  started, so the parent is in progress" flip is excluded. A parent's actual is
-  the **aggregation of its children**; `ownActiveSeconds` sits beside it and is
-  normally `null`.
-
-The honest limit: this measures an agent's **write cadence**. Twenty silent
-minutes before a crash are not counted. Under-counting silence beats billing a
-dead process for a weekend — the second error compounds without limit.
-
-`in_review` is measured separately as `reviewSeconds` and never folded into the
-actual: waiting on a human reviewer is a queue, not execution. It surfaces only
-when nonzero. A workspace imported from another tool, with no usable event log,
-falls back to `completedAt − startedAt` with `approximate: true`, which every
-surface renders as "approx".
-
-Nothing is cached, and there is deliberately no `active_seconds` column: a
-derived reading frozen onto an entity you serialize, hand to an MCP client and
-hold for a session is a number that stopped being true the instant it was
-written. This is the same rule `claim` follows, and for the same reason — so
-timing rides **beside** the issue, never on it:
-
-```bash
-staple show STA-42
-# status in_progress (v3) · priority high · @claude · held by claude
-# claim  held 3h · silent 2m (last activity 2026-09-02T00:40:45Z)
-# time   est 2h · ran 3h10m · counted through 2026-09-02T00:40:45Z
+```text
+APP-1 · Password reset (epic, in_progress)
+  labor 6h (own estimate; units beneath add up to 4h30m) · 3 of 3 units planned · 1 cancelled
+  planned path 4h30m · APP-2 > APP-3 > APP-4
+  remaining path 2h30m · APP-3 > APP-4
 ```
 
-`--json` and the MCP/HTTP read payloads carry the full object as `timing`, plus
-`childrenTiming` keyed by child identifier:
+Checkout, `status` and `done` also take `--harness`, `--model` and `--account`, so
+time and usage land under the right model and account.
 
-```json
-{"timing":{"estimatedSeconds":14400,"ownActiveSeconds":null,"activeSeconds":15000,
-  "reviewSeconds":null,"approximate":false,"countedThrough":null,"childCount":3,
-  "childrenEstimatedSeconds":12600,"childrenActiveSeconds":15000,
-  "childStatusCounts":{"backlog":1,"todo":0,"in_progress":1,"in_review":0,
-                       "done":1,"blocked":0,"cancelled":0},
-  "subtreePlan":{"estimatedSeconds":14400,"source":"own",
-                 "descendantsEstimatedSeconds":12600,"contributingCount":2,"totalCount":3}},
- "childrenTiming":{"STA-43":{"estimatedSeconds":5400,"activeSeconds":3600,"…":"…"}}}
-```
-
-Rollups sum **direct children only**, and each child contributes its own
-`activeSeconds` — so a child that is itself a parent contributes its aggregate,
-which is exactly the number its row on screen shows. The table adds up, and an
-epic-of-epics reports its grandchildren's work rather than zero. Estimates stay
-strictly depth-1 in `childrenEstimatedSeconds`, because a parent's estimate is
-a plan for its whole subtree and adding it to its children's would double-count
-the plan. A sum is `null` — never `0` — when no child contributed one.
-
-**The recursive plan** is `subtreePlan`, beside that field rather than in its
-place, and it survives an epic-of-epics with one rule: an issue contributes its
-**own estimate if it has one, otherwise the sum of its children's
-contributions** — never both. So a parent's plan and its descendants' plans
-cannot both land in one ancestor total, and a middle-level epic nobody
-estimated passes its children's plan straight up. The fields:
-
-- `estimatedSeconds` — the **effective (top-down) plan**, the one number an
-  ancestor counts this issue as: the own estimate when recorded, otherwise
-  `descendantsEstimatedSeconds`, `null` when neither exists.
-- `source` — `own`, `descendants` or `none`: which fed `estimatedSeconds`.
-- `descendantsEstimatedSeconds` — the **bottom-up plan**, the sum of the
-  direct children's effective plans. Kept visible even when an own estimate
-  wins, so the 4h epic above, over 3h30m of planned children, shows the
-  disagreement instead of one side quietly winning.
-- `contributingCount` / `totalCount` — coverage over descendants at **every
-  depth**: how many contributed their own estimate to the bottom-up sum, out
-  of how many exist. A descendant shadowed by an estimated ancestor beneath
-  this issue is not counted — and not lost; it is on its own timing.
-
-A middle epic with no estimate over three leaves at 4h/3h/4h therefore
-reports an 11h plan, and its parent includes that 11h whether or not the
-middle level was estimated. `staple show` adds one segment per parent:
-`plan 11h (from 3 of 3 descendants)` when the plan was inherited, or
-`descendants est 11h (3 of 3)` beside `est` when an own estimate wins.
-
-Every surface takes it: MCP `create_task` / `update_task` via `estimate_seconds`
-(explicit `null` clears, absent leaves alone), HTTP `create` / `update` via
-`estimateSeconds`, and the CLI as above. `list_tasks` and `inbox` carry the
-scalar `estimatedSeconds` but not the rollup object — those shapes exist to
-make choosing a task cheap.
-
-## Approval gates
-
-A **gate** parks a *parent* on a named human and takes its whole subtree out of
-circulation until that person answers. It is the counterpart of `block`: a
-blocker waits on other work, a gate waits on a person.
-
-```bash
-staple gate <ref> --owner O [-m text]                 park it; every open descendant is queued
-staple approve <ref> [--children R1,R2] [-m text]     release the queue — all of it, or only these
-staple request-changes <ref> -m text                  send it back; children stay queued
-```
-
-- **`gate`** moves the parent to `awaiting_approval` and clears its claim.
-  `--owner` is required. Refused on a leaf (`in_review` is the status for a leaf
-  waiting on a human) and while a gate is already `pending`; re-gating after
-  `request-changes` is allowed, and is how you resubmit.
-- **`approve`** with no `--children` resolves the gate, releases the whole
-  subtree, and re-derives the parent from its children. With `--children` it
-  releases only those refs — which must be descendants — and everything
-  underneath them, leaving the parent parked and the gate active.
-- **`request-changes`** requires `-m`, and does exactly this: *posts your note as
-  a comment on `<ref>`, returns it to todo for the next agent, and keeps the
-  queued children parked until you approve.* No automatic re-checkout; the queue
-  holds until an `approve` or a fresh gate cycle. The web UI calls this action
-  **Send back** and prints that same sentence above the note field. The command
-  name is unchanged — the label was the thing that was unclear, not the verb.
-
-### What is actually queued
-
-Four rules decide what a gate holds, and every surface — `inbox`, the checkout
-guard, the `[queued: …]` cue on `ls`, and the reviewer's checklist in the web UI
-— reads the same answer (STA-154):
-
-- **(a) Only OPEN work is queued.** `done` and `cancelled` issues under a gated
-  parent carry no `queuedBy`, are never listed for approval and are never
-  counted. Finished work is not being held back from anyone.
-- **(b) A parent with nothing open underneath is not queued.** It has nothing to
-  release, so approving it would be a no-op. An open **leaf** is still queued —
-  it *is* the work.
-- **(c) Approving some children releases them and everything under them, at
-  once.** They stop reading queued immediately; you do not re-run anything. The
-  parent stays parked and the gate stays active.
-- **(d) A subtree behind its own inner gate is not yours to release.**
-  `queuedBy` names the *nearest* gate, so that decision belongs to whoever holds
-  it.
-
-Semantics and the tests that pin each rule are in
-[semantics.md](semantics.md#approval-gates).
-
-```console
-$ staple gate STA-142 --owner VP -m "Schema plus the three CLI verbs — ok to build on this?"
-⊙! STA-142   awaiting_approval Q: approval gates — park a parent for VP review …  [awaiting VP]
-
-$ staple approve STA-142 --children STA-145 -m "Q3 docs can proceed."
-⊙! STA-142   awaiting_approval Q: approval gates …  [released STA-145; still awaiting VP]
-
-$ staple request-changes STA-142 -m "Split the queuedBy derivation out."
-○! STA-142   todo        Q: approval gates …  [changes requested; children stay queued]
-
-$ staple approve STA-142
-◐! STA-142   in_progress Q: approval gates …  [gate approved]
-```
-
-`ls` marks both sides of a gate — `[awaiting VP]` on the holder,
-`[queued: STA-142/VP]` on the work behind it — and `show` gives the gate its own
-lines, printed for a resolved gate too, so the review leaves a trace:
-
-```console
-gate:  awaiting VP (requested opus-q3 2026-09-02T22:00:46Z)
-queued: behind STA-142, awaiting approval by VP — checkout is refused until then
-```
-
-### The QUEUED section of the inbox
-
-`staple inbox` grows a third section between READY and BLOCKED, printed only
-when it is non-empty. QUEUED is work a **human** must release; BLOCKED is work
-waiting on other **work**. Gate holders are listed first inside the section —
-the one row a person can act on should not sit under the three tickets it is
-holding — while `--json` and the MCP/HTTP payloads keep the store's ordinary
-pickup order.
-
-```console
-READY (pickup order):
-  ◌! STA-61    backlog     L1: scaffold Docusaurus site (single locale) replacing the POC
-QUEUED (waiting on a human — checkout is refused):
-  ⊙! STA-142   awaiting_approval Q: approval gates — park a parent for VP review …  [awaiting VP]
-  ◐! STA-143   in_progress Q1: gate model in the store … @opus-q1  [awaiting VP on STA-142]
-  ◌! STA-144   backlog     Q2: gates in the web UI …  [awaiting VP on STA-142]
-BLOCKED:
-  ⊘! STA-80    blocked     T: estimates vs actuals …  [waiting on VP: schedule the brainstorm]
-```
-
-`inbox --json` is `{"ready":[…],"queued":[…],"blocked":[…],"hasMore":false}`;
-every entry carries `gate` and `queuedBy` beside `unresolvedBlockers` and
-`claim`. An entry with a `gate` and no `queuedBy` **is** the gate; an entry with
-`queuedBy` is standing behind the one it names. `staple inbox --hub` goes
-through the hub's unified list and carries no gate cue today — checkout is still
-refused, it is just less informative.
-
-### Exit code 9 and the `gated` error
-
-Checkout of a queued issue fails with its own exit code so a shell loop can tell
-"take another task" from "wait for a person":
-
-```console
-$ staple checkout STA-144
-error(gated): STA-144 is queued behind STA-142, awaiting approval by VP. Pick a different task — approval is a human action, not a retry.
-$ echo $?
-9
-```
-
-`--steal-if-stale` does not open it: a stale holder and a closed gate are
-unrelated facts. The only thing that clears it is the owner running `approve`.
-The `--json` form carries the gate in `detail`, identically on the CLI, MCP and
-HTTP surfaces:
-
-```json
-{"code":"gated","message":"STA-144 is queued behind STA-142, awaiting approval by VP. Pick a different task — approval is a human action, not a retry.","detail":{"currentStatus":"backlog","queuedBy":{"identifier":"STA-142","owner":"VP"}},"retryable":false}
-```
-
-The three write commands emit the parent issue plus its `gate` under `--json`,
-so they read like any other write; `approve` adds `releasedChildren`, which is
-what distinguishes a partial approval from a whole one:
-
-```json
-{"identifier":"STA-142","status":"awaiting_approval","…":"…",
- "gate":{"state":"pending","owner":"VP","requestedBy":"opus-q3",
-         "requestedAt":"2026-09-02T22:00:46.381Z","resolvedBy":null,"resolvedAt":null},
- "releasedChildren":["STA-144"]}
-```
-
-`gate.state` is `pending | approved | changes_requested`. `ls --json`,
-`show --json` and `inbox --json` carry the same `gate` object plus `queuedBy`
-(`{identifier, owner}`) as siblings of the issue — never fields *on* it, the
-same rule `claim` and `timing` follow. At most one of the pair is ever non-null.
-
-Semantics, and the tests behind each rule, are in
-[semantics.md](semantics.md#approval-gates).
-
-## Machine-readable output
-
-`--json` is a global flag on every task command (`ls`, `show`, `inbox`, `board`,
-`tree`, `events`, `start`, `done`, `new`, `doc`, …). It emits the store objects
-unformatted, so timestamps are full ISO-8601 with a `Z` suffix rather than the
-truncated forms the human tables print. `events --json` emits **NDJSON** — one
-event object per line. Human output is unchanged when the flag is absent.
-
-Errors under `--json` are a single line of JSON on **stderr**, carrying the same
-fields on every surface (the MCP server nests it under an `error` key in its
-text block; the UI server adds a legacy `error` alias for `message`):
-
-```json
-{"code":"conflict","message":"Checkout refused: …","detail":{"currentStatus":"in_progress","heldBy":"other-agent","blockers":[]},"retryable":false}
-```
-
-`retryable` is the branchable bit. Among the tracker's own failures only
-`revision_conflict` is worth retrying. A checkout conflict means *pick a different task*.
-Among cloud sync failures, `rate_limited`, `unavailable` and `offline` are
-retryable, and nothing else is.
-
-A cloud sync failure carries the service's own code, from the taxonomy in
-[sync.md](sync.md#error-taxonomy): `auth`, `forbidden`, `revoked` and the rest,
-never the nearest store code. `detail.cloudCode` and `detail.retryable` repeat
-the code and the bit. They are there for scripts written before the code was true, and
-they always agree with the top level:
-
-```json
-{"code":"offline","message":"Could not reach https://sync.example.com (TypeError). Local work is unaffected; nothing was sent and nothing was changed.","detail":{"endpoint":"https://sync.example.com","cloudCode":"offline","retryable":true},"retryable":true}
-```
-
-Until STA-251 the code was folded into a store code and only `detail` held the
-truth. `auth`, `forbidden`, `revoked`, `cursor_invalid`, `payload_too_large`,
-`schema_ahead` and `protocol_unsupported` were `validation` (exit 2).
-`epoch_changed`, `rate_limited`, `unavailable` and `offline` were a
-non-retryable `conflict` (exit 4). A script that branched on those two exit
-codes for a cloud command should branch on the codes below instead.
-
-## Exit codes
-
-Exit codes let CI branch without parsing stderr:
-
-| code | meaning | | code | meaning |
-|---|---|---|---|---|
-| 0 | success | | 4 | `conflict` |
-| 1 | unknown error | | 5 | `duplicate` |
-| 2 | `validation` | | 6 | `cycle` |
-| 3 | `not_found` | | 7 | `revision_conflict` |
-| | | | 8 | `timeout` (`wait` only) |
-| | | | 9 | `gated` (a review gate above it is unresolved) |
-| | | | 10 | `out_of_order` (the plan says something else comes first) |
-
-Cloud sync failures (`staple cloud …`, `staple hub registry …`) use 2, 3 and 4 for the
-three codes they share with the tracker, and these for the rest:
-
-| code | meaning | retry? |
-|---|---|---|
-| 11 | `auth`: missing or invalid credential. Re-connect | no |
-| 12 | `forbidden`: not a member, or a consent the service or this machine lacks | no |
-| 13 | `revoked`: this device was revoked. Re-connect | no |
-| 14 | `epoch_changed`: the timeline moved again during recovery | no |
-| 15 | `cursor_invalid`: a stored position the service cannot read | no |
-| 16 | `payload_too_large`: a batch or one row is over the service's cap | no |
-| 17 | `schema_ahead`: data written by a newer staple. Upgrade | no |
-| 18 | `protocol_unsupported`: this build and the service share no protocol. Upgrade | no |
-| 19 | `rate_limited`: `detail.retryAfter` says how long | **yes** |
-| 20 | `unavailable`: a transient service failure | **yes** |
-| 21 | `offline`: the service could not be reached. Local work continues | **yes** |
-
-Test for exactly those three. Don't use a range check such as `-ge 19`. Codes above 21
-are not staple's: the installed launcher exits 70 when no runtime is installed, and a
-signal gives 128+n (130 for Ctrl-C). A loop that retried on those would spin for ever
-on a broken install:
-
-```sh
-staple cloud sync
-case $? in
-  19|20|21) echo "try again later" ;;
-esac
-```
+Going deeper: [the CLI in detail](../design/cli.md) has every command's JSON
+shape, refusal and rule.

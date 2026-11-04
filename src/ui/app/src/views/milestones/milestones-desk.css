@@ -1,0 +1,6 @@
+/* The desktop Milestones page (MilestonesView `desk`). Token roles only. */
+
+/* The selected card: the accent edge the task list uses for the open row. */
+.staple-milestone-card[aria-current="true"] {
+  box-shadow: inset 3px 0 0 var(--ring);
+}

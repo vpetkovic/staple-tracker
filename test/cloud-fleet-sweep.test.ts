@@ -1,6 +1,6 @@
 /**
  * A fleet on this build, driven at random, holds one state on every device and a fresh one
- * (`docs/sync.md`, "The support boundary").
+ * (`design/sync.md`, "The support boundary").
  *
  * Three writers from the start and a fourth that joins late. Each round every device does random
  * work offline — issues, vocabulary, edits, documents, comments, blockers, the plan, milestones,

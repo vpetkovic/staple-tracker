@@ -6,7 +6,7 @@
  * through numbers they learned, however long ago. Sync settles colliding numbers
  * (`src/core/cloud/claims.ts`), so a number can leave one issue, name another, and have
  * that one pass through and move on in turn. Every move here is recent, so the contract
- * (`docs/sync.md`, "A number that moved under a caller") allows exactly two outcomes for
+ * (`design/sync.md`, "A number that moved under a caller") allows exactly two outcomes for
  * each write: it lands on the issue the writer meant, or it is refused. It may never land
  * on another issue — which it did when the guard remembered only the last issue to leave a
  * number, measured by the reviewer at 121 of 1,057 writes over 80 runs, and here on 8 of

@@ -1,7 +1,7 @@
 /**
  * The heartbeat: bounded, observable, and with no clock authority.
  *
- * Contract: `docs/sync.md` — *"Renewal is a bounded, observable heartbeat."*
+ * Contract: `design/sync.md` — *"Renewal is a bounded, observable heartbeat."*
  *
  * The distinction every test here holds: **the client's timer decides when to
  * ask; the server decides whether the lease still exists.** So the loop is

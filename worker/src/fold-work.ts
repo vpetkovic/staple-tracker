@@ -52,8 +52,8 @@ export const PARSE_NS_PER_ESCAPE = 12;
 export const WRITE_NS_PER_BYTE = 3;
 export const WRITE_NS_PER_ESCAPE = 36;
 /** Provenance an operation adds to what its entity writes: at most, per operation. */
-export const PROVENANCE_BYTES = 200;
-export const PROVENANCE_ESCAPES = 16;
+export const PROVENANCE_BYTES = 256;
+export const PROVENANCE_ESCAPES = 24;
 
 /** Quotes and backslashes in `text`: SQL's `escapes`, counted in the isolate. */
 export function countEscapes(text: string): number {
@@ -85,7 +85,7 @@ export function serveWork(bytes: number, escapes: number): number {
  * Entry `i` is the work of folding operations `0..i`.
  */
 export function runWork(
-  rows: ReadonlyArray<{ keys: readonly string[]; bytes: number; escapes: number }>,
+  rows: ReadonlyArray<{ keys: readonly string[]; bytes: number; escapes: number; fields?: number }>,
   stored: (key: string) => { size: number; escapes: number } | undefined,
 ): number[] {
   const out: number[] = [];
@@ -102,7 +102,7 @@ export function runWork(
       written += writeWork(size?.size ?? 0, size?.escapes ?? 0);
     }
     // What the operation adds to its own entity's write.
-    written += writeWork(row.bytes + PROVENANCE_BYTES, row.escapes + PROVENANCE_ESCAPES);
+    written += writeWork(row.bytes + PROVENANCE_BYTES * (row.fields ?? 1), row.escapes + PROVENANCE_ESCAPES * (row.fields ?? 1));
     out.push(read + written);
   }
   return out;

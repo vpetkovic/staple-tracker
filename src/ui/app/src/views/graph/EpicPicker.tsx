@@ -50,6 +50,7 @@
  */
 import { ChevronDown, ChevronRight, Layers, Search, X } from "lucide-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
+import { useBackToClose } from "@/lib/back-to-close";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 // Through the barrel, never from a file inside it — the same rule searchable-select.tsx
@@ -105,6 +106,8 @@ export function EpicPicker({
 }: EpicPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Phone Back closes the picker, not the page (lib/back-to-close.ts).
+  useBackToClose(open, () => setOpen(false));
 
   // Clear on every OPEN rather than on close: a list that reopens still holding the last
   // query looks broken, and clearing on close happens under the animation. R7's rule.
@@ -184,7 +187,7 @@ export function EpicPicker({
                   className={cn(
                     "flex size-4 items-center justify-center rounded-sm text-text-tertiary transition-colors",
                     "hover:bg-surface-hover hover:text-foreground",
-                    "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                    "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring",
                   )}
                 >
                   <X className="size-3" aria-hidden />
@@ -423,7 +426,7 @@ function EpicPickerRow({
         data-epic-matched={matched ? "" : undefined}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1.5 py-1 text-left hover:bg-muted",
-          "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+          "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring",
           // A row present only to hold up a match's indentation is context, not a result.
           !matched && "opacity-60",
         )}
@@ -456,7 +459,7 @@ function EpicPickerRow({
         className={cn(
           "flex size-6 shrink-0 items-center justify-center rounded-sm transition-colors",
           "hover:bg-muted",
-          "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+          "outline-hidden focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring",
           collapsed ? "text-foreground" : "text-muted-foreground",
         )}
       >

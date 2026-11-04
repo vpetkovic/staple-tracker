@@ -1,0 +1,42 @@
+{
+  "title": "edges written with an issue: a child that blocks its parent until done, and an issue born blocked",
+  "covers": [
+    "a parent held back by an unresolved blockParentUntilDone edge reads blocked, not queued",
+    "an issue created with --blocked-by has no wall until it first enters active; its wait is lead time",
+    "both edges are explained by blockers_changed events, so the partition is exact on every device"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "r", "title": "parent" },
+    { "at": "0s", "do": "create", "ref": "j", "parent": "r" },
+    { "at": "0s", "do": "create", "ref": "k", "parent": "r", "blockParentUntilDone": true },
+    { "at": "0s", "do": "create", "ref": "n", "blockedBy": ["k"] },
+    { "at": "0s", "do": "checkout", "ref": "j", "agent": "w1" },
+    { "at": "5m", "do": "comment", "ref": "j", "agent": "w1" },
+    { "at": "10m", "do": "status", "ref": "j", "to": "done", "agent": "w1" },
+    { "at": "20m", "do": "checkout", "ref": "k", "agent": "w2" },
+    { "at": "25m", "do": "comment", "ref": "k", "agent": "w2" },
+    { "at": "30m", "do": "status", "ref": "k", "to": "done", "agent": "w2" },
+    { "at": "35m", "do": "checkout", "ref": "n", "agent": "w3" },
+    { "at": "40m", "do": "status", "ref": "n", "to": "done", "agent": "w3" }
+  ],
+  "expect": [
+    {
+      "asOf": "50m",
+      "ref": "r",
+      "intervals": 2,
+      "workSeconds": "20m",
+      "quality": { "wall": "exact" },
+      "wall": { "startAt": "0s", "endAt": "30m", "buckets": { "active": "20m", "blocked": "10m" } }
+    },
+    {
+      "asOf": "50m",
+      "ref": "n",
+      "workSeconds": "5m",
+      "leadSeconds": "35m",
+      "quality": { "wall": "exact" },
+      "wall": { "startAt": "35m", "endAt": "40m", "buckets": { "work": "5m" } }
+    }
+  ]
+}

@@ -30,6 +30,7 @@ import { initWorkspace } from "../src/core/workspace.js";
 import { STATUS_CATEGORIES } from "../src/core/types.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { describeRefusal, type Refusal } from "../src/ui/app/src/lib/refusal.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 interface SettingsEnvelope {
   workspace: string;
@@ -69,11 +70,14 @@ async function write(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(`${origin}/api/settings`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-staple-token": token,
-      origin: over.origin ?? origin,
-    },
+    headers: asForeignPage(
+      {
+        "content-type": "application/json",
+        "x-staple-token": token,
+        origin: over.origin ?? origin,
+      },
+      origin,
+    ),
     body: JSON.stringify({ actor: "ui", target, ops }),
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };

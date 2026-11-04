@@ -86,6 +86,8 @@
  * shipping beside rather than some other one.
  */
 
+import { settleAttemptEnd } from "../../src/core/cloud/attempt-ends.js";
+import { withoutNarration } from "../../src/core/cloud/narration.js";
 import { type FoldedRevisionEntry, settleRevisionCreate } from "../../src/core/cloud/revision-placement.js";
 import { entityKey } from "./cursor.js";
 import type { Env } from "./env.js";
@@ -359,7 +361,15 @@ export async function foldLog(
        * hydrating device — so the stale one could win. A key's other spelling is dropped
        * when it is written, state and provenance alike, so the state holds the latest.
        */
-      const carried = columnSpellingWins(payload as Record<string, unknown>);
+      /**
+       * A stored orphan end never overwrites a real end (`design/execution-telemetry.md`), and a
+       * dropped one leaves no `fieldWrites` for its keys: a device hydrated from this fold must
+       * not inherit provenance for a write it never took. The same rule the client applier, the
+       * tail fold and the test service call (`src/core/cloud/attempt-ends.ts`).
+       */
+      const spelled = columnSpellingWins(payload as Record<string, unknown>);
+      // What the operation narrates is not the entity's state (`src/core/cloud/narration.ts`).
+      const carried = withoutNarration(row.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled);
       for (const key of Object.keys(carried)) {
         const other = otherSpelling(key);
         if (other !== key) {
@@ -553,7 +563,8 @@ export function foldRow(
    * hydrating device — so the stale one could win. A key's other spelling is dropped
    * when it is written, state and provenance alike, so the state holds the latest.
    */
-  const carried = columnSpellingWins(payload as Record<string, unknown>);
+  const spelled = columnSpellingWins(payload as Record<string, unknown>);
+  const carried = withoutNarration(row.entity === "attempt" ? settleAttemptEnd(entry.state, spelled) : spelled);
   for (const key of Object.keys(carried)) {
     const other = otherSpelling(key);
     if (other !== key) {

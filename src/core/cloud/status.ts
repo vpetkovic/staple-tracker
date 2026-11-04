@@ -1,7 +1,7 @@
 /**
  * What state is this repository's cloud connection in?
  *
- * Contract: `docs/sync.md`, "Three consents" — what a surface may do at each
+ * Contract: `design/sync.md`, "Three consents" — what a surface may do at each
  * stage, and the acceptance criterion that human and JSON status must
  * distinguish disconnected, manual, automatic, offline, revoked and
  * authentication-failed.

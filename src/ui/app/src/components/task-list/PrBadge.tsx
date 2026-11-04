@@ -78,7 +78,14 @@ function PrGlyph({ state }: { state: PullRequestRef["state"] }) {
   );
 }
 
-export function PrBadge({ pullRequests }: { pullRequests?: PullRequestRef[] }) {
+export function PrBadge({
+  pullRequests,
+  showNumber = true,
+}: {
+  pullRequests?: PullRequestRef[];
+  /** `#123` beside the glyph — the first thing the row ladder drops (row-layout.ts). */
+  showNumber?: boolean;
+}) {
   const prs = pullRequests ?? [];
   if (prs.length === 0) return null; // no element, no space, no placeholder
 
@@ -100,7 +107,7 @@ export function PrBadge({ pullRequests }: { pullRequests?: PullRequestRef[] }) {
       title={pr.title ? `#${pr.number} ${pr.title} (${pr.state})` : `#${pr.number} (${pr.state})`}
     >
       <PrGlyph state={pr.state} />
-      <span className="staple-pr-number">#{pr.number}</span>
+      {showNumber ? <span className="staple-pr-number">#{pr.number}</span> : null}
       {extra > 0 ? <span className="staple-pr-more">+{extra}</span> : null}
     </a>
   );

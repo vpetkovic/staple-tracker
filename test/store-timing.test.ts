@@ -54,7 +54,7 @@ const ago = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOStri
 function eventKinds(issueId: string): string[] {
   return (
     store.db
-      .prepare("SELECT kind FROM events WHERE issue_id = ? ORDER BY seq")
+      .prepare("SELECT kind FROM events WHERE issue_id = ? AND kind NOT LIKE 'attempt\_%' ESCAPE '\\' ORDER BY seq")
       .all(issueId) as Array<{ kind: string }>
   ).map((row) => row.kind);
 }
@@ -67,15 +67,36 @@ function eventKinds(issueId: string): string[] {
  * shifting a history sideways and producing a plausible wrong number.
  */
 function backdateEvents(issueId: string, secondsAgo: number[]): void {
-  const rows = store.db
-    .prepare("SELECT seq FROM events WHERE issue_id = ? ORDER BY seq")
-    .all(issueId) as Array<{ seq: number }>;
+  const all = store.db
+    .prepare("SELECT seq, kind, payload FROM events WHERE issue_id = ? ORDER BY seq")
+    .all(issueId) as Array<{ seq: number; kind: string; payload: string }>;
+  const rows = all.filter((row) => !row.kind.startsWith("attempt_"));
   expect(rows.length, `event count for ${issueId}: ${eventKinds(issueId).join(" -> ")}`).toBe(
     secondsAgo.length,
   );
   rows.forEach((row, i) => {
     store.db.prepare("UPDATE events SET created_at = ? WHERE seq = ?").run(ago(secondsAgo[i]!), row.seq);
+    // A comment and the event that narrates it are one mutation, one instant: move the comment with it.
+    if (row.kind === "comment_added") {
+      const commentId = (JSON.parse(row.payload) as { commentId?: string }).commentId;
+      if (commentId) store.db.prepare("UPDATE comments SET created_at = ? WHERE id = ?").run(ago(secondsAgo[i]!), commentId);
+    }
   });
+  backdateAttemptEvents(all);
+}
+
+/**
+ * An attempt transition's event is written by the mutation it narrates, in the same
+ * transaction (`telemetry/attempts.ts`): it moves with the event before it, so the history
+ * a test rewinds stays one history — and the holder's activity is not left at "now".
+ */
+function backdateAttemptEvents(all: Array<{ seq: number; kind: string }>): void {
+  let at: string | null = null;
+  for (const row of all) {
+    const current = store.db.prepare("SELECT created_at FROM events WHERE seq = ?").get(row.seq) as { created_at: string };
+    if (!row.kind.startsWith("attempt_")) at = current.created_at;
+    else if (at !== null) store.db.prepare("UPDATE events SET created_at = ? WHERE seq = ?").run(at, row.seq);
+  }
 }
 
 /** Backdate the claim itself, so `lastActivityAt`'s floor moves with its history. */
@@ -475,16 +496,18 @@ describe("in_review is measured, and kept out of the actual", () => {
     expect(store.timing(issue.id).reviewSeconds).toBeNull();
   });
 
-  it("clamps an open review interval too, rather than counting to now", () => {
+  it("counts an open review interval to the read instant: a queue's clock runs while nobody writes (Q3)", () => {
     const issue = store.createIssue({ title: "Waiting on a human" });
     store.checkoutIssue(issue.id, "agent-a");
     store.updateIssue(issue.id, { status: "in_review" }, "agent-a");
     backdateEvents(issue.id, [9000, 8000, 5000]);
 
-    // Newest event is the transition into review itself, so the queue reads 0
-    // until something else happens on the ticket. Honest: there is no evidence
-    // of anything since.
-    expect(store.timing(issue.id).reviewSeconds).toBe(0);
+    // The newest event is the transition into review itself, and the queue still
+    // reads the 5000 seconds it has been waiting (design/timing-semantics.md, Q3):
+    // review waits on a person, and silence is the waiting, not the end of it.
+    const asOf = new Date().toISOString();
+    expect(store.timingFor([issue.id], asOf).get(issue.id)!.reviewSeconds).toBeGreaterThanOrEqual(5000);
+    expect(store.timingFor([issue.id], asOf).get(issue.id)!.reviewSeconds).toBeLessThanOrEqual(5001);
     // And review never leaks into the ACTIVE clock, open or not.
     expect(store.timing(issue.id).countedThrough).toBeNull();
   });
@@ -579,6 +602,7 @@ describe("rollups", () => {
         source: "descendants",
         descendantsEstimatedSeconds: 11 * H,
         contributingCount: 3,
+        unplannedCount: 0,
         totalCount: 3,
       });
     });
@@ -594,6 +618,7 @@ describe("rollups", () => {
         source: "descendants",
         descendantsEstimatedSeconds: 11 * H,
         contributingCount: 3,
+        unplannedCount: 0,
         totalCount: 4,
       });
     });
@@ -606,6 +631,7 @@ describe("rollups", () => {
         source: "own",
         descendantsEstimatedSeconds: 11 * H,
         contributingCount: 3,
+        unplannedCount: 0,
         totalCount: 3,
       });
       // …but the ancestor counts it ONCE, at its own 10h — never 21h.
@@ -637,6 +663,7 @@ describe("rollups", () => {
         source: "none",
         descendantsEstimatedSeconds: null,
         contributingCount: 0,
+        unplannedCount: 1,
         totalCount: 2,
       });
       expect(store.timing(mid.id).subtreePlan.totalCount).toBe(1);

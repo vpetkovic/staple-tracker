@@ -31,7 +31,6 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { initWorkspace } from "../src/core/workspace.js";
@@ -43,6 +42,8 @@ import { describeIdentityReplacement } from "../src/core/cloud/hub-registry.js";
 import { REGISTRY_PROTOCOL } from "../src/core/cloud/hub-registry-ops.js";
 import { HUB_NOT_PROVISIONED, publishRegistry } from "../src/core/cloud/hub-registry-service.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
+import { spawnAsync } from "./fixtures/spawn-async.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 const ENROLLMENT = "hub-enrollment-secret";
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
@@ -77,7 +78,7 @@ let otherMachines = 0;
 function post(path: string, body: Record<string, unknown>, headers: Record<string, string> = {}) {
   return fetch(`${origin}${path}`, {
     method: "POST",
-    headers: { "x-staple-token": token, "content-type": "application/json", ...headers },
+    headers: asForeignPage({ "x-staple-token": token, "content-type": "application/json", ...headers }, origin),
     body: JSON.stringify(body),
   });
 }
@@ -789,7 +790,7 @@ describe("publish, backups, adopt and restore against the service", () => {
       "/api/hub/registry/backups",
       {},
     );
-    const cli = spawnSync(
+    const cli = await spawnAsync(
       process.execPath,
       ["--import", "tsx", join(REPO_ROOT, "src/cli.ts"), "hub", "registry", "restore", "some-backup", "--json"],
       { env: { ...process.env, STAPLE_HOME: home, NODE_NO_WARNINGS: "1" }, encoding: "utf8" },

@@ -1,0 +1,99 @@
+{
+  "title": "a device whose clock runs two minutes behind resumes an interruption: the inverted gap counts zero and says so",
+  "covers": [
+    "each attempt is measured on one device's clock, so workSeconds is the true work however far apart the clocks are",
+    "an interruption resumed on a device whose clock reads earlier than the end: the gap is an inverted interval, counted 0",
+    "an inversion over one second makes the record clock_skew and approximate, on every device"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true,
+    "skew": {
+      "b": "-2m"
+    }
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "x"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1"
+    },
+    {
+      "at": "15m",
+      "do": "interrupt",
+      "ref": "x",
+      "agent": "w1",
+      "reason": "provider_limit"
+    },
+    {
+      "at": "16m",
+      "do": "sync",
+      "devices": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "at": "16m",
+      "do": "checkout",
+      "ref": "x",
+      "agent": "w1",
+      "device": "b"
+    },
+    {
+      "at": "30m",
+      "do": "comment",
+      "ref": "x",
+      "agent": "w1",
+      "device": "b"
+    },
+    {
+      "at": "40m",
+      "do": "status",
+      "ref": "x",
+      "to": "done",
+      "agent": "w1",
+      "device": "b"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "50m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "39m",
+      "quality": {
+        "wall": "approximate",
+        "wallInputs": [
+          "clock_skew"
+        ]
+      },
+      "wall": {
+        "startAt": "0s",
+        "endAt": "38m",
+        "buckets": {
+          "work": "38m"
+        }
+      },
+      "resumeGaps": [
+        0
+      ],
+      "resumeGapsClockSkew": [
+        true
+      ]
+    }
+  ]
+}

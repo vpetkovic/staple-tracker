@@ -1,0 +1,55 @@
+{
+  "title": "blocked by a dependency edge: added mid-work then yielded, resolved by the blocker; added and removed pre-work",
+  "covers": [
+    "an issue in active that gains a blocker stays in the active buckets",
+    "leaving active with an unresolved blocker is blocked, not queued",
+    "a blocker entering done moves the dependent from blocked to queued at its instant",
+    "blocked-by adding then removing the last blocker bounds blocked exactly"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "y" },
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "create", "ref": "z" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "0s", "do": "checkout", "ref": "z", "agent": "w3" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "release", "ref": "z", "agent": "w3" },
+    { "at": "15m", "do": "blockedBy", "ref": "z", "blockers": ["y"], "agent": "planner" },
+    { "at": "19m", "do": "blockedBy", "ref": "x", "blockers": ["y"], "agent": "w1" },
+    { "at": "20m", "do": "release", "ref": "x", "agent": "w1" },
+    { "at": "25m", "do": "checkout", "ref": "y", "agent": "w2" },
+    { "at": "25m", "do": "blockedBy", "ref": "z", "blockers": [], "agent": "planner" },
+    { "at": "30m", "do": "checkout", "ref": "z", "agent": "w3" },
+    { "at": "35m", "do": "comment", "ref": "y", "agent": "w2" },
+    { "at": "40m", "do": "status", "ref": "y", "to": "done", "agent": "w2" },
+    { "at": "40m", "do": "status", "ref": "z", "to": "done", "agent": "w3" },
+    { "at": "45m", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "50m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "55m", "do": "status", "ref": "x", "to": "done", "agent": "w1" }
+  ],
+  "expect": [
+    {
+      "asOf": "60m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "30m",
+      "quality": { "work": "exact", "wall": "exact", "wallInputs": [] },
+      "wall": { "startAt": "0s", "endAt": "55m", "buckets": { "work": "30m", "blocked": "20m", "queued": "5m" } }
+    },
+    {
+      "asOf": "60m",
+      "ref": "z",
+      "intervals": 2,
+      "workSeconds": "20m",
+      "wall": { "startAt": "0s", "endAt": "40m", "buckets": { "work": "20m", "queued": "10m", "blocked": "10m" } }
+    },
+    {
+      "asOf": "60m",
+      "ref": "y",
+      "workSeconds": "15m",
+      "wall": { "startAt": "25m", "endAt": "40m", "buckets": { "work": "15m" } }
+    }
+  ]
+}

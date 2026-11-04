@@ -34,6 +34,7 @@
  */
 import { Check, Download, Link2, SlidersHorizontal } from "lucide-react";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useBackToClose } from "@/lib/back-to-close";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -143,6 +144,8 @@ export function GraphToolbar({
   copied,
 }: GraphToolbarProps) {
   const [open, setOpen] = useState(false);
+  // Phone Back closes the popover, not the page (lib/back-to-close.ts).
+  useBackToClose(open, () => setOpen(false));
   const label = viewTriggerLabel(mode, doneMode);
   const active = label !== "View";
 

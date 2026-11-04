@@ -1,7 +1,7 @@
 /**
  * Is this directory inside a version control checkout?
  *
- * Contract: `docs/sync.md`, "Repository identity" and "A copied home is not a
+ * Contract: `design/sync.md`, "Repository identity" and "A copied home is not a
  * second device".
  *
  * ## What this is NOT

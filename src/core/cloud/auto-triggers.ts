@@ -1,7 +1,7 @@
 /**
  * Where the three triggers meet the three surfaces.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * Contract: `design/sync.md`, "Three consents" — *"After automatic — bounded
  * triggers only: startup, post-write, long-running session, pre-checkout."*
  * (On the absence of the fourth, see the header of `auto.ts`.)
  *
@@ -79,6 +79,7 @@ export const CLI_COMMAND_TRIGGERS: Readonly<Record<string, AutoSyncTrigger>> = {
   done: "post-write",
   cancel: "post-write",
   status: "post-write",
+  estimate: "post-write",
   release: "post-write",
   gate: "post-write",
   approve: "post-write",
@@ -88,12 +89,15 @@ export const CLI_COMMAND_TRIGGERS: Readonly<Record<string, AutoSyncTrigger>> = {
   link: "post-write",
   comment: "post-write",
   doc: "post-write",
+  file: "post-write",
   queue: "post-write",
   statuses: "post-write",
   kinds: "post-write",
   settings: "post-write",
   milestone: "post-write",
   add: "post-write",
+  // `run continue` claims the ticket it hands out; the rest of `run` is machine-local.
+  run: "post-write",
   // reads
   ls: "startup",
   show: "startup",

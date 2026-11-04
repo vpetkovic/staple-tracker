@@ -2,7 +2,7 @@
  * What `staple cloud connect` shows a human BEFORE it asks, and before it has
  * spoken to anything.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"**Connect shows before it
+ * Contract: `design/sync.md`, "Three consents" — *"**Connect shows before it
  * asks.** It prints the endpoint, the `repositoryId` and the account it is about
  * to bind, and performs **no remote mutation** before the answer. A declined
  * connect leaves no credential, no config key and no server-side record."*

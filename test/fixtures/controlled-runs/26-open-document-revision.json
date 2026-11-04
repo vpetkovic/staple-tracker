@@ -1,0 +1,24 @@
+{
+  "title": "a holder that writes a document revision while its attempt is open: the writer and the tail agree on where work stopped",
+  "covers": [
+    "the held clamp and an open attempt's evidence limit read the holder's document revisions, which replicate while their events do not",
+    "activeSeconds, the work and silent buckets and workSeconds read the same on the writer and the tail"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "30m", "do": "document", "ref": "x", "agent": "w1", "key": "worklog" }
+  ],
+  "expect": [
+    {
+      "asOf": "60m",
+      "ref": "x",
+      "workSeconds": "30m",
+      "activeSeconds": "30m",
+      "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "30m", "silent": "30m" } }
+    }
+  ]
+}

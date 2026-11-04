@@ -37,7 +37,7 @@ export const EXIT_CODES: Readonly<Record<StapleErrorCode | "timeout", number>> =
    */
   out_of_order: 10,
   /**
-   * The cloud sync taxonomy (STA-251), in `docs/sync.md`'s table order. `validation`,
+   * The cloud sync taxonomy (STA-251), in `design/sync.md`'s table order. `validation`,
    * `not_found` and `conflict` are shared with the store and keep 2, 3 and 4.
    *
    * Each has its own number because each asks for a different remedy: `auth` and

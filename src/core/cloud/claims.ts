@@ -1,7 +1,7 @@
 /**
  * Two devices claiming one unique value, settled the same way on every device.
  *
- * Contract: `docs/sync.md`, "Identifiers and other unique values".
+ * Contract: `design/sync.md`, "Identifiers and other unique values".
  *
  * An issue's identifier, a project's slug, a retry key, a live external origin: each is
  * `UNIQUE` in every workspace database, and each can be claimed on two devices that have
@@ -29,7 +29,7 @@
  * settled value from the fold. Nobody is asked to resolve anything, and no conflict is
  * left open: the stand-in's record is closed when the settlement arrives (`apply.ts`).
  *
- * This is the allocator `docs/sync.md` called for, built from the parts that exist: the
+ * This is the allocator `design/sync.md` called for, built from the parts that exist: the
  * log's order is the single authority, and the renumber is the settlement. It needs no
  * server-side counter and no change to the push response, and a device on an older build
  * — which does not settle its claims — degrades to what it did before: the stand-in, and

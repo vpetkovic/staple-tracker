@@ -6,7 +6,7 @@
  * workspace does not define. Across devices the removal and the move were each legal where
  * they were made, and the issue ended on a status that existed on no device.
  *
- * The rule (`docs/sync.md`, "A removal and a move into it"): the removal names where its
+ * The rule (`design/sync.md`, "A removal and a move into it"): the removal names where its
  * issues go, and that is where an issue moved into it goes too — on every device, in
  * either log order, and on a device that hydrates afterwards.
  */

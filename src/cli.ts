@@ -17,8 +17,21 @@ import { runDoctorCommand } from "./commands/doctor.js";
 import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
+import { assertNotReservedActor } from "./core/milestones.js";
 import { runQueueCommand } from "./commands/queue.js";
+import { runRunCommand } from "./commands/run.js";
+import { runDriveCommand } from "./commands/run-drive.js";
+import { runHookCommand } from "./commands/run-hook.js";
+import { runBudgetCommand } from "./commands/budget.js";
+import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
+import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
+import { planLines, runCompareCommand } from "./commands/compare.js";
+import { runTimingCommand } from "./commands/timing.js";
+import { runCalibrateCommand } from "./commands/calibrate.js";
+import { runForecastCommand } from "./commands/forecast.js";
+import type { AttemptOptions } from "./core/telemetry/attempts.js";
 import { runCloudCommand } from "./commands/cloud.js";
+import { runFileCommand } from "./commands/file.js";
 import { runHubRegistryCommand } from "./commands/hub-registry.js";
 import { EXIT_CODES, exitCodeFor } from "./commands/exit-codes.js";
 import { CLI_COMMAND_TRIGGERS, runCommandTrigger } from "./core/cloud/auto-triggers.js";
@@ -337,6 +350,52 @@ function estimateOption(
   return parseDuration(raw, "estimate");
 }
 
+/**
+ * `staple estimate <ref> <dur>` / `staple estimate <ref> --clear`, resolved to the store's
+ * REQUIRED value: seconds to set, or null to clear. Never undefined — that is the
+ * status verb's "leave it alone", and this verb exists only to change the estimate.
+ *
+ * The grammar keeps `estimateOption`'s shell-safety property (see above) in both of the
+ * shapes an unset variable can take:
+ *
+ *  - `staple estimate STA-42 "$EST"` with EST unset passes `""`, which `parseDuration`
+ *    refuses — an empty string is never a clear.
+ *  - `staple estimate STA-42 $EST` unquoted passes nothing at all, which is refused here
+ *    as a missing duration — an absent value is never a clear either.
+ *
+ * Only the literal `--clear` erases, and `<dur> --clear` together is refused rather than
+ * resolved by precedence, for the reason `estimateOption` gives.
+ */
+function estimateVerbValue(
+  ref: string | undefined,
+  raw: string | undefined,
+  extra: readonly string[],
+  clear: boolean | undefined,
+): number | null {
+  const usage = "usage: staple estimate <ref> <dur> | staple estimate <ref> --clear";
+  if (ref === undefined || ref.trim() === "") throw new StapleError("validation", `${usage} (no issue given)`);
+  if (extra.length > 0) {
+    throw new StapleError("validation", `${usage} (unexpected argument "${extra[0]}")`);
+  }
+  if (clear && raw !== undefined) {
+    throw new StapleError("validation", "a duration and --clear cannot be used together");
+  }
+  if (clear) return null;
+  if (raw === undefined) {
+    throw new StapleError(
+      "validation",
+      `${usage} (no duration given; an estimate is only cleared by --clear)`,
+    );
+  }
+  try {
+    return parseDuration(raw, "estimate");
+  } catch (error) {
+    // The duration is a positional here, not the --estimate flag the shared sentence names.
+    if (error instanceof StapleError) throw new StapleError("validation", error.message.replace(/^--estimate/, "<dur>"));
+    throw error;
+  }
+}
+
 /** Read from argv, not parsed values: a parse failure must still honour --json. */
 const jsonMode = process.argv.includes("--json");
 
@@ -398,11 +457,13 @@ function completeWithHub(
   comment?: string,
   estimatedSeconds?: number | null,
   actor: string = agentName(),
+  attempt?: AttemptOptions,
 ) {
   const updated = store.updateIssue(
     ref,
     { status, comment, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
     actor,
+    attempt,
   );
   notifyHubResolvedSafe(store.slug, updated.identifier);
   return updated;
@@ -855,6 +916,31 @@ Tasks
   ls [--status s1,s2] [--kind k1,k2] [--assignee A] [-q text] [--all]
   show <ref>                            full context (ancestry, relations, comments, docs)
   tree [ref]                            subtask tree
+  compare <ref> [<ref> ...]             total labor, estimate coverage and critical path
+              of each named issue, side by side, with no tree dump: every planned
+              unit once (own estimate over descendants), unplanned units named,
+              the planned and remaining in-subtree blockedBy paths; staple compare --help
+  timing quality [--kind K] [--parent REF] [--since T] [--include S] [--exclude S]
+              one quality state per timing record (exact, timing-floor, approximate,
+              reconstructed, missing) and coverage over the eligible population (done
+              leaves); --exclude drops states from the analysis, never from the counts;
+              staple timing --help
+  calibrate [--kind K] [--priority P] [--parent REF] [--since T] [--include reconstructed]
+            [--for REF [--model M]]
+              calibration cohorts over trusted samples (done, own estimate, exact
+              work): kind, priority, work type, area and model, sparse cohorts
+              falling back to broader classes, with coverage and a snapshot id;
+              quantiles, 90% bounds (or what they reach), heavy tails, timing
+              floors and warnings; --for forecasts an issue's duration;
+              reconstructed history only on request, as its own cohorts;
+              staple calibrate --help
+  forecast <ref> [--reserve P] [--account A] [--model M]
+              completion: remaining labor and the longest chain of remaining
+              work over the plan's units, from calibrated durations less work
+              done, with resampled bands; budget, apart: per provider limit on
+              this machine, pace, exhaustion, the work's burn and the
+              probability it leaves less than the reserve at the reset;
+              staple forecast --help
   board                                 terminal kanban
   inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
               QUEUED is work a HUMAN has to release (see Approval gates below) and
@@ -871,12 +957,28 @@ Flow
   done <ref> [--agent A] [-m comment]   complete (+ cross-workspace fan-out)
   cancel <ref> [--agent A] [-m comment]
   status <ref> <status> [--agent A] [--estimate <dur>|--no-estimate]
-              any status, guards enforced; --estimate also re-records the
-              estimate (same status = estimate-only write), --no-estimate clears
+              any status, guards enforced; --estimate/--no-estimate re-record
+              the estimate in the same write as the move
+  estimate <ref> <dur> | estimate <ref> --clear   [--agent A]
+              change ONLY the estimate: no status to restate, no claim needed.
+              A value it already has is a no-op ("changed": false). Only --clear
+              erases; an empty or missing <dur> is refused (exit 2)
   release <ref> [--agent A] [--if-stale <dur>]
               give a claim back -> todo; --if-stale frees a claim whose holder
               has been silent at least <dur> (any caller)
               --agent names who acts, as on checkout; else $STAPLE_AGENT, else $USER
+
+Execution attempts (one agent's tenure on one issue; opened and ended by the verbs above)
+  checkout|status|done ... [--harness claude_code|codex|other] [--harness-session ID]
+              [--model M] [--account A] [--attempt-key K]   self-reported, all optional
+  release|status|done ... --outcome failed --reason R   only the agent can say it failed
+  attempt pause|resume|milestone|interrupt <ref> [--reason R] [-m label] [--role R | --attempt ID]
+  attempt open|end <ref> --role orchestrator   coordinate an issue without claiming it
+  attempt reconstruct                   rebuild attempts from events recorded before them
+  attempts <ref> [--limit N] [--cursor C]
+              every attempt on the issue as it reads now, oldest first, bounded
+              (default 50, max 500) with truncation and coverage stated
+  attempt <attempt-id>                  one attempt: transitions, chain, budget burn
   --ack-renumber  on any write: a number sync renumbered on this device is refused
               while the issue that left it is checked out, leased here, or moved
               under a day ago — this writes to whatever holds it now. Or use the id
@@ -894,7 +996,9 @@ Approval gates
               QUEUED — listed apart in inbox and refused at checkout (exit 9 / gated).
               Resolved work is never queued, and neither is a parent with nothing
               open under it. Refused on a leaf (use in_review) and while a gate is
-              already pending; re-gating after request-changes is how you resubmit
+              already pending; re-gating after request-changes is how you resubmit.
+              A milestone with members is gateable: the gate holds its close for
+              review and queues nothing through membership
   approve <ref> [--children R1,R2] [-m text]
               with no --children: resolve the gate, release the whole subtree and
               re-derive the parent from its children. With --children: release only
@@ -908,14 +1012,23 @@ Milestones
   milestone ls [--all]                  dated, human-ordered plans (issues of the reserved
               "milestone" kind — run "staple kinds add milestone" once to enable);
               --all includes done and cancelled ones
-  milestone show <ref>                  dates, derived state, progress, ordered members
-  milestone new <title> [--target D] [--start D] [--from-epic <ref>] [--preview]
+  milestone show <ref>                  dates, derived state, progress, ordered members,
+              the goal check (each criterion met/unmet/unknown with its evidence)
+              and the pace against the target date
+  milestone new <title> [-d desc] [--criteria "a;b"] [--target D] [--start D]
+              [--from-epic <ref>] [--preview]
+              --criteria are the milestone's goal (its acceptance criteria);
               --from-epic adds the epic as the ONE member (its children come along
               by descent, nothing is re-parented); --preview prints the exact plan
               and writes nothing; D is a UTC calendar day, YYYY-MM-DD
-  milestone set <ref> [--target D|none] [--start D|none]
-              only the dates; title, description, assignee and status are edited
-              with the ordinary commands
+  milestone set <ref> [-d desc] [--criteria "a;b"] [--target D|none] [--start D|none]
+              the dates and the goal (-d "" and --criteria "" clear); title,
+              assignee and status are edited with the ordinary commands
+  milestone criterion <ref> <n> (--met|--unmet|--unknown) [--evidence E]... [-m note]
+              [--follow-up "<title>" [--follow-up-description D]] [--run <id>]
+              judge criterion n: E is a ticket (ABC-12, counts while done), a
+              document (ABC-12:plan) or text; --met needs evidence. --follow-up
+              (unmet only) files a ticket through your live goal run, capped
   milestone add <milestone> <ref> [--before R|--after R|--at N] [--base N] [-m note]
   milestone rm <milestone> <ref> [--base N]
   milestone mv <ref> (--before R|--after R|--at N|--to <milestone>) [--base N]
@@ -929,8 +1042,10 @@ The pickup queue
               queued container's expansion indented under it and a "-> n" cue giving
               each leaf's EFFECTIVE position; --effective prints effective order with
               its eligibility column; --all keeps resolved entries visible
-  queue next [--actor A]                the one row an agent should take, and every
-              row it stepped over with why (resolved, gated, blocked, claimed)
+  queue next [--actor A] [--scope <ref>]
+              the one row an agent should take, and every row it stepped over
+              with why (resolved, gated, blocked, claimed); --scope limits both to
+              the work inside an epic, a milestone or any parent, queued or not
   queue add <ref> [--before R|--after R|--at N] [--base N] [-m note]
               queue a task, an epic or a milestone; a container is never picked up
               itself, it expands to its open leaf work
@@ -944,7 +1059,32 @@ The pickup queue
               out_of_order (exit 10) naming what to take; a human may step over the
               plan with "checkout <ref> --override -m <why>", which is recorded
 
+Autopilot runs
+  run start --scope <queue|ref> [--max-tickets N] [--until T] [--ceiling P [--ceiling-account A]] [--override -m why]
+              [--gate-owner W] [--goal-cap N]
+              one agent working the queue, an epic or parent, or a milestone,
+              ticket after ticket; one live run per actor per scope. Under strict
+              queue.policy it follows the whole plan unless started with --override.
+              A milestone run is a goal run: it gates the milestone to W and ends goal_met
+  run status [<run-id>] [--all]         a run and whether a stop rule trips now:
+              stopped_by_human, touched_main_line, budget, failure_streak, scope_gone, vp_blocked,
+              gate_pending, goal_met, scope_empty (staple run --help)
+  run stop [<run-id>] [-m why]          stop a run, recorded as stopped_by_human
+  run pause|resume [<run-id>]           hold a run without ending it, and let it go on
+  run continue [--run <id>] [--outcome done|failed] [--reason R]
+              after each ticket: record how it ended, then take (already claimed),
+              wait (paused, waiting_on_others, out_of_order) or stop (a stop
+              reason, or no_run)
+  run drive [--run <id> | --scope <ref> ...] --agent <claude|codex|custom>
+              loop continue with a fresh headless agent session per ticket
+              (staple run drive --help)
+
 Documents & events
+  file attach <ref> <path> [--caption C] [--filename N]
+              attach a file; the type is sniffed from the bytes
+  file ls <ref>                         list a ticket's files (metadata only)
+  file get <id> --out <path>            write one file's bytes to a path
+  file rm <id>                          remove a file
   doc <ref> <key>                       read (latest)
   doc <ref> <key> --put <file|->        write (--base N for optimistic concurrency)
   doc <ref> <key> --revisions           history
@@ -963,12 +1103,32 @@ UI
               collision fails; the browser follows config browser=auto|always|never
   ui [--port 4400] [--hub]              compatibility alias for open
 
+Provider budget
+  budget ingest --source claude-statusline|codex-rollout|manual …
+              record provider usage readings on this machine (opt-in: budget
+              capture on; accounts come from budget bind); staple budget --help
+  budget [--account A] [--reserve P]    each account's current windows: latest reading,
+              high-water remaining, status, and the provisional pressure (observed
+              pace against the pace that keeps P% at the reset; default a
+              provisional 20%); unknown is never shown as 0
+  budget history --account A [--since T] [--limit N] [--cursor C]
+              one account's readings, bounded, with capture gaps listed
+  budget forget <reading-id>... [--yes]
+              remove wrong readings; without --yes only the preview (each
+              reading, its window, and the limit's current window and reading
+              after); a window left empty goes and the one it displaced returns
+  budget setup [--claude-account A] [--codex-account B] [--yes]
+              one consent: capture on, bindings, the Claude status-line wrapper
+              and the Codex watcher; without --yes only the plan. budget unsetup
+              [--yes] reverses it exactly; budget status and budget collect
+
 Durations (<dur>): 90s, 30m, 2h, 3d, or a bare number of seconds.
 Claim liveness: in_progress rows show "held <dur> · silent <dur>" in ls/show; the
               same numbers ride in --json as "claim". Nothing expires a claim on
               its own — a takeover only ever happens because you asked for one.
 Estimates:    --estimate takes a <dur> and is what makes estimate-vs-actual honest,
-              so record it when you PLAN, not when you finish. Actuals are derived
+              so record it when you PLAN, not when you finish. Re-estimate later
+              with "staple estimate <ref> <dur>". Actuals are derived
               from started_at/completed_at and never stored; show prints
               "time   est 2h · ran 3h10m" and --json carries "timing" (with
               children rollups over DIRECT children) beside the issue.
@@ -1000,11 +1160,54 @@ Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
             15 cursor_invalid · 16 payload_too_large · 17 schema_ahead · 18 protocol_unsupported
             19 rate_limited · 20 unavailable · 21 offline (19–21 are retryable; try again later)`;
 
+/** Commands whose own module answers `--help` / `-h` with a page of its own. */
+const OWN_HELP: ReadonlySet<string> = new Set(["attempt", "attempts", "budget", "calibrate", "cloud", "compare", "forecast", "queue", "run", "timing"]);
+
+/**
+ * `staple <command> --help` for a command with no page of its own: its entries in HELP (every
+ * line naming it, `start|checkout` style alternatives included, with their continuation
+ * lines), so the answer can never disagree with `staple help`. Null for a word HELP does not
+ * name.
+ */
+function commandHelp(command: string): string | null {
+  // `kinds` is documented as "the same verbs" as `statuses`: its page shows them.
+  const names = command === "kinds" ? ["kinds", "statuses"] : [command];
+  const picked: string[] = [];
+  let taking = false;
+  for (const line of HELP.split("\n")) {
+    const entry = /^  (\S+)/.exec(line);
+    if (entry) {
+      taking = entry[1]!.split("|").some((name) => names.includes(name));
+      if (taking) picked.push(line);
+    } else if (taking && /^ {3,}\S/.test(line)) {
+      picked.push(line);
+    } else {
+      taking = false;
+    }
+  }
+  if (picked.length === 0) return null;
+  return `staple ${command} (from staple help, which lists every command, the global flags and the exit codes)\n\n${picked.join("\n")}`;
+}
+
+/** Whether argv asks for help: `--help` or `-h` anywhere before a `--`. */
+function asksForHelp(args: readonly string[]): boolean {
+  const end = args.indexOf("--");
+  return (end === -1 ? args : args.slice(0, end)).some((arg) => arg === "--help" || arg === "-h");
+}
+
 function main() {
   const [command, ...rest] = process.argv.slice(2);
-  if (command === "help" || command === "--help") {
+  if (command === "help" || command === "--help" || command === "-h") {
     console.log(HELP);
     return;
+  }
+  // Before any workspace is resolved or anything runs: help answers anywhere, and never acts.
+  if (command !== undefined && !OWN_HELP.has(command) && asksForHelp(rest)) {
+    const page = commandHelp(command);
+    if (page !== null) {
+      console.log(page);
+      return;
+    }
   }
   /**
    * A bare `staple` is no longer help.
@@ -1024,6 +1227,23 @@ function main() {
     runBareCommand(command ? [command, ...rest] : rest, { token: persistentUiToken() });
     return;
   }
+
+  /**
+   * The goal-run gate marker is reserved (`assertNotReservedActor`): refused as $STAPLE_AGENT,
+   * as any flag that names who acts, and as the $USER fallback when neither is given, before
+   * any command runs.
+   */
+  assertNotReservedActor(process.env.STAPLE_AGENT);
+  let named = false;
+  for (const [index, arg] of rest.entries()) {
+    const flag = /^--(actor|agent|author|by)(?:=(.*))?$/.exec(arg);
+    if (flag) {
+      named = true;
+      assertNotReservedActor(flag[2] ?? rest[index + 1]);
+    }
+  }
+  // With neither, the actor is $USER (`agentName` and every command's own fallback).
+  if (!named && process.env.STAPLE_AGENT === undefined) assertNotReservedActor(process.env.USER);
 
   const common = {
     db: { type: "string" as const },
@@ -1172,6 +1392,9 @@ function main() {
           gate: store.gate(ctx.issue.id),
           queuedBy: store.queuedBy(ctx.issue.id),
           ...store.detailTiming(ctx.issue.id),
+          attempts: store.attemptSummary(ctx.issue.id),
+          orchestration: store.orchestrationSummary(ctx.issue.id),
+          planSummary: store.planSummary(ctx.issue.id),
         });
         break;
       }
@@ -1191,6 +1414,12 @@ function main() {
         console.log(
           `claim  held ${formatAgo(claim.heldSeconds)} · silent ${formatAgo(claim.idleSeconds)} (last activity ${claim.lastActivityAt.slice(0, 19)}Z)`,
         );
+      }
+      // Execution attempts, only once there is one (`staple attempts <ref>` lists them all).
+      const attempts = store.attemptSummary(i.id);
+      if (attempts.count > 0) {
+        console.log(`attempts ${attempts.count}${attempts.current ? ` · current ${attemptLine(attempts.current)}` : ""}`);
+        if (attempts.last) console.log(`  last ${attemptLine(attempts.last)}`);
       }
       /**
        * Its own line, beside `claim`, and emitted only when there is something
@@ -1231,11 +1460,11 @@ function main() {
       const plan = timing.subtreePlan;
       if (plan.source === "descendants" && plan.estimatedSeconds != null) {
         timingParts.push(
-          `plan ${formatDuration(plan.estimatedSeconds)} (from ${plan.contributingCount} of ${plan.totalCount} descendants)`,
+          `plan ${formatDuration(plan.estimatedSeconds)} (${plan.contributingCount} of ${plan.contributingCount + plan.unplannedCount} units planned)`,
         );
       } else if (plan.source === "own" && plan.descendantsEstimatedSeconds != null) {
         timingParts.push(
-          `descendants est ${formatDuration(plan.descendantsEstimatedSeconds)} (${plan.contributingCount} of ${plan.totalCount})`,
+          `descendants est ${formatDuration(plan.descendantsEstimatedSeconds)} (${plan.contributingCount} of ${plan.contributingCount + plan.unplannedCount} units planned)`,
         );
       }
       if (timing.childrenActiveSeconds != null) {
@@ -1248,6 +1477,10 @@ function main() {
       }
       if (timing.approximate && timingParts.length > 0) timingParts.push("approx");
       if (timingParts.length > 0) console.log(`time   ${timingParts.join(" · ")}`);
+      // The certified plan of a parent (`staple compare`): labor with coverage, and the path.
+      // Only once something beneath is planned, so an unplanned parent renders as it always did.
+      const planSummary = store.planSummary(i.id);
+      if (planSummary && planSummary.coverage.planned > 0) for (const line of planLines(planSummary)) console.log(line);
       if (ctx.ancestors.length > 0) {
         console.log(`path   ${[...ctx.ancestors.map((a) => a.identifier), i.identifier].join(" > ")}`);
       }
@@ -1306,6 +1539,12 @@ function main() {
       if (ctx.documents.length) {
         console.log(`\ndocuments: ${ctx.documents.map((d) => `${d.key}@r${d.currentRevision}`).join(", ")}`);
       }
+      if (ctx.attachments.length) {
+        console.log("\nfiles:");
+        for (const file of ctx.attachments) {
+          console.log(`  ${file.filename}  ${file.mediaType}  ${file.size}  ${file.byteSync}  ${file.sha256}`);
+        }
+      }
       if (ctx.comments.length) {
         console.log("\ncomments:");
         for (const c of ctx.comments) {
@@ -1314,6 +1553,30 @@ function main() {
       }
       break;
     }
+
+    case "attempt":
+      runAttemptCommand(rest);
+      break;
+
+    case "compare":
+      runCompareCommand(rest);
+      break;
+
+    case "timing":
+      runTimingCommand(rest);
+      break;
+
+    case "calibrate":
+      runCalibrateCommand(rest);
+      break;
+
+    case "forecast":
+      runForecastCommand(rest);
+      break;
+
+    case "attempts":
+      runAttemptsCommand(rest);
+      break;
 
     case "checkout":
     case "start": {
@@ -1326,6 +1589,7 @@ function main() {
           "steal-if-stale": { type: "string" },
           override: { type: "boolean" },
           message: { type: "string", short: "m" },
+          ...ATTEMPT_OPEN_OPTIONS,
         },
       });
       const { store } = getStore(values);
@@ -1335,15 +1599,16 @@ function main() {
         stealIfIdleSeconds:
           stale === undefined ? undefined : parseDuration(stale, "steal-if-stale"),
         /**
-         * The human override (docs/queue.md). `--override` alone reaches the
+         * The human override (design/queue.md). `--override` alone reaches the
          * store as an EMPTY reason and is refused there rather than here, so the
          * "a reason is mandatory" rule has exactly one implementation and MCP,
          * HTTP and the CLI cannot disagree about it.
          */
         overrideReason: values.override === true ? (values.message ?? "") : undefined,
+        attempt: attemptOptionsFrom(values),
       });
       if (values.json) {
-        outJson(issue);
+        outJson(withAttempt(store, issue));
         break;
       }
       // Name whose work was taken: a silent "claimed" would hide the takeover.
@@ -1361,7 +1626,7 @@ function main() {
       const { values, positionals } = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { ...common, agent: { type: "string" }, message: { type: "string", short: "m" } },
+        options: { ...common, agent: { type: "string" }, message: { type: "string", short: "m" }, ...ATTEMPT_OPEN_OPTIONS, ...ATTEMPT_END_OPTIONS },
       });
       const { store } = getStore(values);
       const issue = completeWithHub(
@@ -1371,9 +1636,10 @@ function main() {
         values.message,
         undefined,
         agentName(values.agent),
+        attemptOptionsFrom(values),
       );
       if (values.json) {
-        outJson(issue);
+        outJson(withAttempt(store, issue));
         break;
       }
       console.log(line(issue));
@@ -1389,31 +1655,63 @@ function main() {
           agent: { type: "string" },
           estimate: { type: "string" },
           "no-estimate": { type: "boolean" },
+          ...ATTEMPT_OPEN_OPTIONS,
+          ...ATTEMPT_END_OPTIONS,
         },
       });
+      if (positionals.length < 2) throw new StapleError("validation", "usage: staple status <ref> <status>");
       const { store } = getStore(values);
       const target = positionals[1]! as IssueStatus;
       /**
-       * `status` is the CLI's only update path, so it is also where a re-estimate
-       * lands. `staple status STA-81 in_progress --estimate 2h` is the natural
-       * moment for one; `staple status STA-81 backlog --estimate 2h` sets an
-       * estimate without moving the ticket (a same-status write is a no-op
-       * transition, not an error).
+       * A move can re-estimate in the same write: `staple status STA-42
+       * in_progress --estimate 2h` is the natural moment for one. A same-status
+       * write with `--estimate` still sets the estimate without moving the ticket
+       * (a no-op transition, not an error) and is kept for scripts that already
+       * say it, but it is no longer the documented form: an estimate-only change
+       * is `staple estimate <ref> <dur>`, which does not make the caller restate
+       * a status it did not mean to touch.
        */
       const estimatedSeconds = estimateOption(values.estimate, values["no-estimate"]);
+      const attempt = attemptOptionsFrom(values);
       const issue =
         target === "done" || target === "cancelled"
-          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds, agentName(values.agent))
+          ? completeWithHub(store, positionals[0]!, target, undefined, estimatedSeconds, agentName(values.agent), attempt)
           : store.updateIssue(
               positionals[0]!,
               { status: target, ...(estimatedSeconds === undefined ? {} : { estimatedSeconds }) },
               agentName(values.agent),
+              attempt,
             );
       if (values.json) {
-        outJson(issue);
+        outJson(withAttempt(store, issue));
         break;
       }
       console.log(line(issue));
+      break;
+    }
+
+    case "estimate": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { ...common, agent: { type: "string" }, clear: { type: "boolean" } },
+      });
+      const [ref, raw, ...extra] = positionals;
+      const seconds = estimateVerbValue(ref, raw, extra, values.clear);
+      const { store } = getStore(values);
+      const result = store.setEstimate(ref!, seconds, agentName(values.agent));
+      const estimateChange = { from: result.from, to: result.to, changed: result.changed };
+      if (values.json) {
+        outJson({ ...result.issue, estimateChange });
+        break;
+      }
+      const said = (value: number | null) => (value === null ? "none" : formatDuration(value));
+      console.log(
+        line(
+          result.issue,
+          result.changed ? `  est ${said(result.from)} -> ${said(result.to)}` : `  est ${said(result.to)} (unchanged)`,
+        ),
+      );
       break;
     }
 
@@ -1421,7 +1719,7 @@ function main() {
       const { values, positionals } = parseArgs({
         args: rest,
         allowPositionals: true,
-        options: { ...common, agent: { type: "string" }, "if-stale": { type: "string" } },
+        options: { ...common, agent: { type: "string" }, "if-stale": { type: "string" }, ...ATTEMPT_END_OPTIONS },
       });
       const { store } = getStore(values);
       const stale = values["if-stale"];
@@ -1434,9 +1732,10 @@ function main() {
       }
       const released = store.releaseIssue(positionals[0]!, agentName(values.agent), {
         ifIdleSeconds: stale === undefined ? undefined : parseDuration(stale, "if-stale"),
+        attempt: attemptOptionsFrom(values),
       });
       if (values.json) {
-        outJson(released);
+        outJson(withAttempt(store, released));
         break;
       }
       console.log(line(released));
@@ -1986,6 +2285,10 @@ function main() {
       break;
     }
 
+    case "file":
+      runFileCommand(rest);
+      break;
+
     case "doc": {
       const { values, positionals } = parseArgs({
         args: rest,
@@ -2334,6 +2637,16 @@ function main() {
       break;
     }
 
+    /** `staple run` — autopilot runs over the queue, an epic or a milestone (src/commands/run.ts). */
+    case "run": {
+      // `drive` is async and long-lived; it parses its own options (src/commands/run-drive.ts).
+      if (rest[0] === "drive") runDriveCommand(rest.slice(1));
+      // `hook` is called by agent CLIs and answers in their format (src/commands/run-hook.ts).
+      else if (rest[0] === "hook") runHookCommand(rest.slice(1));
+      else runRunCommand(rest);
+      break;
+    }
+
     /**
      * `staple cloud` — connection and credential lifecycle (STA-71). Thin
      * delegation, like `queue` and `milestone`: the logic, and in particular
@@ -2346,6 +2659,12 @@ function main() {
      */
     case "cloud": {
       runCloudCommand(rest);
+      break;
+    }
+
+    /** `staple budget` — provider budget telemetry, machine-level (src/commands/budget.ts). */
+    case "budget": {
+      runBudgetCommand(rest);
       break;
     }
 
@@ -2458,7 +2777,7 @@ try {
 /**
  * S10: the CLI's entire automatic-sync registration.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * Contract: `design/sync.md`, "Three consents" — *"After automatic — bounded
  * triggers only … A tracker command never blocks indefinitely on Cloudflare."*
  *
  * **After the command, never around it.** Output is printed, `process.exitCode`

@@ -34,7 +34,10 @@ export async function catchUpFolds(env: Env): Promise<Array<{ repoId: string; ep
             COALESCE((SELECT MAX(m.seq) FROM fold_marks m WHERE m.repo_id = r.repo_id AND m.epoch = r.epoch), 0) AS folded
        FROM repos r
       WHERE r.last_seq > COALESCE((SELECT MAX(m.seq) FROM fold_marks m WHERE m.repo_id = r.repo_id AND m.epoch = r.epoch), 0)
-      ORDER BY r.last_seq - COALESCE((SELECT MAX(m.seq) FROM fold_marks m WHERE m.repo_id = r.repo_id AND m.epoch = r.epoch), 0) DESC
+      ORDER BY r.last_seq - MAX(
+        COALESCE((SELECT MAX(m.seq) FROM fold_marks m WHERE m.repo_id = r.repo_id AND m.epoch = r.epoch), 0),
+        COALESCE((SELECT MIN(o.seq) - 1 FROM ops o WHERE o.repo_id = r.repo_id AND o.epoch = r.epoch), r.last_seq)
+      ) DESC
       LIMIT ?1`,
   )
     .bind(CATCH_UP_REPOS)

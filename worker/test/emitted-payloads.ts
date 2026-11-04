@@ -24,6 +24,113 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
   payload: Record<string, unknown>;
 }> = [
   {
+    "entity": "attachment",
+    "verb": "create",
+    "payload": {
+      "issueId": "00000000-0000-4000-8000-000000000000",
+      "filename": "note.txt",
+      "mediaType": "text/plain",
+      "size": 4,
+      "sha256": "9b75290f6a6359a2a3471022cbba4b724e45105b313ae8f6c103a2f79e82a857",
+      "author": "emitter",
+      "caption": "a log",
+      "byteSync": "inline",
+      "createdAt": "2026-09-10T00:00:00.000Z",
+      "bytes": "bG9nCg=="
+    }
+  },
+  {
+    "entity": "attachment",
+    "verb": "delete",
+    "payload": {
+      "issueId": "00000000-0000-4000-8000-000000000000",
+      "filename": "note.txt"
+    }
+  },
+  {
+    "entity": "attempt",
+    "verb": "create",
+    "payload": {
+      "issueId": "00000000-0000-4000-8000-000000000000",
+      "agent": "emitter",
+      "role": "worker",
+      "state": "running",
+      "outcome": null,
+      "endReason": null,
+      "endDetection": null,
+      "endedBy": null,
+      "endedAt": null,
+      "endedAtSource": null,
+      "openedBy": "checkout",
+      "resumesAttemptId": null,
+      "startedAt": "2026-09-10T00:00:00.000Z",
+      "deviceId": "device-a",
+      "claim": {
+        "scope": "local",
+        "fencingToken": null
+      },
+      "harness": null,
+      "providerBinding": null,
+      "estimateAtStart": {
+        "estimatedSeconds": null,
+        "source": "none"
+      },
+      "idempotencyKey": null,
+      "provenance": "recorded",
+      "missing": {
+        "harness": "not_supplied",
+        "providerBinding": "not_supplied"
+      }
+    }
+  },
+  {
+    "entity": "attempt",
+    "verb": "update",
+    "payload": {
+      "state": "ended",
+      "outcome": "yielded",
+      "endReason": "released",
+      "endDetection": "reported",
+      "endedBy": "emitter",
+      "endedAt": "2026-09-10T00:00:00.000Z",
+      "endedAtSource": "mutation"
+    }
+  },
+  {
+    "entity": "attemptTransition",
+    "verb": "create",
+    "payload": {
+      "attemptId": "00000000-0000-4000-8000-000000000000",
+      "kind": "attempt_started",
+      "at": "2026-09-10T00:00:00.000Z",
+      "actor": "emitter",
+      "detection": null,
+      "reason": null,
+      "detail": {
+        "openedBy": "checkout",
+        "resumesAttemptId": null
+      },
+      "concurrency": {
+        "observedAt": "2026-09-10T00:00:00.000Z",
+        "scope": "device",
+        "openAttemptsInWorkspace": 1,
+        "openAttemptsInWorkspaceByRole": {
+          "worker": 1,
+          "orchestrator": 0
+        },
+        "storedOpenAttemptsStartedHere": null,
+        "storedOpenAttemptsStartedHereByRole": null,
+        "storedOpenAttemptsOnAccountStartedHere": null,
+        "workspaceSyncedThrough": "2026-09-10T00:00:00.000Z",
+        "missing": {
+          "storedOpenAttemptsStartedHere": "source_unavailable",
+          "storedOpenAttemptsStartedHereByRole": "source_unavailable",
+          "storedOpenAttemptsOnAccountStartedHere": "no_provider_binding"
+        }
+      }
+    }
+  },
+  {
     "entity": "comment",
     "verb": "create",
     "payload": {
@@ -119,14 +226,17 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "checkoutAgent": null,
       "checkoutAt": null,
       "createdAt": "2026-09-10T00:00:00.000Z",
-      "updatedAt": "2026-09-10T00:00:00.000Z"
+      "updatedAt": "2026-09-10T00:00:00.000Z",
+      "derivedStatus": null,
+      "originEvents": []
     }
   },
   {
     "entity": "issue",
     "verb": "renumber",
     "payload": {
-      "identifier": "TST-14"
+      "identifier": "TST-14",
+      "originEvents": []
     }
   },
   {
@@ -137,7 +247,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "title": "Child, renamed",
       "priority": "low",
       "labels": "[]",
-      "normalizedTitle": "child, renamed"
+      "normalizedTitle": "child, renamed",
+      "originEvents": []
     }
   },
   {
@@ -303,7 +414,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
           "createdBy": "past",
           "createdAt": "2026-09-10T00:00:00.000Z"
         }
-      }
+      },
+      "originEvents": []
     }
   },
   {
@@ -318,7 +430,25 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
           "createdBy": "emitter",
           "createdAt": "2026-09-10T00:00:00.000Z"
         }
-      }
+      },
+      "originEvents": [
+        {
+          "issueId": "00000000-0000-4000-8000-000000000000",
+          "kind": "blockers_changed",
+          "at": "2026-09-10T00:00:00.000Z",
+          "actor": "emitter",
+          "seq": 22,
+          "payload": {
+            "identifier": "TST-6",
+            "blockedBy": [
+              "TST-7"
+            ],
+            "blockedByIds": [
+              "00000000-0000-4000-8000-000000000000"
+            ]
+          }
+        }
+      ]
     }
   },
   {

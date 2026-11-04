@@ -1,0 +1,39 @@
+{
+  "title": "review then done, and a review still open at the read",
+  "covers": [
+    "leaving active for review ends the attempt completed; review from t",
+    "reviewSeconds and the review bucket agree",
+    "an open review interval ends at asOf"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x", "estimate": "1h" },
+    { "at": "0s", "do": "create", "ref": "y" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "0s", "do": "checkout", "ref": "y", "agent": "w2" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "y", "agent": "w2" },
+    { "at": "20m", "do": "status", "ref": "x", "to": "in_review", "agent": "w1" },
+    { "at": "20m", "do": "status", "ref": "y", "to": "in_review", "agent": "w2" },
+    { "at": "50m", "do": "status", "ref": "x", "to": "done", "agent": "reviewer" }
+  ],
+  "expect": [
+    {
+      "asOf": "60m",
+      "ref": "x",
+      "workSeconds": "20m",
+      "activeSeconds": "20m",
+      "reviewSeconds": "30m",
+      "quality": { "work": "exact", "wall": "exact" },
+      "wall": { "startAt": "0s", "endAt": "50m", "buckets": { "work": "20m", "review": "30m" } }
+    },
+    {
+      "asOf": "60m",
+      "ref": "y",
+      "workSeconds": "20m",
+      "reviewSeconds": "40m",
+      "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "20m", "review": "40m" } }
+    }
+  ]
+}

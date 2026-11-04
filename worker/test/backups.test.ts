@@ -300,6 +300,9 @@ describe("restore materialises into the new epoch", () => {
     }>(await call(`/v1/repos/${REPO}/snapshot`, { token }));
 
     expect(snapshot.epoch).toBe(2);
+    // When the restore committed: the one instant every rewinding device dates its rewind by.
+    const committed = await env.DB.prepare(`SELECT committed_at FROM restores WHERE repo_id = ?1 AND to_epoch = 2`).bind(REPO).first<{ committed_at: number }>();
+    expect((snapshot as unknown as { restoredAt: string }).restoredAt).toBe(new Date(committed!.committed_at).toISOString());
     expect(snapshot.entities.map((e) => e.entityId).sort()).toEqual([
       "issue-1",
       "issue-2",

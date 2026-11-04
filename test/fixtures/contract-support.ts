@@ -20,6 +20,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnAsync } from "./spawn-async.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -89,6 +90,13 @@ const ELAPSED_SECONDS_KEYS = new Set([
   "ownActiveSeconds",
   "reviewSeconds",
   "childrenActiveSeconds",
+  // design/timing-semantics.md: the effort and elapsed fields.
+  "workSeconds",
+  "ownWorkSeconds",
+  "orchestrationSeconds",
+  "leadSeconds",
+  // An attempt's contribution to them (design/timing-semantics.md, "Quality states").
+  "effortSeconds",
 ]);
 
 /**
@@ -134,6 +142,17 @@ export function normalize(value: unknown, tempRoots: readonly string[] = []): un
       // non-finite reading fails instead of being normalized away.
       if (ELAPSED_SECONDS_KEYS.has(key) && typeof inner === "number") {
         out[key] = Number.isFinite(inner) && inner >= 0 ? SECONDS : `<bad-seconds:${inner}>`;
+        continue;
+      }
+      // The elapsed partition: every bucket and the span are readings off a wall clock too.
+      if (key === "wall" && inner !== null && typeof inner === "object" && !Array.isArray(inner) && "buckets" in inner) {
+        const wall = inner as Record<string, unknown>;
+        const reading = (n: unknown): unknown => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? SECONDS : `<bad-seconds:${String(n)}>`);
+        out[key] = {
+          ...(normalize(wall, tempRoots) as Record<string, unknown>),
+          seconds: reading(wall.seconds),
+          buckets: Object.fromEntries(Object.entries((wall.buckets ?? {}) as Record<string, unknown>).map(([bucket, n]) => [bucket, reading(n)])),
+        };
         continue;
       }
       if (DEDUP_KEY_KEYS.has(key)) {
@@ -235,9 +254,96 @@ export function timingGolden(over: Record<string, unknown> = {}): Record<string,
       source: "none",
       descendantsEstimatedSeconds: null,
       contributingCount: 0,
+      unplannedCount: 0,
       totalCount: 0,
     },
+    // design/timing-semantics.md: an issue that never started has no work, no wall and no orchestration.
+    workSeconds: null,
+    ownWorkSeconds: null,
+    orchestrationSeconds: null,
+    leadSeconds: null,
+    estimateRatio: null,
+    wall: null,
+    resumeGaps: [],
+    // One state per record: an issue that never started is missing on both, and says why.
+    quality: {
+      work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] },
+      wall: { state: "missing", inputs: [], reasons: ["never_started"] },
+    },
+    missing: {
+      workSeconds: "never_started",
+      ownWorkSeconds: "never_started",
+      orchestrationSeconds: "no_orchestrator_attempt",
+      wall: "never_started",
+      leadSeconds: "never_started",
+    },
     ...over,
+  };
+}
+
+/** The leaf buckets of a `wall`, every one a reading. */
+export function leafBucketsGolden(): Record<string, string> {
+  return Object.fromEntries(
+    ["work", "paused", "silent", "interrupted", "unattributed", "review", "gated", "blocked", "queued", "resolved"].map((bucket) => [bucket, SECONDS]),
+  );
+}
+
+/** The parent buckets of a `wall`, every one a reading. */
+export function parentBucketsGolden(): Record<string, string> {
+  return Object.fromEntries(["active", "review", "gated", "blocked", "queued", "resolved"].map((bucket) => [bucket, SECONDS]));
+}
+
+/**
+ * The `attempts` block `show`/`get_task`/`/api/agent-context`/`/api/issue` carry for an
+ * issue the contract agent checked out once and still holds: one running attempt, nothing
+ * ended. No harness and no account were reported, so both are null with `not_supplied`.
+ */
+/** The `orchestration` block beside it for an issue nobody coordinates by hand. */
+export function noOrchestrationGolden(): Record<string, unknown> {
+  return { current: null, count: 0 };
+}
+
+export function openAttemptsGolden(identifier: string): Record<string, unknown> {
+  return {
+    count: 1,
+    current: {
+      id: UUID,
+      issueId: UUID,
+      identifier,
+      agent: CONTRACT_AGENT,
+      role: "worker",
+      ordinal: 1,
+      state: "running",
+      storedState: "running",
+      outcome: null,
+      endReason: null,
+      endDetection: null,
+      endedBy: null,
+      openedBy: "checkout",
+      resumesAttemptId: null,
+      startedAt: ISO,
+      endedAt: null,
+      endedAtSource: null,
+      deviceId: null,
+      claim: { scope: "local", fencingToken: null },
+      harness: null,
+      providerBinding: null,
+      estimateAtStart: { estimatedSeconds: null, source: "none" },
+      idempotencyKey: null,
+      provenance: "recorded",
+      lastActivityAt: ISO,
+      activeSeconds: SECONDS,
+      pausedSeconds: 0,
+      countedThrough: ISO,
+      idleSeconds: SECONDS,
+      contested: false,
+      chain: [UUID],
+      missing: { harness: "not_supplied", providerBinding: "not_supplied" },
+      // Claimed and read within the same few milliseconds: under the floor.
+      effortSeconds: SECONDS,
+      quality: { state: "timing-floor", reasons: ["timing_floor"] },
+    },
+    last: null,
   };
 }
 
@@ -256,7 +362,7 @@ export function claimGolden(over: Record<string, unknown> = {}): Record<string, 
     /**
      * STA-75. Pinned as the LITERAL `"local"` rather than tokenized, and that is
      * the assertion: these fixtures are unconnected workspaces, so every claim
-     * they produce is local-only, and `docs/sync.md` is explicit that this must
+     * they produce is local-only, and `design/sync.md` is explicit that this must
      * be stated rather than left for a reader to assume — *"an agent that reads
      * `local` and behaves as though it read `lease` is the failure this field
      * exists to prevent."*
@@ -342,6 +448,14 @@ export async function startMcpClient(options: {
   });
   const client = new Client({ name: "staple-contract", version: "0.0.0" });
   await client.connect(transport);
+  /**
+   * The SDK validates a result's structuredContent against the tool's outputSchema only
+   * for tools it has LISTED: it caches the schemas `tools/list` returns. Real clients
+   * (Claude Code, the SDK Client) list first, so an unlisted harness would let a schema
+   * that rejects every real result pass here. List once, up front, so every call through
+   * this harness is validated exactly as a real client validates it.
+   */
+  await client.listTools();
   return {
     client,
     async call(name, args) {
@@ -408,6 +522,21 @@ export interface CliResult {
 /** Run the real CLI in a child process, exactly as an agent shells out to it. */
 export function runCli(args: string[], env: Record<string, string>): CliResult {
   const result = spawnSync(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
+    cwd: REPO_ROOT,
+    env: cleanEnv(env),
+    encoding: "utf8",
+  });
+  return { status: result.status ?? 0, stdout: result.stdout, stderr: result.stderr };
+}
+
+/**
+ * `runCli`, without blocking this process's event loop while the child runs. Use it
+ * in a file that serves HTTP from this process (`startUiServer`): a blocked loop
+ * freezes that server between two requests, which production never does (see
+ * `spawn-async.ts`).
+ */
+export async function runCliAsync(args: string[], env: Record<string, string>): Promise<CliResult> {
+  const result = await spawnAsync(process.execPath, [TSX_CLI, CLI_ENTRY, ...args], {
     cwd: REPO_ROOT,
     env: cleanEnv(env),
     encoding: "utf8",

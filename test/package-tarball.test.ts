@@ -123,6 +123,17 @@ describe("the packed artifact", () => {
     expect(pkg.engines.node).toBe(">=22.5.0");
   });
 
+  it("names the GitHub repository, which npm provenance requires to match the publishing repo", () => {
+    const pkg = JSON.parse(
+      readFileSync(join(prefix, "node_modules", "staple-cli", "package.json"), "utf8"),
+    ) as { repository?: { type: string; url: string } };
+
+    expect(pkg.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/vpetkovic/staple-tracker.git",
+    });
+  });
+
   it("declares the workspace schema its bundle understands, from the same migration list", () => {
     const pkg = JSON.parse(
       readFileSync(join(prefix, "node_modules", "staple-cli", "package.json"), "utf8"),
@@ -170,7 +181,7 @@ describe("the packed artifact", () => {
     // `icon-previews.generated-<hash>.js`, the LAZY chunk R5d (STA-184) split the
     // Lucide components into so the glyph picker can preview the whole catalog
     // without the main view carrying ~140 kB gzipped of icons it never draws
-    // (docs/web-ui.md, "Glyph picker"). It ships because the picker fetches it at
+    // (design/web-ui.md, "Glyph picker"). It ships because the picker fetches it at
     // runtime; a build that folded it back into the bundle is the regression.
     // Anything else appearing under assets/ is a payload regression, which is the
     // whole point of matching by shape instead of counting files.
@@ -342,8 +353,15 @@ describe("the installed binary, run from outside this repository", () => {
       const tools = listed.result?.tools ?? [];
       // The same tools scripts/smoke-mcp.ts exercises against the source tree.
       // 40, plus hub_unregister / hub_prune / cross_unlink, cloud_status, and
-      // the conflict lane's conflict_list / conflict_resolve.
-      expect(tools).toHaveLength(46);
+      // the conflict lane's conflict_list / conflict_resolve, and record_budget_sample.
+      // Execution attempts added record_attempt_event (48), and the telemetry reads
+      // list_attempts, get_attempt, get_budget and list_budget_samples (52),
+      // and the explicit estimate write set_estimate (53), compare_plans (54), and
+      // timing_quality (55), calibration_cohorts (56), and forecast (57), and
+      // forget_budget_samples (58), start_run, run_status and stop_run (61), and
+      // pause_run, resume_run and continue_run (64), and mark_milestone_criterion (65),
+      // and list_files, attach_file, export_file and remove_file (69).
+      expect(tools).toHaveLength(69);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.

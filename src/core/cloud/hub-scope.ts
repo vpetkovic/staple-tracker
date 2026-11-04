@@ -2,7 +2,7 @@
  * Which workspaces a hub-wide cloud operation is about — enumerated from files,
  * and from files only.
  *
- * Contract: `docs/sync.md`, "What never leaves the machine" — *"The whole hub
+ * Contract: `design/sync.md`, "What never leaves the machine" — *"The whole hub
  * database | `~/.staple/hub.db` | `workspaces.path` is an absolute filesystem
  * path and the registry names every *other* repository on the machine.
  * Cross-repository topology is not this repository's business."*

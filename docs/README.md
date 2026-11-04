@@ -1,22 +1,81 @@
+---
+title: Documentation
+description: What staple is, where to start, and every page grouped by what you want to do.
+---
+
 # staple documentation
 
-Reference material, parked here until the docs site lands. Unpolished on
-purpose — the content is accurate, the prose is not finished.
+staple is a local-first task tracker for coding agents: the execution layer where
+agents work through your plans ticket by ticket, next to the board your team already
+uses. These pages show you how to use it. Each one starts with what it is for and
+takes a few minutes to read.
 
-| Page | What it covers |
+**New here?** Read [Why staple](why-staple.md) to see whether it fits your project,
+then [Install and first workspace](getting-started.md) to set up a repository:
+
+```bash
+# set this repository up and open the web UI
+npx staple-cli
+# give Claude Code staple's tools
+claude mcp add staple -e STAPLE_AGENT=claude -- npx -y staple-cli mcp
+```
+
+Until `staple-cli`'s first npm release, build the package from a checkout first;
+[Install and first workspace](getting-started.md) says how.
+
+**Already set up?** Find what you want to do below. Guides walk you through a task;
+the reference pages at the end are for looking things up.
+
+## Start here
+
+| Page | What it is for |
 |---|---|
-| [semantics.md](semantics.md) | Statuses and guards, atomic claims, the dependency graph, revisioned documents |
-| [agents.md](agents.md) | The protocol `init` writes, the MCP tool surface, harness ergonomics |
-| [continuity.md](continuity.md) | Claims, staleness, takeover, and the takeover drill |
-| [queue.md](queue.md) | The pickup queue: plan vs effective order, the resolver, advisory vs strict, human override, storage — the R2 contract, not yet built |
-| [milestones.md](milestones.md) | Milestones: the `milestone` kind, UTC inclusive dates, ordered membership that never re-parents, count-each-leaf-once progress, queue expansion — the R3 contract, not yet built |
-| [sync.md](sync.md) | Optional cloud sync: what replicates, the operation envelope, ordering, conflicts, leases, the three consents and the zero-network rule — the S contract, not yet built |
-| [cli.md](cli.md) | The command surface, estimates vs actuals, `--json`, exit codes |
-| [web-ui.md](web-ui.md) | `staple open`, the stack, the theme, the auth model |
-| [configuration.md](configuration.md) | The staple home, the bootstrap locator, `config.json` |
-| [migration.md](migration.md) | Moving a legacy `.tasks` workspace, and why it is more than a rename |
-| [packaging.md](packaging.md) | How `staple-cli` is built, and the user-owned runtime installer |
-| [architecture.md](architecture.md) | Where the code lives, workspace topology, known limits |
+| [Why staple](why-staple.md) | Why staple exists and where it fits next to Linear, GitHub or ClickUp |
+| [Install and first workspace](getting-started.md) | Install staple, set up a repository, open the web UI and file your first tickets |
+| [Connect your agent](connect-your-agent.md) | Wire Claude Code, Codex or any MCP client to staple |
 
-Hacking on staple itself is in [CONTRIBUTING.md](../CONTRIBUTING.md);
-cutting a release is in [RELEASING.md](../RELEASING.md).
+## Working with agents
+
+| Page | What it is for |
+|---|---|
+| [How an agent works a ticket](working-a-ticket.md) | The loop every agent follows: claim, plan, worklog, done |
+| [Plans become tickets](plans-to-tickets.md) | Turn an implementation plan into an epic with tickets agents work through |
+| [Handoff and resume](handoff.md) | Pick up work after a session dies, hits a limit or changes hands |
+
+## Planning
+
+| Page | What it is for |
+|---|---|
+| [Epics and dependencies](epics-and-dependencies.md) | Group work under epics and order it with dependencies |
+| [Approval gates](approval-gates.md) | Hold an epic for your review, then approve it or send it back |
+| [The pickup queue](queue.md) | Set the order agents take work in |
+| [Milestones and goals](milestones.md) | Put a date and a goal on work from several epics, and track it |
+| [Autopilot runs](runs.md) | Let one agent work a scope ticket after ticket, within a budget |
+
+## Across machines and repositories
+
+| Page | What it is for |
+|---|---|
+| [Cloud sync](cloud-sync.md) | Share one workspace between two machines |
+| [Several repositories](hub.md) | Work across several repositories from one machine |
+
+## The web UI
+
+| Page | What it is for |
+|---|---|
+| [Tour](web-ui.md) | Every view of the local web UI and what you do there |
+| [Budget and estimates](budget-and-estimates.md) | Estimate work, compare it with what it took, watch your provider budget |
+
+## Reference
+
+| Page | What it is for |
+|---|---|
+| [CLI](cli.md) | Every command, with its main flags |
+| [MCP tools](mcp-tools.md) | Every tool the MCP server offers |
+| [Configuration](configuration.md) | The staple home, machine preferences and workspace settings |
+| [Errors and exit codes](errors.md) | What each error means and what to do about it |
+
+Working on staple itself is covered in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md),
+and cutting a release in [RELEASING.md](https://github.com/vpetkovic/staple-tracker/blob/master/RELEASING.md).
+The design documents behind the code (sync protocol, timing, telemetry, the store's
+guarantees) live in the repository's [design/](https://github.com/vpetkovic/staple-tracker/tree/master/design) folder.

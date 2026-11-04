@@ -1,0 +1,34 @@
+{
+  "title": "liveness decides a steal: a comment the holder wrote and that was deleted later still keeps the claim",
+  "covers": [
+    "the claim's lastActivityAt counts the holder's comment at its created_at after a replicated deletion, as the writer's comment event does",
+    "checkout --steal-if-stale 30m on the other device is refused at 20 minutes idle, and succeeds past the threshold",
+    "effort still skips the deleted comment: the stolen tenure's work ends at its stored end, the comment's instant, and nowhere later"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "30m", "do": "comment", "ref": "x", "agent": "w1", "saveAs": "said" },
+    { "at": "31m", "do": "sync", "devices": ["a", "b"] },
+    { "at": "40m", "do": "olderBuildUpdate", "entity": "comment", "ref": "said", "payload": { "deletedAt": "40m" } },
+    { "at": "41m", "do": "sync", "devices": ["a", "b"] },
+    { "at": "50m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m", "device": "b", "refused": "conflict" },
+    { "at": "70m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m", "device": "b" },
+    { "at": "80m", "do": "comment", "ref": "x", "agent": "w2", "device": "b" },
+    { "at": "90m", "do": "status", "ref": "x", "to": "done", "agent": "w2", "device": "b" }
+  ],
+  "expect": [
+    { "asOf": "45m", "ref": "x", "claim": { "lastActivityAt": "30m" } },
+    {
+      "asOf": "95m",
+      "ref": "x",
+      "intervals": 2,
+      "claim": null,
+      "workSeconds": "50m",
+      "wall": { "startAt": "0s", "endAt": "90m", "buckets": { "work": "50m", "interrupted": "40m" } },
+      "resumeGaps": ["40m"]
+    }
+  ]
+}

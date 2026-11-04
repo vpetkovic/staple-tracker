@@ -1,0 +1,37 @@
+{
+  "title": "review and blocked stay distinct: a blocker added during review is review, sent back it is blocked",
+  "covers": [
+    "precedence is by category: an issue in review with an unresolved blocker is review",
+    "sent back to the pool with the blocker unresolved it is blocked, then queued when the blocker resolves",
+    "no second is counted in both review and blocked"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "create", "ref": "y" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "5m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "status", "ref": "x", "to": "in_review", "agent": "w1" },
+    { "at": "15m", "do": "blockedBy", "ref": "x", "blockers": ["y"], "agent": "reviewer" },
+    { "at": "20m", "do": "checkout", "ref": "y", "agent": "w2" },
+    { "at": "25m", "do": "status", "ref": "x", "to": "todo", "agent": "reviewer" },
+    { "at": "30m", "do": "comment", "ref": "y", "agent": "w2" },
+    { "at": "35m", "do": "status", "ref": "y", "to": "done", "agent": "w2" },
+    { "at": "40m", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "45m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "50m", "do": "status", "ref": "x", "to": "in_review", "agent": "w1" },
+    { "at": "60m", "do": "status", "ref": "x", "to": "done", "agent": "reviewer" }
+  ],
+  "expect": [
+    {
+      "asOf": "70m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "20m",
+      "reviewSeconds": "25m",
+      "quality": { "work": "exact", "wall": "exact" },
+      "wall": { "startAt": "0s", "endAt": "60m", "buckets": { "work": "20m", "review": "25m", "blocked": "10m", "queued": "5m" } }
+    }
+  ]
+}

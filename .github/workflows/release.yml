@@ -28,6 +28,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Same as ci.yml: the browser suites (test/ui-*.test.ts) need Chromium for
+      # playwright-core, and with CI set they fail rather than skip without it.
+      - name: Install Chromium for playwright-core
+        run: npx playwright-core install --with-deps chromium
+
       - name: Unit tests
         run: npm test
 
@@ -52,18 +57,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # No registry-url here: with it, setup-node writes an .npmrc whose
+      # _authToken=${NODE_AUTH_TOKEN} makes npm think a token is configured, so
+      # it never attempts the OIDC exchange and the publish fails with ENEEDAUTH.
+      # npmjs.org is npm's default registry anyway.
       - name: Setup Node 22 (engines require >= 22.5)
         uses: actions/setup-node@v6
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
           cache: npm
 
-      # npm >= 11.5.1 is required for OIDC trusted publishing; Node 22 ships
-      # an older npm, so upgrade it before publishing.
+      # Trusted publishing needs npm >= 11.5.1 on Node >= 22.14; Node 22 ships
+      # npm 10. Pinned to the 11 line: npm@latest (12.x) narrows its Node range
+      # and can refuse to install on a Node 22 minor.
       - name: Upgrade npm for trusted publishing
         run: |
-          npm install -g npm@latest
+          npm install -g npm@11
           npm --version
 
       - name: Install dependencies
@@ -93,18 +102,19 @@ jobs:
       - name: Publish
         run: npm publish ./dist-package --provenance --access public
 
-      # The registry can lag a few seconds after publish; retry briefly.
+      # The registry can take minutes to serve a new version: v0.1.0 appeared
+      # about 4.5 minutes after npm accepted it. Wait up to 10.
       - name: Verify published version matches tag
         run: |
           expected="${GITHUB_REF_NAME#v}"
-          for i in 1 2 3 4 5 6; do
+          for i in $(seq 1 30); do
             actual="$(npm view staple-cli version 2>/dev/null || true)"
             if [ "${actual}" = "${expected}" ]; then
               echo "OK: npm view staple-cli version = ${actual}"
               exit 0
             fi
             echo "attempt ${i}: registry reports '${actual}', want '${expected}'; waiting..."
-            sleep 10
+            sleep 20
           done
           echo "FAIL: npm view staple-cli version never reported ${expected}" >&2
           exit 1

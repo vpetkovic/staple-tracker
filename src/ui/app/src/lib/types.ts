@@ -392,6 +392,104 @@ export interface IssueTiming {
   childStatusCounts: Record<IssueStatus, number>;
   /** The recursive plan for the subtree, beside the depth-1 fields above. */
   subtreePlan: SubtreePlan;
+  /**
+   * Agent work from worker attempts, replicated data only: the estimate ratio's actual. A
+   * parent's is its children's sum. Null with a reason (never started, no attempt, cancelled).
+   */
+  workSeconds: number | null;
+  /** `workSeconds / estimatedSeconds` for a done issue with its own estimate and exact work; else null. */
+  estimateRatio: number | null;
+  /** One quality state per record, and the reasons that produced it. */
+  quality: TimingQuality;
+}
+
+/** `missing` > `reconstructed` > `approximate` > `timing-floor` > `exact`, mirroring core. */
+export type WorkQualityState = "missing" | "reconstructed" | "approximate" | "timing-floor" | "exact";
+
+/** Mirrors `TimingQuality` in src/core/types.ts (pinned in test/contract-ui-types.test.ts). */
+export interface TimingQuality {
+  work: {
+    /** Null for a cancelled issue, which owes no work. */
+    state: WorkQualityState | null;
+    inputs: string[];
+    /** Every reason that produced the state, highest precedence first. */
+    reasons: string[];
+    coverage: { known: number; total: number; partial: boolean } | null;
+    missingInputs: string[];
+  };
+  wall: {
+    state: "missing" | "approximate" | "exact" | null;
+    inputs: string[];
+    reasons: string[];
+  };
+}
+
+/** The work states an analysis can exclude, and the elapsed states. */
+export type WorkState = WorkQualityState;
+export type WallState = "missing" | "approximate" | "exact";
+
+/** A ratio over the members of the ratio population in `states`, mirroring core's `RatioAggregate`. */
+export interface RatioAggregate {
+  readonly states: WorkState[];
+  readonly count: number;
+  readonly workSeconds: number | null;
+  readonly estimatedSeconds: number | null;
+  readonly ratio: number | null;
+  readonly coverage: { readonly known: number; readonly total: number; readonly partial: boolean };
+  readonly missing: Record<string, string>;
+}
+
+/** One eligible record of a cohort. */
+export interface CohortItem {
+  readonly identifier: string;
+  readonly title: string;
+  readonly kind: string;
+  readonly status: string;
+  readonly completedAt: string | null;
+  readonly estimatedSeconds: number | null;
+  readonly workSeconds: number | null;
+  readonly estimateRatio: number | null;
+  readonly work: { readonly state: WorkQualityState; readonly reasons: string[] };
+  readonly wall: { readonly state: WallState; readonly reasons: string[] };
+}
+
+/**
+ * `GET /api/timing/quality`, mirroring `TimingQualityReport` in src/core/telemetry/cohort.ts
+ * (pinned in test/contract-ui-types.test.ts): the quality states of the done leaves in a
+ * filter, their coverage over that eligible population, and the ratio aggregates.
+ */
+export interface TimingQualityReport {
+  readonly asOf: string;
+  readonly filter: {
+    readonly kind: string[] | null;
+    readonly parent: string | null;
+    readonly since: string | null;
+    readonly include: WorkState[];
+    readonly exclude: WorkState[];
+    readonly excludeReasons: string[];
+  };
+  readonly population: {
+    readonly issues: number;
+    readonly eligible: number;
+    readonly notEligible: { readonly parents: number; readonly open: number; readonly cancelled: number };
+  };
+  readonly work: {
+    readonly counts: Record<WorkState, number>;
+    readonly coverage: Record<WorkState, number> | null;
+    readonly reasons: Record<string, number>;
+    readonly missing: Record<string, string>;
+  };
+  readonly wall: {
+    readonly counts: Record<WallState, number>;
+    readonly coverage: Record<WallState, number> | null;
+    readonly reasons: Record<string, number>;
+    readonly missing: Record<string, string>;
+  };
+  readonly ratio: { readonly total: number; readonly parents: number; readonly exact: RatioAggregate; readonly admitted: RatioAggregate };
+  readonly excluded: { readonly count: number; readonly counts: Partial<Record<WorkState, number>>; readonly reasons: Record<string, number> };
+  readonly items: CohortItem[];
+  readonly truncated: boolean;
+  readonly nextCursor: string | null;
 }
 
 /** Where a `SubtreePlan.estimatedSeconds` came from. */
@@ -407,11 +505,13 @@ export interface SubtreePlan {
   /** The effective (top-down) plan: own estimate if recorded, else `descendantsEstimatedSeconds`. */
   estimatedSeconds: number | null;
   source: PlanSource;
-  /** The bottom-up plan: sum of the direct children's effective plans; null when no descendant has one. */
+  /** The bottom-up plan: sum of the direct children's contributions (a cancelled child's own estimate drops out, live work beneath it counts); null when no live descendant has one. */
   descendantsEstimatedSeconds: number | null;
-  /** Descendants at any depth whose own estimate is a term of the bottom-up sum. */
+  /** Planned units: descendants at any depth whose own estimate is a term of the bottom-up sum. */
   contributingCount: number;
-  /** Descendants at any depth. 0 for a leaf. */
+  /** Unplanned units: live descendants with no live work beneath, no estimate and no estimated ancestor beneath this issue. */
+  unplannedCount: number;
+  /** Descendants at any depth, whatever their status. 0 for a leaf. */
   totalCount: number;
 }
 
@@ -584,6 +684,24 @@ export interface IssueDocument {
   title: string | null;
   author: string | null;
   createdAt: string;
+  /** Present when the body is base64 evidence (`core/legacy-evidence.ts`). */
+  evidence?: DocumentEvidence;
+}
+
+/**
+ * A document an agent wrote as a `Media type:` + `SHA-256:` header over base64.
+ * Only `verified` has bytes worth showing: `GET /api/document-file` refuses the rest.
+ */
+export interface DocumentEvidence {
+  status: "verified" | "sha256_mismatch" | "type_mismatch" | "undecodable";
+  declaredMediaType: string;
+  declaredSha256: string;
+  mediaType: string | null;
+  sha256: string | null;
+  size: number | null;
+  problem: string | null;
+  /** What the file downloads as: `evidence-before-png` holding a PNG is `evidence-before.png`. */
+  filename: string;
 }
 
 /**
@@ -637,6 +755,8 @@ export interface WorkspaceRef {
 export interface Bootstrap {
   mode: UiMode;
   workspaces: WorkspaceRef[];
+  /** The page origins the server accepts writes from (its Origin check). */
+  writeOrigins?: string[];
 }
 
 /** GET /api/poll — the whole auto-refresh contract, one string. */
@@ -690,7 +810,7 @@ export interface IssueDeps {
 }
 
 /**
- * WHETHER AN AGENT COULD TAKE THIS ROW RIGHT NOW — R4b (STA-187), docs/queue.md "Policy".
+ * WHETHER AN AGENT COULD TAKE THIS ROW RIGHT NOW — R4b (STA-187), design/queue.md "Policy".
  *
  * Five words, one per row, first match wins, mirroring the resolver's eligibility ladder:
  * `gated` and `blocked` are the hard constraints it names before anything else, `claimed`
@@ -736,6 +856,12 @@ export interface IssueRow {
    */
   deps?: IssueDeps;
   /**
+   * The issue id of the milestone this row is a DIRECT member of, or null. Membership is a
+   * relation, not a parent link, so `issue.parentId` never carries it; the list reads this to
+   * nest a parentless member under its milestone. Optional for the reason `deps` is.
+   */
+  milestoneId?: string | null;
+  /**
    * Linked pull requests, newest-first. OPTIONAL and absent today — see `PullRequestRef`.
    *
    * A SIBLING of `issue` rather than a field on it, for the same reason `claim` is one:
@@ -771,7 +897,7 @@ export interface IssueRow {
    * consumer is obliged to check rather than assume. `null` means "not in the plan", which is
    * NOT the same as position 0, and `lib/sort-modes.ts` treats absent and null identically.
    *
-   * READ ONLY, EVERYWHERE IN THE UI. `docs/queue.md` is explicit that presentation sort is
+   * READ ONLY, EVERYWHERE IN THE UI. `design/queue.md` is explicit that presentation sort is
    * not the queue: the list may display and order by these numbers and may never set them.
    * The one write path is the queue's own API.
    */
@@ -813,7 +939,7 @@ export interface IssueRow {
  * WHAT AN UNGROUPED ROW DISCLOSES ABOUT THE PICKUP PLAN — R4c (STA-188).
  *
  * Six words, one per row. Five of them are `PICKUP_STATES` above, unchanged and meaning
- * exactly what docs/queue.md says they mean; the sixth, `unqueued`, is the queue's own
+ * exactly what design/queue.md says they mean; the sixth, `unqueued`, is the queue's own
  * sixth answer — `EffectiveQueueRow.unqueued`, "a row after the last plan row: still work,
  * just later". It is a state rather than the absence of one because "nothing is stopping
  * this and nobody planned it" is a different fact from "this is next", and a reader who
@@ -827,6 +953,7 @@ export const ROW_CUE_STATES = [
   "waiting",
   "gated",
   "in_flight",
+  "unavailable",
   "unqueued",
 ] as const;
 export type RowCueState = (typeof ROW_CUE_STATES)[number];
@@ -871,6 +998,20 @@ export interface InboxRow {
   inbox: { ready: InboxIssue[]; queued: InboxIssue[]; blocked: InboxIssue[]; hasMore: boolean };
 }
 
+/** One file on a ticket. Metadata only — the bytes are `GET /api/file`. */
+export interface IssueAttachment {
+  id: string;
+  issueId: string;
+  filename: string;
+  mediaType: string;
+  size: number;
+  sha256: string;
+  author: string | null;
+  caption: string | null;
+  byteSync: "inline" | "local";
+  createdAt: string;
+}
+
 /** GET /api/issue */
 export interface IssueDetail {
   workspace: string;
@@ -881,6 +1022,8 @@ export interface IssueDetail {
   blocks: IssueRef[];
   comments: IssueComment[];
   documents: IssueDocumentMeta[];
+  /** File metadata. Empty when the ticket has no files. The bytes are a separate request. */
+  attachments: IssueAttachment[];
   crossBlockers: CrossBlocker[];
   claim: ClaimActivity | null;
   /** Estimate vs actual for this issue. What the Analytics tab renders. */
@@ -918,6 +1061,23 @@ export interface IssueDetail {
    * own route — the same line `deps` draws on `/api/issues`.
    */
   childrenQueued: GateQueueEntry[];
+  /**
+   * The milestone this issue counts toward: its own membership, else the nearest
+   * ancestor's, which `via` then names. Optional on the type so fixtures need not care.
+   */
+  milestone?: EffectiveMilestone | null;
+  /** On a milestone's own detail: its plan (dates, state, progress, members). Else null. */
+  milestonePlan?: MilestoneView | null;
+}
+
+/** Mirror of `EffectiveMilestone` in src/core/milestone-store.ts. */
+export interface EffectiveMilestone {
+  id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  targetDate: string | null;
+  via: { identifier: string; title: string } | null;
 }
 
 /**
@@ -1115,7 +1275,13 @@ export type ActionPayload =
    * for a `null` to mean. Contrast `assignee`, which has its own action precisely
    * because clearing it IS a real and distinct fact.
    */
-  | { type: "update"; title?: string; priority?: IssuePriority; kind?: IssueKind; labels?: string[] };
+  | { type: "update"; title?: string; priority?: IssuePriority; kind?: IssueKind; labels?: string[] }
+  /**
+   * The explicit estimate write (`staple estimate`, MCP `set_estimate`): `estimateSeconds`
+   * is required, and `null` is the only clear. Answers the issue plus
+   * `estimateChange: {from, to, changed}`.
+   */
+  | { type: "estimate"; estimateSeconds: number | null };
 
 /** The error envelope every staple surface speaks. */
 export interface ErrorEnvelope {
@@ -1130,7 +1296,7 @@ export interface ErrorEnvelope {
 
 /**
  * The milestone view as every surface prints it — the mirror of `MilestoneView` in
- * `src/core/milestone-store.ts` and the JSON shape in docs/milestones.md. One shape for
+ * `src/core/milestone-store.ts` and the JSON shape in design/milestones.md. One shape for
  * `GET /api/milestone`, and for the result of every `POST /api/milestone/*` write, so the
  * page redraws from a write result exactly as it does from a read.
  */
@@ -1145,12 +1311,18 @@ export interface MilestoneSummary {
   status: StatusId;
   kind: KindId;
   assignee: string | null;
+  /** The issue's own description: what the milestone is for. */
+  description: string | null;
+  /** The issue's own acceptance criteria: the milestone's goal. Empty when none. */
+  acceptanceCriteria: string[];
   targetDate: string | null;
   startDate: string | null;
   /** Derived on every read; never stored. */
   state: MilestoneState;
   /** The milestone's own row in the pickup plan; null when it is not queued. */
   planPosition: number | null;
+  /** When it was closed: `completedAt` when done, `cancelledAt` when cancelled; else null. */
+  closedAt: string | null;
 }
 
 export interface MilestoneProgress {
@@ -1194,16 +1366,112 @@ export interface MilestoneView {
   members: MilestoneMemberRow[];
   /** The first eligible row of the effective queue planned under this milestone. */
   next: MilestoneNext | null;
+  /** The goal check: each criterion's verdict with its evidence, and the pace against the target date. */
+  goal: MilestoneGoal;
+  /** The work still open in it, from its estimates. Mirrors core `MilestoneRemaining`. */
+  remaining: MilestoneRemaining;
 }
 
-/** A `GET /api/milestones` row: the view without its members, plus how many there are. */
-export type MilestoneListRow = Omit<MilestoneView, "members"> & { memberCount: number };
+/**
+ * The work still open in a milestone, from the estimates of its open leaves (not done, not
+ * cancelled). `forecastSeconds` scales each estimate by its class's calibrated ratio, as
+ * `staple forecast` does; `goal.pace.remainingSeconds` is a different figure, the critical path.
+ */
+export interface MilestoneRemaining {
+  estimated: number;
+  unestimated: number;
+  /** Open leaves `forecast` cannot weigh: `forecastSeconds` is then a lower bound. */
+  unknown: number;
+  estimateSeconds: number | null;
+  forecastSeconds: number | null;
+}
+
+/** A `GET /api/milestones` row: the view without its members or goal, plus how many members there are. */
+export type MilestoneListRow = Omit<MilestoneView, "members" | "goal"> & { memberCount: number };
+
+/**
+ * The milestone's goal as the check reads it now (core/milestone-goal.ts, design/milestones.md
+ * "Goal"). The tracker never judges a criterion: an agent marks it, and the check weighs the
+ * mark at every read. Pinned against core in test/contract-ui-types.test.ts.
+ */
+export const CRITERION_VERDICTS = ["met", "unmet", "unknown"] as const;
+export type CriterionVerdict = (typeof CRITERION_VERDICTS)[number];
+
+export type EvidenceKind = "ticket" | "document" | "text";
+
+export interface EvidenceItem {
+  kind: EvidenceKind;
+  /** The text as it was given. */
+  value: string;
+  /** The issue it names, for a ticket or a document. */
+  ref: string | null;
+  /** The document key, for a document. */
+  document: string | null;
+  /** The cited ticket's status now, for a ticket. */
+  status: string | null;
+  /** Text always holds; a ticket holds while it is done; a document while it exists. */
+  holds: boolean;
+  /** Why it does not hold; null when it does. */
+  problem: string | null;
+  /** It does not hold now but did at some point since the mark; false while it holds. */
+  lapsed: boolean;
+}
+
+export interface GoalCriterion {
+  /** 1-based, in the milestone's criteria order. */
+  position: number;
+  text: string;
+  /** What the check makes of it now. */
+  verdict: CriterionVerdict;
+  /** What was marked; differs from `verdict` when the mark no longer stands. */
+  marked: CriterionVerdict | null;
+  evidence: EvidenceItem[];
+  note: string | null;
+  markedBy: string | null;
+  markedAt: string | null;
+  runId: string | null;
+  /** Why `verdict` reads `unknown`; null when the mark stands. */
+  why: string | null;
+}
+
+export interface GoalCounts {
+  met: number;
+  unmet: number;
+  unknown: number;
+  total: number;
+}
+
+export const PACE_VERDICTS = ["done", "no_target", "overdue", "no_estimate", "behind", "on_track"] as const;
+export type PaceVerdict = (typeof PACE_VERDICTS)[number];
+
+export interface GoalPace {
+  targetDate: string | null;
+  /** Whole UTC calendar days to the target: 0 on the day, negative after. Null without a target. */
+  daysToTarget: number | null;
+  leaves: { done: number; countable: number; percent: number | null };
+  laborSeconds: number | null;
+  /** 0 when every member landed; null when nothing open is planned. */
+  remainingSeconds: number | null;
+  /** Some open member is unplanned or partly planned: the estimates are lower bounds. */
+  partial: boolean;
+  unplannedRefs: string[];
+  verdict: PaceVerdict;
+  message: string;
+}
+
+export interface MilestoneGoal {
+  criteria: GoalCriterion[];
+  counts: GoalCounts;
+  /** Every criterion met; true when the milestone has none. */
+  met: boolean;
+  pace: GoalPace;
+}
 
 // ---------- the pickup queue (R2c / STA-168) ----------
 
 /**
  * The queue as every surface prints it — the mirror of `QueueView` in
- * `src/core/queue-store.ts` and the JSON shape in docs/queue.md. ONE shape for
+ * `src/core/queue-store.ts` and the JSON shape in design/queue.md. ONE shape for
  * `GET /api/queue` and for the result of every `POST /api/queue/*` write, so the
  * editor (R2d) redraws from a write result exactly as it does from a read.
  *
@@ -1213,7 +1481,7 @@ export type MilestoneListRow = Omit<MilestoneView, "members"> & { memberCount: n
  * to leaf work and every row classified — what agents receive, and what the
  * READY list derives its order from.
  */
-export const QUEUE_ELIGIBILITIES = ["resolved", "gated", "blocked", "claimed", "eligible"] as const;
+export const QUEUE_ELIGIBILITIES = ["resolved", "gated", "blocked", "claimed", "unavailable", "eligible"] as const;
 export type QueueEligibility = (typeof QUEUE_ELIGIBILITIES)[number];
 
 export interface QueueEntry {
@@ -1248,6 +1516,8 @@ export interface EffectiveQueueRow {
   /** True for a row after the last plan row: still work, just later. */
   unqueued: boolean;
   eligibility: QueueEligibility;
+  /** Current holder activity and scope, or null for a fresh pickup. */
+  claim: ClaimActivity | null;
   /** A sentence for a human; null when the row is eligible. */
   reason: string | null;
   detail: Record<string, unknown> | null;
@@ -1371,7 +1641,7 @@ export interface CloudSurfaceReport {
   /**
    * Static text, and ONLY when disconnected.
    *
-   * The page deliberately does not render it. `docs/sync.md` permits a static
+   * The page deliberately does not render it. `design/sync.md` permits a static
    * hint before connect, but permitting is not requiring, and this page's
    * requirement is the stronger one: *"The UI does not prompt."* The field is
    * mirrored because it is part of the contract, and left unrendered because
@@ -2122,4 +2392,722 @@ export interface HubAdoptResult {
    */
   retiresOptOuts: string[];
   report: HubCloudReport;
+}
+
+// ------------------------------------------------------------------ calibration and forecasts
+
+/**
+ * `GET /api/calibration` and `GET /api/forecast`, mirroring `CalibrationReport` in
+ * src/core/telemetry/calibration.ts and `ForecastReport` in src/core/telemetry/forecast-report.ts
+ * (both pinned in test/contract-ui-types.test.ts). design/timing-semantics.md, "Calibration
+ * cohorts", "Confidence ranges" and "Forecasts", says what every field means. The browser renders
+ * these; it never recomputes one of them.
+ */
+export type QuantileName = "p10" | "p25" | "p50" | "p75" | "p90";
+export type EvidenceSet = "exact" | "reconstructed";
+export type CalibrationWarning =
+  | "small_sample"
+  | "bounds_below_confidence"
+  | "quantile_below_confidence"
+  | "fallback_used"
+  | "heavy_tail"
+  | "floor_dominated"
+  | "floors_excluded"
+  | "reconstructed_only"
+  | "no_samples";
+export type ForecastWarning =
+  | "unknown_units"
+  | "beyond_class_range"
+  | "overrun"
+  | "few_admissible"
+  | "awaiting_review"
+  | "independent_draws"
+  | "dependency_cycle"
+  | "unresolved_outside_blockers";
+export type CohortDimension = "kind" | "priority" | "workType" | "area" | "model";
+export type CohortKey = Record<CohortDimension, string>;
+export type EstimateAtStartMissing = "parent" | "no_worker_attempt" | "not_recorded" | "not_own";
+
+export interface SampleEstimate {
+  readonly seconds: number;
+  readonly source: "at_start" | "current";
+  readonly atStartSeconds: number | null;
+  readonly currentSeconds: number;
+  readonly missing: { readonly atStart?: EstimateAtStartMissing };
+}
+
+export interface SampleEvidence {
+  readonly state: WorkState;
+  readonly reasons: string[];
+  readonly workerAttempts: number;
+  readonly provenance: string[];
+  readonly harnessSupplied: number;
+}
+
+export interface CalibrationSample {
+  readonly set: EvidenceSet;
+  readonly identifier: string;
+  readonly title: string;
+  readonly completedAt: string | null;
+  readonly workSeconds: number;
+  readonly estimate: SampleEstimate;
+  readonly ratio: number;
+  readonly dimensions: CohortKey;
+  readonly evidence: SampleEvidence;
+}
+
+export interface CalibrationExcluded {
+  readonly count: number;
+  readonly counts: Partial<Record<WorkState, number>>;
+  readonly reasons: Record<string, number>;
+}
+
+/** `samples / eligible`, with the denominator named. */
+export interface CalibrationCoverage {
+  readonly samples: number;
+  readonly eligible: number;
+  readonly fraction: number | null;
+  readonly denominator: "ratio_population";
+}
+
+export type ExpectedMethod = "pooled" | "fence_clipped_pooled";
+
+/** A distribution-free interval between two order statistics, with the confidence it reaches. */
+export interface OrderInterval {
+  readonly lower: number;
+  readonly upper: number;
+  readonly ranks: readonly [number, number];
+  readonly confidence: number;
+  readonly reached: boolean;
+}
+
+export interface CalibrationTail {
+  readonly tested: boolean;
+  readonly outliers: { readonly lower: number; readonly upper: number };
+  readonly share: number | null;
+  readonly heavy: boolean;
+  readonly fences: { readonly lower: number; readonly upper: number } | null;
+  readonly scale: "mad" | "mean_absolute_deviation" | null;
+  readonly fenceClippedPooled: number | null;
+}
+
+export interface CalibrationFloors {
+  readonly count: number;
+  readonly share: number | null;
+  readonly dominated: boolean;
+  readonly seconds: number;
+  readonly refs: string[];
+  readonly truncated: boolean;
+}
+
+/** One cohort: an observed key, and the class (possibly broader) it reads. */
+export interface CalibrationCohort {
+  readonly set: EvidenceSet;
+  readonly key: CohortKey;
+  readonly keySamples: number;
+  readonly level: number;
+  readonly levelName: string;
+  readonly class: CohortKey;
+  readonly path: Array<{ readonly level: number; readonly name: string; readonly samples: number; readonly floors: number }>;
+  readonly fallback: "none" | "below_minimum" | "below_minimum_everywhere";
+  readonly samples: number;
+  readonly coverage: CalibrationCoverage;
+  readonly ratio: {
+    readonly median: number;
+    readonly pooled: number;
+    readonly min: number;
+    readonly max: number;
+    readonly expected: { readonly value: number; readonly method: ExpectedMethod };
+    readonly quantiles: Record<QuantileName, number> | null;
+    readonly intervals: Record<QuantileName, OrderInterval> | null;
+    readonly bounds: OrderInterval | null;
+  };
+  readonly workSeconds: {
+    readonly median: number;
+    readonly total: number;
+    readonly min: number;
+    readonly max: number;
+    readonly quantiles: Record<QuantileName, number> | null;
+    readonly intervals: Record<QuantileName, OrderInterval> | null;
+    readonly bounds: OrderInterval | null;
+  };
+  readonly tail: CalibrationTail;
+  readonly floors: CalibrationFloors;
+  readonly rangeConfidence: number;
+  readonly estimatedSeconds: { readonly total: number };
+  readonly estimateSources: { readonly at_start: number; readonly current: number };
+  readonly members: { readonly total: number; readonly refs: string[]; readonly truncated: boolean };
+  readonly excluded: CalibrationExcluded;
+  readonly warnings: CalibrationWarning[];
+}
+
+/** A duration forecast for one issue from one evidence set (`for=`). */
+export interface DurationForecast {
+  readonly set: EvidenceSet;
+  readonly identifier: string;
+  readonly title: string;
+  readonly status: string;
+  readonly estimate: { readonly seconds: number | null };
+  readonly key: CohortKey;
+  readonly cohort: Pick<CalibrationCohort, "level" | "levelName" | "class" | "path" | "fallback" | "samples" | "coverage">;
+  readonly state: "ratio" | "floor" | "no_samples" | "no_estimate";
+  readonly seconds: Record<QuantileName, number> | null;
+  readonly bounds: OrderInterval | null;
+  readonly expected: { readonly seconds: number; readonly ratio: number | null; readonly method: ExpectedMethod | "floor_bound" } | null;
+  readonly heavyTail: boolean;
+  readonly floors: Pick<CalibrationFloors, "count" | "share" | "dominated" | "seconds">;
+  readonly warnings: CalibrationWarning[];
+  readonly missing: Record<string, string>;
+}
+
+export interface CalibrationSetSummary {
+  readonly set: EvidenceSet;
+  readonly samples: number;
+  readonly coverage: CalibrationCoverage;
+  readonly excluded: CalibrationExcluded;
+  readonly cohorts: number;
+}
+
+export interface CalibrationReport {
+  readonly asOf: string;
+  readonly filter: {
+    readonly kind: string[] | null;
+    readonly priority: string[] | null;
+    readonly parent: string | null;
+    readonly since: string | null;
+    readonly include: EvidenceSet[];
+  };
+  /** The identity of the data the report was computed from. */
+  readonly snapshot: {
+    readonly id: string;
+    readonly algorithm: string;
+    readonly repositoryId: string | null;
+    readonly members: number;
+    readonly samples: Partial<Record<EvidenceSet, number>>;
+  };
+  readonly method: {
+    readonly minSamples: number;
+    readonly levels: string[];
+    readonly median: "lower";
+    readonly estimate: "at_start_else_current";
+    readonly quantile: "lower";
+    readonly quantiles: QuantileName[];
+    readonly confidence: number;
+    readonly intervals: "order_statistic";
+    readonly minBoundsSamples: number;
+    readonly heavyTail: {
+      readonly rule: "log_mad_z";
+      readonly z: 3.5;
+      readonly minSamples: 10;
+      readonly minOutliers: 3;
+      readonly minShare: 0.05;
+      readonly minLogDeviation: number;
+    };
+    readonly floorSeconds: number;
+  };
+  readonly population: { readonly issues: number; readonly ratio: number; readonly parents: number };
+  readonly sets: CalibrationSetSummary[];
+  readonly list: "cohorts" | "samples";
+  readonly items: CalibrationCohort[] | CalibrationSample[];
+  readonly forecasts: DurationForecast[];
+  readonly truncated: boolean;
+  readonly nextCursor: string | null;
+  readonly missing: Record<string, string>;
+}
+
+/** The spread of a set of draws: the mean, the lower quantiles, and the 90% band (p5 to p95). */
+export interface SimulatedSpread {
+  readonly mean: number;
+  readonly p10: number;
+  readonly p50: number;
+  readonly p90: number;
+  readonly band: { readonly lower: number; readonly upper: number; readonly nominal: number };
+}
+
+/** One plan unit's remaining work. */
+export interface UnitForecast {
+  readonly ref: string;
+  readonly title: string;
+  readonly status: string;
+  readonly treatment: "done" | "awaiting_review" | "forecast";
+  readonly estimateSeconds: number | null;
+  readonly workSeconds: number | null;
+  readonly state: DurationForecast["state"] | "done" | "awaiting_review" | "beyond_class_range";
+  readonly expected: { readonly durationSeconds: number; readonly remainingSeconds: number; readonly method: string } | null;
+  readonly simulated: SimulatedSpread | null;
+  readonly cohort: { readonly levelName: string; readonly class: CohortKey; readonly samples: number } | null;
+  readonly admissibleSamples: number | null;
+  readonly overrun: boolean;
+  readonly warnings: Array<CalibrationWarning | ForecastWarning>;
+  readonly missing: Record<string, string>;
+}
+
+/** A sum or path of remaining work. `partial`: some unit is unknown, so it is a lower bound. */
+export interface RemainingFigure {
+  readonly expectedSeconds: number | null;
+  readonly partial: boolean;
+  readonly missing: string[];
+  readonly simulated: SimulatedSpread | null;
+}
+
+export interface ForecastPathStep {
+  ref: string;
+  seconds: number | null;
+  status: string;
+}
+
+export interface CrossSubtreeBlocker {
+  blocked: string;
+  blocker: string;
+  blockerStatus: string;
+  resolved: boolean;
+}
+
+export interface CompletionPath extends RemainingFigure {
+  readonly chain: ForecastPathStep[];
+  readonly chainLength: number;
+  readonly edgeCount: number;
+  readonly cycle: string[];
+  readonly crossSubtreeBlockerCount: number;
+  readonly unresolvedCrossSubtreeBlockerCount: number;
+  readonly crossSubtreeBlockers: CrossSubtreeBlocker[];
+}
+
+export interface CompletionConfidence {
+  readonly label: "high" | "medium" | "low";
+  readonly nominal: number;
+  readonly achieved: number | null;
+  readonly reached: boolean;
+  readonly reasons: string[];
+}
+
+export interface PlanLabor {
+  seconds: number | null;
+  source: PlanSource;
+  ownSeconds: number | null;
+  descendantsSeconds: number | null;
+}
+
+export interface CompletionForecast {
+  readonly set: "exact";
+  readonly units: {
+    readonly total: number;
+    readonly done: number;
+    readonly awaitingReview: number;
+    readonly forecast: number;
+    readonly known: number;
+    readonly unknownRefs: string[];
+    readonly awaitingReviewRefs: string[];
+    readonly items: UnitForecast[];
+    readonly truncated: boolean;
+  };
+  readonly settled: boolean;
+  readonly review: { readonly units: number; readonly refs: string[]; readonly seconds: number | null; readonly missing: Record<string, string> };
+  readonly plan: PlanLabor;
+  readonly labor: RemainingFigure;
+  readonly path: CompletionPath;
+  readonly confidence: CompletionConfidence;
+  readonly warnings: Array<CalibrationWarning | ForecastWarning>;
+}
+
+export type BudgetState = "provider-unavailable" | "missing" | "approximate" | "exact";
+export type ReserveSource = "argument" | "provisional_default";
+
+export interface BudgetPace {
+  readonly percentPerHour: number;
+  readonly fromPercent: number;
+  readonly toPercent: number;
+  readonly from: string;
+  readonly to: string;
+  readonly spanSeconds: number;
+  readonly readings: number;
+}
+
+export interface BudgetExhaustion {
+  readonly atPace: "before_reset" | "after_reset" | "never";
+  readonly seconds: number | null;
+  readonly at: string | null;
+}
+
+export interface RateConfidence {
+  readonly label: "low" | "medium";
+  readonly spans: number;
+  readonly minimum: number;
+  readonly warnings: string[];
+}
+
+export interface BudgetWorkRate {
+  readonly percentPerWorkHour: number;
+  readonly spans: number;
+  readonly attempts: number;
+  readonly concurrentSpans: number;
+  readonly sparseSpans: number;
+  readonly sharedSpans: number;
+  readonly sharedExcluded: number;
+  readonly burnPercent: number;
+  readonly workSeconds: number;
+  readonly lowerBound: boolean;
+  readonly excluded: number;
+  readonly spanningReset: number;
+  readonly truncated: boolean;
+  readonly simulated: SimulatedSpread;
+  readonly confidence: RateConfidence;
+}
+
+export interface BudgetOtherUse {
+  readonly percentPerHour: number;
+  readonly risePercent: number;
+  readonly seconds: number;
+  readonly readings: number;
+  readonly confidence: { readonly label: "low" | "medium"; readonly warnings: string[] };
+}
+
+type ExpectedSpread = { readonly expected: number; readonly simulated: SimulatedSpread };
+
+export interface BudgetWorkProjection {
+  readonly consumedPercent: ExpectedSpread;
+  readonly beforeResetPercent: ExpectedSpread;
+  readonly remainingAtResetPercent: ExpectedSpread;
+  readonly outlastsResetProbability: number;
+  readonly nextWindowRemainingPercent: ExpectedSpread | null;
+  readonly windows: SimulatedSpread;
+  readonly exhaustionProbability: number;
+  readonly currentWindowExhaustionProbability: number;
+  readonly lowerBound: boolean;
+}
+
+export interface BudgetReserveCheck {
+  readonly percent: number;
+  readonly source: ReserveSource;
+  readonly note: string | null;
+  readonly basis: "work_alone";
+  readonly scope: "through_the_work";
+  readonly breachProbability: number | null;
+  readonly currentWindowBreachProbability: number;
+  readonly alreadyBelow: boolean;
+  readonly draws: number;
+  readonly withOtherUse: {
+    readonly basis: "work_and_other_use";
+    readonly otherPercentPerHour: number;
+    readonly otherConfidence: BudgetOtherUse["confidence"];
+    readonly breachProbability: number | null;
+    readonly currentWindowBreachProbability: number;
+    readonly remainingAtResetPercent: ExpectedSpread;
+    readonly nextWindowRemainingPercent: ExpectedSpread | null;
+  } | null;
+  readonly confidence: RateConfidence;
+  readonly missing: Record<string, string>;
+  readonly missingInputs: Record<string, string[]>;
+}
+
+export interface BudgetLimitForecast {
+  readonly limitKey: string;
+  readonly windowId: string | null;
+  readonly status: string | null;
+  readonly resetsAt: string | null;
+  readonly secondsToReset: number | null;
+  readonly windowSeconds: number | null;
+  readonly remainingPercent: number | null;
+  readonly highWaterPercent: number | null;
+  readonly stale: boolean | null;
+  readonly observedAt: string | null;
+  readonly readingAgeSeconds: number | null;
+  readonly quality: { readonly state: BudgetState; readonly reasons: string[] };
+  readonly pace: BudgetPace | null;
+  readonly exhaustion: BudgetExhaustion | null;
+  readonly workRate: BudgetWorkRate | null;
+  readonly otherUse: BudgetOtherUse | null;
+  readonly work: BudgetWorkProjection | null;
+  readonly reserve: BudgetReserveCheck | null;
+  readonly missing: Record<string, string>;
+  readonly missingInputs: Record<string, string[]>;
+}
+
+export interface BudgetAccountForecast {
+  readonly provider: string | null;
+  readonly accountRef: string;
+  readonly bound: boolean;
+  readonly limits: BudgetLimitForecast[];
+  readonly missing: Record<string, string>;
+}
+
+export interface BudgetForecast {
+  readonly machineLocal: true;
+  readonly budgetCapture: boolean;
+  readonly reserve: { readonly percent: number; readonly source: ReserveSource; readonly note: string | null };
+  readonly work: { readonly expectedSeconds: number | null; readonly partial: boolean; readonly schedule: "serial_from_as_of" };
+  readonly accounts: BudgetAccountForecast[];
+  readonly missing: Record<string, string>;
+}
+
+/**
+ * The forecast report. `method` (the rules as prose constants) is not mirrored field by field:
+ * the page renders none of it, and the contract test pins every other field exactly.
+ */
+export interface ForecastReport {
+  readonly asOf: string;
+  readonly subject: {
+    readonly ref: string;
+    readonly title: string;
+    readonly kind: string;
+    readonly status: string;
+    readonly scope: "unit" | "subtree";
+  };
+  readonly filter: { readonly model: string | null; readonly account: string | null };
+  readonly snapshot: {
+    readonly id: string;
+    readonly algorithm: string;
+    readonly calibration: { readonly id: string; readonly algorithm: string; readonly members: number; readonly samples: number };
+    readonly budget: { readonly id: string; readonly machineLocal: true };
+  };
+  readonly method: Readonly<Record<string, unknown>>;
+  readonly completion: CompletionForecast;
+  readonly budget: BudgetForecast;
+}
+
+// ------------------------------------------------------------------ this machine's budget
+
+/**
+ * `GET /api/budget` (`staple budget --json`, MCP `get_budget`), mirroring `BudgetView` in
+ * src/core/telemetry/read-budget.ts and `LimitPressure` in src/core/telemetry/budget-pressure.ts.
+ * design/execution-telemetry.md, "Pressure", says what every field means. Machine-level: it reads
+ * this machine's hub, never a workspace, and never synchronizes.
+ */
+/** The fields of a stored sample the page reads; the payload carries the whole record. */
+export interface BudgetSampleView {
+  readonly id: string;
+  readonly observedAt: string;
+  readonly recordedAt: string;
+  readonly usedPercent: number | null;
+  readonly source: { readonly kind: string; readonly harnessVersion: string | null; readonly field: string };
+  readonly heartbeat: boolean;
+}
+
+/** The fields of a limit window the page reads. */
+export interface BudgetWindowView {
+  readonly id: string;
+  readonly label: string | null;
+  readonly resetsAt: string | null;
+  readonly windowSeconds: number | null;
+  readonly status: "current" | "elapsed" | "superseded";
+}
+
+export interface ReserveReach {
+  readonly atPace: "already" | "before_reset" | "after_reset" | "never";
+  readonly seconds: number | null;
+  readonly at: string | null;
+}
+
+export interface PressureConfidence {
+  readonly label: "low" | "medium";
+  readonly readings: number;
+  readonly spanSeconds: number;
+  readonly warnings: string[];
+}
+
+export interface LimitPressure {
+  readonly provisional: true;
+  readonly observed: BudgetPace | null;
+  readonly lastReadingAgeSeconds: number | null;
+  readonly secondsToReset: number | null;
+  readonly reservePercent: number;
+  readonly sustainablePercentPerHour: number | null;
+  readonly ratio: number | null;
+  readonly state: "within" | "unsafe" | null;
+  readonly exhaustion: BudgetExhaustion | null;
+  readonly reserveReach: ReserveReach | null;
+  readonly safeConcurrency: null;
+  readonly confidence: PressureConfidence | null;
+  readonly missing: Record<string, string>;
+  readonly missingInputs: Record<string, string[]>;
+}
+
+export interface BudgetLimitReading {
+  readonly limitKey: string;
+  readonly status: string | null;
+  readonly window: BudgetWindowView | null;
+  readonly latestSample: BudgetSampleView | null;
+  readonly highWaterPercent: number | null;
+  readonly remainingPercent: number | null;
+  readonly regressionCount: number | null;
+  readonly sampleCount: number | null;
+  readonly stale: boolean | null;
+  readonly missing: Record<string, string>;
+  readonly quality: { readonly state: BudgetState; readonly reasons: string[] };
+  readonly pressure: LimitPressure;
+}
+
+export interface BudgetAccountView {
+  readonly provider: string | null;
+  readonly accountRef: string;
+  readonly bound: boolean;
+  readonly limits: BudgetLimitReading[];
+  readonly missing: Record<string, string>;
+}
+
+export interface BudgetView {
+  readonly asOf: string;
+  readonly budgetCapture: boolean;
+  readonly reserve: { readonly percent: number; readonly source: ReserveSource; readonly note: string | null };
+  readonly pressureRule: { readonly provisional: true; readonly unsafeAtRatio: number; readonly note: string };
+  readonly accounts: BudgetAccountView[];
+}
+
+// ---------------------------------------------------------------- autopilot runs
+
+/**
+ * An autopilot run, as `staple run status --json` prints it under `run` (core/run-store.ts,
+ * design/runs.md). The reason codes are a public contract and never renamed; the page words
+ * them in lib/run-text.ts. Pinned against core in test/contract-ui-types.test.ts.
+ */
+export type RunState = "active" | "paused" | "stopped" | "completed";
+
+export const RUN_STOP_REASONS = [
+  "stopped_by_human",
+  "touched_main_line",
+  "budget",
+  "failure_streak",
+  "scope_gone",
+  "vp_blocked",
+  "gate_pending",
+  "goal_met",
+  "scope_empty",
+] as const;
+export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
+
+export const RUN_WAIT_REASONS = ["paused", "waiting_on_others", "out_of_order"] as const;
+export type RunWaitReason = (typeof RUN_WAIT_REASONS)[number];
+
+export type RunScope =
+  | { kind: "queue" }
+  | { kind: "issue" | "milestone"; issueId: string; identifier: string | null };
+
+export interface RunTicket {
+  seq: number;
+  issueId: string;
+  identifier: string;
+  takenAt: string;
+  outcome: "done" | "failed" | null;
+  reason: string | null;
+  attemptId: string | null;
+  recordedAt: string | null;
+}
+
+export interface RunBudget {
+  maxTickets: number | null;
+  until: string | null;
+  ceilingPercent: number | null;
+  ceilingAccount: string | null;
+}
+
+export interface RunStop {
+  reason: RunStopReason;
+  detail: Record<string, unknown>;
+  by: string | null;
+  note: string | null;
+  at: string;
+}
+
+/** What makes a run over a milestone a goal run; null on any other run. */
+export interface RunGoal {
+  gateOwner: string;
+  childCap: number;
+  children: Array<{ identifier: string; title: string; status: string; purpose: RunGoalChildPurpose }>;
+  gatedAt: string | null;
+}
+
+export type RunGoalChildPurpose = "goal_check" | "follow_up";
+
+export interface Run {
+  id: string;
+  actor: string;
+  scope: RunScope;
+  state: RunState;
+  budget: RunBudget;
+  /** Null unless the run is over a milestone. */
+  goal: RunGoal | null;
+  override: string | null;
+  tickets: RunTicket[];
+  /** `tickets` distinct tickets taken (what `--max-tickets` counts); `taken` every take, retries included. */
+  counts: { tickets: number; taken: number; done: number; failed: number; open: number };
+  stop: RunStop | null;
+  startedAt: string;
+  updatedAt: string;
+  endedAt: string | null;
+}
+
+export interface RunWait {
+  reason: RunWaitReason;
+  detail: Record<string, unknown>;
+  message: string;
+}
+
+/** A goal run's scope emptied short of its goal: the next take is a new goal-check ticket. */
+export interface RunGoalCheck {
+  counts: GoalCounts;
+  message: string;
+}
+
+export type RunDecision =
+  | { stop: false; wait?: RunWait; goalCheck?: RunGoalCheck }
+  | { stop: true; reason: RunStopReason; state: "stopped" | "completed"; detail: Record<string, unknown>; message: string };
+
+export interface RunFacts {
+  now: string;
+  workable: Array<{ issueId: string; identifier: string; held: boolean }>;
+  waiting: Array<{ issueId: string; identifier: string; eligibility: string; reason: string | null }>;
+  /** `state` is `pending` or a person's `changes_requested`. */
+  pendingGates: Array<{ issueId: string; identifier: string; owner: string | null; state?: string }>;
+  personBlocks: Array<{ issueId: string; identifier: string; owner: string; action: string | null }>;
+  ceiling: { usedPercent: number | null; accountRef: string | null; limitKey: string | null; missing: string | null } | null;
+  scopeGone?: string | null;
+  goal?: RunGoalFacts | null;
+}
+
+/** What the goal check reads: the criteria counts and the room left under the cap. */
+export interface RunGoalFacts {
+  milestone: string;
+  counts: GoalCounts;
+  met: boolean;
+  childCap: number;
+  childrenCreated: number;
+}
+
+/**
+ * A goal run's goal, as every run answer carries it: the milestone's goal check, the tickets
+ * the run created against its cap, and the gate on the milestone. `byGoalRun`: a goal run
+ * asked for the gate (it holds the close and nothing else); `ownedByRun`: this run did.
+ */
+export interface RunGoalReport extends MilestoneGoal {
+  milestone: { identifier: string; title: string; status: string };
+  children: { cap: number; created: number; left: number; refs: string[] };
+  gate: { state: string; owner: string; requestedAt: string; requestedBy: string | null; byGoalRun: boolean; ownedByRun: boolean } | null;
+}
+
+/** The `staple run drive` process attached to a run (core/run-attachment.ts). */
+export interface RunDriver {
+  pid: number;
+  host: string;
+  agent: string;
+  startedAt: string;
+  heartbeatAt: string;
+  ticket: string | null;
+  sessionPid: number | null;
+  /** When that session started; null between sessions. */
+  sessionStartedAt?: string | null;
+  logDir: string;
+  /** Null when the driver is on another host and this one cannot tell. */
+  alive: boolean | null;
+}
+
+/** One row of `GET /api/runs`, and what each run verb answers: `run status --json` plus the workspace. */
+export interface RunEntry {
+  workspace: string;
+  run: Run;
+  decision: RunDecision;
+  /** Null once the run has ended. */
+  facts: RunFacts | null;
+  driver: RunDriver | null;
+  /** A goal run's goal check now; null on any other run. */
+  goal: RunGoalReport | null;
 }

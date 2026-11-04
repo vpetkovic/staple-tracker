@@ -1,0 +1,14 @@
+/* A group heading in the sidebar: the link's metrics, none of its hover. */
+.group,
+.group:hover {
+  background: none;
+  color: var(--ifm-menu-color);
+  cursor: default;
+}
+
+/* The group of the page you are on, as the classic theme marks an active category.
+   Two classes, so it outranks the rule above wherever the minifier puts it. */
+.group.active,
+.group.active:hover {
+  color: var(--ifm-menu-color-active);
+}

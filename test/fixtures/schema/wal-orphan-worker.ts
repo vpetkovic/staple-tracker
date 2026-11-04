@@ -5,7 +5,7 @@
  *
  * What a process that died mid-session leaves behind: `-wal` and `-shm`
  * sidecars beside the database, the `-wal` holding a committed frame that was
- * never checkpointed into the file. `docs/migration.md` warns that those
+ * never checkpointed into the file. `design/migration.md` warns that those
  * sidecars belong to the newer schema and must be moved aside with the file
  * before a snapshot is restored at its path; this is how the matrix test puts
  * them there deterministically rather than hoping a clean exit forgot to.

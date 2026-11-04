@@ -1,7 +1,7 @@
 /**
  * The machine-local, repository-scoped record of a cloud connection.
  *
- * Contract: `docs/sync.md`, "Three consents".
+ * Contract: `design/sync.md`, "Three consents".
  *
  * ## Why this is a file in the staple home and not a row in the workspace
  *

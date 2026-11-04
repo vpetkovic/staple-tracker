@@ -1,7 +1,7 @@
 /**
  * Applying a remote operation to the local database.
  *
- * Contract: `docs/sync.md`, "What synchronizes", "Deletion is a tombstone" and
+ * Contract: `design/sync.md`, "What synchronizes", "Deletion is a tombstone" and
  * "Ordering, cursors and epochs".
  *
  * ## Why this writes rows instead of calling the store
@@ -46,6 +46,8 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { renumberedRanks } from "../milestones.js";
+import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } from "../milestone-goal.js";
+import { writeCriterionMark } from "../milestone-marks.js";
 import {
   SETTING_DEFINITIONS,
   encodeStoredSetting,
@@ -55,6 +57,8 @@ import {
 import { aliasedIssueId, moveIdentifier, recordIdentifierMove } from "../identifier-moves.js";
 import { ORIGIN_RELEASING_STATUSES, StapleError, holdsLiveOrigin, normalizeTitle, nowIso } from "../types.js";
 import { type OwnRevision, holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq, ownRevisionOf, ownRevisions } from "./claims.js";
+import { applyAttempt, applyAttemptTransition } from "./apply-attempts.js";
+import { applyAttachment } from "./apply-attachments.js";
 import { placeRevision, sameRevision, summaryAt } from "./revision-placement.js";
 import {
   isDefined,
@@ -95,7 +99,7 @@ function col(column: string, encoding: Encoding = "raw"): Column {
 /**
  * The `issues` columns that travel, keyed by the payload name the seam uses.
  *
- * This is `docs/sync.md`'s field inventory for `issues`, plus `checkoutAgent` and
+ * This is `design/sync.md`'s field inventory for `issues`, plus `checkoutAgent` and
  * `checkoutAt` — which travel, but *"never as a plain field write"*: they are the
  * projection of a lease. They are accepted here because the merged claim
  * operations already carry them as fields and refusing them would drop a claim
@@ -141,6 +145,8 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   checkoutAt: col("checkout_at"),
   createdAt: col("created_at"),
   updatedAt: col("updated_at"),
+  // The status derivation last wrote, cleared by any other move (migration 017).
+  derivedStatus: col("derived_status"),
 };
 
 export const COMMENT_FIELDS: Record<string, Column> = {
@@ -174,7 +180,7 @@ export const MILESTONE_FIELDS: Record<string, Column> = {
  * The issue columns computed from other synchronized columns: `normalized_title` from
  * `title`, `depth` from the parent's depth. Never part of a change a device journals —
  * no provenance, never contested — and never read from an operation by this build: the
- * applier computes them from what it wrote (`docs/sync.md`, "Derived columns").
+ * applier computes them from what it wrote (`design/sync.md`, "Derived columns").
  */
 export const DERIVED_ISSUE_FIELDS: ReadonlySet<string> = new Set(["normalizedTitle", "depth"]);
 const DERIVED_ISSUE_COLUMNS: ReadonlySet<string> = new Set(["normalized_title", "depth"]);
@@ -207,7 +213,7 @@ export const PROJECT_COLUMNS: Record<string, Column> = withColumnAliases(PROJECT
  * `createIssue` declares `{ estimatedSeconds, acceptanceCriteria, … }`, while
  * `updateIssue` declares `{ ...next }` where `next` is the SQL patch it is about
  * to run — so its keys are `estimated_seconds`, `acceptance_criteria`,
- * `normalized_title`. `docs/sync.md` names the fields in its inventory as
+ * `normalized_title`. `design/sync.md` names the fields in its inventory as
  * columns and gives its envelope example single-word fields, so it settles
  * nothing either.
  *
@@ -404,7 +410,7 @@ function restoreActor(actor: string | null | undefined): boolean {
  * store read the clock a millisecond before its journal did, and whose row the applier
  * catch-up re-dates once. When the only create is one a restore staged, there is no true
  * time or author to converge on, and a row this device holds keeps its own
- * (`docs/sync.md`, "A restore's own actor and instant are never a create's").
+ * (`design/sync.md`, "A restore's own actor and instant are never a create's").
  */
 function canonicalCreate(input: ApplyInput): { at: string; actor: string | null } | null {
   if (input.verb !== "create" || input.atIsCreate !== true) return null;
@@ -592,6 +598,12 @@ export function applyToDatabase(db: DatabaseSync, input: ApplyInput): boolean {
       return applyQueue(db, input);
     case "lease":
       return applyLease(db, input);
+    case "attempt":
+      return applyAttempt(db, input);
+    case "attemptTransition":
+      return applyAttemptTransition(db, input);
+    case "attachment":
+      return applyAttachment(db, input);
     case "conflict":
       /**
        * Not applied by this build, and not an error either.
@@ -681,6 +693,33 @@ export function settingsMoved(db: DatabaseSync, applied: boolean): boolean {
   return applied;
 }
 
+/**
+ * What an issue operation may say about who wrote its status (`derived_status`, migration 017).
+ *
+ * A `derivedStatus` that is not the status the row will hold is dropped: it names a status
+ * derivation wrote once, and the row has since moved on, so taking it would claim for
+ * derivation a status somebody else set. (The schema's trigger would null it too; dropping it
+ * here keeps a stale value from being written at all.)
+ *
+ * A derived move from a build before 017 carries its `derived` marker and its `status` but no
+ * `derivedStatus`. It is still derivation's write, so the row says so, as it would have had
+ * the sender known the column; left as it was, the trigger would clear it.
+ */
+function settleDerivedStatus(db: DatabaseSync, entityId: string, payload: Record<string, unknown>, pairs: Array<[string, unknown]>): void {
+  const statusPair = pairs.find(([column]) => column === "status");
+  const held = db.prepare("SELECT status FROM issues WHERE id = ?").get(entityId) as { status: string } | undefined;
+  const resulting = statusPair !== undefined ? statusPair[1] : (held?.status ?? null);
+  const index = pairs.findIndex(([column]) => column === "derived_status");
+  if (index >= 0) {
+    const value = pairs[index]![1];
+    if (value !== null && value !== resulting) pairs.splice(index, 1);
+    return;
+  }
+  if (typeof payload.derived === "string" && statusPair !== undefined && typeof statusPair[1] === "string") {
+    pairs.push(["derived_status", statusPair[1]]);
+  }
+}
+
 function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   if (input.verb === "delete") return tombstone(db, input, "issues", "id");
 
@@ -688,6 +727,7 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
   // A derived column is computed here from what is written, never taken from the operation.
   const pairs = project(payload, ISSUE_COLUMNS).filter(([column]) => !DERIVED_ISSUE_COLUMNS.has(column));
   redirectRemoved(db, input, pairs);
+  settleDerivedStatus(db, input.entityId, payload, pairs);
 
   const exists = db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(input.entityId) as
     | { hit: number }
@@ -705,7 +745,23 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
 
   if (!exists) {
     insertIssue(db, input, pairs);
-  } else if (pairs.length > 0) {
+    /**
+     * A child created to block its parent until done adds that one edge to the parent's set,
+     * merged into whatever the parent holds: an addition, never a replacement, so a child made
+     * offline elsewhere keeps its edge. Dated at the child's create, by its author.
+     */
+    const child = db.prepare("SELECT parent_id, block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(input.entityId) as
+      | { parent_id: string | null; block_parent_until_done: number; created_by: string | null; created_at: string }
+      | undefined;
+    if (child && child.parent_id !== null && child.block_parent_until_done === 1) {
+      db.prepare(
+        `INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`,
+      ).run(input.entityId, child.parent_id, child.created_by, child.created_at);
+    }
+  } else if (input.verb === "create" && typeof input.seq === "number") {
+    keepChildEdgeAgainstEarlierSet(db, input);
+  }
+  if (exists && pairs.length > 0) {
     const before = identifierOf(db, input.entityId);
     displaceIdentifierHolder(db, input, pairs);
     const values = new Map(pairs);
@@ -750,10 +806,44 @@ function applyIssue(db: DatabaseSync, input: ApplyInput): boolean {
    * forgets the version of a set the epoch does not hold (`rewind.ts`).
    */
   const setLogged = db.prepare("SELECT 1 AS hit FROM sync_entity_versions WHERE entity = 'relation' AND entity_id = ?").get(input.entityId) !== undefined;
-  if (Array.isArray(payload.blockedBy) && !setLogged) {
+  /**
+   * And only when this apply made the issue: a create arriving over one this device already
+   * holds — its own coming back, above all — would replace the set with the one the issue was
+   * born with, and so dropped the edge a child created to block it had added since. That was
+   * how a `blockParentUntilDone` edge was lost even on the device that made it.
+   */
+  if (Array.isArray(payload.blockedBy) && !setLogged && !exists) {
     writeBlockers(db, input.entityId, payload.blockedBy as unknown[], input);
   }
   return true;
+}
+
+/**
+ * A create of an issue this device already holds — its own, coming back — of a child made to
+ * block its parent: a blocker set applied here since, but earlier in the log, removed the edge
+ * the child had added locally. Read in log order the create comes later and adds it, so it is put
+ * back here too, as `keepChildEdgesInLogOrder` does for a snapshot. The set's position is the seq
+ * of the operation that last wrote it here; a set this device wrote and has not had back yet is
+ * later in the log than this create, and stands.
+ */
+function keepChildEdgeAgainstEarlierSet(db: DatabaseSync, input: ApplyInput): void {
+  const child = db.prepare("SELECT parent_id, block_parent_until_done, created_by, created_at FROM issues WHERE id = ?").get(input.entityId) as
+    | { parent_id: string | null; block_parent_until_done: number; created_by: string | null; created_at: string }
+    | undefined;
+  if (!child || child.parent_id === null || child.block_parent_until_done !== 1) return;
+  const write = db
+    .prepare(
+      `SELECT a.seq AS seq, w.op_id AS op FROM sync_field_writes w LEFT JOIN sync_applied a ON a.op_id = w.op_id
+        WHERE w.entity = 'relation' AND w.entity_id = ? AND w.field = 'blockedBy'`,
+    )
+    .get(child.parent_id) as { seq: number | null; op: string } | undefined;
+  if (write !== undefined && (write.seq === null || write.seq > (input.seq as number))) return;
+  db.prepare(`INSERT OR IGNORE INTO relations (blocker_id, blocked_id, type, created_by, created_at) VALUES (?, ?, 'blocks', ?, ?)`).run(
+    input.entityId,
+    child.parent_id,
+    child.created_by,
+    child.created_at,
+  );
 }
 
 /**
@@ -1582,7 +1672,7 @@ function settledInRead(db: DatabaseSync, read: SnapshotRead, issueId: string, ke
  * The end of a snapshot read, for every document: this device's own revisions the log has not
  * reached are placed after the log's (`placeOwnAgain`), and — when `rewind` — every other
  * revision the snapshot did not place is dropped. That is a revision the log does not hold: a
- * copy an older build made, or one pushed to an epoch a restore rewound (`docs/sync.md`).
+ * copy an older build made, or one pushed to an epoch a restore rewound (`design/sync.md`).
  * Without `rewind` (a join, whose rows are this workspace's own and are sent by the seed, or a
  * snapshot from a fold before this build) they stay where they are.
  */
@@ -2075,9 +2165,24 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const hasTarget = "targetDate" in input.payload;
   const hasStart = "startDate" in input.payload;
   const hasUpdated = typeof input.payload.updatedAt === "string";
-  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated) return false;
+  /**
+   * Criterion marks (`criterion<n>`, `milestone-goal.ts`): each key is one criterion's mark,
+   * applied only when named, like every other facet; a null value clears it. A value that is
+   * not a mark is ignored rather than written half-formed.
+   */
+  const marks = Object.keys(input.payload)
+    .map((key) => ({ key, position: criterionMarkPosition(key) }))
+    .filter((entry): entry is { key: string; position: number } => entry.position !== null);
+  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated && marks.length === 0) return false;
 
   if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
+  for (const { key, position } of marks) {
+    const value = input.payload[key];
+    const mark = value === null ? null : criterionMarkFromValue(position, value);
+    if (value !== null && mark === null) continue;
+    writeCriterionMark(db, input.entityId, position, mark === null ? null : criterionMarkValue(mark));
+  }
+  if (marks.length > 0 && !hasMembers && !hasTarget && !hasStart && !hasUpdated) return true;
   /**
    * When the milestone last changed, as the device that changed it wrote it: the payload's
    * `updatedAt`, which every build since this one sends (`journal.ts`, the row diff). An
@@ -2186,7 +2291,7 @@ function entryMetadata(rows: readonly EntryRow[]): Map<string, EntryMetadata> {
  *
  * The list travels as ids, because the ORDER is what is contested and what the rank
  * is recomputed from; the per-entry facts travel beside it, in `entries`, keyed by
- * issue id — `docs/sync.md`: *"`added_by`, `added_at` and `note` ride along"*. Before
+ * issue id — `design/sync.md`: *"`added_by`, `added_at` and `note` ride along"*. Before
  * they did, a note written on one device never reached another, and every apply wrote
  * the applying operation's actor and time over every entry, so a plan reordered on one
  * device erased every other device's record of who queued what.

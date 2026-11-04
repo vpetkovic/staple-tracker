@@ -140,6 +140,13 @@ function exerciseTheSeam(store: WorkspaceStore): void {
   store.addComment(child.identifier, "a comment", actor, "agent");
   store.putDocument(child.identifier, "plan", "# plan\n", { author: actor, title: "Plan" });
   store.putDocument(child.identifier, "plan", "# plan, v2\n", { author: actor, baseRevision: 1 });
+  const attached = store.attachFile(child.identifier, {
+    filename: "note.txt",
+    bytes: Buffer.from("log\n"),
+    caption: "a log",
+    author: actor,
+  });
+  store.removeFile(attached.id, actor);
   store.checkoutIssue(blocker.identifier, actor);
   store.releaseIssue(blocker.identifier, actor);
   store.gateIssue(epic.identifier, { owner: "vp", comment: "please look" }, actor);
@@ -217,6 +224,25 @@ function history(store: WorkspaceStore): void {
  * the fake refuses a non-object payload, so an emitter sending one fails the sync here.
  */
 async function everythingTheClientSends(): Promise<FakeSyncServer> {
+  /**
+   * The process's staple home, as a real one has: its own, with no hub. An attempt
+   * transition records machine-wide counts from the hub of the home the process runs under
+   * (`telemetry/presence.ts`), and a recorded payload must not depend on whichever hub
+   * another test left in the shared default home.
+   */
+  const machineHome = mkdtempSync(join(tmpdir(), "staple-emit-machine-"));
+  homes.push(machineHome);
+  const previousHome = process.env.STAPLE_HOME;
+  process.env.STAPLE_HOME = machineHome;
+  try {
+    return await driveEveryEmitter();
+  } finally {
+    if (previousHome === undefined) delete process.env.STAPLE_HOME;
+    else process.env.STAPLE_HOME = previousHome;
+  }
+}
+
+async function driveEveryEmitter(): Promise<FakeSyncServer> {
   const server = new FakeSyncServer({ repositoryId: REPO_ID });
   // Lease payloads carry server time. A fixed clock keeps the recorded ones comparable.
   server.now = () => Date.parse("2026-09-10T12:00:00.000Z");
@@ -319,8 +345,9 @@ describe("every payload a real emitter sends is a JSON object", () => {
     // The plan's order, with who queued each entry, when and why beside it — a conflict
     // resolution too, from the side it chose (conflicts.ts, "the entries a plan record keeps").
     expect(new Set(listKey("queue.replace"))).toEqual(new Set(["entries,order"]));
-    // A blocker set, with who made each edge and when beside it.
-    expect(new Set(listKey("relation.update"))).toEqual(new Set(["blockedBy,edges"]));
+    // A blocker set, with who made each edge and when beside it, and the `blockers_changed` it
+    // narrated, which a receiver re-emits dated at the origin (`cloud/reemit.ts`).
+    expect(new Set(listKey("relation.update"))).toEqual(new Set(["blockedBy,edges,originEvents"]));
     expect(listKey("status.update")).toContain("order");
     expect(listKey("kind.update")).toContain("order");
     expect(listKey("milestone.replace").every((keys) => keys.split(",").includes("members"))).toBe(true);

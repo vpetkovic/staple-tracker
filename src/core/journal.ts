@@ -2,7 +2,7 @@
  * The journal seam — the one place a repository mutation becomes a replicable
  * operation.
  *
- * Contract: `docs/sync.md`, "The journal seam and what it owes". That section
+ * Contract: `design/sync.md`, "The journal seam and what it owes". That section
  * states seven obligations; this file is where six of them are enforced and the
  * seventh (nothing outside the boundary) is enforced by omission — migrations,
  * snapshots and the hub never call in here.
@@ -44,6 +44,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { NARRATION_KEY } from "./cloud/narration.js";
 import { stapleHome } from "../config/home.js";
 import { connectionPath } from "./cloud/connection.js";
 import { readDeviceId } from "./cloud/device.js";
@@ -60,7 +61,7 @@ const DERIVED_FIELDS: ReadonlySet<string> = new Set(["normalizedTitle", "depth"]
 /** Both spellings, for provenance a snapshot or an older build's operation names by column. */
 const DERIVED_ISSUE_KEYS: ReadonlySet<string> = new Set([...DERIVED_FIELDS, "normalized_title"]);
 
-/** Every entity an operation can name. Closed set — see docs/sync.md. */
+/** Every entity an operation can name. Closed set — see design/sync.md. */
 export const SYNC_ENTITIES = [
   "issue",
   "comment",
@@ -75,6 +76,11 @@ export const SYNC_ENTITIES = [
   "queue",
   "lease",
   "conflict",
+  // Protocol 3: execution attempts (`design/execution-telemetry.md`, "Where it lives").
+  "attempt",
+  "attemptTransition",
+  // Protocol 4: typed file attachments. Metadata always; bytes only when they fit.
+  "attachment",
 ] as const;
 export type SyncEntity = (typeof SYNC_ENTITIES)[number];
 
@@ -136,8 +142,12 @@ export interface SeedIntent {
  */
 export const JOURNAL_MAX_OP_BYTES = 512 * 1024;
 
-/** The protocol this build speaks. */
-export const SYNC_PROTOCOL = 1;
+/**
+ * The protocol this build's operations are stamped with: the workspace client's
+ * (`CLIENT_PROTOCOL`, `cloud/client.ts`). 4 since typed file attachments — a new entity
+ * kind is a protocol change, and the Worker that knows `attachment` is deployed first.
+ */
+export const SYNC_PROTOCOL = 4;
 
 /**
  * Derive the operation id.
@@ -253,9 +263,50 @@ interface SyncStateRow {
  * `opId`, so a redelivered operation re-derives the same keys and the partial
  * unique index on `events.dedup_key` absorbs the second insert.
  */
+/**
+ * One status-moving or edge event a local mutation emitted, carried on the operation that
+ * made it (`originEvents`) so a device applying that operation re-emits the same event,
+ * dated at the origin's own instant (`design/sync.md`, "Events are re-derived, never
+ * transported"; `design/timing-semantics.md`, "Multi-device").
+ */
+export interface OriginEvent {
+  /** The issue the event is on: not always the operation's own entity (a parent's blocker set rides on the child's create). */
+  readonly issueId: string;
+  readonly kind: string;
+  readonly at: string;
+  readonly actor: string | null;
+  /** The event's `seq` on the device that wrote it: the tie-break every device orders by (`EVENT_ORDER`). */
+  readonly seq: number;
+  readonly payload: Record<string, unknown>;
+}
+
+/** The event kinds an operation carries for re-emission: every status-moving kind, and the blocker set. */
+export const REEMITTED_EVENT_KINDS: ReadonlySet<string> = new Set([
+  "issue_created",
+  "status_changed",
+  "checkout",
+  "claim_stolen",
+  "release",
+  "claim_released_stale",
+  "blockers_changed",
+]);
+
 class JournalScope {
   readonly intents = new Map<string, JournalIntent & { payload: Record<string, unknown> }>();
+  /** The re-emittable events this mutation wrote, by issue, in order. */
+  readonly originEvents = new Map<string, OriginEvent[]>();
   private eventOrdinal = 0;
+  private instant: string | null = null;
+
+  /**
+   * The mutation's one instant: read from the clock once, on first use, and handed to every
+   * writer in the scope — the row, its events and the attempt ledger — so one mutation's
+   * boundaries are one instant (`design/timing-semantics.md`, "Boundary rules").
+   */
+  at(): string {
+    this.instant ??= nowIso();
+    return this.instant;
+  }
 
   constructor(
     readonly token: string,
@@ -334,8 +385,11 @@ export interface FieldWriteRecord {
  * newest write refreshes its attribution rather than being ignored.
  */
 export function recordFieldWrites(db: DatabaseSync, record: FieldWriteRecord): void {
-  // A derived column is nobody's write, on every path that records one (`docs/sync.md`, "Derived columns").
-  const fields = record.entity === "issue" ? record.fields.filter((field) => !DERIVED_ISSUE_KEYS.has(field)) : record.fields;
+  // A derived column is nobody's write, on every path that records one (`design/sync.md`, "Derived columns"),
+  // and an operation's narration is not a field at all (`cloud/narration.ts`).
+  const fields = (record.entity === "issue" ? record.fields.filter((field) => !DERIVED_ISSUE_KEYS.has(field)) : record.fields).filter(
+    (field) => field !== NARRATION_KEY,
+  );
   if (fields.length === 0) return;
   const insert = db.prepare(
     `INSERT INTO sync_field_writes
@@ -399,6 +453,7 @@ export function recordInheritedFieldWrites(
   priorVersion: number,
 ): void {
   if (entity === "issue") writes = writes.filter((write) => !DERIVED_ISSUE_KEYS.has(write.field));
+  writes = writes.filter((write) => write.field !== NARRATION_KEY);
   if (writes.length === 0) return;
   const insert = db.prepare(
     `INSERT INTO sync_field_writes
@@ -543,6 +598,11 @@ export class Journal {
     return this.knownDeviceId;
   }
 
+  /** This device's id as the journal holds it, or null on a machine that never connected. */
+  deviceIdentity(): string | null {
+    return this.deviceId;
+  }
+
   /** True when this workspace has both an identity and a bound device. */
   armed(): boolean {
     if (this.deviceId === null) return false;
@@ -565,6 +625,23 @@ export class Journal {
   /** The dedup key an event should carry, or null outside any scope. */
   eventDedupKey(kind: string): string | null {
     return this.scope ? this.scope.nextEventKey(kind) : null;
+  }
+
+  /** The current mutation's one instant, or the clock outside a scope. */
+  mutationAt(): string {
+    return this.scope ? this.scope.at() : nowIso();
+  }
+
+  /**
+   * A local mutation wrote a re-emittable event: note it, so the operation it belongs to
+   * carries it (`flush`). Nothing while applying a pulled operation.
+   */
+  noteEvent(issueId: string | null | undefined, event: OriginEvent): void {
+    const scope = this.scope;
+    if (!scope || scope.suppressed || !issueId || !REEMITTED_EVENT_KINDS.has(event.kind)) return;
+    const list = scope.originEvents.get(issueId) ?? [];
+    list.push(event);
+    scope.originEvents.set(issueId, list);
   }
 
   /** True while a mutation scope is open. Read by the characterization tests. */
@@ -720,8 +797,33 @@ export class Journal {
     if (!state?.repository_id) return;
     this.mergeRowChanges(scope, changes);
     if (scope.intents.size === 0) return;
+    /**
+     * The events this mutation narrated, on the operation that carries the change: an issue's
+     * on its `issue` operation, a blocker set's on its `relation` operation when the mutation
+     * wrote one and on the issue's otherwise (a create carries its blockers inside). Not a
+     * column: the applier re-emits them (`cloud/reemit.ts`) and writes nothing from them.
+     */
+    /**
+     * EVERY `issue` and `relation` operation carries the key, an empty list when the mutation
+     * narrated nothing — a vocabulary migration, a settlement, a seed, a heal, a republish — so
+     * a receiver invents no event for a write the origin deliberately wrote none for. An event
+     * on an issue whose own operation this scope did not write (a parent's blocker set, which a
+     * child's create carries) rides on the first such operation, naming its issue.
+     */
+    const carriers = [...scope.intents.values()].filter((intent) => intent.entity === "issue" || intent.entity === "relation");
+    for (const carrier of carriers) carrier.payload.originEvents = [];
+    for (const [issueId, events] of scope.originEvents) {
+      const issueIntent = scope.intents.get(`issue\u0000${issueId}`);
+      const relationIntent = scope.intents.get(`relation\u0000${issueId}`);
+      for (const event of events) {
+        const target = (event.kind === "blockers_changed" ? (relationIntent ?? issueIntent) : (issueIntent ?? relationIntent)) ?? carriers[0];
+        if (target) (target.payload.originEvents as OriginEvent[]).push(event);
+      }
+    }
 
-    const createdAt = nowIso();
+    // The mutation's one instant: its operations are dated with its rows and its events, so a
+    // conflict record's `local_at` and `remote_at` are the instants the two changes happened.
+    const createdAt = scope.at();
     /**
      * Refused here, on the device, before a row is written — *"a document revision
      * larger than the payload cap is refused at journal time, with the same code, so the
@@ -826,7 +928,7 @@ export class Journal {
    * operation of its own: an `update`, or a `create` for a row it inserted, attributed to
    * the mutation's actor. A declared `delete` is left as it is.
    *
-   * A derived issue column is never part of the change (`docs/sync.md`, "Derived
+   * A derived issue column is never part of the change (`design/sync.md`, "Derived
    * columns"): no provenance, never contested, and ignored by this build's applier, which
    * computes it. What an issue operation does carry, as the row holds it, is a copy for the
    * builds from before this one, whose applier reads it — the normalized title beside any

@@ -52,7 +52,23 @@ export default defineConfig({
      * repository's `dist-package/`, which is a developer's build output and can be
      * absent, stale, or mid-rebuild.
      */
-    globalSetup: ["test/setup/package-payload.ts"],
+    globalSetup: ["test/setup/isolated-home.ts", "test/setup/package-payload.ts"],
+
+    /**
+     * Every worker runs with the run's private HOME and STAPLE_HOME, and the run fails
+     * if the operator's real hub was created, migrated or written with scratch
+     * workspaces (`test/setup/isolated-home.ts`). A test that forgets its own
+     * STAPLE_HOME lands in the temp home instead of the live one.
+     *
+     * Every test starts after one turn of the worker's event loop, so a file of
+     * `spawnSync` tests cannot starve vitest's RPC for longer than one test
+     * (`test/setup/turn-event-loop.ts`).
+     *
+     * `stall-probe.ts` does nothing unless STAPLE_TEST_STALL_LOG names a file; then it
+     * logs every stretch in which a worker's loop did not turn, with the tests that
+     * ran in it.
+     */
+    setupFiles: ["test/setup/isolate-env.ts", "test/setup/turn-event-loop.ts", "test/setup/stall-probe.ts"],
 
     /**
      * Vitest's default is 5000ms, which is wrong for this suite.

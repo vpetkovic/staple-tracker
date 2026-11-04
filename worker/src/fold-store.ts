@@ -227,6 +227,7 @@ export interface StepRow extends FoldOpRow {
   schema_version: number;
   /** UTF-8 bytes of the payload. */
   bytes: number;
+  fields: number;
   /** Quotes and backslashes in the payload (`fold-work.ts`). */
   escapes: number;
 }
@@ -297,8 +298,8 @@ export interface RunLimits {
  * (`fold-revisions.ts`). When its placement needs more than the run may read, the run ends before
  * it: that operation is the first of the next step, where it can always be placed.
  *
- * Without `limits` the run folds everything it is given, however much that reads. That is a tail
- * folded on top of a mark by a read, which is part of a step some request already fitted.
+ * Historical tails use the same work and placement bounds as a new step. A partial tail
+ * is persisted as an intermediate mark so the next request can continue from it.
  */
 async function foldRun(
   env: Env,
@@ -382,7 +383,7 @@ async function foldRun(
   }
 
   const cumulative = runWork(
-    rows.map((row, index) => ({ keys: keysOf[index]!, bytes: row.bytes, escapes: row.escapes })),
+    rows.map((row, index) => ({ keys: keysOf[index]!, bytes: row.bytes, escapes: row.escapes, fields: row.fields })),
     (key) => sizes.get(key),
   );
   let take = rows.length;
@@ -493,7 +494,7 @@ async function foldRun(
           placer.walkLimit = Number.POSITIVE_INFINITY;
           continue;
         }
-        if (!must && reads >= limits!.reads) break folding;
+        if (reads >= (must ? Math.max(limits?.reads ?? 0, FOLD_STEP_READS) : limits!.reads)) break folding;
         reads += 1;
         await readForPlacement(env, repoId, epoch, base.seq, placer, placed.need);
       }
@@ -743,12 +744,13 @@ export async function advanceFold(
      * at most `limit` rows, never over the rest of the backlog.
      */
     const read = await env.DB.prepare(
-      `SELECT seq, op_id, entity, entity_id, verb, actor, created_at, server_ts, schema_version, bytes, escapes,
+      `SELECT seq, op_id, entity, entity_id, verb, actor, created_at, server_ts, schema_version, bytes, escapes, fields,
               CASE WHEN spent - bytes < ?5 THEN payload END AS payload
          FROM (SELECT *, SUM(bytes) OVER (ORDER BY seq ROWS UNBOUNDED PRECEDING) AS spent
                  FROM (SELECT seq, op_id, entity, entity_id, verb, actor, created_at, server_ts,
                               schema_version, payload, length(CAST(payload AS BLOB)) AS bytes,
-                              ${ESCAPES("payload")} AS escapes
+                              ${ESCAPES("payload")} AS escapes,
+                              CASE WHEN verb = 'create' THEN 0 ELSE (SELECT COUNT(*) FROM json_each(payload)) END AS fields
                          FROM ops
                         WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 AND seq <= ?4
                         ORDER BY seq
@@ -995,7 +997,8 @@ async function foldAt(
   if ((size?.n ?? 0) > FOLD_STEP_OPS || (size?.bytes ?? 0) > TAIL_BYTES) throw foldBehind(base.seq, cutoff);
   const read = await env.DB.prepare(
     `SELECT seq, op_id, entity, entity_id, verb, payload, actor, created_at, server_ts, schema_version,
-            0 AS bytes, 0 AS escapes
+            length(CAST(payload AS BLOB)) AS bytes, ${ESCAPES("payload")} AS escapes,
+            CASE WHEN verb = 'create' THEN 0 ELSE (SELECT COUNT(*) FROM json_each(payload)) END AS fields
        FROM ops
       WHERE repo_id = ?1 AND epoch = ?2 AND seq > ?3 AND seq <= ?4
       ORDER BY seq`,
@@ -1003,7 +1006,18 @@ async function foldAt(
     .bind(repoId, epoch, base.seq, cutoff)
     .all<StepRow>();
   // Whole: the tail is part of a step some request already fitted to its budget.
-  const run = await foldRun(env, repoId, epoch, base, read.results, cutoff, null);
+  const run = await foldRun(env, repoId, epoch, base, read.results, cutoff, {
+    work: FOLD_STEP_WORK, reads: FOLD_STEP_READS, walk: FOLD_STEP_WALK, mayBeEmpty: false,
+  });
+  if (run.folded < read.results.length) {
+    if (run.folded > 0) await env.DB.batch([
+      ...writeVersions(env, repoId, epoch, run.fold, run.changed, run.keyOf),
+      env.DB.prepare(`INSERT OR IGNORE INTO fold_marks (repo_id, epoch, seq, op_count, schema_version, kinds)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)`).bind(repoId, epoch, run.mark.seq, run.mark.opCount,
+          run.mark.schemaVersion, JSON.stringify(run.mark.kinds)),
+    ]);
+    throw foldBehind(run.mark.seq, cutoff);
+  }
   return { base, fold: run.fold, changed: run.changed, created: run.created, mark: run.mark };
 }
 

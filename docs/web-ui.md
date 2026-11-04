@@ -1,1020 +1,145 @@
-# Web UI
+---
+title: Web UI tour
+sidebar_label: Tour
+description: Open the local web UI and find your way around it, from the task tree and the pickup queue to task detail, autopilot runs and settings.
+---
+
+# Web UI tour
+
+Use the web UI to see the whole plan at once and steer it: what is ready, what is
+blocked, what agents hold and what needs you. It works on the same tickets as the
+CLI and MCP, so a change made anywhere shows up here within seconds.
+
+The screenshots show a demo workspace called `lumen` (prefix `LUM`).
+
+## 1. Open it
 
 ```bash
-staple open      # prints http://127.0.0.1:4400/?token=… and opens your browser
+staple open
 ```
 
-One command, no daemon: the server runs in the foreground and Ctrl-C closes it
-along with every database handle, then exits 130 (143 for SIGTERM). A second
-Ctrl-C or SIGTERM while it is closing is absorbed, not treated as a harder kill.
-`--hub` serves every registered workspace at
-once; the browser behaviour follows `config browser=auto|always|never`.
+```text
+staple ui — workspace "app" at http://localhost:4400/
+  (browser on this machine needs no token; API callers use ~/.staple/ui-token or ?token=25nHEhaY…)
+```
 
-Views: Tasks (the subtask tree), the pickup queue, the dependency graph and
-milestones, plus a detail panel with documents, comments, and the agent-payload
-pane, and the Work Workspace Settings dialog for the status and kind
-vocabularies and the settings registry.
+Your browser opens on this repository's workspace. The server listens on this
+machine only and stops on Ctrl-C.
 
-## Layout
+- `staple open --port 4410` picks the port. Without `--port`, staple takes 4400,
+  or a free port when 4400 is busy.
+- `staple open --hub` shows every workspace on this machine at once. See
+  [Several repositories](hub.md).
+- `staple open --no-browser` starts the server without opening a tab.
 
-Navigation on the left, content on the right — Linear's shape.
+## 2. Find your way around
 
-**The frame.** The page is the sidebar tint — one step off the content colour
-on the gray ramp, light and dark — and the content pane is an inset card on
-it: one hairline, an 8px gutter on top, right and bottom, a rounded top-left
-corner where it meets the rail. Below 768px the gutter and the radius go. Dark
-mode is charcoal, on the ramp (page 100, card 200, menus 300, foreground 900),
-not near-black.
+On a wide screen the **rail** on the left lists the views: *Tasks*, *Queue*,
+*Graph*, *Milestones* and *Estimates*, then *Usage* under *This computer*, and
+*Settings* with the dark-mode switch at the foot. The **top bar** names where you
+are, shows the sync state if the workspace uses [cloud sync](cloud-sync.md), and
+holds the search field and **New task**.
 
-**The rail** (232px) reads top to bottom: the **workspace switcher** (the
-workspace's name; in `--hub` mode a menu of *All workspaces* and every
-registered workspace, with each row's prefix), then one row with a bordered
-**New task** button (pen icon; the same `c` shortcut) beside a bordered
-**search** button (the command palette, `⌘K`) — shortcuts live in the
-tooltips, not in chips — then the views in named groups. Rows are 28px, 13px
-text, no gap; the active row is a fill and nothing else. The first group is
-**Workspace**: *Tasks*, *Queue*, *Graph*, *Milestones*. The groups are data
-(`components/nav/nav-model.ts`, an array of groups of items), so moving a view
-between groups is an edit to that array and not to the rail. The active view
-carries `aria-current="page"`; a group header is a real disclosure button in
-sentence case whose chevron shows on hover and focus. At the foot of the rail
-sit **Settings** (the Work Workspace Settings dialog) and **Dark mode**, both
-ordinary rows above a hairline.
-
-**Projects hang off Tasks.** The Tasks row carries a `+` — visible on hover and
-focus, always in the tab order — that opens the project dialog to create one,
-and lists every tracked project beneath itself as a sub-row (see *Projects*
-below): a project glyph one indent step in, the name, and the project's open
-issue count on the right (from the rows the page already holds), which gives
-way to the gear on hover. Clicking a project switches to Tasks and narrows it to that project's
-issues, and nothing else; the row then carries `aria-current="true"` for as
-long as Tasks is filtered to exactly it. Each sub-row has a gear that opens the
-same dialog on that project. On *All workspaces* in hub mode the rows are
-captioned with their workspace, which is what tells two projects with one name
-apart.
-
-The rail collapses with `[` or `⌘\` and remembers that it did; a *Show
-navigation* button then leads the content header. Below 768px the rail is a
-sheet opened from that same button and closed by a row, the scrim or Escape, so
-the list keeps its width on a narrow window.
-
-**The content header** is one 40px row: the view's name on the left and, on
-the right, **Group**, **Sort**, **Filter**, **Done** and last the **search**
-field, every one the same ghost button (28px, 13px, a 16px icon). The sort
-trigger says "Sort: Activity" with a small arrow for the direction; the
-direction's full reading ("Most active first") is its accessible name, its
-tooltip and the menu's direction rows. Filter carries its count as a badge.
-Below 768px the words drop and the controls become icon buttons with tooltips,
-and the search folds into an icon that expands on click and stays open while
-it holds text; below 640px the list's date column hides (its tooltip keeps the
-stamp). The active-filter chips sit directly beneath the row and take no space
-when no filter is on. The Tasks view keeps every filter, sort and group control
-it had.
-
-## Grouping
-
-The tree is ungrouped by default: one hierarchy, parents over children. The
-"Group" control adds an axis — status, pickup order, epic, or kind — and each
-axis is a way of *displaying* the same rows, never a second copy of them.
-
-**Expansion.** Every parent has one expand/collapse state, keyed by the issue
-and shared by every axis, so an epic folded in the ungrouped view is folded
-under Group by Epic and vice versa; the choice survives the poll, a view switch,
-and a reload. On first visit — before you have clicked anything — a parent is
-**open when it, or anything beneath it, is active** (in progress, in review, or
-blocked) and **folded otherwise**, so live work is on screen and the backlog is
-not a wall. Group by Epic uses exactly that default; the epic's own row is the
-top of its section, its chevron is the only fold, and nothing is collapsed on
-your behalf.
-
-**Epic sections.** Under Group by Epic every row sits under its top-level
-ancestor, with the epic itself as the section's first row (dimmed, when the
-current filter removed it) and "No epic" last for rows that have none. Adjacent
-sections are separated by one rule — 8px of air plus a hairline — whether the
-next section is headed by a real epic, a ghost of one, or the "No epic" header,
-at every width. There is no gap between an epic and its own first task.
-
-### Row cues
-
-Ungrouped is the normal working view, not the absence of information. Every row
-in it carries four readings, and none of them adds a pixel of height: the row is
-`--row-height` in every density preset — 36px, 28px compact, 44px on a coarse
-pointer — exactly as it was before the cues existed.
-
-- **Status** — the existing status icon, unchanged, in its own column.
-- **Kind** — the glyph the workspace configured for that kind (see *Glyph
-  catalog*), leading the identifier on every row.
-- **Pickup** — one glyph, and a number when there is one, immediately right of
-  the identifier.
-- **Milestone** — a `◇` marker when the row is planned under a milestone. It is
-  a button: it opens the Milestones view with that milestone focused.
-
-**The pickup cue speaks the queue's vocabulary** (see `docs/queue.md`), one word
-per row, first match wins:
-
-| Cue | Glyph | Prints | Means |
-| --- | --- | --- | --- |
-| Pickable | `▸` | `next` | the one row the resolver would hand an agent right now |
-| Queued | `#` | `#5` | eligible, but the plan puts an earlier row first — the **effective** position |
-| Queued (container) | `#` | `plan #2` | an epic or milestone the plan holds — the **plan** position |
-| Waiting | `⋯` | — | an unresolved blocker, or a blocked status |
-| Gated | `⚑` | — | a human review gate holds it, or it stands behind one |
-| In flight | `◐` | — | somebody is holding it, or it is already being worked |
-| Unqueued | `·` | — | not in the pickup plan — still work, just later |
-
-A **resolved** row has no pickup cue at all: finished work is not waiting for
-anything, and saying it is "not pickable" would file it beside work that is stuck.
-
-**Two numbers, and they are not interchangeable.** An actionable row prints its
-position in the *effective* order — the sequence an agent receives — and a
-container prints the position of the *plan* row it sits at, spelled out as
-`plan #2` so the two can never be read as one scale. A container is never in the
-effective order (the resolver expands it in place), so it never gets an
-effective number, and a leaf never borrows its container's plan number.
-
-**Glyph and word, never colour alone.** No cue carries a hue. Every one of them
-has a `title` tooltip and screen-reader text saying the same sentence — the word
-first, then what it means, then the position, then the queue resolver's own
-reason where there is one ("STA-3 is queued behind STA-9, awaiting approval by
-VP"). The milestone marker's accessible name names the milestone and says where
-it goes.
-
-**Where the numbers come from.** One read of `GET /api/queue` per poll, joined
-onto the list in the browser by identifier, memoised, refreshed by the same 1.5s
-fingerprint as everything else. That one join feeds both halves — the number a row
-prints and the number **Queue position** sorting orders it by are the same value,
-so the list can never sort by anything other than what it shows. The list
-*displays* these numbers and can never set them — presentation sort is not the
-queue.
-
-**Ungrouped only.** The grouped axes are unchanged, element for element, and the
-queue is not fetched while one of them is active — so the plan, both as a cue and
-as an order, is an affordance of the view that shows it. In hub mode the cues
-appear once a workspace is selected: a plan is a per-workspace sequence, and there
-is no cross-workspace order to show.
-
-## Sorting
-
-The "Sort" control sits beside "Group" and names both halves of its own state without
-being opened — "Sort: Activity" with a direction arrow on the trigger, and the whole
-reading, "Sort: Activity · Most active first", as its accessible name and tooltip, never an arrow you have to
-decode. Every mode is a real radio in a labelled group, so Tab and Enter operate it.
-The choice is stored **per workspace and per view** under the same
-`staple:view:v1` key as the grouping; a scope you have never set uses the default, and
-setting one back to the default forgets it rather than pinning it.
-
-**Sorting is not the queue.** Ordering the list by queue position is a statement about
-your screen; it cannot move an item in the pickup plan, change checkout eligibility, or
-reorder a dependency. See `docs/queue.md`.
-
-Direction flips the **primary key only** — every tie-break below runs forwards in both
-directions, so two rows that tie never swap and "descending, then ascending" is exactly
-where you started. Under Queue position, unqueued rows come last in both directions.
-Every chain ends in the identifier, which is unique and compared **numerically on the
-number part**, so STA-9 precedes STA-10 and the list cannot reshuffle on the 1.5s poll.
-
-| Mode | Orders by | Tie-break chain, in order | Parent rollup |
-| --- | --- | --- | --- |
-| **Activity** (default) | a live claim first, then the configured status order | priority → newest update → identifier | best activity tier in the subtree |
-| **Queue position** | the effective queue position; rows with one before rows without | activity → priority → newest update → identifier | earliest effective position in the subtree |
-| **Status** | the workspace's configured status order | priority → newest update → identifier | — |
-| **Priority** | critical → high → medium → low | activity → newest update → identifier | — |
-| **Updated** | when anything last moved | priority → identifier | latest update in the subtree |
-| **Created** | when the ticket was filed | priority → identifier | — |
-| **Identifier** | the number, numerically | — (identifiers are unique) | — |
-| **Title** | alphabetically, locale-aware | identifier | — |
-
-Only three modes roll a parent up over its descendants, and each is named above; the
-other five read the row and nothing else. A rollup counts only rows the current filter
-kept, so an order is always accountable from what is on the screen. A status the
-workspace order does not mention ranks last but still ranks.
-
-**Queue position has one scale, and it is the effective one.** A row sorts by the
-position its own cue prints — the place in the sequence an agent receives. A **container**
-never has one (the resolver expands it in place), so it sorts by the *earliest effective
-position among the rows it holds*; its `plan #2` caption is a place in the plan, a
-different ruler, and the sort never reads it. Anything the queue has no position for —
-waiting, gated, in flight, unqueued, resolved — sorts after everything that has one, in
-both directions. The numbers come from the same browser-side join as the cues, so the list
-always sorts by exactly what it prints.
-
-Sorting orders **siblings**: it never lifts a child out from under its parent, and it
-applies inside a group exactly as it does in the ungrouped view. Under Group by Status
-the activity tier is inert — every row in a status bucket ranks equally on it — so the
-default mode there is priority, then the newest update, then the identifier. Under
-**Group by Pickup order** the store's own dependency-ordered rank *is* the activity tier,
-so Activity — the default — renders the queue exactly as `/api/inbox` published it,
-"Least active first" renders the back of it, and every other mode reorders inside each
-section by the key you named. Gate holders still head Pending approval whatever you sort
-by: that is what the section is, not an order you chose.
-
-## Filtering
-
-The "Filter" button opens a two-page menu: pick a dimension, then pick values inside
-it. **Alternatives inside one dimension are ORed, dimensions are ANDed** — "gated or
-waiting, and in Release 1.0" is one question — and an empty selection is the *absence*
-of a constraint rather than "match nothing". Every option is enumerated from data the
-server sent: statuses and kinds from the workspace vocabulary, assignees and labels
-from the rows on the page, milestones from `/api/milestones`, epics from the rows' own
-ancestry. Nothing in the menu is a value this build invented.
-
-| Dimension | Values | Read from |
-| --- | --- | --- |
-| **Status** | the workspace's configured statuses | the issue |
-| **Kind** | the kinds present, in the configured order | the issue |
-| **Assignee** | the names on the page, plus Unassigned | the issue |
-| **Priority** | Urgent, High, Medium, Low | the issue |
-| **Label** | the labels on the page | the issue |
-| **Claim** | Working now, Stale claim, Held, Unclaimed | the claim reading |
-| **Handoff** | Stale worklog, No worklog | the worklog summary |
-| **Gate** | Awaiting approval, Queued behind a gate | the gate siblings |
-| **Pickup state** | Pickable, Queued, Waiting, Gated, In flight | the queue resolver |
-| **Milestone** | every milestone, by title | milestone **membership** |
-| **Epic** | the top-level ancestors present | the row's ancestry |
-| **Project** | every tracked project, by name (captioned with its workspace when the page spans several) | the issue's `projectId` |
-
-**Pickup state** is the resolver's own word for the row when the server sends one
-(`docs/queue.md`, step 3). When it does not, four of the five are derived locally in the
-resolver's order — gated (its own gate, or the gate it stands behind), waiting (an
-unresolved blocker or a blocked status), in flight (a claim, a checkout, or a working
-status), pickable (everything else) — and a resolved row has no pickup state at all.
-*Queued* is the one the browser never derives: it means "eligible, but the plan puts an
-earlier row first", and order is the resolver's knowledge, not the page's.
-
-**Milestone is membership, never the tree.** A milestone contains epics and tasks
-without reparenting them, so filtering by one selects its members — which may include a
-row whose own parent is not a member, and exclude a child of one that is.
-
-**Epic** is the top-level ancestor, and a top-level row is its own epic, so selecting one
-keeps the epic and everything under it.
-
-**Chips.** Every active value gets a chip naming its dimension and its value —
-"Pickup state: Gated", never a bare "Gated", because a label, an assignee and a
-milestone can all be called the same thing. Clicking a chip reopens its own menu, the
-`×` removes that one value, and "Clear all" resets to the shipped default (which
-re-hides done work).
-
-**Hierarchy survives a filter.** A parent the filter removed is still drawn above its
-surviving children, dimmed, as a ghost — it is a bracket around rows rather than a row,
-so it is not in any count and it folds like the real one would.
-
-**An empty page says why.** With nothing left, the view names the dimensions
-responsible: either the one whose removal would bring rows back and how many
-("Removing Priority (4) would bring rows back"), or that they exclude every row only in
-combination, or — for a selection that could not match anything whatever the data said,
-such as *done* plus *pickable* — that the two cannot both be true and one has to go.
-
-**Filters persist per workspace and per view**, under the same `staple:view:v1` key as
-the sort and the grouping. A scope you have never filtered in opens with whatever the
-pre-R4b global filter key holds, so nothing is lost on upgrade. Changing a filter is a
-statement about your screen: it cannot touch `queue.policy`, the pickup plan, or any
-write path.
-
-## What the view tests prove
-
-Grouping, sorting, filtering and the row cues shipped as four separate tickets and meet
-on one page. The tests that hold that page together are listed here so a change knows
-what it is up against — and so the two things they *cannot* say are written down rather
-than assumed.
-
-All of them are pure functions or `react-dom/server` markup: there is no browser, no
-jsdom and no screenshot harness in this repo. **A "visual check" below means the
-rendered markup at a narrow width (under the 719px two-line breakpoint) and a wide one,
-with class and attribute assertions, plus the `task-list.css` rule that does the rest.**
-
-One board — `views/tree/drift-fixture.ts` — backs all four files: two epics, one open
-and one folded, a gated child, a stale claim, a done child, a custom kind, a milestone
-whose two members sit under different epics, and a `/api/queue` payload covering every
-cue state. Every file below reads it, so a claim proved about the model is a claim about
-the same rows on the screen.
-
-| File | What it pins |
+| Keys | Does |
 | --- | --- |
-| `views/tree/view-combinations.test.ts` | every sort mode × every grouping axis keeps section membership, the header counts, the nesting and the published visible order; filter combinations keep the ghosts and agree with the counts the menu and the empty state print; a queued milestone member is cued and ordered consistently; a folded epic keeps its rollup and its cue |
-| `views/tree/polling-stability.test.ts` | the 1.5s poll changes nothing you chose — sort, filters, folds and cues all survive a fresh payload, a new queue payload moves the cues and nothing else, and the rendered page is identical bar the absolute timestamps |
-| `views/tree/view-a11y.test.tsx` | the sort trigger names the mode *and* the direction in all sixteen states; chips and the empty state name the dimension, the value and the count; all six cue words reach a screen reader; `aria-level` and `aria-expanded` on rows and group headers; the controls tab in reading order and the grid has one roving tab stop |
-| `views/tree/view-responsive.test.tsx` | all five groupings at 400px and 1440px draw the same sections, rows, levels and cues; labels degrade to dots; the rolled-up plan yields to a `max-[719px]:hidden` utility; the sheet reflows the row to two lines and never drops either cue |
+| `⌘K` / Ctrl-K | the command palette: jump to a view, a task or a setting |
+| `c` | New task |
+| `[` | hide or show the rail |
+| `j` / `k` | next or previous task while one is open |
+| Escape | close what is open |
 
-Alongside them, `lib/sort-modes.test.ts` walks each mode's key and tie-breaks,
-`lib/filter-dimensions.test.ts` and `components/filters/filters-render.test.tsx` walk the
-twelve dimensions, `views/tree/tree-model.test.ts` pins placement and ghosts, and
-`views/tree/group-header.test.tsx` pins the epic-axis rhythm.
+Below 768 px the UI becomes a phone app with a tab bar for the views. The address
+always describes the page, filters included, so you can bookmark or share a view.
 
-`view-combinations.test.ts` also pins the three things that used to be gaps: the chosen
-sort reaches **Group by Pickup order**, **Queue position** orders by the numbers the cues
-print, and a container is ranked on the effective scale rather than on its plan index.
+## 3. Tasks: the whole tree
 
-## Auth
+![The Tasks view: epics with their tickets nested beneath, status icons, blockers and who holds what](../site/static/img/screens/tasks-light.webp)
 
-Pages served to loopback carry their own token, so the browser never sees a
-token screen. The token — for curl, agents, and remote tabs — lives in
-`~/.staple/ui-token` (0600) and survives restarts; delete the file to rotate it.
+Every ticket, parents over children. Each row shows its status, what it waits on
+(*Blocked by 2*), what waits on it, and who holds it (*Working*). A folded epic
+shows its progress.
 
-Every `/api/*` route is gated by the per-process token (`X-Staple-Token`,
-`Authorization: Bearer`, or `?token=`), compared with `timingSafeEqual`; writes
-are `POST`-only and Origin-checked, and every route pins the methods it accepts.
-The app reads the token out of its own URL once, keeps it in `sessionStorage`,
-and strips it from the address bar. Arriving without a valid token renders an
-explanation, not a blank page.
+The **quick filters** (*My tasks*, *In progress*, *Blocked*, *High priority*),
+**Filter**, **Group**, **Sort** and search shape the list. Change a status from its
+icon, and click a ticket to open it (step 7).
 
-## Work Workspace Settings
+## 4. Queue: what agents take next
 
-The settings surface is titled exactly that. It opens from the Settings row at
-the foot of the navigation rail, from the command palette, or by URL: `?settings`
-opens it on its first category and `?settings=kinds` focuses one. Opening from
-the rail pushes one
-history entry, so Back closes it and lands on the page you were on; moving
-between categories replaces that entry rather than adding to it; Forward
-reopens it. A deep-link arrival pushed nothing, so closing strips the
-parameter in place.
+![The Queue view: the Next up band over the numbered pickup order, with each queued epic expanded into its tickets](../site/static/img/screens/queue-light.webp)
 
-**Two panes.** Left, the categories, exactly as the registry serves them —
-grouped under *Workspace* and *Global*, in registry order, with no list of
-their own in the browser: registering a category in
-`src/core/settings-registry.ts` is the whole of adding it to the nav. Right,
-the selected category, with its scope named beside its heading. Under the
-title a scope line says which workspace is being edited and where global
-preferences live (the `global.path` the envelope reports). Scroll position is
-kept per category, and selecting one does not move focus off the nav.
+The [pickup queue](queue.md) as one list. **Next up** names the ticket an agent
+asking now would get; below it, your plan in order, each queued epic or milestone
+expanded into its tickets. Drag rows (or Alt-↑ and Alt-↓) to reorder; *Queue a
+task, epic or milestone…* adds work, and a row's `⋯` menu removes it.
 
-**Narrow screens** (below 768px) stack the panes: the category list first,
-then the category, with a Back button in the header that returns to the list
-and puts focus back on the category you were in. The stacked frame is the
-whole viewport, so no form is clipped by a centred dialog.
+## 5. Graph: how work depends on work
 
-**Full screen.** On wide displays a toggle in the header takes the dialog
-edge to edge and back; it is per open and never persisted, so the shell
-always reopens as a dialog. Esc closes, as every dialog in the app does.
+![The Graph view: tickets as nodes inside their epics, with arrows from each ticket to the work waiting on it](../site/static/img/screens/graph-light.webp)
 
-What a category holds is decided by its registry `editor`: `statuses` and
-`kinds` are the two vocabulary editors below; a `fields` category renders a
-control per registered definition (see *Registry-driven categories*).
+Tickets that take part in a dependency, inside boxes for their epics, with an arrow
+from each ticket to the work that waits on it. Hover a ticket to light up the chain
+it waits on, and use the **Epics** picker to narrow the canvas.
 
-### Form primitives
+## 6. Milestones: dated plans
 
-Every category is built from one set of primitives (`settings/form/`), so
-saving, cancelling, dirty state, inline errors and conflicts behave the same
-way everywhere:
+![The Milestones view: a milestone card with its due date and progress, and beside it the milestone's summary and its members in order](../site/static/img/screens/milestones-light.webp)
 
-- **Field** — a label, a description, the control, an inline error
-  (`role="alert"`, tied to the control with `aria-describedby`) and a scope
-  tag that says *Workspace* or *Global* and where the value came from
-  (`default`, `workspace`, `config`). **Section** groups fields and carries the
-  error that belongs to no single field.
-- **ActionBar** — *Save changes* / *Cancel* / *Reset to defaults*. Nothing is
-  written until Save; Cancel drops the draft; Reset is offered only by forms
-  that have defaults to go back to. While a save is in flight the bar says
-  *Saving…* and every control is disabled; a refused save keeps the draft and
-  puts the store's sentence on the row or field it names, or on the section
-  when it names none. Nothing is paraphrased and nothing is retried.
-- **ReorderList** — drag by the handle, or the per-row *Move up* / *Move down*
-  buttons (always visible), or alt+arrow on the row. After a keyboard move
-  focus stays on the moved row: on the same button, or on the other one when
-  the row reached an end and that button became disabled.
-- **Destructive confirmation** — a removal opens an inline confirmation under
-  the row, with the migrate-to picker when issues still carry it; the
-  confirm button stays disabled until a target is chosen.
+Each [milestone](milestones.md) in plan order, with its due date, progress and
+what is in the way (*1 is blocked and 3 wait for approval.*). Select one to see
+what is in it and what comes next; reorder or remove members from their rows.
+**Open** shows its goal: each criterion with its verdict, and whether the
+milestone is on pace for its date.
 
-**Unsaved changes.** A form with a draft reports it to the shell, and every
-way out — the X, Esc, a click outside, the narrow layout's Back, selecting
-another category, closing the tab — asks first: *Discard changes* or *Keep
-editing*. Nothing leaves a dirty form on a keypress.
+## 7. Open a task
 
-**External revisions.** The 1.5s poll republishes the settings envelope while
-the dialog is open. A clean form simply shows the new state. A dirty form
-remembers the served state it started from; when that moves underneath it
-(another tab, an agent through MCP, the CLI) a conflict banner appears and
-Save is held until you choose: *Reload* drops the draft and shows the new
-state, *Keep my changes* keeps the draft and makes the next save a deliberate
-overwrite. The store remains the authority — a batch it refuses after that
-comes back as a refusal on the responsible row.
+![Task detail: the title, status and primary action at the top, the tabs, and the properties on the right](../site/static/img/screens/detail-light.webp)
 
-### Statuses and kinds
+A task opens in a drawer on the right. The top holds its status, a sentence about
+where it stands, and one primary action: *Start work*, *Mark done*, *Reopen*, or
+*Take it over* when the holder has gone quiet for 30 minutes. The tabs:
 
-The status set and the kind vocabulary are workspace data, not staple's
-(see [semantics.md](semantics.md)).
+| Tab | What it is for |
+| --- | --- |
+| **Details** | The description, the done-when criteria, the latest worklog, and what it waits on and holds up |
+| **Connections** | Its epic, sub-tasks and dependencies, with a map |
+| **Documents** | The plan, worklog and other documents agents stored, with every revision and a compare |
+| **Activity** | Comments and events by day; add a comment here |
+| **For agents** | Exactly what an agent sees when it opens this ticket, and its size in tokens |
+| **Time** | Estimate against actual work, and the forecast ([Budget and estimates](budget-and-estimates.md)) |
 
-Two lists. Each row has an editable label, a drag handle, and — for statuses —
-a category select; removing a row that issues still carry requires a target to
-migrate them onto. Reorder by dragging, or with the per-row move buttons, which
-are the keyboard path and are always visible rather than revealed on hover.
-Edits accumulate as a draft — the list shows what Save will produce, with the
-usage count moved along by a migrate-to removal — and Save posts them as one
-ordered, all-or-nothing batch of the same ops the MCP tools take. A refusal
-is the store's own sentence, on the row it names. A kind row carries one thing
-more: its glyph, which is also the control that changes it (see
-[Glyph picker](#glyph-picker)).
+When a ticket waits on your approval, a *Review gate* block sits above the tabs:
+approve all, approve some children, or send it back with a note
+([Approval gates](approval-gates.md)).
 
-Behaviour follows the CATEGORY, never the id. A workspace that adds `pairing` in
-`active` gets a claimable status wearing the in-progress glyph and the
-in-progress colour, with no new theme token — `styles/app.css` maps the eight
-categories onto the existing `--status-task-*` hues.
+## 8. Watch autopilot runs
 
-**Order.** The dialog's list is the CONFIGURED order. Lists and group headers use
-the LIST RANK, which the server computes: categories in a fixed sequence (active,
-review, gated, blocked, ready, unstarted, then done and cancelled) with the
-configured order breaking ties inside each one. So dragging reorders statuses
-within a category, and moving one between groups means changing its category.
-Rows sort by the same rank, so a header can never sit above rows ordered
-differently.
+Once the workspace has had an [autopilot run](runs.md), the rail gains an
+*Autopilot* section: a card per live run with its progress, next ticket and
+**Stop**, and *Run history* with how each run ended. Agents start runs; the web UI
+watches, pauses and stops them.
 
-`GET /api/settings` returns the vocabulary, the derived orders, the category set,
-and a per-id count of what still carries it. `POST /api/settings` takes
-`{ target, ops }` — the same ordered, all-or-nothing op batch as the
-`update_statuses` / `update_kinds` MCP tools — and answers with the identical
-envelope, so the page re-derives from one response rather than merging. It is
-the only route that both reads and writes.
+## 9. Estimates and Usage
 
-The same envelope carries the **settings registry**
-(see [configuration.md](configuration.md#the-settings-registry)): `registry`
-lists every category with its scope and editor and every typed definition;
-`values` holds this workspace's registered values, each with its `source`
-(`default` or `workspace`) and version; `unknownKeys` names stored keys this
-build has no definition for; and `global` is the machine's `config.json` with
-each value's `source` (`default` or `config`) — served read-only, because its
-write path is `staple config set`. `target: "settings"` takes
-`{ op: "set", key, value }` / `{ op: "reset", key }` ops for workspace keys
-and refuses a global one. `lib/settings.ts` exposes `settingCategories()`,
-`settingDefinitions()` and `settingValue()` over the served registry; nothing
-in the browser restates a definition.
+**Estimates** shows how long work really takes against its estimate, per kind of
+work. **Usage** shows this computer's provider limits and whether your pace keeps
+a reserve. Both are covered in [Budget and estimates](budget-and-estimates.md).
 
-### Registry-driven categories
+## 10. Settings
 
-A `fields` category is its definitions, rendered as controls chosen by each
-one's value schema: a boolean is a switch, an integer a number field with the
-schema's bounds, a string a text field whose description carries the pattern
-hint, an enum a select over the registry's values. Each control sits in a
-Field with the definition's label and description, its scope tag and source,
-and its own *Reset* to the default. Values are checked against the schema
-before the round trip; the store still refuses on its own terms, and that
-sentence lands on the field whose key it names. Save posts `target:
-"settings"` ops — `set` per changed key, `reset` for a stored value sent back
-to its default. Global-scope definitions render disabled with the sentence
-naming `staple config set`. Registering a definition is the whole of adding
-it to the page: nothing in the form names a setting.
+Open **Settings** from the foot of the rail, or `⌘K` then *Settings*.
 
-**Workflow** is the first such category in workspace scope, and its first
-control is the queue policy
-([configuration.md](configuration.md#queuepolicy)): a select over `advisory`
-and `strict`, with the registry's description stating before you save what
-`strict` changes for agents, and the scope tag beside it saying *Workspace ·
-default* until a value is stored and *Workspace · workspace* after. The
-category, the control and its explanation all come from the registry entry;
-`fields-form.test.tsx` renders a second fixture toggle beside it and pins
-that none of the shell's files names the setting or the category.
+- **Across all workspaces:** *Cloud account* and *Workspaces on this computer*
+  ([cloud sync](cloud-sync.md) and the [hub](hub.md)), *Usage* (provider budget
+  capture) and *This computer* (the default port and whether a browser opens).
+- **Per workspace:** *Statuses* and *Task types* (rename, add, reorder; turn on
+  milestones here), *Picking up work* (the queue's advisory or strict policy) and
+  *Cloud sync* for that workspace.
 
-Adding a setting or a category of your own is a registry entry and nothing
-else — the checklist is
-[configuration.md → Adding a setting](configuration.md#adding-a-setting). That
-the claim holds end to end is asserted rather than assumed:
-`test/settings-verification.test.ts` registers a category no build has ever
-had, serves it through the real HTTP server and renders this shell from that
-envelope, then reads the shell's own sources to prove none of them names it;
-`settings/settings-verification.test.tsx` renders every breakpoint with both a
-registry-driven and a vocabulary category, and pins the unsaved-changes guard,
-the conflict banner's two ways out, and the label, scope, error and
-`aria-current` wiring over every field and button on the surface.
+## Next
 
-### Cloud: the hub registry
+- [Budget and estimates](budget-and-estimates.md): the Estimates and Usage views.
+- [Several repositories](hub.md): one page over every workspace.
+- [Configuration](configuration.md): every setting the Settings sheet edits.
 
-The *Cloud* category (global scope) leads with the hub, then the **Hub
-registry** panel, then the workspace list. The panel is the page's half of
-`staple hub registry`: four tiles for its state (registry id, service,
-publishing, hub backups), then one block per step.
-
-- **Identity.** The hub's registry id, or *None yet*. *Mint an id* is
-  `staple hub registry id`; *Take on an existing id* is `staple hub registry
-  identity`. Replacing an id asks first, and the question is the server's
-  `describeIdentityReplacement` sentence. It is shown whenever there is a
-  previous id, because this machine cannot tell whether that id was used. The
-  yes names the id the warning was about. If another tab or the CLI changed the
-  stored id in the meantime, it is refused. Unavailable while the hub is
-  connected.
-- **Connection.** A collapsed form for endpoint, enrollment secret, label and
-  credential store. *Review connection* shows the hub's own preview; *Connect*
-  sends only the ticket and the secret. Connected, it offers *Disconnect the
-  hub*, which is local and leaves what was published on the service.
-- **Publish.** The publish switch, with `REGISTRY_DISCLOSURE` from the report,
-  and *Publish now*. The result lists every group the publish report carries:
-  what the service holds that this machine lacks, names that differ between
-  here and the registry, link retractions and re-links, and anything that
-  could not be published.
-- **Backups on the service.** Its own switch, asked of the service first. The
-  list is fetched only when *Show backups* is pressed. *Restore…* on a row
-  shows the CLI's disclosure, and the confirm button names the backup, its
-  epoch and its entity count. The server checks those three against its own
-  list and restores nothing if they differ. Afterwards the panel names the
-  undo copy, marked *undo* in the list, and previews the adoption of what came
-  back.
-- **Adopt.** *Preview adoption* lists one decision per incoming workspace and
-  per link. *Apply N changes to this machine* carries the preview's digest.
-  The server reads the service once, checks that read against the digest and
-  applies that same read. If anything moved since the preview, it refuses and
-  writes nothing. The count includes clearing a stale opt-out on a row that is
-  already here, and that row shows its sentence.
-
-Nothing in the panel reaches the service without a press. The routes are the
-eleven `POST /api/hub/registry/*` routes, each named in the method gate.
-`test/network-silence.test.ts` drives every one of them in the state where it
-must not leave the machine.
-
-## Glyph catalog
-
-Every kind wears one **appearance** record — `{ source, value, label, fallback }`
-— resolved by the server and served on each row of `/api/settings` `kinds[]`,
-the same record `staple kinds ls --json` and MCP `list_kinds` answer. The
-operator's choices live in the `kinds.appearance` workspace setting (see
-[configuration.md](configuration.md#the-settings-registry)); a kind with no
-entry wears the built-in mark, and a kind that has none wears a generic one.
-`lib/kind-appearance.ts` mirrors the built-in table so the first paint, before
-the fetch lands, already shows the right marks, and `kindAppearance(id)` in
-`lib/settings.ts` is the accessor every row, group header, form and graph node
-resolves through. No
-colour travels in the record: hue is a status-category property, and a kind
-glyph is monochrome by design.
-
-### One resolver
-
-There is exactly one component in the browser that turns an appearance record
-into pixels: `components/task-list/KindGlyph.tsx`. Given no `appearance` prop it
-resolves the served record itself through `useKindAppearance(id)` — the
-`kindAppearance` accessor wrapped in a `useSyncExternalStore` subscription to the
-settings snapshot — and then draws the arm the record names: `emoji` and `svg`
-through `SafeGlyph`, `lucide` through the catalog chunk, `none` (and anything
-that fails validation, including a Lucide key the catalog does not know) through
-its own hand-drawn mark, so a slot is never empty. Because the resolution happens
-inside the glyph, every surface gets it by drawing `<KindGlyph kind={…}/>` and
-nothing else: ungrouped and grouped rows and the epic-headed sections
-(`TaskRowLine`), kind group headers (`views/tree/TreeGrid.tsx`), graph nodes and
-the epic picker (`views/graph/`), the create dialog and the detail panel's kind
-editor, and the settings preview. And because the subscription is to the same
-snapshot the settings editor republishes after its POST — and the 1.5 s
-fingerprint poll refetches — **changing a kind's glyph repaints every one of them
-without a reload**. The `appearance` prop survives for the one caller drawing
-something not saved yet: the picker's preview. The `lucide` arm is asynchronous
-(the catalog is its own chunk); the built-in mark is the synchronous fallback
-while it loads, cached module-wide so only the first glyph on a page waits.
-`components/task-list/kind-glyph.test.tsx` renders all six seeded kinds and one
-custom kind at the row, header, graph-node, picker and form sites, and swaps the
-published envelope to prove the re-render.
-
-The catalog a `lucide` value names is not a hand-kept list: it is generated
-from the INSTALLED `lucide-react`, and checked in. The server validates only
-that a value is *shaped* like a key (the manifest is browser code); the
-browser's `resolveIcon` decides whether it exists, and an unknown key answers
-`undefined` — the cue to draw the fallback.
-
-```bash
-npx tsx scripts/gen-lucide-catalog.ts    # after bumping lucide-react, or editing the category table
-```
-
-That writes two modules under `src/ui/app/src/lib/`. `icon-catalog.generated.ts`
-is data only — the pinned `LUCIDE_VERSION`, the category list, and every canonical
-key with its category and aliases. `icon-previews.generated.ts`
-names every icon by a real import from `lucide-react`, so a key that does not
-exist in the package fails `npm run typecheck` and `npm run build:ui`, not a user.
-`test/lucide-catalog-freshness.test.ts` regenerates in memory and fails, with the
-command above, if the checked-in text is stale.
-
-The source of truth is the package's own `dynamicIconImports` map. A key that
-points at itself is canonical; one that points elsewhere is an alias, and aliases
-never become keys — `alert-triangle` collapses onto `triangle-alert`, is recorded
-on that entry, and its words join the entry's search terms (Lucide's aliases are
-its synonym list: `home` finds `house`). The package ships
-no tags or categories, so the category comes from an ordered keyword table in the
-generator — first row sharing a word with the key wins, then the same pass over
-alias words, then `other`. Deterministic and offline: the same version gives the
-same catalog on every machine.
-
-`lib/icon-catalog.ts` is what the app consumes. It rebuilds the human label
-("Triangle Alert"), the search terms, and the alias map from the manifest at
-load, so the checked-in data stays small enough for the main view to carry
-(rows resolve persisted keys synchronously). `resolveIcon(key)` accepts a
-canonical key, an alias, or "Triangle Alert" and answers the canonical entry (or
-`undefined` — the cue to fall back); `searchIcons(query, { category, limit })` is
-ranked (exact key, whole word, prefix, alias word, substring) and stable;
-`loadIconComponent(key)` reaches the React component through `import()`, so the
-module that names every icon is its own chunk (about 140 kB gzipped) and the main
-view never pays for icons it does not draw. Importing the catalog module costs
-the manifest alone, about 12 kB gzipped.
-
-### Custom glyphs
-
-When the catalog is not enough, a kind can wear an **emoji** or a **custom
-SVG**. Both are validated in core (`src/core/kind-appearance.ts`), and both
-are drawn by one browser primitive, `components/task-list/SafeGlyph.tsx`, which
-`KindGlyph` delegates an `emoji` or `svg` record to, drawing its own built-in
-mark for anything else. The **glyph picker** below is how an operator chooses
-one.
-
-An **emoji** value is bounded by grapheme clusters, not bytes: `Intl.Segmenter`
-counts what a person sees as one glyph, so a joined family (`👨‍👩‍👧‍👦`, eleven
-UTF-16 units) or a flag is one, and the bound is 1 to 2 of them with a ceiling
-of 32 units. Whitespace, control characters, lone surrogates and a value with
-no visible code point (a bare zero-width joiner) are refused. The browser draws
-it as text, which is safe by construction.
-
-A **custom SVG** goes through `src/core/svg-sanitize.ts` — pure string work, no
-DOM, no dependency — and only the sanitiser's **canonical output** is ever
-stored, served or drawn. The security model has three walls:
-
-1. **The write boundary.** `kinds.appearance` accepts an `svg` value only if it
-   is exactly the sanitiser's output (a fixed point: sanitising it again
-   returns it unchanged). A raw document is refused with a sentence saying to
-   sanitise it first; a hostile one is refused with the reason. The sanitiser
-   is an allowlist, not a denylist: `svg`, `g`, `path`, `circle`, `ellipse`,
-   `rect`, `line`, `polyline`, `polygon`, `defs`, `clipPath`, `symbol`, `use`
-   and a `title`/`desc`, with the presentation and geometry attributes those
-   take. It **refuses** `<script>`, `<foreignObject>`, `<style>`, `<image>`,
-   `<a>`, animation elements, a nested `<svg>`, every `on*` attribute,
-   `javascript:`/`data:`/`vbscript:` URLs in any attribute (including
-   entity-encoded spellings), `url(` to anything but a local `#id`, an `href`
-   that is not a local `#id`, `@import` or `url(` in a `style`, DOCTYPE and
-   entity declarations (so a billion-laughs document never reaches a parser),
-   CDATA, processing instructions, undeclared entities, control characters,
-   malformed or truncated markup, more than 512 elements or 32 levels, and
-   anything over 8 KiB. It **strips** what an editor leaves behind: the XML
-   declaration, comments, `xmlns:*`, `class`, `data-*`, `style` (when it
-   carries nothing external), unknown attributes, and `width`/`height`/`x`/`y`
-   on the root.
-2. **The canonical form.** The root is rewritten as
-   `<svg xmlns viewBox role="img" aria-label>`: the `viewBox` is normalised
-   (derived from a plain width and height when absent) and bounded to ±4096 with
-   a positive width and height of at most 4096; absolute sizing is gone, so the
-   glyph inherits the caller's box; every `fill` and `stroke` becomes
-   `currentColor` unless it is `none`, so the glyph takes the row's colour like
-   the built-in marks; and exactly one `<title>` carries the accessible name —
-   the document's own root `<title>` if it had one, else the record's `label`,
-   else its `aria-label`, else the document is refused. Attributes are written
-   in one order with escaped values, so equal drawings give equal strings.
-3. **The browser's gate.** `safeGlyph` in `lib/kind-appearance.ts` does not
-   trust the wire: before anything is injected it holds the value to the exact
-   shape the sanitiser writes (that root, only those elements, no handler, no
-   non-local reference) and answers null for everything else. `SafeGlyph`
-   places the canonical body inside an `<svg>` it owns — which sets the size,
-   the recorded `viewBox` and the accessible name — and that body is the only
-   string in the app that ever reaches `dangerouslySetInnerHTML`. Null draws
-   the record's terminal `fallback` as text, so an invalid record costs the row
-   nothing but its custom mark.
-
-The same suites that prove this live in `test/svg-sanitize.test.ts`,
-`test/kind-appearance.test.ts`, `test/store-settings.test.ts` (custom glyphs),
-`test/contract-kind-appearance.test.ts` (a hostile save is refused and no
-surface carries executable markup) and
-`components/task-list/safe-glyph.test.tsx`.
-
-### Glyph picker
-
-Every row of the Kinds editor carries its glyph, and the glyph *is* the control:
-pressing it (*Change glyph for Epic*) opens the picker under that row. Three
-tabs, one preview, and one form contract — `{ source, value, label, fallback }`
-— whichever tab produced the choice. `settings/glyph-picker/` holds it:
-`glyph-picker-model.ts` is every decision as a function, `GlyphPicker.tsx` the
-wiring, `GlyphPreview.tsx` the preview.
-
-**The catalog tab** is a search field over names and Lucide's own aliases
-(`alert-triangle` finds `triangle-alert`), a category filter over
-`ICON_CATEGORIES`, and a live count. The grid is a `listbox` that takes focus
-itself and names its active cell through `aria-activedescendant` — which is
-what makes a WINDOWED grid navigable at all, since the cell holding the
-"focus" need not be in the DOM until the arrow key that reaches it scrolls it
-into the window. Arrows step a cell or a row, Home and End jump, Enter or
-Space chooses, Escape closes; the index is clamped rather than wrapped. Only a
-viewport's worth of cells plus two overscan rows exist at a time and two
-spacers stand in for the rest, so scrolling ~1,800 icons costs the DOM a few
-dozen nodes. Each cell is a `role="option"` with the icon's label as its
-accessible name.
-
-The icon COMPONENTS arrive through `loadIconComponents()` — the `import()`
-that makes `icon-previews.generated.ts` its own chunk — and only once the
-catalog tab is open, so a page that never opens the picker never fetches them.
-Until they land a cell is a placeholder box, and the search, the keyboard and
-the choice all work without them. The main bundle therefore carries the
-manifest (data only, ~11 kB gzipped — `resolveIcon` answers synchronously) and
-never the 142 kB gzipped of icon code.
-
-**The emoji tab** is one field, held to the same grapheme rule core states
-(`isEmojiGlyph`). **The custom SVG tab** posts the raw document to
-`POST /api/glyph/sanitize` — core's `sanitizeSvg`, over the wire, writing
-nothing; the route exists because the store accepts an `svg` value only as
-that function's canonical output and the sanitiser is Node-only code the
-browser cannot import. Only the answer becomes a choice; the raw text never
-enters the draft, and a refusal is the sanitiser's own sentence.
-
-A **recents** strip remembers the last twelve choices in `localStorage`
-(`staple:glyph-recents`). An `svg` is not remembered: a canonical document is
-up to 8 KiB, and twelve of those is not what a recents strip is for.
-
-**The preview** is not a second renderer. It hands the appearance the draft
-currently holds to the same `KindGlyph` a list row draws, at the row's 12 px
-and the graph node's 14 px, so what the picker shows is what those surfaces
-will show by construction — every source, `lucide` included, since the glyph
-resolves all of them itself. Beside it are the accessible name and the terminal
-fallback, both bounded exactly as core bounds them, and *Reset to default* —
-offered only when this kind has an entry to drop. The picker sits beside the
-chooser when the shell is two-pane or full screen and below it when the shell
-is stacked, from the same `STACKED_QUERY` the dialog uses, so the two never
-disagree about how wide the world is.
-
-**Nothing here writes.** A choice enters a SECOND draft — the
-`kinds.appearance` map, posted to `target: "settings"` — held beside the
-vocabulary ops rather than inside them, because the store lets that map name
-only CONFIGURED kinds: a glyph for a kind the same draft is adding can only be
-written after the kinds batch lands. Save therefore posts the ops first and the
-map second (one `set` of the whole map, or `reset` when nothing is customised
-any more), and a refusal on the second cannot re-post the first. The user sees
-ONE form all the same: one dirty state, one ActionBar whose summary counts
-both halves, one Cancel that drops both, one unsaved-changes guard, and one
-conflict banner for either half moving underneath.
-
-`settings/glyph-picker/glyph-picker-model.test.ts` pins the arithmetic,
-`glyph-picker.test.tsx` the markup, and `test/ui-glyph-sanitize.test.ts` the
-route.
-
-## Analytics
-
-The detail panel's Analytics tab is estimate versus actual for one issue, drawn
-entirely from the `timing` and `childrenTiming` the issue payload already
-carries (see [cli.md](cli.md), "Estimates vs actuals") — the page adds nothing
-up itself, so it can never disagree with `staple show` or with MCP `get_task`.
-
-**One headline.** Leaf and parent alike open with three figures: **planned**,
-**actual**, and the **difference**. Planned is the recursive `subtreePlan` —
-the issue's own estimate when one is set, otherwise its descendants' — so an
-epic nobody estimated over three 4h/3h/4h tasks leads with `11h`, and the epic
-above it leads with that same 11h whether or not the middle level was typed
-in. Actual is the headline `activeSeconds`, which for a parent is already its
-children's aggregate; an epic has no stopwatch of its own. A real duration or
-delta is set as a large tabular figure; an absence is the words *No estimate*,
-*No work recorded* or *No comparison*, small and muted in the interface face,
-never a number and never a dash. Where the plan came from is said beneath it
-(`inherited from 3 of 3 descendants`, or `own estimate; descendants add up to
-11h`), and under the card one muted line carries the caveats: why there is no
-difference, how many children have no plan, whether the time is approximate,
-and time spent in review, which is named but never counted as active.
-
-**This issue versus children.** A parent gets one compact block beneath the
-headline with two rows. *This issue* is the top-down estimate typed on the
-parent and the time it was worked directly; *Children* is the bottom-up plan
-(`from 3 of 3 descendants`) and the aggregate actual. Every figure names its
-source in words, because the two plans are alternatives — the headline takes
-the own estimate when it exists, otherwise the children's — and are never
-added. A leaf has nothing to break down and shows the summary only.
-
-**Per child.** Two lines per direct child: identifier, status and delta, then
-the title with `est … · ran …`. A child that is itself a parent shows its own
-aggregate. Unfinished children mark their delta `*` while the clock is being
-fed and `‡` once it has gone idle, and the same distinction is spelled out in
-the caveat line. The reading order — headline, breakdown, per child — is the
-same in the drawer and on the full-screen page.
-
-**Rolled-up plans in the rows.** The per-child `est` is the child's *effective*
-plan — the same figure its parent counts it as — so under STA-156 the STA-157
-line reads `est 11h`, not a dash, and the parent's planned headline is exactly
-the sum of what the child lines show. Where each figure came from (`own
-estimate`, `inherited from 3 of 3 descendants`) is the tooltip on the figure,
-never a third line per child, and the child's delta is measured against that
-same plan. The headline is also written once as a single sentence for screen
-readers — planned, actual, difference, coverage, source, in that order — with
-the visible figures hidden from the accessibility tree so nothing is heard
-twice. In the task list, a folded parent in comfortable density shows the same
-rolled-up plan as `est 11h` beside its progress bar, in the existing rollup slot
-at the count's own size, so the row does not grow; it is absent rather than
-`est —` when nothing beneath is estimated, and hidden below the two-line
-breakpoint where the title has the whole row.
-
-## Milestones
-
-The third tab beside Graph — also "Go to milestones" in the command palette —
-is the planning view for [milestones](milestones.md): dated, human-ordered plans
-that contain epics and tasks without moving them. It needs the `milestone` kind
-configured (`staple kinds add milestone --label Milestone`); without it the
-page shows the store's own refusal naming that command.
-
-**Left, the plan.** Every milestone in plan order, then target date, then
-identifier — an unplanned milestone sits below every planned one, and a date
-never reorders a plan. Each row shows the target date, member count, a progress
-bar with `done/countable` and the percent, the derived state, the risk, and the
-queue's answer: `next: STA-67 (#4)` — the first eligible row of the effective
-queue planned under this milestone (R3d) — or a muted "no eligible work" when
-nothing under it is takeable. Resolved milestones follow the page's "show done" filter.
-
-**Right, one milestone.** Title, start and target dates, owner, plan position;
-rollups (progress, blocked, gated, active, ready); the ordered members drawn
-with the same row as the tree, so kind glyph, status glyph and identifier read
-the same everywhere. A member epic's own children follow it indented, read-only
-— membership never rewrites hierarchy and neither does this list. A member added
-with a note shows the note under its row.
-
-**Editing membership.** Every member has Open, Move up, Move down and Remove
-buttons, always visible, plus alt+arrow on the row; the form under the list adds
-an identifier with an optional note. Each write carries the view's `revision` as
-`baseRevision`, and the store refuses a stale one with `revision_conflict`: the
-page shows "Member order changed elsewhere" with the store's sentence and a
-Reload, rather than a refusal, because the fix is to read again. Any other
-refusal is the store's own sentence. Drag is deliberately absent — the row list
-carries no drag wiring, and the buttons are the keyboard path either way.
-
-**States without colour.** Planned `○`, active `◐`, overdue `!`, done `✓`,
-cancelled `×` — glyph and word together, so no state is told by hue alone; an
-active milestone whose members have all landed says "all members done" beside
-the badge until a human closes it. Blocked and gated are not milestone states
-(they are facts about members) and appear as `⊘ n blocked` / `◇ n gated` in the
-risk line.
-
-**Layout.** Below `md` (48rem) the two panes stack: the list, then the detail
-with a "Back to milestones" button. From `md` up they split. The expand button in
-the detail header gives it the whole content box at any width; press it again to
-return.
-
-**How this section is verified.** `views/milestones/milestones-e2e.test.tsx`
-(R3e) starts the real HTTP server over the scenario workspace, fetches
-`/api/milestones`, `/api/milestone` and `/api/issues`, and renders the real
-`MilestoneListPane`, `MilestoneDetailPane` and `MilestonesLayout` from those
-payloads with `react-dom/server` — no jsdom, no screenshots, no new dependency,
-and no hand-written view fixture. It pins the three layouts at real widths
-through `layoutFor`, that the accessible row order equals the server's member
-order (the epic's child indented immediately under it, nothing drawn twice), that
-every reorder control carries its member's identifier and only the true edges are
-disabled, that each state is a glyph AND a word with the glyph `aria-hidden` so a
-screen reader hears the word, and that a genuinely stale `baseRevision` — a real
-409 from the real route — renders the conflict banner with the store's sentence
-verbatim while the server keeps the other writer's order. The one thing it does
-not render is `MilestonesView` itself, which reads `window.innerWidth` and the
-session; it composes the same three exported pieces the same way.
-
-## Queue
-
-The fourth tab — also "Go to queue" in the command palette — is the visual
-editor for the [pickup queue](queue.md). Two panes over one payload: the **plan**
-a human writes, and the **effective order** an agent is handed. Both come from a
-single `GET /api/queue`, so the preview can never be one poll behind the list it
-is previewing.
-
-**Left, the plan.** `entries` in plan order — the rows somebody put there,
-containers included — drawn with the same task row as the tree, so kind glyph,
-status glyph and identifier read the same everywhere. The header says how many
-entries there are and which `revision` the next write will send. An entry added
-with a note shows the note under its row, and a plan row that is not itself
-pickable carries the store's sentence for why (`✓ STA-31 is done`).
-
-**Two numbers, side by side only where they differ.** The plan position is an
-editable field on every row; the effective position sits beside it as
-`pickup #5` when the two disagree, and is silent when they agree — a column of
-`#3 · pickup #3` would teach a reader that the distinction does not matter. A
-container has no effective position of its own (the resolver never emits one as
-a row) so it shows `expands to 3` instead, or `no pickup row` when nothing is
-open underneath it.
-
-**Containers expand inline.** Under a queued epic or milestone, the effective
-rows it expanded to, in the order an agent will meet them, each with its pickup
-number, its eligibility and its reason. Capped at five with `and n more under
-STA-66` — a plan of five epics is otherwise sixty rows of somebody else's
-problem.
-
-**One atomic reorder.** Drag (`@dnd-kit/core`, the same reorder list the
-settings vocabulary editors use), Move up / Move down buttons, alt+arrow on the
-row, alt+Home / alt+End for the ends, and typing a new number into the position
-field all end in ONE `POST /api/queue/reorder` carrying the view's `revision` as
-`baseRevision`. There is deliberately no second write path: `move` and
-`enqueue --at` exist on the wire and would each be a different idea of what a
-move is. A typed position out of range is clamped rather than refused — 99 in a
-plan of eleven means "last" — and a move that would change nothing is never
-sent. `alt` is required on the arrows and on Home/End because a bare Home
-belongs to the caret in the position field.
-
-**Adding and removing.** The search box matches issues, epics and milestones by
-identifier or title over the page's own issue list, offers eight, and never
-offers something already in the plan; a match adds on click, and the raw text
-adds on Enter so an identifier you already know needs no search. Every entry has
-a Remove, and the header offers `Prune n resolved` when the plan has resolved
-rows in it.
-
-**Right, the effective order.** `effective`, in two bands. *From the plan* is
-every row the plan produced, never capped — the plan is shown whole, so a human
-can see what their order is waiting on. *Unqueued, and therefore later* is every
-other open leaf in presentation sort, capped at ten with the remainder counted.
-The header names the row an agent asking right now would be given:
-`next: STA-67 (#2)`, or "nothing is pickable right now". That row is the first
-`eligible` row of the list already on screen, which is exactly what the resolver
-answers for an actorless read — a second `GET /api/queue/next` on the poll would
-be a second source of truth that could disagree with the list under it.
-
-**Eligibility without colour.** Eligible `○`, claimed `◐`, blocked `⊘`, gated
-`◇`, resolved `✓` — glyph and word together on every row, with the store's own
-sentence underneath when it is not pickable ("blocked by STA-35, STA-67",
-"queued behind STA-66's review", "held by codex-1, idle 4m"). A milestone target
-date rides along as `due 2026-10-31`: it explains urgency and never reorders
-anything.
-
-**A stale reorder.** Every mutation carries `baseRevision` and the store refuses
-a stale one with `revision_conflict`, changing nothing — so the server's order is
-still the truth. The page drops what it was showing, re-reads, and puts up "The
-plan changed elsewhere — nothing was written" with the store's sentence and TWO
-deliberate ways out: **Reload**, which abandons the move, and **Retry my order**,
-which re-applies the intent at the new revision — keeping whatever the other
-writer added and dropping whatever they removed, so a retry never silently
-undoes them. Neither happens on its own. Any other refusal is the store's own
-sentence in the shared refusal panel.
-
-**Layout.** Below `md` (48rem) the queue is a drawer: one pane at a time, with
-"Effective order" at the foot of the plan and "Back to the plan" at the head of
-the preview. From `md` up they split, plan left and preview right. Each pane's
-header carries an expand button that gives it the whole content box at either
-width; press it again to return.
-
-## Projects
-
-A project is a named container an issue can be filed under — the thing the rail
-lists under Tasks and the thing the Project filter narrows by. It is workspace
-data: workspace migration **009** adds a `projects` table and a nullable
-`issues.project_id`, alongside milestones and the queue.
-
-**Two kinds.** An **unmanaged** project is a name and nothing else. A
-**managed** project points at a source, and the source's kind is stored
-explicitly rather than inferred from the shape of a string: `github` (a
-repository URL like `https://github.com/owner/repo`) or `local` (a folder path).
-The record is `{ id, slug, name, kind, sourceKind, source, createdAt, updatedAt }`;
-`sourceKind` and `source` are null exactly when the kind is `unmanaged`. The
-settings a project grows later — initiating a tracker in it, repointing it —
-hang off this distinction and are not modelled yet.
-
-**Rules.** The name is required. A managed project needs both a source kind and
-a source; a GitHub source must look like a repository URL; a local path is any
-non-empty string — nothing probes the network or the filesystem. An unmanaged
-project may not carry a source: sending one is refused rather than dropped. The
-rules are pure (`src/core/projects.ts`) and pinned in `test/projects.test.ts`.
-
-**Slug and id.** The slug is derived from the name once, at create time
-(`My Project (v2)` → `my-project-v2`, numbered `-2`, `-3` when taken), and a
-rename leaves it alone. Every lookup answers to the id or the slug. An issue
-points at a project by `projectId` — at most one, exactly like `parentId`, and
-null for every issue that predates the migration. Deleting a project lets its
-issues go (their `projectId` becomes null in the same transaction) and touches
-nothing else about them.
-
-**The dialog.** One dialog creates and edits: a *General* section (name, kind
-— and, on a create in hub mode with several workspaces, which one) and a
-*Source* section that appears for a managed project (source kind, then the URL
-or the path, labelled by kind). Errors sit beside their field once a save has
-been tried, in the form's own words; a store refusal renders the store's
-sentence unchanged. An edit starts on the served values, saves only when
-something changed, and offers *Delete project* behind a confirm that says what
-deleting does — the issues stay, unfiled. The draft is a discriminated union on
-kind (`components/projects/projectForm.ts`, pinned without a DOM), switching
-kind keeps the name and drops or seeds the source, and the sections are a list
-the next project setting slots into.
-
-**Where a project shows up.** The page fetches every workspace's projects once
-per poll and narrows them where they are used, so an issue opened from another
-workspace still sees its own workspace's projects. The rail lists them under
-Tasks; the **Project** filter dimension offers them by name (captioned with the
-workspace when the page spans several) and matches on the id, so a saved filter
-survives a rename — and a deleted project's id is dropped from every saved
-scope on the next poll, so no chip outlives its project; the
-New task dialog has a *Project* select (no project by default, narrowed to the
-target workspace); and the detail panel's property block has a *Project* row
-that is an editor, like Kind, writing through `/api/project/assign`.
-
-**Routes.** `GET /api/projects` answers `{ workspace, project }` rows — for one
-workspace with `?ws=`, and in `--hub` mode with no `ws` for every workspace at
-once, so two projects called `docs` in two workspaces are tellable apart. The
-writes are POST-only and Origin-checked, the milestone family's shape:
-`/api/project/create`, `/api/project/update` (absent fields keep their value;
-changing the kind means changing the source in the same call),
-`/api/project/delete` (answers how many issues it let go of) and
-`/api/project/assign` (`{ ref, project }`, where `project` is an id, a slug, or
-null to take the issue out; answers the refreshed `/api/issue` payload). A task
-created through `/api/action` may name a `project`. `/api/issues` rows and the
-detail payload carry `issue.projectId`. `test/contract-projects.test.ts` pins the
-gate, the refusals and the row shape; `test/store-projects.test.ts` pins the
-store. CLI and MCP have no project verbs — `projectId` simply rides along on the
-issue shape they already print.
-
-## Stack
-
-The page is a Vite + React + TypeScript app in `src/ui/app/`, shipped inside the
-package as a prebuilt static bundle that `src/ui/server.ts` reads off disk.
-
-React 19, Tailwind v4, [shadcn/ui](https://ui.shadcn.com) in the *new-york*
-style, `radix-ui` primitives, `lucide-react` icons. All of it is a
-**devDependency** — staple's runtime dependencies are compiled into the
-published bundle, because what ships is the built app, not the toolchain that
-made it.
-
-## Theme
-
-`src/ui/app/src/styles/theme-tokens.css` holds 531 CSS custom properties: the
-light and dark scales, the radius and type ladders, motion, and the
-`.status-chip` color-mix recipe. `src/ui/app/src/styles/app.css` is staple's own
-layer on top — the status-to-hue mapping and the SVG chrome for the dependency
-graph, which has no Tailwind equivalent.
-
-The load-bearing family is `--status-task-*`: one hue per built-in status, so a
-status badge is one variable and light/dark both fall out of the same color-mix.
-Since the status set became configurable, the mapping that matters is
-`[data-status-category]` — eight categories onto those same hues, declared after
-the per-id rules so the category wins. Adding a status never needs a new token.
-
-Working on the app itself is a contributor path — dev server, rebuild loop, and
-the rest are in [CONTRIBUTING.md](../CONTRIBUTING.md).
+Going deeper: [the web UI in detail](../design/web-ui.md) covers every control,
+cue and route.

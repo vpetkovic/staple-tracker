@@ -1,5 +1,5 @@
 /**
- * RR1. A restore keeps what an unsent EDIT names (`docs/sync.md`, "A restore rewinds").
+ * RR1. A restore keeps what an unsent EDIT names (`design/sync.md`, "A restore rewinds").
  *
  * The rewind kept an entity with unsent work, and walked what it names — but only when the new
  * epoch lacked the entity itself. An unsent edit of an issue the backup holds names what it

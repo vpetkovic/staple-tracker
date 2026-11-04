@@ -68,7 +68,8 @@ function Control({
   switch (schema.type) {
     case "boolean":
       return (
-        <label className="flex h-7 items-center gap-2 text-[13px]">
+        // A finger gets the whole 44px line; a mouse keeps the compact 28px one.
+        <label className="flex h-7 items-center gap-2 text-[13px] pointer-coarse:h-11">
           <input
             {...aria}
             type="checkbox"
@@ -193,6 +194,7 @@ export function FieldsForm({ definitions, settings, write, onDirtyChange }: Fiel
                     type="button"
                     variant="ghost"
                     size="xs"
+                    className="[@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:px-3"
                     aria-label={`Reset ${definition.ui.label} to default`}
                     disabled={disabled || !isResettable(value, definition, current)}
                     onClick={() => draft.set(resetField(value, definition, current))}

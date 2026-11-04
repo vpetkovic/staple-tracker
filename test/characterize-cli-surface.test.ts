@@ -86,6 +86,9 @@ const COMMANDS: ReadonlyArray<{
   // `status` is the CLI's only update path, so STA-81's re-estimate lands here
   // too — same two flags as `new`.
   { name: "status", strings: ["db", "ws", "estimate"], booleans: ["json", "no-estimate"], shorts: [] },
+  // The explicit estimate write: the duration is a POSITIONAL, and clearing is the
+  // one boolean `--clear`, so nothing an unset variable expands to can erase it.
+  { name: "estimate", strings: ["db", "ws", "agent"], booleans: ["json", "clear"], shorts: [] },
   { name: "release", strings: ["db", "ws", "if-stale"], booleans: ["json"], shorts: [] },
   { name: "block", strings: ["db", "ws", "owner", "action"], booleans: ["json"], shorts: [] },
   { name: "blocked-by", strings: ["db", "ws"], booleans: ["json", "none"], shorts: [] },
@@ -159,6 +162,57 @@ const COMMANDS: ReadonlyArray<{
     booleans: ["json", "all", "effective"],
     shorts: ["m"],
   },
+  // `budget` records provider usage readings in this MACHINE's hub.db, so it takes
+  // no --db or --ws: there is no workspace to select.
+  {
+    name: "budget",
+    // The reads added `--since`, `--limit` and `--cursor` (`budget history`).
+    // Automatic collection (`budget setup|unsetup|status|collect`) added the account,
+    // directory, interval and bound flags, and the consent and opt-out booleans.
+    strings: [
+      "source", "account", "provider", "config-dir", "codex-home", "limit-key", "used", "resets-at", "since", "limit", "cursor",
+      "claude-account", "codex-account", "claude-config-dir", "interval", "max-files",
+    ],
+    booleans: ["json", "help", "tee", "no-statusline", "no-watcher", "yes", "quiet"],
+    shorts: [],
+  },
+  // Execution attempts: `attempt` reports on the attempt the caller holds, or, given an
+  // attempt id, reads one (`--limit`/`--cursor` page its transitions). It was dispatched
+  // before this table knew it; `attempts <ref>` is the bounded list.
+  {
+    name: "attempt",
+    strings: ["db", "ws", "agent", "reason", "message", "comment-id", "doc", "limit", "cursor"],
+    booleans: ["json", "help"],
+    shorts: ["h", "m"],
+  },
+  { name: "attempts", strings: ["db", "ws", "limit", "cursor"], booleans: ["json", "help"], shorts: ["h"] },
+  // `compare`: the certified plan (labor, coverage, critical path) of named issues.
+  { name: "compare", strings: ["db", "ws"], booleans: ["json", "help"], shorts: ["h"] },
+  // `timing quality`: one quality state per timing record, and coverage over the eligible population.
+  {
+    name: "timing",
+    strings: ["db", "ws", "kind", "parent", "since", "include", "exclude", "exclude-reason", "limit", "cursor"],
+    booleans: ["json", "help"],
+    shorts: ["h"],
+  },
+  // `calibrate`: calibration cohorts over trusted samples, with the fallback and a snapshot id;
+  // `--for` forecasts the durations of the issues named.
+  {
+    name: "calibrate",
+    strings: ["db", "ws", "kind", "priority", "parent", "since", "include", "limit", "cursor", "for", "model"],
+    booleans: ["json", "help", "samples"],
+    shorts: ["h"],
+  },
+  // `forecast <ref>`: the completion forecast and, apart, the budget forecast of the work.
+  { name: "forecast", strings: ["db", "ws", "reserve", "account", "model"], booleans: ["json", "help"], shorts: ["h"] },
+  // `run start|status|stop|pause|resume|continue`: autopilot runs. `-m` is the stop note;
+  // `--run`, `--outcome` and `--reason` are continue's.
+  {
+    name: "run",
+    strings: ["db", "ws", "actor", "scope", "max-tickets", "until", "ceiling", "ceiling-account", "message", "run", "outcome", "reason"],
+    booleans: ["json", "help", "all", "override"],
+    shorts: ["h", "m"],
+  },
 ];
 
 /** Every command token in one place, so a removal is a one-line diff. */
@@ -168,10 +222,11 @@ describe("command inventory", () => {
   it("pins the exact set of command tokens the dispatcher answers to", () => {
     expect(COMMAND_NAMES).toEqual([
       "init", "new", "ls", "show", "checkout", "start", "done", "cancel",
-      "status", "release", "block", "blocked-by", "wait", "link", "comment",
+      "status", "estimate", "release", "block", "blocked-by", "wait", "link", "comment",
       "tree", "board", "inbox", "doc", "events", "hub", "ui", "open", "config",
       "migrate", "install", "doctor", "add", "discover", "milestone", "settings",
-      "queue",
+      "queue", "budget", "attempt", "attempts", "compare", "timing", "calibrate",
+      "forecast", "run",
     ]);
     // 32 tokens, 29 distinct behaviours: checkout/start, done/cancel and ui/open
     // each share a case. Was 22 before A3 (STA-33) added `config`, 23 before A5
@@ -185,7 +240,13 @@ describe("command inventory", () => {
     // handled by the PACKAGED entrypoint (src/package/staple.ts) rather than by
     // this dispatcher. Whoever adds an `mcp` case here must delete that branch
     // in the same change rather than leaving two.
-    expect(COMMAND_NAMES).toHaveLength(32);
+    // 33 with `budget` (provider budget telemetry), 35 with `attempt` (dispatched
+    // since execution attempts, missing here until the read surfaces) and `attempts`.
+    // 36 with `estimate`, the explicit estimate write. 37 with `compare`, the
+    // certified plan of named issues. 38 with `timing`, the timing quality read.
+    // 39 with `calibrate`, the calibration cohorts read. 40 with `forecast`. 41 with
+    // `run`, autopilot runs.
+    expect(COMMAND_NAMES).toHaveLength(41);
   });
 
   it.each(COMMANDS.map((c) => c.name))(
@@ -203,7 +264,9 @@ describe("command inventory", () => {
 
   // MOVED BY A6 then A7: `open` and `doctor` each left this list when they
   // became real commands.
-  it.each(["bogus", "Init", "INIT", "ini", "--version", "-h", "task", "list", "diagnose"])(
+  // MOVED: `-h` left this list when every command learned `--help` and `-h`
+  // (test/command-help.test.ts): `staple -h` is `staple --help`, pinned below.
+  it.each(["bogus", "Init", "INIT", "ini", "--version", "task", "list", "diagnose"])(
     "`%s` is NOT a command and is rejected as validation",
     (token) => {
       const result = cli(token);
@@ -404,14 +467,16 @@ describe("help surface", () => {
    * runner is the plan's refusal — validation exit 2, no mutation. The full
    * behaviour lives in `init-lifecycle.test.ts`.
    */
-  it("prints the same help for `help` and `--help`, both exit 0", () => {
+  it("prints the same help for `help`, `--help` and `-h`, all exit 0", () => {
     const word = cli("help");
     const flag = cli("--help");
-    for (const result of [word, flag]) {
+    const short = cli("-h");
+    for (const result of [word, flag, short]) {
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
     }
     expect(flag.stdout).toBe(word.stdout);
+    expect(short.stdout).toBe(word.stdout);
     expect(word.stdout.startsWith("staple — local-first task tracker for coding agents")).toBe(true);
   }, 30_000);
 
@@ -448,10 +513,25 @@ describe("help surface", () => {
       // records them: a reader who has just learned what a milestone is meets
       // the thing that decides what comes out of one next.
       "The pickup queue",
+      // Autopilot runs work the queue, so they follow it.
+      "Autopilot runs",
       "Documents & events",
       "UI",
+      // Provider budget telemetry is machine-level, like the UI: it sits after it.
+      "Provider budget",
       "Workspace vocabulary",
     ]);
+  });
+
+  it("names budget forget, and its consent, in the Provider budget section and in budget --help", () => {
+    const help = cli("help").stdout;
+    const section = help.slice(help.indexOf("Provider budget"), help.indexOf("Durations (<dur>)"));
+    expect(section).toContain("budget forget <reading-id>... [--yes]");
+    expect(section).toContain("without --yes only the preview");
+    const own = cli("budget", "--help");
+    expect(own.status).toBe(0);
+    expect(own.stdout).toContain("budget forget <reading-id>... [--yes]");
+    expect(own.stdout).toContain("Without --yes it\n              only previews, exit 2");
   });
 
   it("pins the global-flag and status footer scripts read", () => {

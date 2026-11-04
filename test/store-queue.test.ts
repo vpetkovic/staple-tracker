@@ -11,7 +11,7 @@ import { WorkspaceStore } from "../src/core/store.js";
 import { StapleError } from "../src/core/types.js";
 
 /**
- * STA-167 — the pickup queue in the store, the storage half of docs/queue.md.
+ * STA-167 — the pickup queue in the store, the storage half of design/queue.md.
  *
  * What is pinned here is what needs a database: that the plan is its own data
  * and not a derivation, that its order is durable and total, that the sparse
@@ -19,7 +19,7 @@ import { StapleError } from "../src/core/types.js";
  * `meta.queue_revision` refuses a stale base and leaves the order standing, that
  * an entry keys on `issues.id` and so survives everything except deletion, and
  * that the written lifecycle — kept, hidden, reopened, pruned — is what the
- * table actually does. Every test name below is the one docs/queue.md says pins
+ * table actually does. Every test name below is the one design/queue.md says pins
  * the paragraph.
  *
  * What is NOT here: the resolver, eligibility, container expansion, the unqueued

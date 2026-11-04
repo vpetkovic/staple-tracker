@@ -1,7 +1,7 @@
 /**
  * Automatic synchronization: the second consent, and the three bounded triggers.
  *
- * Contract: `docs/sync.md`, "Three consents".
+ * Contract: `design/sync.md`, "Three consents".
  *
  * This file is about the SCHEDULER and the GATE — consent, coalescing, bounds,
  * jittered backoff, cancellation, and the import graph that makes the gate
@@ -645,7 +645,7 @@ describe("the CLI command table", () => {
   });
 
   it("puts the everyday writes on post-write and the everyday reads on startup", () => {
-    for (const command of ["new", "checkout", "done", "comment", "status", "release"]) {
+    for (const command of ["new", "checkout", "done", "comment", "status", "estimate", "release"]) {
       expect(CLI_COMMAND_TRIGGERS[command], command).toBe("post-write");
     }
     for (const command of ["ls", "show", "tree", "board", "inbox"]) {

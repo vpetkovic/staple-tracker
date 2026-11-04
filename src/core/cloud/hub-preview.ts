@@ -3,7 +3,7 @@
  * to anything.
  *
  * Contract: STA-275 — *"One connect covers every registered workspace without
- * connecting each by hand"*. And `docs/sync.md`, "Three consents" — *"**Connect
+ * connecting each by hand"*. And `design/sync.md`, "Three consents" — *"**Connect
  * shows before it asks.** It prints the endpoint, the `repositoryId` and the
  * account it is about to bind, and performs **no remote mutation** before the
  * answer."*
@@ -22,7 +22,7 @@
  * because anything had called out, but because nothing structural would stop the
  * next person from adding a "let us check which of these endpoints is
  * reachable" convenience to the preview. That convenience is exactly the
- * violation — `docs/sync.md` counts *attempted* calls, so a reachability probe
+ * violation — `design/sync.md` counts *attempted* calls, so a reachability probe
  * across twelve endpoints on a screen nobody has agreed to yet is twelve
  * violations.
  *

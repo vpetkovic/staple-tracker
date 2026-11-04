@@ -60,6 +60,7 @@ import { readStoredRepositoryId } from "../src/core/repo-identity.js";
 import { Hub } from "../src/core/hub.js";
 import { readConnection } from "../src/core/cloud/connection.js";
 import { hubCloudReport, type HubCloudReport } from "../src/core/cloud/hub-surface.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 /**
  * The BROWSER's own copy of "which rows would a hub-wide verb visit", loaded so
@@ -101,7 +102,8 @@ function pageTargets(report: HubCloudReport, action: "connect" | "sync" | "disco
 
 const ENROLLMENT = "enrollment-secret";
 const CAPABILITIES = {
-  protocol: { min: 1, max: 1 },
+  // A Worker deployed for typed file attachments (protocol 4) — the one this build syncs with.
+  protocol: { min: 1, max: 4 },
   maxBatchSize: 500,
   maxOpBytes: 65_536,
   maxPullLimit: 1000,
@@ -1174,11 +1176,7 @@ describe("the hub's publish consent is the hub's, not a workspace's", () => {
 
     const cross = await fetch(`${origin}/api/hub/consent`, {
       method: "POST",
-      headers: {
-        "x-staple-token": token,
-        "content-type": "application/json",
-        origin: "http://evil.example",
-      },
+      headers: asForeignPage({ "x-staple-token": token, "content-type": "application/json", origin: "http://evil.example" }, origin),
       body: JSON.stringify({ registry: true }),
     });
     expect(cross.status).toBe(403);
@@ -1227,11 +1225,7 @@ describe("the gates these four routes inherit", () => {
     for (const path of ROUTES) {
       const response = await fetch(`${origin}${path}`, {
         method: "POST",
-        headers: {
-          "x-staple-token": token,
-          "content-type": "application/json",
-          origin: "http://evil.example",
-        },
+        headers: asForeignPage({ "x-staple-token": token, "content-type": "application/json", origin: "http://evil.example" }, origin),
         body: "{}",
       });
       expect(response.status, `${path} accepted a cross-origin POST`).toBe(403);

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { initWorkspace } from "../src/core/workspace.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 let home: string;
 let ref: string;
@@ -32,7 +33,7 @@ function get(path: string, headers: Record<string, string> = {}) {
 function post(payload: Record<string, unknown>, headers: Record<string, string> = {}) {
   return fetch(`${origin}/api/action`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-staple-token": token, ...headers },
+    headers: asForeignPage({ "content-type": "application/json", "x-staple-token": token, ...headers }, origin),
     body: JSON.stringify(payload),
   });
 }

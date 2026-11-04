@@ -166,6 +166,27 @@ describe("GET /v1/repos/{repoId}/snapshot", () => {
   });
 
   /**
+   * Milestone goal mode: a criterion's mark is the milestone field `criterion<n>`, with no
+   * new entity and no Worker change. What that relies on is this fold's key-by-key merge:
+   * two criteria judged by two operations both survive, a second judgement of one criterion
+   * supersedes the first whole, and the dates beside them are untouched.
+   */
+  it("folds criterion marks key by key, beside the milestone's other fields", async () => {
+    const mark = (verdict: string, markedBy: string) => ({ criterion: "It ships", verdict, evidence: ["x"], note: null, markedBy, runId: null, markedAt: "2026-10-01T00:00:00.000Z" });
+    await pushOps(
+      [
+        envelope({ clientSeq: 1, entity: "milestone", entityId: "milestone-1", verb: "update", payload: { targetDate: "2026-12-24" } }),
+        envelope({ clientSeq: 2, entity: "milestone", entityId: "milestone-1", verb: "update", payload: { criterion1: mark("unmet", "a") } }),
+        envelope({ clientSeq: 3, entity: "milestone", entityId: "milestone-1", verb: "update", payload: { criterion2: mark("met", "b") } }),
+        envelope({ clientSeq: 4, entity: "milestone", entityId: "milestone-1", verb: "update", payload: { criterion1: mark("met", "a") } }),
+      ],
+      { token },
+    );
+    const body = await jsonOf(await call(`/v1/repos/${REPO}/snapshot`, { token }));
+    expect(body.entities[0].state).toEqual({ targetDate: "2026-12-24", criterion1: mark("met", "a"), criterion2: mark("met", "b") });
+  });
+
+  /**
    * The other order, which failed differently and is the sharper proof.
    *
    * A later merge landed ON TOP of the fold's private `{ replaced: … }` wrapper, so the

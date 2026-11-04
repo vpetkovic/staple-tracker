@@ -10,13 +10,14 @@
  * journal now records every synchronized column a mutation changed (`journal.ts`), and
  * this is what holds it to that: the registry below names every public mutation of the
  * four stores, a new one fails the first test until it is listed, and each is run and
- * compared column for column over every synchronized table (`docs/sync.md`, "What
+ * compared column for column over every synchronized table (`design/sync.md`, "What
  * synchronizes").
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { sha256Hex } from "../src/core/attachments.js";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { listConflicts, resolveConflict, type ResolutionChoice } from "../src/core/cloud/conflicts.js";
 import { acquireClaim, releaseClaim } from "../src/core/cloud/lease.js";
@@ -59,6 +60,9 @@ function publicMethods(store: StoreName): string[] {
   return [...names].sort();
 }
 
+/** A 1x1 PNG, the payload of the base64 evidence document an agent used to write. */
+const EVIDENCE_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
 /** Public methods that write nothing: reads, and the scope helper every mutation runs in. */
 const READS: Record<StoreName, readonly string[]> = {
   WorkspaceStore: [
@@ -71,9 +75,29 @@ const READS: Record<StoreName, readonly string[]> = {
     "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "listCommentsPage",
     "getDocument", "listDocuments", "listDocumentRevisions", "listIssues", "listIssuesPage", "inbox", "context", "tree",
     "edges", "milestones", "queue", "projects", "writeTarget",
+    // The attempt ledger the mutators write through; its own writes are the store's methods below.
+    "attempts",
+    // The attempt read surfaces: pure reads, which write no stored orphan end either.
+    "attemptSummary", "listAttempts", "getAttempt",
+    // The orchestrator lane's read summary (`orchestration` on show/get_task).
+    "orchestrationSummary",
+    // The certified plan reads (`planSummary` on show/get_task, `staple compare`).
+    "planSummary", "comparePlans", "timingQuality", "calibration", "remainingForecasts", "forecast",
+    // File metadata and bytes. Writes are attachFile and removeFile below.
+    "listFiles", "readFile",
+    // A base64 evidence document, checked. Its write is adoptDocumentFile below.
+    "documentEvidence",
+    // The autopilot run service. Its writes touch only `runs` and `run_tickets`, which are
+    // machine-local and never journaled (`run-store.ts`); `test/run-store.test.ts` pins
+    // that a run leaves no outbox row on a device that journals. `run continue`'s take
+    // claims through `checkoutIssue`, and a stated failure releases through
+    // `releaseIssue`: both are this store's own mutations, covered by their scenarios.
+    "runs",
   ],
-  MilestoneStore: ["queueSeam", "get", "list", "milestoneOf"],
-  QueueStore: ["revision", "entries", "effectiveQueue", "view"],
+  // `criteriaCheck`: the goal check's criteria half, read by a goal run's stop rules.
+  MilestoneStore: ["queueSeam", "get", "list", "milestoneOf", "effectiveMilestone", "criteriaCheck"],
+  // `scopeMembership`: which issues a scope holds, the same resolution a scoped `effectiveQueue` reads.
+  QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
 };
 
@@ -203,6 +227,8 @@ const SCENARIOS: readonly Scenario[] = [
   },
   { method: "WorkspaceStore.createChild", name: "create a child", prep: (w) => void issue(w, "The epic", { kind: "epic" }), run: (w) => void (w.ids["The child"] = w.a.store.createChild(w.ids["The epic"]!, { title: "The child", assignee: "alice" }).id) },
   { method: "WorkspaceStore.setBlockedBy", name: "set blockers", run: (w) => void w.a.store.setBlockedBy(w.ids["Everything"]!, [w.ids["Retried"]!], "alice") },
+  { method: "WorkspaceStore.setEstimate", name: "re-estimate without restating the status", run: (w) => void w.a.store.setEstimate(w.ids["The child"]!, 5400, "alice") },
+  { method: "WorkspaceStore.setEstimate", name: "clear the estimate", run: (w) => void w.a.store.setEstimate(w.ids["The child"]!, null, "alice") },
   { method: "WorkspaceStore.updateIssue", name: "retitle", run: (w) => void w.a.store.updateIssue(w.ids["Everything"]!, { title: "Everything, renamed" }, "alice") },
   { method: "WorkspaceStore.updateIssue", name: "start work", run: (w) => void w.a.store.updateIssue(w.ids["The child"]!, { status: "in_progress" }, "alice") },
   { method: "WorkspaceStore.updateIssue", name: "finish work, moving the epic", run: (w) => void w.a.store.updateIssue(w.ids["The child"]!, { status: "done" }, "alice") },
@@ -254,6 +280,51 @@ const SCENARIOS: readonly Scenario[] = [
     prep: (w) => void w.a.store.checkoutIssue(issue(w, "Idle claim"), "agent-a"),
     run: (w) => void w.a.store.releaseIssue(w.ids["Idle claim"]!, "agent-b", { ifIdleSeconds: 0 }),
   },
+  // ---- execution attempts (protocol 3): each is a side effect above, or reported here
+  {
+    method: "WorkspaceStore.checkoutIssue",
+    name: "check out with a harness session, then take it over",
+    prep: (w) =>
+      void w.a.store.checkoutIssue(issue(w, "Attempted"), "agent-a", undefined, {
+        attempt: { harness: "claude_code", harnessSession: "session-1", model: "claude-test", account: "personal-max" },
+      }),
+    run: (w) => void w.a.store.checkoutIssue(w.ids["Attempted"]!, "agent-b", undefined, { stealIfIdleSeconds: 0 }),
+  },
+  { method: "WorkspaceStore.recordAttemptEvent", name: "pause an attempt", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "pause", "agent-b", { reason: "checkpoint_before_reset" }) },
+  { method: "WorkspaceStore.recordAttemptEvent", name: "resume an attempt", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "resume", "agent-b") },
+  { method: "WorkspaceStore.recordAttemptEvent", name: "record an attempt milestone", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "milestone", "agent-b", { label: "tests green" }) },
+  { method: "WorkspaceStore.recordAttemptEvent", name: "report an interruption", run: (w) => void w.a.store.recordAttemptEvent(w.ids["Attempted"]!, "interrupt", "agent-b", { reason: "provider_limit" }) },
+  {
+    method: "WorkspaceStore.openOrchestratorAttempt",
+    name: "open an orchestrator attempt",
+    run: (w) => void w.a.store.openOrchestratorAttempt(w.ids["Everything"]!, "coordinator", "orchestrator"),
+  },
+  {
+    method: "WorkspaceStore.endOrchestratorAttempt",
+    name: "end an orchestrator attempt",
+    prep: (w) => void w.a.store.openOrchestratorAttempt(w.ids["Everything"]!, "coordinator", "orchestrator"),
+    run: (w) => void w.a.store.endOrchestratorAttempt(w.ids["Everything"]!, "coordinator", "orchestrator"),
+  },
+  {
+    method: "WorkspaceStore.updateIssue",
+    name: "re-claim after an interruption, then fail it",
+    prep: (w) => void w.a.store.checkoutIssue(w.ids["Attempted"]!, "agent-b"),
+    run: (w) => void w.a.store.updateIssue(w.ids["Attempted"]!, { status: "todo" }, "agent-b", { outcome: "failed", reason: "cannot reproduce" }),
+  },
+  {
+    method: "WorkspaceStore.reconstructAttemptHistory",
+    name: "reconstruct attempts from the event log",
+    prep: (w) => {
+      // History from before capture, as an older build left it: the events of a checkout, a
+      // steal and a release, and no attempt rows behind them.
+      const id = issue(w, "Before capture");
+      const event = w.a.db.prepare("INSERT INTO events (kind, issue_id, actor, payload, dedup_key, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+      event.run("checkout", id, "agent-old", "{}", "old-1", "2026-01-01T00:00:00.000Z");
+      event.run("claim_stolen", id, "agent-new", JSON.stringify({ previousHolder: "agent-old", previousLastActivityAt: "2026-01-01T01:00:00.000Z" }), "old-2", "2026-01-01T05:00:00.000Z");
+      event.run("release", id, "agent-new", "{}", "old-3", "2026-01-01T06:00:00.000Z");
+    },
+    run: (w) => void w.a.store.reconstructAttemptHistory(),
+  },
   { method: "WorkspaceStore.addComment", name: "comment", run: (w) => void w.a.store.addComment(w.ids["Everything"]!, "A comment", "alice") },
   {
     method: "WorkspaceStore.addCommentResult",
@@ -295,6 +366,14 @@ const SCENARIOS: readonly Scenario[] = [
   },
   { method: "MilestoneStore.update", name: "move a milestone's dates", run: (w) => void w.a.store.milestones().update(w.ids["M1"]!, { targetDate: "2026-12-01", startDate: "2026-10-01" }, "alice") },
   {
+    // The goal (description, criteria) is an issue edit; the mark is the milestone field
+    // `criterion<n>`, and every device holds it.
+    method: "MilestoneStore.markCriterion",
+    name: "judge a milestone criterion",
+    prep: (w) => void w.a.store.milestones().update(w.ids["M1"]!, { description: "Why", acceptanceCriteria: ["It ships", "It is documented"] }, "alice"),
+    run: (w) => void w.a.store.milestones().markCriterion(w.ids["M1"]!, 2, { verdict: "met", evidence: ["the README says so"] }, "alice"),
+  },
+  {
     method: "MilestoneStore.addMember",
     name: "add milestone members",
     prep: (w) => {
@@ -309,6 +388,31 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "MilestoneStore.moveMember", name: "move a member", run: (w) => void w.a.store.milestones().moveMember(w.ids["Member two"]!, { at: 1 }, "alice") },
   { method: "MilestoneStore.reorderMembers", name: "reorder members", run: (w) => void w.a.store.milestones().reorderMembers(w.ids["M1"]!, [w.ids["Member one"]!, w.ids["Member two"]!], {}, "alice") },
   { method: "MilestoneStore.removeMember", name: "remove a member", run: (w) => void w.a.store.milestones().removeMember(w.ids["M1"]!, w.ids["Member one"]!, {}, "alice") },
+  {
+    // The derived milestone status is its own journaled operation, like a derived parent's:
+    // a member starting moves M1 on every device, and re-deriving again changes nothing.
+    method: "WorkspaceStore.rederiveMilestones",
+    name: "a member starting moves its milestone",
+    run: (w) => {
+      w.a.store.updateIssue(w.ids["Member two"]!, { assignee: "alice" }, "alice");
+      w.a.store.updateIssue(w.ids["Member two"]!, { status: "in_progress" }, "alice");
+      w.a.store.rederiveMilestones([w.ids["M1"]!], "Member two", "alice");
+    },
+  },
+  {
+    // The upgrade's one-shot repair travels like any derived move. M1 reads `backlog` while
+    // its member is in progress, as a milestone did before this build; A owes the repair.
+    method: "WorkspaceStore.rederiveEveryMilestone",
+    name: "an upgrade re-derives a stale milestone",
+    prep: (w) => void w.a.store.updateIssue(w.ids["M1"]!, { status: "backlog" }, "alice"),
+    run: (w) => {
+      w.a.db.prepare("DELETE FROM meta WHERE key = 'milestone_status_rederived'").run();
+      const moved = w.a.store.rederiveEveryMilestone();
+      if (moved !== 1 || w.a.store.getIssue(w.ids["M1"]!).status !== "in_progress") {
+        throw new Error(`the repair did not move M1 (moved ${moved})`);
+      }
+    },
+  },
 
   // ---- the plan
   {
@@ -344,6 +448,38 @@ const SCENARIOS: readonly Scenario[] = [
     name: "remove a project issues are filed under",
     prep: (w) => void w.a.store.projects().assign(w.ids["Filed"]!, w.ids["Docs"]!, "alice"),
     run: (w) => void w.a.store.projects().remove(w.ids["Docs"]!, "alice"),
+  },
+
+  // ---- files
+  {
+    method: "WorkspaceStore.attachFile",
+    name: "attach a file",
+    prep: (w) => void issue(w, "With a file"),
+    run: (w) => {
+      const meta = w.a.store.attachFile(w.ids["With a file"]!, {
+        filename: "note.txt",
+        bytes: Buffer.from("log\n"),
+        caption: "a log",
+        author: "alice",
+      });
+      w.ids["note"] = meta.id;
+    },
+  },
+  {
+    method: "WorkspaceStore.adoptDocumentFile",
+    name: "adopt a base64 evidence document as a file",
+    prep: (w) => {
+      issue(w, "With evidence");
+      const png = Buffer.from(EVIDENCE_PNG_B64, "base64");
+      const body = `Media type: image/png\nSHA-256: ${sha256Hex(png)}\n\n![shot](data:image/png;base64,${EVIDENCE_PNG_B64})\n`;
+      w.a.store.putDocument(w.ids["With evidence"]!, "evidence-png", body, { author: "alice" });
+    },
+    run: (w) => void w.a.store.adoptDocumentFile(w.ids["With evidence"]!, "evidence-png", { author: "alice" }),
+  },
+  {
+    method: "WorkspaceStore.removeFile",
+    name: "remove a file",
+    run: (w) => void w.a.store.removeFile(w.ids["note"]!, "alice"),
   },
 
   // ---- a claim through the service's lease, which checks out and releases through the store
@@ -445,7 +581,7 @@ describe("every public mutation", () => {
     /**
      * The restore step: everything after the half-way backup is rewound, B's unsent work
      * survives, and every device and a fresh one hold the same on every synchronized column —
-     * the sentence "every device, and a fresh one, then holds the same" (`docs/sync.md`, "A
+     * the sentence "every device, and a fresh one, then holds the same" (`design/sync.md`, "A
      * restore rewinds") as a test.
      */
     try {
@@ -552,6 +688,20 @@ const CONFLICTS: readonly ConflictKind[] = [
       return { milestone: a.store.getIssue(view.milestone.identifier).id };
     },
     edit: (m, x, which) => void m.store.milestones().update(x.milestone!, { targetDate: which === "a" ? "2026-10-01" : "2026-12-01" }, which),
+  },
+  {
+    // A criterion's mark is one milestone field: judged differently on two devices at once,
+    // it is preserved as a conflict and settled by a decision, like any field.
+    name: "milestone criterion mark",
+    entity: "milestone",
+    field: "criterion1",
+    setup: (a) => {
+      a.store.addKind({ id: "milestone", label: "Milestone" });
+      const view = a.store.milestones().create({ title: "M3", acceptanceCriteria: ["It ships"] }, "alice") as { milestone: { identifier: string } };
+      return { milestone: a.store.getIssue(view.milestone.identifier).id };
+    },
+    edit: (m, x, which) =>
+      void m.store.milestones().markCriterion(x.milestone!, 1, which === "a" ? { verdict: "met", evidence: ["a saw it ship"] } : { verdict: "unmet", evidence: ["b did not"] }, which),
   },
   {
     name: "status label",

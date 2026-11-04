@@ -1,7 +1,7 @@
 /**
  * The test that proves the zero-network invariant.
  *
- * Contract: `docs/sync.md`, "The network rule — and the test that proves it".
+ * Contract: `design/sync.md`, "The network rule — and the test that proves it".
  *
  *   *"Today the runtime contains **zero outbound network call sites** … The
  *   invariant is therefore not a reduction to be achieved — it is a floor to be
@@ -29,7 +29,6 @@
  * `wrangler` at all, in any mode. The Worker's own suite lives in `worker/` with
  * its own runner and is not collected here.
  */
-import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
@@ -39,6 +38,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { initWorkspace } from "../src/core/workspace.js";
 import { describeViolations, installNetworkSpy, isExempt } from "./fixtures/network-spy.js";
+import { spawnAsync } from "./fixtures/spawn-async.js";
 
 const REPO_ROOT = process.cwd();
 const PRELOAD = join(REPO_ROOT, "test", "fixtures", "network-spy-preload.mjs");
@@ -74,9 +74,9 @@ let logPath: string;
  * place before tsx registers its loader so that a module which captured `fetch`
  * at import time captured the patched one.
  */
-function staple(args: string[], extraEnv: Record<string, string> = {}) {
+async function staple(args: string[], extraEnv: Record<string, string> = {}) {
   rmSync(logPath, { force: true });
-  const result = spawnSync(process.execPath, [TSX, CLI, ...args], {
+  const result = await spawnAsync(process.execPath, [TSX, CLI, ...args], {
     env: {
       ...process.env,
       STAPLE_HOME: home,
@@ -125,9 +125,9 @@ function call(id: number, name: string, args: Record<string, unknown>) {
  * child-never-started guard is the same one: a session that died in the module
  * loader answers nothing and calls nobody, and would otherwise pass.
  */
-function mcp(messages: Array<Record<string, unknown>>, extraEnv: Record<string, string> = {}) {
+async function mcp(messages: Array<Record<string, unknown>>, extraEnv: Record<string, string> = {}) {
   rmSync(logPath, { force: true });
-  const result = spawnSync(process.execPath, [TSX, MCP], {
+  const result = await spawnAsync(process.execPath, [TSX, MCP], {
     input: `${messages.map((m) => JSON.stringify(m)).join("\n")}\n`,
     env: {
       ...process.env,
@@ -214,7 +214,7 @@ describe("the spy, before it is trusted to prove anything", () => {
     for (const exempt of ["127.0.0.1", "127.0.0.2", "::1", "localhost", "/tmp/staple.sock"]) {
       expect(isExempt(exempt)).toBe(true);
     }
-    for (const egress of ["example.com", "1.1.1.1", "staple-sync-dev.vptkvc.workers.dev"]) {
+    for (const egress of ["example.com", "1.1.1.1", "staple-tracker-sync.example.workers.dev"]) {
       expect(isExempt(egress)).toBe(false);
     }
   });
@@ -243,12 +243,12 @@ describe("the spy, before it is trusted to prove anything", () => {
     }
   });
 
-  it("is installed in the CHILD too — a subprocess cannot hide a call", () => {
+  it("is installed in the CHILD too — a subprocess cannot hide a call", async () => {
     // Proves the preload attaches, using the same sentinel discipline. Without
     // this, every subprocess assertion below could be passing because the child
     // never had a spy at all.
     rmSync(logPath, { force: true });
-    const probe = spawnSync(
+    const probe = await spawnAsync(
       process.execPath,
       ["-e", "fetch('https://spy-preload-check.invalid/').catch(() => {})"],
       {
@@ -390,15 +390,15 @@ describe("disconnected: every ordinary command makes zero outbound calls", () =>
    * violations" in the rest of the loop means "staple ran and stayed silent"
    * rather than "nothing happened".
    */
-  it("the harness runs the real CLI against the real workspace", () => {
-    const result = staple(["ls"]);
+  it("the harness runs the real CLI against the real workspace", async () => {
+    const result = await staple(["ls"]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("a task");
   });
 
   for (const [name, args] of DISCONNECTED_SCENARIOS) {
-    it(`${name} attempts no network call`, () => {
-      const result = staple(args);
+    it(`${name} attempts no network call`, async () => {
+      const result = await staple(args);
       expect(
         result.violations,
         `${name} attempted: ${JSON.stringify(result.violations, null, 2)}`,
@@ -406,8 +406,8 @@ describe("disconnected: every ordinary command makes zero outbound calls", () =>
     });
   }
 
-  it("an MCP initialize handshake attempts no network call", () => {
-    const result = mcp([
+  it("an MCP initialize handshake attempts no network call", async () => {
+    const result = await mcp([
       { jsonrpc: "2.0", id: 1, method: "initialize", params: INITIALIZE_PARAMS },
       { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
     ]);
@@ -433,8 +433,8 @@ describe("disconnected: every ordinary command makes zero outbound calls", () =>
    * validation failure makes no network call either, so without it this test
    * would be back where the last one was.
    */
-  it("MCP write tools attempt no network call — and really did write", () => {
-    const result = mcp([
+  it("MCP write tools attempt no network call — and really did write", async () => {
+    const result = await mcp([
       { jsonrpc: "2.0", id: 1, method: "initialize", params: INITIALIZE_PARAMS },
       call(2, "create_task", { title: "a task made over MCP", actor: "network-silence" }),
       call(3, "add_comment", { ref: "NET-1", body: "said over MCP", actor: "network-silence" }),
@@ -564,8 +564,8 @@ describe("connected in manual mode: still zero", () => {
       ["cloud", "connect", "--all", "--endpoint", "https://staple-sync-dev.example.workers.dev"],
     ],
   ] as Array<[string, string[]]>) {
-    it(`${name} on a CONNECTED repository attempts no network call`, () => {
-      const result = staple(args);
+    it(`${name} on a CONNECTED repository attempts no network call`, async () => {
+      const result = await staple(args);
       expect(
         result.violations,
         `${name} attempted: ${JSON.stringify(result.violations, null, 2)}`,
@@ -573,8 +573,8 @@ describe("connected in manual mode: still zero", () => {
     });
   }
 
-  it("cloud status reports connected-manual without having asked anyone", () => {
-    const result = staple(["cloud", "status", "--json"]);
+  it("cloud status reports connected-manual without having asked anyone", async () => {
+    const result = await staple(["cloud", "status", "--json"]);
     expect(result.violations).toHaveLength(0);
     expect(result.status, `stderr: ${result.stderr}`).toBe(0);
     const status = JSON.parse(result.stdout) as { state: string; checked: boolean };
@@ -582,11 +582,11 @@ describe("connected in manual mode: still zero", () => {
     expect(status.checked).toBe(false);
   });
 
-  it("cloud disconnect is local: it removes the credential with no request at all", () => {
-    const result = staple(["cloud", "disconnect", "--yes"]);
+  it("cloud disconnect is local: it removes the credential with no request at all", async () => {
+    const result = await staple(["cloud", "disconnect", "--yes"]);
     expect(result.violations).toHaveLength(0);
     expect(result.status).toBe(0);
-    expect(staple(["cloud", "status", "--json"]).stdout).toContain('"state": "disconnected"');
+    expect((await staple(["cloud", "status", "--json"])).stdout).toContain('"state": "disconnected"');
   });
 });
 
@@ -689,8 +689,8 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
    * this lane can make: a read command, on a machine that consented, really does
    * reach the network — and the spy really does see it.
    */
-  it("an ordinary READ attempts exactly one call, and its destination is the endpoint", () => {
-    const result = staple(["ls"]);
+  it("an ordinary READ attempts exactly one call, and its destination is the endpoint", async () => {
+    const result = await staple(["ls"]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("a task");
 
@@ -703,8 +703,8 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
     expect(new Set(result.violations.map((v) => v.destination))).toEqual(new Set([ENDPOINT_HOST]));
   });
 
-  it("an ordinary WRITE does too, and nothing it touched leaked into the destination", () => {
-    const result = staple(["new", "a task made while automatic"]);
+  it("an ordinary WRITE does too, and nothing it touched leaked into the destination", async () => {
+    const result = await staple(["new", "a task made while automatic"]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.violations.length).toBeGreaterThan(0);
     expect(new Set(result.violations.map((v) => v.destination))).toEqual(new Set([ENDPOINT_HOST]));
@@ -720,8 +720,8 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
    * bound that lived in memory would be no bound at all for a tool that exits
    * after every command.
    */
-  it("backs off across processes: the next command inside the window attempts nothing", () => {
-    const first = staple(["ls"]);
+  it("backs off across processes: the next command inside the window attempts nothing", async () => {
+    const first = await staple(["ls"]);
     expect(first.violations.length).toBeGreaterThan(0);
 
     const clock = JSON.parse(readFileSync(join(cloudDir, `${repositoryId}.autosync`), "utf8")) as {
@@ -732,7 +732,7 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
     expect(Date.parse(clock.nextEligibleAt!)).toBeGreaterThan(Date.now());
 
     // Same machine, new process, inside the window. Silent.
-    const second = staple(["ls"]);
+    const second = await staple(["ls"]);
     expect(
       second.violations,
       `a second command inside the backoff window attempted: ${JSON.stringify(second.violations)}`,
@@ -747,8 +747,8 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
    * place to put a trigger is "at the end", and "at the end" includes the error
    * path unless somebody says otherwise.
    */
-  it("a command that failed attempts nothing — a typo is not a reason to call anybody", () => {
-    const result = staple(["show", "NET-99999"]);
+  it("a command that failed attempts nothing — a typo is not a reason to call anybody", async () => {
+    const result = await staple(["show", "NET-99999"]);
     expect(result.status).not.toBe(0);
     expect(result.violations).toHaveLength(0);
   });
@@ -762,16 +762,16 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
    * them. Nothing disconnects, no credential moves, and the endpoint in the record
    * is untouched. One boolean changes.
    */
-  it("`cloud auto off` stops the background requests, and manual sync still works", () => {
+  it("`cloud auto off` stops the background requests, and manual sync still works", async () => {
     // Off is itself local: turning it off must not tell the service.
-    const off = staple(["cloud", "auto", "off"]);
+    const off = await staple(["cloud", "auto", "off"]);
     expect(off.status, off.stderr).toBe(0);
     expect(off.violations).toHaveLength(0);
     expect(off.stdout).toContain("Still connected");
 
     freshDevice();
     for (const args of [["ls"], ["new", "a task made after auto off"], ["show", "NET-1"]]) {
-      const result = staple(args);
+      const result = await staple(args);
       expect(
         result.violations,
         `${args.join(" ")} after \`cloud auto off\` attempted: ${JSON.stringify(result.violations)}`,
@@ -779,7 +779,7 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
     }
 
     // Still connected, and still manual — the mode the report shows.
-    const status = JSON.parse(staple(["cloud", "status", "--json"]).stdout) as {
+    const status = JSON.parse((await staple(["cloud", "status", "--json"])).stdout) as {
       state: string;
       mode: string;
       auto: boolean;
@@ -796,15 +796,15 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
      * clearing the credential, would pass every assertion above and destroy the
      * feature the consent was separate from.
      */
-    const manual = staple(["cloud", "sync"]);
+    const manual = await staple(["cloud", "sync"]);
     expect(manual.violations.length).toBeGreaterThan(0);
     expect(new Set(manual.violations.map((v) => v.destination))).toEqual(new Set([ENDPOINT_HOST]));
   });
 
-  it("`cloud auto on` gives it back, and the consent is the only thing that changed", () => {
-    expect(staple(["cloud", "auto", "on"]).violations).toHaveLength(0);
+  it("`cloud auto on` gives it back, and the consent is the only thing that changed", async () => {
+    expect((await staple(["cloud", "auto", "on"])).violations).toHaveLength(0);
     freshDevice();
-    const result = staple(["ls"]);
+    const result = await staple(["ls"]);
     expect(result.violations.length).toBeGreaterThan(0);
     expect(new Set(result.violations.map((v) => v.destination))).toEqual(new Set([ENDPOINT_HOST]));
   });
@@ -832,9 +832,9 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
    * precisely so that a `--json` consumer never sees it and a test like this one
    * can.
    */
-  it("an MCP write tool triggers a sync; a read tool adds nothing beyond startup", () => {
+  it("an MCP write tool triggers a sync; a read tool adds nothing beyond startup", async () => {
     freshDevice();
-    const reads = mcp(
+    const reads = await mcp(
       [
         { jsonrpc: "2.0", id: 1, method: "initialize", params: INITIALIZE_PARAMS },
         call(2, "list_tasks", {}),
@@ -848,7 +848,7 @@ describe("connected in AUTOMATIC mode: the trigger fires, at the endpoint and no
     expect(reads.stderr, reads.stderr).not.toMatch(/auto-sync: post-write/);
 
     freshDevice();
-    const writes = mcp(
+    const writes = await mcp(
       [
         { jsonrpc: "2.0", id: 1, method: "initialize", params: INITIALIZE_PARAMS },
         call(2, "create_task", {
@@ -933,8 +933,8 @@ describe("connect: nothing leaves the machine before consent", () => {
     expect(rendered).toContain("Nothing has been sent yet");
   });
 
-  it("`cloud connect` without --yes and without a terminal previews, exits 2, and sends nothing", () => {
-    const result = staple([
+  it("`cloud connect` without --yes and without a terminal previews, exits 2, and sends nothing", async () => {
+    const result = await staple([
       "cloud",
       "connect",
       "--endpoint",
@@ -1068,6 +1068,16 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
       const port = (ui.server.address() as AddressInfo).port;
       const origin = `http://127.0.0.1:${port}`;
       const token = ui.token;
+      /**
+       * A Codex home that is SIGNED IN (a fake auth.json with an unexpired token), bound
+       * below for the Refresh step: were live polling's gate not there, that Refresh would
+       * ask chatgpt.com and this test would see it. Signed out, the step would pass with
+       * the gate removed and prove nothing.
+       */
+      const signedInCodex = join(uiHome, "codex-signed-in");
+      mkdirSync(signedInCodex, { recursive: true });
+      const fakeToken = `x.${Buffer.from(JSON.stringify({ exp: 4_102_444_800 })).toString("base64url")}.y`;
+      writeFileSync(join(signedInCodex, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: fakeToken, account_id: "acct" } }), { mode: 0o600 });
 
       /**
        * Everything a freshly opened tab asks for, in the order it asks. The poll
@@ -1084,6 +1094,12 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         "/api/queue",
         "/api/settings",
         "/api/poll",
+        // Budget collection: the status the web Settings reads (local files and hub.db).
+        "/api/budget/collection",
+        // Budget capture and bindings (config.json).
+        "/api/budget/bindings",
+        // Live polling's switch and each account's last check (config.json and a state file).
+        "/api/budget/polling",
       ];
 
       for (let round = 0; round < 3; round += 1) {
@@ -1170,6 +1186,43 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
         ["/api/cloud/workspace/disconnect", { slug: "netsilenceui", confirm: true }],
         ["/api/hub/unregister", { slug: "netsilenceui" }],
         ["/api/hub/unregister", { slug: "no-such-workspace", confirm: true }],
+        /*
+         * Automatic budget collection. The contract is that it makes no
+         * network call, and these routes are excluded from the post-write sync
+         * trigger for that reason. The plan, setup without a ticket and with a made-up
+         * one (both refused from local state), a collect and an unsetup without a ticket.
+         * The applying path is driven with real tickets, and pinned as never arming the
+         * sync trigger, in `test/budget-collection-http.test.ts`.
+         */
+        ["/api/budget/collection/plan", { action: "setup", codexAccount: "codex-plus", watcher: false }, 200],
+        ["/api/budget/collection/setup", { codexAccount: "codex-plus", watcher: false }, 400],
+        ["/api/budget/collection/setup", { consent: "made-up", digest: "made-up" }, 404],
+        ["/api/budget/collection/collect", {}, 200],
+        ["/api/budget/collection/unsetup", {}, 400],
+        /*
+         * Budget capture and bindings, the web Settings' "Usage & budget": config.json
+         * writes, excluded from the post-write sync trigger like the collection routes.
+         */
+        ["/api/budget/capture", { enabled: true }, 200],
+        ["/api/budget/bindings/bind", { source: "codex-rollout", account: "codex-plus", codexHome: signedInCodex }, 200],
+        /*
+         * The Usage page's Refresh with capture on and a home bound but live polling off,
+         * which is how every install starts: the passive scan runs and nobody is asked.
+         * Live polling is the one budget switch that may call out, and only when on;
+         * `budget collect` with it on is the scenario at the end of this file.
+         */
+        ["/api/budget/live", { enabled: false }, 200],
+        ["/api/budget/collection/refresh", {}, 200],
+        ["/api/budget/bindings/unbind", { source: "codex-rollout", codexHome: signedInCodex }, 200],
+        ["/api/budget/capture", { enabled: false }, 200],
+        /*
+         * Removing budget readings: hub.db only, excluded from the post-write sync
+         * trigger. A preview and a confirmed removal of an id this home does not hold,
+         * both refused from local state. The applying path is pinned as never arming the
+         * sync trigger in `test/budget-forget.test.ts`.
+         */
+        ["/api/budget/forget", { ids: ["0000dead"] }, 404],
+        ["/api/budget/forget", { ids: ["0000dead"], confirm: true }, 404],
         /*
          * S18 (STA-279). A hub backup is offered unconditionally — the button is
          * never hidden and never gated on a connection — so it is reachable on a
@@ -1589,4 +1642,44 @@ describe("the UI server serves the whole page, connected or not, and calls nobod
       rmSync(uiRepo, { recursive: true, force: true });
     }
   });
+});
+
+// ------------------------------------------------------- live usage polling
+
+/**
+ * Live polling is the one budget feature that makes a network call, behind its own
+ * consent (`telemetry.livePolling`, off by default; design/execution-telemetry.md, "Live
+ * polling"). Off, `budget collect` stays silent (the scenario above and the UI routes);
+ * on, it may ask the bound providers and NOBODY ELSE: each call's destination is the
+ * usage host of a bound account's provider. The spy throws at the call, which the poller
+ * reports as a plain network failure, so nothing is stored and nothing else is asked.
+ */
+describe("budget collect with live polling on", () => {
+  it("asks only the bound provider's usage host, and with live polling off asks nobody", async () => {
+    const { bindBudgetSource, setBudgetCapture, setLivePolling } = await import("../src/core/telemetry/budget-config.js");
+    const pollHome = mkdtempSync(join(tmpdir(), "staple-netsilence-poll-"));
+    try {
+      const codexHome = join(pollHome, "codex");
+      mkdirSync(codexHome, { recursive: true });
+      const token = `x.${Buffer.from(JSON.stringify({ exp: 4_102_444_800 })).toString("base64url")}.y`;
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: token, account_id: "acct" } }), { mode: 0o600 });
+      setBudgetCapture(pollHome, true);
+      bindBudgetSource(pollHome, { source: "codex_rollout", account: "netsilence-codex", codexHome });
+      const env = { STAPLE_HOME: pollHome, CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: join(pollHome, "claude-unbound") };
+
+      const off = await staple(["budget", "collect", "--json"], env);
+      expect(off.status, off.stderr).toBe(0);
+      expect(JSON.parse(off.stdout).poll).toMatchObject({ enabled: false, skippedReason: "live_polling_off" });
+      expect(off.violations, describeViolations(off.violations as never)).toHaveLength(0);
+
+      setLivePolling(pollHome, true);
+      const on = await staple(["budget", "collect", "--json"], env);
+      expect(on.status, on.stderr).toBe(0);
+      expect(JSON.parse(on.stdout).poll.outcomes).toEqual([expect.objectContaining({ poller: "codex", outcome: "failed", failure: expect.objectContaining({ code: "network" }) })]);
+      expect(on.violations.length).toBeGreaterThan(0);
+      expect(new Set(on.violations.map((v) => v.destination))).toEqual(new Set(["chatgpt.com"]));
+    } finally {
+      rmSync(pollHome, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

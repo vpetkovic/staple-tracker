@@ -104,6 +104,10 @@ describe("the pane cannot drift from the tool", () => {
   it("carries every key get_task declares, and no more", async () => {
     expect(Object.keys(await http(false)).sort()).toEqual([
       "ancestors",
+      // File metadata. get_task grew it, so this pane grew it in lockstep. Never the bytes.
+      "attachments",
+      // Execution attempts: get_task grew them, so this pane grew them in lockstep.
+      "attempts",
       "blockedBy",
       "blocks",
       "children",
@@ -125,6 +129,10 @@ describe("the pane cannot drift from the tool", () => {
        */
       "gate",
       "issue",
+      // The orchestrator lane beside `attempts` (design/timing-semantics.md), in lockstep too.
+      "orchestration",
+      // The certified plan of a parent, in lockstep with get_task.
+      "planSummary",
       "queuedBy",
       // STA-81, and the same lockstep story as `claim`: both surfaces spread the
       // SAME store.detailTiming() call, which is why the deep-equality tests

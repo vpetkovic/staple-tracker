@@ -38,7 +38,23 @@
  * category, not as a matter of routine.
  */
 import { describe, expect, it } from "vitest";
-import type { ClaimActivity, ClaimLease, ClaimScope } from "../src/core/types.js";
+import type { ClaimActivity, ClaimLease, ClaimScope, TimingQuality } from "../src/core/types.js";
+import type { TimingQualityReport } from "../src/core/telemetry/cohort.js";
+import type { CalibrationReport } from "../src/core/telemetry/calibration.js";
+import type { ForecastReport } from "../src/core/telemetry/forecast-report.js";
+import { RUN_STOP_REASONS, RUN_WAIT_REASONS, type RunStatus } from "../src/core/run-store.js";
+import {
+  RUN_STOP_REASONS as UI_RUN_STOP_REASONS,
+  RUN_WAIT_REASONS as UI_RUN_WAIT_REASONS,
+  CRITERION_VERDICTS as UI_CRITERION_VERDICTS,
+  PACE_VERDICTS as UI_PACE_VERDICTS,
+  type MilestoneGoal as UiMilestoneGoal,
+  type RunEntry as UiRunEntry,
+} from "../src/ui/app/src/lib/types.js";
+import { CRITERION_VERDICTS, PACE_VERDICTS } from "../src/core/milestone-goal.js";
+import type { MilestoneGoal } from "../src/core/milestone-store.js";
+import type { CalibrationReport as UiCalibrationReport, ForecastReport as UiForecastReport } from "../src/ui/app/src/lib/types.js";
+import type { TimingQuality as UiTimingQuality, TimingQualityReport as UiTimingQualityReport } from "../src/ui/app/src/lib/types.js";
 import type { CloudSurfaceReport } from "../src/core/cloud/surface.js";
 import type { HubCloudReport, HubWorkspaceOutcome } from "../src/core/cloud/hub-surface.js";
 import type { HubConnectPreview } from "../src/core/cloud/hub-preview.js";
@@ -193,6 +209,39 @@ type _HubRestoreReportMatches = Expect<Equals<HubRestoreReport, UiHubRestoreRepo
 type _RemoteBackupMatches = Expect<Equals<RemoteBackup, UiRemoteBackup>>;
 type _PublishReportMatches = Expect<Equals<PublishReport, UiPublishReport>>;
 
+/**
+ * Timing quality: the one state per record the Analytics tab prints, and the cohort report it
+ * reads beneath a parent. A mirror that drifted here would let the page name a state the server
+ * never sends, or drop the reasons that say why a figure is not exact.
+ */
+type _TimingQualityMatches = Expect<Equals<TimingQuality, UiTimingQuality>>;
+type _TimingQualityReportMatches = Expect<Equals<TimingQualityReport, UiTimingQualityReport>>;
+/**
+ * The calibration report and the forecast report the Analytics pages render. The forecast's
+ * `method` is the rules as prose constants, which the page never reads: it is typed loosely in
+ * the mirror and left out of the check; every other field, the completion and budget blocks
+ * whole, must match exactly.
+ */
+type _CalibrationReportMatches = Expect<Equals<CalibrationReport, UiCalibrationReport>>;
+type _ForecastReportMatches = Expect<Equals<Omit<ForecastReport, "method">, Omit<UiForecastReport, "method">>>;
+
+/**
+ * Autopilot runs: what `/api/runs` answers per run and every run verb answers, which is
+ * `run status --json` plus the workspace. The page BRANCHES on the state, the decision and
+ * the stop reason (the banner, the Stop button, the plain words for why a run ended), and
+ * those codes are a public contract that is never renamed; a mirror that drifted would put
+ * a reason on screen the server can never send, or miss one it does.
+ */
+type _RunEntryMatches = Expect<Equals<RunStatus, Omit<UiRunEntry, "workspace">>>;
+
+/**
+ * A milestone's goal check: what the milestone's detail renders criterion by criterion (the
+ * verdict, the evidence, why it is unknown) and the pace against its target. The page
+ * branches on the verdicts; a mirror that drifted would draw a criterion met the check never
+ * said was, or drop the reason one is unknown.
+ */
+type _MilestoneGoalMatches = Expect<Equals<MilestoneGoal, UiMilestoneGoal>>;
+
 describe("the browser app's mirror of the wire vocabulary", () => {
   /**
    * The assertions above are types, and types are erased — so `vitest` would
@@ -221,6 +270,10 @@ describe("the browser app's mirror of the wire vocabulary", () => {
       true satisfies _HubRestoreReportMatches,
       true satisfies _RemoteBackupMatches,
       true satisfies _PublishReportMatches,
+      true satisfies _CalibrationReportMatches,
+      true satisfies _ForecastReportMatches,
+      true satisfies _RunEntryMatches,
+      true satisfies _MilestoneGoalMatches,
     ];
     // GOLDEN, moved by S13 (STA-258): 4 -> 6. The two additions are the connect
     // preview and the device row; see the comment above them.
@@ -239,6 +292,20 @@ describe("the browser app's mirror of the wire vocabulary", () => {
     // services.
     // GOLDEN, moved by STA-289: 9 -> 13. The hub registry leg's adoption preview,
     // restore report, backup row and publish report; see the comment above them.
-    expect(proofs).toHaveLength(13);
+    // GOLDEN, moved by the forecast report: 13 -> 15. The calibration report and
+    // the forecast report the Analytics pages render; see the comment above them.
+    // GOLDEN, moved by autopilot runs: 15 -> 16. The run entry; see the comment above it.
+    // GOLDEN, moved by milestone goal mode: 16 -> 17. The milestone's goal check; see the comment above it.
+    expect(proofs).toHaveLength(17);
+  });
+
+  it("words the same stop and wait reasons as core, in the same order", () => {
+    expect([...UI_RUN_STOP_REASONS]).toEqual([...RUN_STOP_REASONS]);
+    expect([...UI_RUN_WAIT_REASONS]).toEqual([...RUN_WAIT_REASONS]);
+  });
+
+  it("names the same criterion and pace verdicts as core, in the same order", () => {
+    expect([...UI_CRITERION_VERDICTS]).toEqual([...CRITERION_VERDICTS]);
+    expect([...UI_PACE_VERDICTS]).toEqual([...PACE_VERDICTS]);
   });
 });

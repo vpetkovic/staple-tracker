@@ -12,7 +12,7 @@
  * exist at test time.
  */
 import { HANDOFF_RISKS, handoffRiskOf, type HandoffRisk } from "../../lib/filters";
-import { VIEWS, selectionTarget, viewLabel, type Selection, type ViewName } from "../../lib/session";
+import { VIEWS, selectionTarget, viewLabel, viewUsesIssueFilters, type Selection, type ViewName } from "../../lib/session";
 import { SEED_SETTINGS } from "../../lib/settings";
 import {
   type IssueRow,
@@ -70,7 +70,7 @@ export type CommandAction =
    * verb the header's gear does, so there is one way in with two triggers rather than
    * two ways in.
    */
-  | { type: "settings" };
+  | { type: "settings"; section?: string };
 
 export type PalettePage = "checkout" | "assignee";
 
@@ -243,11 +243,11 @@ export interface PaletteContext {
  */
 const HANDOFF_COPY: Record<HandoffRisk, { label: string; keywords: string }> = {
   stale: {
-    label: "Handoff risk · stale worklog",
+    label: "Tasks whose progress notes are out of date",
     keywords: "handoff risk stale worklog behind checkpoint silent stuck resume takeover",
   },
   none: {
-    label: "Handoff risk · no worklog",
+    label: "Tasks being worked on with no progress notes",
     keywords: "handoff risk no missing worklog never checkpointed undocumented abandoned orphan",
   },
 };
@@ -262,6 +262,12 @@ function issueCount(count: number): string {
  * Every non-issue command, in natural order. Ordering for display is a separate
  * concern — see `orderCommands`.
  */
+/** Words the pages were once called, so muscle memory still finds them in the palette. */
+const FORMER_VIEW_NAMES: Partial<Record<ViewName, string>> = {
+  calibration: "estimate accuracy calibration",
+  budget: "budget limits",
+};
+
 /**
  * Where a palette write on the open issue goes: the issue the selection was pinned to, not
  * the number it was opened by — a renumber in between would otherwise aim it at another
@@ -328,7 +334,8 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
     commands.push({
       id: "checkout",
       group: "actions",
-      label: "Check out as…",
+      // The drawer's words for the same act (detail/plain-actions.ts).
+      label: "Start working on it as…",
       hint: ref,
       keywords: `checkout claim start agent assign ${ref}`,
       action: { type: "page", page: "checkout" },
@@ -336,7 +343,7 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
     commands.push({
       id: "release",
       group: "actions",
-      label: "Release the checkout",
+      label: "Stop working on it",
       hint: ref,
       keywords: `release unclaim give back ${ref}`,
       action: { type: "release" },
@@ -351,45 +358,17 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       id: `view:${view}`,
       group: "view",
       label: `Go to ${viewLabel(view)}`,
-      keywords: `view switch ${view} ${viewLabel(view)}`,
+      // The names these pages used to have still find them.
+      keywords: `view switch ${view} ${viewLabel(view)} ${FORMER_VIEW_NAMES[view] ?? ""}`,
       action: { type: "view", view },
     });
   }
 
-  commands.push({
-    id: "filter:assignee",
-    group: "filter",
-    label: "Filter by assignee…",
-    hint: context.assignee || undefined,
-    keywords: "filter assignee who owner mine",
-    action: { type: "page", page: "assignee" },
-  });
-  if (context.assignee !== "") {
-    commands.push({
-      id: "filter:assignee:clear",
-      group: "filter",
-      label: "Clear the assignee filter",
-      hint: context.assignee,
-      keywords: "clear reset assignee filter all",
-      action: { type: "assignee", assignee: "" },
-    });
-  }
-
-  // Handoff risk — the whole of W5's palette surface. Always offered, including when the
-  // count is zero: "nothing is at risk" is the answer the orchestrator came for, and a
-  // command that disappears when the board is healthy is a command nobody ever learns.
-  for (const risk of HANDOFF_RISKS) {
-    const copy = HANDOFF_COPY[risk];
-    const rows = context.rows;
-    commands.push({
-      id: `filter:handoff:${risk}`,
-      group: "filter",
-      label: copy.label,
-      hint: rows ? issueCount(rows.filter((row) => handoffRiskOf(row) === risk).length) : undefined,
-      keywords: copy.keywords,
-      action: { type: "dimension", dimension: "handoff", values: [risk] },
-    });
-  }
+  /*
+   * The issue filters, only where they filter something: the Estimates report is not an issue
+   * list, and the header hides the same controls there (`viewUsesIssueFilters`).
+   */
+  if (viewUsesIssueFilters(context.view)) pushIssueFilters(commands, context);
 
   /*
    * The workspace vocabulary editor — O7b (STA-141). In the `view` group rather than in
@@ -399,18 +378,36 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
   commands.push({
     id: "settings",
     group: "view",
-    label: "Workspace settings — statuses and kinds",
+    label: "Settings",
+    hint: "this computer and every workspace",
     keywords:
-      "settings workspace statuses kinds vocabulary configure reorder rename category customise",
+      "settings preferences workspace statuses kinds vocabulary configure reorder rename category customise cloud usage budget machine",
     action: { type: "settings" },
   });
+  /*
+   * The sections people come looking for by name, straight to the section — from any page,
+   * All workspaces included, since Settings is global.
+   */
+  for (const [section, label, keywords] of [
+    ["telemetry", "Settings: Usage", "usage budget telemetry claude codex plan limits tracking"],
+    ["cloud", "Settings: Cloud account", "cloud sync hub connect devices backup"],
+    ["statuses", "Settings: Statuses", "statuses status vocabulary workflow states"],
+  ] as const) {
+    commands.push({
+      id: `settings:${section}`,
+      group: "view",
+      label,
+      keywords: `settings ${keywords}`,
+      action: { type: "settings", section },
+    });
+  }
 
   if (context.hub) {
     if (context.ws !== "") {
       commands.push({
         id: "ws:all",
         group: "filter",
-        label: "Workspace → all",
+        label: "Switch to All workspaces",
         keywords: "workspace all every hub",
         action: { type: "workspace", ws: "" },
       });
@@ -420,7 +417,7 @@ export function buildCommands(context: PaletteContext): PaletteCommand[] {
       commands.push({
         id: `ws:${workspace.slug}`,
         group: "filter",
-        label: `Workspace → ${workspace.slug}`,
+        label: `Switch to ${workspace.slug}`,
         hint: workspace.prefix,
         keywords: `workspace ${workspace.slug} ${workspace.prefix}`,
         action: { type: "workspace", ws: workspace.slug },
@@ -485,4 +482,42 @@ export function filterCommands(commands: readonly PaletteCommand[], query: strin
   });
   scored.sort((a, b) => b.score - a.score || a.index - b.index);
   return scored.map(({ command }) => command);
+}
+
+/** The assignee and handoff-risk filter commands. */
+function pushIssueFilters(commands: PaletteCommand[], context: PaletteContext): void {
+  commands.push({
+    id: "filter:assignee",
+    group: "filter",
+    label: "Filter by assignee…",
+    hint: context.assignee || undefined,
+    keywords: "filter assignee who owner mine",
+    action: { type: "page", page: "assignee" },
+  });
+  if (context.assignee !== "") {
+    commands.push({
+      id: "filter:assignee:clear",
+      group: "filter",
+      label: "Clear the assignee filter",
+      hint: context.assignee,
+      keywords: "clear reset assignee filter all",
+      action: { type: "assignee", assignee: "" },
+    });
+  }
+
+  // Handoff risk — the whole of W5's palette surface. Always offered, including when the
+  // count is zero: "nothing is at risk" is the answer the orchestrator came for, and a
+  // command that disappears when the board is healthy is a command nobody ever learns.
+  for (const risk of HANDOFF_RISKS) {
+    const copy = HANDOFF_COPY[risk];
+    const rows = context.rows;
+    commands.push({
+      id: `filter:handoff:${risk}`,
+      group: "filter",
+      label: copy.label,
+      hint: rows ? issueCount(rows.filter((row) => handoffRiskOf(row) === risk).length) : undefined,
+      keywords: copy.keywords,
+      action: { type: "dimension", dimension: "handoff", values: [risk] },
+    });
+  }
 }

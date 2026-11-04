@@ -1,0 +1,51 @@
+{
+  "title": "work split across two devices: a steal and a re-claim written on the tail device, read on every device",
+  "covers": [
+    "a read mid-timeline sees provisional silence the same on the writer and the tail",
+    "a steal written on the other device ends the old tenure at its last activity, as the writer recorded it",
+    "an interruption reported on one device and re-claimed on the other links the two attempts",
+    "every device reads the same workSeconds; the tail the same wall; the hydrated one replay_unavailable"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x", "estimate": "2h" },
+    { "at": "0s", "do": "create", "ref": "y", "estimate": "1h" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "0s", "do": "checkout", "ref": "y", "agent": "w3" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "y", "agent": "w3" },
+    { "at": "15m", "do": "interrupt", "ref": "y", "agent": "w3", "reason": "provider_limit" },
+    { "at": "30m", "do": "milestone", "ref": "x", "agent": "w1", "label": "checkpoint" },
+    { "at": "45m", "do": "checkout", "ref": "y", "agent": "w3", "device": "b" },
+    { "at": "60m", "do": "comment", "ref": "y", "agent": "w3", "device": "b" },
+    { "at": "70m", "do": "status", "ref": "y", "to": "done", "agent": "w3", "device": "b" },
+    { "at": "90m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m", "device": "b" },
+    { "at": "100m", "do": "comment", "ref": "x", "agent": "w2", "device": "b" },
+    { "at": "110m", "do": "status", "ref": "x", "to": "done", "agent": "w2", "device": "b" }
+  ],
+  "expect": [
+    {
+      "asOf": "40m",
+      "ref": "x",
+      "workSeconds": "30m",
+      "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "30m", "silent": "10m" } }
+    },
+    {
+      "asOf": "120m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "50m",
+      "wall": { "startAt": "0s", "endAt": "110m", "buckets": { "work": "50m", "interrupted": "60m" } },
+      "resumeGaps": ["60m"]
+    },
+    {
+      "asOf": "120m",
+      "ref": "y",
+      "intervals": 2,
+      "workSeconds": "40m",
+      "wall": { "startAt": "0s", "endAt": "70m", "buckets": { "work": "40m", "interrupted": "30m" } },
+      "resumeGaps": ["30m"]
+    }
+  ]
+}

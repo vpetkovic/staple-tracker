@@ -1,0 +1,230 @@
+/*
+ * Design tokens: the only place colours, type, spacing, radii, control sizes
+ * and motion are defined. Everything else (the Infima mapping in custom.css,
+ * the components in src/components) reads these custom properties. What stays
+ * local to a component is small geometry with no system meaning (a 6 px dot, a
+ * 3 px hover nudge). Media queries cannot read custom properties; the
+ * breakpoints are 997 px (Infima: sidebar and TOC show), 768 px (tablet) and
+ * 600 px (footer columns side by side).
+ *
+ * Neutrals are a cool grey ramp; the one accent is green. Dark mode has its own
+ * tuned values rather than an inversion of light. Contrast ratios of the text
+ * pairs are measured and recorded with the design-system work (WCAG AA).
+ */
+
+:root {
+  /* Type */
+  --st-font-sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --st-font-mono: 'Geist Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --st-text-xs: 0.75rem;
+  --st-text-sm: 0.875rem;
+  --st-text-base: 1rem;
+  --st-text-lg: 1.125rem;
+  --st-text-xl: 1.25rem;
+  --st-text-2xl: 1.5rem;
+  --st-text-3xl: 2rem;
+  --st-text-4xl: clamp(2rem, 1.4rem + 2.4vw, 2.75rem);
+  --st-text-display: clamp(2.5rem, 1.6rem + 4.2vw, 4.25rem);
+
+  --st-leading-tight: 1.1;
+  --st-leading-snug: 1.3;
+  --st-leading-ui: 1.45;
+  --st-leading-body: 1.7;
+  --st-leading-relaxed: 1.6;
+  --st-leading-code: 1.75;
+
+  --st-tracking-display: -0.045em;
+  --st-tracking-heading: -0.025em;
+  --st-tracking-eyebrow: 0.08em;
+
+  --st-weight-regular: 400;
+  --st-weight-medium: 500;
+  --st-weight-semibold: 600;
+
+  --st-measure: 44rem;
+  --st-measure-lead: 38rem;
+
+  /* Spacing (4 px base) */
+  --st-space-1: 0.25rem;
+  --st-space-2: 0.5rem;
+  --st-space-3: 0.75rem;
+  --st-space-4: 1rem;
+  --st-space-5: 1.25rem;
+  --st-space-6: 1.5rem;
+  --st-space-8: 2rem;
+  --st-space-10: 2.5rem;
+  --st-space-12: 3rem;
+  --st-space-16: 4rem;
+  --st-space-24: 6rem;
+  --st-space-32: 8rem;
+
+  /* Radii */
+  --st-radius-sm: 6px;
+  --st-radius-md: 8px;
+  --st-radius-lg: 12px;
+  --st-radius-full: 999px;
+
+  /* Lines */
+  --st-hairline: 1px;
+  --st-focus-ring: 2px;
+
+  /* Controls */
+  --st-control-sm: 2.25rem;
+  --st-control-md: 2.5rem;
+  --st-control-lg: 2.875rem;
+  /* The smallest tap target: a control drawn smaller reaches this far with its hit area. */
+  --st-target-min: 2.75rem;
+
+  /* Motion */
+  --st-ease: cubic-bezier(0.2, 0, 0, 1);
+  --st-duration-fast: 120ms;
+  --st-duration: 180ms;
+  --st-duration-slow: 480ms;
+  --st-stagger: 80ms;
+  --st-rise: 8px;
+
+  /* Layout */
+  --st-navbar-height: 3.5rem;
+  --st-navbar-blur: 14px;
+  --st-container: 72rem;
+  --st-container-wide: 88rem;
+  --st-gutter: var(--st-space-6);
+  --st-logo-nav: 1.5rem;
+  --st-logo-footer: 1.25rem;
+  --st-grid-cell: 48px;
+
+  /* Light theme colours */
+  --st-bg: #ffffff;
+  --st-bg-subtle: #fafafa;
+  --st-bg-muted: #f4f4f5;
+  --st-bg-translucent: rgb(255 255 255 / 0.78);
+  --st-border: #e8e8eb;
+  --st-border-strong: #d4d4d8;
+
+  --st-fg-strong: #09090b;
+  --st-fg: #3f3f46;
+  --st-fg-muted: #52525b;
+  --st-fg-subtle: #6b6b74;
+
+  --st-accent: #059669;
+  --st-accent-text: #047857;
+  --st-accent-hover: #065f46;
+  --st-accent-soft: #ecfdf5;
+  --st-accent-ring: rgb(5 150 105 / 0.35);
+  --st-on-accent: #ffffff;
+  --st-accent-bg: #047857;
+  --st-accent-bg-hover: #065f46;
+
+  --st-code-bg: #fafafa;
+  --st-code-fg: #18181b;
+  --st-code-inline-bg: #f4f4f5;
+
+  --st-syntax-comment: #6b6b74;
+  --st-syntax-punctuation: #52525b;
+  --st-syntax-keyword: #7c3aed;
+  --st-syntax-string: #047857;
+  --st-syntax-function: #1d4ed8;
+  --st-syntax-number: #b45309;
+  --st-syntax-property: #0e7490;
+
+  --st-info: #1d4ed8;
+  --st-warning: #a16207;
+  --st-danger: #b91c1c;
+  /* Scenes (src/components/scenes): the web UI's two small type sizes, its row
+     height, the pace of a scene's steps, and the status hues of the 16 px status
+     glyphs. The hues clear 3:1 on the scene surfaces as marks; text in a scene
+     uses the fg, accent, info, warning and danger tokens. */
+  --st-text-2xs: 0.6875rem;
+  --st-text-ui: 0.8125rem;
+  --st-scene-row: 2.25rem;
+  --st-duration-scene: 420ms;
+  --st-status-backlog: #85858f;
+  --st-status-ready: #c2710c;
+  --st-status-active: #2563eb;
+  --st-status-review: #7c3aed;
+  --st-status-done: #059669;
+  --st-status-blocked: #dc2626;
+  --st-active-soft: #eff4ff;
+  --st-warning-soft: #fdf6e3;
+  --st-danger-soft: #fdf1f1;
+  /* The bento landing page (src/components/landing/Bento): a serif display face for
+     its headlines (Fraunces, loaded by that page only) with its own sizes, weight and
+     tracking; the dashed rules of its drafting grid; the glow behind its hero. */
+  --st-font-serif: 'Fraunces Variable', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --st-text-serif-hero: clamp(3.5rem, 2rem + 6.4vw, 7rem);
+  --st-text-serif-2xl: clamp(2.75rem, 1.9rem + 3.6vw, 4.75rem);
+  --st-text-serif-xl: clamp(2.25rem, 1.8rem + 1.6vw, 3rem);
+  --st-text-serif-lg: 1.625rem;
+  --st-weight-serif: 340;
+  --st-tracking-serif: -0.035em;
+  --st-leading-serif: 1.02;
+  --st-rule: #d0d0d6;
+  --st-rule-dash: 8px;
+  --st-glow: rgb(5 150 105 / 0.11);
+  --st-glow-faint: rgb(5 150 105 / 0.05);
+  /* The step strip (src/components/landing/parts/Steps): the title of a step where
+     three share a tablet's width, and the radius of its box. */
+  --st-text-step: clamp(var(--st-text-lg), 3.1vw - 0.36rem, var(--st-text-2xl));
+  --st-radius-xl: 20px;
+  /* The blend landing page (src/components/landing/Blend): the serif heading of a
+     band's legend column, which follows the screen; the serif headline of a feature,
+     which follows its column, so it keeps its two lines; and how far the page scrolls
+     for one feature where the walk-through is pinned. */
+  --st-text-serif-legend: clamp(2.125rem, 0.6rem + 2.6vw, 3rem);
+  --st-text-serif-feature: clamp(1.625rem, 9.6cqw, 2.75rem);
+  --st-tour-step: min(60vh, 34rem);
+}
+
+[data-theme='dark'] {
+  --st-bg: #09090b;
+  --st-bg-subtle: #0f0f12;
+  --st-bg-muted: #18181b;
+  --st-bg-translucent: rgb(9 9 11 / 0.72);
+  --st-border: #222227;
+  --st-border-strong: #313138;
+
+  --st-fg-strong: #fafafa;
+  --st-fg: #d4d4d8;
+  --st-fg-muted: #a1a1aa;
+  --st-fg-subtle: #8c8c96;
+
+  --st-accent: #34d399;
+  --st-accent-text: #34d399;
+  --st-accent-hover: #6ee7b7;
+  --st-accent-soft: rgb(52 211 153 / 0.1);
+  --st-accent-ring: rgb(52 211 153 / 0.4);
+  --st-on-accent: #04130d;
+  --st-accent-bg: #34d399;
+  --st-accent-bg-hover: #6ee7b7;
+
+  --st-code-bg: #0f0f12;
+  --st-code-fg: #e4e4e7;
+  --st-code-inline-bg: #18181b;
+
+  --st-syntax-comment: #8c8c96;
+  --st-syntax-punctuation: #a1a1aa;
+  --st-syntax-keyword: #c4b5fd;
+  --st-syntax-string: #6ee7b7;
+  --st-syntax-function: #93c5fd;
+  --st-syntax-number: #fcd34d;
+  --st-syntax-property: #67e8f9;
+
+  --st-info: #93c5fd;
+  --st-warning: #fcd34d;
+  --st-danger: #fca5a5;
+
+  --st-status-backlog: #7c7c87;
+  --st-status-ready: #f59e0b;
+  --st-status-active: #60a5fa;
+  --st-status-review: #a78bfa;
+  --st-status-done: #34d399;
+  --st-status-blocked: #f87171;
+  --st-active-soft: rgb(96 165 250 / 0.12);
+  --st-warning-soft: rgb(252 211 77 / 0.1);
+  --st-danger-soft: rgb(252 165 165 / 0.1);
+
+  --st-rule: #2e2e35;
+  --st-glow: rgb(52 211 153 / 0.15);
+  --st-glow-faint: rgb(52 211 153 / 0.05);
+}

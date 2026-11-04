@@ -1,5 +1,5 @@
 /**
- * Milestones in the store — the database half of `docs/milestones.md` (STA-172, R3b).
+ * Milestones in the store — the database half of `design/milestones.md` (STA-172, R3b).
  *
  * A milestone is an ordinary issue of the reserved `milestone` kind. This
  * service owns the two tables migration 007 added — `milestone_meta` (two
@@ -37,12 +37,32 @@ import {
   assertMembershipAllowed,
   assertMilestoneDates,
   assertMilestoneKindConfigured,
+  milestoneLeaves,
   milestoneProgress,
   milestoneState,
   parseMilestoneDate,
   rankBetween,
   renumberedRanks,
 } from "./milestones.js";
+import {
+  CRITERION_VERDICTS,
+  type CriterionMark,
+  type CriterionVerdict,
+  criterionMarkField,
+  criterionMarkValue,
+  type EvidenceItem,
+  type GoalCounts,
+  type GoalCriterion,
+  type GoalPace,
+  type MemberPlan,
+  goalCounts,
+  goalPace,
+  isGoalMet,
+  judgeCriterion,
+  parseEvidence,
+} from "./milestone-goal.js";
+import { COMPARE_MAX_REFS } from "./plan-rollup.js";
+import { writeCriterionMark } from "./milestone-marks.js";
 import type { WorkspaceStore } from "./store.js";
 import { type Issue, MAX_TREE_DEPTH, StapleError, type StatusCategory, nowIso } from "./types.js";
 
@@ -55,12 +75,18 @@ export interface MilestoneSummary {
   status: string;
   kind: string;
   assignee: string | null;
+  /** The issue's own description: what the milestone is for. */
+  description: string | null;
+  /** The issue's own acceptance criteria: the milestone's goal (design/milestones.md "Goal"). Empty when none. */
+  acceptanceCriteria: string[];
   targetDate: string | null;
   startDate: string | null;
   /** Derived on every read; never stored. */
   state: MilestoneState;
   /** The milestone's own row in the pickup plan; null when it is not queued. */
   planPosition: number | null;
+  /** When it was closed: its `completedAt` when done, its `cancelledAt` when cancelled; else null. */
+  closedAt: string | null;
 }
 
 /** One ordered member, as every surface prints it. */
@@ -96,6 +122,63 @@ export interface MilestoneView {
    * an agent sees it at. Null when nothing under the milestone is takeable.
    */
   next: { identifier: string; position: number } | null;
+  /** The goal check: each criterion's verdict with its evidence, and the pace against the target date. */
+  goal: MilestoneGoal;
+  /** The work still open in it, from its estimates: what a projected finish date reads. */
+  remaining: MilestoneRemaining;
+}
+
+/**
+ * The work still open in a milestone, from the estimates of its open LEAVES (not done, not
+ * cancelled; the tasks `progress` counts). Derived on every read, never stored. Distinct from
+ * `goal.pace.remainingSeconds`, which is the remaining critical path of each member's plan: this
+ * is the plain sum, the work that is left whatever order it is done in.
+ */
+export interface MilestoneRemaining {
+  /** Open leaves with an estimate, and open leaves without one. */
+  estimated: number;
+  unestimated: number;
+  /**
+   * Open leaves whose remaining work `forecast` cannot weigh (no estimate, no samples for its
+   * class, or beyond its class's range): not in `forecastSeconds`, which is then a lower bound.
+   */
+  unknown: number;
+  /** Their own estimates, summed; null when none has one. */
+  estimateSeconds: number | null;
+  /**
+   * Their remaining work exactly as `staple forecast` adds its units into the labor
+   * (`Store.remainingForecasts`, `unitRemaining`): the estimate scaled by its class's calibrated
+   * ratio, the conditional remainder once started, 0 while waiting for review. Null when no open
+   * leaf can be weighed.
+   */
+  forecastSeconds: number | null;
+}
+
+/** The milestone's goal as a check reads it now (`milestone-goal.ts`). */
+export interface MilestoneGoal {
+  criteria: GoalCriterion[];
+  counts: GoalCounts;
+  /** Every criterion met; true when the milestone has none. */
+  met: boolean;
+  pace: GoalPace;
+}
+
+/** Just the criteria half of {@link MilestoneGoal}: what the run's stop rules read. */
+export type MilestoneCriteriaCheck = Omit<MilestoneGoal, "pace">;
+
+/** `milestone criterion`: one criterion judged. */
+export interface MarkCriterionInput {
+  verdict: CriterionVerdict;
+  /** An issue reference, `<ref>:<document key>`, or free text; a `met` mark needs at least one. */
+  evidence?: readonly string[];
+  note?: string | null;
+  /**
+   * A follow-up ticket for an `unmet` criterion. Created by the marker's live goal run over
+   * this milestone (or `run`), attributed to it, made a member, and counted against its cap.
+   */
+  followUp?: { title: string; description?: string | null } | null;
+  /** The goal run the mark and its follow-up belong to; else the marker's live run over this milestone. */
+  run?: string | null;
 }
 
 /**
@@ -129,8 +212,22 @@ interface QueueFacts {
   nextOf: ReadonlyMap<string, { identifier: string; position: number }>;
 }
 
+/**
+ * Which milestone an issue belongs to, for a detail view: its own direct membership,
+ * else the nearest ancestor's. `via` names that ancestor, so a view can say why an
+ * issue that was never added still counts toward the plan; null for a direct member.
+ */
+export interface EffectiveMilestone {
+  id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  targetDate: string | null;
+  via: { identifier: string; title: string } | null;
+}
+
 /** A `milestone ls` row: the view without its members, plus how many there are. */
-export type MilestoneListRow = Omit<MilestoneView, "members"> & { memberCount: number };
+export type MilestoneListRow = Omit<MilestoneView, "members" | "goal"> & { memberCount: number };
 
 /** Where a member goes: before/after another member, at a 1-based position, or (none) appended. */
 export interface MemberPosition {
@@ -142,12 +239,18 @@ export interface MemberPosition {
 export interface MilestoneDatePatch {
   targetDate?: string | null;
   startDate?: string | null;
+  /** The issue's description; null clears it. */
+  description?: string | null;
+  /** The issue's acceptance criteria, whole; an empty list clears them. */
+  acceptanceCriteria?: string[];
 }
 
 export interface CreateMilestoneInput {
   /** Defaults to the epic's title when `fromEpic` is given. */
   title?: string;
   description?: string | null;
+  /** The milestone's goal: its acceptance criteria. */
+  acceptanceCriteria?: string[];
   targetDate?: string | null;
   startDate?: string | null;
   /** The epic that becomes the one member; its children come along by descent. */
@@ -200,6 +303,21 @@ const MEMBER_SELECT = `SELECT m.issue_id, m.milestone_id, m.rank, m.added_by, m.
 
 function article(word: string): string {
   return /^[aeiou]/i.test(word) ? "an" : "a";
+}
+
+/** When a milestone was closed: its `completedAt` when done, its `cancelledAt` when cancelled, else null. */
+export function closedAtOf(
+  category: string,
+  issue: { completedAt: string | null; cancelledAt: string | null },
+): string | null {
+  if (category === "done") return issue.completedAt;
+  if (category === "cancelled") return issue.cancelledAt;
+  return null;
+}
+
+/** Criteria as `staple new --criteria` leaves them: trimmed, blanks dropped. */
+function cleanCriteria(criteria: readonly string[]): string[] {
+  return criteria.map((criterion) => criterion.trim()).filter(Boolean);
 }
 
 function hasPosition(position: MemberPosition): boolean {
@@ -564,6 +682,44 @@ export class MilestoneStore {
   }
 
   private view(id: string, facts: QueueFacts = this.queueFacts()): MilestoneView {
+    const { base, openIds } = this.baseView(id, facts);
+    const view = { ...base, remaining: this.remainingOf(openIds, this.store.remainingForecasts(openIds)) };
+    return { ...view, goal: this.goalOf(id, view) };
+  }
+
+  /** `remaining` from the open leaves and each one's remaining work as `forecast` weighs it. */
+  private remainingOf(
+    openIds: readonly string[],
+    forecasts: ReadonlyMap<string, { estimateSeconds: number | null; seconds: number | null }>,
+  ): MilestoneRemaining {
+    let estimated = 0;
+    let unknown = 0;
+    let known = 0;
+    let estimateSeconds = 0;
+    let forecastSeconds = 0;
+    for (const id of openIds) {
+      const forecast = forecasts.get(id);
+      if (forecast?.estimateSeconds != null) {
+        estimated += 1;
+        estimateSeconds += forecast.estimateSeconds;
+      }
+      if (forecast?.seconds == null) unknown += 1;
+      else {
+        known += 1;
+        forecastSeconds += forecast.seconds;
+      }
+    }
+    return {
+      estimated,
+      unestimated: openIds.length - estimated,
+      unknown,
+      estimateSeconds: estimated === 0 ? null : estimateSeconds,
+      forecastSeconds: known === 0 ? null : forecastSeconds,
+    };
+  }
+
+  /** The view without its goal: what `list` returns per row, and what the goal's pace reads. */
+  private baseView(id: string, facts: QueueFacts): { base: Omit<MilestoneView, "goal" | "remaining">; openIds: string[] } {
     const issue = this.store.getIssue(id);
     const meta = this.meta(id);
     const rows = this.memberRows(id);
@@ -601,10 +757,13 @@ export class MilestoneStore {
     }));
     const descendantsByMember = new Map(rows.map((row) => [row.issue_id, this.descendants(row.issue_id)]));
     const progress = milestoneProgress(nodes, descendantsByMember);
+    const openIds = milestoneLeaves(nodes, descendantsByMember)
+      .filter((node) => node.category !== "done" && node.category !== "cancelled")
+      .map((node) => node.id);
 
     const targetDate = meta?.target_date ?? null;
     const startDate = meta?.start_date ?? null;
-    return {
+    const base = {
       milestone: {
         id: issue.id,
         identifier: issue.identifier,
@@ -612,16 +771,22 @@ export class MilestoneStore {
         status: issue.status,
         kind: issue.kind,
         assignee: issue.assignee,
+        description: issue.description,
+        acceptanceCriteria: issue.acceptanceCriteria ?? [],
         targetDate,
         startDate,
         state: milestoneState({ category: this.category(issue.status), targetDate, startDate }, progress, nowIso()),
         planPosition: facts.planPositionOf.get(id) ?? null,
+        // From the status's category, not from whichever stamp is set: a reopened milestone
+        // keeps its old `cancelledAt`, and is not closed.
+        closedAt: closedAtOf(this.category(issue.status), issue),
       },
       progress,
       revision: meta?.members_revision ?? 0,
       members,
       next: facts.nextOf.get(issue.identifier) ?? null,
     };
+    return { base, openIds };
   }
 
   /** One milestone, one shape. `validation` for a non-milestone, `not_found` for nothing. */
@@ -642,10 +807,13 @@ export class MilestoneStore {
       .all(MILESTONE_KIND) as Array<{ id: string; status: string }>;
     // One resolver read for the whole list, not one per milestone.
     const facts = this.queueFacts();
-    const views = rows
-      .filter((row) => options.all === true || !this.store.isResolvedStatus(row.status))
-      .map((row) => {
-        const { members, ...rest } = this.view(row.id, facts);
+    const listed = rows.filter((row) => options.all === true || !this.store.isResolvedStatus(row.status));
+    // Each milestone's walk once, then one forecast read for every open leaf of every one.
+    const bases = listed.map((row) => this.baseView(row.id, facts));
+    const forecasts = this.store.remainingForecasts([...new Set(bases.flatMap((b) => b.openIds))]);
+    const views = bases
+      .map(({ base, openIds }) => {
+        const { members, ...rest } = { ...base, remaining: this.remainingOf(openIds, forecasts) };
         return { ...rest, memberCount: members.length };
       });
     const nullsLast = (a: number | string | null, b: number | string | null): number => {
@@ -659,6 +827,30 @@ export class MilestoneStore {
         nullsLast(a.milestone.targetDate, b.milestone.targetDate) ||
         number(a.milestone.identifier) - number(b.milestone.identifier),
     );
+  }
+
+  /** `milestoneOf` with the names a detail view prints; see `EffectiveMilestone`. */
+  effectiveMilestone(ref: string): EffectiveMilestone | null {
+    const issue = this.requireIssue(ref, false);
+    const titled = (id: string) =>
+      this.db.prepare("SELECT identifier, title FROM issues WHERE id = ?").get(id) as {
+        identifier: string;
+        title: string;
+      };
+    for (const id of [issue.id, ...this.ancestorIds(issue.id)]) {
+      const membership = this.membershipOf(id);
+      if (!membership) continue;
+      const milestone = this.store.getIssue(membership.milestone_id);
+      return {
+        id: membership.milestone_id,
+        identifier: milestone.identifier,
+        title: milestone.title,
+        status: milestone.status,
+        targetDate: this.meta(membership.milestone_id)?.target_date ?? null,
+        via: id === issue.id ? null : titled(id),
+      };
+    }
+    return null;
   }
 
   /** The effective milestone of an issue: its own direct membership, else the nearest ancestor's. */
@@ -675,16 +867,289 @@ export class MilestoneStore {
     return null;
   }
 
+  // ---------- goal (milestone-goal.ts) ----------
+
+  private marksOf(milestoneId: string): Map<number, CriterionMark> {
+    const rows = this.db
+      .prepare("SELECT * FROM milestone_criterion_marks WHERE milestone_id = ? ORDER BY position")
+      .all(milestoneId) as Array<{
+      position: number;
+      criterion: string;
+      verdict: string;
+      evidence: string;
+      note: string | null;
+      marked_by: string;
+      run_id: string | null;
+      marked_at: string;
+    }>;
+    return new Map(
+      rows.map((row) => [
+        row.position,
+        {
+          position: row.position,
+          criterion: row.criterion,
+          verdict: row.verdict as CriterionVerdict,
+          evidence: JSON.parse(row.evidence) as string[],
+          note: row.note,
+          markedBy: row.marked_by,
+          runId: row.run_id,
+          markedAt: row.marked_at,
+        },
+      ]),
+    );
+  }
+
+  /** The issue a ticket or document evidence names, in this workspace; null when there is none. */
+  private evidenceIssue(ref: string): { id: string; identifier: string; status: string } | null {
+    const parsed = parseIdentifier(ref);
+    if (parsed === null || parsed.prefix !== this.store.prefix) return null;
+    return (
+      (this.db.prepare("SELECT id, identifier, status FROM issues WHERE identifier = ?").get(ref) as
+        | { id: string; identifier: string; status: string }
+        | undefined) ?? null
+    );
+  }
+
+  /**
+   * Whether one piece of evidence holds: a ticket while it is done, a document while it
+   * exists. `markedAt` is when it was cited, for `lapsed`.
+   */
+  private evidenceItem(value: string, markedAt: string): EvidenceItem {
+    const parsed = parseEvidence(value);
+    if (parsed.kind === "text") return { ...parsed, status: null, holds: true, problem: null, lapsed: false };
+    const issue = this.evidenceIssue(parsed.ref!);
+    // A mark cites only what exists, so a cited issue that is gone was there and has lapsed.
+    if (issue === null) return { ...parsed, status: null, holds: false, problem: `${parsed.ref} is not an issue in this workspace`, lapsed: true };
+    if (parsed.kind === "document") {
+      const exists = this.db
+        .prepare("SELECT 1 AS hit FROM documents WHERE issue_id = ? AND key = ?")
+        .get(issue.id, parsed.document!.toLowerCase());
+      return exists
+        ? { ...parsed, ref: issue.identifier, status: issue.status, holds: true, problem: null, lapsed: false }
+        : { ...parsed, ref: issue.identifier, status: issue.status, holds: false, problem: `${issue.identifier} has no document "${parsed.document}"`, lapsed: true };
+    }
+    const done = this.store.categoryOf(issue.status) === "done";
+    return {
+      ...parsed,
+      ref: issue.identifier,
+      status: issue.status,
+      holds: done,
+      problem: done ? null : `${issue.identifier} is ${issue.status}, not done`,
+      lapsed: !done && this.leftDoneSince(issue.id, markedAt),
+    };
+  }
+
+  /**
+   * Whether a ticket that is not done now was done at some point since `since`: it then left
+   * done after that instant, and every status change writes a `status_changed` event naming
+   * the status it left. A change in the very millisecond of the mark, and a device without
+   * the event (history it never received), read false: the cautious "does not hold yet".
+   */
+  private leftDoneSince(issueId: string, since: string): boolean {
+    const rows = this.db
+      .prepare("SELECT payload FROM events WHERE issue_id = ? AND kind = 'status_changed' AND created_at > ?")
+      .all(issueId, since) as Array<{ payload: string }>;
+    return rows.some((row) => {
+      const from = (JSON.parse(row.payload) as { from?: unknown }).from;
+      return typeof from === "string" && this.store.categoryOf(from) === "done";
+    });
+  }
+
+  /**
+   * Each criterion of the milestone as a check reads it now: the stop rules of a goal run
+   * read this (`run-store.ts`), and it is the criteria half of every view's `goal`.
+   */
+  criteriaCheck(ref: string): MilestoneCriteriaCheck {
+    this.assertKindConfigured();
+    const issue = this.requireMilestone(ref, false);
+    const marks = this.marksOf(issue.id);
+    const criteria = (issue.acceptanceCriteria ?? []).map((text, index) => {
+      const mark = marks.get(index + 1) ?? null;
+      return judgeCriterion(index + 1, text, mark, (mark?.evidence ?? []).map((value) => this.evidenceItem(value, mark!.markedAt)));
+    });
+    const counts = goalCounts(criteria);
+    return { criteria, counts, met: isGoalMet(counts) };
+  }
+
+  /**
+   * Pace against the target date, from the certified plans `compare` reads: one per member
+   * that is not nested under another member (a nested one is inside that member's plan).
+   */
+  private paceOf(view: Omit<MilestoneView, "goal" | "remaining">): GoalPace {
+    const top = view.members.filter((member) => member.nestedUnder === null);
+    const plans: MemberPlan[] = [];
+    for (let index = 0; index < top.length; index += COMPARE_MAX_REFS) {
+      const chunk = top.slice(index, index + COMPARE_MAX_REFS).map((member) => member.issueId);
+      for (const plan of this.store.comparePlans(chunk).plans) {
+        const openUnplanned = plan.coverage.unplannedRefs.filter((ref) => {
+          const row = this.db.prepare("SELECT status FROM issues WHERE identifier = ?").get(ref) as { status: string } | undefined;
+          return row !== undefined && !this.store.isResolvedStatus(row.status);
+        });
+        plans.push({
+          ref: plan.ref,
+          // Resolved only when nothing is left under it: a done epic can still hold an open
+          // task (added or reopened after it closed), and that work is not done.
+          resolved: this.store.isResolvedStatus(plan.status) && plan.remainingPath.chain.length === 0 && !plan.remainingPath.partial,
+          laborSeconds: plan.labor.seconds,
+          remainingSeconds: plan.remainingPath.seconds,
+          // Open work only: a finished task with no estimate is not work left to estimate, so it
+          // is neither named as "not estimated yet" nor a reason to call the figure a lower bound.
+          partial: plan.remainingPath.partial || openUnplanned.length > 0,
+          unplannedRefs: openUnplanned,
+        });
+      }
+    }
+    return goalPace({ targetDate: view.milestone.targetDate, now: nowIso(), progress: view.progress, plans });
+  }
+
+  private goalOf(id: string, view: Omit<MilestoneView, "goal" | "remaining">): MilestoneGoal {
+    return { ...this.criteriaCheck(id), pace: this.paceOf(view) };
+  }
+
+  /**
+   * Judge one criterion (`milestone criterion`): a verdict, the evidence it rests on, and for
+   * an unmet one optionally a follow-up ticket. The tracker records the judgement and decides
+   * what it is still worth at each check (`judgeCriterion`); it never judges the criterion
+   * itself. A `met` mark needs evidence. A ticket or document cited must exist in this
+   * workspace; a ticket that is not done yet may be cited, and the criterion reads `unknown`
+   * until it is.
+   *
+   * A mark replicates, as the milestone field `criterion<n>`; two devices judging the same
+   * criterion concurrently are a field conflict, preserved until someone picks a side. A
+   * follow-up is an ordinary issue and membership, created by the goal run
+   * (`RunStore.createGoalChild`), which enforces the run's cap. The run stays machine-local.
+   */
+  markCriterion(ref: string, position: number, input: MarkCriterionInput, actor: string | null): MilestoneView {
+    this.assertKindConfigured();
+    if (!(CRITERION_VERDICTS as readonly string[]).includes(input.verdict)) {
+      throw new StapleError("validation", `A criterion's verdict is met, unmet or unknown; got "${String(input.verdict)}".`);
+    }
+    const milestone = this.requireMilestone(ref);
+    const criteria = milestone.acceptanceCriteria ?? [];
+    if (criteria.length === 0) {
+      throw new StapleError(
+        "validation",
+        `${milestone.identifier} has no acceptance criteria to judge; give it some with \`staple milestone set ${milestone.identifier} --criteria "a;b"\`.`,
+        { identifier: milestone.identifier },
+      );
+    }
+    if (!Number.isInteger(position) || position < 1 || position > criteria.length) {
+      throw new StapleError("validation", `${milestone.identifier} has criteria 1 to ${criteria.length}; got ${position}.`, {
+        identifier: milestone.identifier,
+        criteria: criteria.length,
+      });
+    }
+    const evidence = (input.evidence ?? []).map((value) => value.trim()).filter(Boolean);
+    for (const value of evidence) {
+      const parsed = parseEvidence(value);
+      if (parsed.kind === "text") continue;
+      this.assertLocalRef(parsed.ref!);
+      const issue = this.evidenceIssue(parsed.ref!);
+      if (issue === null) throw new StapleError("not_found", `Evidence ${value}: ${parsed.ref} is not an issue in this workspace.`, { evidence: value });
+      if (parsed.kind === "document" && !this.db.prepare("SELECT 1 AS hit FROM documents WHERE issue_id = ? AND key = ?").get(issue.id, parsed.document!.toLowerCase())) {
+        throw new StapleError("not_found", `Evidence ${value}: ${issue.identifier} has no document "${parsed.document}".`, { evidence: value });
+      }
+    }
+    const followUp = input.followUp ?? null;
+    if (followUp !== null && input.verdict !== "unmet") {
+      throw new StapleError("validation", "A follow-up ticket is for an unmet criterion; mark it unmet.");
+    }
+    if (input.verdict === "met" && evidence.length === 0) {
+      throw new StapleError(
+        "validation",
+        `A met criterion needs evidence: --evidence <ticket, ticket:document, or text> (${milestone.identifier} criterion ${position}).`,
+      );
+    }
+    const text = criteria[position - 1]!;
+    return this.journaled(() => {
+      const runs = this.store.runs();
+      const run = input.run != null ? runs.get(input.run) : actor === null ? null : runs.liveGoalRunOf(actor, milestone.id);
+      if (run !== null && (run.scope.kind !== "milestone" || run.scope.issueId !== milestone.id)) {
+        throw new StapleError("validation", `Run ${run.id} is not a goal run over ${milestone.identifier}.`, { runId: run.id });
+      }
+      if (followUp !== null) {
+        if (run === null) {
+          throw new StapleError(
+            "validation",
+            `A follow-up is created by a goal run over ${milestone.identifier}, and ${actor ?? "you"} has none live; file it with \`staple new\` and \`staple milestone add\`.`,
+            { identifier: milestone.identifier },
+          );
+        }
+        const child = runs.createGoalChild(run.id, "follow_up", {
+          title: followUp.title,
+          description: followUp.description ?? null,
+          criterion: { position, text },
+        });
+        evidence.push(child.identifier);
+      }
+      const mark = criterionMarkValue({
+        criterion: text,
+        verdict: input.verdict,
+        evidence,
+        note: input.note?.trim() ? input.note.trim() : null,
+        markedBy: actor ?? "user",
+        runId: run?.id ?? null,
+        markedAt: this.journal.mutationAt(),
+      });
+      writeCriterionMark(this.db, milestone.id, position, mark);
+      // A mark is a change to the milestone, and says when, as a date edit does: the row diff
+      // carries `updatedAt` with it, so a device hydrating from the log holds the same time.
+      this.ensureMeta(milestone.id, mark.markedAt);
+      this.db.prepare("UPDATE milestone_meta SET updated_at = ? WHERE issue_id = ?").run(mark.markedAt, milestone.id);
+      /**
+       * The mark replicates as one field of the milestone (`criterion<n>`, see
+       * `criterionMarkField`): a field of an entity the protocol already carries, so no new
+       * entity and no protocol change. The run it names is this machine's; the id travels as
+       * a label and is never looked up elsewhere.
+       */
+      this.journal.record({
+        entity: "milestone",
+        entityId: milestone.id,
+        verb: "update",
+        payload: { [criterionMarkField(position)]: mark },
+        actor: actor ?? null,
+      });
+      // The event names no issue: it is this device's note of the judgement, never transported.
+      insertEvent(this.db, {
+        kind: "milestone_criterion_marked",
+        issueId: null,
+        actor,
+        payload: { milestone: milestone.identifier, position, criterion: text, verdict: input.verdict, evidence, runId: run?.id ?? null },
+      });
+      return this.view(milestone.id);
+    });
+  }
+
   // ---------- writes ----------
 
-  /** `set`: only the two dates; everything else is edited where every issue is. */
+  /** `set`: the two dates, and the goal (description, criteria) kept on the issue itself. */
   update(ref: string, patch: MilestoneDatePatch, actor: string | null): MilestoneView {
     this.assertKindConfigured();
-    if (patch.targetDate === undefined && patch.startDate === undefined) {
-      throw new StapleError("validation", "update requires targetDate or startDate (null clears one).");
+    const goalPatch = patch.description !== undefined || patch.acceptanceCriteria !== undefined;
+    if (patch.targetDate === undefined && patch.startDate === undefined && !goalPatch) {
+      throw new StapleError(
+        "validation",
+        "update requires targetDate, startDate (null clears one), description (null clears it) or acceptanceCriteria (empty clears them).",
+      );
     }
     const milestone = this.requireMilestone(ref);
     return this.journaled(() => {
+      /**
+       * The goal lives on the issue: description and criteria are the issue's own fields,
+       * edited through `updateIssue` so they journal and replicate as any issue edit does.
+       * Criteria are trimmed and emptied of blanks, as `staple new --criteria` splits them.
+       */
+      if (goalPatch) {
+        this.store.updateIssue(
+          milestone.id,
+          {
+            ...(patch.description !== undefined ? { description: patch.description?.trim() ? patch.description.trim() : null } : {}),
+            ...(patch.acceptanceCriteria !== undefined ? { acceptanceCriteria: cleanCriteria(patch.acceptanceCriteria) } : {}),
+          },
+          actor,
+        );
+      }
+      if (patch.targetDate === undefined && patch.startDate === undefined) return this.view(milestone.id);
       const meta = this.meta(milestone.id);
       const previous = { targetDate: meta?.target_date ?? null, startDate: meta?.start_date ?? null };
       const next = {
@@ -763,6 +1228,8 @@ export class MilestoneStore {
       // Declared only on the write path: the idempotent replay above returns
       // before reaching here, so a repeated add mints no second operation.
       this.recordMembership(milestone.id, actor ?? null);
+      // A member reports upward like a child, so joining can move the milestone's status.
+      this.store.rederiveMilestones([milestone.id], member.identifier, actor ?? null);
       return { ...this.view(milestone.id), replayed: false };
     });
   }
@@ -820,6 +1287,7 @@ export class MilestoneStore {
       this.emit("milestone_member_removed", milestone.id, actor, { identifier: member.identifier, position, revision });
       this.emit("milestone_left", member.id, actor, { milestone: milestone.identifier, revision });
       this.recordMembership(milestone.id, actor ?? null);
+      this.store.rederiveMilestones([milestone.id], member.identifier, actor ?? null);
       return this.view(milestone.id);
     });
   }
@@ -887,6 +1355,7 @@ export class MilestoneStore {
       // would show the member in both places.
       this.recordMembership(from.id, actor ?? null);
       this.recordMembership(target.id, actor ?? null);
+      this.store.rederiveMilestones([from.id, target.id], member.identifier, actor ?? null);
       return this.view(target.id);
     });
   }
@@ -990,11 +1459,13 @@ export class MilestoneStore {
      * together, not three transactions a receiver could see a prefix of.
      */
     return this.journaled(() => {
+      const criteria = cleanCriteria(input.acceptanceCriteria ?? []);
       const issue = this.store.createIssue({
         title,
-        description: input.description ?? null,
+        description: input.description?.trim() ? input.description.trim() : null,
         kind: MILESTONE_KIND,
         createdBy: actor,
+        ...(criteria.length > 0 ? { acceptanceCriteria: criteria } : {}),
       });
       if (targetDate !== null || startDate !== null) this.update(issue.id, { targetDate, startDate }, actor);
       if (epic !== null) this.addMember(issue.id, epic.id, {}, actor);

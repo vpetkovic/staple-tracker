@@ -1,7 +1,7 @@
 /**
  * The seed: a workspace's existing state reaches the service when it first synchronizes.
  *
- * Contract: `docs/sync.md`, "A workspace's history reaches the service when it first
+ * Contract: `design/sync.md`, "A workspace's history reaches the service when it first
  * synchronizes".
  *
  * ## The gap this closes
@@ -34,6 +34,7 @@
  * the whole local state together.
  */
 import type { DatabaseSync } from "node:sqlite";
+import { attachmentPayload, readAttachment, readAttachmentBytes } from "../attachments.js";
 import { tx } from "../db.js";
 import { moveIdentifier } from "../identifier-moves.js";
 import { newId } from "../ids.js";
@@ -46,7 +47,10 @@ import { cloudError } from "./errors.js";
 import { REPOSITORY_PREFIX_SETTING, localPrefix, repositoryPrefixOf } from "./repository-prefix.js";
 import { VOCABULARY_ORDER_ID, hydrate } from "./hydrate.js";
 import { completeSnapshot, recordReconciledEpoch } from "./sync-state.js";
+import { attemptPayload, noteAttemptsSeededHere, readAttempt, readTransition, transitionPayload } from "../telemetry/attempt-records.js";
 import type { SnapshotEntity } from "./wire.js";
+import { criterionMarkPosition } from "../milestone-goal.js";
+import { criterionMarkFields } from "../milestone-marks.js";
 
 /** The plan's singleton entity id. Mirrors `queue-store.ts`. */
 const QUEUE_PLAN_ID = "@plan";
@@ -71,6 +75,12 @@ export interface RepositorySurvey {
   readonly fromTail?: boolean;
   /** How many operations of that tail an earlier, stopped read had already folded. */
   readonly resumedFrom?: number;
+  /**
+   * When the restore that made this epoch committed, as the service recorded it: the one
+   * instant every device that rewinds into the epoch dates what the rewind changed by. Null on
+   * an epoch no restore made, and absent from a service before this build.
+   */
+  readonly restoredAt?: string | null;
 }
 
 export interface SeedItem {
@@ -179,6 +189,9 @@ const NOUNS: Record<string, [string, string]> = {
   setting: ["setting", "settings"],
   milestone: ["milestone", "milestones"],
   queue: ["plan", "plans"],
+  attempt: ["attempt", "attempts"],
+  attemptTransition: ["attempt transition", "attempt transitions"],
+  attachment: ["file", "files"],
 };
 
 function counted(n: number, entity: string): string {
@@ -281,6 +294,9 @@ export function workspaceHoldings(db: DatabaseSync): { total: number; summary: s
     project: count("SELECT COUNT(*) AS n FROM projects"),
     milestone: count("SELECT COUNT(*) AS n FROM milestone_meta"),
     queue: count("SELECT CASE WHEN EXISTS (SELECT 1 FROM queue_entries) THEN 1 ELSE 0 END AS n"),
+    attempt: count("SELECT COUNT(*) AS n FROM attempts"),
+    attemptTransition: count("SELECT COUNT(*) AS n FROM attempt_transitions"),
+    attachment: count("SELECT COUNT(*) AS n FROM attachments"),
   };
   const total = Object.values(byEntity).reduce((sum, n) => sum + n, 0);
   return { total, summary: breakdown(byEntity) };
@@ -318,6 +334,12 @@ function isComplete(entity: SnapshotEntity): boolean {
       );
     case "documentRevision":
       return typeof state.issueId === "string";
+    case "attempt":
+      return typeof state.issueId === "string";
+    case "attemptTransition":
+      return typeof state.attemptId === "string";
+    case "attachment":
+      return typeof state.issueId === "string" && typeof state.filename === "string";
     default:
       return true;
   }
@@ -562,6 +584,17 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     set.push(edge);
     sets.set(edge.blocked_id, set);
   }
+  /**
+   * A child created to block its parent carries that edge in its create, and every receiver
+   * adds it (`applyIssue`). Where the parent no longer holds it — the set cleared by hand since —
+   * the parent's set travels too, empty or not, after the children's creates, so a receiver ends
+   * where this workspace is.
+   */
+  for (const row of db
+    .prepare("SELECT DISTINCT parent_id AS id FROM issues WHERE block_parent_until_done = 1 AND parent_id IS NOT NULL")
+    .all() as Array<{ id: string }>) {
+    if (!sets.has(row.id)) sets.set(row.id, []);
+  }
   for (const [blockedId, set] of sets) {
     out.push({
       entity: "relation",
@@ -572,8 +605,8 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
         // Each edge's own author and time, so no device dates them with the seed's.
         edges: Object.fromEntries(set.map((edge) => [edge.blocker_id, { createdBy: edge.created_by, createdAt: edge.created_at }])),
       },
-      actor: set[set.length - 1]!.created_by,
-      at: latest(set.map((edge) => edge.created_at), now),
+      actor: set[set.length - 1]?.created_by ?? null,
+      at: set.length > 0 ? latest(set.map((edge) => edge.created_at), now) : now,
     });
   }
 
@@ -615,7 +648,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     if (row.identifier === null) {
       /**
        * `document_revisions` has no foreign key to `issues`, so a revision can outlive
-       * its issue — `docs/sync.md` lists it under Known limits. A receiver cannot place
+       * its issue — `design/sync.md` lists it under Known limits. A receiver cannot place
        * a revision of an issue it will never have, and would defer it for ever.
        */
       skipped.push({
@@ -645,11 +678,59 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     });
   }
 
+  /**
+   * Execution attempts, then their transitions — each after what it names. An attempt is
+   * sent whole, its end included, and a transition is immutable once written; the seed
+   * sends the record as it stands, never re-derives it.
+   */
+  for (const row of db.prepare("SELECT id FROM attempts ORDER BY started_at, id").all() as Array<{ id: string }>) {
+    const attempt = readAttempt(db, row.id)!;
+    out.push({
+      entity: "attempt",
+      entityId: attempt.id,
+      label: `attempt ${attempt.id} on ${identifierOf(db, attempt.issueId)}`,
+      payload: attemptPayload(attempt),
+      actor: attempt.agent,
+      at: attempt.endedAt ?? attempt.startedAt,
+    });
+  }
+  for (const row of db.prepare("SELECT id FROM attempt_transitions ORDER BY at, id").all() as Array<{ id: string }>) {
+    const transition = readTransition(db, row.id)!;
+    out.push({
+      entity: "attemptTransition",
+      entityId: transition.id,
+      label: `${transition.kind} of attempt ${transition.attemptId}`,
+      payload: transitionPayload(transition),
+      actor: transition.actor,
+      at: transition.at,
+    });
+  }
+
+  /**
+   * Files. Metadata always. Bytes only when this device still holds them and the
+   * file was inlined — a local file, or an inlined file whose blob is gone, seeds
+   * as local so a receiver is not told the bytes are coming.
+   */
+  for (const row of db.prepare("SELECT id FROM attachments ORDER BY created_at, id").all() as Array<{ id: string }>) {
+    const meta = readAttachment(db, row.id)!;
+    const bytes = meta.byteSync === "inline" ? readAttachmentBytes(db, meta.sha256) : null;
+    const seeded = bytes === null ? { ...meta, byteSync: "local" as const } : meta;
+    out.push({
+      entity: "attachment",
+      entityId: meta.id,
+      label: `${meta.filename} on ${identifierOf(db, meta.issueId)}`,
+      payload: attachmentPayload(seeded, bytes),
+      actor: meta.author,
+      at: meta.createdAt,
+    });
+  }
+
   const milestoneIds = (
     db
       .prepare(
         `SELECT issue_id AS id FROM milestone_meta
           UNION SELECT milestone_id AS id FROM milestone_members
+          UNION SELECT milestone_id AS id FROM milestone_criterion_marks
           ORDER BY id`,
       )
       .all() as Array<{ id: string }>
@@ -671,6 +752,8 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
       // When it last changed, as this device holds it (`applyMilestone`).
       payload.updatedAt = meta.updated_at;
     }
+    // Its criterion marks, one field each (`criterion<n>`), as a mark is journaled.
+    Object.assign(payload, criterionMarkFields(db, milestoneId));
     out.push({
       entity: "milestone",
       entityId: milestoneId,
@@ -1098,6 +1181,12 @@ function replacedValues(db: DatabaseSync, index: SurveyIndex): SeedReplaced[] {
           if (!(field in entity.state)) continue;
           if (canonical(meta[column]) === canonical(entity.state[field])) continue;
           out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field: column, local: meta[column], repository: entity.state[field] });
+        }
+        const marks = criterionMarkFields(db, entity.entityId);
+        for (const field of Object.keys(entity.state).filter((key) => criterionMarkPosition(key) !== null)) {
+          const local = marks[field] ?? null;
+          if (canonical(local) === canonical(entity.state[field])) continue;
+          out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field, local, repository: entity.state[field] });
         }
         break;
       }
@@ -1529,7 +1618,16 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
      * nothing, and the fix is to shorten it and sync again.
      */
     const sendable: SeedIntent[] = [];
-    for (const intent of intents) {
+    for (const listed of intents) {
+      /**
+       * A seed, a heal and a republish send what exists, never what happened: every issue and
+       * blocker set says it narrates nothing, so no receiver writes a birth or a move for it
+       * dated by the seed (`cloud/reemit.ts`).
+       */
+      const intent: SeedIntent =
+        (listed.entity === "issue" || listed.entity === "relation") && listed.verb !== "delete" && !("originEvents" in listed.payload)
+          ? { ...listed, payload: { ...listed.payload, originEvents: [] } }
+          : listed;
       const bytes = Buffer.byteLength(JSON.stringify(intent.payload), "utf8");
       if (bytes <= args.maxOpBytes) {
         sendable.push(intent);
@@ -1572,6 +1670,16 @@ export function seedRepository(db: DatabaseSync, journal: Journal, args: SeedArg
      * push and this transaction: it keeps its id and follows the push like any other.
      */
     journal.seed(sendable);
+    /**
+     * The attempts this database opened before it had a device (`deviceId` null) and now
+     * uploads: this device's from here on, for the stored orphan end and the presence index
+     * (`attemptsOpenedHere`). A device hydrating them holds them with a null device too, and
+     * must not take them for its own, so the claim is the upload, recorded here.
+     */
+    noteAttemptsSeededHere(
+      db,
+      sendable.filter((intent) => intent.entity === "attempt" && intent.verb === "create" && intent.payload.deviceId == null).map((intent) => intent.entityId),
+    );
     // And anything the repository's state displaced while it was applied above (`claims.ts`).
     settleOwedClaims(db, journal);
 

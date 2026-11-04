@@ -1,5 +1,5 @@
 /**
- * RW1(c). No entity can stop a sync (`quarantine.ts`, `docs/sync.md` "No entity can stop a sync").
+ * RW1(c). No entity can stop a sync (`quarantine.ts`, `design/sync.md` "No entity can stop a sync").
  *
  * An entity naming what never arrived used to fail its page — of the ordered tail or of a
  * snapshot — whole, and every later sync met the same page: one device's write stopped every

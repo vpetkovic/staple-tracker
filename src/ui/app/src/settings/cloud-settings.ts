@@ -67,7 +67,9 @@ export const CLOUD_CATEGORY_ID = "cloud";
  */
 export const CLOUD_CATEGORY: SettingCategoryView = {
   id: CLOUD_CATEGORY_ID,
-  label: "Cloud",
+  // "Cloud account": the computer's sign-in to the sync service. Each workspace's own
+  // syncing is "Cloud sync", under Per workspace (settings-shell.ts).
+  label: "Cloud account",
   description:
     "This machine's connection to a sync service, and the two later consents. Stored beside " +
     "staple's home on this computer — never in the workspace, which would replicate it to " +
@@ -1197,7 +1199,7 @@ export function hubWideDisconnectWarning(report: HubCloudReport): string {
  * It is the fourth consent and the first that belongs to the hub. The other
  * three are per workspace and stay on their rows — automatic sync is a decision
  * about one repository's traffic, and a hub-wide switch for it would be one
- * press spending N consents, which is the shape `docs/sync.md` separates them to
+ * press spending N consents, which is the shape `design/sync.md` separates them to
  * prevent. This one is genuinely singular: there is one registry.
  */
 export function hubRegistryControl(report: HubCloudReport): {

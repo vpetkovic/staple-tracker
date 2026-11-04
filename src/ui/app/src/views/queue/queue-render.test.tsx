@@ -208,8 +208,9 @@ describe("the pickup order", () => {
    * confirmation and no context. The menu is closed in static markup, so what is asserted
    * here is the slot; the items themselves are `components/queue-row-menu.test.tsx`.
    */
-  it("hangs per-row actions off the shared ⋯ rather than a bin of its own", () => {
-    expect(html).toContain("staple-row-actions");
+  it("hangs per-row actions off the shared row slot rather than a bin of its own", () => {
+    // The desktop row's quick-action slot is the one place a row's actions live.
+    expect(html).toContain('data-testid="row-quick-actions"');
     expect(html).not.toContain('aria-label="Remove STA-31 from the plan"');
   });
 
@@ -267,8 +268,8 @@ describe("the pickup order", () => {
   });
 
   it("gives every row the one place its actions live", () => {
-    // The `⋯` column is ON here, and it is the same slot the tree hangs its menu on.
-    expect(html).toContain("staple-row-actions");
+    // The actions column is ON here, and it is the same slot the tree hangs its menu on.
+    expect(html).toContain('data-testid="row-quick-actions"');
   });
 });
 
@@ -428,7 +429,7 @@ describe("the next-up band", () => {
 /**
  * WORK AN AGENT HAS ALREADY PICKED UP.
  *
- * docs/queue.md: rows are never dropped for being ineligible. So a claimed row keeps its
+ * design/queue.md: rows are never dropped for being ineligible. So a claimed row keeps its
  * place and its number, and says who has it — the alternative, lifting it into a section of
  * its own, would rearrange the order while somebody was reading it.
  */
@@ -497,7 +498,7 @@ describe("the board", () => {
 });
 
 /**
- * THE WORKED EXAMPLE — docs/queue.md, and the ticket's first acceptance criterion.
+ * THE WORKED EXAMPLE — design/queue.md, and the ticket's first acceptance criterion.
  *
  * Through the real client with a stubbed `fetch`, so what is proven is the whole path: the
  * order a drag or a keyboard move produces goes out as one `reorder` with the CAS base,

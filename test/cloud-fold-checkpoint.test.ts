@@ -18,6 +18,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBackup, restoreFromBackup, setBackupConsent } from "../src/core/cloud/backup.js";
 import { SNAPSHOT_FOLD_PATIENCE, cloudCodeOf, fetchSnapshotPage, whileFolding } from "../src/core/cloud/client.js";
+import { TailFold } from "../src/core/cloud/tail-fold.js";
 import { cloudError } from "../src/core/cloud/errors.js";
 import { parseEndpoint } from "../src/core/cloud/endpoint.js";
 import { setConsent } from "../src/core/cloud/connection.js";
@@ -101,14 +102,8 @@ describe("a device meeting a service that is still folding", () => {
     expect(seen.length).toBeGreaterThan(2);
     expect(seen).toEqual([...seen].sort((x, y) => x - y));
     expect(new Set(seen).size).toBe(seen.length);
-    /**
-     * The milliseconds the refusal named, once per refusal — not the second its `Retry-After`
-     * header carries. A fold in progress is not back-pressure: every refusal folded a budget, so the
-     * wait is pure latency, and at a second each a backup of a large unfolded log spent three
-     * quarters of an hour waiting for four minutes of folding (`FOLD_RETRY_MS`,
-     * `worker/src/limits.ts`).
-     */
-    expect(waits).toEqual(seen.map(() => 200));
+    // A one-second retry keeps catch-up below the device's 120 requests per minute.
+    expect(waits).toEqual(seen.map(() => 1000));
     expect(backup.opCount).toBe(server.ops.filter((op) => op.epoch === 1).length);
   });
 
@@ -261,4 +256,31 @@ describe("waiting on a service that is still folding", () => {
     );
     expect(waits).toEqual([2000]);
   });
+});
+
+it.each([0, null, -1, "invalid"])("uses a positive retry fallback for %s", async (retryAfterMs) => {
+  const waits: number[] = [];
+  let attempts = 0;
+  await whileFolding(async () => {
+    if (++attempts > 1) return "served";
+    throw cloudError("unavailable", "still folding", { foldedSeq: 1, cutoffSeq: 2, retryAfterMs });
+  }, { sleep: async ms => void waits.push(ms) });
+  expect(waits).toEqual([1000]);
+});
+
+it("the client tail fold carries unknown fields when it moves a revision", () => {
+  const fold = new TailFold();
+  fold.add(["first", "second"].map((body, index) => ({
+    opId: `opaque-${index}`, seq: index + 1, epoch: 1, protocol: 4, schema: 18,
+    entity: "documentRevision", entityId: "i/worklog/1", verb: "create", baseVersion: null,
+    payload: { body, revision: 1, instructions: true, future: { untouched: [1, 2] } },
+    deviceId: "a", actor: "alice", clientSeq: index + 1,
+    createdAt: "2026-09-17T00:00:00.000Z", serverTs: index + 1,
+  })));
+  expect(fold.saved().find(e => e.entityId === "i/worklog/2")!.state)
+    .toMatchObject({ instructions: true, future: { untouched: [1, 2] } });
+});
+
+it("keeps snapshot fold patience bounded by answers and elapsed time", () => {
+  expect(SNAPSHOT_FOLD_PATIENCE).toEqual({ answers: 5, ms: 5_000 });
 });

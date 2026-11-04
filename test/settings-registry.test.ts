@@ -84,7 +84,7 @@ describe("the registered set", () => {
   });
 
   /**
-   * R6d (STA-179) — the queue policy is registered EXACTLY as docs/queue.md
+   * R6d (STA-179) — the queue policy is registered EXACTLY as design/queue.md
    * "Policy: advisory or strict" names it: key, the two values, the default and
    * the scope. Everything a surface needs to define, persist and expose it is on
    * the definition; nothing here enforces it — that is R2c's (STA-168) resolver,

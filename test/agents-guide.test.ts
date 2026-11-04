@@ -62,6 +62,14 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toContain("staple checkout DEM-42");
   });
 
+  it("teaches ONE form for an estimate-only change: the explicit verb, never a restated status", () => {
+    expect(guide).toContain("staple estimate DEM-42 2h");
+    expect(guide).toContain("--clear");
+    expect(guide).toContain("`set_estimate`");
+    expect(guide).not.toMatch(/staple status DEM-42 \S+\s+--estimate/);
+    expect(guide).not.toContain("--no-estimate");
+  });
+
   it("teaches the loop, including that a conflict means pick another task", () => {
     for (const step of ["staple inbox", "staple checkout", "plan", "staple comment", "staple done", "staple events"]) {
       expect(guide, step).toContain(step);
@@ -287,13 +295,31 @@ describe("the guide teaches the whole protocol", () => {
     expect(guide).toMatch(/plain checkout of a stale claim is still refused/i);
   });
 
-  it("carries a copy-pasteable MCP wiring line pointing at a real entry point", () => {
+  it("wires MCP through the installed CLI rather than a checkout entry point", () => {
     const line = guide.split("\n").find((l) => l.includes("claude mcp add staple"));
     expect(line, "wiring one-liner").toBeTruthy();
     expect(line).toContain("STAPLE_AGENT=");
-    const entry = line?.match(/npx tsx (\S+)/)?.[1];
-    expect(entry, "resolved mcp entry").toBeTruthy();
-    expect(existsSync(entry as string), `${entry} should exist`).toBe(true);
+    expect(line).toContain("-- staple mcp");
+    expect(line).not.toContain("npx tsx");
+  });
+
+  it("teaches autopilot runs: the three tiers, the one question, and the rules they share", () => {
+    const section = guide.slice(guide.indexOf("## Autopilot runs"), guide.indexOf("## Wiring"));
+    expect(section).toContain("staple run continue --json");
+    for (const action of ["`take`", "`wait`", "`stop`"]) expect(section, action).toContain(action);
+    expect(section).toMatch(/already checked out to you/);
+    // The three tiers: headless driver, stop hook, instructions only.
+    expect(section).toContain("staple run drive");
+    expect(section).toContain("STAPLE_RUN_TICKET");
+    expect(section).toContain("staple run hook install claude --print");
+    expect(section).toContain("staple run hook bind");
+    expect(section).toMatch(/C: these instructions/);
+    // The rules: finish or state the failure, review first, never merge, stop means stop.
+    expect(section).toContain("staple status DEM-42 in_review");
+    expect(section).toContain("--outcome failed");
+    expect(section).toContain("`review:`");
+    expect(section).toMatch(/Never merge to master or main/);
+    expect(section).toMatch(/Stop means stop/);
   });
 
   it("tells the reader their edits are safe", () => {

@@ -1,7 +1,7 @@
 /**
  * The page writes by issue id, so the renumber guard never has to stop it.
  *
- * A write through a number an issue has left is refused for a day (`docs/sync.md`, "A
+ * A write through a number an issue has left is refused for a day (`design/sync.md`, "A
  * number that moved under a caller"), and the page has no way to acknowledge that. It does
  * not need one: every row it shows carries its id, and every write it makes names the id of
  * the row the reader acted on (`src/ui/app/src/lib/write-ref.ts`). Here, inside the window,

@@ -11,7 +11,7 @@
  * the dedup ledger really does absorb a replay, the tombstone really does
  * outlive its row, the singleton really is a singleton, and the client-sequence
  * allocator really does survive an emptied outbox. Each one is a property the
- * contract in docs/sync.md depends on, expressed at the only layer that can
+ * contract in design/sync.md depends on, expressed at the only layer that can
  * currently hold it.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -103,7 +103,7 @@ describe("migration 010 — what lands, and what does not", () => {
       const db = openDb(path);
       try {
         migrateWorkspace(db);
-        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 12, pending: [] });
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 18, pending: [] });
         expect(
           db.prepare("SELECT identifier, title, status FROM issues ORDER BY identifier").all(),
         ).toEqual(before);
@@ -391,7 +391,7 @@ describe("the migration is reachable from every shipped shape", () => {
       const db = openDb(path);
       try {
         runMigrations(db, WORKSPACE_TARGET);
-        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 12, pending: [] });
+        expect(describeSchema(db, WORKSPACE_TARGET)).toMatchObject({ current: 18, pending: [] });
         expect((db.prepare("SELECT COUNT(*) AS n FROM sync_state").get() as { n: number }).n).toBe(0);
       } finally {
         db.close();

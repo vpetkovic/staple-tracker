@@ -54,13 +54,21 @@ const ago = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOStri
  * including the length assertion that fails loudly when a path grows an event.
  */
 function backdateEvents(issueId: string, secondsAgo: number[]): void {
-  const rows = store.db
-    .prepare("SELECT seq FROM events WHERE issue_id = ? ORDER BY seq")
-    .all(issueId) as Array<{ seq: number }>;
+  const all = store.db
+    .prepare("SELECT seq, kind FROM events WHERE issue_id = ? ORDER BY seq")
+    .all(issueId) as Array<{ seq: number; kind: string }>;
+  // An attempt transition's event moves with the event it accompanies (store-timing.test.ts).
+  const rows = all.filter((row) => !row.kind.startsWith("attempt_"));
   expect(rows.length).toBe(secondsAgo.length);
   rows.forEach((row, i) => {
     store.db.prepare("UPDATE events SET created_at = ? WHERE seq = ?").run(ago(secondsAgo[i]!), row.seq);
   });
+  let at: string | null = null;
+  for (const row of all) {
+    const current = store.db.prepare("SELECT created_at FROM events WHERE seq = ?").get(row.seq) as { created_at: string };
+    if (!row.kind.startsWith("attempt_")) at = current.created_at;
+    else if (at !== null) store.db.prepare("UPDATE events SET created_at = ? WHERE seq = ?").run(at, row.seq);
+  }
 }
 
 /**
@@ -340,7 +348,24 @@ describe("rollups sum DIRECT children and nothing else", () => {
         source: "own",
         descendantsEstimatedSeconds: null,
         contributingCount: 0,
+        unplannedCount: 0,
         totalCount: 0,
+      },
+      // design/timing-semantics.md: nothing ran, so every effort and elapsed field is null, with its reason.
+      workSeconds: null,
+      ownWorkSeconds: null,
+      orchestrationSeconds: null,
+      leadSeconds: null,
+      estimateRatio: null,
+      wall: null,
+      resumeGaps: [],
+      quality: { work: { state: "missing", inputs: [], reasons: ["never_started"], coverage: null, missingInputs: [] }, wall: { state: "missing", inputs: [], reasons: ["never_started"] } },
+      missing: {
+        workSeconds: "never_started",
+        ownWorkSeconds: "never_started",
+        orchestrationSeconds: "no_orchestrator_attempt",
+        wall: "never_started",
+        leadSeconds: "never_started",
       },
     });
   });

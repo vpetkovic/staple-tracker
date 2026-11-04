@@ -1,0 +1,113 @@
+/*
+ * staple · the detail's secondary tabs (Activity, Connections, Documents, For agents, Time).
+ *
+ * Only what Tailwind utilities cannot say on their own lives here: the timeline rail that
+ * runs behind the activity icons, the edge fade on a horizontally scrolling code panel, and
+ * the reduced-motion switch. Every value is a token; nothing here introduces a hue.
+ * Namespaced (`.activity-*`, `.tab-*`) so it cannot collide with the frame's detail.css.
+ */
+
+/* ── Activity: the rail ───────────────────────────────────────────────────────────── */
+
+.activity-rail {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* One hairline behind every node of a day, from the first icon's centre to the last's. */
+.activity-rail::before {
+  content: "";
+  position: absolute;
+  left: 11.5px;
+  top: 14px;
+  bottom: 14px;
+  width: 1px;
+  background: var(--border);
+}
+
+.activity-node {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+
+.activity-node--person {
+  border: 0;
+  background: transparent;
+}
+
+.activity-node--person > [data-person-disc] {
+  width: 24px;
+  height: 24px;
+  box-shadow: 0 0 0 3px var(--background);
+}
+
+/* Markdown inside a comment card: reading rhythm, and no stray outer margins. */
+.activity-comment-body > :first-child {
+  margin-top: 0;
+}
+.activity-comment-body > :last-child {
+  margin-bottom: 0;
+}
+
+/* ── Documents: prose at reading size ─────────────────────────────────────────────── */
+
+.tab-prose {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.tab-prose > :first-child {
+  margin-top: 0;
+}
+.tab-prose h1,
+.tab-prose h2,
+.tab-prose h3 {
+  letter-spacing: var(--tracking-heading, -0.01em);
+}
+.tab-prose pre {
+  border-radius: 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+/* ── For agents: the code panel ───────────────────────────────────────────────────── */
+
+.tab-code {
+  tab-size: 2;
+  scrollbar-width: thin;
+}
+
+/* ── Motion ───────────────────────────────────────────────────────────────────────── */
+
+.tab-fade-in {
+  animation: tab-fade-in var(--duration-base, 180ms) var(--ease-standard, ease-out) both;
+}
+
+@keyframes tab-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-fade-in {
+    animation: none;
+  }
+}

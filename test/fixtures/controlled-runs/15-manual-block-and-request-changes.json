@@ -1,0 +1,181 @@
+{
+  "title": "a manual block, and a gate answered with request-changes",
+  "covers": [
+    "leaving active for blocked ends the attempt yielded; blocked from t",
+    "a status write back to the pool is queued when no edge blocks it",
+    "request-changes moves a gated parent to queued (no edge on it) at t; its children stay queued until it is re-gated and approved"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "m"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "q",
+      "title": "parent"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "d1",
+      "parent": "q"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "d2",
+      "parent": "q"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "m",
+      "agent": "w1"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "d1",
+      "agent": "w2"
+    },
+    {
+      "at": "5m",
+      "do": "comment",
+      "ref": "m",
+      "agent": "w1"
+    },
+    {
+      "at": "5m",
+      "do": "comment",
+      "ref": "d1",
+      "agent": "w2"
+    },
+    {
+      "at": "10m",
+      "do": "status",
+      "ref": "m",
+      "to": "blocked",
+      "agent": "w1"
+    },
+    {
+      "at": "10m",
+      "do": "status",
+      "ref": "d1",
+      "to": "done",
+      "agent": "w2"
+    },
+    {
+      "at": "12m",
+      "do": "gate",
+      "ref": "q",
+      "owner": "vp",
+      "agent": "lead"
+    },
+    {
+      "at": "20m",
+      "do": "requestChanges",
+      "ref": "q",
+      "agent": "vp",
+      "comment": "split d2"
+    },
+    {
+      "at": "22m",
+      "do": "gate",
+      "ref": "q",
+      "owner": "vp",
+      "agent": "lead"
+    },
+    {
+      "at": "24m",
+      "do": "approve",
+      "ref": "q",
+      "agent": "vp"
+    },
+    {
+      "at": "25m",
+      "do": "checkout",
+      "ref": "d2",
+      "agent": "w2"
+    },
+    {
+      "at": "27m",
+      "do": "comment",
+      "ref": "d2",
+      "agent": "w2"
+    },
+    {
+      "at": "30m",
+      "do": "status",
+      "ref": "m",
+      "to": "todo",
+      "agent": "lead"
+    },
+    {
+      "at": "30m",
+      "do": "status",
+      "ref": "d2",
+      "to": "done",
+      "agent": "w2"
+    },
+    {
+      "at": "35m",
+      "do": "checkout",
+      "ref": "m",
+      "agent": "w1"
+    },
+    {
+      "at": "40m",
+      "do": "comment",
+      "ref": "m",
+      "agent": "w1"
+    },
+    {
+      "at": "45m",
+      "do": "status",
+      "ref": "m",
+      "to": "done",
+      "agent": "w1"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "50m",
+      "ref": "m",
+      "intervals": 2,
+      "workSeconds": "20m",
+      "wall": {
+        "startAt": "0s",
+        "endAt": "45m",
+        "buckets": {
+          "work": "20m",
+          "blocked": "20m",
+          "queued": "5m"
+        }
+      },
+      "resumeGaps": []
+    },
+    {
+      "asOf": "50m",
+      "ref": "q",
+      "intervals": 2,
+      "workSeconds": "15m",
+      "wall": {
+        "startAt": "0s",
+        "endAt": "30m",
+        "buckets": {
+          "active": "15m",
+          "queued": "5m",
+          "gated": "10m"
+        }
+      }
+    }
+  ]
+}

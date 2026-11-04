@@ -5,9 +5,11 @@
  *
  * Loopback is not a security boundary. Any page the user visits can reach
  * 127.0.0.1 on a guessable port, so every /api/* route is gated by a
- * per-process bearer token, the write route additionally checks Origin, and
- * both read and write routes pin their HTTP method.
+ * per-process bearer token; a write must also come from this server's own
+ * loopback Origin or carry the token in the `X-Staple-Token` header (`writeAllowed`),
+ * and both read and write routes pin their HTTP method.
  */
+import { EVENT_ORDER, EVENT_ORDER_DESC } from "../core/event-row.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -25,14 +27,20 @@ import {
 } from "../core/types.js";
 // O7b (STA-141): the closed category set and the categories the code writes into,
 // both served verbatim on /api/settings so the browser never hand-keeps a copy.
-import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES } from "../core/types.js";
+import { REQUIRED_STATUS_CATEGORIES, STATUS_CATEGORIES, type StatusCategory } from "../core/types.js";
 import type { SettingOp, UpdateIssueInput, VocabularyOp, WorkspaceStore } from "../core/store.js";
 import type { QueueVerb } from "../core/queue-store.js";
 // R6a (STA-176): the settings registry and the global values it defines, served
 // beside the workspace ones so the page can say which scope each setting has.
 import { settingDefinitionsFor, settingRegistryView, settingValueView } from "../core/settings-registry.js";
+import { contentDisposition, servedFileHeaders, sniffMediaType } from "../core/attachments.js";
+import { evidenceFilename, parseEvidenceDocument, summarizeEvidence } from "../core/legacy-evidence.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
+import { MILESTONE_KIND, assertNotReservedActor } from "../core/milestones.js";
+import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
+import { readBudget } from "../core/telemetry/read-budget.js";
+import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
 import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
@@ -133,6 +141,30 @@ import { ConsentTicketStore, MAX_OUTSTANDING_CONSENTS, previewDigest } from "../
 import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
 import { readConnection, setConsent } from "../core/cloud/connection.js";
 import { readConfig, stapleHome } from "../config/index.js";
+import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
+import { readDriver } from "../core/run-attachment.js";
+import { LIVE_RUN_STATES, type RunStatus } from "../core/run-store.js";
+import {
+  applyBudgetSetup,
+  applyBudgetUnsetup,
+  budgetCollectionStatus,
+  collectBudgetNow,
+  planBudgetSetup,
+  planBudgetUnsetup,
+  type SetupOptions,
+} from "../core/telemetry/collection/service.js";
+import { PlanConsentStore } from "../core/telemetry/collection/plan-consent.js";
+import {
+  accountRequired,
+  bindBudgetSource,
+  budgetConfig,
+  parseBindingSource,
+  setBudgetCapture,
+  setLivePolling,
+  unbindBudgetSource,
+  type BindingHome,
+} from "../core/telemetry/budget-config.js";
+import { usagePollingStatus } from "../core/telemetry/polling/run.js";
 
 interface UiOptions {
   port: number;
@@ -238,6 +270,19 @@ const QUEUE_VERBS: Record<string, QueueVerb> = {
 };
 const QUEUE_WRITE_PATHS = new Set(Object.keys(QUEUE_VERBS));
 
+/** How many ended runs per workspace `/api/runs` answers besides the live ones, unless `limit` says. */
+const RUN_HISTORY_LIMIT = 50;
+
+/**
+ * The categories whose tickets carry a clock that runs without anyone writing: the claim's
+ * idle reading, time in status, the forecast. Their readings are computed at response time,
+ * so while one of these exists the page must refetch on a timer, not only on a write.
+ */
+const STARTED_CATEGORIES: readonly StatusCategory[] = ["active", "review", "gated"];
+
+/** How often those server-side clock readings refresh on an open page while work is started. */
+const STARTED_REFRESH_MS = 30_000;
+
 /**
  * The cloud writes that must NOT arm the post-write sync trigger (S10).
  *
@@ -339,6 +384,103 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
   "/api/hub/registry/restore",
   "/api/hub/registry/adopt",
 ]);
+
+/**
+ * Automatic budget collection, machine-local. The four writes change this
+ * machine's staple home, its Claude settings file and its launch agents, never the
+ * tracker, so they journal nothing and must not arm the post-write sync trigger: the
+ * contract is that budget collection makes no network call, and a sync fired on the
+ * way out of a setup would be one. `GET /api/budget/collection` is the read.
+ *
+ * `plan` only reads (a POST because it takes the options as a body) and returns, with
+ * the plan, a single-use consent ticket bound to its digest. `setup` and `unsetup`
+ * apply only with that ticket and digest, the page's equivalent of `--yes`; without it
+ * they answer 400 and change nothing, and a plan that changed since it was shown is
+ * refused (409).
+ */
+/** The setup options a request body may carry, each checked for its type. */
+function budgetSetupOptions(body: Record<string, unknown>): SetupOptions {
+  const text = (key: string): string | undefined => {
+    const value = body[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "string") throw new StapleError("validation", `${key} must be a string`);
+    return value;
+  };
+  const flag = (key: string): boolean | undefined => {
+    const value = body[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "boolean") throw new StapleError("validation", `${key} must be true or false`);
+    return value;
+  };
+  const interval = body.intervalMinutes;
+  if (interval !== undefined && interval !== null && typeof interval !== "number") throw new StapleError("validation", "intervalMinutes must be a number");
+  return {
+    claudeAccount: text("claudeAccount"),
+    codexAccount: text("codexAccount"),
+    claudeConfigDir: text("claudeConfigDir"),
+    codexHome: text("codexHome"),
+    statusline: flag("statusline"),
+    watcher: flag("watcher"),
+    intervalMinutes: typeof interval === "number" ? interval : undefined,
+    livePolling: flag("livePolling"),
+  };
+}
+
+const BUDGET_COLLECTION_WRITES = new Set([
+  "/api/budget/collection/plan",
+  "/api/budget/collection/setup",
+  "/api/budget/collection/unsetup",
+  "/api/budget/collection/collect",
+]);
+
+/**
+ * Budget capture and source bindings, the web Settings' "Usage & budget" section:
+ * `staple budget capture on|off`, `bind` and `unbind`, each the same store method
+ * (`core/telemetry/budget-config.ts`) with the same validation. They write
+ * `<staple home>/config.json`, machine-local and never synced, so like the collection
+ * writes they journal nothing and must not arm the post-write sync trigger.
+ * `GET /api/budget/bindings` is the read (`staple budget bindings --json`).
+ *
+ * No consent ticket: the CLI's `bind` and `capture on` take no `--yes`, and a binding
+ * only names which account a harness home spends from. What the page shows before
+ * turning capture on is its own confirmation; the token and the Origin check are what
+ * keep a foreign page from doing it.
+ */
+const BUDGET_CONFIG_WRITES = new Set(["/api/budget/capture", "/api/budget/live", "/api/budget/bindings/bind", "/api/budget/bindings/unbind"]);
+
+/**
+ * The Usage page's Refresh: one collection now (the passive scan, then the live poll when
+ * it is on), the same `collectBudgetNow` `staple budget collect` runs. POST because it
+ * writes readings and, with live polling on, asks the bound providers.
+ *
+ * THE ONE WRITE EXEMPT FROM THE ORIGIN CHECK, on purpose. The operator's phone reaches
+ * this server through a tailnet forwarder that sends the phone's own Origin, so every
+ * other write is refused there by design. Refresh is the one the phone needs, and it is
+ * safe to accept from any page that holds the token: it takes no input at all (the body is
+ * never read), it can only do what the 5-minute schedule already does, and a provider is
+ * asked at most once a minute per account however often it is pressed (`polling/run.ts`).
+ *
+ * So the TOKEN ALONE gates it. It is accepted in any of its transports, `?token=` included,
+ * and a `?token=` POST is a simple request a page can send cross-origin without a
+ * preflight, so the Origin check is the only thing a foreign page lacks here, and this
+ * route waives it. Any page that knows the token can press Refresh; a page that does not
+ * gets 401. That is acceptable only because of what the route can do (above), and is why
+ * no other write may join it. `test/budget-refresh-http.test.ts` pins that every other
+ * write still refuses a foreign Origin.
+ */
+const BUDGET_REFRESH_ROUTE = "/api/budget/collection/refresh";
+
+/** A binding home out of a request body: `source` spelled as at the CLI, and its directory. */
+function bindingHomeOf(body: Record<string, unknown>, what: string): BindingHome {
+  const text = (key: string): string | undefined => {
+    const value = body[key];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "string") throw new StapleError("validation", `${what}${key} must be a string`);
+    return value;
+  };
+  // As at the CLI, the directory that is not the source's own is ignored rather than refused.
+  return { source: parseBindingSource(body.source, what === "" ? "--source" : `${what}source`), configDir: text("configDir"), codexHome: text("codexHome") };
+}
 
 /**
  * What the page shows before a hub restore — the CLI's own disclosure (`runRestore` in
@@ -475,6 +617,42 @@ function optionalEstimate(value: unknown): number | null | undefined {
     throw new StapleError("validation", "estimateSeconds must be a number of seconds or null");
   }
   return seconds;
+}
+
+/**
+ * `estimateSeconds` for the `estimate` action: present, and either a number or null.
+ * The store owns every range refusal; this only refuses what is not a value at all.
+ */
+function requiredEstimate(body: Record<string, unknown>): number | null {
+  if (!("estimateSeconds" in body) || body.estimateSeconds === undefined) {
+    throw new StapleError(
+      "validation",
+      "estimate requires estimateSeconds: a number of seconds, or null to clear the estimate",
+    );
+  }
+  const value = body.estimateSeconds;
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new StapleError("validation", "estimateSeconds must be a number of seconds, or null to clear the estimate");
+  }
+  return value;
+}
+
+/**
+ * Who a write from the page acts as: `body.actor`, else `ui`. The goal-run gate marker is
+ * reserved here as on the CLI and over MCP (`assertNotReservedActor`), so no HTTP field can
+ * name an actor `goal-run:…`.
+ */
+function bodyActor(body: Record<string, unknown>): string {
+  const actor = (body.actor as string) || "ui";
+  assertNotReservedActor(actor);
+  return actor;
+}
+
+/** An `actor` query parameter, refused like {@link bodyActor} when it is reserved. */
+function queryActor(value: string | null): string | undefined {
+  assertNotReservedActor(value);
+  return value ?? undefined;
 }
 
 function stringList(value: unknown): string[] | undefined {
@@ -620,11 +798,15 @@ export function startUiServer(options: UiOptions): UiHandle {
     return url.searchParams.get("token");
   }
 
-  function authorized(req: IncomingMessage, url: URL): boolean {
-    const presented = presentedToken(req, url);
+  /** THE token comparison, constant-time, for every place a request presents one. */
+  function tokenMatches(presented: string | null | undefined): boolean {
     if (!presented) return false;
     const bytes = Buffer.from(presented);
     return bytes.length === tokenBytes.length && timingSafeEqual(bytes, tokenBytes);
+  }
+
+  function authorized(req: IncomingMessage, url: URL): boolean {
+    return tokenMatches(presentedToken(req, url));
   }
 
   /** Read from the live socket so --port 0 (tests) reports the port it actually got. */
@@ -640,11 +822,37 @@ export function startUiServer(options: UiOptions): UiHandle {
    * alongside 127.0.0.1 because both name the loopback socket this server is
    * bound to — an attacker's page is on neither.
    */
-  function originAllowed(req: IncomingMessage): boolean {
-    const origin = req.headers.origin;
-    if (!origin) return true;
+  /** The page origins this server accepts writes from: its own loopback socket, by either name. */
+  function writeOrigins(): string[] {
     const port = boundPort();
-    return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+    return [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
+  }
+
+  /**
+   * THE WRITE RULE. A write is accepted when EITHER holds:
+   *
+   *   1. its Origin is absent (curl, the CLI) or this server's own loopback page; or
+   *   2. it carries the UI token in the `X-Staple-Token` HEADER.
+   *
+   * (2) is what lets the page write when it is opened through a forwarder that keeps the
+   * browser's own Origin: a phone on the tailnet, whose page holds the token because the
+   * forwarder rewrites Host to loopback and the page is seeded (or because it was opened
+   * with `?token=`). It is safe for the reason the header is load-bearing on reads: a
+   * cross-site page cannot set a custom header without a CORS preflight, and this server
+   * answers no preflight with a grant (it sets no CORS header anywhere; an
+   * OPTIONS is refused by the token gate or the method gate like any other method), so a
+   * forged form or `fetch` from another site arrives without it and is still refused.
+   *
+   * Only the header counts here. `?token=` and `Authorization: Bearer` open the READ gate
+   * for curl and agents, but a query string can ride a plain cross-site form POST with no
+   * preflight, so it must never stand in for the header on a write. The compare is the
+   * same constant-time one the read gate uses.
+   */
+  function writeAllowed(req: IncomingMessage): boolean {
+    const origin = req.headers.origin;
+    if (!origin || writeOrigins().includes(origin)) return true;
+    const header = req.headers["x-staple-token"];
+    return typeof header === "string" && tokenMatches(header);
   }
 
   /**
@@ -684,9 +892,54 @@ export function startUiServer(options: UiOptions): UiHandle {
           .prepare("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at),'') AS u FROM issues")
           .get() as { c: number; u: string };
         const comments = h.store.db.prepare("SELECT COUNT(*) AS c FROM comments").get() as { c: number };
-        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}`;
+        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}${clockFingerprint(h)}`;
       })
       .join("|");
+  }
+
+  /**
+   * A time bucket, but only for a workspace with started work. Without it an agent working a
+   * ticket for three hours without a write leaves the page showing the idle time and durations
+   * it read three hours ago. A workspace with nothing started adds nothing, so an idle
+   * tracker still refetches only on a write.
+   */
+  function clockFingerprint(h: StoreHandle): string {
+    const started = h.store
+      .getStatuses()
+      .filter((status) => STARTED_CATEGORIES.includes(status.category))
+      .map((status) => status.id);
+    if (started.length === 0) return "";
+    const row = h.store.db
+      .prepare(`SELECT EXISTS(SELECT 1 FROM issues WHERE status IN (${started.map(() => "?").join(", ")})) AS any`)
+      .get(...started) as { any: number };
+    return row.any ? `:t${Math.floor(Date.now() / STARTED_REFRESH_MS)}` : "";
+  }
+
+  /**
+   * Which live runs have a `staple run drive` process attached, and whether it is still
+   * running. A run's state moves the event seq above (every run write emits an event), but a
+   * driver attaching, exiting or dying writes only its `driver.json` (core/run-attachment.ts),
+   * so without this the page would keep saying "driver attached" about a driver that is gone.
+   * The heartbeat is deliberately left out: it changes every few seconds while a driver
+   * runs, and would refetch the whole page that often for nothing a reader can see.
+   */
+  function driverFingerprint(h: StoreHandle): string {
+    const live = h.store.db
+      .prepare(`SELECT id FROM runs WHERE state IN (${LIVE_RUN_STATES.map(() => "?").join(", ")}) ORDER BY id`)
+      .all(...LIVE_RUN_STATES) as Array<{ id: string }>;
+    const parts = live.flatMap(({ id }) => {
+      const driver = readDriver(h.dbPath, id);
+      return driver === null ? [] : [`${id.slice(0, 8)}=${driver.pid}/${driver.alive === null ? "?" : driver.alive ? 1 : 0}`];
+    });
+    return parts.length === 0 ? "" : `:${parts.join(",")}`;
+  }
+
+  /**
+   * A workspace's runs as `/api/runs` and the run verbs answer them: the `run status --json`
+   * object (`{run, decision, facts, driver}`) with the workspace it lives in.
+   */
+  function runEntry(h: StoreHandle, status: RunStatus): Record<string, unknown> {
+    return { workspace: h.slug, ...status };
   }
 
   /**
@@ -711,7 +964,10 @@ export function startUiServer(options: UiOptions): UiHandle {
     try {
       const hub = Hub.open();
       try {
-        crossBlockers = hub.crossBlockersOf(context.issue.identifier);
+        // With titles: the detail's Connections tab names a blocker in another workspace
+        // the way it names every other row. /api/agent-context stays without them, because
+        // it is pinned byte for byte to MCP get_task.
+        crossBlockers = hub.crossBlockersWithTitles(context.issue.identifier);
       } finally {
         hub.close();
       }
@@ -745,6 +1001,16 @@ export function startUiServer(options: UiOptions): UiHandle {
      * `gateQueueOf` is written on top of the very walk `queuedByFor` runs.
      */
     const childrenQueued = handle.store.gateQueueOf(context.issue.id);
+    const milestones = handle.store.milestones();
+    // By id, never by number (a device holding two prefixes refuses a foreign number), and
+    // a milestone read that fails costs the detail its milestone, not the whole detail.
+    const orNull = <T,>(read: () => T): T | null => {
+      try {
+        return read();
+      } catch {
+        return null;
+      }
+    };
     return {
       workspace: handle.slug,
       ...context,
@@ -756,7 +1022,25 @@ export function startUiServer(options: UiOptions): UiHandle {
       // Additive: the Analytics tab's whole payload, from the one store
       // method get_task also spreads, so the two cannot drift.
       ...handle.store.detailTiming(context.issue.id),
+      attempts: handle.store.attemptSummary(context.issue.id),
+      orchestration: handle.store.orchestrationSummary(context.issue.id),
+      planSummary: handle.store.planSummary(context.issue.id),
+      /**
+       * Membership is a relation, not hierarchy, so `ancestors` never shows it. The
+       * detail names the milestone an issue counts toward (its own, else the nearest
+       * ancestor's, with that ancestor as `via`), and a milestone's own detail carries
+       * its plan: dates, state, progress and ordered members. UI-only, like
+       * `childrenQueued`; `/api/agent-context` stays pinned to get_task.
+       */
+      milestone: orNull(() => milestones.effectiveMilestone(context.issue.id)),
+      milestonePlan: context.issue.kind === MILESTONE_KIND ? orNull(() => milestones.get(context.issue.id)) : null,
     };
+  }
+
+  async function readRawBody(req: IncomingMessage): Promise<string> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks).toString("utf8");
   }
 
   async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -779,11 +1063,13 @@ export function startUiServer(options: UiOptions): UiHandle {
    * from that id rather than from anything the request said.
    */
   const consents = new ConsentTicketStore();
+  /** Budget collection's plan consents: the same pattern, bound to the plan shown (`plan-consent.ts`). */
+  const planConsents = new PlanConsentStore();
 
   /**
    * S10: this server's automatic-sync registration, and all of it.
    *
-   * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+   * Contract: `design/sync.md`, "Three consents" — *"After automatic — bounded
    * triggers only: startup, post-write, long-running session … Coalesced,
    * jittered backoff, cancellable, bounded timeout."*
    *
@@ -1202,6 +1488,12 @@ export function startUiServer(options: UiOptions): UiHandle {
            */
           url.pathname.startsWith("/api/project/") ||
           /**
+           * The autopilot run verbs: stop, pause, resume. Singular prefix, like the
+           * milestone and project families; the read is `/api/runs` (plural), which
+           * does not share it, so the family admits no read.
+           */
+          url.pathname.startsWith("/api/run/") ||
+          /**
            * The queue's mutating verbs (STA-168). `/api/queue` and
            * `/api/queue/next` are READS and are deliberately NOT in this list, so
            * naming the family by prefix the way the gate routes do would have
@@ -1320,7 +1612,14 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/hub/registry/backups" ||
           url.pathname === "/api/hub/registry/backup/create" ||
           url.pathname === "/api/hub/registry/restore" ||
-          url.pathname === "/api/hub/registry/adopt"
+          url.pathname === "/api/hub/registry/adopt" ||
+          /** Budget collection: named in one set; `/api/budget/collection` itself is the GET read. */
+          BUDGET_COLLECTION_WRITES.has(url.pathname) ||
+          /** Budget capture and bindings: machine-local config writes, named in one set. */
+          BUDGET_CONFIG_WRITES.has(url.pathname) ||
+          /** The Usage page's Refresh: a POST, and the one write exempt from the Origin check (below). */
+          url.pathname === BUDGET_REFRESH_ROUTE ||
+          url.pathname === "/api/budget/forget"
             ? ["POST"]
             : url.pathname === "/api/settings"
               ? ["GET", "POST"]
@@ -1336,8 +1635,17 @@ export function startUiServer(options: UiOptions): UiHandle {
          * wherever it lands, and a GET on a read/write path is not — same guard,
          * same sentence, now stated about the request instead of about the route.
          */
-        if (req.method === "POST" && !originAllowed(req)) {
-          deny(res, 403, "forbidden", `Cross-origin request rejected (Origin: ${req.headers.origin})`);
+        if (req.method === "POST" && !writeAllowed(req) && url.pathname !== BUDGET_REFRESH_ROUTE) {
+          /**
+           * `detail.reason` names WHY, so the page can tell this refusal from a dead token:
+           * a foreign Origin without the token header (`writeAllowed`). The app's own page
+           * always sends the header, so from a phone on the tailnet it writes; what lands
+           * here is a page that does not hold the token. The page words it
+           * ("changes can only be made from this computer's browser") instead of treating
+           * it as a credential failure.
+           */
+          const message = `Cross-origin request rejected (Origin: ${req.headers.origin}); send the UI token in X-Staple-Token to write from another origin`;
+          json(res, 403, { error: message, message, code: "forbidden", detail: { reason: "cross_origin" }, retryable: false });
           return;
         }
 
@@ -1366,7 +1674,16 @@ export function startUiServer(options: UiOptions): UiHandle {
          * on its session tick. Fixing it properly means threading the resolved
          * handle out of the route, which is not a thin registration.
          */
-        if (req.method === "POST" && !CLOUD_LIFECYCLE_WRITES.has(url.pathname)) {
+        if (
+          req.method === "POST" &&
+          !CLOUD_LIFECYCLE_WRITES.has(url.pathname) &&
+          !BUDGET_COLLECTION_WRITES.has(url.pathname) &&
+          !BUDGET_CONFIG_WRITES.has(url.pathname) &&
+          url.pathname !== BUDGET_REFRESH_ROUTE &&
+          url.pathname !== "/api/budget/forget" &&
+          // A run is machine-local and never synchronized (core/run-store.ts): nothing to send.
+          !url.pathname.startsWith("/api/run/")
+        ) {
           const ws = url.searchParams.get("ws") ?? undefined;
           res.once("finish", () => {
             if (res.statusCode >= 200 && res.statusCode < 300) autoSync.postWrite(ws);
@@ -1374,11 +1691,178 @@ export function startUiServer(options: UiOptions): UiHandle {
         }
       }
 
+      /**
+       * Automatic budget collection. One service method per route, the same
+       * ones `staple budget setup|unsetup|status|collect` call. Machine-local: nothing
+       * here reads or writes a workspace, and nothing replicates.
+       */
+      if (url.pathname === "/api/budget/collection") {
+        json(res, 200, budgetCollectionStatus({ home: stapleHome() }));
+        return;
+      }
+      /**
+       * Budget capture and source bindings (`staple budget capture|bind|unbind|bindings`),
+       * one store method each. Machine-local: `<staple home>/config.json`, never a workspace.
+       */
+      if (url.pathname === "/api/budget/bindings") {
+        json(res, 200, budgetConfig(stapleHome()));
+        return;
+      }
+      /**
+       * Live polling: on or off, and per bound account its last check (`staple budget live
+       * --json`). A read of config.json and the poll state file; it asks nobody.
+       */
+      if (url.pathname === "/api/budget/polling") {
+        json(res, 200, usagePollingStatus(stapleHome()));
+        return;
+      }
+      // Spelled out rather than as BUDGET_REFRESH_ROUTE so the route golden (test/contract-http.test.ts) reads it.
+      if (url.pathname === "/api/budget/collection/refresh") {
+        const home = stapleHome();
+        const result = await collectBudgetNow({ manual: true }, { home, attemptLinker: attemptLinkerFor(home) });
+        json(res, 200, { collect: result, polling: usagePollingStatus(home) });
+        return;
+      }
+      let budgetBody: Record<string, unknown> | null = null;
+      if (BUDGET_CONFIG_WRITES.has(url.pathname) || BUDGET_COLLECTION_WRITES.has(url.pathname) || url.pathname === "/api/budget/forget") {
+        /**
+         * These bodies are objects. Malformed JSON, `null`, an array or a scalar is the
+         * caller's mistake and answers 400 `validation` with nothing changed, rather than the
+         * 500 a property read of `null` would otherwise become.
+         */
+        const raw = await readRawBody(req);
+        let parsed: unknown = {};
+        let bad: string | null = null;
+        if (raw.trim() !== "") {
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            bad = "The request body is not valid JSON.";
+          }
+        }
+        if (bad === null && (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))) bad = "The request body must be a JSON object.";
+        if (bad !== null) {
+          json(res, 400, { error: bad, message: bad, code: "validation", detail: { reason: "invalid_body" }, retryable: false });
+          return;
+        }
+        budgetBody = parsed as Record<string, unknown>;
+      }
+      if (BUDGET_CONFIG_WRITES.has(url.pathname)) {
+        const body = budgetBody!;
+        const home = stapleHome();
+        if (url.pathname === "/api/budget/capture") {
+          if (typeof body.enabled !== "boolean") throw new StapleError("validation", "enabled must be true or false (budget capture on|off).");
+          json(res, 200, setBudgetCapture(home, body.enabled));
+          return;
+        }
+        /** `staple budget live on|off`: the page's toggle, which says what turning it on means before it is pressed. */
+        if (url.pathname === "/api/budget/live") {
+          if (typeof body.enabled !== "boolean") throw new StapleError("validation", "enabled must be true or false (budget live on|off).");
+          json(res, 200, setLivePolling(home, body.enabled));
+          return;
+        }
+        if (url.pathname === "/api/budget/bindings/unbind") {
+          json(res, 200, unbindBudgetSource(home, bindingHomeOf(body, "")));
+          return;
+        }
+        if (url.pathname === "/api/budget/bindings/bind") {
+          const target = bindingHomeOf(body, "");
+          if (typeof body.account !== "string") accountRequired();
+          if (body.provider !== undefined && body.provider !== null && typeof body.provider !== "string") throw new StapleError("validation", "provider must be a string");
+          const replacing = body.replacing;
+          if (replacing !== undefined && replacing !== null && (typeof replacing !== "object" || Array.isArray(replacing))) {
+            throw new StapleError("validation", "replacing must be the binding being edited: { source, configDir | codexHome }.", { reason: "invalid_body", field: "replacing" });
+          }
+          json(
+            res,
+            200,
+            bindBudgetSource(home, {
+              ...target,
+              account: body.account,
+              provider: typeof body.provider === "string" ? body.provider : undefined,
+              replacing: replacing ? bindingHomeOf(replacing as Record<string, unknown>, "replacing.") : undefined,
+            }),
+          );
+          return;
+        }
+      }
+      /**
+       * `staple budget forget` / MCP `forget_budget_samples`: remove readings from this
+       * machine's hub.db through the one method all three call. POST-only, so it is
+       * Origin-checked like every write. Like the collection writes, it journals nothing
+       * and never arms the post-write sync trigger. `{ ids }` alone answers the preview
+       * (`applied: false`); `{ ids, confirm: true }` is the consent and removes them.
+       */
+      if (url.pathname === "/api/budget/forget") {
+        const body = budgetBody!;
+        if (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== "string")) {
+          deny(res, 400, "validation", "ids must be an array of reading ids.");
+          return;
+        }
+        if (body.confirm !== undefined && typeof body.confirm !== "boolean") {
+          deny(res, 400, "validation", "confirm must be true or false.");
+          return;
+        }
+        json(res, 200, forgetBudgetSamples({ ids: body.ids as string[], confirm: body.confirm === true, via: "http" }, { home: stapleHome() }));
+        return;
+      }
+      if (BUDGET_COLLECTION_WRITES.has(url.pathname)) {
+        const body = budgetBody!;
+        const home = stapleHome();
+        if (url.pathname === "/api/budget/collection/collect") {
+          const maxFiles = body.maxFiles === undefined ? undefined : Number(body.maxFiles);
+          json(res, 200, await collectBudgetNow({ maxFiles }, { home, attemptLinker: attemptLinkerFor(home) }));
+          return;
+        }
+        const action =
+          url.pathname === "/api/budget/collection/plan"
+            ? body.action
+            : url.pathname === "/api/budget/collection/unsetup"
+              ? "unsetup"
+              : url.pathname === "/api/budget/collection/setup"
+                ? "setup"
+                : null;
+        if (action !== "setup" && action !== "unsetup") {
+          deny(res, 400, "validation", 'action must be "setup" or "unsetup".');
+          return;
+        }
+        const deps = { home, attemptLinker: attemptLinkerFor(home) };
+        const planFor = (options: SetupOptions) => (action === "setup" ? planBudgetSetup(options, deps) : planBudgetUnsetup(deps));
+        if (url.pathname === "/api/budget/collection/plan") {
+          const options = budgetSetupOptions(body);
+          const plan = planFor(options);
+          // A ticket only for a plan that would change something and refuses nothing.
+          const consent = plan.changes > 0 && plan.refusals === 0 ? planConsents.mint(plan, options) : null;
+          json(res, 200, { plan, consent });
+          return;
+        }
+        /**
+         * The consent is the ticket minted with the plan the page showed, and its digest.
+         * The options come from the ticket, not from this body, and the plan is rebuilt
+         * and compared, so what is applied is what was read.
+         */
+        if (typeof body.consent !== "string" || body.consent === "") {
+          const message = `${action} changes this machine's settings and needs consent: POST /api/budget/collection/plan, show the plan, then send back its consent id and digest. Nothing was changed.`;
+          json(res, 400, { error: message, message, code: "validation", detail: { reason: "consent_required" }, retryable: false });
+          return;
+        }
+        const { options } = planConsents.redeem(body.consent, body.digest, action, planFor);
+        json(res, 200, action === "setup" ? applyBudgetSetup(options, deps) : applyBudgetUnsetup(deps));
+        return;
+      }
+
       if (url.pathname === "/api/bootstrap") {
         const handles = allHandles();
         json(res, 200, {
           mode: options.hub ? "hub" : "workspace",
           workspaces: handles.map((h) => ({ slug: h.slug, prefix: h.prefix })),
+          /**
+           * The origins a write is accepted from (the Origin check below). A page compares
+           * its own origin against these to know, before pressing anything, that it is
+           * open somewhere writes are refused: through the tailnet, or a port-forward to
+           * a different localhost port.
+           */
+          writeOrigins: writeOrigins(),
         });
         return;
       }
@@ -1386,7 +1870,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       /**
        * `GET /api/cloud/status` — read-only, and network-free by construction.
        *
-       * `docs/sync.md`, on what a surface may do before a repository is
+       * `design/sync.md`, on what a surface may do before a repository is
        * connected: *"render 'not connected' and a static hint naming
        * `staple cloud connect`. Static text. No probe, no reachability check, no
        * 'we noticed you might want to connect'. The UI does not prompt."*
@@ -1523,7 +2007,7 @@ export function startUiServer(options: UiOptions): UiHandle {
             id: body.id as string,
             choice: take ?? "custom",
             value: body.value,
-            actor: (body.actor as string) || "ui",
+            actor: bodyActor(body),
           }),
         );
         return;
@@ -1678,7 +2162,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        *
        * `{ auto: boolean }` OR `{ backup: boolean }`, and **exactly one**. Two
        * consents are two decisions; a body carrying both would let one click
-       * spend both, which is the shape `docs/sync.md` separates them to prevent.
+       * spend both, which is the shape `design/sync.md` separates them to prevent.
        *
        * This writes a file in the staple home — `setConsent` — and nothing else.
        * It is emphatically NOT a workspace setting and never touches
@@ -1744,7 +2228,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        * from `/api/cloud/status`, which is network-free, and asks for devices only
        * when a human presses the button. A panel that listed devices on open would
        * turn opening settings into a request to Cloudflare — the shape
-       * `docs/sync.md` calls a heartbeat arrived at by accident.
+       * `design/sync.md` calls a heartbeat arrived at by accident.
        */
       if (url.pathname === "/api/cloud/devices") {
         const body = await readBody(req);
@@ -2595,7 +3079,7 @@ export function startUiServer(options: UiOptions): UiHandle {
        * settings panel touches and this is deliberately absent from all of those
        * lists, exactly as `/api/cloud/workspace/sync` and `/api/cloud/devices`
        * are. A settings page that synchronized the machine when you opened it
-       * would be the heartbeat `docs/sync.md` describes as arrived at by
+       * would be the heartbeat `design/sync.md` describes as arrived at by
        * accident, multiplied by the size of the registry.
        *
        * A row that fails answers **200 with `status: "failed"`**, and that is not
@@ -3371,6 +3855,9 @@ export function startUiServer(options: UiOptions): UiHandle {
            */
           const gates = h.store.gateFor(ids);
           const queuedBy = h.store.queuedByFor(ids);
+          // The direct milestone of each member, one query for the page: the list nests a
+          // parentless member under its milestone, and membership is not a parent link.
+          const milestoneOf = h.store.milestones().queueSeam().milestoneOf;
           return issues.map((issue) => ({
             workspace: h.slug,
             issue,
@@ -3385,6 +3872,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               blockedBy: blockedBy.get(issue.id) ?? [],
               blocks: blocks.get(issue.id) ?? [],
             },
+            milestoneId: milestoneOf.get(issue.id) ?? null,
           }));
         });
         json(res, 200, out);
@@ -3466,7 +3954,87 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.searchParams.get("key")!,
           url.searchParams.get("revision") ? Number(url.searchParams.get("revision")) : undefined,
         );
-        json(res, 200, doc);
+        const evidence = parseEvidenceDocument(doc.body);
+        json(
+          res,
+          200,
+          evidence
+            ? {
+                ...doc,
+                evidence: {
+                  ...summarizeEvidence(evidence),
+                  filename: evidenceFilename(doc.key, evidence.mediaType ?? evidence.declaredMediaType),
+                },
+              }
+            : doc,
+        );
+        return;
+      }
+
+      /**
+       * The bytes inside a base64 evidence document (`core/legacy-evidence.ts`),
+       * served the way `/api/file` serves a file. Only a document whose bytes
+       * match the SHA-256 and the media type it claims is served; any other is
+       * refused, so a tampered or mislabelled one never shows as valid evidence.
+       */
+      if (url.pathname === "/api/document-file") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const ref = url.searchParams.get("ref")?.trim() ?? "";
+        const key = url.searchParams.get("key")?.trim() ?? "";
+        if (ref === "" || key === "") throw new StapleError("validation", "A document file needs a ref and a key.");
+        const revisionParam = url.searchParams.get("revision");
+        const revision = revisionParam ? Number(revisionParam) : undefined;
+        if (revision !== undefined && (!Number.isInteger(revision) || revision < 1)) {
+          throw new StapleError("validation", "revision is a revision number.");
+        }
+        const found = handle.store.documentEvidence(ref, key, revision);
+        if (!found) throw new StapleError("not_found", `Document "${key}" is not base64 evidence.`);
+        const { evidence, document } = found;
+        if (evidence.status !== "verified" || evidence.bytes === null) {
+          throw new StapleError("validation", evidence.problem ?? "This document's bytes do not match what it claims.", {
+            status: evidence.status,
+          });
+        }
+        const served = servedFileHeaders(sniffMediaType(evidence.bytes));
+        res.writeHead(200, {
+          "content-type": served.contentType,
+          "content-length": String(evidence.bytes.length),
+          "content-disposition": contentDisposition(served.disposition, evidenceFilename(document.key, evidence.mediaType!)),
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
+          "referrer-policy": "no-referrer",
+          "cache-control": "private, no-store",
+          "cross-origin-resource-policy": "same-origin",
+        });
+        res.end(evidence.bytes);
+        return;
+      }
+
+      /**
+       * The bytes of one attachment. Metadata stays on `/api/issue`.
+       *
+       * The type on the response is sniffed again from the bytes, not trusted
+       * from the row. SVG and HTML are stored as what they are and served as a
+       * download (`application/octet-stream` plus `nosniff`), so a file cannot
+       * run script in this origin by being opened here.
+       */
+      if (url.pathname === "/api/file") {
+        const id = url.searchParams.get("id")?.trim() ?? "";
+        if (id === "") throw new StapleError("validation", "A file needs an id.");
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const file = handle.store.readFile(id);
+        const served = servedFileHeaders(sniffMediaType(file.bytes));
+        res.writeHead(200, {
+          "content-type": served.contentType,
+          "content-length": String(file.bytes.length),
+          "content-disposition": contentDisposition(served.disposition, file.meta.filename),
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; sandbox",
+          "referrer-policy": "no-referrer",
+          "cache-control": "private, no-store",
+          "cross-origin-resource-policy": "same-origin",
+        });
+        res.end(file.bytes);
         return;
       }
 
@@ -3515,7 +4083,118 @@ export function startUiServer(options: UiOptions): UiHandle {
           gate: handle.store.gate(context.issue.id),
           queuedBy: handle.store.queuedBy(context.issue.id),
           ...handle.store.detailTiming(context.issue.id),
+          attempts: handle.store.attemptSummary(context.issue.id),
+          orchestration: handle.store.orchestrationSummary(context.issue.id),
+          planSummary: handle.store.planSummary(context.issue.id),
         });
+        return;
+      }
+
+      /**
+       * `staple compare` / MCP `compare_plans`: the certified plan of each `ref` (repeat the
+       * parameter, up to 20), from the one store method both call.
+       */
+      if (url.pathname === "/api/compare") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.comparePlans(url.searchParams.getAll("ref")));
+        return;
+      }
+
+      /**
+       * `staple timing quality` / MCP `timing_quality`: quality states and cohort coverage, from
+       * the one store method both call. `kind`, `include`, `exclude` and `excludeReason` take a
+       * comma list or a repeated parameter.
+       */
+      if (url.pathname === "/api/timing/quality") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const listOf = (name: string): string[] | undefined => {
+          const values = url.searchParams.getAll(name).flatMap((value) => value.split(",")).map((value) => value.trim()).filter((value) => value !== "");
+          return values.length === 0 ? undefined : values;
+        };
+        const limit = url.searchParams.get("limit");
+        json(
+          res,
+          200,
+          handle.store.timingQuality({
+            kind: listOf("kind"),
+            parent: url.searchParams.get("parent") ?? undefined,
+            since: url.searchParams.get("since") ?? undefined,
+            include: listOf("include"),
+            exclude: listOf("exclude"),
+            excludeReasons: listOf("excludeReason"),
+            limit: limit === null ? undefined : Number(limit),
+            cursor: url.searchParams.get("cursor") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      /**
+       * `staple calibrate` / MCP `calibration_cohorts`: calibration cohorts over trusted
+       * samples, from the one store method both call. `kind`, `priority` and `include` take a
+       * comma list or a repeated parameter; `list` is `cohorts` or `samples`; `for` (a comma
+       * list or repeated) names the issues to forecast, and `model` pins their model.
+       */
+      if (url.pathname === "/api/calibration") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        const listOf = (name: string): string[] | undefined => {
+          const values = url.searchParams.getAll(name).flatMap((value) => value.split(",")).map((value) => value.trim()).filter((value) => value !== "");
+          return values.length === 0 ? undefined : values;
+        };
+        const limit = url.searchParams.get("limit");
+        json(
+          res,
+          200,
+          handle.store.calibration({
+            kind: listOf("kind"),
+            priority: listOf("priority"),
+            parent: url.searchParams.get("parent") ?? undefined,
+            since: url.searchParams.get("since") ?? undefined,
+            include: listOf("include"),
+            list: url.searchParams.get("list") ?? undefined,
+            limit: limit === null ? undefined : Number(limit),
+            cursor: url.searchParams.get("cursor") ?? undefined,
+            for: listOf("for"),
+            model: url.searchParams.get("model") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      /**
+       * `staple forecast` / MCP `forecast`: the completion forecast of `ref` and, apart from it,
+       * the budget forecast of that work on this machine, from the one store method both call.
+       * `reserve` is a percent (`20` or `20%`), `account` one account, `model` pins the model.
+       */
+      if (url.pathname === "/api/forecast") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(
+          res,
+          200,
+          handle.store.forecast({
+            ref: url.searchParams.get("ref") ?? "",
+            reserve: url.searchParams.get("reserve") ?? undefined,
+            account: url.searchParams.get("account") ?? undefined,
+            model: url.searchParams.get("model") ?? undefined,
+          }),
+        );
+        return;
+      }
+
+      /**
+       * `staple budget` / MCP `get_budget`: this machine's provider limits and each one's
+       * provisional pressure, from the one read both call. Machine-level: it takes no `ws`
+       * and reads no workspace. `account` narrows to one account, `reserve` is a percent.
+       */
+      if (url.pathname === "/api/budget") {
+        json(
+          res,
+          200,
+          readBudget(stapleHome(), {
+            account: url.searchParams.get("account") ?? undefined,
+            reserve: url.searchParams.get("reserve") ?? undefined,
+          }),
+        );
         return;
       }
 
@@ -3605,8 +4284,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           const rows = handle.store.db
             .prepare(
               `SELECT * FROM (
-                 SELECT * FROM events WHERE issue_id = ? AND seq > ? ORDER BY seq DESC LIMIT ?
-               ) ORDER BY seq`,
+                 SELECT * FROM events WHERE issue_id = ? AND seq > ? ORDER BY ${EVENT_ORDER_DESC} LIMIT ?
+               ) ORDER BY ${EVENT_ORDER}`,
             )
             .all(id, since, ISSUE_EVENT_LIMIT) as Array<{
             seq: number;
@@ -3679,7 +4358,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const ref = body.ref as string;
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
 
         switch (url.pathname) {
           case "/api/gate/request":
@@ -3836,7 +4515,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           throw new StapleError("validation", "settings requires a non-empty ops array");
         }
         const writeHandle = handleFor((body.ws as string) ?? undefined);
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
         // One ordered, all-or-nothing batch — the same store call `update_statuses`
         // and `update_kinds` make, so the two surfaces cannot disagree about what
         // an op means or about which of them is refused. `settings` (R6a) writes
@@ -3854,18 +4533,20 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const ref = body.ref as string;
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
         const type = body.type as string;
         let result: unknown;
         if (type === "status") {
           const status = body.status as IssueStatus;
-          result = handle.store.updateIssue(ref, { status, comment: body.comment as string | undefined }, actor);
+          const updated = handle.store.updateIssue(ref, { status, comment: body.comment as string | undefined }, actor);
+          // The attempt this write opened, ended or kept, as the CLI and MCP return it: same store, same handle.
+          result = { ...updated, attempt: handle.store.attempts().result() };
           if (status === "done" || status === "cancelled") {
             notifyHubResolvedSafe(handle.slug, handle.store.getIssue(ref).identifier);
           }
         } else if (type === "checkout") {
           // Additive: absent stealIfIdleSeconds is exactly the old behaviour.
-          result = handle.store.checkoutIssue(ref, actor, undefined, {
+          const claimed = handle.store.checkoutIssue(ref, actor, undefined, {
             stealIfIdleSeconds: optionalSeconds(body.stealIfIdleSeconds, "stealIfIdleSeconds"),
             /**
              * The human override (STA-168) — the UI's confirm-with-a-reason
@@ -3875,12 +4556,26 @@ export function startUiServer(options: UiOptions): UiHandle {
              */
             overrideReason: body.overrideReason === undefined ? undefined : String(body.overrideReason),
           });
+          result = { ...claimed, attempt: handle.store.attempts().result() };
         } else if (type === "release") {
-          result = handle.store.releaseIssue(ref, actor, {
+          const released = handle.store.releaseIssue(ref, actor, {
             ifIdleSeconds: optionalSeconds(body.ifIdleSeconds, "ifIdleSeconds"),
           });
+          result = { ...released, attempt: handle.store.attempts().result() };
         } else if (type === "comment") {
           result = handle.store.addComment(ref, body.body as string, actor, "user");
+        } else if (type === "estimate") {
+          /**
+           * The explicit estimate write — `WorkspaceStore.setEstimate`, the same method as
+           * `staple estimate` and MCP `set_estimate`, answering the same shape. The key is
+           * REQUIRED and `null` is the only clear: unlike `update`'s `optionalEstimate`, a
+           * missing key or `""` is refused rather than read as "leave alone" or "clear".
+           */
+          const change = handle.store.setEstimate(ref, requiredEstimate(body), actor);
+          result = {
+            ...change.issue,
+            estimateChange: { from: change.from, to: change.to, changed: change.changed },
+          };
         } else if (type === "assignee") {
           result = handle.store.updateIssue(ref, { assignee: (body.assignee as string) || null }, actor);
         } else if (type === "doc_restore") {
@@ -4140,13 +4835,77 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
-       * Milestones — R3b (STA-172), docs/milestones.md. Two reads and a POST
+       * Milestones — R3b (STA-172), design/milestones.md. Two reads and a POST
        * family, the gate routes' shape: every answer is the ONE milestone view
        * the CLI prints under `--json` and the MCP tools return, so the
        * Milestones page (R3c) redraws from a write result exactly as it does
        * from a read. `create` with `preview: true` writes nothing and returns
        * the plan; a stale `baseRevision` is the store's own revision_conflict.
        */
+      /**
+       * Autopilot runs (design/runs.md). The page WATCHES and STOPS runs; it never starts or
+       * continues one, so there is no route for either: a run is started by talking to an
+       * agent, and only its actor's `run continue` takes tickets.
+       *
+       * The read is every live run plus the most recent ended ones (`limit`, default 50,
+       * per workspace), newest first, each the object `staple run status --json` prints.
+       * Hub mode with no `ws` reads every workspace, as `/api/issues` does.
+       */
+      if (url.pathname === "/api/runs") {
+        const wanted = url.searchParams.get("ws") ?? undefined;
+        const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
+        const limitRaw = url.searchParams.get("limit");
+        const limit = limitRaw === null ? RUN_HISTORY_LIMIT : Number(limitRaw);
+        if (!Number.isInteger(limit) || limit < 0) {
+          throw new StapleError("validation", `limit is a whole number of at least 0; got "${limitRaw}".`);
+        }
+        const out = targets.flatMap((h) => {
+          let ended = 0;
+          return h.store
+            .runs()
+            .statuses({ all: true })
+            .filter((status) => LIVE_RUN_STATES.includes(status.run.state) || ended++ < limit)
+            .map((status) => runEntry(h, status));
+        });
+        out.sort((a, b) => String((b.run as { startedAt: string }).startedAt).localeCompare(String((a.run as { startedAt: string }).startedAt)));
+        // `now`: the server's clock, so a page counts "stopped since I first looked" against
+        // the same clock that wrote `endedAt`, not against a phone's skewed one.
+        json(res, 200, { runs: out, now: new Date().toISOString() });
+        return;
+      }
+
+      /**
+       * A person stops, pauses or resumes a run: `RunStore.stop` / `setState`, the methods
+       * `staple run stop|pause|resume` and MCP `stop_run|pause_run|resume_run` call. `by` is
+       * the page's person (`actor`, else "ui"), so the run records who pressed Stop. Stopping
+       * a run that already ended changes nothing and answers it as it stands, so a second
+       * press is harmless. Every route answers the run's fresh `run status` object.
+       */
+      if (url.pathname.startsWith("/api/run/")) {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) || undefined);
+        const runs = handle.store.runs();
+        const id = typeof body.id === "string" ? body.id.trim() : "";
+        if (id === "") throw new StapleError("validation", "Name the run: id is required.");
+        const by = (typeof body.actor === "string" && body.actor.trim()) || "ui";
+        switch (url.pathname) {
+          case "/api/run/stop":
+            runs.stop(id, by, typeof body.note === "string" ? body.note : null);
+            break;
+          case "/api/run/pause":
+            runs.setState(id, "paused", by);
+            break;
+          case "/api/run/resume":
+            runs.setState(id, "active", by);
+            break;
+          default:
+            json(res, 404, { error: "not found" });
+            return;
+        }
+        json(res, 200, runEntry(handle, runs.status(id)));
+        return;
+      }
+
       if (url.pathname === "/api/milestones") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
         json(res, 200, handle.store.milestones().list({ all: url.searchParams.get("all") === "1" }));
@@ -4163,7 +4922,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const milestones = handle.store.milestones();
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
         const ref = body.ref as string;
         const position = {
           before: body.before as string | undefined,
@@ -4178,6 +4937,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               {
                 title: body.title as string | undefined,
                 description: body.description as string | null | undefined,
+                acceptanceCriteria: body.acceptanceCriteria as string[] | undefined,
                 targetDate: body.targetDate as string | null | undefined,
                 startDate: body.startDate as string | null | undefined,
                 fromEpic: body.fromEpic as string | null | undefined,
@@ -4192,6 +4952,22 @@ export function startUiServer(options: UiOptions): UiHandle {
               {
                 targetDate: body.targetDate as string | null | undefined,
                 startDate: body.startDate as string | null | undefined,
+                description: body.description as string | null | undefined,
+                acceptanceCriteria: body.acceptanceCriteria as string[] | undefined,
+              },
+              actor,
+            );
+            break;
+          case "/api/milestone/criterion":
+            payload = milestones.markCriterion(
+              ref,
+              body.position as number,
+              {
+                verdict: body.verdict as CriterionVerdict,
+                evidence: (body.evidence as string[] | undefined) ?? [],
+                note: (body.note as string | undefined) ?? null,
+                followUp: (body.followUp as { title: string; description?: string | null } | undefined) ?? null,
+                run: (body.run as string | undefined) ?? null,
               },
               actor,
             );
@@ -4227,7 +5003,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
-       * Projects — migration 009, docs/web-ui.md "Projects". One read and a POST
+       * Projects — migration 009, design/web-ui.md "Projects". One read and a POST
        * family, the milestone routes' shape.
        *
        * The read answers `{ workspace, project }` rows rather than bare projects,
@@ -4254,7 +5030,7 @@ export function startUiServer(options: UiOptions): UiHandle {
         const body = await readBody(req);
         const handle = handleFor((body.ws as string) ?? undefined);
         const projects = handle.store.projects();
-        const actor = (body.actor as string) || "ui";
+        const actor = bodyActor(body);
         /**
          * A missing or non-string `ref` is a validation refusal in the same envelope
          * every other refusal uses — not a TypeError three frames down that arrives as
@@ -4307,7 +5083,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
 
       /**
-       * The pickup queue — R2c (STA-168), docs/queue.md "Operations, by surface".
+       * The pickup queue — R2c (STA-168), design/queue.md "Operations, by surface".
        * Two reads and a POST family, the milestone routes' shape: every answer is
        * the ONE `{revision, entries, effective}` view the CLI prints under
        * `--json` and the MCP tools return, so the queue editor (R2d) redraws from
@@ -4321,7 +5097,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           200,
           handle.store.queue().view({
             all: url.searchParams.get("all") === "1",
-            actor: url.searchParams.get("actor") ?? undefined,
+            actor: queryActor(url.searchParams.get("actor")),
           }),
         );
         return;
@@ -4329,10 +5105,11 @@ export function startUiServer(options: UiOptions): UiHandle {
 
       if (url.pathname === "/api/queue/next") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
-        const { revision, next, skipped } = handle.store
-          .queue()
-          .effectiveQueue({ actor: url.searchParams.get("actor") ?? undefined });
-        json(res, 200, { revision, next, skipped });
+        const { revision, scope, next, skipped } = handle.store.queue().effectiveQueue({
+          actor: queryActor(url.searchParams.get("actor")),
+          scope: url.searchParams.get("scope") ?? undefined,
+        });
+        json(res, 200, scope ? { revision, scope, next, skipped } : { revision, next, skipped });
         return;
       }
 
@@ -4355,7 +5132,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               note: (body.note as string | undefined) ?? null,
               all: body.all === true,
             },
-            (body.actor as string) || "ui",
+            bodyActor(body),
           ),
         );
         return;
@@ -4461,6 +5238,7 @@ export function startUiServer(options: UiOptions): UiHandle {
       // ticket is a record that somebody was looking at a preview a moment ago,
       // not a stored permission; see `core/cloud/consent.ts`.
       consents.clear();
+      planConsents.clear();
       for (const handle of stores.values()) {
         try {
           handle.store.db.close();

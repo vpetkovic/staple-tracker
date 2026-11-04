@@ -138,12 +138,14 @@ describe("/api/issues carries dependency identifiers", () => {
   it("is ADDITIVE — the fields the row already had are untouched", async () => {
     const row = (await issues()).find((r) => r.issue.identifier === ref.target)!;
     // STA-143 added `gate` and `queuedBy` as two further siblings, on the same
-    // additive terms this test exists to police.
+    // additive terms this test exists to police, and the milestone list nesting added
+    // `milestoneId`.
     expect(Object.keys(row).sort()).toEqual([
       "claim",
       "deps",
       "gate",
       "issue",
+      "milestoneId",
       "queuedBy",
       "worklog",
       "workspace",

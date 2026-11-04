@@ -1,5 +1,5 @@
 /**
- * A milestone the log holds no membership write of holds no members (`docs/sync.md`, "A restore
+ * A milestone the log holds no membership write of holds no members (`design/sync.md`, "A restore
  * rewinds").
  *
  * A milestone made on a device already connected reaches the log as `milestone update

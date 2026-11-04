@@ -48,9 +48,30 @@ function tasks(n: number): string {
 
 export interface DependencyBadgesProps {
   row: TaskRow;
+  /**
+   * ONE cue instead of two badges — the compact row (row-layout.ts, `splitDeps`). Both
+   * counts stay, each behind its own glyph, inside a single chip and a single tap target,
+   * so a phone row keeps the fact on its line without paying for two boxes and a gap.
+   */
+  merged?: boolean;
+  /**
+   * The desktop row: each cue says what it means in words. The task that IS blocked gets the
+   * strong cue ("Blocked by 1", the blocked status's red); the task other work waits on gets
+   * a neutral one ("Blocks 3"). The phone keeps its glyph-and-count badges.
+   */
+  words?: boolean;
 }
 
-export function DependencyBadges({ row }: DependencyBadgesProps) {
+/** The merged cue's accessible name: both facts, in the order the badges read. */
+export function mergedDependencySentence(blockedBy: number, blocks: number): string {
+  const parts: string[] = [];
+  if (blockedBy > 0) parts.push(`blocked by ${tasks(blockedBy)}`);
+  if (blocks > 0) parts.push(`blocks ${tasks(blocks)}`);
+  const sentence = parts.join(", ");
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+}
+
+export function DependencyBadges({ row, merged = false, words = false }: DependencyBadgesProps) {
   const [open, setOpen] = useState(false);
 
   const blockedBy = row.deps?.blockedBy ?? [];
@@ -90,7 +111,68 @@ export function DependencyBadges({ row }: DependencyBadgesProps) {
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
     >
-      {blockedBy.length > 0 ? (
+      {merged ? (
+        <button
+          type="button"
+          className="staple-dep-badge staple-dep-merged"
+          data-kind="merged"
+          data-testid="dep-cue"
+          aria-label={mergedDependencySentence(blockedBy.length, blocks.length)}
+          title={[
+            blockedBy.length > 0 ? `Blocked by ${blockedBy.join(", ")}` : null,
+            blocks.length > 0 ? `Blocks ${blocks.join(", ")}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          onClick={openDialog}
+        >
+          {blockedBy.length > 0 ? (
+            <span className="staple-dep-part" data-kind="blocked-by">
+              <TriangleAlert aria-hidden="true" focusable="false" />
+              <span className="staple-dep-count">{blockedBy.length}</span>
+            </span>
+          ) : null}
+          {blocks.length > 0 ? (
+            <span className="staple-dep-part" data-kind="blocks">
+              <OctagonX aria-hidden="true" focusable="false" />
+              <span className="staple-dep-count">{blocks.length}</span>
+            </span>
+          ) : null}
+        </button>
+      ) : null}
+
+      {!merged && words && blockedBy.length > 0 ? (
+        <button
+          type="button"
+          className="staple-dep-badge"
+          data-kind="blocked-by"
+          data-words=""
+          data-testid="dep-badge-blocked-by"
+          aria-label={`Blocked by ${tasks(blockedBy.length)}: ${blockedBy.join(", ")}`}
+          title={`Waiting on ${blockedBy.join(", ")} to finish`}
+          onClick={openDialog}
+        >
+          <OctagonX aria-hidden="true" focusable="false" />
+          <span>Blocked by {blockedBy.length}</span>
+        </button>
+      ) : null}
+
+      {!merged && words && blocks.length > 0 ? (
+        <button
+          type="button"
+          className="staple-dep-badge"
+          data-kind="blocks"
+          data-words=""
+          data-testid="dep-badge-blocks"
+          aria-label={`Blocks ${tasks(blocks.length)}: ${blocks.join(", ")}`}
+          title={`${blocks.join(", ")} ${blocks.length === 1 ? "waits" : "wait"} for this to finish`}
+          onClick={openDialog}
+        >
+          <span>Blocks {blocks.length}</span>
+        </button>
+      ) : null}
+
+      {!merged && !words && blockedBy.length > 0 ? (
         <button
           type="button"
           className="staple-dep-badge"
@@ -107,7 +189,7 @@ export function DependencyBadges({ row }: DependencyBadgesProps) {
         </button>
       ) : null}
 
-      {blocks.length > 0 ? (
+      {!merged && !words && blocks.length > 0 ? (
         <button
           type="button"
           className="staple-dep-badge"

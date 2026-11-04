@@ -49,6 +49,16 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
+describe("staple status", () => {
+  it("names its usage when the ref or the status is missing", () => {
+    for (const args of [["status"], ["status", "VOCAB-1"]]) {
+      const result = staple(...args, "--json");
+      expect(result.status).toBe(2);
+      expect(JSON.parse(result.stderr.trim().split("\n").at(-1)!)).toMatchObject({ code: "validation", message: "usage: staple status <ref> <status>" });
+    }
+  });
+});
+
 describe("staple statuses", () => {
   it("lists the configured statuses with their categories", () => {
     const { status, stdout } = staple("statuses");
@@ -209,7 +219,7 @@ describe("staple kinds", () => {
   });
 
   /**
-   * The one kind that carries a rule (docs/milestones.md): `rm` is refused outright
+   * The one kind that carries a rule (design/milestones.md): `rm` is refused outright
    * while a milestone still owns members or dates, and the refusal names it so the
    * operator knows what to clear first.
    */

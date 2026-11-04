@@ -1,0 +1,698 @@
+{
+  "title": "confidence ranges: quantiles, order-statistic intervals and bounds, a heavy tail read robustly, timing floors kept apart, and duration forecasts, the same on every device",
+  "covers": [
+    "eleven task/high/feature samples: eight at 18 to 25 minutes over 2h and three at 20 minutes over a 5-minute estimate; the lower quantiles p10 p25 p50 p75 p90 read indices 1 2 5 7 9",
+    "the median's order-statistic interval is ranks 3 to 9, 1914/2048; the bounds for one more sample are the range, 10/12, below 90% and said so, and the p10/p90 intervals miss 90% too",
+    "the three 5-minute tickets sit 14.7 robust deviations above the standard median of ln(ratio): heavy_tail, and the expected ratio is the pooled ratio clipped at the fence (0.1825) instead of pooled (0.2379)",
+    "two timing-floor records in that class are listed apart and never samples: floors_excluded",
+    "a bug/low key with one sample and four floors reads its own key, floor_dominated, and an open bug/low forecasts the floor with a 60-second floor_bound expected figure, with or without an estimate",
+    "an unstarted task/high/feature estimated at 4h has no model to match: its walk starts without the model, and it forecasts estimate times the ratio's quantiles, bounds and clipped expected ratio; one with no estimate reads no_estimate",
+    "every figure is from replicated data, so the writer, the tail device and a hydrated device read the same ranges, warnings and forecasts"
+  ],
+  "start": "2026-09-02T09:00:00.000Z",
+  "devices": {
+    "tail": true,
+    "hydrate": true
+  },
+  "steps": [
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "p",
+      "title": "ranges",
+      "kind": "epic"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h1",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h2",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h3",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h4",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h5",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h6",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h7",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h8",
+      "parent": "p",
+      "estimate": "2h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h9",
+      "parent": "p",
+      "estimate": "5m",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h10",
+      "parent": "p",
+      "estimate": "5m",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "h11",
+      "parent": "p",
+      "estimate": "5m",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "f1",
+      "parent": "p",
+      "estimate": "30m",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "f2",
+      "parent": "p",
+      "estimate": "30m",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "b1",
+      "parent": "p",
+      "estimate": "1h",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "g1",
+      "parent": "p",
+      "estimate": "15m",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "g2",
+      "parent": "p",
+      "estimate": "15m",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "g3",
+      "parent": "p",
+      "estimate": "15m",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "g4",
+      "parent": "p",
+      "estimate": "15m",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "o1",
+      "parent": "p",
+      "estimate": "4h",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "o2",
+      "parent": "p",
+      "estimate": "1h",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "o3",
+      "parent": "p",
+      "kind": "task",
+      "priority": "high",
+      "labels": [
+        "type:feature"
+      ]
+    },
+    {
+      "at": "0s",
+      "do": "create",
+      "ref": "o4",
+      "parent": "p",
+      "kind": "bug",
+      "priority": "low"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h1",
+      "agent": "w1"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h2",
+      "agent": "w2"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h3",
+      "agent": "w3"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h4",
+      "agent": "w4"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h5",
+      "agent": "w5"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h6",
+      "agent": "w6"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h7",
+      "agent": "w7"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h8",
+      "agent": "w8"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h9",
+      "agent": "w9"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h10",
+      "agent": "w10"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "h11",
+      "agent": "w99"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "f1",
+      "agent": "w11"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "f2",
+      "agent": "w12"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "b1",
+      "agent": "w13"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "g1",
+      "agent": "w14"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "g2",
+      "agent": "w15"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "g3",
+      "agent": "w16"
+    },
+    {
+      "at": "0s",
+      "do": "checkout",
+      "ref": "g4",
+      "agent": "w17"
+    },
+    {
+      "at": "30s",
+      "do": "status",
+      "ref": "g1",
+      "to": "done",
+      "agent": "w14"
+    },
+    {
+      "at": "31s",
+      "do": "status",
+      "ref": "g2",
+      "to": "done",
+      "agent": "w15"
+    },
+    {
+      "at": "32s",
+      "do": "status",
+      "ref": "g3",
+      "to": "done",
+      "agent": "w16"
+    },
+    {
+      "at": "33s",
+      "do": "status",
+      "ref": "g4",
+      "to": "done",
+      "agent": "w17"
+    },
+    {
+      "at": "40s",
+      "do": "status",
+      "ref": "f1",
+      "to": "done",
+      "agent": "w11"
+    },
+    {
+      "at": "41s",
+      "do": "status",
+      "ref": "f2",
+      "to": "done",
+      "agent": "w12"
+    },
+    {
+      "at": "18m",
+      "do": "status",
+      "ref": "h1",
+      "to": "done",
+      "agent": "w1"
+    },
+    {
+      "at": "19m",
+      "do": "status",
+      "ref": "h2",
+      "to": "done",
+      "agent": "w2"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "h3",
+      "to": "done",
+      "agent": "w3"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "h9",
+      "to": "done",
+      "agent": "w9"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "h10",
+      "to": "done",
+      "agent": "w10"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "h11",
+      "to": "done",
+      "agent": "w99"
+    },
+    {
+      "at": "20m",
+      "do": "status",
+      "ref": "b1",
+      "to": "done",
+      "agent": "w13"
+    },
+    {
+      "at": "21m",
+      "do": "status",
+      "ref": "h4",
+      "to": "done",
+      "agent": "w4"
+    },
+    {
+      "at": "22m",
+      "do": "status",
+      "ref": "h5",
+      "to": "done",
+      "agent": "w5"
+    },
+    {
+      "at": "23m",
+      "do": "status",
+      "ref": "h6",
+      "to": "done",
+      "agent": "w6"
+    },
+    {
+      "at": "24m",
+      "do": "status",
+      "ref": "h7",
+      "to": "done",
+      "agent": "w7"
+    },
+    {
+      "at": "25m",
+      "do": "status",
+      "ref": "h8",
+      "to": "done",
+      "agent": "w8"
+    }
+  ],
+  "expect": [
+    {
+      "asOf": "30m",
+      "ref": "p",
+      "calibration": {
+        "population": 18,
+        "sets": {
+          "exact": 12
+        },
+        "for": [
+          "o1",
+          "o2",
+          "o3",
+          "o4"
+        ],
+        "cohorts": [
+          {
+            "set": "exact",
+            "key": {
+              "kind": "bug",
+              "priority": "low",
+              "workType": "unknown",
+              "area": "unknown",
+              "model": "unknown"
+            },
+            "keySamples": 1,
+            "level": "full",
+            "samples": 1,
+            "quantiles": {
+              "p10": 0.3333,
+              "p50": 0.3333,
+              "p90": 0.3333
+            },
+            "bounds": {
+              "lower": 0.3333,
+              "upper": 0.3333,
+              "confidence": 0,
+              "reached": false
+            },
+            "tail": {
+              "heavy": false,
+              "lower": 0,
+              "upper": 0
+            },
+            "floors": {
+              "count": 4,
+              "dominated": true,
+              "members": [
+                "g1",
+                "g2",
+                "g3",
+                "g4"
+              ]
+            },
+            "warnings": [
+              "small_sample",
+              "bounds_below_confidence",
+              "quantile_below_confidence",
+              "floor_dominated"
+            ]
+          },
+          {
+            "set": "exact",
+            "key": {
+              "kind": "task",
+              "priority": "high",
+              "workType": "feature",
+              "area": "unknown",
+              "model": "unknown"
+            },
+            "keySamples": 11,
+            "level": "full",
+            "samples": 11,
+            "minRatio": 0.15,
+            "maxRatio": 4.0,
+            "quantiles": {
+              "p10": 0.15833,
+              "p25": 0.16667,
+              "p50": 0.19167,
+              "p75": 0.20833,
+              "p90": 4.0
+            },
+            "medianInterval": {
+              "lower": 0.16667,
+              "upper": 4.0,
+              "confidence": 0.9345703125,
+              "reached": true
+            },
+            "bounds": {
+              "lower": 0.15,
+              "upper": 4.0,
+              "confidence": 0.833333,
+              "reached": false
+            },
+            "tail": {
+              "heavy": true,
+              "lower": 0,
+              "upper": 3
+            },
+            "expected": {
+              "value": 0.1825,
+              "method": "fence_clipped_pooled"
+            },
+            "floors": {
+              "count": 2,
+              "dominated": false,
+              "members": [
+                "f1",
+                "f2"
+              ]
+            },
+            "warnings": [
+              "bounds_below_confidence",
+              "quantile_below_confidence",
+              "heavy_tail",
+              "floors_excluded"
+            ]
+          }
+        ],
+        "forecasts": [
+          {
+            "ref": "o1",
+            "set": "exact",
+            "state": "ratio",
+            "level": "without_model",
+            "seconds": {
+              "p10": 2280,
+              "p25": 2400,
+              "p50": 2760,
+              "p75": 3000,
+              "p90": 57600
+            },
+            "bounds": {
+              "lower": 2160,
+              "upper": 57600,
+              "confidence": 0.833333,
+              "reached": false
+            },
+            "expected": {
+              "seconds": 2628,
+              "method": "fence_clipped_pooled"
+            },
+            "warnings": [
+              "bounds_below_confidence",
+              "quantile_below_confidence",
+              "heavy_tail",
+              "floors_excluded"
+            ]
+          },
+          {
+            "ref": "o2",
+            "set": "exact",
+            "state": "floor",
+            "level": "without_model",
+            "expected": {
+              "seconds": 60,
+              "method": "floor_bound"
+            },
+            "warnings": [
+              "small_sample",
+              "bounds_below_confidence",
+              "quantile_below_confidence",
+              "floor_dominated"
+            ]
+          },
+          {
+            "ref": "o3",
+            "set": "exact",
+            "state": "no_estimate",
+            "level": "without_model",
+            "warnings": [
+              "bounds_below_confidence",
+              "quantile_below_confidence",
+              "heavy_tail",
+              "floors_excluded"
+            ]
+          },
+          {
+            "ref": "o4",
+            "set": "exact",
+            "state": "floor",
+            "level": "without_model",
+            "expected": {
+              "seconds": 60,
+              "method": "floor_bound"
+            },
+            "warnings": [
+              "small_sample",
+              "bounds_below_confidence",
+              "quantile_below_confidence",
+              "floor_dominated"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

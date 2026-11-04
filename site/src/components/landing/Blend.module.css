@@ -1,0 +1,1216 @@
+/*
+ * The blend landing page: one drawing sheet read in order. Serif headlines with one
+ * italic word and the dashed rules of a drafting grid; a legend column on the left of
+ * every band and its content on the right; and a walk-through whose legend is a feature
+ * index that stays in view while the stage beside it shows one feature at a time.
+ *
+ * Colours, sizes and weights are tokens. A rule that changes another outranks it,
+ * because the production CSS is minified across files and rules of equal weight can
+ * swap places: every rule in a media query starts at `main.page`, width ranges that set
+ * the same thing do not overlap, and the pinned walk-through, which shares its width
+ * with the plain one, starts at `:global(html[data-blend-pinned]) main.page .tour` (an attribute Blend.tsx sets on the root element).
+ */
+
+.page {
+  /* The inset of a cell, and the dashed rules: a dash and a gap of equal length. */
+  --pad: var(--st-space-3);
+  --pad-y: var(--st-space-10);
+  --edge: var(--st-space-3);
+  --overshoot: var(--st-space-3);
+  --rule-v: linear-gradient(to bottom, var(--st-rule) 50%, transparent 50%);
+  --rule-h: linear-gradient(to right, var(--st-rule) 50%, transparent 50%);
+  /* The columns of a band from 768 px: the legend, then the content in two parts, and
+     where the two rules between them fall. */
+  --col-legend: 3fr;
+  --col-a: 4fr;
+  --col-b: 5fr;
+  --col-content: 9fr;
+  --rule-1: 25%;
+  --rule-2: 58.3333%;
+  overflow-x: clip;
+}
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A line of a headline that is set in two. */
+.line {
+  display: block;
+}
+
+/* ---------- Hero ---------- */
+
+.top {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  border-bottom: var(--st-hairline) solid var(--st-border);
+}
+
+.top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(46% 72% at 80% 42%, var(--st-glow), transparent 72%),
+    radial-gradient(40% 80% at 0% 100%, var(--st-glow-faint), transparent 70%);
+}
+
+/* As wide as the sheet below, so the copy starts where the legends do. */
+.hero {
+  position: relative;
+  display: grid;
+  align-items: center;
+  width: calc(100% - 2 * var(--edge));
+  max-width: var(--st-container-wide);
+  margin-inline: auto;
+  padding: 8.25rem var(--pad) 10rem;
+}
+
+.heroCopy {
+  position: relative;
+  z-index: 4;
+  min-width: 0;
+}
+
+.eyebrow {
+  margin: 0 0 var(--st-space-5);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-ui);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-accent-text);
+}
+
+.heroTitle {
+  margin: 0 0 var(--st-space-6);
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-hero);
+  font-weight: var(--st-weight-serif);
+  line-height: 0.98;
+  letter-spacing: var(--st-tracking-serif);
+  color: var(--st-fg-strong);
+}
+
+.heroTitle em,
+.title em,
+.featureTitle em,
+.closingTitle em {
+  font-weight: 300;
+}
+
+.heroLead {
+  max-width: 33rem;
+  margin: 0 0 var(--st-space-8);
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg);
+  text-wrap: pretty;
+}
+
+.fineprint {
+  margin: var(--st-space-5) 0 0;
+  font-size: var(--st-text-sm);
+  color: var(--st-fg-subtle);
+}
+
+/* The control for the chips, which keep moving. */
+.pause {
+  position: absolute;
+  right: var(--pad);
+  bottom: var(--st-space-4);
+  z-index: 5;
+}
+
+/* ---------- The sheet ---------- */
+
+.sheet {
+  position: relative;
+  width: calc(100% - 2 * var(--edge));
+  max-width: var(--st-container-wide);
+  margin-inline: auto;
+}
+
+/* A band is one row of the sheet. It draws the sheet's two edges, and from 768 px the
+   rules between its columns. */
+.band {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  background-image: var(--rule-v), var(--rule-v);
+  background-repeat: repeat-y;
+  background-size: var(--st-hairline) var(--st-rule-dash);
+  background-position:
+    0 0,
+    100% 0;
+}
+
+/* The dashed rule over a band crosses the edges by a little, as on a drawing. */
+.band + .band::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(-1 * var(--overshoot));
+  right: calc(-1 * var(--overshoot));
+  height: var(--st-hairline);
+  background: var(--rule-h) repeat-x;
+  background-size: var(--st-rule-dash) var(--st-hairline);
+}
+
+.legend {
+  min-width: 0;
+  padding: var(--pad-y) var(--pad) 0;
+}
+
+.prose {
+  min-width: 0;
+  padding: var(--st-space-6) var(--pad) 0;
+}
+
+.figure {
+  min-width: 0;
+  padding: var(--st-space-8) var(--pad) var(--pad-y);
+}
+
+/* The solid tick on a heading, on the rule at the left edge of its column. */
+.tick {
+  position: relative;
+}
+
+.tick::before {
+  content: '';
+  position: absolute;
+  top: 0.14em;
+  bottom: 0.14em;
+  left: calc(-1 * var(--pad) - 1px);
+  width: 2px;
+  background: var(--st-fg-subtle);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-legend);
+  font-weight: var(--st-weight-serif);
+  line-height: 1.06;
+  letter-spacing: var(--st-tracking-serif);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.legendText {
+  margin: var(--st-space-5) 0 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.prose p {
+  margin: 0 0 var(--st-space-5);
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.prose > :last-child {
+  margin-bottom: 0;
+}
+
+.page .more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-muted);
+  text-decoration: none;
+}
+
+/* A docs link is drawn small but taps as a 44 px target: its hit area reaches above
+   and below the text, which keeps its place. */
+.page .more {
+  position: relative;
+}
+
+.page .more::after {
+  content: '';
+  position: absolute;
+  inset: calc(50% - var(--st-target-min) / 2) 0;
+}
+
+.page .more:hover {
+  color: var(--st-fg-strong);
+  text-decoration: none;
+}
+
+.arrow {
+  display: inline-block;
+  transition: transform var(--st-duration) var(--st-ease);
+}
+
+.more:hover .arrow {
+  transform: translateX(3px);
+}
+
+/* A scene that its cell cuts off: the lower edge of the panel runs out under a fade,
+   so the fragment reads as a detail of a larger screen. */
+.fragment {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--st-space-8)), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--st-space-8)), transparent);
+}
+
+.fragment > * {
+  margin-bottom: calc(-1 * var(--st-space-3));
+}
+
+/* ---------- What it is, and the three steps ---------- */
+
+.statement {
+  max-width: 24rem;
+  margin: 0;
+  font-size: var(--st-text-base);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-strong);
+  text-wrap: pretty;
+}
+
+.startSteps {
+  position: relative;
+  min-width: 0;
+  padding-top: var(--st-space-4);
+}
+
+/* The strip lies on the sheet: no box of its own, serif titles, dashed lines between
+   the steps on a phone. From 768 px the band draws the rules between them. */
+.steps {
+  --steps-radius: 0;
+  --steps-outset: calc(-1 * var(--st-hairline));
+  --steps-pad: var(--pad);
+  --steps-frame: transparent;
+  --steps-ground: transparent;
+  --steps-line: var(--st-rule);
+  --steps-line-style: dashed;
+  --steps-title-font: var(--st-font-serif);
+  --steps-title-weight: var(--st-weight-serif);
+  --steps-title-tracking: var(--st-tracking-heading);
+  --glyph-cut: var(--st-bg);
+}
+
+/* ---------- The walk-through ---------- */
+
+/* The frame draws the rules, not the band: where it is pinned they stay still with it. */
+.band.tour {
+  background-image: none;
+}
+
+.frame {
+  background-image: var(--rule-v), var(--rule-v);
+  background-repeat: repeat-y;
+  background-size: var(--st-hairline) var(--st-rule-dash);
+  background-position:
+    0 0,
+    100% 0;
+}
+
+.index {
+  min-width: 0;
+  padding: var(--pad-y) var(--pad) 0;
+}
+
+.indexLede {
+  margin: var(--st-space-5) 0 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: balance;
+}
+
+/* The list of features is an index only where there is a column for it. */
+.indexNav,
+.counter {
+  display: none;
+}
+
+.feature {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: var(--st-space-6);
+  padding: var(--pad-y) 0;
+  /* A link to a feature lands under the navbar. */
+  scroll-margin-top: var(--st-navbar-height);
+}
+
+.anchor {
+  display: none;
+}
+
+.feature + .feature::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--pad);
+  right: var(--pad);
+  height: var(--st-hairline);
+  background: var(--rule-h) repeat-x;
+  background-size: var(--st-rule-dash) var(--st-hairline);
+}
+
+.featureHead,
+.featureScene,
+.featureText {
+  min-width: 0;
+  padding-inline: var(--pad);
+}
+
+/* The headline is sized from this column (see --st-text-serif-feature). */
+.featureHead {
+  container-type: inline-size;
+}
+
+/* The step a feature belongs to, then its name in a pill: always two lines, so a
+   headline starts at the same height whichever feature shows. */
+.kicker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--st-space-3);
+  margin: 0 0 var(--st-space-5);
+}
+
+.kicker p {
+  margin: 0;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  padding: var(--st-space-1) var(--st-space-3);
+  border: var(--st-hairline) solid var(--st-accent-ring);
+  border-radius: var(--st-radius-full);
+  background: var(--st-accent-soft);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-accent-text);
+}
+
+.kickerStep {
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-snug);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-subtle);
+}
+
+.featureTitle {
+  margin: 0;
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-feature);
+  font-weight: var(--st-weight-serif);
+  line-height: 1.06;
+  letter-spacing: var(--st-tracking-serif);
+  color: var(--st-fg-strong);
+}
+
+.body {
+  margin: 0 0 var(--st-space-6);
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.points {
+  display: grid;
+  gap: var(--st-space-3);
+  margin: 0 0 var(--st-space-6);
+  padding: 0;
+  list-style: none;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-muted);
+}
+
+/* Each point carries the sheet's tick. */
+.points li {
+  position: relative;
+  padding-left: var(--st-space-4);
+  text-wrap: pretty;
+}
+
+.points li::before {
+  content: '';
+  position: absolute;
+  top: 0.3em;
+  left: 0;
+  width: 2px;
+  height: 0.85em;
+  background: var(--st-accent);
+}
+
+/* ---------- Next to the team's tracker ---------- */
+
+.compare {
+  --compare-wrap: pretty;
+  position: relative;
+  min-width: 0;
+  padding: var(--st-space-6) var(--pad) var(--pad-y);
+}
+
+.compare::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--pad);
+  right: var(--pad);
+  height: var(--st-hairline);
+  background: var(--rule-h) repeat-x;
+  background-size: var(--st-rule-dash) var(--st-hairline);
+}
+
+.alongside .figure {
+  padding-bottom: var(--st-space-8);
+}
+
+/* ---------- Underneath: the figures ---------- */
+
+.facts {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin: var(--st-space-8) 0 0;
+}
+
+.fact {
+  position: relative;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: var(--st-space-3);
+  padding: var(--st-space-8) var(--pad);
+}
+
+/* A dashed rule over every row of figures. */
+.fact::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--st-hairline);
+  background: var(--rule-h) repeat-x;
+  background-size: var(--st-rule-dash) var(--st-hairline);
+}
+
+.factValue {
+  margin: 0;
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-2xl);
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: var(--st-tracking-serif);
+  font-variant-numeric: lining-nums;
+  color: var(--st-fg-strong);
+}
+
+.factLabel {
+  max-width: 22rem;
+  text-wrap: balance;
+  font-size: var(--st-text-sm);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-muted);
+}
+
+/* ---------- FAQ ---------- */
+
+.faqBody {
+  min-width: 0;
+  padding: var(--st-space-8) var(--pad) var(--pad-y);
+}
+
+.faqList {
+  --faq-question-font: var(--st-font-serif);
+  --faq-question-size: var(--st-text-xl);
+  --faq-question-weight: var(--st-weight-serif);
+  max-width: 46rem;
+}
+
+/* ---------- Get started ---------- */
+
+.band.closing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--st-space-16) var(--pad);
+  text-align: center;
+  isolation: isolate;
+}
+
+.closing::after {
+  content: '';
+  position: absolute;
+  inset: var(--st-hairline) var(--st-hairline) 0;
+  z-index: -1;
+  background: radial-gradient(50% 90% at 50% 100%, var(--st-glow), transparent 72%);
+}
+
+.closingTitle {
+  max-width: 14em;
+  margin: 0;
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-2xl);
+  font-weight: var(--st-weight-serif);
+  line-height: var(--st-leading-serif);
+  letter-spacing: var(--st-tracking-serif);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.closingLead {
+  max-width: 34rem;
+  margin: var(--st-space-6) 0 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: balance;
+}
+
+.closingActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--st-space-3);
+  margin-top: var(--st-space-8);
+}
+
+/* ---------- The narrowest phones: a scene keeps the 300 px the kit draws for ---------- */
+
+@media (max-width: 349.98px) {
+  main.page {
+    --edge: 0.625rem;
+  }
+
+  main.page .featureScene,
+  main.page .figure {
+    padding-inline: 0;
+  }
+}
+
+/* ---------- Below 1024 px: the chips sit in a band above the copy and one below ---------- */
+
+@media (min-width: 700px) and (max-width: 1023.98px) {
+  main.page .hero {
+    padding-block: 10.5rem;
+  }
+}
+
+/* ---------- From 768 px: two columns, a rule between them ---------- */
+
+@media (min-width: 768px) {
+  main.page {
+    --pad-y: var(--st-space-12);
+    --edge: var(--st-gutter);
+    --overshoot: var(--st-space-4);
+  }
+
+  main.page .heroLead {
+    font-size: var(--st-text-lg);
+  }
+
+  main.page .legend,
+  main.page .index {
+    padding-bottom: var(--pad-y);
+  }
+
+  main.page .prose {
+    padding-block: var(--pad-y);
+  }
+
+  main.page .figure {
+    padding-block: var(--pad-y);
+  }
+
+  /* Head and copy on the left, the scene on the right. */
+  main.page .feature {
+    grid-template-columns: minmax(0, var(--col-a)) minmax(0, var(--col-b));
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      'head scene'
+      'text scene';
+  }
+
+  main.page .featureHead {
+    grid-area: head;
+  }
+
+  main.page .featureScene {
+    grid-area: scene;
+  }
+
+  main.page .featureText {
+    grid-area: text;
+  }
+
+  main.page .feature + .feature::before {
+    left: 0;
+    right: 0;
+  }
+
+  main.page .steps {
+    --steps-line: transparent;
+  }
+
+  main.page .startSteps {
+    padding-top: 0;
+    background-image: var(--rule-v), var(--rule-v);
+    background-repeat: repeat-y;
+    background-size: var(--st-hairline) var(--st-rule-dash);
+    background-position:
+      33.3333% 0,
+      66.6667% 0;
+  }
+
+  main.page .compare {
+    padding-top: var(--st-space-8);
+  }
+
+  main.page .compare::before {
+    left: 0;
+    right: 0;
+  }
+
+  main.page .fact {
+    padding-block: var(--st-space-10);
+  }
+
+  main.page .faqList {
+    --faq-question-size: var(--st-text-2xl);
+  }
+
+  main.page .band.closing {
+    padding-block: var(--st-space-24);
+  }
+}
+
+/* ---------- 768 to 1023 px: the legend over its content ---------- */
+
+@media (min-width: 768px) and (max-width: 1023.98px) {
+  main.page {
+    --pad: var(--st-space-6);
+    --col-a: 1fr;
+    --col-b: 1fr;
+  }
+
+  main.page .split,
+  main.page .frame {
+    background-image: var(--rule-v), var(--rule-v), var(--rule-v);
+    background-position:
+      0 0,
+      50% 0,
+      100% 0;
+  }
+
+  main.page .split {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      'legend figure'
+      'prose figure';
+  }
+
+  main.page .split .legend {
+    grid-area: legend;
+    padding-bottom: 0;
+  }
+
+  main.page .split .prose {
+    grid-area: prose;
+    padding-top: var(--st-space-8);
+  }
+
+  main.page .split .figure {
+    grid-area: figure;
+  }
+
+  main.page .split.alongside {
+    grid-template-rows: auto 1fr auto;
+    grid-template-areas:
+      'legend figure'
+      'prose figure'
+      'compare compare';
+  }
+
+  main.page .compare {
+    grid-area: compare;
+    /* The row labels take the left column; the two answers start in the right one. */
+    --compare-label: calc((100vw - 2 * var(--edge)) / 2);
+  }
+
+  /* The figures across the sheet, under their heading. */
+  main.page .split.underneath {
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      'legend legend'
+      'facts facts';
+  }
+
+  main.page .split.underneath .legend {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: calc(2 * var(--pad));
+    align-items: end;
+    padding-bottom: var(--pad-y);
+  }
+
+  main.page .underneath .legend .eyebrow {
+    grid-column: 1 / -1;
+  }
+
+  main.page .underneath .legendText {
+    margin-top: 0;
+  }
+
+  main.page .facts {
+    grid-area: facts;
+    margin-top: 0;
+  }
+
+  main.page .start .legend {
+    padding-bottom: var(--st-space-8);
+  }
+
+  main.page .start .startSteps::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--st-hairline);
+    background: var(--rule-h) repeat-x;
+    background-size: var(--st-rule-dash) var(--st-hairline);
+  }
+
+  /* The walk-through's heading on the left, its one line on the right. */
+  main.page .indexHead {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: calc(2 * var(--pad));
+    align-items: end;
+  }
+
+  main.page .indexHead .eyebrow {
+    grid-column: 1 / -1;
+  }
+
+  main.page .indexLede {
+    margin-top: 0;
+  }
+
+  main.page .feature:first-child::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--st-hairline);
+    background: var(--rule-h) repeat-x;
+    background-size: var(--st-rule-dash) var(--st-hairline);
+  }
+
+  main.page .faqBody {
+    padding-top: 0;
+  }
+}
+
+/* ---------- From 1024 px: the legend beside its content ---------- */
+
+@media (min-width: 1024px) and (max-width: 1279.98px) {
+  main.page {
+    --pad: var(--st-space-5);
+    --col-legend: 3.5fr;
+    --col-a: 4fr;
+    --col-b: 4.5fr;
+    --col-content: 8.5fr;
+    --rule-1: 29.1667%;
+    --rule-2: 62.5%;
+  }
+}
+
+@media (min-width: 1280px) {
+  main.page {
+    --pad: var(--st-space-6);
+  }
+}
+
+@media (min-width: 1024px) {
+  /* The copy on the left half, the chips to its right. */
+  main.page .hero {
+    min-height: clamp(34rem, calc(100svh - var(--st-navbar-height) - 12rem), 44rem);
+    padding-block: var(--st-space-16);
+  }
+
+  main.page .heroCopy {
+    max-width: 50%;
+  }
+
+  main.page .split,
+  main.page .frame {
+    background-image: var(--rule-v), var(--rule-v), var(--rule-v), var(--rule-v);
+    background-position:
+      0 0,
+      var(--rule-1) 0,
+      var(--rule-2) 0,
+      100% 0;
+  }
+
+  main.page .start,
+  main.page .faq {
+    background-image: var(--rule-v), var(--rule-v), var(--rule-v);
+    background-position:
+      0 0,
+      var(--rule-1) 0,
+      100% 0;
+  }
+
+  main.page .split {
+    grid-template-columns: minmax(0, var(--col-legend)) minmax(0, var(--col-a)) minmax(0, var(--col-b));
+  }
+
+  main.page .start,
+  main.page .faq,
+  main.page .frame {
+    grid-template-columns: minmax(0, var(--col-legend)) minmax(0, var(--col-content));
+  }
+
+  main.page .frame {
+    display: grid;
+    align-items: start;
+  }
+
+  main.page .split.alongside {
+    grid-template-areas:
+      'legend prose figure'
+      'legend compare compare';
+  }
+
+  /* The heading of the FAQ stays in view beside the questions. */
+  main.page .legendSticky {
+    position: sticky;
+    top: calc(var(--st-navbar-height) + var(--pad-y));
+  }
+
+  main.page .alongside .legend {
+    grid-area: legend;
+  }
+
+  main.page .alongside .prose {
+    grid-area: prose;
+  }
+
+  main.page .alongside .figure {
+    grid-area: figure;
+  }
+
+  main.page .compare {
+    grid-area: compare;
+  }
+
+  /* The figures sit on the two content columns. */
+  main.page .facts {
+    grid-column: 2 / span 2;
+    grid-template-columns: minmax(0, var(--col-a)) minmax(0, var(--col-b));
+    margin-top: 0;
+  }
+
+  main.page .fact:nth-child(-n + 2)::before {
+    display: none;
+  }
+
+  main.page .facts .fact {
+    padding-block: var(--pad-y);
+  }
+
+  main.page .faqBody {
+    padding-top: var(--pad-y);
+  }
+
+  /* The comparison's row labels take the first content column (4 of the sheet's 12)
+     and the two answers share the second. A table takes a length here, not a share. */
+  main.page .compare {
+    --compare-label: calc(min(100vw - 2 * var(--edge), var(--st-container-wide)) * 4 / 12);
+  }
+
+  /* The index: the features by step, as links. The heading gives its room to the list. */
+  main.page .frame .index {
+    padding-block: var(--pad-y);
+  }
+
+  /* The index's eyebrow, a feature's kicker and the bar of its scene share one line. */
+  main.page .index .eyebrow {
+    margin-bottom: var(--st-space-3);
+    line-height: var(--st-control-sm);
+  }
+
+  main.page .kicker {
+    gap: var(--st-space-2);
+  }
+
+  main.page .kickerStep {
+    line-height: var(--st-control-sm);
+  }
+
+  main.page .indexTitle {
+    font-size: var(--st-text-serif-lg);
+    letter-spacing: var(--st-tracking-heading);
+  }
+
+  main.page .indexLede {
+    display: none;
+  }
+
+  main.page .indexNav {
+    display: block;
+    margin-top: var(--st-space-6);
+  }
+
+  main.page .group {
+    display: flex;
+    align-items: center;
+    gap: var(--st-space-2);
+    margin: var(--st-space-4) 0 var(--st-space-1);
+    font-family: var(--st-font-mono);
+    font-size: var(--st-text-2xs);
+    font-weight: var(--st-weight-medium);
+    line-height: var(--st-leading-snug);
+    letter-spacing: var(--st-tracking-eyebrow);
+    text-transform: uppercase;
+    color: var(--st-fg-subtle);
+  }
+
+  main.page .group:first-child {
+    margin-top: 0;
+  }
+
+  main.page .groupNumber {
+    color: var(--st-accent-text);
+  }
+
+  main.page .groupGlyph {
+    display: inline-flex;
+    margin-left: auto;
+    --glyph-cut: var(--st-bg);
+  }
+
+  main.page .tab {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 2rem;
+    /* Room for the focus ring around the words. */
+    margin-inline: calc(-1 * var(--st-space-2));
+    padding-inline: var(--st-space-2);
+    border-radius: var(--st-radius-sm);
+    font-size: var(--st-text-sm);
+    line-height: var(--st-leading-snug);
+    color: var(--st-fg-muted);
+    text-decoration: none;
+    transition: color var(--st-duration) var(--st-ease);
+  }
+
+  main.page .tab:hover {
+    color: var(--st-fg-strong);
+    text-decoration: none;
+  }
+
+  main.page .features {
+    min-width: 0;
+  }
+}
+
+/* A screen tall enough keeps the plain index in view beside the features. */
+@media (min-width: 1024px) and (min-height: 38em) {
+  main.page .index {
+    position: sticky;
+    top: var(--st-navbar-height);
+  }
+}
+
+/* ---------- The pinned walk-through ---------- */
+
+/* A tall track with a frame pinned under the navbar. The scroll position picks the
+   feature; the features lie on top of each other and only the one that is picked shows.
+   Blend.tsx sets `data-blend-pinned` on the root element where its PINNED query
+   matches, which is this one: a landscape screen wide and tall enough, and not so tall
+   that one feature would be lost in it, with the heights in `em` because the content
+   grows with the reader's font size. Without the script it is not set, and the
+   features flow. */
+@media (min-width: 1024px) and (min-width: 64em) and (min-height: 40em) and (max-height: 100em) and (orientation: landscape) {
+  :global(html[data-blend-pinned]) main.page .tour {
+    --frame: calc(100svh - var(--st-navbar-height));
+    display: block;
+    height: calc(var(--frame) + 9 * var(--st-tour-step));
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .frame {
+    position: sticky;
+    top: var(--st-navbar-height);
+    height: var(--frame);
+    align-content: center;
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .index {
+    position: static;
+    padding-block: var(--st-space-8);
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .counter {
+    display: block;
+    margin: var(--st-space-5) 0 0;
+    font-family: var(--st-font-mono);
+    font-size: var(--st-text-2xs);
+    letter-spacing: var(--st-tracking-eyebrow);
+    color: var(--st-fg-subtle);
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .counterNow {
+    color: var(--st-fg-strong);
+  }
+
+  /* The tick of the feature that is showing, on the rule at the left edge. */
+  :global(html[data-blend-pinned]) main.page .tour .tab::before {
+    content: '';
+    position: absolute;
+    top: 0.375rem;
+    bottom: 0.375rem;
+    left: calc(var(--st-space-2) - var(--pad) - 1px);
+    width: 2px;
+    background: var(--st-accent);
+    transform: scaleY(0);
+    transition: transform var(--st-duration) var(--st-ease);
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .tab.tabOn {
+    color: var(--st-fg-strong);
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .tab.tabOn::before {
+    transform: scaleY(1);
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .features {
+    display: grid;
+    align-items: start;
+    padding-block: var(--st-space-8);
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .feature {
+    grid-area: 1 / 1;
+    padding-block: 0;
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .feature::before {
+    display: none;
+  }
+
+  /* The place in the track the page scrolls to for a feature (a link to `#handoff`). */
+  :global(html[data-blend-pinned]) main.page .tour .anchor {
+    display: block;
+    position: absolute;
+    top: calc((var(--i) + 0.5) * var(--st-tour-step));
+    left: 0;
+    width: 1px;
+    height: 1px;
+    scroll-margin-top: var(--st-navbar-height);
+    pointer-events: none;
+    /* Never what the browser keeps the page's place by: on a reload it would look the id up
+       in the server's HTML, where the sections carry it. */
+    overflow-anchor: none;
+  }
+
+  /* A feature that is not showing keeps its place in the page, unrendered, so the
+     browser's find-in-page still reaches it (Blend.tsx marks it hidden until found, and
+     shows the feature on a match) and nothing in it takes focus or runs. Blend.tsx
+     hides it in a browser that cannot leave it unrendered: an `@supports not` block
+     here would be folded into this rule by the minifier, and hidden text is not found. */
+  :global(html[data-blend-pinned]) main.page .tour .feature:not(.featureOn) {
+    content-visibility: hidden;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(var(--st-rise));
+  }
+
+  /* The one that is picked fades and rises in. */
+  :global(html[data-blend-pinned]) main.page .tour .feature.featureOn {
+    z-index: 1;
+    transition:
+      opacity var(--st-duration-slow) var(--st-ease),
+      transform var(--st-duration-slow) var(--st-ease);
+  }
+
+  /* The ring of a feature that has focus stands clear of its words and its scene. */
+  :global(html[data-blend-pinned]) main.page .tour .feature:focus-visible {
+    outline-offset: var(--st-space-3);
+    border-radius: var(--st-radius-sm);
+  }
+}
+
+/* A frame at its least height gives the room around the index to the index. */
+@media (min-width: 1024px) and (min-width: 64em) and (min-height: 40em) and (max-height: 45.99em) and (orientation: landscape) {
+  :global(html[data-blend-pinned]) main.page .tour .frame .index,
+  :global(html[data-blend-pinned]) main.page .tour .frame .features {
+    padding-block: var(--st-space-5);
+  }
+}
+
+/* Reduced motion: the feature that is picked is there at once. The site gives every
+   element a near-zero transition then, and a change that is inherited would still be
+   handed down one level of the scene per frame, so nothing inside a feature transitions. */
+@media (prefers-reduced-motion: reduce) {
+  :global(html[data-blend-pinned]) main.page .tour .features .feature,
+  :global(html[data-blend-pinned]) main.page .tour .features .feature.featureOn {
+    transform: none;
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .features .feature,
+  :global(html[data-blend-pinned]) main.page .tour .features .feature *,
+  :global(html[data-blend-pinned]) main.page .tour .features .feature *::before,
+  :global(html[data-blend-pinned]) main.page .tour .features .feature *::after,
+  :global(html[data-blend-pinned]) main.page .tour .tabs .tab::before {
+    transition-property: none !important;
+  }
+}
+
+/* A frame with room to spare gives the index its full heading back. */
+@media (min-width: 1024px) and (min-width: 64em) and (min-height: 51.25em) and (max-height: 100em) and (orientation: landscape) {
+  :global(html[data-blend-pinned]) main.page .tour .indexTitle {
+    font-size: var(--st-text-serif-legend);
+    letter-spacing: var(--st-tracking-serif);
+  }
+
+  :global(html[data-blend-pinned]) main.page .tour .indexNav {
+    margin-top: var(--st-space-8);
+  }
+}

@@ -1,11 +1,11 @@
 /**
  * Every synchronized column of every synchronized table, and the differences between two
  * devices' copies of it — what "every device holds the same" is checked against
- * (`docs/sync.md`, "What synchronizes").
+ * (`design/sync.md`, "What synchronizes").
  */
 import type { DatabaseSync } from "node:sqlite";
 
-/** Every synchronized column of every synchronized table, by natural key (`docs/sync.md`). */
+/** Every synchronized column of every synchronized table, by natural key (`design/sync.md`). */
 export const TABLES: Record<string, { readonly key: readonly string[]; readonly sql: string; readonly ordered?: boolean }> = {
   issues: {
     key: ["id"],
@@ -13,7 +13,8 @@ export const TABLES: Record<string, { readonly key: readonly string[]; readonly 
                  assignee, created_by, labels, acceptance_criteria, block_parent_until_done, unblock_owner, unblock_action,
                  origin_kind, origin_id, idempotency_key, estimated_seconds, kind, project_id, gate_state, gate_owner,
                  gate_requested_by, gate_requested_at, gate_resolved_by, gate_resolved_at, gate_released, started_at,
-                 blocked_transition_at, completed_at, cancelled_at, checkout_agent, checkout_at, created_at, updated_at
+                 blocked_transition_at, completed_at, cancelled_at, checkout_agent, checkout_at, created_at, updated_at,
+                 derived_status
             FROM issues ORDER BY id`,
   },
   comments: {
@@ -37,12 +38,34 @@ export const TABLES: Record<string, { readonly key: readonly string[]; readonly 
   workspace_statuses: { key: ["id"], ordered: true, sql: "SELECT id, label, category, is_builtin FROM workspace_statuses ORDER BY sort_order, id" },
   workspace_kinds: { key: ["id"], ordered: true, sql: "SELECT id, label, is_builtin FROM workspace_kinds ORDER BY sort_order, id" },
   milestone_meta: { key: ["issue_id"], sql: "SELECT issue_id, target_date, start_date, updated_at FROM milestone_meta ORDER BY issue_id" },
+  // Milestone goal mode: each criterion's mark, the milestone field `criterion<n>`.
+  milestone_criterion_marks: {
+    key: ["milestone_id", "position"],
+    sql: "SELECT milestone_id, position, criterion, verdict, evidence, note, marked_by, run_id, marked_at FROM milestone_criterion_marks ORDER BY milestone_id, position",
+  },
   settings: { key: ["key"], sql: "SELECT key, value FROM meta WHERE key LIKE 'setting:%' ORDER BY key" },
   queue_entries: { key: ["issue_id"], ordered: true, sql: "SELECT issue_id, added_by, added_at, note FROM queue_entries ORDER BY rank" },
   milestone_members: {
     key: ["issue_id"],
     ordered: true,
     sql: "SELECT milestone_id, issue_id, added_by, added_at, note FROM milestone_members ORDER BY milestone_id, rank",
+  },
+  // Execution attempts and their transitions (protocol 3): every stored field travels.
+  attempts: {
+    key: ["id"],
+    sql: `SELECT id, issue_id, agent, state, outcome, end_reason, end_detection, ended_by, opened_by, resumes_attempt_id,
+                 started_at, ended_at, ended_at_source, device_id, claim_scope, claim_fencing_token, harness, provider_binding,
+                 estimate_at_start, idempotency_key, provenance, missing
+            FROM attempts ORDER BY id`,
+  },
+  attempt_transitions: {
+    key: ["id"],
+    sql: "SELECT id, attempt_id, kind, at, actor, detection, reason, detail, concurrency FROM attempt_transitions ORDER BY id",
+  },
+  // File metadata (protocol 4). The bytes in attachment_bytes do not travel as a table.
+  attachments: {
+    key: ["id"],
+    sql: "SELECT id, issue_id, filename, media_type, size, sha256, author, caption, byte_sync, created_at FROM attachments ORDER BY id",
   },
 };
 

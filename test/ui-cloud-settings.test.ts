@@ -40,6 +40,7 @@ import { initWorkspace } from "../src/core/workspace.js";
 import { readStoredRepositoryId } from "../src/core/repo-identity.js";
 import { readConnection } from "../src/core/cloud/connection.js";
 import { describeViolations, installNetworkSpy } from "./fixtures/network-spy.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 const ENROLLMENT = "enrollment-secret";
 const MINTED_TOKEN = "stpl_minted_device_token";
@@ -627,11 +628,7 @@ describe("the gates these routes inherit", () => {
     ]) {
       const response = await fetch(`${origin}${path}`, {
         method: "POST",
-        headers: {
-          "x-staple-token": token,
-          "content-type": "application/json",
-          origin: "http://evil.example",
-        },
+        headers: asForeignPage({ "x-staple-token": token, "content-type": "application/json", origin: "http://evil.example" }, origin),
         body: "{}",
       });
       expect(response.status, `${path} accepted a cross-origin POST`).toBe(403);

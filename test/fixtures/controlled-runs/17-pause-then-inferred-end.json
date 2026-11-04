@@ -1,0 +1,42 @@
+{
+  "title": "a pause nobody resumed before the claim was taken: the pause keeps [pausedAt, L), the rest is interrupted",
+  "covers": [
+    "a steal of a paused attempt ends it at L; the paused bucket stops at L",
+    "a stale release of a paused attempt with a later comment: paused up to the comment, interrupted after, queued after the release",
+    "workSeconds of an inferred end takes the replicated evidence before the release"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x" },
+    { "at": "0s", "do": "create", "ref": "y" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "0s", "do": "checkout", "ref": "y", "agent": "w3" },
+    { "at": "5m", "do": "comment", "ref": "y", "agent": "w3" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "pause", "ref": "y", "agent": "w3", "reason": "awaiting_input" },
+    { "at": "15m", "do": "comment", "ref": "y", "agent": "w3" },
+    { "at": "20m", "do": "pause", "ref": "x", "agent": "w1", "reason": "awaiting_reset" },
+    { "at": "60m", "do": "release", "ref": "y", "agent": "ops", "ifIdle": "30m" },
+    { "at": "80m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m" },
+    { "at": "85m", "do": "comment", "ref": "x", "agent": "w2" },
+    { "at": "90m", "do": "status", "ref": "x", "to": "done", "agent": "w2" }
+  ],
+  "expect": [
+    {
+      "asOf": "95m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "30m",
+      "wall": { "startAt": "0s", "endAt": "90m", "buckets": { "work": "30m", "interrupted": "60m" } },
+      "resumeGaps": ["60m"]
+    },
+    {
+      "asOf": "95m",
+      "ref": "y",
+      "workSeconds": "10m",
+      "wall": { "startAt": "0s", "endAt": null, "buckets": { "work": "10m", "paused": "5m", "interrupted": "45m", "queued": "35m" } },
+      "resumeGaps": []
+    }
+  ]
+}

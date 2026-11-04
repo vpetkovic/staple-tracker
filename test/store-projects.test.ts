@@ -6,7 +6,7 @@ import { WorkspaceStore } from "../src/core/store.js";
 import { StapleError } from "../src/core/types.js";
 
 /**
- * Projects in the store — the database half of docs/web-ui.md "Projects".
+ * Projects in the store — the database half of design/web-ui.md "Projects".
  *
  * The pure rules (name, kind, source) are pinned in `projects.test.ts` and are
  * not re-proved here. What is pinned here is what needs a database: that a slug

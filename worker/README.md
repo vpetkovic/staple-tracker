@@ -1,6 +1,6 @@
 # staple-sync — the Cloudflare Worker and its D1 operation log
 
-The server half of [cloud sync](../docs/sync.md). It stores an ordered operation log per
+The server half of [cloud sync](../design/sync.md). It stores an ordered operation log per
 repository, assigns the total order every device replays, and arbitrates leases. It is
 trusted for exactly those two things and nothing else.
 
@@ -79,7 +79,7 @@ worker/
 | `POST` | `/v1/repos/{repoId}/backups/{backupId}/restore` | device token |
 | `DELETE` | `/v1/repos/{repoId}` | device token, plus `{ "confirm": "<repoId>" }` in the body |
 
-Three of those are **additive** to the route table in `docs/sync.md`, which names create,
+Three of those are **additive** to the route table in `design/sync.md`, which names create,
 list and restore but nothing that writes the backup consent flag and nothing that removes
 a backup. `PUT /backup` exists because the contract grants backup with "a server-side
 flag" and names no route that sets one; `DELETE /backups/{backupId}` exists because "its
@@ -410,9 +410,10 @@ in 784 pull pages — and its tables are identical to the author's. With the who
 fold and about a thousand refusals.
 
 What still waits on the fold is a backup, which has no alternative: it must record a cutoff the fold
-has reached. On that 100,000-operation log it took 2,592 requests and **12 minutes**, against 47 for
-the same backlog when each refusal asked for a second (`FOLD_RETRY_MS`, `src/limits.ts`): the requests
-do the folding, so the wait between them is latency and nothing else. On the worklog it took one
+has reached. In the earlier measurement with 200 ms retries, that 100,000-operation log took
+2,592 requests and 12 minutes. The current client waits at least one second between fold retries,
+so a long catch-up stays below the device limiter's 120 requests per minute. Those earlier timings
+are historical, rather than a promise for the current retry policy. On the worklog it took one
 request and on the wide issues 32. Pushes folding what they write is what keeps the count down — with
 pulls alone the same run left the checkpoint 30,000 operations behind after writing, and with neither
 it was the whole log — and on the worklog run, where a push can pay for what it wrote, the checkpoint
@@ -565,12 +566,30 @@ Worker's fold and the client's appliers agree on rules each side assumes the oth
 follows — among them that a field is folded under one spelling, and that a payload naming a
 field in both spellings keeps the column's (`columnSpellingWins`, `src/fold.ts`). A client of
 a newer build editing a field while an older Worker is live, followed by a backup and a
-restore, writes an edit that no build can recover (`docs/sync.md`, "Every field travels in
+restore, writes an edit that no build can recover (`design/sync.md`, "Every field travels in
 one spelling"). With the Worker deployed first, that window is empty.
 
 **Deploying the fold checkpoint** (migrations `0006` and `0007`) needs no step after the migrations;
 [The fold checkpoint](#the-fold-checkpoint) says what devices see while it is built on a
 large existing log.
+
+**The lifecycle release (orchestrator lane, re-emitted events)** — the checklist, in order:
+
+1. `npm run test:worker` green on the release commit.
+2. `npx wrangler deploy -c wrangler.local.toml`. **No D1 migration**: `role`, `originEvents`
+   and `restoredAt` need no table change (`restoredAt` reads the existing `restores`
+   table). The protocol stays 3.
+3. Confirm the Worker is live: `GET /v1/capabilities` lists `orphanEndReasons` with
+   `issue_resolved` and `superseded_by_newer`. Its fold then treats an orchestrator
+   attempt's stored orphan end as subordinate to a real `coordination_ended`, and drops
+   `originEvents` from the state it folds.
+4. Only then merge the client, which auto-deploys to devices; every device upgrades
+   together (workspace schema 14).
+
+A client before step 3 is safe on its own: it writes no stored orchestrator orphan end to a
+service whose capabilities do not list both reasons, and reads the end at read time
+instead. An older Worker would otherwise take such an end for a real one and could keep it
+over `coordination_ended` in its snapshots and, for good, in its backups.
 
 The repository is **public**. No account id, no database id, no token and no
 `workers.dev` URL containing the account subdomain may enter a committed file.
@@ -609,7 +628,7 @@ and database names do not.
 
 ### Provisioning a repository
 
-`docs/sync.md` defines no provisioning route and no account model, so this Worker does
+`design/sync.md` defines no provisioning route and no account model, so this Worker does
 not invent one. A repository and its first enrollment secret are created out of band:
 
 ```sql

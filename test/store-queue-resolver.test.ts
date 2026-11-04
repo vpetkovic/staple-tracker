@@ -8,9 +8,9 @@ import { StapleError } from "../src/core/types.js";
 
 /**
  * STA-168 — the RESOLVER, `strict` and the human override: the policy half of
- * docs/queue.md, over the storage half `store-queue.test.ts` already pins.
+ * design/queue.md, over the storage half `store-queue.test.ts` already pins.
  *
- * Every test name below is the one docs/queue.md names for the paragraph it
+ * Every test name below is the one design/queue.md names for the paragraph it
  * proves. The doc originally filed them under `store-queue.test.ts` because R2b
  * and R2c had not been split yet; they live here, and the doc's pins now say so.
  *
@@ -246,7 +246,7 @@ describe("container expansion", () => {
     expect(identifiers()).toEqual(before);
     const row = queue.effectiveQueue().rows.find((r) => r.identifier === late)!;
     // The INCLUSIVE end of the target day, so `new Date(dueAt) < now` is overdue only
-    // once the day is over — docs/milestones.md, "Dates".
+    // once the day is over — design/milestones.md, "Dates".
     expect(row.dueAt).toBe("2026-01-01T23:59:59.999Z");
     // A date explains urgency; it never reorders a plan somebody wrote by hand.
     expect(identifiers()[0]).toBe(late);
@@ -339,8 +339,8 @@ describe("the eligibility ladder", () => {
       // The blocker itself is real, unqueued work.
       `${blocker}:eligible`,
     ]);
-    // The actor's OWN claim is not somebody else's claim.
-    expect(eligibilityOf(held, "other-agent")).toBe("eligible");
+    // Ongoing work is never offered as a fresh pickup, even to its holder.
+    expect(eligibilityOf(held, "other-agent")).toBe("claimed");
   });
 
   it("names the gate before the blocker", () => {
@@ -417,6 +417,31 @@ describe("the eligibility ladder", () => {
 // ----------------------------------------------------------------- the policy
 
 describe("queue.policy = advisory", () => {
+  it("only offers unclaimed leaves whose status checkout accepts", () => {
+    const review = issue("awaiting review");
+    const active = issue("active without holder");
+    const held = issue("held by me");
+    const ready = issue("ready leaf");
+    store.updateIssue(review, { status: "in_review" }, "vp");
+    store.updateIssue(active, { status: "in_progress", assignee: "vp" }, "vp");
+    store.checkoutIssue(held, "me");
+    for (const ref of [review, active, held, ready]) queue.enqueue(ref, {}, "vp");
+
+    const result = queue.effectiveQueue({ actor: "me" });
+    expect(result.rows.map(({ identifier, eligibility }) => [identifier, eligibility])).toEqual([
+      [review, "unavailable"],
+      [active, "unavailable"],
+      [held, "claimed"],
+      [ready, "eligible"],
+    ]);
+    expect(result.rows[2]!.claim).toMatchObject({ heldBy: "me", scope: "local", lease: null });
+    expect(result.next?.identifier).toBe(ready);
+    expect(store.checkoutIssue(ready, "me").identifier).toBe(ready);
+    // Reclaiming one's own ticket is still intentionally idempotent, but it
+    // is ongoing work and therefore must never displace a fresh pickup.
+    expect(store.checkoutIssue(held, "me").identifier).toBe(held);
+  });
+
   it("advisory never refuses a checkout for order", () => {
     const first = issue("first");
     const later = issue("later");
@@ -635,5 +660,206 @@ describe("human override", () => {
     expect(queue.revision()).toBe(revisionBefore);
     // The displaced row is still the head for the next agent.
     expect(queue.effectiveQueue({ actor: "agent-1" }).next?.identifier).toBe(first);
+  });
+});
+
+// ------------------------------------------------------------- scoped pickup
+
+describe("scoped pickup", () => {
+  /** A scoped answer as `IDENT:eligibility`, in the order an agent receives it. */
+  function scoped(scope: string, actor?: string): string[] {
+    return queue.effectiveQueue({ actor, scope }).rows.map((row) => `${row.identifier}:${row.eligibility}`);
+  }
+
+  function milestoneKind(): void {
+    store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, "vp");
+  }
+
+  it("limits next and skipped to rows inside the epic, in queue order", () => {
+    const outside = issue("outside");
+    const epic = issue("S", { kind: "epic" });
+    const one = issue("S1", { parent: epic });
+    const two = issue("S2", { parent: epic });
+    const blocker = issue("blocker");
+    store.setBlockedBy(two, [blocker], "vp");
+    // The plan puts an outside row first and S2 before S1: a scope keeps that
+    // order among its own rows and drops everything else.
+    queue.enqueue(outside, {}, "vp");
+    queue.enqueue(two, {}, "vp");
+    queue.enqueue(one, {}, "vp");
+
+    expect(queue.effectiveQueue({ actor: "me" }).next?.identifier).toBe(outside);
+    const result = queue.effectiveQueue({ actor: "me", scope: epic });
+    expect(result.rows.map((row) => row.identifier)).toEqual([two, one]);
+    expect(result.next?.identifier).toBe(one);
+    // The stepped-over row keeps its eligibility and its reason, and every row
+    // keeps its place in the WHOLE effective order.
+    expect(result.skipped.map((row) => `${row.identifier}:${row.eligibility}`)).toEqual([`${two}:blocked`]);
+    expect(result.skipped[0]!.reason).toContain(blocker);
+    expect(result.rows.map((row) => row.position)).toEqual([2, 3]);
+    expect(result.scope).toMatchObject({ identifier: epic, kind: "epic" });
+  });
+
+  it("answers inside an unqueued milestone: its members plus their descendants, in membership order", () => {
+    milestoneKind();
+    const milestone = store.createIssue({ title: "Goal", kind: MILESTONE_KIND }).identifier;
+    const solo = issue("solo");
+    const epic = issue("S", { kind: "epic" });
+    const child = issue("S1", { parent: epic });
+    const own = issue("own child", { parent: milestone });
+    const stranger = issue("stranger", { priority: "critical" });
+    const milestones = store.milestones();
+    milestones.addMember(milestone, solo, {}, "vp");
+    // Epic before solo, against creation order: membership order is the human's.
+    milestones.addMember(milestone, epic, { before: solo }, "vp");
+
+    // Nothing is queued, so the whole answer is the unqueued band — and inside
+    // the scope it follows the milestone's own order, not presentation sort.
+    expect(scoped(milestone)).toEqual([`${child}:eligible`, `${solo}:eligible`, `${own}:eligible`]);
+    expect(scoped(milestone)).not.toContain(`${stranger}:eligible`);
+    expect(queue.effectiveQueue({ scope: milestone }).next?.identifier).toBe(child);
+  });
+
+  it("puts the rows the plan reaches before the scope's unqueued work", () => {
+    milestoneKind();
+    const milestone = store.createIssue({ title: "Goal", kind: MILESTONE_KIND }).identifier;
+    const first = issue("first");
+    const second = issue("second");
+    const third = issue("third");
+    for (const ref of [first, second, third]) store.milestones().addMember(milestone, ref, {}, "vp");
+    queue.enqueue(third, {}, "vp");
+
+    expect(scoped(milestone)).toEqual([`${third}:eligible`, `${first}:eligible`, `${second}:eligible`]);
+  });
+
+  it("reaches an open leaf under a resolved parent inside the scope", () => {
+    const epic = issue("S", { kind: "epic" });
+    const parent = issue("parent", { parent: epic });
+    const leaf = issue("leaf", { parent });
+    store.updateIssue(parent, { status: "done" }, "vp");
+
+    // Membership is the tree, not the open tree: the leaf is still inside S.
+    expect(scoped(epic)).toEqual([`${leaf}:eligible`]);
+  });
+
+  it("a member of a milestone under the scope is inside it", () => {
+    milestoneKind();
+    // A milestone parented under a milestone, and one parented under an epic:
+    // queueing the outer container reaches the inner one's members, so the
+    // scope must too — whatever tree those members live in.
+    const outer = store.createIssue({ title: "Outer", kind: MILESTONE_KIND }).identifier;
+    const inner = store.createIssue({ title: "Inner", kind: MILESTONE_KIND, parent: outer }).identifier;
+    const member = issue("member of inner");
+    store.milestones().addMember(inner, member, {}, "vp");
+    const epic = issue("S", { kind: "epic" });
+    const nested = store.createIssue({ title: "Nested", kind: MILESTONE_KIND, parent: epic }).identifier;
+    const stranger = issue("member outside S");
+    store.milestones().addMember(nested, stranger, {}, "vp");
+
+    expect(scoped(outer)).toEqual([`${member}:eligible`]);
+    expect(scoped(epic)).toEqual([`${stranger}:eligible`]);
+    // The same rows queueing the container would reach.
+    queue.enqueue(outer, {}, "vp");
+    queue.enqueue(epic, {}, "vp");
+    expect(identifiers().slice(0, 2)).toEqual([member, stranger]);
+  });
+
+  it("strict still checks a queued scoped next against the whole plan", () => {
+    const outside = issue("outside");
+    const epic = issue("S", { kind: "epic" });
+    const inner = issue("S1", { parent: epic });
+    queue.enqueue(outside, {}, "vp");
+    queue.enqueue(inner, {}, "vp");
+    strict();
+
+    expect(queue.effectiveQueue({ actor: "me", scope: epic }).next?.identifier).toBe(inner);
+    const error = refused(() => store.checkoutIssue(inner, "me"), "out_of_order");
+    expect(error.message).toContain(`Take ${outside}`);
+  });
+
+  it("two overlapping membership cycles resolve at once, scoped and queued", () => {
+    milestoneKind();
+    // P > E > t, with milestones M1 and M2 parented under E; E is a member of M1
+    // and P of M2. Two cycles overlap at E, so a walk that re-enters containers
+    // forks at every level up to the depth guard — exponential, from a read.
+    const p = issue("P", { kind: "epic" });
+    const e = issue("E", { kind: "epic", parent: p });
+    const t = issue("t", { parent: e });
+    const m1 = store.createIssue({ title: "M1", kind: MILESTONE_KIND, parent: e }).identifier;
+    const m2 = store.createIssue({ title: "M2", kind: MILESTONE_KIND, parent: e }).identifier;
+    store.milestones().addMember(m1, e, {}, "vp");
+    store.milestones().addMember(m2, p, {}, "vp");
+
+    const started = performance.now();
+    for (const scope of [p, e, m1, m2]) expect(scoped(scope)).toEqual([`${t}:eligible`]);
+    queue.enqueue(p, {}, "vp");
+    expect(effective()).toEqual([`${t}:eligible`]);
+    expect(queue.effectiveQueue().rows[0]!.via).toBe(p);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it("a scope holds exactly what queueing it alone would reach", () => {
+    milestoneKind();
+    // A shared member, a nested milestone and a cycle, all at once: for every
+    // container, the scoped rows are the queue's expansion of that container.
+    const p = issue("P", { kind: "epic" });
+    const e = issue("E", { kind: "epic", parent: p });
+    issue("e1", { parent: e });
+    issue("e2", { parent: e });
+    const m = store.createIssue({ title: "M", kind: MILESTONE_KIND, parent: p }).identifier;
+    const n = store.createIssue({ title: "N", kind: MILESTONE_KIND }).identifier;
+    const loose = issue("loose");
+    const shared = issue("shared");
+    store.milestones().addMember(m, shared, {}, "vp");
+    store.milestones().addMember(m, e, {}, "vp");
+    store.milestones().addMember(n, loose, {}, "vp");
+    store.milestones().addMember(n, p, {}, "vp");
+    const containers = [p, e, m, n];
+
+    const scopedAnswers = containers.map((scope) => scoped(scope));
+    containers.forEach((container, index) => {
+      queue.enqueue(container, {}, "vp");
+      const reached = queue
+        .effectiveQueue()
+        .rows.filter((row) => !row.unqueued)
+        .map((row) => `${row.identifier}:${row.eligibility}`);
+      expect(scopedAnswers[index], container).toEqual(reached);
+      queue.dequeue(container, {}, "vp");
+    });
+  });
+
+  it("an empty container is an empty scope, and never offers itself", () => {
+    const empty = issue("Empty", { kind: "epic" });
+    const finished = issue("Finished");
+    const child = issue("child", { parent: finished });
+    store.updateIssue(child, { status: "done" }, "vp");
+    // Finishing the last child closed the parent; a human reopening it leaves an
+    // open parent with nothing open underneath.
+    store.updateIssue(finished, { status: "todo" }, "vp");
+
+    for (const scope of [empty, finished]) {
+      const result = queue.effectiveQueue({ scope });
+      expect(result.rows).toEqual([]);
+      expect(result.next).toBeNull();
+      expect(result.skipped).toEqual([]);
+      expect(result.scope?.identifier).toBe(scope);
+    }
+    // Unscoped, both ARE leaves in the unqueued band; neither is inside itself.
+    expect(identifiers()).toEqual(expect.arrayContaining([empty, finished]));
+  });
+
+  it("refuses an unknown scope as not_found and a leaf or foreign ref as validation", () => {
+    const leaf = issue("leaf");
+    refused(() => queue.effectiveQueue({ scope: "TST-999" }), "not_found");
+    const leafError = refused(() => queue.effectiveQueue({ scope: leaf }), "validation");
+    expect(leafError.message).toContain("no children");
+    refused(() => queue.effectiveQueue({ scope: "OTH-1" }), "validation");
+    refused(() => queue.effectiveQueue({ scope: " " }), "validation");
+  });
+
+  it("an unscoped answer carries no scope", () => {
+    issue("only");
+    expect("scope" in queue.effectiveQueue({ actor: "me" })).toBe(false);
+    expect("scope" in queue.effectiveQueue({ actor: "me", scope: null })).toBe(false);
   });
 });

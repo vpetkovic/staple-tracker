@@ -1,7 +1,7 @@
 /**
  * The registry as operations, and operations back as a registry.
  *
- * Contract: `docs/sync.md`, "The hub registry is a set, not a map" and "Protocol
+ * Contract: `design/sync.md`, "The hub registry is a set, not a map" and "Protocol
  * evolution". Sibling of {@link ./hub-registry.js}, which owns the payload type
  * and the adoption rules. This file owns only the translation to and from the
  * wire. It knows nothing about hubs, databases or networks.
@@ -91,7 +91,7 @@ export const CROSS_LINK_ENTITY = "crossLink";
  *
  * A wire widening, declared rather than assumed: `apply.ts` THROWS on an entity it does
  * not know, so an older device pulling one of these would stall its whole page. See
- * `worker/src/envelope.ts` and "Protocol evolution" in `docs/sync.md`.
+ * `worker/src/envelope.ts` and "Protocol evolution" in `design/sync.md`.
  */
 export const REGISTRY_PROTOCOL = 2;
 

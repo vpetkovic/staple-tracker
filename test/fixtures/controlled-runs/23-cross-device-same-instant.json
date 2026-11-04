@@ -1,0 +1,30 @@
+{
+  "title": "the same millisecond on two devices: the old holder's late comment and a steal on the other device",
+  "covers": [
+    "evidence at or after the successor's start belongs to the successor's tenure (limits filter, never clamp)",
+    "a comment the stealing device had not seen does not move the old tenure's end, on the writer, the tail or a hydrated device",
+    "events written at one instant on two devices replay in one order everywhere (created_at, origin device, origin seq)"
+  ],
+  "start": "2026-09-01T09:00:00.000Z",
+  "devices": { "tail": true, "hydrate": true },
+  "steps": [
+    { "at": "0s", "do": "create", "ref": "x", "estimate": "1h" },
+    { "at": "0s", "do": "checkout", "ref": "x", "agent": "w1" },
+    { "at": "10m", "do": "comment", "ref": "x", "agent": "w1" },
+    { "at": "11m", "do": "sync", "devices": ["a", "b"] },
+    { "at": "60m", "do": "comment", "ref": "x", "agent": "w1", "body": "late" },
+    { "at": "60m", "do": "checkout", "ref": "x", "agent": "w2", "stealIfIdle": "30m", "device": "b" },
+    { "at": "70m", "do": "comment", "ref": "x", "agent": "w2", "device": "b" },
+    { "at": "80m", "do": "status", "ref": "x", "to": "done", "agent": "w2", "device": "b" }
+  ],
+  "expect": [
+    {
+      "asOf": "90m",
+      "ref": "x",
+      "intervals": 2,
+      "workSeconds": "30m",
+      "wall": { "startAt": "0s", "endAt": "80m", "buckets": { "work": "30m", "interrupted": "50m" } },
+      "resumeGaps": ["50m"]
+    }
+  ]
+}

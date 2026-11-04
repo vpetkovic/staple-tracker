@@ -1,7 +1,7 @@
 /**
  * STA-263 — a device that bootstrapped from a snapshot defends what it inherited.
  *
- * Contract: `docs/sync.md`, "Conflicts are preserved, never resolved silently".
+ * Contract: `design/sync.md`, "Conflicts are preserved, never resolved silently".
  *
  * ## What was wrong
  *

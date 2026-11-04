@@ -1,7 +1,7 @@
 /**
  * The lease heartbeat: a bounded, observable renewal loop.
  *
- * Contract: `docs/sync.md` — *"Renewal is a bounded, observable heartbeat."*
+ * Contract: `design/sync.md` — *"Renewal is a bounded, observable heartbeat."*
  *
  * ## The one distinction this whole file is built around
  *

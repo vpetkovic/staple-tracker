@@ -2,7 +2,7 @@
  * `GET /api/cloud/status` — the UI's read-only, network-free view of the
  * connection.
  *
- * `docs/sync.md`, on what a surface may do before a repository is connected:
+ * `design/sync.md`, on what a surface may do before a repository is connected:
  * *"render 'not connected' and a static hint naming `staple cloud connect`.
  * Static text. No probe, no reachability check, no 'we noticed you might want to
  * connect'. The UI does not prompt."*

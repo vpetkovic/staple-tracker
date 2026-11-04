@@ -31,6 +31,7 @@ import { useCallback, useMemo } from "react";
 import type { KeyboardEvent } from "react";
 import { TaskRowLine } from "./TaskRowLine";
 import { resolveTaskListConfig, type TaskListDensity, type TaskListPreset } from "./config";
+import { useRowPlan } from "./useRowPlan";
 import { flatRow, type TaskRow, type TaskSource } from "./model";
 import { clampIndex, useRovingFocus } from "./roving";
 import "./task-list.css";
@@ -42,6 +43,7 @@ export function TaskList({
   label,
   currentRef = null,
   empty = null,
+  captionOf,
   onOpen,
 }: {
   /** Either raw API rows or fully-placed ones — a flat list needs no placement pass. */
@@ -53,9 +55,14 @@ export function TaskList({
   /** Identifier currently open in the detail drawer, so the list can mark it. */
   currentRef?: string | null;
   empty?: React.ReactNode;
+  /** A per-row aside after the title (`TaskRowLine`'s `caption`); undefined draws none. */
+  captionOf?: (row: TaskRow) => string | undefined;
   onOpen: (workspace: string, identifier: string) => void;
 }) {
-  const config = useMemo(() => resolveTaskListConfig(preset, { density }), [preset, density]);
+  // The same width ladder as the tree (row-layout.ts), so a child list in the detail sheet on
+  // a phone is the compact one-line row too.
+  const plan = useRowPlan();
+  const config = useMemo(() => resolveTaskListConfig(preset, { density, plan }), [preset, density, plan]);
 
   const placed = useMemo<TaskRow[]>(
     () => rows.map((row) => ("depth" in row ? row : flatRow(row))),
@@ -122,6 +129,7 @@ export function TaskList({
           now={now}
           isCurrent={currentRef === row.issue.identifier}
           isFocused={focus.activeKey === row.issue.id}
+          caption={captionOf?.(row)}
           onOpen={() => onOpen(row.workspace, row.issue.identifier)}
           onFocus={() => focus.set(row.issue.id)}
           onKeyDown={(event) => handleKey(event, index)}

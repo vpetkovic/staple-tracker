@@ -1,7 +1,7 @@
 /**
  * Conflicts: detection, preservation, and explicit resolution.
  *
- * Contract: `docs/sync.md`, "Conflicts are preserved, never resolved silently".
+ * Contract: `design/sync.md`, "Conflicts are preserved, never resolved silently".
  *
  * ## The one rule everything here serves
  *
@@ -104,6 +104,7 @@
  * edits a third"* — and never row by row, which would put the constraint back in
  * reach for no gain.
  */
+import { writeEventRow } from "../event-row.js";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../../config/home.js";
@@ -112,6 +113,8 @@ import { moveIdentifier } from "../identifier-moves.js";
 import { journalFor, recordFieldWrites, type SyncEntity, type SyncVerb } from "../journal.js";
 import { settingMetaKey } from "../settings-registry.js";
 import { StapleError, nowIso } from "../types.js";
+import { criterionMarkPosition } from "../milestone-goal.js";
+import { criterionMarkFields } from "../milestone-marks.js";
 import {
   COMMENT_COLUMNS,
   ISSUE_COLUMNS,
@@ -121,6 +124,8 @@ import {
   splitDocumentKey,
   type ApplyInput,
 } from "./apply.js";
+import { settleIncomingAttempt } from "./apply-attempts.js";
+import { ATTEMPT_END_FIELDS, settledByApplyRule } from "./attempt-ends.js";
 import type { RemoteOperation } from "./wire.js";
 
 // ------------------------------------------------------------------- shapes
@@ -198,6 +203,8 @@ const BOOKKEEPING = new Set(["updated_at"]);
 const DERIVED: Record<string, string> = {
   normalized_title: "title",
   status_version: "status",
+  // Who wrote the status: it means nothing apart from the status it names (migration 017).
+  derived_status: "status",
 };
 
 /** The whole-plan pseudo-field an ordered collection replicates as. */
@@ -227,6 +234,8 @@ function policy(entity: string, key: string): FieldPolicy | null {
       return null;
     case "milestone":
       if (key === "members") return { name: "members" };
+      // One criterion's mark is one field, compared whole (`milestone-goal.ts`).
+      if (criterionMarkPosition(key) !== null) return { name: key };
       if (key === "targetDate" || key === "target_date") return named("target_date");
       if (key === "startDate" || key === "start_date") return named("start_date");
       if (key === "updatedAt" || key === "updated_at") return named("updated_at");
@@ -240,6 +249,15 @@ function policy(entity: string, key: string): FieldPolicy | null {
       return null;
     case "setting":
       return key === "value" ? { name: "value" } : null;
+    /**
+     * An attempt's seven end fields are ONE field, `end`, compared as a unit
+     * (`design/execution-telemetry.md`, "A stored orphan end never overwrites a real end").
+     * Two real ends that disagree conflict; so do two orphan ends. One of each never does:
+     * the apply rule settles that pair (`attempt-ends.ts`). Everything else on an attempt is
+     * written once, at its create.
+     */
+    case "attempt":
+      return (ATTEMPT_END_FIELDS as readonly string[]).includes(key) ? { name: "end" } : null;
     /**
      * Not screened, and each for its own reason. `documentRevision` rows are
      * *"immutable once written"*; a `relation` is an edge that exists or does
@@ -303,6 +321,11 @@ function readField(
           entityId,
         );
       }
+      if (criterionMarkPosition(name) !== null) {
+        // The mark as the wire carries it, so the comparison is value to value; none is null.
+        if (!db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(entityId)) return { present: false, value: null };
+        return { present: true, value: criterionMarkFields(db, entityId)[name] ?? null };
+      }
       return scalar("milestone_meta", "issue_id", name);
     case "queue":
       return list("SELECT issue_id AS id FROM queue_entries ORDER BY rank");
@@ -321,9 +344,41 @@ function readField(
       // wrapped (`{"v":1,"value":"{\"v\":1,…}"}`).
       return { present: true, value: settingValueOf(row?.value ?? null) };
     }
+    case "attempt": {
+      if (name !== "end") return { present: false, value: null };
+      const row = db
+        .prepare("SELECT state, outcome, end_reason, end_detection, ended_by, ended_at, ended_at_source FROM attempts WHERE id = ?")
+        .get(entityId) as Record<string, unknown> | undefined;
+      if (row === undefined) return { present: false, value: null };
+      return {
+        present: true,
+        value: attemptEndValue({
+          state: row.state,
+          outcome: row.outcome,
+          endReason: row.end_reason,
+          endDetection: row.end_detection,
+          endedBy: row.ended_by,
+          endedAt: row.ended_at,
+          endedAtSource: row.ended_at_source,
+        }),
+      };
+    }
     default:
       return { present: false, value: null };
   }
+}
+
+/** An attempt's end as one value, its seven fields in one order, absent ones null. */
+function attemptEndValue(fields: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return Object.fromEntries(ATTEMPT_END_FIELDS.map((field) => [field, fields[field] ?? null]));
+}
+
+/** The payload that writes `value` to `field`: the whole end, spread, for an attempt. */
+function resolutionPayload(entity: string, field: string, value: unknown): Record<string, unknown> {
+  if (entity === "attempt" && field === "end" && value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return attemptEndValue(value as Record<string, unknown>);
+  }
+  return { [wireKey(field)]: value };
 }
 
 /** A stored setting envelope's value; anything that is not one, as it is. */
@@ -523,6 +578,10 @@ function baseValueFor(
 
   for (const row of rows) {
     const payload = JSON.parse(row.payload) as Record<string, unknown>;
+    if (entity === "attempt" && field === "end") {
+      if (ATTEMPT_END_FIELDS.some((name) => name in payload)) return attemptEndValue(payload);
+      continue;
+    }
     for (const [key, value] of Object.entries(payload)) {
       if (policy(entity, key)?.name === field) return value;
     }
@@ -544,6 +603,18 @@ export function screenForConflicts(
   op: RemoteOperation,
   localDeviceId: string | null,
 ): ApplyInput | null {
+  /**
+   * An orphan end over a real end this device holds is dropped before anything else — before
+   * the screen, and before provenance is recorded for it, since a dropped write is not one this
+   * device holds (`settleIncomingAttempt`). Every device, the author's included, applies it.
+   */
+  if (op.entity === "attempt") {
+    const settled = settleIncomingAttempt(db, op.entityId, op.payload);
+    if (settled !== op.payload) {
+      if (Object.keys(settled).length === 0) return null;
+      op = { ...op, payload: settled };
+    }
+  }
   // The same record the applier builds, so what a screened operation carries — its seq
   // above all, which settles claims on unique values (`claims.ts`) — cannot drift.
   const input: ApplyInput = operationToInput(op);
@@ -703,15 +774,22 @@ function contest(
   const contested = new Set<string>();
   const detectedAt = nowIso();
 
-  for (const [key, remoteValue] of Object.entries(op.payload)) {
+  for (const [key, carried] of Object.entries(op.payload)) {
     const named = policy(op.entity, key);
     if (!named || named.bookkeeping || named.derivedFrom) continue;
+    // One record per field: an attempt's end is seven keys and one field.
+    if (contested.has(named.name)) continue;
     const side = localWrites.get(named.name);
     if (!side) continue;
 
     const local = readField(db, op.entity, op.entityId, named.name);
     if (!local.present) continue;
+    const endUnit = op.entity === "attempt" && named.name === "end";
+    const remoteValue = endUnit ? attemptEndValue({ ...(local.value as Record<string, unknown>), ...op.payload }) : carried;
     if (sameValue(local.value, remoteValue)) continue;
+    // An orphan end and a real end, or an end and a state that is not one, are settled by the
+    // apply rule, never recorded as a conflict.
+    if (endUnit && settledByApplyRule(local.value as Record<string, unknown>, remoteValue as Record<string, unknown>)) continue;
 
     contested.add(named.name);
     record(db, {
@@ -730,6 +808,7 @@ function contest(
       remoteAt: op.createdAt,
       detectedAt,
     });
+    if (op.entity === "issue" && named.name === "status") keepStatusOwners(db, conflictId(op.entity, op.entityId, named.name, side.opId, op.opId), op.entityId, local.value, carried, op.payload);
     if (named.name === wholeField) {
       keepEntries(
         db,
@@ -829,12 +908,48 @@ function entriesFor(
   return picked;
 }
 
-/** Forget the entries of every record that is closed now. */
+/** Forget the entries, and the status owners, of every record that is closed now. */
 function forgetClosedEntries(db: DatabaseSync): void {
   db.prepare(
     `DELETE FROM meta WHERE key LIKE 'conflict_entries:%'
        AND substr(key, 18) IN (SELECT id FROM sync_conflicts WHERE resolved_at IS NOT NULL)`,
   ).run();
+  db.prepare(
+    `DELETE FROM meta WHERE key LIKE 'conflict_status_owner:%'
+       AND substr(key, 23) IN (SELECT id FROM sync_conflicts WHERE resolved_at IS NOT NULL)`,
+  ).run();
+}
+
+/**
+ * Whether each side of a contested status was derivation's write (`derived_status`, migration
+ * 017), kept beside the record like a list's entries, device-local in `meta`
+ * (`conflict_status_owner:<id>`). The column is withheld with the status while the record is
+ * open, so the resolution has to write it back with the value chosen: derivation's if the side
+ * chosen was, nobody's otherwise. Written once, when detected.
+ */
+function statusOwnerKey(conflictId: string): string {
+  return `conflict_status_owner:${conflictId}`;
+}
+
+function keepStatusOwners(db: DatabaseSync, id: string, issueId: string, local: unknown, remote: unknown, payload: Record<string, unknown>): void {
+  const held = db.prepare("SELECT derived_status FROM issues WHERE id = ?").get(issueId) as { derived_status: string | null } | undefined;
+  const carried = "derivedStatus" in payload ? payload.derivedStatus : "derived_status" in payload ? payload.derived_status : undefined;
+  const remoteOwned = carried !== undefined ? carried === remote : typeof payload.derived === "string";
+  db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING").run(
+    statusOwnerKey(id),
+    JSON.stringify({ local: held?.derived_status != null && held.derived_status === local, remote: remoteOwned }),
+  );
+}
+
+/** The `derived_status` a resolution to `chosen` writes: the chosen value when the side it came from was derivation's. */
+function ownerFor(db: DatabaseSync, conflict: ConflictRecord, chosen: unknown): string | null {
+  if (typeof chosen !== "string") return null;
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(statusOwnerKey(conflict.id)) as { value: string } | undefined;
+  if (row === undefined) return null;
+  const kept = JSON.parse(row.value) as { local: boolean; remote: boolean };
+  if (sameValue(chosen, conflict.localValue) && kept.local) return chosen;
+  if (sameValue(chosen, conflict.remoteValue) && kept.remote) return chosen;
+  return null;
 }
 
 // ------------------------------------------- a snapshot re-read on this timeline
@@ -931,6 +1046,54 @@ function record(db: DatabaseSync, conflict: NewConflict): void {
     conflict.remoteAt,
     conflict.detectedAt,
   );
+}
+
+/**
+ * The canonical event of a status resolution (`design/timing-semantics.md`, clarifications): a
+ * `status_changed` to the chosen value, written at the decision instant on EVERY device the
+ * decision reaches — whether or not the row moves there — and naming where the disagreement
+ * began (`conflictStartedAt`, the earlier of the two contested writes). The two sides held
+ * different histories between those instants; the replay reads that span as the chosen status,
+ * approximate (`conflict_resolved`), so every device reads the same partition.
+ *
+ * Written by the resolving device under this device's own order, and carried on the `conflict`
+ * operation (never on the domain write, so it is written once), which every other device applies
+ * whatever its own record says: both decisions' events are held everywhere, and the decision
+ * later in the log is the one every device's row keeps (`applyConflictOperation`).
+ */
+export interface ResolutionEvent {
+  readonly issueId: string;
+  readonly from: string | null;
+  readonly to: string;
+  readonly at: string;
+  readonly conflictStartedAt: string;
+  /** The later of the two contested writes: events after it are ones both sides hold. */
+  readonly conflictLastWriteAt: string;
+  readonly actor: string | null;
+  readonly deviceId: string | null;
+  readonly seq: number | null;
+}
+
+function writeResolutionEvent(db: DatabaseSync, event: ResolutionEvent, conflictId: string, dedupKey: string | null, originSeq: number | null | undefined): number | null {
+  const identifier = (db.prepare("SELECT identifier FROM issues WHERE id = ?").get(event.issueId) as { identifier: string } | undefined)?.identifier;
+  if (identifier === undefined) return null;
+  return writeEventRow(db, {
+    kind: "status_changed",
+    issueId: event.issueId,
+    actor: event.actor,
+    payload: {
+      identifier,
+      from: event.from,
+      to: event.to,
+      resolvesConflict: conflictId,
+      conflictStartedAt: event.conflictStartedAt,
+      conflictLastWriteAt: event.conflictLastWriteAt,
+    },
+    createdAt: event.at,
+    dedupKey,
+    originDevice: event.deviceId,
+    originSeq: originSeq ?? null,
+  });
 }
 
 // ------------------------------------------------------------------- reads
@@ -1092,7 +1255,12 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
 
     const renumbered = freeIdentifier(db, conflict, chosen);
     const actor = request.actor ?? null;
-    const at = nowIso();
+    // The decision's one instant (`Journal.mutationAt`): the row, the record and the event it writes.
+    const at = journal.mutationAt();
+    const statusBefore =
+      conflict.entity === "issue" && conflict.field === "status"
+        ? ((db.prepare("SELECT status FROM issues WHERE id = ?").get(conflict.entityId) as { status: string } | undefined)?.status ?? null)
+        : null;
     const verb = resolutionVerb(conflict.entity, conflict.field);
 
     /**
@@ -1132,9 +1300,11 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
     if (conflict.entity === "issue" && conflict.field === "status") {
       const row = db.prepare("SELECT status_version FROM issues WHERE id = ?").get(conflict.entityId) as { status_version: number } | undefined;
       if (row !== undefined) companions.statusVersion = row.status_version + 1;
+      // And who wrote the status chosen, withheld with it while the record was open.
+      companions.derivedStatus = ownerFor(db, conflict, chosen);
     }
     for (const write of writes) {
-      const payload: Record<string, unknown> = { [wireKey(conflict.field)]: write.value, ...companions };
+      const payload: Record<string, unknown> = { ...resolutionPayload(conflict.entity, conflict.field, write.value), ...companions };
       applyToDatabase(db, {
         entity: conflict.entity,
         entityId: write.entityId,
@@ -1154,9 +1324,30 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
       });
     }
 
+    let resolution: ResolutionEvent | null = null;
+    if (statusBefore !== null && typeof chosen === "string") {
+      const writes = [conflict.localAt, conflict.remoteAt].filter((instant): instant is string => typeof instant === "string").sort();
+      const started = writes[0] ?? at;
+      const last = writes[writes.length - 1] ?? at;
+      resolution = {
+        issueId: conflict.entityId,
+        from: statusBefore,
+        to: chosen,
+        at,
+        conflictStartedAt: started < at ? started : at,
+        conflictLastWriteAt: last < at ? last : at,
+        actor,
+        deviceId: journal.deviceIdentity(),
+        seq: null,
+      };
+      const seq = writeResolutionEvent(db, resolution, conflict.id, journal.eventDedupKey("status_changed"), null);
+      resolution = { ...resolution, seq };
+    }
+
     close(db, conflict.id, at, actor, chosen);
     settleOpenFor(db, conflict.entity, conflict.entityId, conflict.field, at, actor, chosen);
     forgetClosedEntries(db);
+    if (resolution !== null) settleAttemptEnds(db, conflict, request.choice === "local" ? "local" : sameValue(chosen, conflict.localValue) ? "local" : sameValue(chosen, conflict.remoteValue) ? "remote" : null, actor);
 
     /**
      * The decision replicates as its own operation so that every other device
@@ -1175,6 +1366,7 @@ function decide(db: DatabaseSync, request: ResolveRequest): ResolveOutcome {
         entity: conflict.entity,
         targetId: conflict.entityId,
         field: conflict.field,
+        ...(resolution !== null ? { resolutionEvent: resolution } : {}),
         /**
          * And what the resolving write carries beside the value. A device with its own record
          * open withholds that write, and closes its record by this one: from the value alone,
@@ -1364,8 +1556,77 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
   const at = typeof payload.resolvedAt === "string" ? payload.resolvedAt : op.createdAt;
   const resolvedBy = typeof payload.resolvedBy === "string" ? payload.resolvedBy : op.actor || null;
 
+  /**
+   * The decision's canonical event, first and on every device, whatever this device's record
+   * says: a device that resolved the same record itself holds both decisions, as every other
+   * device does. Dated at the decision, in the resolving device's order.
+   */
+  const carried = payload.resolutionEvent;
+  if (carried !== null && typeof carried === "object" && !Array.isArray(carried) && op.deviceId !== localDevice(db)) {
+    const event = carried as Record<string, unknown>;
+    if (typeof event.issueId === "string" && typeof event.to === "string" && typeof event.at === "string" && typeof event.conflictStartedAt === "string") {
+      writeResolutionEvent(
+        db,
+        {
+          issueId: event.issueId,
+          from: typeof event.from === "string" ? event.from : null,
+          to: event.to,
+          at: event.at,
+          conflictStartedAt: event.conflictStartedAt,
+          conflictLastWriteAt: typeof event.conflictLastWriteAt === "string" ? event.conflictLastWriteAt : event.conflictStartedAt,
+          actor: typeof event.actor === "string" ? event.actor : null,
+          deviceId: op.deviceId,
+          seq: null,
+        },
+        op.entityId,
+        journalFor(db).eventDedupKey("status_changed"),
+        typeof event.seq === "number" ? event.seq : null,
+      );
+    }
+  }
+
   const existing = getConflict(db, op.entityId);
-  if (existing !== null && existing.resolvedAt !== null) return false;
+  if (existing !== null && existing.resolvedAt !== null) {
+    /**
+     * Two devices can decide one record offline, to different values. Every device keeps the
+     * decision with the higher seq — the later one in the log — so the rows converge: a fresh
+     * device reading the tail applies both in order, and so must a device whose own decision
+     * lost. This device's own decision coming back only records where it landed; a decision
+     * arriving while this device's own is not in the log yet is earlier than it, and loses.
+     */
+    const decided = decidedSeq(db, op.entityId);
+    /**
+     * Where this device's decision stands, the losing decision's own write (the domain operation
+     * before it) may have opened a record against it here: the field is decided, so it closes
+     * to the decision that stands, as the winning side's arrival closes it on the other device.
+     */
+    const standing = (): false => {
+      /**
+       * Only the record whose remote side IS the losing decision's value — the one its own
+       * resolving write opened here — and never for a whole list (the plan, a milestone's
+       * members, a vocabulary's order): a list's records are not one write against one write,
+       * and closing them here while they stay open elsewhere let a later write land here and be
+       * withheld there (`test/cloud-fleet-sweep.test.ts`, seed 163).
+       */
+      if (WHOLE[entity] !== field && field !== "order") {
+        const close = db.prepare("UPDATE sync_conflicts SET resolved_at = ?, resolved_by = ?, resolution = ? WHERE id = ?");
+        for (const record of listConflicts(db)) {
+          if (record.entity !== entity || record.entityId !== targetId || record.field !== field || !sameValue(record.remoteValue, value)) continue;
+          close.run(existing.resolvedAt, existing.resolvedBy, JSON.stringify(existing.resolvedValue ?? null), record.id);
+        }
+      }
+      return false;
+    };
+    if (op.deviceId === localDevice(db)) {
+      if (decided === null || op.seq > decided) noteDecidedSeq(db, op.entityId, op.seq);
+      return standing();
+    }
+    if (decided === null || op.seq <= decided) return standing();
+    noteDecidedSeq(db, op.entityId, op.seq);
+    if (sameValue(existing.resolvedValue, value)) return false;
+  } else if (existing !== null) {
+    noteDecidedSeq(db, op.entityId, op.seq);
+  }
 
   const current = readField(db, entity, targetId, field);
   // What the resolving write carried beside the value rides with the decision (`resolveConflict`),
@@ -1374,13 +1635,14 @@ export function applyConflictOperation(db: DatabaseSync, op: RemoteOperation): b
     ...(isEntries(payload.entries) ? { entries: payload.entries } : {}),
     ...(typeof payload.statusVersion === "number" ? { statusVersion: payload.statusVersion } : {}),
     ...(typeof payload.updatedAt === "string" ? { updatedAt: payload.updatedAt } : {}),
+    ...(typeof payload.derivedStatus === "string" || payload.derivedStatus === null ? { derivedStatus: payload.derivedStatus } : {}),
   };
   if (current.present && (!sameValue(current.value, value) || Object.keys(companions).length > 0)) {
     applyToDatabase(db, {
       entity,
       entityId: targetId,
       verb: resolutionVerb(entity, field),
-      payload: { [wireKey(field)]: value, ...companions },
+      payload: { ...resolutionPayload(entity, field, value), ...companions },
       actor: op.actor === "" ? null : op.actor,
       deviceId: op.deviceId,
       at,
@@ -1412,4 +1674,51 @@ export function conflictsSummary(db: DatabaseSync): { open: number; resolved: nu
     )
     .get() as { open: number | null; resolved: number | null };
   return { open: row.open ?? 0, resolved: row.resolved ?? 0 };
+}
+
+/** This device's id as its journal holds it. */
+function localDevice(db: DatabaseSync): string | null {
+  return journalFor(db).deviceIdentity();
+}
+
+function decidedSeq(db: DatabaseSync, id: string): number | null {
+  const row = db.prepare("SELECT decided_seq FROM sync_conflicts WHERE id = ?").get(id) as { decided_seq: number | null } | undefined;
+  return row?.decided_seq ?? null;
+}
+
+function noteDecidedSeq(db: DatabaseSync, id: string, seq: number): void {
+  db.prepare("UPDATE sync_conflicts SET decided_seq = ? WHERE id = ?").run(seq, id);
+}
+
+/**
+ * A status conflict decided settles the attempt-end conflicts those two status writes made: each
+ * write ended the worker attempt its own way (`review` at one instant on one device, `done` at
+ * another on the other), and every device kept its own end. The end on the same side as the
+ * chosen status wins (a status chosen from the local write takes the local end), decided like any record — its own `conflict` operation — so every device
+ * settles it, a fresh one included, and `workSeconds` reads the same everywhere. An end conflict
+ * no status decision explains is left for a human, as before.
+ */
+function settleAttemptEnds(db: DatabaseSync, status: ConflictRecord, side: "local" | "remote" | null, actor: string | null): void {
+  // A custom value neither side wrote says nothing about which end stands.
+  if (side === null) return;
+  const issueId = status.entityId;
+  const open = listConflicts(db).filter((record) => {
+    if (record.entity !== "attempt" || record.field !== "end" || record.resolvedAt !== null) return false;
+    const attempt = db.prepare("SELECT issue_id, role FROM attempts WHERE id = ?").get(record.entityId) as { issue_id: string; role: string | null } | undefined;
+    if (attempt === undefined || attempt.issue_id !== issueId || (attempt.role ?? "worker") === "orchestrator") return false;
+    /**
+     * Only the dispute those two status writes made: each end was journaled by the same mutation
+     * as its side's status write, so the end record's two writes are the status record's two
+     * writes, instant for instant (operations are dated at their mutation). Another dispute on
+     * the issue's attempts — an interruption against a close, a minute apart — is nobody's
+     * decision yet, and stays open.
+     */
+    return record.localAt === status.localAt && record.remoteAt === status.remoteAt;
+  });
+  /**
+   * The end on the same side as the chosen status: the two records pair write for write (same
+   * two instants, same device on each side), so the side that wrote the chosen status wrote the
+   * end that goes with it — a completion, a steal's interruption, whatever that write made.
+   */
+  for (const record of open) decide(db, { id: record.id, choice: side, actor });
 }

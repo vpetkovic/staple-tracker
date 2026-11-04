@@ -6,6 +6,7 @@
  * paid number fails permanently on the free one.
  */
 
+import { ORPHAN_END_REASONS } from "../../src/core/cloud/attempt-ends.js";
 import type { Env, Plan } from "./env.js";
 
 /**
@@ -25,7 +26,7 @@ import type { Env, Plan } from "./env.js";
  * older device handed a `registration` operation fails the page and stops
  * converging — with a message about an unknown entity, which reads as corruption
  * rather than as "upgrade". See `envelope.ts` for the full reasoning and
- * `docs/sync.md`, "Protocol evolution", which has been corrected to match.
+ * `design/sync.md`, "Protocol evolution", which has been corrected to match.
  *
  * What the bump buys is one specific thing: a protocol-1 client cannot PUSH a
  * registry entity and cannot be HANDED one either — `pull.ts` and `snapshot.ts`
@@ -38,8 +39,27 @@ import type { Env, Plan } from "./env.js";
  * sent 2 for everything would be refused outright by any Worker not yet redeployed
  * — turning a hub feature into a total sync outage on every repository.
  */
+/**
+ * Protocol 3 adds the execution attempts (`attempt`, `attemptTransition` —
+ * `design/execution-telemetry.md`, "Where it lives and what synchronizes"), and this time
+ * the workspace client DOES move to 3: attempts are journaled by every mutation that opens
+ * or ends one, so there is no leg to confine them to. This Worker is deployed first, and
+ * every device upgrades with it: the same release adds workspace migration 013, so an
+ * upgraded device stamps every operation `schema: 13` and an older client refuses the
+ * first page holding any of them with `schema_ahead`, whatever its entity. `PROTOCOL_MIN`
+ * stays 1 only so an older client's own pushes are still accepted while it upgrades; a
+ * page or fold holding an attempt is refused to it with `protocol_unsupported` and
+ * `requiredProtocol: 3`.
+ */
 export const PROTOCOL_MIN = 1;
-export const PROTOCOL_MAX = 2;
+/**
+ * Protocol 4 adds `attachment` (a typed file on an issue). The workspace client moves
+ * to 4 with it: a file has no separate leg to confine it to. This Worker is deployed
+ * first. `PROTOCOL_MIN` stays 1 so an older client's own pushes are still accepted
+ * while it upgrades; a page or fold that holds an attachment is refused to it with
+ * `protocol_unsupported` and `requiredProtocol: 4`.
+ */
+export const PROTOCOL_MAX = 4;
 
 /**
  * The binding constraint on batch size is D1's queries-per-Worker-invocation limit:
@@ -104,6 +124,13 @@ export interface Capabilities {
   maxPullLimit: number;
   defaultPullLimit: number;
   maxSnapshotPageSize: number;
+  /**
+   * The stored orphan-end reasons this Worker's fold treats as subordinate to a real end
+   * (`src/core/cloud/attempt-ends.ts`). A client writes an orchestrator attempt's stored
+   * orphan end (`issue_resolved`, `superseded_by_newer`) only to a service that lists both:
+   * an older fold would take it for a real end and could keep it over `coordination_ended`.
+   */
+  orphanEndReasons: string[];
 }
 
 export function capabilities(env: Env): Capabilities {
@@ -114,6 +141,7 @@ export function capabilities(env: Env): Capabilities {
     maxPullLimit: MAX_PULL_LIMIT,
     defaultPullLimit: DEFAULT_PULL_LIMIT,
     maxSnapshotPageSize: MAX_SNAPSHOT_PAGE,
+    orphanEndReasons: [...ORPHAN_END_REASONS].sort(),
   };
 }
 
@@ -165,16 +193,10 @@ export function foldStepsPerRequest(plan: Plan): number {
  * How long a client should wait before asking again for something the fold has not reached
  * (`foldBehind`, `fold-store.ts`), in milliseconds.
  *
- * `Retry-After` cannot say it: HTTP measures it in whole seconds, and a second is the wrong answer
- * here. A refusal is not back-pressure — the request folded its budget and the next one folds the
- * next — so the only thing the wait costs is the time a backup takes. Measured on workerd, a backup
- * of a 100,000-operation log whose checkpoint was 50,000 operations behind took 2,586 refusals: at a
- * second each, 47 minutes of waiting for about four minutes of folding. So the refusal carries
- * `retryAfterMs` beside `foldedSeq`, which this repository's client honours (`whileFolding`,
- * `src/core/cloud/client.ts`) and clamps; the `Retry-After: 1` header stays for anything that reads
- * only headers, and for the rate limiter's own refusal, which IS back-pressure and still says 60.
+ * One second keeps a continuous catch-up below the device limiter's 120 requests per
+ * minute, leaving room for ordinary sync traffic. The detail and Retry-After header agree.
  */
-export const FOLD_RETRY_MS = 200;
+export const FOLD_RETRY_MS = 1_000;
 
 /** Reads a step may make for its revision placements beyond the ones it plans. */
 export const FOLD_STEP_READS = 4;

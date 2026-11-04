@@ -12,7 +12,7 @@ import { SyncError } from "./errors.js";
 import { MAX_OP_BYTES, PROTOCOL_MAX, PROTOCOL_MIN } from "./limits.js";
 
 /**
- * The vocabulary from docs/sync.md, PER PROTOCOL VERSION.
+ * The vocabulary from design/sync.md, PER PROTOCOL VERSION.
  *
  * This used to be one set with the comment *"additive within a protocol version"*.
  * That claim came from the contract, and the contract was wrong about entities. It
@@ -68,6 +68,20 @@ const ENTITIES_BY_PROTOCOL: ReadonlyArray<readonly [number, ReadonlySet<string>]
    * so the same edge is the same entity on two machines that name a workspace differently.
    */
   [2, new Set(["registration", "crossLink"])],
+  /**
+   * Execution attempts (`design/execution-telemetry.md`). `attempt` is keyed by the attempt's
+   * UUID with `create` and `update`; `attemptTransition` by the transition's UUID, `create`
+   * only and immutable once written, like `documentRevision`. A new entity kind is a
+   * protocol change: a client below 3 is refused a page or a fold that holds one.
+   */
+  [3, new Set(["attempt", "attemptTransition"])],
+  /**
+   * Typed file attachments. `attachment` is keyed by the attachment's UUID. `create`
+   * carries the metadata and, when the file is small enough, the bytes. `delete`
+   * removes it. A new entity kind is a protocol change: a client below 4 is refused
+   * a page or a fold that holds one.
+   */
+  [4, new Set(["attachment"])],
 ];
 
 /** The registry entities, named once so three files can ask about them. */
@@ -270,6 +284,28 @@ export function validateEnvelope(
         "because a tombstone on a content-derived key can never be undone",
       { index },
     );
+  }
+
+  /**
+   * An attempt is created and then updated, and a transition is created and never touched
+   * again (`design/execution-telemetry.md`, "Where it lives"). Refused here rather than merely
+   * not emitted, for the reason the registry's `delete` is: the client is not the only thing
+   * that can push, and a tombstone or an edit on an immutable record would fold into state no
+   * emitter can produce.
+   */
+  if (entity === "attempt" && verb !== "create" && verb !== "update") {
+    throw new SyncError("validation", `${at}.verb '${verb}' is never valid for an attempt: it is created, then updated`, { index });
+  }
+  if (entity === "attemptTransition" && verb !== "create") {
+    throw new SyncError("validation", `${at}.verb '${verb}' is never valid for an attempt transition: it is immutable once written`, { index });
+  }
+  /**
+   * An attachment is created and deleted. There is no edit: a changed file is a new
+   * attachment. Refused here rather than merely not emitted, for the same reason as
+   * an attempt transition — the client is not the only thing that can push.
+   */
+  if (entity === "attachment" && verb !== "create" && verb !== "delete") {
+    throw new SyncError("validation", `${at}.verb '${verb}' is never valid for an attachment: it is created or deleted`, { index });
   }
 
   // `baseVersion` is null for `create` and an integer otherwise. The server records it

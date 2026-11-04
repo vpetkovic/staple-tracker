@@ -40,7 +40,7 @@ const EXCLUDED: Record<string, string> = {
   status_version:
     "0 by schema default on every device; the optimistic-concurrency token, carried by the operations that move status",
   checkout_agent:
-    "never a plain field write — the projection of a lease (docs/sync.md, 'Claims')",
+    "never a plain field write — the projection of a lease (design/sync.md, 'Claims')",
   checkout_at: "as checkout_agent",
   blocked_transition_at:
     "null at create; every transition into or out of a blocked status journals it (test/cloud-blocked-transition.test.ts)",
@@ -156,13 +156,14 @@ describe("issue.create replicates every issues column, or says why not", () => {
     store.db.close();
   });
 
-  it("maps every payload key it carries onto a real column, except blockedBy and its edges", () => {
+  it("maps every payload key it carries onto a real column, except blockedBy, its edges and the events it narrates", () => {
     const store = armed();
     const payload = createPayload(store);
     const columns = new Set(issueColumns(store));
 
     const unplaceable = Object.keys(payload).filter(
-      (key) => key !== "blockedBy" && key !== "edges" && !(ISSUE_COLUMNS[key] && columns.has(ISSUE_COLUMNS[key]!.column)),
+      // `originEvents` is not written to a column: the applier re-emits them as local events (`cloud/reemit.ts`).
+      (key) => key !== "blockedBy" && key !== "edges" && key !== "originEvents" && !(ISSUE_COLUMNS[key] && columns.has(ISSUE_COLUMNS[key]!.column)),
     );
     expect(
       unplaceable,

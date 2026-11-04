@@ -1,0 +1,833 @@
+/*
+ * The bento landing page. Three things make it: serif headlines (Fraunces, SIL Open
+ * Font License 1.1, self-hosted from @fontsource-variable), a drafting grid of dashed
+ * rules with a solid tick on every heading, and scenes that their cells cut off.
+ * The serif face comes from parts/SerifFont, the chips from parts/TicketChips.
+ */
+
+.page {
+  /* The inset of a cell, and the dashed rules: a dash and a gap of equal length. */
+  --pad: var(--st-space-6);
+  --pad-y: var(--st-space-12);
+  --edge: var(--st-gutter);
+  --overshoot: var(--st-space-4);
+  --rule-v: linear-gradient(to bottom, var(--st-rule) 50%, transparent 50%);
+  --rule-h: linear-gradient(to right, var(--st-rule) 50%, transparent 50%);
+  overflow-x: clip;
+}
+
+/* ---------- Hero ---------- */
+
+.top {
+  position: relative;
+  isolation: isolate;
+  border-bottom: var(--st-hairline) solid var(--st-border);
+}
+
+.top::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(52% 64% at 70% 46%, var(--st-glow), transparent 72%),
+    radial-gradient(38% 90% at 0% 38%, var(--st-glow), transparent 70%),
+    radial-gradient(46% 70% at 100% 100%, var(--st-glow-faint), transparent 72%);
+}
+
+.hero {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: clamp(35rem, calc(100svh - var(--st-navbar-height) - 4.25rem), 45rem);
+  padding: var(--st-space-24) var(--edge);
+  overflow: clip;
+}
+
+.heroCopy {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.heroTitle {
+  margin: 0 0 var(--st-space-6);
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-hero);
+  font-weight: var(--st-weight-serif);
+  line-height: var(--st-leading-serif);
+  letter-spacing: var(--st-tracking-serif);
+  color: var(--st-fg-strong);
+}
+
+.heroWords {
+  display: inline-block;
+  white-space: nowrap;
+  transform: translateX(var(--shift, 0));
+  transition: transform var(--st-duration-slow) var(--st-ease);
+}
+
+/* Every word sits in the same box, which is as wide as the first one: the others take
+   no width and run past it, so a change of word lays nothing out again. */
+.rotor {
+  display: inline-grid;
+  justify-items: start;
+  text-align: left;
+}
+
+.word {
+  grid-area: 1 / 1;
+  width: 0;
+  font-style: italic;
+  font-weight: 300;
+  opacity: 0;
+  /* Out of what can be selected or searched, once it has faded. */
+  visibility: hidden;
+  transform: translateY(0.24em);
+  filter: blur(8px);
+  transition:
+    opacity var(--st-duration-slow) var(--st-ease),
+    transform var(--st-duration-slow) var(--st-ease),
+    filter var(--st-duration-slow) var(--st-ease),
+    visibility 0s linear var(--st-duration-slow);
+}
+
+.word:first-child {
+  width: auto;
+}
+
+.word.wordBefore {
+  transform: translateY(-0.24em);
+}
+
+.word.wordNow {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  filter: none;
+  transition-delay: 0s;
+}
+
+.heroLead {
+  max-width: 38rem;
+  margin: 0 0 var(--st-space-10);
+  font-size: var(--st-text-lg);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg);
+  text-wrap: pretty;
+}
+
+/* The control for everything in the hero that keeps moving: the chips and the word. */
+.pause {
+  position: absolute;
+  right: var(--edge);
+  bottom: var(--st-space-4);
+  z-index: 5;
+}
+
+.statement {
+  position: relative;
+  margin: 0;
+  padding: var(--st-space-5) var(--edge);
+  border-top: var(--st-hairline) solid var(--st-border);
+  font-size: var(--st-text-base);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-ui);
+  text-align: center;
+  text-wrap: balance;
+  color: var(--st-fg-strong);
+}
+
+/* ---------- The drafting sheet ---------- */
+
+/* Dashed vertical rules at the column boundaries run the length of the sheet; every
+   band below lays its content out on the same three columns (3, 5 and 4 of 12). */
+.sheet {
+  position: relative;
+  width: calc(100% - 2 * var(--edge));
+  max-width: var(--st-container-wide);
+  margin-inline: auto;
+}
+
+.sheet::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: var(--rule-v), var(--rule-v), var(--rule-v), var(--rule-v);
+  background-repeat: repeat-y;
+  background-size: var(--st-hairline) var(--st-rule-dash);
+  background-position:
+    0 0,
+    25% 0,
+    66.6667% 0,
+    100% 0;
+}
+
+.band {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 5fr) minmax(0, 4fr);
+}
+
+/* The dashed rule over a band crosses the outer rules by a little, as on a drawing. */
+.band + .band::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(-1 * var(--overshoot));
+  right: calc(-1 * var(--overshoot));
+  height: var(--st-hairline);
+  background: var(--rule-h) repeat-x;
+  background-size: var(--st-rule-dash) var(--st-hairline);
+}
+
+.lede,
+.prose {
+  min-width: 0;
+  padding: var(--pad-y) var(--pad);
+}
+
+.figure {
+  min-width: 0;
+  align-self: end;
+  padding: var(--pad-y) var(--pad) 0;
+}
+
+/* The solid tick on a heading, on the rule at the left edge of its column. */
+.tick {
+  position: relative;
+}
+
+.tick::before {
+  content: '';
+  position: absolute;
+  top: 0.14em;
+  bottom: 0.14em;
+  left: calc(-1 * var(--pad) - 1px);
+  width: 2px;
+  background: var(--st-fg-subtle);
+}
+
+.eyebrow {
+  margin: 0 0 var(--st-space-5);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  line-height: var(--st-leading-ui);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-accent-text);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-xl);
+  font-weight: var(--st-weight-serif);
+  line-height: 1.06;
+  letter-spacing: var(--st-tracking-serif);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.title em,
+.closingTitle em {
+  font-weight: 300;
+}
+
+.ledeText {
+  margin: var(--st-space-6) 0 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.prose p {
+  margin: 0 0 var(--st-space-5);
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.prose > :last-child {
+  margin-bottom: 0;
+}
+
+.more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--st-space-2);
+  font-family: var(--st-font-mono);
+  font-size: var(--st-text-2xs);
+  font-weight: var(--st-weight-medium);
+  letter-spacing: var(--st-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--st-fg-muted);
+}
+
+/* A docs link is drawn small but taps as a 44 px target: its hit area reaches above
+   and below the text, which keeps its place. */
+.page .more {
+  position: relative;
+}
+
+.page .more::after {
+  content: '';
+  position: absolute;
+  inset: calc(50% - var(--st-target-min) / 2) 0;
+}
+
+.more:hover {
+  color: var(--st-fg-strong);
+  text-decoration: none;
+}
+
+.arrow {
+  display: inline-block;
+  transition: transform var(--st-duration) var(--st-ease);
+}
+
+.more:hover .arrow {
+  transform: translateX(3px);
+}
+
+/* A scene that its cell cuts off: the lower edge of the panel runs out under the rule
+   below, so the fragment reads as a detail of a larger screen. `--cut` is how much of
+   the scene is below the edge. */
+.fragment {
+  --cut: var(--st-space-3);
+  --fade: var(--st-space-8);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade)), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade)), transparent);
+}
+
+.fragment > * {
+  margin-bottom: calc(-1 * var(--cut));
+}
+
+.fragment.fragmentRow {
+  --cut: var(--st-space-8);
+  --fade: var(--st-space-16);
+}
+
+/* ---------- The feature bento ---------- */
+
+.ideaInner {
+  position: sticky;
+  top: calc(var(--st-navbar-height) + var(--st-space-8));
+}
+
+.ideaBody p {
+  margin: var(--st-space-6) 0 0;
+  font-size: var(--st-text-lg);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg);
+  text-wrap: pretty;
+}
+
+.ideaBody .more {
+  margin-top: var(--st-space-8);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  container: stack / inline-size;
+}
+
+/* Two stacks side by side end on the same line: the cells of the shorter one share
+   the room left over, each scene still on the rule below it. */
+.cell {
+  position: relative;
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  padding: var(--pad-y) var(--pad) 0;
+}
+
+
+.cell + .cell::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--st-hairline);
+  background: var(--rule-h) repeat-x;
+  background-size: var(--st-rule-dash) var(--st-hairline);
+}
+
+.cellTitle {
+  margin: 0 0 var(--st-space-3);
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-lg);
+  font-weight: var(--st-weight-serif);
+  line-height: 1.15;
+  letter-spacing: var(--st-tracking-heading);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.cellText {
+  max-width: 30rem;
+  margin: 0;
+  font-size: var(--st-text-base);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.cell .fragment {
+  margin-top: auto;
+  padding-top: var(--st-space-6);
+}
+
+/* Copy on the left, the scene on the right, in a stack wide enough for both. */
+@container stack (min-width: 34rem) {
+  .cell.cellBeside {
+    display: grid;
+    grid-template-columns: minmax(0, 6fr) minmax(0, 8fr);
+    column-gap: var(--st-space-6);
+    align-items: start;
+  }
+
+  .cell.cellBeside .fragment {
+    margin-top: 0;
+    padding-top: 0;
+    align-self: end;
+  }
+}
+
+/* ---------- Next to the team's tracker ---------- */
+
+/* From 1280 px: the heading down the left, the scene across the other two columns,
+   the copy and the comparison under it. */
+@media (min-width: 1280px) {
+  .alongside .lede {
+    grid-row: 1 / span 2;
+  }
+
+  .alongside .figure.figureWide {
+    grid-column: 2 / span 2;
+  }
+}
+
+.alongsideCopy,
+.compare {
+  position: relative;
+  min-width: 0;
+}
+
+.compare {
+  padding: var(--pad-y) var(--pad);
+}
+
+/* The rule between the scene and what is said under it. */
+.alongsideCopy::before,
+.compare::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--st-hairline);
+  background: var(--rule-h) repeat-x;
+  background-size: var(--st-rule-dash) var(--st-hairline);
+}
+
+/* ---------- Underneath: the figures ---------- */
+
+.facts {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin: 0;
+}
+
+/* From 1280 px the figures take the two columns beside the heading. */
+@media (min-width: 1280px) {
+  .underneath .facts {
+    grid-column: 2 / span 2;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 4fr);
+  }
+}
+
+.fact {
+  position: relative;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: var(--st-space-3);
+  padding: var(--pad-y) var(--pad);
+}
+
+.fact:nth-child(n + 3)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--st-hairline);
+  background: var(--rule-h) repeat-x;
+  background-size: var(--st-rule-dash) var(--st-hairline);
+}
+
+.factValue {
+  margin: 0;
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-2xl);
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: var(--st-tracking-serif);
+  font-variant-numeric: lining-nums;
+  color: var(--st-fg-strong);
+}
+
+.factLabel {
+  max-width: 22rem;
+  font-size: var(--st-text-sm);
+  line-height: var(--st-leading-ui);
+  color: var(--st-fg-muted);
+}
+
+/* ---------- Closing ---------- */
+
+.band.closing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--st-space-24) var(--pad);
+  text-align: center;
+  isolation: isolate;
+}
+
+/* The closing block has a ground of its own: the inner rules stop at it, so none runs
+   through the headline. The two outer rules carry on beside it. */
+.closing::after {
+  content: '';
+  position: absolute;
+  inset: var(--st-hairline) var(--st-hairline) 0;
+  z-index: -1;
+  background:
+    radial-gradient(50% 90% at 50% 100%, var(--st-glow), transparent 72%),
+    var(--st-bg);
+}
+
+.closingTitle {
+  max-width: 14em;
+  margin: 0 0 var(--st-space-5);
+  font-family: var(--st-font-serif);
+  font-size: var(--st-text-serif-2xl);
+  font-weight: var(--st-weight-serif);
+  line-height: var(--st-leading-serif);
+  letter-spacing: var(--st-tracking-serif);
+  color: var(--st-fg-strong);
+  text-wrap: balance;
+}
+
+.closingLead {
+  max-width: 34rem;
+  margin: 0 0 var(--st-space-8);
+  font-size: var(--st-text-lg);
+  line-height: var(--st-leading-relaxed);
+  color: var(--st-fg-muted);
+  text-wrap: pretty;
+}
+
+.fineprint {
+  margin: var(--st-space-5) 0 0;
+  font-size: var(--st-text-sm);
+  color: var(--st-fg-subtle);
+}
+
+/* ---------- Below 1280 px ---------- */
+
+@media (max-width: 1279px) {
+  .ideaInner {
+    position: static;
+  }
+
+  /* The headline leaves no room beside it: the chips move into a band above the copy
+     and a band below it. */
+  .hero {
+    padding-block: 10.5rem;
+  }
+}
+
+/* ---------- 768 to 1279 px: two equal columns, one rule down the middle ---------- */
+
+@media (min-width: 768px) and (max-width: 1279px) {
+  .page {
+    /* Where copy beside a heading starts, to sit level with it under the eyebrow's line. */
+    --beside-heading: calc(var(--st-space-5) + var(--st-text-2xs) * var(--st-leading-ui) + 0.5rem);
+    /* The comparison's row labels take the left column; the two answers start in the right one. */
+    --compare-label: calc(50% + var(--pad));
+  }
+
+  .sheet::before {
+    background-image: var(--rule-v), var(--rule-v), var(--rule-v);
+    background-position:
+      0 0,
+      50% 0,
+      100% 0;
+  }
+
+  .band {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  /* The heading over its fragment on the left, the copy on the right. */
+  .lede {
+    grid-column: 1;
+    padding-bottom: 0;
+  }
+
+  .figure {
+    grid-column: 1;
+  }
+
+  .prose {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    padding-top: calc(var(--pad-y) + var(--beside-heading));
+  }
+
+  /* A lede that runs across the sheet sets its headline in the left column and its
+     copy in the right one, so the rule down the middle passes between them. */
+  .lede.idea,
+  .underneath .lede {
+    grid-column: 1 / -1;
+    padding-bottom: var(--pad-y);
+  }
+
+  .ideaInner,
+  .ledeSplit {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: calc(2 * var(--pad));
+    align-items: start;
+  }
+
+  .ideaBody,
+  .ledeSplit > .ledeText {
+    margin-top: 0;
+    padding-top: var(--beside-heading);
+  }
+
+  .ideaBody > p:first-child {
+    margin-top: 0;
+  }
+
+  .ideaBody .more {
+    margin-top: var(--st-space-6);
+  }
+
+  /* The stacks start under a rule of their own. */
+  .bento .stack {
+    position: relative;
+  }
+
+  .bento .stack::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--st-hairline);
+    background: var(--rule-h) repeat-x;
+    background-size: var(--st-rule-dash) var(--st-hairline);
+  }
+
+  /* Heading and copy side by side, then the scene and the comparison across the sheet. */
+  .alongside .lede {
+    grid-row: 1;
+    padding-bottom: var(--pad-y);
+  }
+
+  .alongside .alongsideCopy {
+    grid-row: 1;
+  }
+
+  .alongsideCopy::before {
+    display: none;
+  }
+
+  .alongside .figure.figureWide {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-top: 0;
+  }
+
+  .alongside .compare {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .facts {
+    grid-column: 1 / -1;
+  }
+
+  .facts::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--st-hairline);
+    background: var(--rule-h) repeat-x;
+    background-size: var(--st-rule-dash) var(--st-hairline);
+  }
+}
+
+/* ---------- A phone: one column, the rules at the edges ---------- */
+
+@media (max-width: 767px) {
+  .page {
+    --pad: var(--st-space-3);
+    --pad-y: var(--st-space-10);
+    --edge: var(--st-space-3);
+    --overshoot: var(--st-space-3);
+  }
+
+  .sheet::before {
+    background-image: var(--rule-v), var(--rule-v);
+    background-position:
+      0 0,
+      100% 0;
+  }
+
+  .band {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero {
+    padding: 7.5rem var(--st-space-6) 9.75rem;
+  }
+
+  .heroLead {
+    margin-bottom: var(--st-space-8);
+    font-size: var(--st-text-base);
+  }
+
+  .statement {
+    padding-inline: var(--st-space-6);
+    font-size: var(--st-text-sm);
+  }
+
+  .pause {
+    right: var(--st-space-4);
+  }
+
+  /* Title, copy, then the fragment. */
+  .prose {
+    padding-top: var(--st-space-6);
+    padding-bottom: 0;
+  }
+
+  .figure {
+    order: 3;
+    padding-top: var(--st-space-8);
+  }
+
+  .alongsideCopy,
+  .compare {
+    order: 4;
+    padding-top: var(--st-space-8);
+    padding-bottom: var(--st-space-8);
+  }
+
+  .alongsideCopy::before {
+    display: none;
+  }
+
+  .alongside .figure {
+    order: 5;
+  }
+
+  .alongside .compare {
+    padding-bottom: 0;
+  }
+
+  .compare::before {
+    left: var(--pad);
+    right: var(--pad);
+  }
+
+  .compare {
+    padding-top: var(--st-space-6);
+  }
+
+  .lede {
+    padding-bottom: 0;
+  }
+
+  .lede.idea {
+    padding-bottom: var(--pad-y);
+  }
+
+  .underneath .lede {
+    padding-bottom: var(--st-space-8);
+  }
+
+  .bento .stack {
+    position: relative;
+  }
+
+  .bento .stack::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--st-hairline);
+    background: var(--rule-h) repeat-x;
+    background-size: var(--st-rule-dash) var(--st-hairline);
+  }
+
+  .facts::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--st-hairline);
+    background: var(--rule-h) repeat-x;
+    background-size: var(--st-rule-dash) var(--st-hairline);
+  }
+
+  .fact {
+    padding-block: var(--st-space-8);
+  }
+
+  .band.closing {
+    padding-block: var(--st-space-16);
+  }
+}
+
+/* The headline takes two lines, and the word that changes is centred on its own. */
+@media (max-width: 699px) {
+  .heroWords {
+    display: grid;
+    justify-items: center;
+    transform: none;
+  }
+
+  .rotor {
+    justify-items: center;
+    text-align: center;
+  }
+
+  /* A word that takes no width still sits centred: it runs out of its box both ways. */
+  .word {
+    display: flex;
+    justify-content: center;
+  }
+}

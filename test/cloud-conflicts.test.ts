@@ -1,7 +1,7 @@
 /**
  * Two devices, the same field, and no winner.
  *
- * Contract: `docs/sync.md`, "Conflicts are preserved, never resolved silently".
+ * Contract: `design/sync.md`, "Conflicts are preserved, never resolved silently".
  * The assertion that matters most is negative and is made first: after two
  * devices edit one field offline and both sync, NEITHER device's value has been
  * replaced by the other's. Before this lane, both devices ended up holding the

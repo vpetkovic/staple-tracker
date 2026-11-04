@@ -1,7 +1,7 @@
 /**
  * The automatic-sync clock: when this device last tried, and when it may try again.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"Coalesced, jittered backoff,
+ * Contract: `design/sync.md`, "Three consents" — *"Coalesced, jittered backoff,
  * cancellable, bounded timeout."* Coalescing and backoff both need memory, and a
  * CLI trigger has none: `staple status` is a whole process, so the run it started
  * and the run the next command would start cannot see each other in memory. This

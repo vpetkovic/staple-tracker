@@ -48,6 +48,7 @@ function effective(over: Partial<EffectiveQueueRow> & { identifier: string }): E
     via: null,
     unqueued: false,
     eligibility: "eligible",
+    claim: null,
     reason: null,
     detail: null,
     dueAt: null,
@@ -111,6 +112,20 @@ describe("pickable is the resolver's answer, not a predicate", () => {
 
     expect(stateOf(held, "STA-1")?.state).toBe("in_flight");
     expect(stateOf(held, "STA-2")?.state).toBe("pickable");
+  });
+
+  it("does not show a pickup position for an unavailable status", () => {
+    const review = view({
+      effective: [
+        effective({ identifier: "STA-1", position: 1, eligibility: "unavailable", reason: "STA-1 is in_review, which cannot be checked out." }),
+        effective({ identifier: "STA-2", position: 2 }),
+      ],
+    });
+    expect(stateOf(review, "STA-1")).toMatchObject({ state: "unavailable", position: null });
+    // …and says so without the raw status id the resolver's sentence carries.
+    expect(rowCueSentence(stateOf(review, "STA-1")!)).toBe(`Unavailable — ${ROW_CUE_PRESENTATION.unavailable.hint}`);
+    expect(rowCueSentence(stateOf(review, "STA-1")!)).not.toContain("in_review");
+    expect(stateOf(review, "STA-2")?.state).toBe("pickable");
   });
 
   it("gives a queued actionable row its EFFECTIVE position, not the plan's", () => {

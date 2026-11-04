@@ -1,7 +1,7 @@
 /**
  * The cloud sync error taxonomy, as `StapleError`s (STA-251).
  *
- * `docs/sync.md`, "Error taxonomy": thirteen codes the service sends and one, `offline`,
+ * `design/sync.md`, "Error taxonomy": thirteen codes the service sends and one, `offline`,
  * that only the client can produce. Every one is a `StapleErrorCode` member, so a sync
  * failure surfaces with the service's own code on every surface — the `--json` envelope,
  * the MCP error, the CLI's exit status — and its retry bit is the protocol's.

@@ -401,9 +401,29 @@ describe("schema migration against a live database", () => {
         "sync_devices",
         "sync_state",
         "sync_field_writes",
+        // Migration 013 (execution attempts): two more tables. Its two `sync_state`
+        // columns go with `sync_state` above.
+        "attempts",
+        "attempt_transitions",
+        // Migration 015 (autopilot runs): two more tables.
+        "runs",
+        "run_tickets",
+        // Migration 016 (milestone goal mode): one more table. Its `runs` columns go with `runs`.
+        "milestone_criterion_marks",
       ]) {
         legacyDb.exec(`DROP TABLE IF EXISTS ${table}`);
       }
+      // Migration 014's columns on a table the legacy shape keeps.
+      legacyDb.exec("ALTER TABLE events DROP COLUMN origin_device");
+      legacyDb.exec("ALTER TABLE events DROP COLUMN origin_seq");
+      // Migration 017's trigger and column.
+      legacyDb.exec("DROP TRIGGER IF EXISTS issues_derived_status_cleared");
+      legacyDb.exec("DROP TRIGGER IF EXISTS issues_derived_status_created");
+      legacyDb.exec("ALTER TABLE issues DROP COLUMN derived_status");
+      // Migration 018's tables. The trigger goes with `attachments`.
+      legacyDb.exec("DROP TRIGGER IF EXISTS attachments_drop_bytes");
+      legacyDb.exec("DROP TABLE IF EXISTS attachments");
+      legacyDb.exec("DROP TABLE IF EXISTS attachment_bytes");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

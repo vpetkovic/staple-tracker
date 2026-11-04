@@ -2,7 +2,7 @@
  * What a device holds, reconciled to the current epoch's fold: a restore rewinds the
  * repository, and every device that follows it rewinds with it.
  *
- * Contract: `docs/sync.md`, "A restore rewinds".
+ * Contract: `design/sync.md`, "A restore rewinds".
  *
  * A restore puts the repository back to a backup, in a new epoch, and every device
  * re-bootstraps into it (`beginBootstrap`). The snapshot it reads says what the repository
@@ -31,7 +31,9 @@
  * under a build that did not reconcile: it notices after the upgrade, by the epoch it last
  * reconciled against (`sync_reconciled_epoch`).
  */
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { writeEventRow } from "../event-row.js";
 import type { Journal, SyncEntity } from "../journal.js";
 import { moveIdentifier, recordRemovedHolder } from "../identifier-moves.js";
 import { WORKSPACE_SETTING_META_PREFIX } from "../settings-registry.js";
@@ -41,6 +43,9 @@ import { forgetRemovedIssueLease } from "./lease-store.js";
 import { localInventory } from "./seed.js";
 import { recordReconciledEpoch, withheldEntities } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
+import { criterionMarkField, criterionMarkPosition } from "../milestone-goal.js";
+import { endOf, readAttempt, writeEnd, type AttemptEnd } from "../telemetry/attempt-records.js";
+import { ATTEMPT_END_FIELDS } from "./attempt-ends.js";
 
 const QUEUE_PLAN_ID = "@plan";
 const ORDER_ID = "@order";
@@ -65,12 +70,67 @@ const BUILTINS: ReadonlyArray<readonly [SyncEntity, string]> = [
 ];
 const BUILTIN_KEYS = new Set(BUILTINS.map(([entity, id]) => keyOf(entity, id)));
 
+/** Every issue's blocker set, by the blocked issue: what a rewind is compared against. */
+export function blockerSets(db: DatabaseSync): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const edge of db.prepare("SELECT blocked_id, blocker_id FROM relations WHERE type = 'blocks' ORDER BY blocked_id, blocker_id").all() as Array<{
+    blocked_id: string;
+    blocker_id: string;
+  }>) {
+    const set = out.get(edge.blocked_id) ?? [];
+    set.push(edge.blocker_id);
+    out.set(edge.blocked_id, set);
+  }
+  return out;
+}
+
+/**
+ * A rewind is an edge-writing path: it removes edges the epoch does not hold and the snapshot
+ * puts back the ones it does, and neither says so in any event. Each issue whose blocker set
+ * changed gets a `blockers_changed` with the set it holds now, dated at the instant the restore
+ * committed (`restoredAt`, from the service) — the same on every device that rewinds into the
+ * epoch, whenever it does — under a key derived from the epoch and the issue, so a second read
+ * of the same epoch writes nothing twice. Without it, the edge history went on naming blockers
+ * nobody held any more, and the elapsed partition counted `blocked` time for them.
+ *
+ * A service before this build sends no instant: the rewind is dated by this device's clock.
+ */
+export function narrateRewoundSets(db: DatabaseSync, before: ReadonlyMap<string, readonly string[]>, epoch: number, restoredAt: string | null): void {
+  const after = blockerSets(db);
+  const at = restoredAt ?? nowIso();
+  for (const issueId of new Set([...before.keys(), ...after.keys()])) {
+    const was = before.get(issueId) ?? [];
+    const now = after.get(issueId) ?? [];
+    if (was.length === now.length && was.every((id, index) => id === now[index])) continue;
+    const row = db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined;
+    if (!row) continue;
+    const set = db
+      .prepare(
+        `SELECT i.id AS id, i.identifier AS identifier FROM relations r JOIN issues i ON i.id = r.blocker_id
+          WHERE r.blocked_id = ? AND r.type = 'blocks' ORDER BY r.created_at, i.identifier`,
+      )
+      .all(issueId) as Array<{ id: string; identifier: string }>;
+    const key = createHash("sha256").update(`rewind\n${epoch}\n${issueId}`, "utf8").digest("hex").slice(0, 32);
+    writeEventRow(db, {
+      kind: "blockers_changed",
+      issueId,
+      actor: null,
+      payload: { identifier: row.identifier, blockedBy: set.map((edge) => edge.identifier), blockedByIds: set.map((edge) => edge.id), rewoundToEpoch: epoch },
+      dedupKey: `blockers_rewound:${key}`,
+      createdAt: at,
+      originDevice: null,
+    });
+  }
+}
+
 /** What the read before it decided, for the half after it. */
 export interface ReconcilePlan {
   readonly kept: ReadonlySet<Key>;
   readonly removed: number;
   readonly restoredBuiltins: number;
   readonly entities: readonly SnapshotEntity[];
+  /** Attempts whose end this device keeps, and sends again, over the epoch's. */
+  readonly resendEnds: readonly string[];
 }
 
 /**
@@ -146,6 +206,60 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
   }
 
   /**
+   * A criterion mark the epoch's milestone does not carry was made after the backup: the log
+   * no longer holds it, and a fresh device reading the epoch holds none. Applying the epoch
+   * names only the marks it has (`applyMilestone`), so the others go here, unless this device
+   * still has to send one.
+   */
+  const unsentMarks = new Set(
+    unsent
+      .filter((op) => op.entity === "milestone")
+      .flatMap((op) => Object.keys(parsedPayload(op.payload)).filter((key) => criterionMarkPosition(key) !== null).map((key) => `${op.id} ${key}`)),
+  );
+  for (const entity of entities) {
+    if (entity.entity !== "milestone") continue;
+    for (const { position } of db.prepare("SELECT position FROM milestone_criterion_marks WHERE milestone_id = ?").all(entity.entityId) as Array<{ position: number }>) {
+      const field = criterionMarkField(position);
+      if (field in entity.state || unsentMarks.has(`${entity.entityId} ${field}`)) continue;
+      db.prepare("DELETE FROM milestone_criterion_marks WHERE milestone_id = ? AND position = ?").run(entity.entityId, position);
+    }
+  }
+
+  /**
+   * An attempt the epoch holds takes the epoch's end, unless this device still has to send
+   * one of its own. The apply rule every reader shares keeps an end over a state that is not
+   * one (`attempt-ends.ts`), so a stale pause cannot reopen an attempt a steal ended; read
+   * over an end the log no longer holds, that rule kept the attempt ended here while a fresh
+   * device read it open. The end fields are one unit, so all seven are taken from the epoch.
+   */
+  /**
+   * An end travels as an `attempt` operation and the `attemptTransition` that tells it, and a
+   * bounded push can land one without the other: either still to be sent keeps the end. When
+   * only the transition is left to send, the `attempt` operation the log acknowledged is the
+   * one the restore rewound, so the end is sent again after the read (`reconcileAfterRead`):
+   * otherwise every other device would read the transition over an attempt still open.
+   */
+  const unsentEnds = new Set(unsent.filter((op) => op.entity === "attempt").map((op) => op.id));
+  const unsentTransitions = new Set(
+    unsent.flatMap((op) => {
+      const attemptId = op.entity === "attemptTransition" ? parsedPayload(op.payload).attemptId : undefined;
+      return typeof attemptId === "string" ? [attemptId] : [];
+    }),
+  );
+  const resendEnds: string[] = [];
+  for (const entity of entities) {
+    if (entity.entity !== "attempt" || unsentEnds.has(entity.entityId)) continue;
+    const held = readAttempt(db, entity.entityId);
+    if (held === null) continue;
+    const epochEnd = epochAttemptEnd(entity.state);
+    if (epochEnd === null) continue;
+    const heldEnd = endOf(held);
+    if (ATTEMPT_END_FIELDS.every((field) => heldEnd[field] === epochEnd[field])) continue;
+    if (unsentTransitions.has(entity.entityId)) resendEnds.push(entity.entityId);
+    else writeEnd(db, held.id, epochEnd);
+  }
+
+  /**
    * A blocker set the epoch does not hold is not in the log any more: its version goes, so an
    * issue's own create decides its blockers again, as on a fresh device (`applyIssue`,
    * `apply.ts`). Except one this device still has to send, which the log holds as soon as it is
@@ -162,7 +276,29 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
     if (placed(entity, id)) continue;
     if (reinstall(db, entity, id)) restoredBuiltins += 1;
   }
-  return { kept, removed, restoredBuiltins, entities };
+  return { kept, removed, restoredBuiltins, entities, resendEnds };
+}
+
+/**
+ * The seven end fields an epoch's folded attempt holds, under either spelling (a fold may hold
+ * an older payload's column name). Null when it names no state: nothing to rewind to.
+ */
+function epochAttemptEnd(state: Readonly<Record<string, unknown>>): AttemptEnd | null {
+  const read = (name: string): string | null => {
+    const value = name in state ? state[name] : state[name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)];
+    return typeof value === "string" ? value : null;
+  };
+  const current = read("state");
+  if (current === null) return null;
+  return {
+    state: current,
+    outcome: read("outcome"),
+    endReason: read("endReason"),
+    endDetection: read("endDetection"),
+    endedBy: read("endedBy"),
+    endedAt: read("endedAt"),
+    endedAtSource: read("endedAtSource"),
+  };
 }
 
 /**
@@ -190,6 +326,14 @@ export function reconcileAfterRead(db: DatabaseSync, journal: Journal, plan: Rec
     journal.run(() => {
       for (const local of republish) {
         journal.record({ entity: local.entity, entityId: local.entityId, verb: "create", payload: local.payload, actor: local.actor });
+      }
+    });
+  }
+  const resend = plan.resendEnds.map((id) => readAttempt(db, id)).filter((held) => held !== null);
+  if (resend.length > 0) {
+    journal.run(() => {
+      for (const held of resend) {
+        journal.record({ entity: "attempt", entityId: held.id, verb: "update", payload: { ...endOf(held) }, actor: held.endedBy });
       }
     });
   }
@@ -295,6 +439,15 @@ function operationReferents(entity: string, entityId: string, payload: Record<st
     case "lease":
       issue(entityId);
       break;
+    case "attempt":
+      issue(payload.issueId);
+      break;
+    case "attemptTransition":
+      if (typeof payload.attemptId === "string") out.push(["attempt", payload.attemptId]);
+      break;
+    case "attachment":
+      issue(payload.issueId);
+      break;
     default:
       break;
   }
@@ -350,6 +503,12 @@ function foldNeeds(entities: readonly SnapshotEntity[]): Set<Key> {
       case "queue":
         if (Array.isArray(state.order)) for (const id of state.order) need("issue", id);
         break;
+      case "attemptTransition":
+        need("attempt", state.attemptId);
+        break;
+      case "attachment":
+        need("issue", field(state, "issueId", "issue_id"));
+        break;
       default:
         break;
     }
@@ -370,8 +529,14 @@ function heldEntities(db: DatabaseSync): Array<readonly [SyncEntity, string]> {
   for (const id of ids("SELECT id FROM issues")) out.push(["issue", id]);
   for (const id of ids("SELECT id FROM comments")) out.push(["comment", id]);
   for (const id of ids("SELECT DISTINCT blocked_id AS id FROM relations WHERE type = 'blocks'")) out.push(["relation", id]);
-  for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members")) out.push(["milestone", id]);
+  for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members UNION SELECT milestone_id AS id FROM milestone_criterion_marks")) {
+    out.push(["milestone", id]);
+  }
   if (ids("SELECT issue_id AS id FROM queue_entries LIMIT 1").length > 0) out.push(["queue", QUEUE_PLAN_ID]);
+  // An attempt outlives its issue by design; it is rewound as an entity of its own.
+  for (const id of ids("SELECT id FROM attempts")) out.push(["attempt", id]);
+  for (const id of ids("SELECT id FROM attempt_transitions")) out.push(["attemptTransition", id]);
+  for (const id of ids("SELECT id FROM attachments")) out.push(["attachment", id]);
   return out;
 }
 
@@ -394,9 +559,20 @@ function holds(db: DatabaseSync, entity: string, id: string): boolean {
     case "relation":
       return hit("SELECT 1 FROM relations WHERE blocked_id = ? AND type = 'blocks'", id);
     case "milestone":
-      return hit("SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ?", id, id);
+      return hit(
+        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ?",
+        id,
+        id,
+        id,
+      );
     case "queue":
       return hit("SELECT 1 FROM queue_entries LIMIT 1");
+    case "attempt":
+      return hit("SELECT 1 FROM attempts WHERE id = ?", id);
+    case "attemptTransition":
+      return hit("SELECT 1 FROM attempt_transitions WHERE id = ?", id);
+    case "attachment":
+      return hit("SELECT 1 FROM attachments WHERE id = ?", id);
     default:
       return false;
   }
@@ -426,6 +602,12 @@ function referents(db: DatabaseSync, entity: string, id: string): Array<readonly
       return [["issue", id], ...column("SELECT issue_id AS id FROM milestone_members WHERE milestone_id = ?", id).map((issue) => ["issue", issue] as const)];
     case "queue":
       return column("SELECT issue_id AS id FROM queue_entries").map((issue) => ["issue", issue] as const);
+    case "attempt":
+      return column("SELECT issue_id AS id FROM attempts WHERE id = ?", id).map((issue) => ["issue", issue] as const);
+    case "attemptTransition":
+      return column("SELECT attempt_id AS id FROM attempt_transitions WHERE id = ?", id).map((attempt) => ["attempt", attempt] as const);
+    case "attachment":
+      return column("SELECT issue_id AS id FROM attachments WHERE id = ?", id).map((issue) => ["issue", issue] as const);
     default:
       return [];
   }
@@ -475,10 +657,17 @@ function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
     case "milestone": {
       const members = db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(id).changes;
       const meta = db.prepare("DELETE FROM milestone_meta WHERE issue_id = ?").run(id).changes;
-      return gone(Number(members) + Number(meta));
+      const marks = db.prepare("DELETE FROM milestone_criterion_marks WHERE milestone_id = ?").run(id).changes;
+      return gone(Number(members) + Number(meta) + Number(marks));
     }
     case "queue":
       return gone(db.prepare("DELETE FROM queue_entries").run().changes);
+    case "attempt":
+      return gone(db.prepare("DELETE FROM attempts WHERE id = ?").run(id).changes);
+    case "attemptTransition":
+      return gone(db.prepare("DELETE FROM attempt_transitions WHERE id = ?").run(id).changes);
+    case "attachment":
+      return gone(db.prepare("DELETE FROM attachments WHERE id = ?").run(id).changes);
     default:
       return 0;
   }

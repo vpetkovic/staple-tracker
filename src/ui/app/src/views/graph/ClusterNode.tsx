@@ -28,6 +28,7 @@
 import { memo } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { cn } from "@/lib/utils";
+import { EpicProgress, EpicProgressEdge } from "./EpicProgress";
 import type { EpicSummary } from "./graph-clusters";
 import { NODE_H, NODE_W } from "./graph-layout";
 
@@ -44,7 +45,6 @@ export type ClusterFlowNode = Node<ClusterNodeData, "cluster">;
 
 export const ClusterNode = memo(function ClusterNode({ data }: NodeProps<ClusterFlowNode>) {
   const { epic, showWorkspace, dim, focused, onExpand } = data;
-  const complete = epic.total > 0 && epic.resolved === epic.total;
 
   return (
     <div
@@ -73,21 +73,16 @@ export const ClusterNode = memo(function ClusterNode({ data }: NodeProps<Cluster
           {showWorkspace ? `${epic.workspace} · ` : ""}
           {epic.id}
         </span>
-        <span
-          className={cn(
-            "ml-auto shrink-0 rounded-sm px-1 font-sans text-[10px] tabular-nums",
-            complete ? "text-muted-foreground" : "text-card-foreground",
-          )}
-          // The count is the reason to collapse; say what it counts out loud for anyone
-          // who cannot see the badge.
-          title={`${epic.resolved} of ${epic.total} tickets on this canvas are done`}
-        >
-          {epic.resolved}/{epic.total} done
-        </span>
+        <EpicProgress resolved={epic.resolved} total={epic.total} inlineBar={false} />
         <button
           type="button"
           // nodrag: a press here must not become a node drag. See the file header.
-          className="nodrag shrink-0 rounded-sm px-1 leading-none hover:bg-muted"
+          // Touch: the house 44px button rule (unlayered, hence the `!`) would push the title out of this fixed-size
+          // node, so the button keeps its drawn size and a ::before carries the target. On touch it
+          // reaches 10px up and about 8px right (the node clips past those), 28px down and 24px
+          // left, over the count: past 44px on screen from the tablet's minimum zoom of 1 up
+          // (graph/phone-fit.ts).
+          className="nodrag relative shrink-0 rounded-sm px-1 leading-none hover:bg-muted pointer-coarse:min-h-0! before:absolute before:-inset-3 before:content-[''] pointer-coarse:before:-top-2.5 pointer-coarse:before:-right-4 pointer-coarse:before:-bottom-7 pointer-coarse:before:-left-6"
           aria-label={`expand ${epic.id}`}
           onClick={(event) => {
             event.stopPropagation();
@@ -100,6 +95,7 @@ export const ClusterNode = memo(function ClusterNode({ data }: NodeProps<Cluster
       <div className="mt-0.5 line-clamp-2 text-[12px] leading-snug font-medium wrap-anywhere text-card-foreground">
         {epic.title}
       </div>
+      <EpicProgressEdge resolved={epic.resolved} total={epic.total} />
     </div>
   );
 });

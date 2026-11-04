@@ -19,12 +19,23 @@ import { z } from "zod";
 import { initWorkspace, resolveWorkspace } from "./core/workspace.js";
 import type { OpenedWorkspace } from "./core/workspace.js";
 import type { VocabularyOp, WorkspaceStore } from "./core/store.js";
-import { MILESTONE_STATES } from "./core/milestones.js";
+import { MILESTONE_STATES, assertNotReservedActor } from "./core/milestones.js";
+import { CRITERION_VERDICTS, PACE_VERDICTS } from "./core/milestone-goal.js";
 import { KIND_APPEARANCE_SOURCES, type KindWithAppearance } from "./core/kind-appearance.js";
-import { dirname } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { stapleHome } from "./config/home.js";
 import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
+import {
+  attemptEndFields,
+  attemptOpenFields,
+  attemptOptionsFromInput,
+  attemptOutputField,
+  recordAttemptEvent,
+  recordAttemptEventInput,
+  withAttemptResult,
+} from "./mcp-attempts.js";
 import { listConflicts, resolveConflict } from "./core/cloud/conflicts.js";
 import { localCloudStatus } from "./core/cloud/status.js";
 import {
@@ -33,8 +44,12 @@ import {
   type CloudSurfaceReport,
 } from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
+import { registerBudgetTools } from "./core/telemetry/mcp-tools.js";
+import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
+import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
+import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
 import {
   COMMENT_AUTHOR_TYPES,
   COMMENT_PAGE_LIMITS,
@@ -80,6 +95,7 @@ import type {
  */
 function requireActor(actor?: string, alias?: string): string {
   const resolved = actor?.trim() || alias?.trim() || process.env.STAPLE_AGENT?.trim();
+  assertNotReservedActor(resolved);
   if (resolved) return resolved;
   throw new StapleError(
     "validation",
@@ -177,7 +193,7 @@ const server = new McpServer({ name: "staple", version: "0.1.0" });
 /**
  * S10: this server's automatic-sync registration.
  *
- * Contract: `docs/sync.md`, "Three consents" — *"After automatic — bounded
+ * Contract: `design/sync.md`, "Three consents" — *"After automatic — bounded
  * triggers only: startup, post-write, long-running session."* An MCP server is
  * the canonical long-running session: one process, many writes, an agent at the
  * other end that will not think to synchronize.
@@ -216,8 +232,10 @@ const autoSync = new SurfaceAutoSync({
  * as on a disconnected one. And a failed tool fires nothing: `run()` reports
  * failure as `isError` rather than by throwing, so the check is on the value.
  */
+// `start_run` is not here: a goal run gates its milestone at start, a write that replicates.
+const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause_run", "resume_run"]);
 {
-  type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown> };
+  type ToolConfig = { annotations?: { readOnlyHint?: boolean }; inputSchema?: Record<string, unknown>; outputSchema?: unknown };
   type ToolCallback = (...args: unknown[]) => unknown;
   const direct = server.registerTool.bind(server) as unknown as (
     name: string,
@@ -282,12 +300,47 @@ const autoSync = new SurfaceAutoSync({
       "Write through an issue number even if it was renumbered on this device and the issue that moved off it may be the one you mean. Prefer naming the issue by its id.",
     );
 
+  /**
+   * `withNotices` adds `renumbered` to an object answer, so every output schema declares it
+   * (optional): a client that validates structured results against the listed schema (the
+   * SDK Client, Claude Code) would otherwise reject any answer that carries a notice. A tool
+   * whose answer already has its own `renumbered` keeps its declaration.
+   */
+  const RENUMBERED = z
+    .array(
+      z.object({
+        identifier: z.string(),
+        renumberedAt: z.string(),
+        issueId: z.string(),
+        nowIdentifier: z.string().nullable(),
+        removedByRestore: z.object({ title: z.string() }).optional(),
+        nowNames: z.object({ id: z.string(), identifier: z.string(), title: z.string() }).optional(),
+        nowNamesAnother: z.boolean(),
+        message: z.string(),
+      }),
+    )
+    .optional()
+    .describe("Identifiers this call used that were renumbered on this device, and what each names now");
+  const declaringNotices = (config: ToolConfig): ToolConfig => {
+    const output = config.outputSchema;
+    if (output === undefined || output === null) return config;
+    if (output instanceof z.ZodObject) {
+      return "renumbered" in output.shape ? config : { ...config, outputSchema: output.extend({ renumbered: RENUMBERED }) };
+    }
+    if (output instanceof z.ZodType) return config;
+    return "renumbered" in (output as Record<string, unknown>) ? config : { ...config, outputSchema: { ...(output as Record<string, unknown>), renumbered: RENUMBERED } };
+  };
+
   (server as unknown as { registerTool: unknown }).registerTool = (
     name: string,
-    config: ToolConfig,
+    rawConfig: ToolConfig,
     cb: ToolCallback,
-  ) =>
-    config.annotations?.readOnlyHint === true
+  ) => {
+    const config = declaringNotices(rawConfig);
+    // A machine-local write (budget samples in hub.db, autopilot runs) changes nothing that
+    // synchronizes and writes through no issue number, so it gets neither the renumber flag
+    // nor a post-write sync.
+    return config.annotations?.readOnlyHint === true || MACHINE_LOCAL_WRITES.has(name)
       ? direct(name, config, withNotices(cb))
       : direct(
           name,
@@ -295,6 +348,7 @@ const autoSync = new SurfaceAutoSync({
           config.inputSchema === undefined ? config : { ...config, inputSchema: { ...config.inputSchema, acknowledgeRenumber: ACKNOWLEDGE } },
           withNotices(afterWrite(acknowledging(cb))),
         );
+  };
 }
 
 /**
@@ -657,22 +711,167 @@ const timingShape = {
         .number()
         .nullable()
         .describe(
-          "BOTTOM-UP: sum of the DIRECT children's effective plans, the recursive counterpart of childrenEstimatedSeconds; null when no descendant at any depth has an estimate. Present even when an own estimate wins, so the two can be compared",
+          "BOTTOM-UP: sum of the DIRECT children's contributions (a cancelled child's own estimate drops out; live work beneath it still counts), the recursive counterpart of childrenEstimatedSeconds; null when no live descendant at any depth has an estimate. Present even when an own estimate wins, so the two can be compared",
         ),
       contributingCount: z
         .number()
         .describe(
-          "Descendants at any depth whose own estimate is a term of descendantsEstimatedSeconds; a descendant shadowed by an estimated ancestor beneath this issue is not counted",
+          "PLANNED UNITS: descendants at any depth whose own estimate is a term of descendantsEstimatedSeconds; a descendant shadowed by an estimated ancestor beneath this issue is covered by it, not counted",
         ),
-      totalCount: z.number().describe("Descendants at any depth, whatever their status; 0 for a leaf"),
+      unplannedCount: z
+        .number()
+        .describe(
+          "UNPLANNED UNITS: live descendants with no live work beneath them, no own estimate and no estimated ancestor beneath this issue. Coverage is contributingCount of contributingCount + unplannedCount; cancelled subtrees are neither",
+        ),
+      totalCount: z.number().describe("Descendants at any depth, whatever their status, shadowed and cancelled included; 0 for a leaf"),
     })
     .describe(
       "Recursive, non-double-counting plan for the subtree: an issue contributes its own estimate if it has one, otherwise its children's contributions — never both",
     ),
+  /**
+   * The effort and elapsed fields of `design/timing-semantics.md`. `workSeconds` is the estimate
+   * ratio's actual and reads the same on every device; `wall` is device-local.
+   */
+  workSeconds: z
+    .number()
+    .nullable()
+    .describe(
+      "AGENT WORK: worker-lane attempts only, measured from replicated data (attempt rows, transitions, the agent's comments and doc revisions), pauses excluded. Leaf: ownWorkSeconds; parent: sum of direct children's; null when cancelled or unmeasured (reason in missing.workSeconds). The estimate ratio's actual",
+    ),
+  ownWorkSeconds: z.number().nullable().describe("This issue's own worker attempts, any status; null when it has none"),
+  orchestrationSeconds: z
+    .number()
+    .nullable()
+    .describe("Orchestrator-lane attempts on this issue plus its children's; never part of workSeconds; null when none in the subtree"),
+  leadSeconds: z.number().nullable().describe("createdAt to wall.startAt: time before any work began"),
+  estimateRatio: z
+    .number()
+    .nullable()
+    .describe("workSeconds / estimatedSeconds, only for an issue with its own estimate, resolved done, with work quality exact"),
+  wall: z
+    .object({
+      startAt: z.string(),
+      endAt: z.string().nullable(),
+      through: z.string().nullable(),
+      seconds: z.number(),
+      buckets: z.record(z.string(), z.number()),
+    })
+    .nullable()
+    .describe(
+      "Elapsed span and its partition, device-local: leaf buckets work, paused, silent, interrupted, unattributed, review, gated, blocked, queued, resolved; parent buckets active, review, gated, blocked, queued, resolved. Null: missing.wall says never_started or replay_unavailable",
+    ),
+  resumeGaps: z
+    .array(
+      z.object({
+        attemptId: z.string().describe("The interrupted worker attempt"),
+        resumedByAttemptId: z.string().describe("The attempt whose resumesAttemptId names it"),
+        endedAt: z.string().describe("The interrupted attempt's end: stored endedAt, or the orphan's endedAtBound"),
+        resumedAt: z.string().describe("The resuming attempt's startedAt"),
+        resumeGapSeconds: z.number().describe("resumedAt - endedAt: how long the interrupted work waited to be picked up again"),
+        clockSkew: z.boolean().describe("The gap runs backwards by more than a second (the two devices' clocks disagree): resumeGapSeconds is a clamped 0, not a measurement"),
+      }),
+    )
+    .nullable()
+    .describe("This issue's worker-lane chain links, oldest first: each interrupted attempt that was resumed, and how long it waited. Empty when nothing was resumed"),
+  quality: z
+    .object({
+      work: z.object({
+        state: z.enum(["missing", "reconstructed", "approximate", "timing-floor", "exact"]).nullable(),
+        inputs: z.array(z.string()),
+        reasons: z.array(z.string()).describe("Every reason that produced the state, highest precedence first: the missing code, reconstructed, the approximate inputs, timing_floor"),
+        coverage: z.object({ known: z.number(), total: z.number(), partial: z.boolean() }).nullable(),
+        missingInputs: z.array(z.string()),
+      }),
+      wall: z.object({
+        state: z.enum(["missing", "approximate", "exact"]).nullable(),
+        inputs: z.array(z.string()),
+        reasons: z.array(z.string()).describe("missing.wall's code when wall is null, else the inputs (and timing_approximate)"),
+      }),
+    })
+    .describe("One quality state per record (work: missing > reconstructed > approximate > timing-floor > exact, from replicated inputs only; wall: missing > approximate > exact) and the reasons that produced it"),
+  missing: z.record(z.string(), z.string()).describe("Why each null effort or elapsed field is null"),
 };
 type _TimingShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof timingShape>>, IssueTiming>
 >;
+
+/**
+ * The certified plan (`core/plan-rollup.ts`): `planSummary` on get_task, one entry per ref of
+ * compare_plans. Typed against the interface, like `timingShape`, so the schema cannot drift.
+ */
+const pathShape = {
+  seconds: z
+    .number()
+    .nullable()
+    .describe("The longest chain's weight; null (no_plan) when no counted unit is planned, never a silent 0"),
+  partial: z.boolean().describe("A counted unit is unplanned, or a cycle was broken: a lower bound"),
+  missing: z.array(z.string()).describe("no_plan, unplanned_units, dependency_cycle"),
+  chain: z
+    .array(z.object({ ref: z.string(), seconds: z.number().nullable(), status: z.string() }))
+    .describe("The chain first to last, at most 100 steps; empty when seconds is null; step seconds null = an unplanned unit, unknown, not 0"),
+  chainLength: z.number(),
+  exceedsLabor: z
+    .boolean()
+    .describe("labor.source is own and this path is longer than that own estimate: the structure beneath says more than the estimate"),
+};
+const planSummaryShape = {
+  labor: z
+    .object({
+      seconds: z
+        .number()
+        .nullable()
+        .describe("TOTAL LABOR: every planned unit once — the own estimate if set, else the sum of the units beneath; never a parent's estimate on top of its descendants'. Cancelled work is excluded. Null when nothing is planned"),
+      source: z.enum(["own", "descendants", "none"]).describe("own = this issue's own estimate; descendants = the sum of its units"),
+      ownSeconds: z.number().nullable(),
+      descendantsSeconds: z.number().nullable().describe("The bottom-up sum of the planned units beneath, kept beside an own estimate"),
+    })
+    .describe("= timing.subtreePlan"),
+  coverage: z
+    .object({
+      planned: z.number(),
+      unplanned: z.number(),
+      units: z.number().describe("planned + unplanned. A unit is a live issue with its own estimate (shadowing everything under it) or a live issue with no estimate and no live work beneath"),
+      partial: z.boolean().describe("Some unit is unplanned: labor (when source is descendants) and the paths are lower bounds"),
+      unplannedRefs: z.array(z.string()).describe("At most 20"),
+      cancelled: z.number().describe("Issues beneath whose own status is cancelled; their estimates are no labor, while live work under a cancelled parent still counts"),
+    })
+    .describe("Estimate coverage over plan units"),
+  criticalPath: z
+    .object({
+      ...pathShape,
+      edgeCount: z.number().describe("In-subtree dependency edges the paths were computed over"),
+      cycle: z.array(z.string()).describe("Units on a dependency cycle broken to compute the paths; normally empty"),
+      crossSubtreeBlockers: z
+        .array(z.object({ blocked: z.string(), blocker: z.string(), blockerStatus: z.string(), resolved: z.boolean() }))
+        .describe("Blockers OUTSIDE the subtree on issues inside it, unresolved first, at most 20; listed, never folded into a path"),
+      crossSubtreeBlockerCount: z.number(),
+      unresolvedCrossSubtreeBlockerCount: z.number(),
+    })
+    .describe(
+      "The PLANNED path: the longest in-subtree blockedBy chain of units, every unit at its estimate (done ones included), parallel branches taking the max. A plan figure, not a forecast",
+    ),
+  remainingPath: z
+    .object(pathShape)
+    .describe(
+      "The REMAINING path: the longest chain over the same graph, with done units weighing 0 (and left off chain); it can follow a different chain from the planned path. 0 when every unit is done; a unit in progress still weighs its full estimate",
+    ),
+};
+type _PlanSummaryShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof planSummaryShape>>, PlanSummary>>;
+const comparePlansShape = {
+  plans: z.array(
+    z.object({
+      ref: z.string(),
+      title: z.string(),
+      kind: z.string(),
+      status: z.string(),
+      ...planSummaryShape,
+    }),
+  ),
+  overlaps: z
+    .array(z.object({ ref: z.string(), within: z.string() }))
+    .describe("A compared issue that lies inside another compared issue: its labor is already part of the other's, so never add the two"),
+};
+type _ComparePlansShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof comparePlansShape>>, PlanComparison>>;
 
 /**
  * Attached to the DETAIL surface only, never to `list_tasks`/`inbox`.
@@ -799,6 +998,20 @@ const documentMetaShape = {
   title: z.string().nullable(),
   updatedAt: z.string(),
   body: z.string().optional().describe("Current revision body; only with include_documents"),
+};
+
+/** What get_task and list_files return. Never the bytes. */
+const attachmentMetaShape = {
+  id: z.string(),
+  issueId: z.string(),
+  filename: z.string(),
+  mediaType: z.string(),
+  size: z.number().int(),
+  sha256: z.string(),
+  author: z.string().nullable(),
+  caption: z.string().nullable(),
+  byteSync: z.enum(["inline", "local"]),
+  createdAt: z.string(),
 };
 
 /** Mirrors hub.CrossBlockerState: status null + unresolvable = file not on this machine. */
@@ -934,7 +1147,7 @@ server.registerTool(
   "get_task",
   {
     description:
-      "Full context for one issue: the issue, ancestors (the why), children, blockers/dependents, latest comments, document list, and cross-workspace blockers from the hub (same view the web UI shows). Pass include_documents to inline document bodies.",
+      "Full context for one issue: the issue, ancestors (the why), children, blockers/dependents, latest comments, document list, file metadata, and cross-workspace blockers from the hub (same view the web UI shows). Pass include_documents to inline document bodies. File bytes are never included.",
     inputSchema: {
       ref: refSchema,
       include_documents: z
@@ -951,12 +1164,38 @@ server.registerTool(
       blocks: z.array(z.object(issueRefShape)),
       comments: z.array(z.object(commentShape)),
       documents: z.array(z.object(documentMetaShape)),
+      attachments: z
+        .array(z.object(attachmentMetaShape))
+        .describe("Files on this issue. Metadata only; the bytes are a separate call."),
       crossBlockers: z
         .array(z.object(crossBlockerShape))
         .describe("Cross-workspace blockers via the hub; [] when the hub is unavailable"),
       ...claimField,
       ...gateFields,
       ...timingField,
+      attempts: z
+        .object({
+          current: z.record(z.string(), z.unknown()).nullable(),
+          last: z.record(z.string(), z.unknown()).nullable(),
+          count: z.number(),
+        })
+        .describe(
+          "Execution attempts on this issue, worker lane, as they read now: the effectively open one, the newest ended one, and how many. list_attempts pages them all.",
+        ),
+      orchestration: z
+        .object({
+          current: z.record(z.string(), z.unknown()).nullable(),
+          count: z.number(),
+        })
+        .describe(
+          "The orchestrator lane on this issue (design/timing-semantics.md): the effectively open orchestrator attempt, and how many. Opened only by record_attempt_event event=open role=orchestrator; never part of workSeconds.",
+        ),
+      planSummary: z
+        .object(planSummaryShape)
+        .nullable()
+        .describe(
+          "The certified plan of a parent: total labor, estimate coverage and critical path, as compare_plans reports them. Null for an issue with no children, whose plan is its own estimate on timing.",
+        ),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -985,8 +1224,124 @@ server.registerTool(
         gate: store.gate(context.issue.id),
         queuedBy: store.queuedBy(context.issue.id),
         ...store.detailTiming(context.issue.id),
+        attempts: store.attemptSummary(context.issue.id),
+        orchestration: store.orchestrationSummary(context.issue.id),
+        planSummary: store.planSummary(context.issue.id),
       };
     }),
+);
+
+server.registerTool(
+  "compare_plans",
+  {
+    description:
+      "Compare named issues (epics) as plans, with no tree dump. Per ref: labor (total labor, every planned unit once: an issue's own estimate over its descendants, never both; a cancelled issue's own estimate excluded, live work beneath it still counted), coverage (planned of units, unplanned refs; partial means a lower bound, never a silent 0), criticalPath (the PLANNED path: the longest blockedBy chain inside the subtree weighted by estimate, done units included, parallel branches taking the max, plus blockers from outside the subtree listed separately) and remainingPath (the longest chain over the same graph, with done units weighing 0; it can follow a different chain). exceedsLabor flags a path longer than an own estimate. overlaps names a ref that lies inside another ref, whose labor must not be added to it. Same payload as `staple compare <ref> <ref> --json`.",
+    inputSchema: {
+      refs: z.array(z.string()).min(1).max(20).describe("1 to 20 issue identifiers or ids"),
+      ws: wsSchema,
+    },
+    outputSchema: comparePlansShape,
+    annotations: { title: "Compare plans", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ refs, ws }) => run(() => storeFor(ws).comparePlans(refs)),
+);
+
+server.registerTool(
+  "timing_quality",
+  {
+    description:
+      "How much of a population's timing can be trusted, for analytics filtering (design/timing-semantics.md, \"Quality states\"). Every timing record has exactly one quality state with the reasons that produced it: work (the estimate ratio's actual) is exact, timing-floor (under 60 s: quick, and little more), approximate (sparse, capture_gap, contested, partial, ...), reconstructed (backfilled before capture) or missing; wall is exact, approximate or missing. Eligible population, the denominator of every coverage figure: the leaves resolved done in the filter. Returns counts and coverage per state, how many records carry each reason, the estimate ratio over done issues with their own estimate and no estimated descendant (exact records only, and over the admitted states), and the eligible records themselves, bounded and cursored. include names the states kept (default all) and exclude the states dropped; a record is kept only when its state and the level of every reason it carries are kept, so exclude [\"approximate\"] also drops a reconstructed record that is sparse, and include [\"exact\"] is exact records only. exclude_reasons drops records carrying a reason code whatever their state (e.g. [\"sparse\"]). Dropped records leave items and the admitted ratio; counts and coverage never change, and nothing is dropped by default, so timing-floor records stay listed. Same payload as `staple timing quality --json`.",
+    inputSchema: {
+      kind: z.array(z.string()).optional().describe("Only these kinds"),
+      parent: z.string().optional().describe("Only issues beneath this issue (identifier or id)"),
+      since: z.string().optional().describe("Resolved at or after: an ISO-8601 instant, or a duration meaning that long ago (7d, 12h)"),
+      include: z.array(z.string()).optional().describe("Work states the analysis keeps (default all): a record is kept only when its state and the level of every reason it carries are kept. [\"exact\"] is exact records only; [\"exact\", \"reconstructed\"] adds reconstructed records with nothing approximate, missing or under a minute about them"),
+      exclude: z.array(z.string()).optional().describe("Work states to drop from the analysis: every record whose state or any reason is at that level (exclude approximate also drops a reconstructed record that is sparse). missing, reconstructed, approximate, timing-floor, exact"),
+      exclude_reasons: z.array(z.string()).optional().describe("Reason codes to drop from the analysis, whatever the record's state: sparse, capture_gap, timing_floor, ..."),
+      limit: z.number().optional().describe("Records listed: a positive integer, default 50, at most 500 (a larger value is clamped)."),
+      cursor: z.string().optional().describe("Opaque cursor from the previous page's nextCursor, with the same other arguments."),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      asOf: z.string(),
+      filter: z.record(z.string(), z.unknown()),
+      population: z.record(z.string(), z.unknown()),
+      work: z.record(z.string(), z.unknown()),
+      wall: z.record(z.string(), z.unknown()),
+      ratio: z.record(z.string(), z.unknown()),
+      excluded: z.record(z.string(), z.unknown()),
+      items: z.array(z.record(z.string(), z.unknown())),
+      truncated: z.boolean().describe("Stated, never inferred: true when more records follow this page."),
+      nextCursor: z.string().nullable(),
+    },
+    annotations: { title: "Timing quality", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ kind, parent, since, include, exclude, exclude_reasons, limit, cursor, ws }) =>
+    run(() => storeFor(ws).timingQuality({ kind, parent, since, include, exclude, excludeReasons: exclude_reasons, limit, cursor })),
+);
+
+server.registerTool(
+  "calibration_cohorts",
+  {
+    description:
+      "Calibration cohorts: how long work of a class takes against its estimate, from trusted samples only (design/timing-semantics.md, \"Calibration cohorts\"). Samples are done issues with their own estimate and no estimated descendant whose work is exact; approximate, timing-floor and missing records are never samples, and are counted under excluded. Each sample divides its workSeconds by the first worker attempt's estimateAtStart, else the current estimate, and says which. A cohort key is kind, priority, workType (label type:<x>), area (label area:<x>) and model (the worker attempts' harness model; unknown when none). A key with fewer than method.minSamples (5) samples falls back, dropping model, then area, then work type, then priority, then kind, to the first class with enough; each cohort reports the level read, the path with the count at each level, n, coverage (samples over the eligible issues in the class, denominator named), the median and pooled ratio, the median workSeconds, bounded member refs and the exclusions by state and reason. include [\"reconstructed\"] adds backfilled history as a separate set with its own cohorts, never pooled with exact. snapshot.id identifies the data the report came from: the same data gives the same id on every device. list \"samples\" lists the samples instead of the cohorts. Confidence ranges (design/timing-semantics.md, \"Confidence ranges\"): ratio and workSeconds each carry quantiles p10/p25/p50/p75/p90 (the lower quantile, index floor(p(n-1))), a distribution-free order-statistic interval for each at method.confidence (0.9), and bounds, the prediction interval for one more sample; every interval states the confidence it reaches and reached=false below the target, never a wider claim. tail tests ln(ratio) for a heavy tail from 10 samples (modified z-score over 3.5, and more than ln 1.05 from the median, on at least 3 samples and 5% of them); a heavy-tailed cohort's ratio.expected is the pooled ratio clipped at the fences (fence_clipped_pooled), never the mean, and it reads low on that class. floors lists the class's timing-floor members (work under 60s, never samples): more floors than samples, with at least 5 of the two, reads floor_dominated. warnings is a closed list: small_sample, bounds_below_confidence, quantile_below_confidence, fallback_used, heavy_tail, floor_dominated, floors_excluded, reconstructed_only, no_samples. for [refs] adds forecasts: per issue and evidence set, the cohort its key reads times its own estimate (seconds p10..p90, bounds, expected), state floor for a floor-dominated class (expected 60s, floor_bound), with the cohort's warnings; an issue with no attempt yet matches any model unless model pins one. Along a path only expected.seconds adds: quantiles and bounds of a sum are not the sums of quantiles or bounds. Same payload as `staple calibrate --json`.",
+    inputSchema: {
+      kind: z.array(z.string()).optional().describe("Only these kinds"),
+      priority: z.array(z.string()).optional().describe("Only these priorities"),
+      parent: z.string().optional().describe("Only issues beneath this issue (identifier or id)"),
+      since: z.string().optional().describe("Resolved at or after: an ISO-8601 instant, or a duration meaning that long ago (7d, 12h)"),
+      include: z.array(z.string()).optional().describe("Evidence sets beyond exact, which is always read: [\"reconstructed\"] adds reconstructed history (with nothing approximate, missing or under a minute about it) as its own cohorts"),
+      list: z.enum(["cohorts", "samples"]).optional().describe("What items lists: cohorts (default) or samples"),
+      limit: z.number().optional().describe("Rows listed: a positive integer, default 50, at most 500 (a larger value is clamped)."),
+      cursor: z.string().optional().describe("Opaque cursor from the previous page's nextCursor, with the same other arguments."),
+      for: z.array(z.string()).optional().describe("Issues (identifier or id) to forecast a duration for: forecasts lists one per issue and evidence set. An issue with no worker attempt yet matches any model"),
+      model: z.string().optional().describe("With for: the model the work will run on, pinned in each forecast's key (as --model on checkout names it)"),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      asOf: z.string(),
+      filter: z.record(z.string(), z.unknown()),
+      snapshot: z.record(z.string(), z.unknown()).describe("{id, algorithm, repositoryId, members, samples}: the identity of the data the report came from"),
+      method: z.record(z.string(), z.unknown()),
+      population: z.record(z.string(), z.unknown()),
+      sets: z.array(z.record(z.string(), z.unknown())),
+      list: z.enum(["cohorts", "samples"]),
+      items: z.array(z.record(z.string(), z.unknown())),
+      forecasts: z.array(z.record(z.string(), z.unknown())).describe("One duration forecast per issue in for and per evidence set read; empty without for"),
+      truncated: z.boolean().describe("Stated, never inferred: true when more rows follow this page."),
+      nextCursor: z.string().nullable(),
+      missing: z.record(z.string(), z.string()),
+    },
+    annotations: { title: "Calibration cohorts", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ kind, priority, parent, since, include, list, limit, cursor, for: forecast, model, ws }) =>
+    run(() => storeFor(ws).calibration({ kind, priority, parent, since, include, list, limit, cursor, for: forecast, model })),
+);
+
+server.registerTool(
+  "forecast",
+  {
+    description:
+      "Forecast an issue's completion and, separately, what that work costs this machine's provider budget (design/timing-semantics.md, \"Forecasts\"). completion: the certified plan's units beneath ref (a leaf is its own unit), each forecast from its calibrated duration (the exact set, the class calibration_cohorts for [ref] reads) less the work already done: done units weigh 0, units in review or gated weigh 0 and are listed (review waits and rework are not forecast), a unit with no samples, no estimate or worked past every sample of its class is unknown, never 0, and turns sums partial. labor is the remaining work added; path is the longest dependency chain of remaining work (effort along the chain, not calendar time). expectedSeconds adds each unit's expected remainder (the calibrated figure when unworked, the mean of the admissible remainders once work has started); simulated is from resampling each unit's class sample ratios (conditioned on the unit not being done) with a fixed seed (method.seed, method.draws), so the same data reads the same everywhere: mean, p10/p50/p90 and band (p5-p95, nominal 0.9). confidence.achieved is the lowest prediction-bounds confidence of the classes drawn from; label high/medium/low with reasons; warnings carry the calibration warnings and unknown_units, beyond_class_range, overrun, few_admissible, awaiting_review, independent_draws, dependency_cycle, unresolved_outside_blockers. budget (machine-local, never blended with completion): per account and limit, the current window's high-water remainingPercent, resetsAt, pace (%/hour of wall clock over the window's readings), exhaustion at that pace before or after the reset, workRate (%/work-hour: the window's rise over the union of this workspace's worker attempt spans, per hour of their work, so concurrent attempts count once, spans with another session's readings or a reading naming no session (shared_use) left out when unshared ones exist, sparse edge readings flagged; its own bootstrap band and confidence), otherUse (%/hour outside those spans, from at least 30 minutes and 2 readings there, with a confidence; withOtherUse adds it only for the hours the work is not running), and for the remaining labor run serially from now through the reset and the windows after it: consumedPercent, beforeResetPercent, remainingAtResetPercent, outlastsResetProbability, exhaustionProbability, and reserve.breachProbability (the work alone, any window it runs in), currentWindowBreachProbability and withOtherUse. completion.settled is false while a unit is in review; completion.review lists those units. reserve is a parameter; without it a provisional default applies and says so (the admission policy will define it). A stale, elapsed or sliding window, no attempt burn or unknown labor reads null with the reason in missing (input_missing lists missingInputs), never 0. snapshot.id identifies the completion inputs (the same on every device, over calibration snapshot.id); snapshot.budget.id this machine's budget data. Same payload as `staple forecast <ref> --json`.",
+    inputSchema: {
+      ref: refSchema,
+      reserve: z.union([z.string(), z.number()]).optional().describe("The protected reserve, a percent of each limit (20 or \"20%\"); a provisional default otherwise"),
+      account: z.string().optional().describe("Only this provider account's budget"),
+      model: z.string().optional().describe("The model the work will run on, pinned in every unit's key (as --model on checkout names it)"),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      asOf: z.string(),
+      subject: z.record(z.string(), z.unknown()),
+      filter: z.record(z.string(), z.unknown()),
+      snapshot: z.record(z.string(), z.unknown()).describe("{id, algorithm, calibration: {id, ...}, budget: {id, machineLocal}}: what the forecast read"),
+      method: z.record(z.string(), z.unknown()),
+      completion: z.record(z.string(), z.unknown()).describe("{set, units, plan, labor, path, confidence, warnings}"),
+      budget: z.record(z.string(), z.unknown()).describe("{machineLocal, budgetCapture, reserve, work, accounts, missing}"),
+    },
+    annotations: { title: "Forecast", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ref, reserve, account, model, ws }) => run(() => storeFor(ws).forecast({ ref, reserve, account, model })),
 );
 
 server.registerTool(
@@ -1060,9 +1415,17 @@ server.registerTool(
       labels: z.array(z.string()).optional(),
       unblock_owner: z.string().nullable().optional(),
       unblock_action: z.string().nullable().optional(),
-      estimate_seconds: estimateSchema,
+      /**
+       * Its own description: update_task still takes an estimate beside other fields, but
+       * an estimate-only change has one documented form, set_estimate.
+       */
+      estimate_seconds: estimateSchema.describe(
+        "Plan-time estimate in SECONDS (90m = 5400, 2h = 7200), written in the same patch as the other fields. Must be a positive whole number of seconds, at most 365d. Pass null to clear; omit to leave unchanged. To change only the estimate, use set_estimate.",
+      ),
       expected_status_version: z.number().int().optional(),
       comment: z.string().optional(),
+      ...attemptOpenFields,
+      ...attemptEndFields,
       actor: actorSchema,
       ws: wsSchema,
     },
@@ -1095,9 +1458,64 @@ server.registerTool(
           comment: input.comment,
         },
         actor,
+        attemptOptionsFromInput(input),
       );
       notifyHubIfResolved(store, input.ref, input.status);
-      return updated;
+      return withAttemptResult(store, updated);
+    }),
+);
+
+/**
+ * The explicit estimate write: `WorkspaceStore.setEstimate`, the same method as
+ * `staple estimate` and the HTTP `estimate` action.
+ *
+ * `estimate_seconds` is REQUIRED, unlike on update_task where absence means "leave
+ * it alone": this tool exists only to change the estimate, so a missing value is a
+ * refused call (the SDK's schema check), never a clear. Null is the clear — the
+ * same explicit value update_task and create_task already use for it.
+ *
+ * idempotentHint is TRUE and honest: the write is an absolute set, and repeating it
+ * finds the value already there and returns `estimateChange.changed: false` with
+ * no event and nothing to sync.
+ */
+server.registerTool(
+  "set_estimate",
+  {
+    description:
+      "Change ONLY an issue's plan-time estimate — no status to restate, no claim needed (like a status write, any actor may; the estimate_changed event records who). estimate_seconds is required: a number sets it, null clears it. Repeating the same value is a no-op that answers estimateChange.changed: false. Returns the issue plus estimateChange {from, to, changed}.",
+    inputSchema: {
+      ref: refSchema,
+      estimate_seconds: z
+        .number()
+        .nullable()
+        .describe(
+          "Plan-time estimate in SECONDS (90m = 5400, 2h = 7200): a positive whole number, at most 365d. null clears it. Required — there is no 'leave unchanged' here.",
+        ),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: {
+      ...issueShape,
+      estimateChange: z
+        .object({
+          from: z.number().nullable().describe("The estimate before this call, in seconds; null when none was recorded"),
+          to: z.number().nullable().describe("The estimate after this call; null when cleared"),
+          changed: z.boolean().describe("False when the issue already carried `to`: nothing was written"),
+        })
+        .describe("What this call did to the estimate"),
+    },
+    annotations: {
+      title: "Set estimate",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, estimate_seconds, actor, ws }) =>
+    run(() => {
+      const result = storeFor(ws).setEstimate(ref, estimate_seconds, requireActor(actor));
+      return { ...result.issue, estimateChange: { from: result.from, to: result.to, changed: result.changed } };
     }),
 );
 
@@ -1124,9 +1542,10 @@ server.registerTool(
         .describe(
           "HUMAN OVERRIDE — do not send this on your own initiative. Takes a row out of turn under queue.policy = strict, recording who did it and why in a `queue_overridden` event. The reason is mandatory (an empty one is refused), it skips ONLY the out_of_order check, and it never bypasses a blocker, a gate or a live claim. If you hit out_of_order, take `detail.expected[0]` instead and let a human decide to override.",
         ),
+      ...attemptOpenFields,
       ws: wsSchema,
     },
-    outputSchema: issueShape,
+    outputSchema: { ...issueShape, ...attemptOutputField },
     /**
      * destructiveHint: TRUE since steal_if_idle_seconds exists. MCP defines the
      * hint as "may perform destructive updates" vs "only additive updates", and
@@ -1148,15 +1567,16 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, override_reason, ws }) =>
-    run(() =>
-      storeFor(ws).checkoutIssue(
-        ref,
-        requireActor(actor, agent),
-        expected_statuses as IssueStatus[] | undefined,
-        { stealIfIdleSeconds: steal_if_idle_seconds, overrideReason: override_reason },
-      ),
-    ),
+  ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, override_reason, ws, ...attempt }) =>
+    run(() => {
+      const store = storeFor(ws);
+      const issue = store.checkoutIssue(ref, requireActor(actor, agent), expected_statuses as IssueStatus[] | undefined, {
+        stealIfIdleSeconds: steal_if_idle_seconds,
+        overrideReason: override_reason,
+        attempt: attemptOptionsFromInput(attempt),
+      });
+      return withAttemptResult(store, issue);
+    }),
 );
 
 server.registerTool(
@@ -1175,6 +1595,7 @@ server.registerTool(
         .describe(
           "Release only if the CURRENT holder's last activity is at least this old. Replaces the ownership check, so a caller can free a dead agent's claim without impersonating it. Refused if the holder is fresher than this, naming them and their last activity.",
         ),
+      ...attemptEndFields,
       ws: wsSchema,
     },
     // destructiveHint: TRUE for the same reason as checkout_task — with
@@ -1187,15 +1608,40 @@ server.registerTool(
       openWorldHint: false,
     },
   },
-  ({ ref, actor, agent, if_idle_seconds, ws }) =>
+  ({ ref, actor, agent, if_idle_seconds, ws, outcome, reason, role }) =>
     run(() => {
       // An issue a restore removed has no checkout or lease left: said, not refused.
       const gone = storeFor(ws).removedByRestore(ref);
       if (gone !== null) return { released: false, removedByRestore: gone };
-      return storeFor(ws).releaseIssue(ref, requireActor(actor, agent), {
+      const store = storeFor(ws);
+      const released = store.releaseIssue(ref, requireActor(actor, agent), {
         ifIdleSeconds: if_idle_seconds,
+        attempt: attemptOptionsFromInput({ outcome, reason, role }),
       });
+      return withAttemptResult(store, released);
     }),
+);
+
+server.registerTool(
+  "record_attempt_event",
+  {
+    description:
+      "Report on the attempt you hold on an issue (design/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (design/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry.",
+    inputSchema: {
+      ref: refSchema,
+      ...recordAttemptEventInput,
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    annotations: {
+      title: "Record attempt event",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, actor, ws, ...input }) => run(() => recordAttemptEvent(storeFor(ws), ref, requireActor(actor), input)),
 );
 
 /**
@@ -1209,7 +1655,7 @@ server.registerTool(
   "gate_task",
   {
     description:
-      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. Re-gating after request_changes is how you resubmit for a second read.",
+      "Park a PARENT behind a human review gate. It moves to awaiting_approval, its claim is cleared (nobody is working it), and every open descendant becomes QUEUED: they leave the inbox `ready` bucket and checkout_task on them is refused with code `gated`. Only OPEN work is queued — done and cancelled issues are never queued, and neither is a parent that has nothing open left underneath it, because there is nothing there to release. Refused on an issue with no children (use status in_review for a leaf awaiting a human) and while a gate is already pending. A milestone with members is gateable: its gate holds the milestone's own close for review and queues nothing through membership (members stay workable; only issues parented under it are queued). Re-gating after request_changes is how you resubmit for a second read.",
     inputSchema: {
       ref: refSchema,
       owner: z
@@ -1439,6 +1885,102 @@ server.registerTool(
     annotations: { title: "Read document", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
   ({ ref, key, revision, ws }) => run(() => storeFor(ws).getDocument(ref, key, revision)),
+);
+
+server.registerTool(
+  "list_files",
+  {
+    description:
+      "List the files attached to an issue. Metadata only: filename, sniffed media type, size, SHA-256, and whether the bytes travelled. Never the bytes.",
+    inputSchema: { ref: refSchema, ws: wsSchema },
+    outputSchema: { files: z.array(z.object(attachmentMetaShape)) },
+    annotations: { title: "List files", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ref, ws }) => run(() => ({ files: storeFor(ws).listFiles(ref) })),
+);
+
+server.registerTool(
+  "attach_file",
+  {
+    description:
+      "Attach a file to an issue. Pass path (a file on this machine) or bytes_base64, and a filename when the bytes are not a path. The media type is sniffed from the bytes, not the name. A file over 32 MiB is refused and nothing is written. A file small enough to inline syncs its bytes; a larger one syncs metadata only.",
+    inputSchema: {
+      ref: refSchema,
+      path: z.string().optional().describe("Path of the file on this machine"),
+      bytes_base64: z.string().optional().describe("The file, base64, when it is not a path"),
+      filename: z.string().optional().describe("Name to store. Required with bytes_base64; defaults to the path's base name"),
+      caption: z.string().max(280).optional(),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: attachmentMetaShape,
+    annotations: {
+      title: "Attach file",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ ref, path, bytes_base64, filename, caption, actor, ws }) =>
+    run(() => {
+      if ((path === undefined) === (bytes_base64 === undefined)) {
+        throw new StapleError("validation", "attach_file needs a path or bytes_base64, and not both.");
+      }
+      const bytes = path !== undefined ? readFileSync(path) : Buffer.from(bytes_base64!, "base64");
+      const name = filename ?? (path !== undefined ? basename(path) : "");
+      if (!name) throw new StapleError("validation", "attach_file needs a filename when the bytes are base64.");
+      return storeFor(ws).attachFile(ref, {
+        filename: name,
+        bytes,
+        caption: caption ?? null,
+        author: requireActor(actor),
+      });
+    }),
+);
+
+server.registerTool(
+  "export_file",
+  {
+    description:
+      "Write one attachment's bytes to a path on this machine. The result is the metadata plus that path, never the bytes. A file whose bytes did not travel with sync is not_found and says so.",
+    inputSchema: {
+      id: z.string().describe("Attachment id"),
+      out: z.string().describe("Path to write"),
+      ws: wsSchema,
+    },
+    outputSchema: { ...attachmentMetaShape, out: z.string() },
+    annotations: {
+      title: "Export file",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  ({ id, out, ws }) =>
+    run(() => {
+      const file = storeFor(ws).readFile(id);
+      writeFileSync(out, file.bytes);
+      return { ...file.meta, out };
+    }),
+);
+
+server.registerTool(
+  "remove_file",
+  {
+    description: "Remove an attachment. A second call finds nothing and is refused with not_found.",
+    inputSchema: { id: z.string(), actor: actorSchema, ws: wsSchema },
+    outputSchema: attachmentMetaShape,
+    annotations: {
+      title: "Remove file",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  ({ id, actor, ws }) => run(() => storeFor(ws).removeFile(id, requireActor(actor))),
 );
 
 server.registerTool(
@@ -1886,7 +2428,7 @@ server.registerTool(
     }),
 );
 
-// ---------- milestones (docs/milestones.md, STA-172) ----------
+// ---------- milestones (design/milestones.md, STA-172) ----------
 
 /**
  * One shape for every milestone tool, and the same one the CLI prints under
@@ -1904,10 +2446,13 @@ const milestoneSummaryShape = {
   status: statusEnum,
   kind: kindSchema,
   assignee: z.string().nullable(),
+  description: z.string().nullable().describe("The issue's own description: what the milestone is for"),
+  acceptanceCriteria: z.array(z.string()).describe("The issue's own acceptance criteria: the milestone's goal"),
   targetDate: z.string().nullable().describe("YYYY-MM-DD, due by the END of that UTC day"),
   startDate: z.string().nullable(),
   state: z.enum(MILESTONE_STATES).describe("Derived on every read: done | cancelled | overdue | active | planned"),
   planPosition: z.number().nullable().describe("The milestone's own row in the pickup plan; null when it is not queued"),
+  closedAt: z.string().nullable().describe("When it was closed: completedAt when done, cancelledAt when cancelled; else null"),
 };
 const milestoneMemberShape = {
   issueId: z.string().describe("The member's issue id — name it by this in a write"),
@@ -1930,6 +2475,64 @@ const milestoneProgressShape = {
   percent: z.number().nullable().describe("floor(done·100/countable); null when nothing is countable"),
   complete: z.boolean(),
 };
+/** The goal check (`milestone-goal.ts`): each criterion's verdict with its evidence, and the pace. */
+const milestoneGoalShape = z
+  .object({
+    criteria: z.array(
+      z.object({
+        position: z.number().describe("1-based"),
+        text: z.string(),
+        verdict: z.enum(CRITERION_VERDICTS).describe("What the check makes of it now; unknown unless a mark stands"),
+        marked: z.enum(CRITERION_VERDICTS).nullable().describe("What was marked; differs from verdict when the mark no longer stands"),
+        evidence: z.array(
+          z.object({
+            kind: z.enum(["ticket", "document", "text"]),
+            value: z.string(),
+            ref: z.string().nullable(),
+            document: z.string().nullable(),
+            status: z.string().nullable(),
+            holds: z.boolean().describe("Text always; a ticket while done; a document while it exists"),
+            problem: z.string().nullable(),
+            lapsed: z.boolean().describe("Does not hold now but did since the mark (why says no longer holds); false for evidence that never held (does not hold yet)"),
+          }),
+        ),
+        note: z.string().nullable(),
+        markedBy: z.string().nullable(),
+        markedAt: z.string().nullable(),
+        runId: z.string().nullable(),
+        why: z.string().nullable().describe("Why the verdict is unknown over a mark, or that nothing was marked"),
+      }),
+    ),
+    counts: z.object({ met: z.number(), unmet: z.number(), unknown: z.number(), total: z.number() }),
+    met: z.boolean().describe("Every criterion met; true with none"),
+    pace: z.object({
+      targetDate: z.string().nullable(),
+      daysToTarget: z.number().nullable(),
+      leaves: z.object({ done: z.number(), countable: z.number(), percent: z.number().nullable() }),
+      laborSeconds: z.number().nullable(),
+      remainingSeconds: z.number().nullable(),
+      partial: z.boolean(),
+      unplannedRefs: z.array(z.string()),
+      verdict: z.enum(PACE_VERDICTS),
+      message: z.string(),
+    }),
+  })
+  .describe("The goal check: each acceptance criterion's verdict with its evidence, and the pace against the target date");
+
+/** The open work left in a milestone, from its estimates (`MilestoneRemaining`). */
+const milestoneRemainingShape = z
+  .object({
+    estimated: z.number().describe("Open leaves (not done, not cancelled) with an estimate"),
+    unestimated: z.number().describe("Open leaves without one"),
+    unknown: z.number().describe("Open leaves forecast cannot weigh (no estimate, no samples, beyond range): forecastSeconds is then a lower bound"),
+    estimateSeconds: z.number().nullable().describe("Their own estimates, summed; null when none has one"),
+    forecastSeconds: z
+      .number()
+      .nullable()
+      .describe("Their remaining work exactly as `forecast` adds its units: scaled estimates, the remainder once started, 0 while in review; null when none can be weighed"),
+  })
+  .describe("The work still open in the milestone, from its estimates; derived on every read");
+
 const milestoneViewShape = {
   milestone: z.object(milestoneSummaryShape),
   progress: z.object(milestoneProgressShape),
@@ -1939,6 +2542,8 @@ const milestoneViewShape = {
     .object({ identifier: z.string(), position: z.number() })
     .nullable()
     .describe("The first eligible row of the effective queue planned under this milestone; null when nothing under it is takeable"),
+  goal: milestoneGoalShape,
+  remaining: milestoneRemainingShape,
 };
 const milestoneRefSchema = z.string().describe("The milestone's reference (an issue of the `milestone` kind)");
 const dateSchema = z
@@ -1980,6 +2585,7 @@ server.registerTool(
           revision: z.number(),
           memberCount: z.number(),
           next: z.object({ identifier: z.string(), position: z.number() }).nullable(),
+          remaining: milestoneRemainingShape,
         }),
       ),
     },
@@ -2008,6 +2614,7 @@ server.registerTool(
     inputSchema: {
       title: z.string().optional(),
       description: z.string().optional(),
+      acceptance_criteria: z.array(z.string()).optional().describe("The milestone's goal: its acceptance criteria"),
       target_date: dateSchema,
       start_date: dateSchema,
       from_epic: refSchema.optional().describe("The epic to plan; it becomes the one member"),
@@ -2017,12 +2624,12 @@ server.registerTool(
     },
     annotations: { title: "Create milestone", ...milestoneWriteAnnotations },
   },
-  ({ title, description, target_date, start_date, from_epic, preview, actor, ws }) =>
+  ({ title, description, acceptance_criteria, target_date, start_date, from_epic, preview, actor, ws }) =>
     run(() =>
       storeFor(ws)
         .milestones()
         .create(
-          { title, description, targetDate: target_date, startDate: start_date, fromEpic: from_epic, preview },
+          { title, description, acceptanceCriteria: acceptance_criteria, targetDate: target_date, startDate: start_date, fromEpic: from_epic, preview },
           requireActor(actor),
         ),
     ),
@@ -2032,13 +2639,60 @@ server.registerTool(
   "update_milestone",
   {
     description:
-      "Set a milestone's target and/or start date (YYYY-MM-DD, UTC calendar days; null clears one). The start may not be after the target. Title, description, assignee and status are edited with update_task like any issue.",
-    inputSchema: { ref: milestoneRefSchema, target_date: dateSchema, start_date: dateSchema, actor: actorSchema, ws: wsSchema },
+      "Set a milestone's target and/or start date (YYYY-MM-DD, UTC calendar days; null clears one; the start may not be after the target) and/or its goal: description (null clears it) and acceptance_criteria (the whole list; [] clears them). The goal is the issue's own description and acceptance criteria, so it replicates like any issue edit; a criterion reworded after it was judged reads unknown again. Title, assignee and status are edited with update_task like any issue.",
+    inputSchema: {
+      ref: milestoneRefSchema,
+      target_date: dateSchema,
+      start_date: dateSchema,
+      description: z.string().nullable().optional().describe("What the milestone is for; null clears it; omit to leave it alone"),
+      acceptance_criteria: z.array(z.string()).optional().describe("The milestone's goal, whole; [] clears it; omit to leave it alone"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
     outputSchema: milestoneViewShape,
-    annotations: { title: "Update milestone dates", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { title: "Update milestone", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
-  ({ ref, target_date, start_date, actor, ws }) =>
-    run(() => storeFor(ws).milestones().update(ref, { targetDate: target_date, startDate: start_date }, requireActor(actor))),
+  ({ ref, target_date, start_date, description, acceptance_criteria, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .milestones()
+        .update(ref, { targetDate: target_date, startDate: start_date, description, acceptanceCriteria: acceptance_criteria }, requireActor(actor)),
+    ),
+);
+
+server.registerTool(
+  "mark_milestone_criterion",
+  {
+    description:
+      "Judge one acceptance criterion of a milestone (its goal; design/milestones.md \"Goal\"): verdict met, unmet or unknown, with evidence. The tracker never judges a criterion itself; it records yours and decides at each check what it is still worth: unmarked is unknown, a criterion reworded since is unknown, and a met criterion whose cited ticket is not done (or cited document is gone) reads unknown until it is. Evidence items are a ticket (ABC-12), a document (ABC-12:plan) or free text; met needs at least one, and a cited ticket or document must exist. follow_up (unmet only) files a ticket through your live goal run over this milestone (or run_id): attributed to the run, made a member, counted against its cap (refused past it). A mark replicates to every device (as the milestone field criterion<n>); two devices judging the same criterion at once are a preserved field conflict (conflict_list / conflict_resolve). Returns the milestone view with its goal. Same payload as `staple milestone criterion --json`.",
+    inputSchema: {
+      ref: milestoneRefSchema,
+      position: z.number().int().min(1).describe("The criterion's 1-based number"),
+      verdict: z.enum(CRITERION_VERDICTS),
+      evidence: z.array(z.string()).optional().describe("Tickets (ABC-12), documents (ABC-12:plan) or text"),
+      note: z.string().optional(),
+      follow_up: z
+        .object({ title: z.string(), description: z.string().optional() })
+        .optional()
+        .describe("For an unmet criterion: the ticket that would meet it, created by your goal run"),
+      run_id: z.string().optional().describe("The goal run; else your live run over this milestone"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: milestoneViewShape,
+    annotations: { title: "Mark milestone criterion", ...milestoneWriteAnnotations },
+  },
+  ({ ref, position, verdict, evidence, note, follow_up, run_id, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .milestones()
+        .markCriterion(
+          ref,
+          position,
+          { verdict, evidence: evidence ?? [], note: note ?? null, followUp: follow_up ?? null, run: run_id ?? null },
+          requireActor(actor),
+        ),
+    ),
 );
 
 server.registerTool(
@@ -2163,7 +2817,7 @@ server.registerTool(
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * THE PICKUP QUEUE — R2c (STA-168), docs/queue.md "Operations, by surface".
+ * THE PICKUP QUEUE — R2c (STA-168), design/queue.md "Operations, by surface".
  *
  * Seven tools over ONE service. Every mutation calls `QueueStore.mutate`, the
  * same method `staple queue` and `/api/queue/*` call, and every one of them
@@ -2198,8 +2852,9 @@ const effectiveRowShape = {
   via: z.string().nullable().describe("The queued container this row was expanded out of"),
   unqueued: z.boolean().describe("True for a row after the last plan row: still work, just later"),
   eligibility: z
-    .enum(["resolved", "gated", "blocked", "claimed", "eligible"])
-    .describe("First rule that matches: resolved, gated, blocked, claimed, else eligible. Only `eligible` is takeable."),
+    .enum(["resolved", "gated", "blocked", "claimed", "unavailable", "eligible"])
+    .describe("First rule that matches: resolved, gated, blocked, claimed, unavailable, else eligible. Only `eligible` is takeable."),
+  ...claimField,
   reason: z.string().nullable(),
   detail: z.record(z.string(), z.unknown()).nullable(),
   dueAt: z.string().nullable().describe("The milestone target date this row inherits; explains urgency, never reorders"),
@@ -2227,10 +2882,10 @@ server.registerTool(
   "list_queue",
   {
     description:
-      "The pickup plan and the effective agent order it resolves to, at one revision. `entries` is PLAN order — what a human queued, containers and milestones included. `effective` is what agents actually receive: every container expanded depth-first to its open leaf work, then the unqueued band in presentation sort, every row classified resolved | gated | blocked | claimed | eligible with a reason. Resolved entries are hidden unless `all`.",
+      "The pickup plan and the effective agent order it resolves to, at one revision. `entries` is PLAN order — what a human queued, containers and milestones included. `effective` is what agents actually receive: every container expanded depth-first to its open leaf work, then the unqueued band in presentation sort, every row classified resolved | gated | blocked | claimed | unavailable | eligible with a reason and full claim metadata. Resolved entries are hidden unless `all`.",
     inputSchema: {
       all: z.boolean().optional().describe("Include done and cancelled plan entries"),
-      actor: z.string().optional().describe("Whose view: a row held by somebody ELSE is `claimed`"),
+      actor: z.string().optional().describe("Whose view; every held row is `claimed`, including this actor's"),
       ws: wsSchema,
     },
     outputSchema: queueViewShape,
@@ -2243,19 +2898,29 @@ server.registerTool(
   "next_task",
   {
     description:
-      "The ONE row you should take next and everything it stepped over. `next` is the first eligible row in effective order for you; `skipped` lists what came before it with why (resolved, gated, blocked, claimed). Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order.",
-    inputSchema: { actor: z.string().optional().describe("Whose view (defaults to unattributed)"), ws: wsSchema },
+      "The ONE fresh leaf you should take next and everything it stepped over. `next` is the first eligible row in effective order; `skipped` lists what came before it with why (resolved, gated, blocked, claimed, unavailable). Each row carries full claim metadata or null. Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order. With `scope` the answer is limited to the work inside one container (an epic, a milestone, or any issue with children; a milestone means its members plus their descendants; inside means whatever queueing the scope would reach), queued or not: rows the plan reaches keep their effective order, then the scope's unqueued work in the order queueing the scope would give it, and the answer echoes `scope`. A null `next` with nothing unresolved in `skipped` means the scope has no open work left. An unknown scope is not_found; a leaf is validation. Under queue.policy = strict checkout_task still checks a scoped `next` against the WHOLE plan, so it is refused out_of_order whenever an eligible plan row outside the scope comes first — queued or not.",
+    inputSchema: {
+      actor: z.string().optional().describe("Whose view (defaults to unattributed)"),
+      scope: z
+        .string()
+        .optional()
+        .describe("Limit the answer to one container: an epic, a milestone, or any issue with children (identifier, bare number, or uuid)"),
+      ws: wsSchema,
+    },
     outputSchema: {
       revision: z.number(),
+      scope: z
+        .object({ issueId: z.string(), identifier: z.string(), title: z.string(), kind: kindSchema, status: statusEnum })
+        .optional(),
       next: z.object(effectiveRowShape).nullable(),
       skipped: z.array(z.object(effectiveRowShape)),
     },
     annotations: { title: "Next task", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ actor, ws }) =>
+  ({ actor, scope: scopeRef, ws }) =>
     run(() => {
-      const { revision, next, skipped } = storeFor(ws).queue().effectiveQueue({ actor });
-      return { revision, next, skipped };
+      const { revision, scope, next, skipped } = storeFor(ws).queue().effectiveQueue({ actor, scope: scopeRef });
+      return scope ? { revision, scope, next, skipped } : { revision, next, skipped };
     }),
 );
 
@@ -2354,10 +3019,320 @@ server.registerTool(
 );
 
 /**
+ * ────────────────────────────────────────────────────────────────────────────
+ * Autopilot runs (`src/core/run-store.ts`). Six tools over one `RunStore`, answering
+ * the objects `staple run start|status|stop|pause|resume|continue --json` print. Runs are
+ * machine-local and never synchronized, so start, stop, pause and resume are in
+ * `MACHINE_LOCAL_WRITES`. `continue_run` is not: a take claims the ticket, a write that
+ * synchronizes like any checkout.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+const runScopeShape = z
+  .object({
+    kind: z.enum(["queue", "issue", "milestone"]),
+    issueId: z.string().optional(),
+    identifier: z.string().nullable().optional(),
+  })
+  .describe("queue, or the epic/parent (`issue`) or milestone the run works; identifier is resolved on every read");
+
+const runShape = {
+  id: z.string(),
+  actor: z.string(),
+  scope: runScopeShape,
+  state: z.enum(RUN_STATES).describe("active and paused are live; stopped and completed are ended"),
+  budget: z.object({
+    maxTickets: z.number().nullable(),
+    until: z.string().nullable(),
+    ceilingPercent: z.number().nullable(),
+    ceilingAccount: z.string().nullable(),
+  }),
+  override: z.string().nullable().describe("Why a person let this run step over the pickup plan, or null"),
+  tickets: z.array(
+    z.object({
+      seq: z.number(),
+      issueId: z.string(),
+      identifier: z.string(),
+      takenAt: z.string(),
+      outcome: z.enum(RUN_TICKET_OUTCOMES).nullable().describe("null while the ticket is being worked"),
+      reason: z.string().nullable(),
+      attemptId: z.string().nullable(),
+      recordedAt: z.string().nullable(),
+    }),
+  ),
+  counts: z.object({
+    tickets: z.number().describe("Distinct tickets taken: what max_tickets caps (a retry is not another)"),
+    taken: z.number().describe("Every take, retries included"),
+    done: z.number(),
+    failed: z.number(),
+    open: z.number(),
+  }),
+  goal: z
+    .object({
+      gateOwner: z.string(),
+      childCap: z.number(),
+      children: z.array(z.object({ identifier: z.string(), title: z.string(), status: z.string(), purpose: z.enum(["goal_check", "follow_up"]) })),
+      gatedAt: z.string().nullable().describe("gate_requested_at of the gate the run opened on its milestone"),
+    })
+    .nullable()
+    .describe("A run over a milestone is a goal run; null otherwise"),
+  stop: z
+    .object({
+      reason: z.enum(RUN_STOP_REASONS),
+      detail: z.record(z.string(), z.unknown()),
+      by: z.string().nullable().describe("Who stopped it; null when a stop rule did"),
+      note: z.string().nullable(),
+      at: z.string(),
+    })
+    .nullable(),
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  endedAt: z.string().nullable(),
+};
+
+const runWaitShape = z.object({
+  reason: z.enum(RUN_WAIT_REASONS),
+  detail: z.record(z.string(), z.unknown()),
+  message: z.string(),
+});
+
+const stopDecisionShape = z
+  .object({
+    stop: z.boolean(),
+    wait: runWaitShape.optional().describe("On {stop:false}: nothing is workable now but unresolved work remains (waiting_on_others)"),
+    goalCheck: z
+      .object({ counts: z.object({ met: z.number(), unmet: z.number(), unknown: z.number(), total: z.number() }), message: z.string() })
+      .optional()
+      .describe("On {stop:false} of a goal run: the scope is empty short of the goal, so the next take is a new goal-check ticket"),
+    reason: z.enum(RUN_STOP_REASONS).optional(),
+    state: z.enum(["stopped", "completed"]).optional(),
+    detail: z.record(z.string(), z.unknown()).optional(),
+    message: z.string().optional(),
+  })
+  .describe("What the stop rules answer now: {stop:false} (with `wait` when nothing is workable yet the scope is not empty), or the first reason that trips, the state it ends the run in, its detail and a sentence");
+
+const runFactsShape = z
+  .object({
+    now: z.string(),
+    workable: z.array(z.object({ issueId: z.string(), identifier: z.string(), held: z.boolean() })),
+    waiting: z.array(z.object({ issueId: z.string(), identifier: z.string(), eligibility: z.string(), reason: z.string().nullable() })),
+    pendingGates: z.array(z.object({ issueId: z.string(), identifier: z.string(), owner: z.string().nullable(), state: z.string().optional().describe("pending, or a person's changes_requested") })),
+    personBlocks: z.array(z.object({ issueId: z.string(), identifier: z.string(), owner: z.string(), action: z.string().nullable() })),
+    ceiling: z
+      .object({ usedPercent: z.number().nullable(), accountRef: z.string().nullable(), limitKey: z.string().nullable(), missing: z.string().nullable() })
+      .nullable(),
+    scopeGone: z.string().nullable().optional().describe("Why the scope no longer resolves (the run stops scope_gone), or null"),
+    goal: z
+      .object({
+        milestone: z.string(),
+        counts: z.object({ met: z.number(), unmet: z.number(), unknown: z.number(), total: z.number() }),
+        met: z.boolean(),
+        childCap: z.number(),
+        childrenCreated: z.number(),
+      })
+      .nullable()
+      .optional(),
+  })
+  .nullable()
+  .describe("The facts the decision was read from; null once the run has ended");
+
+/** The `staple run drive` process attached to a run (`run-attachment.ts`), or null. */
+const runDriverShape = z
+  .object({
+    pid: z.number(),
+    host: z.string(),
+    agent: z.string(),
+    startedAt: z.string(),
+    heartbeatAt: z.string(),
+    ticket: z.string().nullable(),
+    sessionPid: z.number().nullable(),
+    sessionStartedAt: z.string().nullable().optional().describe("When the session working the ticket started; null between sessions"),
+    logDir: z.string(),
+    alive: z.boolean().nullable(),
+  })
+  .nullable();
+
+/** A goal run's goal, on every run answer: the milestone's goal check, the run's tickets against its cap, and the gate. */
+const runGoalReportShape = milestoneGoalShape
+  .extend({
+    milestone: z.object({ identifier: z.string(), title: z.string(), status: z.string() }),
+    children: z.object({ cap: z.number(), created: z.number(), left: z.number(), refs: z.array(z.string()) }),
+    gate: z
+      .object({
+        state: z.string(),
+        owner: z.string(),
+        requestedAt: z.string(),
+        requestedBy: z.string().nullable(),
+        byGoalRun: z.boolean().describe("A goal run's gate (requestedBy goal-run:<actor>): it holds the milestone's close, never its children"),
+        ownedByRun: z.boolean().describe("This run opened it"),
+      })
+      .nullable(),
+  })
+  .nullable()
+  .describe("A goal run's goal check now; null on any other run");
+
+const runStatusShape = { run: z.object(runShape), decision: stopDecisionShape, facts: runFactsShape, driver: runDriverShape, goal: runGoalReportShape };
+
+const runWriteAnnotations = { readOnlyHint: false, destructiveHint: false, openWorldHint: false } as const;
+
+server.registerTool(
+  "start_run",
+  {
+    description:
+      "Start an autopilot run: you (actor) work a scope ticket after ticket until the tracker's stop rules say stop. scope is `queue` (the whole pickup queue) or the ref of an epic, a parent or a milestone; a leaf or a resolved issue is refused with validation. Optional budget: max_tickets, until (ISO instant with a zone, or a duration from now: 90m, 2h, 1d), ceiling_percent (stop once a current rate-limit window on this machine reaches that % used; ceiling_account narrows it to one account). One live run per actor per scope: a second start is refused with `conflict` whose detail.runId names the existing run. A run over a milestone is a GOAL run (design/runs.md \"Goal mode\"): it gates the milestone to gate_owner (default VP) so it never closes unreviewed, may create up to goal_cap tickets itself (default 5: goal checks and follow-ups), and ends goal_met once every acceptance criterion is met. Runs are machine-local and never synchronized; the gate a goal run opens is an ordinary gate and replicates. Same payload as `staple run start --json`.",
+    inputSchema: {
+      scope: z.string().describe("`queue`, or an epic / parent / milestone reference"),
+      max_tickets: z.number().optional(),
+      until: z.string().optional(),
+      ceiling_percent: z.number().optional(),
+      ceiling_account: z.string().optional(),
+      gate_owner: z.string().optional().describe("A milestone run: the person the milestone is gated to (default VP)"),
+      goal_cap: z.number().int().min(0).optional().describe("A milestone run: how many tickets it may create itself (default 5)"),
+      override_reason: z
+        .string()
+        .optional()
+        .describe("Under queue.policy strict, let the run step over the pickup plan for this reason; each such take is recorded as queue_overridden. Without it the run follows the whole plan and waits (out_of_order) when its next row is later than an eligible plan row elsewhere"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: runShape,
+    annotations: { title: "Start run", ...runWriteAnnotations, idempotentHint: false },
+  },
+  ({ scope, max_tickets, until, ceiling_percent, ceiling_account, override_reason, gate_owner, goal_cap, actor, ws }) =>
+    run(() =>
+      storeFor(ws)
+        .runs()
+        .start({
+          actor: requireActor(actor),
+          scope,
+          maxTickets: max_tickets,
+          until,
+          ceilingPercent: ceiling_percent,
+          ceilingAccount: ceiling_account,
+          gateOwner: gate_owner,
+          goalChildCap: goal_cap,
+          override: override_reason,
+        }),
+    ),
+);
+
+server.registerTool(
+  "run_status",
+  {
+    description:
+      "Autopilot runs and what the stop rules make of them now, without changing anything. A run whose scope no longer resolves reads decision scope_gone rather than failing. With run_id (full id, or a prefix of 8+ characters): that run. Without: actor's live (active or paused) runs; with all: every run of every actor, newest first. Each entry is {run, decision, facts}. decision.reason is one of, first match wins: stopped_by_human, touched_main_line (run drive saw a session move master or main), budget (detail.budget tickets | time | ceiling | goal_children), failure_streak (two failed tickets in a row), scope_gone (the scope issue was deleted or holds nothing any more), vp_blocked (a ticket the run took is blocked on a person, or nothing is workable and something in scope is), gate_pending (the scope issue holds a person's open gate, pending or with changes requested, or nothing is workable and something in scope does; detail.gates[].state says which; a goal run's gate on its milestone is not one), goal_met (a goal run: nothing left and every criterion met; ends completed, the milestone left gated), scope_empty (nothing left; the run ends completed). A goal run with its scope empty short of its goal answers {stop:false, goalCheck}: the next continue_run creates and takes a goal-check ticket; past its cap it stops budget (detail.budget goal_children). goal is the goal run's goal check (criteria with verdicts and evidence, pace, the run's tickets against its cap, the gate), null on any other run. driver is the `staple run drive` process working the run ({pid, host, agent, heartbeatAt, ticket, sessionPid, logDir, alive}), or null when none is attached; stop_run stops it mid-ticket. Same payload as `staple run status --json`.",
+    inputSchema: {
+      run_id: z.string().optional(),
+      all: z.boolean().optional().describe("Every run, any actor or state"),
+      actor: z.string().optional().describe("Whose live runs to list when run_id is absent; defaults to the server's STAPLE_AGENT"),
+      ws: wsSchema,
+    },
+    outputSchema: { runs: z.array(z.object(runStatusShape)) },
+    annotations: { title: "Run status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ run_id, all, actor, ws }) =>
+    run(() => {
+      const runs = storeFor(ws).runs();
+      if (run_id !== undefined) return { runs: [runs.status(run_id)] };
+      return { runs: runs.statuses({ actor: actor?.trim() || process.env.STAPLE_AGENT?.trim() || null, all: all === true }) };
+    }),
+);
+
+server.registerTool(
+  "stop_run",
+  {
+    description:
+      "Stop an autopilot run: it ends `stopped` with reason stopped_by_human, recording who (actor) and why (note). The ticket the run is working, if its actor still holds it, is recorded failed (stopped_by_human: <note>) and released. Without run_id, actor's one live run (refused naming them when there are several). Stopping a run that already ended changes nothing and returns it as it stands. Same payload as `staple run stop --json`.",
+    inputSchema: {
+      run_id: z.string().optional(),
+      note: z.string().optional().describe("Why the run was stopped"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: runShape,
+    annotations: { title: "Stop run", ...runWriteAnnotations, idempotentHint: true },
+  },
+  ({ run_id, note, actor, ws }) =>
+    run(() => {
+      const who = requireActor(actor);
+      const runs = storeFor(ws).runs();
+      return runs.stop(run_id ?? runs.liveRunOf(who).id, who, note ?? null);
+    }),
+);
+
+server.registerTool(
+  "pause_run",
+  {
+    description:
+      "Pause a live autopilot run without ending it: continue_run then answers {action:\"wait\", reason:\"paused\"} and takes nothing until resume_run. Without run_id, actor's one live run. Pausing a paused run changes nothing; an ended run is refused with conflict. Same payload as `staple run pause --json`.",
+    inputSchema: { run_id: z.string().optional(), actor: actorSchema, ws: wsSchema },
+    outputSchema: runShape,
+    annotations: { title: "Pause run", ...runWriteAnnotations, idempotentHint: true },
+  },
+  ({ run_id, actor, ws }) =>
+    run(() => {
+      const who = requireActor(actor);
+      const runs = storeFor(ws).runs();
+      return runs.setState(run_id ?? runs.liveRunOf(who).id, "paused", who);
+    }),
+);
+
+server.registerTool(
+  "resume_run",
+  {
+    description:
+      "Resume a paused autopilot run: the next continue_run takes again. Without run_id, actor's one live run. Resuming an active run changes nothing; an ended run is refused with conflict. Same payload as `staple run resume --json`.",
+    inputSchema: { run_id: z.string().optional(), actor: actorSchema, ws: wsSchema },
+    outputSchema: runShape,
+    annotations: { title: "Resume run", ...runWriteAnnotations, idempotentHint: true },
+  },
+  ({ run_id, actor, ws }) =>
+    run(() => {
+      const who = requireActor(actor);
+      const runs = storeFor(ws).runs();
+      return runs.setState(run_id ?? runs.liveRunOf(who).id, "active", who);
+    }),
+);
+
+server.registerTool(
+  "continue_run",
+  {
+    description:
+      "THE call an autopilot agent makes after finishing or failing each ticket; the tracker decides, never the prompt. It records how the run's current ticket ended (outcome if you state it; else read off your ended attempt; else the ticket's status: done/review/gated count as done, anything else you no longer hold as failed; a ticket you still hold is handed back to resume), evaluates the stop rules and answers one action. take: {ref, issueId, title, why, resumed} and the ticket is ALREADY CLAIMED for you (do not check it out again); work it, then call continue_run again. wait: {reason: paused | waiting_on_others | out_of_order, message, retryAfterSeconds}; take nothing, ask again later or end your session (out_of_order: under queue.policy strict the run's next row is later than an eligible plan row elsewhere and the run has no override). stop: {reason, detail, message}; the run has ended (stopped_by_human, touched_main_line, budget, failure_streak, scope_gone, vp_blocked, gate_pending, goal_met, scope_empty) or you have no live run (no_run, run null); end your loop. With no live run, your most recently ended run that still has an unsettled ticket is the one continued: the ticket is settled and that run's stop reason answered. Every answer carries `recorded` (the outcome this call recorded, or null), `run`, and `goal`: on a goal run (a run over a milestone) the goal check (each criterion met/unmet/unknown with its evidence, the pace, the run's tickets against its cap, the gate), else null. On a goal run whose scope empties short of its goal, the take is a goal-check ticket the run created: judge each criterion with mark_milestone_criterion (follow_up for unmet ones), comment `review: …`, then close it. outcome failed on a ticket you still hold also releases it with that reason; outcome done on a ticket you still hold is refused (move it to review or done first). Same payload as `staple run continue --json`.",
+    inputSchema: {
+      run_id: z.string().optional().describe("The run; without it, actor's one live run"),
+      outcome: z.enum(RUN_TICKET_OUTCOMES).optional().describe("How the current ticket ended, when you know"),
+      reason: z.string().optional().describe("Why, for a failed outcome"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    outputSchema: {
+      action: z.enum(["take", "wait", "stop"]),
+      ref: z.string().optional(),
+      issueId: z.string().optional(),
+      title: z.string().optional(),
+      why: z.string().optional(),
+      resumed: z.boolean().optional(),
+      reason: z.union([z.enum(CONTINUE_STOP_REASONS), z.enum(RUN_WAIT_REASONS)]).optional(),
+      detail: z.record(z.string(), z.unknown()).optional(),
+      message: z.string().optional(),
+      retryAfterSeconds: z.number().optional(),
+      recorded: z
+        .object({ ref: z.string(), outcome: z.enum(RUN_TICKET_OUTCOMES), reason: z.string().nullable(), source: z.enum(["stated", "attempt", "status"]) })
+        .nullable(),
+      run: z.object(runShape).nullable(),
+      goal: runGoalReportShape,
+    },
+    annotations: { title: "Continue run", ...runWriteAnnotations, idempotentHint: false },
+  },
+  ({ run_id, outcome, reason, actor, ws }) =>
+    run(() => storeFor(ws).runs().continue({ actor: run_id === undefined ? requireActor(actor) : (actor?.trim() || null), run: run_id ?? null, outcome, reason: reason ?? null })),
+);
+
+/**
  * `cloud_status` — and, deliberately, NOTHING ELSE from `staple cloud`.
  *
  * Connect, disconnect, revoke and purge are not exposed over MCP, and that is a
- * decision rather than an omission. `docs/sync.md` makes the connect preview the
+ * decision rather than an omission. `design/sync.md` makes the connect preview the
  * consent mechanism: the command shows the endpoint, the repository id and where
  * the credential will be stored, and *then* asks a human. An MCP tool has no
  * human to show it to. A `cloud_connect` tool would either skip the preview —
@@ -2451,7 +3426,7 @@ server.registerTool(
  *
  * The reasoning above holds that connect, disconnect, revoke and purge are human
  * consent decisions and stay off MCP. Resolving a conflict is a different kind of
- * thing and `docs/sync.md` says so directly: *"resolving it is a decision a human
+ * thing and `design/sync.md` says so directly: *"resolving it is a decision a human
  * or an agent makes on the record."* It touches only the local database, makes no
  * network request, cannot store or spend a credential, and cannot destroy
  * anything — the losing value stays on the record forever, so the worst outcome
@@ -2535,6 +3510,9 @@ server.registerTool(
       });
     }),
 );
+
+registerBudgetTools(server, { run });
+registerTelemetryReadTools(server, { run, storeFor, wsSchema, refSchema });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

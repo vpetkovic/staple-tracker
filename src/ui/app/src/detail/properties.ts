@@ -1,46 +1,34 @@
 /**
- * The property grid's model — which facts about an issue the new detail shows, in
- * what order, and how each one reads.
+ * The raw facts behind "More details": ids, the workspace, who created it, and every
+ * timestamp exactly as the server sent it.
  *
- * WHY A PURE FUNCTION AND NOT JSX. ClickUp's property block is the strongest thing
- * about its task view and the easiest to get wrong: it is a list of rows, so every
- * engineer who needs one more fact adds one more row, in whatever order they happen
- * to be thinking in, until the block is a bag of fields nobody reads. Computing the
- * row set here means the ordering is one array literal you can see all of, the
- * conditional rows have their conditions in one place, and the whole thing is
- * testable without a DOM.
+ * The readable properties (people as chips, relative dates, priority as icon + word) are
+ * PropertyGrid.tsx's job. This list is the other half of that bargain: nothing the old
+ * table showed is lost, it has just moved one tap down, for the people and agents who need
+ * to type an id or compare two stamps.
  *
- * TWO RULES THE ROW SET FOLLOWS.
+ * WHY A PURE FUNCTION AND NOT JSX. A list of rows accretes: every engineer who needs one more
+ * fact adds one more row, in whatever order they happen to be thinking in. Computing the row
+ * set here keeps the order in one array literal and makes it testable without a DOM.
  *
- *   A SPINE THAT DOES NOT MOVE. Assignee, Created and Updated are rows on every
- *   issue, populated or not. A grid whose shape changes per ticket cannot be
- *   scanned — you re-read it every time instead of looking at the place the fact
- *   lives. Everything else appears only when it carries something, because the
- *   opposite failure is just as bad: eleven rows of em-dash is not information.
+ *   A SPINE THAT DOES NOT MOVE. Reference, status name, assignee, created and updated are
+ *   rows on every issue, populated or not; everything else appears only when it carries
+ *   something.
  *
- *   NO CLOCK ARITHMETIC. Every timestamp renders as the server sent it. This is
- *   lib/claim.ts's rule carried into the grid, for its reasons: a client-derived
- *   "updated 3 minutes ago" keeps counting in a backgrounded tab and against a
- *   store that has moved on, so it is smoother and strictly less true. The one
- *   duration in this file — how long a holder has been silent — is a server
- *   reading, read rather than recomputed.
+ *   NO CLOCK ARITHMETIC HERE. These are the exact values: every timestamp is the instant the
+ *   server sent, in the viewer's local time with its zone, never "ago". The relative reading
+ *   ("12 min ago") is the readable list's, with this same exact value in its tooltip. The one duration in this file, how long a
+ *   holder has been silent, is a server reading, formatted rather than recomputed.
  *
- * Editable properties are deliberately NOT here. Title, kind, priority and labels are
- * click-to-edit components (InlineProperties.tsx) and status is a verb with its own
- * refusal path (IssueActions.tsx); a pure function can model a fact, but it cannot
- * model a control that can be refused by the store.
- *
- * KIND (O1b, STA-125) is the newest member of that list and the one most likely to be
- * added here by mistake, because it reads exactly like a fact: a short string in a
- * table of short strings. It is not one. `store.assertConfiguredKind()` can refuse a
- * value, so the control has a failure path, and a `DetailFact` has nowhere to put one —
- * a row rendered from this function would show the OLD kind after a refused write with
- * no sentence saying why. It also has to be the same element that displayed it or it is
- * not inline editing, so a read-only row here plus a control elsewhere would be two
- * places showing one field. `properties.test.ts` pins its absence for that reason.
+ * Editable properties are deliberately NOT here: kind, priority, project and labels are
+ * click-to-edit components (InlineProperties.tsx) and status is a verb with its own refusal
+ * path (IssueActions.tsx). A `DetailFact` has nowhere to put a refusal, so a row rendered
+ * from this function would show the OLD value after a refused write with no sentence saying
+ * why. `properties.test.ts` pins kind's absence for that reason.
  */
 import { formatAgo } from "../lib/claim";
-import type { IssueDetail, UiMode } from "../lib/types";
+import { formatStamp } from "./parts";
+import type { IssueDetail, IssuePriority, UiMode } from "../lib/types";
 
 export interface DetailFact {
   /** Stable across renders and unique within one grid — it is the React key. */
@@ -48,28 +36,25 @@ export interface DetailFact {
   label: string;
   /** null means "this row exists and is empty", which the grid draws as a dash. */
   value: string | null;
-  /** Identifiers, agent names and stamps are set in mono everywhere else too. */
+  /** Identifiers and machine names only. People and dates are never set in mono. */
   mono?: boolean;
   /** The unrounded fact, for a row that is truncated or a value that is a reading. */
   title?: string;
 }
 
 /**
- * `2026-09-01 22:44` — the same minute-precision stamp ActivityTab and DocumentsTab
- * already print. Sliced rather than parsed on purpose: `new Date(iso).toLocale…`
- * would silently re-express a UTC instant in the viewer's zone, so two surfaces
- * showing "the same" timestamp would disagree by hours, and the mono column would
- * stop being a column.
+ * `Sep 2, 2026, 12:14 AM EDT` — the viewer's local time WITH its zone, the same reading the
+ * relative dates' tooltips give. The raw ISO value stays on the row as its `title`. (The old
+ * UTC slice disagreed by hours with every local date around it and did not say so.)
  */
-export function formatWhen(iso: string | null): string | null {
-  if (!iso) return null;
-  return iso.slice(0, 16).replace("T", " ");
+export function formatWhen(iso: string | null, timeZone?: string): string | null {
+  return formatStamp(iso, { timeZone });
 }
 
 /** A row, but only if it has something in it. Keeps the builder below flat. */
 function when(id: string, label: string, iso: string | null): DetailFact[] {
   const value = formatWhen(iso);
-  return value ? [{ id, label, value, mono: true, title: iso ?? undefined }] : [];
+  return value ? [{ id, label, value, title: iso ?? undefined }] : [];
 }
 
 export function detailFacts(detail: IssueDetail, mode: UiMode): DetailFact[] {
@@ -90,20 +75,21 @@ export function detailFacts(detail: IssueDetail, mode: UiMode): DetailFact[] {
           value: detail.claim
             ? `${detail.claim.heldBy} · silent ${formatAgo(detail.claim.idleSeconds)}`
             : issue.checkoutAgent,
-          mono: true,
           title: detail.claim ? `last activity ${detail.claim.lastActivityAt}` : undefined,
         },
       ]
     : [];
 
   return [
-    { id: "assignee", label: "Assignee", value: issue.assignee ? `@${issue.assignee}` : null, mono: true },
+    { id: "identifier", label: "Reference", value: issue.identifier, mono: true },
+    { id: "status", label: "Status name", value: issue.status, mono: true },
+    { id: "assignee", label: "Assignee", value: issue.assignee ? `@${issue.assignee}` : null },
     ...holder,
     // Only in hub mode, where a bare `STA-88` is ambiguous across workspace files.
     // In single-workspace mode it is the one fact on the page that is true of
     // every row on the page, which makes it furniture.
     ...(mode === "hub" ? [{ id: "workspace", label: "Workspace", value: detail.workspace, mono: true }] : []),
-    ...(issue.createdBy ? [{ id: "createdBy", label: "Created by", value: issue.createdBy, mono: true }] : []),
+    ...(issue.createdBy ? [{ id: "createdBy", label: "Created by", value: issue.createdBy }] : []),
     ...when("created", "Created", issue.createdAt),
     ...when("updated", "Updated", issue.updatedAt),
     ...when("started", "Started", issue.startedAt),
@@ -118,5 +104,17 @@ export function detailFacts(detail: IssueDetail, mode: UiMode): DetailFact[] {
     ...(detail.comments.length > 0
       ? [{ id: "comments", label: "Comments", value: String(detail.comments.length) }]
       : []),
+    { id: "internalId", label: "Internal id", value: issue.id, mono: true },
   ];
 }
+
+/**
+ * Priority as a person says it. The wire says `critical`; every human-facing surface says
+ * "Urgent" (the task list's PrioritySignal makes the same translation).
+ */
+export const PRIORITY_WORDS: Record<IssuePriority, string> = {
+  critical: "Urgent",
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};

@@ -1,7 +1,7 @@
 /**
  * Who put an entry in the plan or a milestone, when, and the note they left, replicate.
  *
- * `docs/sync.md` has always said *"`added_by`, `added_at` and `note` ride along"* with the
+ * `design/sync.md` has always said *"`added_by`, `added_at` and `note` ride along"* with the
  * ordered collections. They did not: the plan travelled as a list of ids, so a note never
  * left the device it was written on, and every device that applied the list wrote the
  * applying operation's actor and time over EVERY entry — so a reorder on one machine

@@ -45,6 +45,7 @@ import {
   type SortPref,
 } from "@/lib/sort-modes";
 import { cn } from "@/lib/utils";
+import { useBackToClose } from "@/lib/back-to-close";
 
 /**
  * What the trigger SHOWS: the mode, short — "Sort: Activity". The direction is an arrow
@@ -79,6 +80,7 @@ export function SortByMenu({
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  useBackToClose(open, () => setOpen(false));
 
   /**
    * PICKING A MODE PICKS ITS OWN DIRECTION, and does not carry the last one over. Somebody
@@ -186,7 +188,7 @@ export function SortByOptions({
 
       {/*
         THE TIE-BREAK CHAIN, ON SCREEN. The ticket asks every mode to document a complete
-        chain and `docs/web-ui.md` is where the table lives, but the question "why is this
+        chain and `design/web-ui.md` is where the table lives, but the question "why is this
         row above that one when both are critical" is asked HERE, with both rows in view, by
         somebody who is not going to go and read the docs. Rendered from `sortChain` via the
         registry, so it cannot describe an order the comparator does not run.
@@ -244,7 +246,7 @@ function OptionRow({
       data-sort-group={group}
       data-sort-option={option}
       onClick={onSelect}
-      className="flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent"
+      className="flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left hover:bg-accent max-md:min-h-11 max-md:py-2.5"
     >
       <span
         className={cn(

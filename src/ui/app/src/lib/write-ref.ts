@@ -4,7 +4,7 @@
  * An issue's identifier can move after the page loaded it: sync renumbers an issue two
  * devices numbered alike, and the number then names another issue. The store refuses a
  * write through a number an issue has left while that issue may be the one meant
- * (`docs/sync.md`, "A number that moved under a caller"), and the page has no way to say
+ * (`design/sync.md`, "A number that moved under a caller"), and the page has no way to say
  * "I know" — so it never writes through a number at all. Every row the page shows carries
  * its id; a write takes the id of the row the reader acted on, and a number somebody typed
  * or pasted is looked up among the rows the page holds, where it names exactly one.

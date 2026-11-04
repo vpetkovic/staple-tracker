@@ -1,7 +1,7 @@
 /**
  * STA-260 — a stale ordered-collection `replace` is refused, on every device.
  *
- * Contract: `docs/sync.md`, "Ordered collections replicate whole, not row by row"
+ * Contract: `design/sync.md`, "Ordered collections replicate whole, not row by row"
  * and "Conflicts are preserved, never resolved silently".
  *
  * ## What was actually wrong

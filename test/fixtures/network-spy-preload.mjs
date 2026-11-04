@@ -3,7 +3,7 @@
  *
  * ## Why this exists as well as `network-spy.ts`
  *
- * `docs/sync.md` names the scenarios that must assert zero, and the list is
+ * `design/sync.md` names the scenarios that must assert zero, and the list is
  * `install` · `init` · `new` · `ls` · … · `staple open` startup plus one
  * authenticated API request · an MCP `initialize` handshake. Those are real CLI
  * invocations. They run as subprocesses, and *a spy installed in the test

@@ -26,6 +26,7 @@ import { initWorkspace } from "../src/core/workspace.js";
 import { MAX_TREE_DEPTH } from "../src/core/types.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { describeRefusal, type Refusal } from "../src/ui/app/src/lib/refusal.js";
+import { asForeignPage } from "./fixtures/foreign-page.js";
 
 interface Issue {
   identifier: string;
@@ -319,11 +320,14 @@ describe("the write gate still covers the new branches", () => {
   it("rejects a cross-origin create even with a valid token", async () => {
     const res = await fetch(`${origin}/api/action`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-staple-token": token,
-        origin: "http://evil.example",
-      },
+      headers: asForeignPage(
+        {
+          "content-type": "application/json",
+          "x-staple-token": token,
+          origin: "http://evil.example",
+        },
+        origin,
+      ),
       body: JSON.stringify({ type: "create", title: "Should never exist either" }),
     });
     expect(res.status).toBe(403);

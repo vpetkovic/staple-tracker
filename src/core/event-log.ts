@@ -6,7 +6,7 @@
  * `INSERT INTO events`. Three of the four hardcoded `NULL` for `dedup_key`, so
  * three quarters of the event table had no dedup token at all.
  *
- * That was survivable while nothing retried. `docs/sync.md` makes applying a
+ * That was survivable while nothing retried. `design/sync.md` makes applying a
  * pulled operation re-emit the same local event rather than transporting the
  * `events` rows — the audit trail converges in content while each device keeps
  * its own monotonic `seq`. Re-derivation plus the `sync_applied` ledger already
@@ -34,22 +34,10 @@
  *      case only.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { inTransaction } from "./db.js";
+import { writeEventRow, type EventInput } from "./event-row.js";
 import { journalFor } from "./journal.js";
-import { nowIso } from "./types.js";
 
-export interface EventInput {
-  readonly kind: string;
-  readonly issueId?: string | null;
-  readonly actor?: string | null;
-  readonly payload?: Record<string, unknown>;
-  /**
-   * An explicit, content-derived key for a level-triggered event. Absent means
-   * "derive one from the enclosing mutation"; explicit `null` is not a way to
-   * ask for no key, because obligation 6 does not have an opt-out.
-   */
-  readonly dedupKey?: string | null;
-}
+export { EVENT_ORDER, EVENT_ORDER_DESC, writeEventRow, type EventInput } from "./event-row.js";
 
 /**
  * Append one event.
@@ -58,31 +46,13 @@ export interface EventInput {
  * a repeated emission a no-op rather than a duplicate row.
  */
 export function insertEvent(db: DatabaseSync, input: EventInput): void {
-  /**
-   * Obligation 1 made structural instead of merely tested.
-   *
-   * Every domain event accompanies a domain write, so an event emitted outside a
-   * transaction is a mutation that was not in one — and that is the failure this
-   * whole lane exists to remove, in the form it is easiest to reintroduce by
-   * accident: a new mutator that forgets to wrap itself. There is no legitimate
-   * caller, so this throws rather than warns.
-   */
-  if (!inTransaction(db)) {
-    throw new Error(
-      `insertEvent(${input.kind}) outside a transaction. Every event accompanies a domain write, ` +
-        `so its mutation must run inside WorkspaceStore.journaled().`,
-    );
+  const journal = journalFor(db);
+  // One mutation, one instant (`Journal.mutationAt`): its events share the row's time.
+  const createdAt = input.createdAt ?? journal.mutationAt();
+  const originDevice = input.originDevice !== undefined ? input.originDevice : journal.deviceIdentity();
+  const seq = writeEventRow(db, { ...input, createdAt, originDevice, dedupKey: input.dedupKey ?? journal.eventDedupKey(input.kind) });
+  // A local event, written: the operation it belongs to carries it, with its place in this device's order.
+  if (seq !== null && input.originSeq === undefined && input.issueId) {
+    journal.noteEvent(input.issueId, { issueId: input.issueId, kind: input.kind, at: createdAt, actor: input.actor ?? null, seq, payload: input.payload ?? {} });
   }
-  const dedupKey = input.dedupKey ?? journalFor(db).eventDedupKey(input.kind);
-  db.prepare(
-    `INSERT OR IGNORE INTO events (kind, issue_id, actor, payload, dedup_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(
-    input.kind,
-    input.issueId ?? null,
-    input.actor ?? null,
-    JSON.stringify(input.payload ?? {}),
-    dedupKey,
-    nowIso(),
-  );
 }

@@ -1,5 +1,5 @@
 /**
- * A resolved status leaves `status_version` the same on every device (`docs/sync.md`,
+ * A resolved status leaves `status_version` the same on every device (`design/sync.md`,
  * "Conflicts are preserved, never resolved silently").
  *
  * `status_version` is derived from `status`: withheld with it while a record is open, and

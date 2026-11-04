@@ -155,7 +155,8 @@ describe("every breakpoint holds both kinds of category", () => {
   it("drawer: a centred frame, both panes, and the offer to grow", () => {
     const at = atBreakpoint("two-pane", "nav", "drawer");
     expect(at.frame).toContain("-translate-x-1/2");
-    expect(at.frame).toContain("w-[min(64rem,calc(100vw-2rem))]");
+    // A preferences window: wide enough for the sidebar and a readable section beside it.
+    expect(at.frame).toContain("w-[min(72rem,calc(100vw-4rem))]");
     for (const [which, html] of Object.entries({ fields: at.fields, vocabulary: at.vocabulary })) {
       expect(html, which).not.toContain(NAV_HIDDEN);
       expect(html, which).not.toContain(CONTENT_HIDDEN);
@@ -177,8 +178,9 @@ describe("every breakpoint holds both kinds of category", () => {
   it("narrow: one pane at a time, and Back is in the header of the content pane", () => {
     const nav = atBreakpoint("stacked", "nav", "drawer");
     const content = atBreakpoint("stacked", "content", "drawer");
-    expect(nav.frame).toBe("inset-0 rounded-none");
-    expect(content.frame).toBe("inset-0 rounded-none");
+    // The whole DYNAMIC viewport on a phone: a collapsing browser toolbar never hides the foot.
+    expect(nav.frame).toBe("inset-x-0 top-0 h-dvh rounded-none");
+    expect(content.frame).toBe("inset-x-0 top-0 h-dvh rounded-none");
 
     for (const [which, html] of Object.entries({ fields: nav.fields, vocabulary: nav.vocabulary })) {
       expect(html, which).toContain(CONTENT_HIDDEN);
@@ -209,7 +211,7 @@ describe("every breakpoint holds both kinds of category", () => {
     for (const [which, html] of Object.entries({ fields: at.fields, vocabulary: at.vocabulary })) {
       expect(html, which).toContain('data-layout="two-pane"');
       // The nav is the fixed-width left column, the content the flexible right one.
-      expect(html, which).toContain("w-56 border-r");
+      expect(html, which).toContain("w-64 flex-col border-r bg-surface-canvas");
       expect(html, which).toContain('data-settings-content="true"');
       expect(html, which).not.toContain(NAV_HIDDEN);
       expect(html, which).not.toContain(CONTENT_HIDDEN);
@@ -267,7 +269,12 @@ describe("nothing the user typed is lost without them choosing to lose it", () =
     // …and there is no fourth, unguarded, way out.
     expect(dialog.match(/onOpenChange\(false\)/g)).toHaveLength(1);
     expect(dialog.match(/onCategoryChange\(/g)).toHaveLength(1);
-    expect(dialog.match(/setPane\("nav"\)/g)).toHaveLength(1);
+    // The one other `setPane("nav")` is the phone's system Back from a section to the list.
+    // It LOSES NOTHING, which is why it needs no guard: the list and the section are two
+    // panes of one mounted form, the draft stays mounted (and dirty) behind the list, and
+    // choosing another section from there still goes through the guard above.
+    expect(dialog.match(/setPane\("nav"\)/g)).toHaveLength(2);
+    expect(dialog).toMatch(/useBackToClose\(stacked && pane === "content", \(\) => setPane\("nav"\)\)/);
 
     // The draft is only really discarded on the deliberate choice.
     expect(dialog).toMatch(/onDiscard=\{\(\) => \{[\s\S]*?setFormKey\(\(key\) => key \+ 1\);[\s\S]*?\}\}/);

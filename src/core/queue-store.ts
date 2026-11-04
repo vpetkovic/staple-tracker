@@ -1,5 +1,5 @@
 /**
- * The pickup queue in the store — `docs/queue.md` (STA-167 R2b, STA-168 R2c).
+ * The pickup queue in the store — `design/queue.md` (STA-167 R2b, STA-168 R2c).
  *
  * TWO HALVES, in this order and deliberately not mixed.
  *
@@ -34,7 +34,7 @@ import type { Journal } from "./journal.js";
 import { parseIdentifier } from "./ids.js";
 import { milestoneDateBounds, MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
-import { type BuiltinIssueKind, type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
+import { type BuiltinIssueKind, type ClaimActivity, type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
 
 /**
  * The kind an `epicPath` names. `epic` is the SEEDED id (`BUILTIN_KIND_SEED`),
@@ -120,6 +120,42 @@ const QUEUE_PLAN_ENTITY_ID = "@plan";
 
 function hasPosition(position: QueuePosition): boolean {
   return position.before !== undefined || position.after !== undefined || position.at !== undefined;
+}
+
+/**
+ * THE definition of "inside a scope", shared by the scoped pickup answer and by
+ * everything that asks it of one issue ({@link QueueStore.scopeMembership}):
+ * what queueing the scope would reach, over the whole tree rather than the open
+ * one — every child at any depth, and every member of any milestone met on the
+ * way (the scope's own, or a milestone parented under it), with their
+ * descendants. The scope is never inside itself.
+ */
+function insideScope(
+  scopeId: string,
+  nodes: ReadonlyMap<string, IssueNode>,
+  membersOf: ReadonlyMap<string, readonly string[]>,
+): (id: string) => boolean {
+  // The expansion rule without the "open" filter, so a resolved parent does
+  // not hide the open work under it.
+  const allChildren = new Map<string, string[]>();
+  for (const node of nodes.values()) {
+    if (node.parent_id === null) continue;
+    const siblings = allChildren.get(node.parent_id) ?? [];
+    siblings.push(node.id);
+    allChildren.set(node.parent_id, siblings);
+  }
+  const reached = new Set<string>([scopeId]);
+  const pending = [scopeId];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    const members = nodes.get(id)?.kind === MILESTONE_KIND ? (membersOf.get(id) ?? []) : [];
+    for (const next of [...(allChildren.get(id) ?? []), ...members]) {
+      if (reached.has(next)) continue;
+      reached.add(next);
+      pending.push(next);
+    }
+  }
+  return (id) => id !== scopeId && reached.has(id);
 }
 
 export class QueueStore {
@@ -611,7 +647,7 @@ export class QueueStore {
     });
   }
 
-  // ---------- the resolver (docs/queue.md "The resolver") ----------
+  // ---------- the resolver (design/queue.md "The resolver") ----------
 
   /** Every issue in the file, keyed by id: the tree the expansion walks. */
   private nodes(): Map<string, IssueNode> {
@@ -625,7 +661,7 @@ export class QueueStore {
    * `store.queue().effectiveQueue()` — the ONE deterministic next-item
    * algorithm, and the only thing in the codebase that computes effective order.
    *
-   * Inputs are exactly the ones docs/queue.md names: the `queue_entries` table,
+   * Inputs are exactly the ones design/queue.md names: the `queue_entries` table,
    * the issue tree, status categories, local `blocks` edges and (injected) hub
    * cross links, gates, live claims, milestone membership order and the calling
    * actor. Same inputs, same output, on every surface and after a restart —
@@ -634,8 +670,9 @@ export class QueueStore {
   effectiveQueue(options: EffectiveQueueOptions | string | null = {}): EffectiveQueue {
     const opts: EffectiveQueueOptions =
       typeof options === "string" || options === null ? { actor: options } : options;
-    const actor = opts.actor ?? null;
     const nodes = this.nodes();
+    // Resolved before any of the work below, so a bad scope costs one lookup.
+    const scope = opts.scope === undefined || opts.scope === null ? null : this.scopeOf(opts.scope, nodes);
     /**
      * The milestone side, for the whole workspace, in two queries (R3d,
      * STA-174): what a queued milestone expands to, the date those rows inherit,
@@ -683,7 +720,8 @@ export class QueueStore {
      * use, so a parent a human resolved after its children finished is a leaf)
      * is never emitted as itself; it expands in place, depth-first, to its open
      * leaf descendants. An issue reached twice is emitted once, at its FIRST
-     * occurrence, which is what `emitted` enforces.
+     * occurrence, which is what `emitted` enforces. It holds the containers a walk
+     * has entered too, which is what keeps a cycle finite.
      */
     const expand = (
       node: IssueNode,
@@ -691,8 +729,28 @@ export class QueueStore {
       via: string | null,
       dueAt: string | null,
       depth: number,
+      seen: Set<string> = emitted,
+      emit: (node: IssueNode, planPosition: number | null, via: string | null, dueAt: string | null) => void = (
+        leaf,
+        position,
+        container,
+        due,
+      ) => raw.push({ node: leaf, planPosition: position, via: container, dueAt: due, unqueued: false }),
     ): void => {
-      if (emitted.has(node.id) || depth > MAX_TREE_DEPTH) return;
+      if (seen.has(node.id) || depth > MAX_TREE_DEPTH) return;
+      /**
+       * A CONTAINER is expanded once per walk, and marked on the way IN. The
+       * tree and milestone membership together form a graph, not a tree — an
+       * epic can be a member of a milestone parented under itself — and without
+       * this a cycle is walked again at every level, forking wherever two
+       * cycles overlap: exponential, and reachable from a read. The order does
+       * not change for anything that is not a cycle. A container reached again
+       * after it was expanded has nothing left to emit, because every leaf under
+       * it is already in `seen`. One reached again WHILE it is being expanded
+       * (a cycle) is already being walked by the outer call.
+       */
+      const container = node.kind === MILESTONE_KIND || (openChildren.get(node.id) ?? []).length > 0;
+      if (container) seen.add(node.id);
       /**
        * A milestone is a container over its MEMBERSHIP rather than over its
        * children — nothing is ever re-parented into one — so it expands in
@@ -703,7 +761,7 @@ export class QueueStore {
        * visible on the next read with no queue write. Its target date rides
        * along as `dueAt`: an explanation of urgency, never an input to order.
        * It rides as the day's INCLUSIVE END (`milestoneDateBounds(target).endsAt`,
-       * docs/milestones.md "Dates"), so a consumer comparing `dueAt` to `now` is
+       * design/milestones.md "Dates"), so a consumer comparing `dueAt` to `now` is
        * on time all through the target day instead of overdue from its 00:00Z.
        */
       if (node.kind === MILESTONE_KIND) {
@@ -711,20 +769,20 @@ export class QueueStore {
         const due = target === null ? null : milestoneDateBounds(target).endsAt;
         for (const memberId of seam.membersOf.get(node.id) ?? []) {
           const memberNode = nodes.get(memberId);
-          if (memberNode) expand(memberNode, planPosition, via ?? node.identifier, due, depth + 1);
+          if (memberNode) expand(memberNode, planPosition, via ?? node.identifier, due, depth + 1, seen, emit);
         }
         for (const child of openChildren.get(node.id) ?? []) {
-          expand(child, planPosition, via ?? node.identifier, due, depth + 1);
+          expand(child, planPosition, via ?? node.identifier, due, depth + 1, seen, emit);
         }
         return;
       }
       const children = openChildren.get(node.id) ?? [];
       if (children.length > 0) {
-        for (const child of children) expand(child, planPosition, via ?? node.identifier, dueAt, depth + 1);
+        for (const child of children) expand(child, planPosition, via ?? node.identifier, dueAt, depth + 1, seen, emit);
         return;
       }
-      emitted.add(node.id);
-      raw.push({ node, planPosition, via, dueAt, unqueued: false });
+      seen.add(node.id);
+      emit(node, planPosition, via, dueAt);
     };
 
     const planEntries = this.entries({ all: true });
@@ -763,6 +821,7 @@ export class QueueStore {
     const blockers = this.store.unresolvedBlockersFor(ids);
     const gates = this.store.queuedByFor(ids);
     const claims = this.store.claimActivityFor(ids);
+    const checkoutStatuses = new Set(this.store.checkoutExpectedStatuses());
 
     /** The row's own id first, then its parent, then the grandparent — one walk, two paths. */
     const chainOf = (id: string): string[] => {
@@ -830,10 +889,14 @@ export class QueueStore {
             unresolvable: blocker.unresolvable,
           })),
         };
-      } else if (category === "active" && node.checkout_agent !== null && node.checkout_agent !== actor) {
+      } else if (node.checkout_agent !== null) {
         eligibility = "claimed";
         reason = `${node.identifier} is held by ${node.checkout_agent}.`;
         detail = { heldBy: node.checkout_agent, idleSeconds: claim?.idleSeconds ?? null };
+      } else if (!checkoutStatuses.has(node.status)) {
+        eligibility = "unavailable";
+        reason = `${node.identifier} is ${node.status}, which cannot be checked out.`;
+        detail = { status: node.status };
       }
       return {
         issueId: node.id,
@@ -846,6 +909,7 @@ export class QueueStore {
         via: row.via,
         unqueued: row.unqueued,
         eligibility,
+        claim,
         reason,
         detail,
         dueAt: row.dueAt,
@@ -855,13 +919,118 @@ export class QueueStore {
       };
     });
 
-    const nextIndex = rows.findIndex((row) => row.eligibility === "eligible");
+    /**
+     * STEP 4 — SCOPE, only when asked (`queue next --scope`). The whole order is
+     * computed first and then NARROWED, so a scoped row carries exactly the
+     * eligibility, reason and `position` the unscoped answer gives it — a scope
+     * changes which rows are considered, never what a row is.
+     *
+     * Membership is WHAT QUEUEING THE SCOPE WOULD REACH, over the whole tree
+     * rather than the open one: every child at any depth, and every member of
+     * any milestone met on the way (the scope's own, or a milestone parented
+     * under it), with their descendants. So an open leaf under a resolved parent
+     * is inside its epic, and a member of a child milestone is inside the
+     * parent. The scope itself is never a row of its own scope: an epic whose
+     * children are all resolved has nothing left inside it. `insideScope` is the
+     * one implementation, shared with `scopeMembership`.
+     *
+     * ORDER inside a scope is the plan first, then the scope's own shape: the
+     * rows the plan reaches keep their effective order, and the scope's unqueued
+     * work follows in the order queueing the scope would give it — a milestone's
+     * membership order, then the tree rule — rather than in presentation sort.
+     * That is the one place a scoped answer is not a plain filter, and it is why
+     * `position` (the row's place in the WHOLE effective order, the number
+     * `out_of_order` speaks) need not rise monotonically through the unqueued
+     * part of a scoped answer: the array order is the answer.
+     */
+    let answer = rows;
+    if (scope !== null) {
+      const walked: string[] = [];
+      const seen = new Set<string>();
+      const walk = (leaf: IssueNode): void => {
+        walked.push(leaf.id);
+      };
+      // A milestone expands over its membership; any other container over its
+      // open children — never the scope node itself, which is not inside itself.
+      const starts = scope.kind === MILESTONE_KIND ? [scope] : (openChildren.get(scope.id) ?? []);
+      for (const start of starts) expand(start, null, null, null, 0, seen, walk);
+      const scopeRank = new Map(walked.map((id, index) => [id, index]));
+      const inside = insideScope(scope.id, nodes, seam.membersOf);
+      const scoped = rows.filter((row) => inside(row.issueId));
+      const unqueued = scoped
+        .filter((row) => row.unqueued)
+        .sort(
+          (a, b) =>
+            (scopeRank.get(a.issueId) ?? Number.MAX_SAFE_INTEGER) - (scopeRank.get(b.issueId) ?? Number.MAX_SAFE_INTEGER) ||
+            a.position - b.position,
+        );
+      answer = [...scoped.filter((row) => !row.unqueued), ...unqueued];
+    }
+
+    const nextIndex = answer.findIndex((row) => row.eligibility === "eligible");
     return {
       revision: this.revision(),
-      rows,
-      next: nextIndex < 0 ? null : rows[nextIndex]!,
-      skipped: nextIndex < 0 ? rows : rows.slice(0, nextIndex),
+      rows: answer,
+      next: nextIndex < 0 ? null : answer[nextIndex]!,
+      skipped: nextIndex < 0 ? answer : answer.slice(0, nextIndex),
+      ...(scope === null
+        ? {}
+        : {
+            scope: {
+              issueId: scope.id,
+              identifier: scope.identifier,
+              title: scope.title,
+              kind: scope.kind,
+              status: scope.status,
+            },
+          }),
     };
+  }
+
+  /**
+   * Which issues a scope holds, for a caller that asks it of one issue at a time
+   * (an autopilot run checking that a ticket is its own, or gathering the gates
+   * and blocks under it). The same resolution and the same {@link insideScope}
+   * as `effectiveQueue({scope})`, so "inside" has one definition. `contains`
+   * answers false for the scope itself, as the pickup answer does.
+   */
+  scopeMembership(ref: string): { scope: QueueScope; contains: (issueId: string) => boolean } {
+    const nodes = this.nodes();
+    const node = this.scopeOf(ref, nodes);
+    return {
+      scope: { issueId: node.id, identifier: node.identifier, title: node.title, kind: node.kind, status: node.status },
+      contains: insideScope(node.id, nodes, this.store.milestones().queueSeam().membersOf),
+    };
+  }
+
+  /**
+   * The container a scoped pickup is limited to. A foreign identifier is refused
+   * by name, as every plan write refuses one; an unknown one is `not_found`,
+   * exactly as `show` answers it. What is accepted is anything that can HOLD
+   * work: an epic or a milestone whatever it holds today (an empty one is an
+   * empty scope, not an error), or any other issue that has children. A leaf is
+   * refused with `validation` — there is nothing under it to pick up, and a
+   * caller that meant "take this one" wants `checkout`, not a scope.
+   */
+  private scopeOf(ref: string, nodes: ReadonlyMap<string, IssueNode>): IssueNode {
+    if (!ref.trim()) {
+      throw new StapleError("validation", "A scope needs an issue reference: an epic, a milestone, or any issue with children.");
+    }
+    this.assertLocalRef(ref);
+    const issue = this.store.getIssue(ref);
+    const node = nodes.get(issue.id)!;
+    const container =
+      node.kind === MILESTONE_KIND ||
+      node.kind === EPIC_KIND ||
+      [...nodes.values()].some((candidate) => candidate.parent_id === node.id);
+    if (!container) {
+      throw new StapleError(
+        "validation",
+        `${node.identifier} is a ${node.kind} with no children, so there is nothing inside it to pick up. A scope is an epic, a milestone, or any issue with children; to take ${node.identifier} itself, check it out.`,
+        { identifier: node.identifier, kind: node.kind },
+      );
+    }
+    return node;
   }
 
   /**
@@ -922,7 +1091,7 @@ export class QueueStore {
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * THE RESOLVER — R2c (STA-168), docs/queue.md "The resolver".
+ * THE RESOLVER — R2c (STA-168), design/queue.md "The resolver".
  *
  * Everything above this line is the PLAN: rows a human put in a table, in the
  * order they put them. Everything below is the one deterministic function that
@@ -936,7 +1105,7 @@ export class QueueStore {
  */
 
 /** The eligibility ladder, in order. The first rule that matches wins. */
-export type QueueEligibility = "resolved" | "gated" | "blocked" | "claimed" | "eligible";
+export type QueueEligibility = "resolved" | "gated" | "blocked" | "claimed" | "unavailable" | "eligible";
 
 /** One row of the effective order — what an agent receives. */
 export interface EffectiveQueueRow {
@@ -958,6 +1127,8 @@ export interface EffectiveQueueRow {
   /** True for a row after the last plan row: still work, just later. */
   unqueued: boolean;
   eligibility: QueueEligibility;
+  /** Liveness of a held row, null for an unclaimed pickup candidate. */
+  claim: ClaimActivity | null;
   /** A sentence for a human; null when the row is eligible. */
   reason: string | null;
   /** The machine-readable half of `reason`; null when the row is eligible. */
@@ -989,6 +1160,21 @@ export interface EffectiveQueue {
   next: EffectiveQueueRow | null;
   /** The rows before `next`, each carrying why it was passed over. */
   skipped: EffectiveQueueRow[];
+  /**
+   * Present only on a scoped answer: the container the rows were limited to.
+   * `rows`, `next` and `skipped` are then all inside it, and a null `next` with
+   * no non-resolved row in `skipped` means the scope has no open work left.
+   */
+  scope?: QueueScope;
+}
+
+/** The container a scoped answer was limited to, as `queue next --scope` echoes it. */
+export interface QueueScope {
+  issueId: string;
+  identifier: string;
+  title: string;
+  kind: string;
+  status: string;
 }
 
 /**
@@ -1030,10 +1216,15 @@ export interface CrossBlockerLite {
 }
 
 export interface EffectiveQueueOptions {
-  /** Whose view this is. A row held by somebody ELSE is `claimed`; a row held by the actor is not. */
+  /** Accepted for caller compatibility; held rows remain claimed, including the actor's own. */
   actor?: string | null;
   /** Cross-workspace blockers by issue identifier; absent means none are known. */
   crossBlockers?: ReadonlyMap<string, readonly CrossBlockerLite[]>;
+  /**
+   * Limit the answer to one container's work: an epic, a milestone, or any issue
+   * with children (`queue next --scope`). Absent or null is the whole queue.
+   */
+  scope?: string | null;
 }
 
 interface IssueNode {

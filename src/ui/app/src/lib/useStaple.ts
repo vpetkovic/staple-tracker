@@ -28,7 +28,24 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
   const authRef = useRef(onAuthError);
   authRef.current = onAuthError;
 
-  const bump = useCallback(() => setVersion((v) => v + 1), []);
+  const advance = useCallback(() => setVersion((v) => v + 1), []);
+
+  /**
+   * A write on this page refreshes it — and only once. The write also changed the data
+   * fingerprint, so the next poll would see "something changed" and refetch everything a
+   * second time. So the fingerprint is read FIRST and adopted as the baseline, then the page
+   * refetches: everything that fingerprint covers is in the refetch, and the poll recognises
+   * it as already shown. If the read fails the page refetches anyway.
+   */
+  const bump = useCallback(() => {
+    getPoll().then(
+      ({ fingerprint: next }) => {
+        fingerprint.current = next;
+        advance();
+      },
+      () => advance(),
+    );
+  }, [advance]);
 
   useEffect(() => {
     let alive = true;
@@ -38,7 +55,7 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
         if (!alive) return;
         // The first fingerprint only establishes the baseline — the views already
         // loaded current data, so refetching on it would be a wasted round trip.
-        if (fingerprint.current !== null && fingerprint.current !== next) bump();
+        if (fingerprint.current !== null && fingerprint.current !== next) advance();
         fingerprint.current = next;
       } catch (error) {
         if (error instanceof AuthError) {
@@ -54,7 +71,7 @@ export function useDataVersion(onAuthError: (error: AuthError) => void): {
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [bump]);
+  }, [advance]);
 
   return { version, bump };
 }

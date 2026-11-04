@@ -19,7 +19,7 @@
  * `onDismiss` is optional: a strip that is replaced by the next attempt does not need an
  * X, and a dismiss control that leaves nothing behind is worse than none.
  */
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle, MonitorSmartphone, X } from "lucide-react";
 import type { Refusal } from "@/lib/refusal";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +32,41 @@ export function GuardRefusal({
   onDismiss?: () => void;
   className?: string;
 }) {
+  /**
+   * The Origin check's refusal is not the store's: nothing about the change was wrong, the
+   * page is open from another device. So it is not framed as a guard ("refused by the
+   * store", "not retryable — change something first"): the sentence `describeRefusal` gives
+   * it says what to do, and the server's own sentence is kept behind a disclosure.
+   */
+  if (refusal.crossOrigin) {
+    return (
+      <div role="alert" data-guard-refusal data-cross-origin className={cn("flex items-start gap-2", className)}>
+        <MonitorSmartphone aria-hidden className="mt-px size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-medium tracking-[var(--tracking-eyebrow)] text-muted-foreground uppercase">only from this computer's browser</div>
+          <p data-guard-message className="mt-1 text-[13px] leading-snug wrap-anywhere">
+            {refusal.message}
+          </p>
+          {refusal.serverMessage ? (
+            <details className="mt-1 text-[11px] text-muted-foreground">
+              <summary className="cursor-pointer select-none">Show details</summary>
+              <p className="mt-1 font-mono wrap-anywhere">{refusal.serverMessage}</p>
+            </details>
+          ) : null}
+        </div>
+        {onDismiss ? (
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label="Dismiss"
+            className="-mt-1 -mr-1 rounded-sm p-1 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
+          >
+            <X className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div role="alert" data-guard-refusal className={cn("flex flex-col gap-2", className)}>
       <div className="flex items-start gap-2">

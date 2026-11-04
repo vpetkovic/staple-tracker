@@ -30,6 +30,7 @@ import { PrioritySignal } from "./PrioritySignal";
 import { StatusIcon } from "./StatusIcon";
 import { TaskRowLine } from "./TaskRowLine";
 import { resolveTaskListConfig } from "./config";
+import { rowPlan } from "./row-layout";
 import { flatRow } from "./model";
 import { claim, row, worklog } from "./fixtures";
 import type { Issue, ClaimActivity, WorklogSummary, IssueDeps, QueueView } from "@/lib/types";
@@ -685,6 +686,14 @@ describe("parent rollup", () => {
     expect(markup).toContain("+2");
   });
 
+  it("still declares its count when the filter hid every child, and reads as folded", () => {
+    // Every child done and Done hidden: nothing is under the row, yet 3 of 3 are there.
+    const markup = renderEpic({ expanded: true, statuses: ["done", "done", "done"] });
+    expect(markup).toContain('data-testid="parent-rollup"');
+    expect(markup).toContain("3/3");
+    expect(markup).toContain('data-testid="parent-rollup-bar"');
+  });
+
   it("keeps the count and drops the bar when the parent is expanded", () => {
     const markup = renderEpic({ expanded: true });
 
@@ -784,6 +793,7 @@ describe("parent rollup plan", () => {
       density?: "comfortable" | "compact";
       parentEstimate?: number | null;
       estimates?: (number | null)[];
+      width?: number;
     } = {},
   ): string {
     const {
@@ -791,6 +801,7 @@ describe("parent rollup plan", () => {
       density = "comfortable",
       parentEstimate = null,
       estimates = [14_400, 10_800, 14_400],
+      width,
     } = over;
 
     const all = [
@@ -809,7 +820,11 @@ describe("parent rollup plan", () => {
     return renderToStaticMarkup(
       <TaskRowLine
         row={built}
-        config={resolveTaskListConfig("tree", { density, labelMax: 2 })}
+        config={resolveTaskListConfig("tree", {
+          density,
+          labelMax: 2,
+          ...(width === undefined ? {} : { plan: rowPlan(width) }),
+        })}
         semantics="grid"
         isExpanded={expanded}
         now={NOW}
@@ -819,7 +834,7 @@ describe("parent rollup plan", () => {
 
   /** The whole element, attribute by attribute, so a stray one cannot slip in. */
   const PLAN =
-    /<span class="staple-rollup-count max-\[719px\]:hidden" data-testid="parent-rollup-plan" data-plan-source="(\w+)" aria-label="([^"]+)" title="([^"]+)">est ([^<]+)<\/span>/;
+    /<span class="staple-rollup-count" data-testid="parent-rollup-plan" data-plan-source="(\w+)" aria-label="([^"]+)" title="([^"]+)">est ([^<]+)<\/span>/;
 
   it("shows the rolled-up 11h beside the bar when folded, in the O3 slot", () => {
     const markup = renderPlanned();
@@ -847,9 +862,9 @@ describe("parent rollup plan", () => {
     expect(plan.startsWith("<span ")).toBe(true);
     expect(plan).not.toContain("style=");
     expect(plan).not.toContain("<div");
-    // The class list is the count's class plus the narrow-width utility — nothing that
-    // task-list.css does not already size at 11px, nowrap, inline.
-    expect(plan).toContain('class="staple-rollup-count max-[719px]:hidden"');
+    // The class list is the count's class — nothing that task-list.css does not already
+    // size at 11px, nowrap, inline. The narrow-width drop is the row plan's, not a class's.
+    expect(plan).toContain('class="staple-rollup-count"');
     expect(markup).not.toContain("staple-rollup-plan");
   });
 
@@ -890,10 +905,14 @@ describe("parent rollup plan", () => {
     expect(markup).toContain('data-testid="parent-rollup-bar"');
   });
 
-  it("hides below the two-line breakpoint with a utility class, not a new rule in the sheet", () => {
-    // Below 720px §14 gives the title track the whole row width and there is no room for an
-    // aside; the plan yields there and the count and the bar stay.
-    expect(PLAN.exec(renderPlanned())![0]).toContain("max-[719px]:hidden");
+  it("is dropped below 768px by the row plan — absent from the DOM, the count stays", () => {
+    // The compact one-line row has no room for an aside; the ladder's `rollupPlan` rung
+    // takes it off the row, and `x/y` stays because a folded epic must say it at any width.
+    expect(PLAN.exec(renderPlanned({ width: 768 }))).not.toBeNull();
+    const narrow = renderPlanned({ width: 767 });
+    expect(narrow).not.toContain('data-testid="parent-rollup-plan"');
+    expect(narrow).toContain('aria-label="0 of 3 done"');
+    expect(narrow).toContain("0/3");
   });
 });
 
@@ -1293,9 +1312,9 @@ describe("row cues", () => {
       { issueId: "epic", identifier: "STA-9", title: "The epic", kind: "epic", status: "todo", planPosition: 2, rank: 2000, parent: null, resolved: false, addedBy: "VP", addedAt: "2026-09-01T00:00:00.000Z", note: null },
     ],
     effective: [
-      { issueId: "a", identifier: "STA-1", title: "first", kind: "task", status: "todo", position: 1, planPosition: 1, via: null, unqueued: false, eligibility: "eligible", reason: null, detail: null, dueAt: null, milestonePath: ["STA-50"], epicPath: [], parent: null },
-      { issueId: "b", identifier: "STA-2", title: "second", kind: "task", status: "todo", position: 2, planPosition: 2, via: "STA-9", unqueued: false, eligibility: "eligible", reason: null, detail: null, dueAt: null, milestonePath: [], epicPath: ["STA-9"], parent: "epic" },
-      { issueId: "c", identifier: "STA-3", title: "third", kind: "task", status: "todo", position: 3, planPosition: null, via: null, unqueued: false, eligibility: "blocked", reason: "STA-3 is blocked by STA-1.", detail: null, dueAt: null, milestonePath: [], epicPath: [], parent: null },
+      { issueId: "a", identifier: "STA-1", title: "first", kind: "task", status: "todo", position: 1, planPosition: 1, via: null, unqueued: false, eligibility: "eligible", claim: null, reason: null, detail: null, dueAt: null, milestonePath: ["STA-50"], epicPath: [], parent: null },
+      { issueId: "b", identifier: "STA-2", title: "second", kind: "task", status: "todo", position: 2, planPosition: 2, via: "STA-9", unqueued: false, eligibility: "eligible", claim: null, reason: null, detail: null, dueAt: null, milestonePath: [], epicPath: ["STA-9"], parent: "epic" },
+      { issueId: "c", identifier: "STA-3", title: "third", kind: "task", status: "todo", position: 3, planPosition: null, via: null, unqueued: false, eligibility: "blocked", claim: null, reason: "STA-3 is blocked by STA-1.", detail: null, dueAt: null, milestonePath: [], epicPath: [], parent: null },
     ],
   };
   const TITLES = new Map([["STA-50", "Q4 launch"]]);

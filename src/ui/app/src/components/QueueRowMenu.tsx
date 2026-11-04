@@ -37,15 +37,22 @@
  * removal that raced a checkout is refused there, and `GuardRefusal` says so. This only
  * stops the UI from advertising an action it can see will fail.
  */
-import { ArrowDownToLine, ArrowUpRight, ArrowUpToLine, ListPlus, ListX, SquareArrowUp } from "lucide-react";
-import type { ReactNode } from "react";
+import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpRight, ArrowUpToLine, CircleDot, ListPlus, ListX, SquareArrowUp } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { StatusChoiceItems } from "@/components/task-list/RowStatusMenu";
+import type { RowStatusChoice } from "@/components/task-list/row-status";
+import { useBackToClose } from "@/lib/back-to-close";
 import { statusCategory } from "@/lib/settings";
 import type { TaskRow } from "@/components/task-list";
 
@@ -64,7 +71,7 @@ export interface QueueRowMenuState {
  * row can be in the effective order because an ancestor was queued, and "remove from queue"
  * on such a row would be a lie: there is no entry of its own to remove, and dequeuing the
  * ancestor is a much larger act than the menu item implies. Those rows get the ADD items
- * instead, which is honest — queueing them explicitly is exactly how docs/queue.md says you
+ * instead, which is honest — queueing them explicitly is exactly how design/queue.md says you
  * pull one child out in front of its siblings.
  *
  * A SET, built once by the caller, rather than a scan per row: this is called for every
@@ -88,23 +95,47 @@ export function queueRowMenuState(
 
 export function QueueRowMenu({
   trigger,
+  open,
+  onOpenChange,
   identifier,
   state,
   disabled,
+  disabledReason,
+  queueWorkspace,
   onOpen,
   onQueueNext,
   onQueueLast,
   onDequeue,
   onMoveToTop,
   onMoveToBottom,
+  onMoveUp,
+  onMoveDown,
+  statusSubmenu,
 }: {
   /** The ready-made `⋯` button `TaskRowLine` hands us. */
   trigger: ReactNode;
+  /**
+   * Controlled by the row when it can long-press (TaskRowLine's `RowMenuControl`), so a
+   * touch hold and the `⋯` open the same menu. Absent, the menu keeps its own state.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** The only thing this component needed off the row — the caller keeps the row. */
   identifier: string;
   state: QueueRowMenuState;
   /** A write is already in flight; the plan's revision is not safe to build on. */
   disabled: boolean;
+  /**
+   * Why the queue items are off, when that is something other than a write in flight — the
+   * row's workspace plan still loading, or unreadable, in All workspaces.
+   */
+  disabledReason?: string;
+  /**
+   * All workspaces: the workspace whose queue these items write to — the row's own. Named
+   * above the items, because in a list mixing workspaces "Add to queue" alone does not say
+   * which queue.
+   */
+  queueWorkspace?: string;
   onOpen: () => void;
   onQueueNext: () => void;
   onQueueLast: () => void;
@@ -116,17 +147,66 @@ export function QueueRowMenu({
    */
   onMoveToTop?: () => void;
   onMoveToBottom?: () => void;
+  /**
+   * One step up or down — offered where the row's own arrow buttons are not drawn (the
+   * Queue on a phone, where the title needs their width). Absent means absent: the item
+   * is not rendered, so a desktop menu is unchanged.
+   */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  /** "Change status", on the desk: the keyboard's and a finger's way to the row's status. */
+  statusSubmenu?: ReactNode;
 }) {
   const held = state.heldBy;
+  /**
+   * Always controlled from here, so phone Back can close it: the row's long-press state
+   * when the row hands one over, this component's own otherwise.
+   */
+  const [ownOpen, setOwnOpen] = useState(false);
+  const isOpen = open ?? ownOpen;
+  const setOpen = (next: boolean) => {
+    if (open === undefined) setOwnOpen(next);
+    onOpenChange?.(next);
+  };
+  useBackToClose(isOpen, () => setOpen(false));
   return (
-    <DropdownMenu>
+    <DropdownMenu open={isOpen} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent aria-label={`Actions for ${identifier}`} data-queue-row-menu={identifier}>
-        <DropdownMenuItem data-menu-item="open" onSelect={onOpen}>
+      <DropdownMenuContent
+        aria-label={`Actions for ${identifier}`}
+        data-queue-row-menu={identifier}
+        // Touch screens get finger-sized rows; a mouse keeps the compact desktop menu.
+        className="pointer-coarse:[&_[role=menuitem]]:min-h-11 pointer-coarse:[&_[role=menuitem]]:text-[15px]"
+      >
+        <DropdownMenuItem
+          data-menu-item="open"
+          // One tap closes the menu and opens the detail. No hand-off is needed here: the
+          // detail's entry is pushed through `whenHistoryIsFree` (lib/back-to-close.ts), so it
+          // lands after the menu's own entry has been taken out.
+          onSelect={onOpen}
+        >
           <ArrowUpRight aria-hidden />
           Open details
         </DropdownMenuItem>
+        {statusSubmenu}
         <DropdownMenuSeparator />
+        {queueWorkspace ? (
+          <DropdownMenuLabel data-menu-queue-workspace={queueWorkspace} className="normal-case tracking-normal">
+            Queue in {queueWorkspace}
+          </DropdownMenuLabel>
+        ) : null}
+        {state.queued && onMoveUp ? (
+          <DropdownMenuItem data-menu-item="move-up" disabled={disabled} onSelect={onMoveUp}>
+            <ArrowUp aria-hidden />
+            Move up
+          </DropdownMenuItem>
+        ) : null}
+        {state.queued && onMoveDown ? (
+          <DropdownMenuItem data-menu-item="move-down" disabled={disabled} onSelect={onMoveDown}>
+            <ArrowDown aria-hidden />
+            Move down
+          </DropdownMenuItem>
+        ) : null}
         {state.queued && onMoveToTop ? (
           <DropdownMenuItem data-menu-item="move-top" disabled={disabled} onSelect={onMoveToTop}>
             <ArrowUpToLine aria-hidden />
@@ -143,7 +223,7 @@ export function QueueRowMenu({
           <DropdownMenuItem
             data-menu-item="dequeue"
             disabled={disabled || held !== null}
-            reason={held ? `In flight — ${held} is working on ${identifier}` : undefined}
+            reason={held ? `${held} is working on this, so it stays in the queue` : disabled ? disabledReason : undefined}
             onSelect={onDequeue}
           >
             <ListX aria-hidden />
@@ -151,7 +231,12 @@ export function QueueRowMenu({
           </DropdownMenuItem>
         ) : (
           <>
-            <DropdownMenuItem data-menu-item="queue-next" disabled={disabled} onSelect={onQueueNext}>
+            <DropdownMenuItem
+              data-menu-item="queue-next"
+              disabled={disabled}
+              reason={disabled ? disabledReason : undefined}
+              onSelect={onQueueNext}
+            >
               <SquareArrowUp aria-hidden />
               Queue next
             </DropdownMenuItem>
@@ -163,5 +248,36 @@ export function QueueRowMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * The row's statuses as a submenu of its `⋯` menu. Mounted only while the menu is open, which
+ * is when the row's workspace vocabulary is asked for.
+ */
+export function StatusSubmenu({
+  choices,
+  disabled,
+  onOpen,
+  onPick,
+}: {
+  choices: readonly RowStatusChoice[] | null;
+  disabled: boolean;
+  onOpen: () => void;
+  onPick: (status: string, label: string) => void;
+}) {
+  // Ask once, when the menu opens.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => onOpen(), []);
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger data-menu-item="change-status">
+        <CircleDot aria-hidden />
+        Change status
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent aria-label="Change status" data-row-status-submenu="">
+        <StatusChoiceItems choices={choices} disabled={disabled} onPick={onPick} />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

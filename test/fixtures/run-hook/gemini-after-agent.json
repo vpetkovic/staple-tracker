@@ -1,0 +1,10 @@
+{
+  "session_id": "9f2c1c7e-1b2a-4c3d-8e9f-0a1b2c3d4e5f",
+  "transcript_path": "/Users/me/.gemini/tmp/project/chats/session-2026-09-28.json",
+  "cwd": "/Users/me/project",
+  "hook_event_name": "AfterAgent",
+  "timestamp": "2026-09-28T10:00:00.000Z",
+  "prompt": "Work the next ticket.",
+  "prompt_response": "Done: the tests pass.",
+  "stop_hook_active": false
+}

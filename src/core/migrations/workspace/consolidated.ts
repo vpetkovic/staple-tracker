@@ -3,7 +3,7 @@
  * Regenerate with: npx tsx scripts/regen-migration-snapshots.ts
  *
  * The `sqlite_master` dump of a workspace database that walked migrations
- * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012. Executed verbatim by the runner when — and only when —
+ * 001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013, 014, 015, 016, 017, 018. Executed verbatim by the runner when — and only when —
  * version detection proved the file has no tables at all.
  *
  * No `IF NOT EXISTS` anywhere, deliberately: reaching this text with tables
@@ -47,7 +47,7 @@ CREATE TABLE issues (
   cancelled_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-, estimated_seconds INTEGER, kind TEXT NOT NULL DEFAULT 'task', gate_state TEXT, gate_owner TEXT, gate_requested_by TEXT, gate_requested_at TEXT, gate_resolved_by TEXT, gate_resolved_at TEXT, gate_released INTEGER NOT NULL DEFAULT 0, project_id TEXT);
+, estimated_seconds INTEGER, kind TEXT NOT NULL DEFAULT 'task', gate_state TEXT, gate_owner TEXT, gate_requested_by TEXT, gate_requested_at TEXT, gate_resolved_by TEXT, gate_resolved_at TEXT, gate_released INTEGER NOT NULL DEFAULT 0, project_id TEXT, derived_status TEXT);
 
 CREATE UNIQUE INDEX issues_idempotency_uq
   ON issues(idempotency_key) WHERE idempotency_key IS NOT NULL;
@@ -122,7 +122,7 @@ CREATE TABLE events (
   payload TEXT NOT NULL DEFAULT '{}',
   dedup_key TEXT,
   created_at TEXT NOT NULL
-);
+, origin_device TEXT, origin_seq INTEGER);
 
 CREATE UNIQUE INDEX events_dedup_uq
   ON events(dedup_key) WHERE dedup_key IS NOT NULL;
@@ -250,7 +250,7 @@ CREATE TABLE sync_conflicts (
          resolved_at      TEXT,
          resolved_by      TEXT,
          resolution       TEXT
-       );
+       , decided_seq INTEGER);
 
 CREATE INDEX sync_conflicts_open_idx ON sync_conflicts(detected_at) WHERE resolved_at IS NULL;
 
@@ -280,7 +280,7 @@ CREATE TABLE sync_state (
          client_seq_high_water INTEGER NOT NULL DEFAULT 0,
          last_sync_at          TEXT,
          bootstrap_cursor      TEXT
-       , origin_host TEXT);
+       , origin_host TEXT, head_reached_cursor TEXT, head_reached_at TEXT);
 
 CREATE TABLE sync_field_writes (
          entity       TEXT    NOT NULL,
@@ -292,4 +292,149 @@ CREATE TABLE sync_field_writes (
          written_at   TEXT    NOT NULL,
          PRIMARY KEY (entity, entity_id, field)
        );
+
+CREATE TABLE attempts (
+        id                  TEXT PRIMARY KEY,
+        issue_id            TEXT NOT NULL,
+        agent               TEXT NOT NULL,
+        state               TEXT NOT NULL,
+        outcome             TEXT,
+        end_reason          TEXT,
+        end_detection       TEXT,
+        ended_by            TEXT,
+        opened_by           TEXT NOT NULL,
+        resumes_attempt_id  TEXT,
+        started_at          TEXT NOT NULL,
+        ended_at            TEXT,
+        ended_at_source     TEXT,
+        device_id           TEXT,
+        claim_scope         TEXT NOT NULL,
+        claim_fencing_token INTEGER,
+        harness             TEXT,
+        provider_binding    TEXT,
+        estimate_at_start   TEXT NOT NULL,
+        idempotency_key     TEXT,
+        provenance          TEXT NOT NULL,
+        missing             TEXT NOT NULL DEFAULT '{}'
+      , role TEXT NOT NULL DEFAULT 'worker');
+
+CREATE INDEX attempts_issue_idx ON attempts (issue_id, started_at, id);
+
+CREATE INDEX attempts_stored_open_idx ON attempts (state) WHERE state <> 'ended';
+
+CREATE INDEX attempts_idempotency_idx ON attempts (issue_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE attempt_transitions (
+        id          TEXT PRIMARY KEY,
+        attempt_id  TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        at          TEXT NOT NULL,
+        actor       TEXT,
+        detection   TEXT,
+        reason      TEXT,
+        detail      TEXT NOT NULL DEFAULT '{}',
+        concurrency TEXT NOT NULL DEFAULT '{}'
+      );
+
+CREATE INDEX attempt_transitions_attempt_idx ON attempt_transitions (attempt_id, at, id);
+
+CREATE TABLE runs (
+        id              TEXT PRIMARY KEY,
+        actor           TEXT NOT NULL,
+        scope_kind      TEXT NOT NULL,
+        scope_key       TEXT NOT NULL,
+        scope_issue_id  TEXT,
+        state           TEXT NOT NULL,
+        max_tickets     INTEGER,
+        until_at        TEXT,
+        ceiling_percent REAL,
+        ceiling_account TEXT,
+        override_reason TEXT,
+        stop_reason     TEXT,
+        stop_detail     TEXT NOT NULL DEFAULT '{}',
+        stopped_by      TEXT,
+        stop_note       TEXT,
+        started_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        ended_at        TEXT
+      , goal_gate_owner TEXT, goal_child_cap INTEGER, goal_gated_at TEXT);
+
+CREATE UNIQUE INDEX runs_live_scope_uq ON runs (actor, scope_key) WHERE state IN ('active', 'paused');
+
+CREATE INDEX runs_started_idx ON runs (started_at, id);
+
+CREATE TABLE run_tickets (
+        run_id      TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+        seq         INTEGER NOT NULL,
+        issue_id    TEXT NOT NULL,
+        identifier  TEXT NOT NULL,
+        taken_at    TEXT NOT NULL,
+        outcome     TEXT,
+        reason      TEXT,
+        attempt_id  TEXT,
+        recorded_at TEXT,
+        PRIMARY KEY (run_id, seq)
+      );
+
+CREATE TABLE milestone_criterion_marks (
+        milestone_id TEXT    NOT NULL,
+        position     INTEGER NOT NULL,
+        criterion    TEXT    NOT NULL,
+        verdict      TEXT    NOT NULL,
+        evidence     TEXT    NOT NULL DEFAULT '[]',
+        note         TEXT,
+        marked_by    TEXT    NOT NULL,
+        run_id       TEXT,
+        marked_at    TEXT    NOT NULL,
+        PRIMARY KEY (milestone_id, position)
+      );
+
+CREATE TRIGGER issues_derived_status_cleared
+      AFTER UPDATE OF status, derived_status, checkout_agent, checkout_at ON issues
+      WHEN NEW.derived_status IS NOT NULL
+       AND (
+             NEW.derived_status IS NOT NEW.status
+          OR (    NEW.derived_status IS OLD.derived_status
+              AND OLD.derived_status IS OLD.status
+              AND (NEW.status IS NOT OLD.status OR NEW.checkout_agent IS NOT OLD.checkout_agent OR NEW.checkout_at IS NOT OLD.checkout_at))
+           )
+      BEGIN
+        UPDATE issues SET derived_status = NULL WHERE id = NEW.id;
+      END;
+
+CREATE TRIGGER issues_derived_status_created
+      AFTER INSERT ON issues
+      WHEN NEW.derived_status IS NOT NULL AND NEW.derived_status IS NOT NEW.status
+      BEGIN
+        UPDATE issues SET derived_status = NULL WHERE id = NEW.id;
+      END;
+
+CREATE TABLE attachments (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        filename TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        author TEXT,
+        caption TEXT,
+        byte_sync TEXT NOT NULL CHECK (byte_sync IN ('inline', 'local')),
+        created_at TEXT NOT NULL
+      );
+
+CREATE INDEX attachments_issue_idx ON attachments(issue_id);
+
+CREATE INDEX attachments_sha_idx ON attachments(sha256);
+
+CREATE TABLE attachment_bytes (
+        sha256 TEXT PRIMARY KEY,
+        bytes BLOB NOT NULL
+      );
+
+CREATE TRIGGER attachments_drop_bytes
+      AFTER DELETE ON attachments
+      WHEN NOT EXISTS (SELECT 1 FROM attachments WHERE sha256 = OLD.sha256)
+      BEGIN
+        DELETE FROM attachment_bytes WHERE sha256 = OLD.sha256;
+      END;
 `;
