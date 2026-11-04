@@ -181,7 +181,8 @@ export const EMITTED_PAYLOADS: ReadonlyArray<{
       "title": null,
       "changeSummary": null,
       "author": "past",
-      "createdAt": "2026-09-10T00:00:00.000Z"
+      "createdAt": "2026-09-10T00:00:00.000Z",
+      "instructions": false
     }
   },
   {

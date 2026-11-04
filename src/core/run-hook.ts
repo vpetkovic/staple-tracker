@@ -43,6 +43,7 @@
  * session stop. Any error inside the hook lets the session stop too: the adapter maps every
  * failure to "allow", never to its provider's blocking exit code.
  */
+import { describeSource } from "./instructions.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { join, sep } from "node:path";
@@ -522,7 +523,8 @@ function noReviewReason(input: { ref: string; status: string; as: string }): str
   return `staple autopilot: ${ref} is ${input.status} but has no review since the run took it. Before the run moves on, review the change as a skeptic whose job is to find where it fails ${ref}'s acceptance criteria: reproduce, do not read (a separate reviewer sub-agent if you can start one). Fix what it finds, then record it: ${as} staple comment ${ref} "review: <findings and what you did about each>". Then end your turn.`;
 }
 
-function takeReason(input: { answer: Extract<ContinueAnswer, { action: "take" }>; db: string }): string {
+/** The message a `take` blocks with: the ticket, how to work it, and the instructions that bind it. Exported for its test. */
+export function takeReason(input: { answer: Extract<ContinueAnswer, { action: "take" }>; db: string }): string {
   const { answer } = input;
   const { ref, run } = answer;
   const as = actorPrefix(run.actor, input.db);
@@ -546,6 +548,18 @@ function takeReason(input: { answer: Extract<ContinueAnswer, { action: "take" }>
       `5. Comment the evidence, then: staple status ${ref} in_review --json.`,
     );
     if (milestone !== null) lines.push(`This run's goal is milestone ${milestone}: when your work is evidence that one of its criteria is met, mark it (staple milestone criterion ${milestone} <n> --met --evidence ${ref}). Mark only what your work shows.`);
+  }
+  const effective = answer.instructions.filter((entry) => entry.effective);
+  if (effective.length > 0) {
+    /**
+     * Named, not pasted: a hook's reason is one message in the transcript, and the documents
+     * can be long. The session reads them in full with the command, which also adds the
+     * run's own instructions.
+     */
+    const changed = answer.instructionsChanged.length > 0 ? ` Changed since the last ticket: ${answer.instructionsChanged.map((change) => `${change.ref ?? change.issueId} ${change.key}`).join(", ")}.` : "";
+    lines.push(
+      `Instructions bind this ticket: ${effective.map((entry) => `${entry.key} (${describeSource(entry.source)})`).join(", ")}.${changed} Read them before you start and follow them while you work: ${as} staple instructions ${ref} --run ${run.id}`,
+    );
   }
   lines.push(
     `If you cannot finish, comment why, then staple run continue --run ${short(run.id)} --outcome failed --reason "<why>" --json and do what it answers.`,

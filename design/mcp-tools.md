@@ -23,7 +23,7 @@ Every tool, by area:
 | Area | Tools |
 |---|---|
 | Issues and claims | `inbox`, `list_tasks`, `get_task`, `create_task`, `update_task`, `set_estimate`, `checkout_task`, `release_task`, `set_blocked_by`, `record_attempt_event` |
-| Comments, documents, events | `add_comment`, `list_comments`, `put_document`, `get_document`, `events_since` |
+| Comments, documents, events | `add_comment`, `list_comments`, `put_document` (`instructions` flags an instruction document), `get_document`, `events_since` |
 | Approval gates | `gate_task`, `approve_task`, `request_changes` |
 | Pickup queue | `list_queue`, `next_task`, `enqueue_task`, `dequeue_task`, `move_queue_entry`, `reorder_queue`, `prune_queue` |
 | Milestones | `list_milestones`, `get_milestone`, `create_milestone`, `update_milestone`, `mark_milestone_criterion`, `add_milestone_member`, `remove_milestone_member`, `move_milestone_member`, `reorder_milestone_members` |

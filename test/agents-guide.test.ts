@@ -322,6 +322,16 @@ describe("the guide teaches the whole protocol", () => {
     expect(section).toMatch(/Stop means stop/);
   });
 
+  it("teaches instruction documents: how to make one, where they arrive, and which one wins", () => {
+    const section = guide.slice(guide.indexOf("## Instructions"), guide.indexOf("## Approval gates"));
+    expect(section).toContain("--instructions");
+    expect(section).toContain("staple instructions DEM-42 --json");
+    for (const surface of ["get_task", "checkout_task", "next_task", "continue_run"]) expect(section, surface).toContain(surface);
+    expect(section).toMatch(/nearest wins/);
+    expect(section).toContain("instructions_changed");
+    expect(section).toContain("--no-instructions");
+  });
+
   it("tells the reader their edits are safe", () => {
     expect(guide).toMatch(/will not\s+overwrite your changes/i);
   });

@@ -424,6 +424,8 @@ describe("schema migration against a live database", () => {
       legacyDb.exec("DROP TRIGGER IF EXISTS attachments_drop_bytes");
       legacyDb.exec("DROP TABLE IF EXISTS attachments");
       legacyDb.exec("DROP TABLE IF EXISTS attachment_bytes");
+      // Migration 019's revision column (its `runs` columns went with the table above).
+      legacyDb.exec("ALTER TABLE document_revisions DROP COLUMN instructions");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

@@ -32,6 +32,7 @@ function detail(over: Partial<IssueDetail> = {}): IssueDetail {
     comments: [],
     documents: [],
     attachments: [],
+    instructions: [],
     crossBlockers: [],
     claim: null,
     timing,
@@ -205,8 +206,8 @@ describe("Documents", () => {
       DocumentsTab,
       detail({
         documents: [
-          { issueId: "id-50", key: "plan", currentRevision: 3, title: null, updatedAt: new Date().toISOString() },
-          { issueId: "id-50", key: "worklog", currentRevision: 2, title: null, updatedAt: new Date().toISOString() },
+          { issueId: "id-50", key: "plan", currentRevision: 3, title: null, updatedAt: new Date().toISOString(), instructions: false },
+          { issueId: "id-50", key: "worklog", currentRevision: 2, title: null, updatedAt: new Date().toISOString(), instructions: false },
         ],
       }),
     );

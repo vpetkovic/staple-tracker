@@ -362,6 +362,9 @@ async function driveLocked(options: DriveOptions): Promise<DriveResult> {
           goal: answer.goal,
           goalCheck: answer.run.goal?.children.some((child) => child.identifier === answer.ref && child.purpose === "goal_check") ?? false,
           resumed: answer.resumed,
+          ticketInstructions: answer.instructions,
+          instructionsChanged: answer.instructionsChanged,
+          instructionsFile: `${stem}.instructions.json`,
         }),
         brief_file: `${stem}.brief.md`,
         workspace: options.cwd,
@@ -372,8 +375,16 @@ async function driveLocked(options: DriveOptions): Promise<DriveResult> {
         log_dir: logDir,
       };
       writeFileSync(values.brief_file, values.brief);
+      writeFileSync(`${stem}.instructions.json`, `${JSON.stringify({ ref: answer.ref, runId, instructions: answer.instructions, instructionsChanged: answer.instructionsChanged }, null, 2)}\n`);
       const command = sessionCommand(options.agent, options.command, values, { fullAccess: options.fullAccess });
-      const env: NodeJS.ProcessEnv = { ...options.env, STAPLE_AGENT: answer.run.actor, STAPLE_DB: dbFile, STAPLE_RUN: runId, STAPLE_RUN_TICKET: answer.ref };
+      const env: NodeJS.ProcessEnv = {
+        ...options.env,
+        STAPLE_AGENT: answer.run.actor,
+        STAPLE_DB: dbFile,
+        STAPLE_RUN: runId,
+        STAPLE_RUN_TICKET: answer.ref,
+        STAPLE_RUN_INSTRUCTIONS: `${stem}.instructions.json`,
+      };
       for (const name of command.unsetEnv) delete env[name];
 
       const sessionStartedAt = nowIso();

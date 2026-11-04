@@ -295,14 +295,14 @@ function settleOne(db: DatabaseSync, journal: Journal, item: OwedSettlement): bo
     const key = document.slice(split + 1);
     const revision = Number(item.entityId.slice(slash + 1));
     const row = db
-      .prepare("SELECT body, author, change_summary, created_at FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?")
-      .get(issueId, key, revision) as { body: string; author: string | null; change_summary: string | null; created_at: string } | undefined;
+      .prepare("SELECT body, author, change_summary, created_at, instructions FROM document_revisions WHERE issue_id = ? AND key = ? AND revision = ?")
+      .get(issueId, key, revision) as { body: string; author: string | null; change_summary: string | null; created_at: string; instructions: number } | undefined;
     if (!row || ownRevisionOf(ownRevisions(db, issueId, key), { body: row.body, author: row.author, createdAt: row.created_at }) === null) return false;
     journal.record({
       entity: "documentRevision",
       entityId: item.entityId,
       verb: "create",
-      payload: { issueId, key, revision, body: row.body, title: null, changeSummary: row.change_summary, author: row.author, createdAt: row.created_at },
+      payload: { issueId, key, revision, body: row.body, title: null, changeSummary: row.change_summary, author: row.author, createdAt: row.created_at, instructions: row.instructions === 1 },
       actor: row.author,
     });
     return true;

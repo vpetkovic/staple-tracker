@@ -120,7 +120,7 @@ describe("GET /api/runs", () => {
     const { runId, epic, taken } = liveRun("reader");
     const entry = (await runs()).find((candidate) => candidate.run.id === runId)!;
     expect(entry).toBeDefined();
-    expect(Object.keys(entry).sort()).toEqual(["decision", "driver", "facts", "goal", "run", "workspace"]);
+    expect(Object.keys(entry).sort()).toEqual(["decision", "driver", "facts", "goal", "instructionsChanged", "run", "workspace"]);
     expect(entry.workspace).toBe("runs");
     expect(entry.run.state).toBe("active");
     expect(entry.run.scope).toMatchObject({ kind: "issue", identifier: epic });

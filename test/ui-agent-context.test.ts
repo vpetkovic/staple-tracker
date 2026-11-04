@@ -128,6 +128,8 @@ describe("the pane cannot drift from the tool", () => {
        * to force.
        */
       "gate",
+      // Instruction documents an agent works under (core/instructions.ts), in lockstep with get_task.
+      "instructions",
       "issue",
       // The orchestrator lane beside `attempts` (design/timing-semantics.md), in lockstep too.
       "orchestration",

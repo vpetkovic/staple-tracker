@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { DRIVE_PROVIDERS, PLACEHOLDERS, type DriveEvent, assertNoLiveDriver, drive, sessionCommand } from "../core/run-driver.js";
+import { runInstructionKey, withRunInstructions } from "../core/instructions.js";
 import { buildBrief, type DriveFinish } from "../core/run-brief.js";
 import { runDirectory } from "../core/run-attachment.js";
 import type { Run } from "../core/run-store.js";
@@ -55,7 +56,10 @@ prints the reason and exits 0. Non-zero only for a driver error.
   --ticket-timeout D  end a session after D (90m, 2h); the ticket fails
   --retry-after S     seconds to sleep on a wait, above 0 (default: the answer's)
   --poll S            seconds between reads of the run while a session works (5)
-  --instructions F    append this file to every brief (gates, conventions)
+  --instructions F    with --scope: the run's own instructions, stored on the run it
+                      starts and handed to every ticket like any instruction
+                      document (keyed by the file name). With --run: appended to
+                      every brief this driver writes, and nowhere else
   --cwd DIR           where sessions run (default: the workspace's directory)
   --dry-run           start nothing, claim nothing: print the command and the
                       brief the next ticket would get
@@ -150,7 +154,10 @@ export function runDriveCommand(rest: string[]): void {
   if (retryAfter !== null && retryAfter <= 0) throw new StapleError("validation", `--retry-after takes a number of seconds above 0; got "${values["retry-after"]}".`);
   const poll = seconds(values.poll, "--poll") ?? 5;
   if (poll <= 0) throw new StapleError("validation", `--poll takes a number of seconds above 0; got "${values.poll}".`);
-  const instructions = values.instructions === undefined ? null : readFileSync(values.instructions, "utf8");
+  const instructionFile = values.instructions === undefined ? null : readFileSync(values.instructions, "utf8");
+  // A run this drive starts keeps the file as its own instructions; an attached drive only briefs with it.
+  const runInstructions = values.scope !== undefined && instructionFile !== null ? [{ key: runInstructionKey(values.instructions!), body: instructionFile }] : [];
+  const instructions = values.scope !== undefined ? null : instructionFile;
   const command = values.command ?? null;
   // Refuse a bad provider or template before a run is started or a ticket claimed.
   const probe = Object.fromEntries(PLACEHOLDERS.map((name) => [name, `{${name}}`])) as Parameters<typeof sessionCommand>[2];
@@ -177,6 +184,7 @@ export function runDriveCommand(rest: string[]): void {
           ceilingAccount: values["ceiling-account"],
           gateOwner: values["gate-owner"],
           goalChildCap: positiveInteger(values["goal-cap"], "--goal-cap"),
+          instructions: runInstructions,
         };
 
   if (values["dry-run"] === true) return dryRun();
@@ -250,19 +258,25 @@ export function runDriveCommand(rest: string[]): void {
     // First, as start would: a bad option, or a live run of the actor's over the scope, is refused.
     const preview = startInput === null ? null : runs.previewStart(startInput);
     const existing = values.scope === undefined ? (values.run !== undefined ? runs.get(values.run) : runs.liveRunOf(actor)) : null;
-    let next: { ref: string; title: string } | null = null;
+    let next: { ref: string; title: string; issueId: string } | null = null;
     if (existing !== null) {
       const facts = runs.status(existing.id).facts;
       const pick = facts?.workable[0];
-      if (pick) next = { ref: pick.identifier, title: store.getIssue(pick.issueId).title };
+      if (pick) next = { ref: pick.identifier, title: store.getIssue(pick.issueId).title, issueId: pick.issueId };
     } else {
       const row = store.queue().effectiveQueue({ actor, scope: values.scope === "queue" ? null : values.scope }).next;
-      if (row) next = { ref: row.identifier, title: row.title };
+      if (row) next = { ref: row.identifier, title: row.title, issueId: row.issueId };
     }
     const runId = existing?.id ?? "<new run>";
     const logDir = runDirectory(dbFile, runId);
     const ref = next?.ref ?? "<ref>";
-    const brief = buildBrief({ ref, title: next?.title ?? "<title>", workspace: cwd, db: dbFile, runId, actor: existing?.actor ?? actor, finish, instructions, goal: existing ? runs.goalReport(existing) : (preview?.goal ?? null) });
+    const ticketInstructions =
+      next === null
+        ? []
+        : existing !== null
+          ? store.instructions(next.issueId, { runId: existing.id })
+          : withRunInstructions(store.instructions(next.issueId), runInstructions, { runId, actor, startedAt: null });
+    const brief = buildBrief({ ref, title: next?.title ?? "<title>", workspace: cwd, db: dbFile, runId, actor: existing?.actor ?? actor, finish, instructions, goal: existing ? runs.goalReport(existing) : (preview?.goal ?? null), ticketInstructions, instructionsFile: `${logDir}/001-${ref}.instructions.json` });
     const briefFile = `${logDir}/001-${ref}.brief.md`;
     const shown = sessionCommand(values.agent!, command, {
       ref,
@@ -276,7 +290,7 @@ export function runDriveCommand(rest: string[]): void {
       model: values.model ?? "",
       log_dir: logDir,
     }, { fullAccess });
-    const env = { STAPLE_AGENT: existing?.actor ?? actor, STAPLE_DB: dbFile, STAPLE_RUN: runId, STAPLE_RUN_TICKET: ref };
+    const env = { STAPLE_AGENT: existing?.actor ?? actor, STAPLE_DB: dbFile, STAPLE_RUN: runId, STAPLE_RUN_TICKET: ref, STAPLE_RUN_INSTRUCTIONS: `${logDir}/001-${ref}.instructions.json` };
     if (json) {
       console.log(JSON.stringify({ dryRun: true, run: runId, next, cwd, env, unsetEnv: shown.unsetEnv, file: shown.file, args: shown.args, command: shown.display, briefFile, brief }));
       return;

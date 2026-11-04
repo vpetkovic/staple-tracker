@@ -270,6 +270,8 @@ describe("read shapes", () => {
       documents: [],
       // File metadata, from the store method get_task spreads too. CON-1 has none.
       attachments: [],
+      // The instructions that reach it, from the same store expression. None here.
+      instructions: [],
       crossBlockers: [],
       // C1: claim liveness rides with the issue, matching MCP get_task.
       claim: claimGolden(),

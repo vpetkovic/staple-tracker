@@ -59,6 +59,7 @@ import { ORIGIN_RELEASING_STATUSES, StapleError, holdsLiveOrigin, normalizeTitle
 import { type OwnRevision, holderYields, oweSettlement, ownClaimSeq, ownOriginClaimSeq, ownRevisionOf, ownRevisions } from "./claims.js";
 import { applyAttempt, applyAttemptTransition } from "./apply-attempts.js";
 import { applyAttachment } from "./apply-attachments.js";
+import { writeEventRow } from "../event-row.js";
 import { placeRevision, sameRevision, summaryAt } from "./revision-placement.js";
 import {
   isDefined,
@@ -1497,11 +1498,64 @@ function applyDocumentRevision(db: DatabaseSync, input: ApplyInput): boolean {
     author: typeof payload.author === "string" ? payload.author : input.actor,
     createdAt: typeof payload.createdAt === "string" ? payload.createdAt : input.at,
     changeSummary: typeof payload.changeSummary === "string" ? payload.changeSummary : null,
+    // Migration 019: an older device's revision has no flag, and is not instructions.
+    instructions: payload.instructions === true ? 1 : 0,
   };
+  const before = instructionHead(db, issueId, key);
   if (input.read !== undefined) placeFromSnapshot(db, issueId, key, incoming, input, input.read);
   else placeFromLog(db, issueId, key, incoming, claimSeqOf(input, ["body"]));
   writeHead(db, issueId, key, typeof payload.title === "string" ? payload.title : null);
+  noteInstructionsChanged(db, issueId, key, before, input);
   return true;
+}
+
+/** The head revision of a document and whether it is instructions, or null when there is none. */
+function instructionHead(db: DatabaseSync, issueId: string, key: string): { revision: number; instructions: boolean } | null {
+  const head = db
+    .prepare(
+      `SELECT d.current_revision AS revision, COALESCE(r.instructions, 0) AS instructions
+         FROM documents d
+         LEFT JOIN document_revisions r ON r.issue_id = d.issue_id AND r.key = d.key AND r.revision = d.current_revision
+        WHERE d.issue_id = ? AND d.key = ?`,
+    )
+    .get(issueId, key) as { revision: number; instructions: number } | undefined;
+  return head === undefined ? null : { revision: head.revision, instructions: head.instructions === 1 };
+}
+
+/**
+ * A pulled revision that changed an instruction document's head raises `instructions_changed`
+ * here, as `putDocument` does for one written on this device. Events never replicate, so
+ * without it a live run on this machine would never hear that another device edited the
+ * rules it works under (`RunStore.continue`).
+ */
+function noteInstructionsChanged(
+  db: DatabaseSync,
+  issueId: string,
+  key: string,
+  before: { revision: number; instructions: boolean } | null,
+  input: ApplyInput,
+): void {
+  // A snapshot read rebuilds the workspace; it is not news to a run on it.
+  if (input.read !== undefined) return;
+  const after = instructionHead(db, issueId, key);
+  if (after === null) return;
+  if (!after.instructions && before?.instructions !== true) return;
+  if (before !== null && before.revision === after.revision && before.instructions === after.instructions) return;
+  // `writeEventRow`, not `insertEvent`: `event-log.ts` imports the journal, which imports this module.
+  writeEventRow(db, {
+    kind: "instructions_changed",
+    issueId,
+    actor: input.actor,
+    payload: { key, revision: after.revision, instructions: after.instructions, was: before?.instructions ?? false, deviceId: input.deviceId },
+    createdAt: input.at,
+    originDevice: input.deviceId,
+    /**
+     * The same operation delivered twice raises it once. Keyed by the operation, not by the head
+     * it produced: after a restore rewinds the epoch, a different revision can land on the same
+     * number with the same flag, and that is news too.
+     */
+    dedupKey: `instructions_changed ${input.opId ?? `${issueId}/${key}/${after.revision}/${after.instructions ? 1 : 0}`}`,
+  });
 }
 
 interface HeldRevision {
@@ -1510,12 +1564,14 @@ interface HeldRevision {
   readonly author: string | null;
   readonly createdAt: string;
   readonly changeSummary: string | null;
+  /** 0 or 1, as the column holds it (migration 019). */
+  readonly instructions: number;
 }
 
 function heldRevisions(db: DatabaseSync, issueId: string, key: string): HeldRevision[] {
   return db
     .prepare(
-      `SELECT revision, body, author, created_at AS createdAt, change_summary AS changeSummary
+      `SELECT revision, body, author, created_at AS createdAt, change_summary AS changeSummary, instructions
          FROM document_revisions WHERE issue_id = ? AND key = ? ORDER BY revision`,
     )
     .all(issueId, key) as unknown as HeldRevision[];
@@ -1523,9 +1579,9 @@ function heldRevisions(db: DatabaseSync, issueId: string, key: string): HeldRevi
 
 function insertRevision(db: DatabaseSync, issueId: string, key: string, row: HeldRevision): void {
   db.prepare(
-    `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(issueId, key, row.revision, row.body, row.author, row.changeSummary, row.createdAt);
+    `INSERT INTO document_revisions (issue_id, key, revision, body, author, change_summary, created_at, instructions)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(issueId, key, row.revision, row.body, row.author, row.changeSummary, row.createdAt, row.instructions);
 }
 
 function deleteRevision(db: DatabaseSync, issueId: string, key: string, revision: number): void {
@@ -1660,6 +1716,9 @@ function takeLogFields(db: DatabaseSync, issueId: string, key: string, revision:
   if ("changeSummary" in payload) {
     const summary = typeof payload.changeSummary === "string" ? payload.changeSummary : null;
     db.prepare(`UPDATE document_revisions SET change_summary = ? ${where}`).run(summary, issueId, key, revision);
+  }
+  if (typeof payload.instructions === "boolean") {
+    db.prepare(`UPDATE document_revisions SET instructions = ? ${where}`).run(payload.instructions ? 1 : 0, issueId, key, revision);
   }
 }
 

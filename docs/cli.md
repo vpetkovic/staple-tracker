@@ -86,7 +86,8 @@ Guides: [How an agent works a ticket](working-a-ticket.md),
 | `staple release <ref>` | Give the claim back; the ticket returns to `todo`. |
 | `staple status <ref> <status>` | Move a ticket to any status the rules allow. |
 | `staple comment <ref> <text>` | Add a comment. |
-| `staple doc <ref> <key> --put <file>` | Store a document on a ticket (a plan, a worklog). Without `--put` it prints the latest; `--revisions` lists the history. |
+| `staple doc <ref> <key> --put <file>` | Store a document on a ticket (a plan, a worklog). Without `--put` it prints the latest; `--revisions` lists the history. `--instructions` makes it an [instruction document](runs.md#instructions-for-everything-in-scope), handed to every ticket beneath `<ref>`; `--no-instructions` turns that off. |
+| `staple instructions <ref> [--run <id>]` | The instructions that apply to a ticket, nearest first: its own, its parents', its milestone's, then the run's. |
 | `staple file attach <ref> <path>` | Attach a file. The type is sniffed from the bytes. `--caption` and `--filename` are optional. |
 | `staple file ls <ref>` | List a ticket's files. Metadata only: type, size, and hash. |
 | `staple file get <id> --out <path>` | Write one file's bytes to a path. |
@@ -175,7 +176,7 @@ Guide: [Autopilot runs](runs.md).
 
 | Command | What it does |
 |---|---|
-| `staple run start --scope <queue\|ref>` | Start one agent working the queue, an epic or a milestone, ticket after ticket. `--max-tickets N`, `--until 4h`, `--ceiling P` (stop at P% of a usage limit). |
+| `staple run start --scope <queue\|ref>` | Start one agent working the queue, an epic or a milestone, ticket after ticket. `--max-tickets N`, `--until 4h`, `--ceiling P` (stop at P% of a usage limit). `--instructions <file>` (repeatable) gives the run instructions of its own. |
 | `staple run continue` | After each ticket: `take` the next (already claimed), `wait`, or `stop`. `--outcome failed --reason R` records a failure. |
 | `staple run status [--all]` | A run, and whether it would stop now and why. |
 | `staple run pause` / `resume` | Hold a run without ending it, then let it go on. |

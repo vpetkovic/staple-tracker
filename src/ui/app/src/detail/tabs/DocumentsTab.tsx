@@ -22,7 +22,7 @@
  * this file is only the fetch plumbing and the mode switch.
  */
 import { useCallback, useMemo, useState } from "react";
-import { FileText, History, RotateCcw } from "lucide-react";
+import { FileText, History, RotateCcw, ScrollText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { action, ApiError, getDocument, getRevisions } from "@/lib/api";
 import { Markdown } from "@/lib/markdown";
@@ -291,8 +291,9 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
                   : "border-border text-text-secondary hover:text-foreground",
               )}
             >
-              <FileText aria-hidden className="size-3.5" />
+              {doc.instructions ? <ScrollText aria-hidden className="size-3.5" /> : <FileText aria-hidden className="size-3.5" />}
               {documentName(doc.key, doc.title)}
+              {doc.instructions ? <span className="sr-only"> (instructions)</span> : null}
             </button>
           ))}
         </div>
@@ -306,6 +307,12 @@ export function DocumentsTab({ detail, workspace, onAuthError, refresh }: TabPro
               Updated <RelativeTime iso={meta.updatedAt} inSentence />
               <Dot />
               revision {meta.currentRevision}
+              {meta.instructions ? (
+                <>
+                  <Dot />
+                  <span data-document-instructions="">instructions: handed to every ticket beneath this one</span>
+                </>
+              ) : null}
             </p>
           ) : null}
         </div>

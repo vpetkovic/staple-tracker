@@ -26,7 +26,7 @@ console.log(
     ref,
     briefExists: existsSync(briefFile),
     cwd: process.cwd(),
-    env: { STAPLE_AGENT: process.env.STAPLE_AGENT, STAPLE_DB: process.env.STAPLE_DB, STAPLE_RUN: process.env.STAPLE_RUN, STAPLE_RUN_TICKET: process.env.STAPLE_RUN_TICKET },
+    env: { STAPLE_AGENT: process.env.STAPLE_AGENT, STAPLE_DB: process.env.STAPLE_DB, STAPLE_RUN: process.env.STAPLE_RUN, STAPLE_RUN_TICKET: process.env.STAPLE_RUN_TICKET, STAPLE_RUN_INSTRUCTIONS: process.env.STAPLE_RUN_INSTRUCTIONS },
   }),
 );
 

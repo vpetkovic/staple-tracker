@@ -623,7 +623,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
 
   const revisions = db
     .prepare(
-      `SELECT r.issue_id, r.key, r.revision, r.body, r.author, r.change_summary, r.created_at,
+      `SELECT r.issue_id, r.key, r.revision, r.body, r.author, r.change_summary, r.created_at, r.instructions,
               d.current_revision, d.title, i.identifier
          FROM document_revisions r
          LEFT JOIN documents d ON d.issue_id = r.issue_id AND d.key = r.key
@@ -638,6 +638,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     author: string | null;
     change_summary: string | null;
     created_at: string;
+    instructions: number;
     current_revision: number | null;
     title: string | null;
     identifier: string | null;
@@ -672,6 +673,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
         changeSummary: row.change_summary,
         author: row.author,
         createdAt: row.created_at,
+        instructions: row.instructions === 1,
       },
       actor: row.author,
       at: row.created_at,
