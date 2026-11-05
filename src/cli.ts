@@ -24,6 +24,7 @@ import { runRunCommand } from "./commands/run.js";
 import { runDriveCommand } from "./commands/run-drive.js";
 import { runHookCommand } from "./commands/run-hook.js";
 import { runBudgetCommand } from "./commands/budget.js";
+import { runBrainCommand } from "./commands/brain.js";
 import { ATTEMPT_END_OPTIONS, ATTEMPT_OPEN_OPTIONS, attemptOptionsFrom, runAttemptCommand, withAttempt } from "./commands/attempt.js";
 import { attemptLine, runAttemptsCommand } from "./commands/attempts.js";
 import { planLines, runCompareCommand } from "./commands/compare.js";
@@ -1200,7 +1201,7 @@ Exit codes: 0 ok · 1 unknown · 2 validation · 3 not_found · 4 conflict
             19 rate_limited · 20 unavailable · 21 offline (19–21 are retryable; try again later)`;
 
 /** Commands whose own module answers `--help` / `-h` with a page of its own. */
-const OWN_HELP: ReadonlySet<string> = new Set(["attempt", "attempts", "budget", "calibrate", "cloud", "compare", "forecast", "queue", "run", "timing"]);
+const OWN_HELP: ReadonlySet<string> = new Set(["attempt", "attempts", "brain", "budget", "calibrate", "cloud", "compare", "forecast", "queue", "run", "timing"]);
 
 /**
  * `staple <command> --help` for a command with no page of its own: its entries in HELP (every
@@ -2739,6 +2740,12 @@ function main() {
     /** `staple budget` — provider budget telemetry, machine-level (src/commands/budget.ts). */
     case "budget": {
       runBudgetCommand(rest);
+      break;
+    }
+
+    /** `staple brain` — persistent agent memory, POC (src/commands/brain.ts). */
+    case "brain": {
+      runBrainCommand(rest);
       break;
     }
 

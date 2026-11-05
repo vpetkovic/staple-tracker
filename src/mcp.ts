@@ -50,6 +50,7 @@ import {
 } from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { registerBudgetTools } from "./core/telemetry/mcp-tools.js";
+import { registerBrainTools } from "./brain/mcp-tools.js";
 import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
@@ -4052,6 +4053,7 @@ server.registerTool(
 );
 
 registerBudgetTools(server, { run });
+registerBrainTools(server, { run });
 registerTelemetryReadTools(server, { run, storeFor, wsSchema, refSchema });
 
 const transport = new StdioServerTransport();

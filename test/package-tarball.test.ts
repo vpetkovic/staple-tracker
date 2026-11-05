@@ -369,7 +369,8 @@ describe("the installed binary, run from outside this repository", () => {
       // about view's show_about (70), the ticket card's show_ticket (71), the
       // progress view's show_progress (72), the queue view's show_queue (73), and the
       // app-only approve_gate_from_view and request_changes_from_view the views' buttons call (75).
-      expect(tools).toHaveLength(75);
+      // The brain POC's remember, recall and forget (78).
+      expect(tools).toHaveLength(78);
       expect(tools.map((tool) => tool.name)).toContain("list_tasks");
 
       // A real call, so this proves the workspace path too, not just the handshake.
