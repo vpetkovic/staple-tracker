@@ -11,12 +11,15 @@ import { recall } from "../brain/recall.js";
 import { projectKeysFor, projectScope, type ProjectKeys } from "../brain/scope.js";
 import type { BrainStore } from "../brain/store.js";
 import { GLOBAL_SCOPE, isBrainKind } from "../brain/types.js";
+import { computeStats } from "../brain/stats.js";
+import { buildTurn } from "../brain/turn.js";
+import { withUsage, type UsageRow } from "../brain/usage.js";
 import { StapleError } from "../core/types.js";
 
-function withBrain<T>(fn: (brain: BrainStore) => T): T {
+function withBrain<T>(fn: (brain: BrainStore, dbPath: string) => T): T {
   const opened = openBrain();
   try {
-    return fn(opened.brain);
+    return fn(opened.brain, opened.dbPath);
   } finally {
     opened.close();
   }
@@ -78,23 +81,65 @@ export function brainRemember(body: Record<string, unknown>) {
     if (!scopeIn.startsWith("project:")) throw new StapleError("validation", "scope must be global, project or project:<slug>.");
     scope = scopeIn;
   }
-  return withBrain((brain) =>
-    brain.remember({
+  // `id` edits that record in place; `supersedes` writes a new one and marks the old one replaced.
+  const id = text("id");
+  const supersedes = text("supersedes");
+  return withBrain((brain, dbPath) => {
+    const record = brain.remember({
+      ...(id ? { id } : {}),
       kind: body.kind as never,
       body: content,
       name: text("name"),
       description: text("description"),
       why: text("why"),
       scope,
-      tags: Array.isArray(body.tags) ? body.tags.filter((t): t is string => typeof t === "string") : [],
+      tags: Array.isArray(body.tags) ? body.tags.filter((t): t is string => typeof t === "string") : undefined,
       source: "human:web-ui",
       provisional: body.provisional === true,
-    }),
-  );
+      supersedes,
+    });
+    withUsage(dbPath, (log) => log.log({ event: "remember", provider: "web", recordIds: [record.id], detail: { edit: id !== null, supersedes } }));
+    return record;
+  });
 }
 
 /** `POST /api/brain/forget` with `{ id }` */
 export function brainForget(body: Record<string, unknown>) {
   if (typeof body.id !== "string" || !body.id) throw new StapleError("validation", "id is required.");
-  return withBrain((brain) => brain.forget(body.id as string, "human:web-ui"));
+  return withBrain((brain, dbPath) => {
+    const record = brain.forget(body.id as string, "human:web-ui");
+    withUsage(dbPath, (log) => log.log({ event: "forget", provider: "web", recordIds: [record.id] }));
+    return record;
+  });
+}
+
+/** `GET /api/brain/stats` — `staple brain stats --json`: health, usage from the log, activity, the latest eval. */
+export function brainStats() {
+  const opened = openBrain();
+  try {
+    let rows: UsageRow[] = [];
+    withUsage(opened.dbPath, (log) => {
+      rows = log.rows();
+    });
+    return computeStats(opened.brain.all(), rows);
+  } finally {
+    opened.close();
+  }
+}
+
+/**
+ * `GET /api/brain/turn?(scope=|cwd=)&prompt=…[&seen=start]` — what the UserPromptSubmit hook
+ * would add for this prompt. With `seen=start`, the records the session-start block already
+ * shows are excluded, exactly as a real session's first prompt would see it. A preview: nothing
+ * is written to the usage log.
+ */
+export function brainTurnPreview(params: URLSearchParams) {
+  const keys = keysFor(params) ?? { slugs: [], repoName: null };
+  const prompt = params.get("prompt") ?? "";
+  return withBrain((brain) => {
+    const seen = params.get("seen") === "start" ? new Set(buildContext(brain.all(), keys).ids) : new Set<string>();
+    const started = performance.now();
+    const block = buildTurn(brain.live(), prompt, { keys, seen });
+    return { prompt, ms: Math.round((performance.now() - started) * 10) / 10, ...block };
+  });
 }

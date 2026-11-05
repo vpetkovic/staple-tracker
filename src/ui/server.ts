@@ -41,7 +41,7 @@ import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
 import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
-import { brainContext, brainForget, brainRecall, brainRecords, brainRemember } from "./brain-routes.js";
+import { brainContext, brainForget, brainRecall, brainRecords, brainRemember, brainStats, brainTurnPreview } from "./brain-routes.js";
 import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
@@ -1720,6 +1720,14 @@ export function startUiServer(options: UiOptions): UiHandle {
       }
       if (url.pathname === "/api/brain/context") {
         json(res, 200, brainContext(url.searchParams));
+        return;
+      }
+      if (url.pathname === "/api/brain/turn") {
+        json(res, 200, brainTurnPreview(url.searchParams));
+        return;
+      }
+      if (url.pathname === "/api/brain/stats") {
+        json(res, 200, brainStats());
         return;
       }
       if (url.pathname === "/api/brain/remember" || url.pathname === "/api/brain/forget") {

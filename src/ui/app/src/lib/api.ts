@@ -1189,6 +1189,10 @@ export const getBrainContext = (target: BrainTarget, budget?: number) =>
   request<BrainContextBlock>(`/api/brain/context${qs({ scope: target.scope, cwd: target.cwd, budget })}`);
 
 export interface BrainRememberInput {
+  /** Edit this record in place. */
+  id?: string;
+  /** Write a new record that replaces this one. */
+  supersedes?: string;
   kind: BrainKind;
   body: string;
   name?: string;
@@ -1204,3 +1208,68 @@ export const rememberBrain = (input: BrainRememberInput) => postJson<BrainRecord
 
 /** `staple brain forget`. */
 export const forgetBrain = (id: string) => postJson<BrainRecord>("/api/brain/forget", { id });
+
+export interface BrainStats {
+  generatedAt: string;
+  health: {
+    total: number;
+    live: number;
+    byKind: Record<BrainKind, number>;
+    global: number;
+    projects: Array<{ scope: string; count: number }>;
+    provisional: number;
+    durable: number;
+    superseded: number;
+    stale: Array<{ id: string; name: string | null; reason: string }>;
+    duplicates: Array<{ a: { id: string; name: string | null }; b: { id: string; name: string | null }; similarity: number }>;
+  };
+  usage: {
+    events: number;
+    sessions: number;
+    byProvider: Array<{ provider: string; sessions: number; injections: number; recalls: number; writes: number; cites: number }>;
+    perSession: Array<{ session: string; provider: string | null; startedAt: string; turns: number; injected: number; tokens: number; cites: number }>;
+    avgTokens: { sessionStart: number | null; turn: number | null };
+    turnInjectionRate: number | null;
+    recallHitRate: number | null;
+    citations: number;
+    latency: Record<string, { n: number; p50: number | null; p95: number | null }>;
+    mostUsed: Array<{ id: string; name: string | null; uses: number; cites: number }>;
+    neverUsed: Array<{ id: string; name: string | null; kind: BrainKind }>;
+  };
+  activity: {
+    recentWrites: Array<{ id: string; name: string | null; kind: BrainKind; source: string | null; at: string; superseded: boolean }>;
+    bySource: Array<{ source: string; count: number }>;
+    timeline: Array<{ day: string; created: number; updated: number; injections: number; recalls: number }>;
+  };
+  eval: {
+    at: string;
+    detail: {
+      questions?: number;
+      records?: number;
+      all?: { n: number; unscoped: { r1: number; r3: number } };
+      easy?: { n: number; unscoped: { r1: number; r3: number } };
+      hard?: { n: number; unscoped: { r1: number; r3: number } };
+      meanRecallTokensTop3?: number;
+      misses?: Array<{ id: string; difficulty: string; target: string; rank: number | null; got: string[] }>;
+    };
+  } | null;
+}
+
+/** `GET /api/brain/stats` — `staple brain stats --json`. */
+export const getBrainStats = () => request<BrainStats>("/api/brain/stats");
+
+export interface BrainTurnPreview {
+  prompt: string;
+  ms: number;
+  text: string;
+  ids: string[];
+  tokens: number;
+  considered: number;
+  skippedAsSeen: number;
+  belowFloor: number;
+  topScore: number | null;
+}
+
+/** `GET /api/brain/turn` — what the UserPromptSubmit hook would add for this prompt (unlogged). */
+export const previewBrainTurn = (target: BrainTarget, prompt: string) =>
+  request<BrainTurnPreview>(`/api/brain/turn${qs({ scope: target.scope, cwd: target.cwd, prompt, seen: "start" })}`);

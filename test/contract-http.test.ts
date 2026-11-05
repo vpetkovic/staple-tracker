@@ -417,6 +417,9 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/brain/recall",
       "/api/brain/records",
       "/api/brain/remember",
+      // The dashboard's numbers (`staple brain stats`) and the per-prompt preview (`staple brain turn`, unlogged).
+      "/api/brain/stats",
+      "/api/brain/turn",
       // `staple budget` / MCP `get_budget`: GET-only, a read of this machine's hub, no `ws`.
       "/api/budget",
       /**
