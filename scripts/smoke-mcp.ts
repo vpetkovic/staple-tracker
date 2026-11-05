@@ -199,12 +199,10 @@ try {
     `resources/read returns the queue view as one self-contained HTML file (${queueHtml.text.length} chars)`,
   );
   assert(
-    ["show_queue", "inbox", "list_queue"].every(
-      (name) =>
-        byName.get(name)._meta?.ui?.resourceUri === "ui://staple/queue" &&
-        byName.get(name)._meta?.["ui/resourceUri"] === "ui://staple/queue",
-    ),
-    "show_queue, inbox and list_queue declare the queue view (both _meta spellings)",
+    byName.get("show_queue")._meta?.ui?.resourceUri === "ui://staple/queue" &&
+      byName.get("show_queue")._meta?.["ui/resourceUri"] === "ui://staple/queue" &&
+      ["inbox", "list_queue"].every((name) => byName.get(name)._meta === undefined),
+    "show_queue declares the queue view (both _meta spellings); inbox and list_queue draw none",
   );
   const progressHtml = (await rpc("resources/read", { uri: "ui://staple/progress" })).contents[0];
   assert(
@@ -226,12 +224,12 @@ try {
     `resources/read returns the ticket view as one self-contained HTML file (${ticketHtml.text.length} chars)`,
   );
   assert(
-    ["show_ticket", "get_task", "checkout_task"].every(
+    ["show_ticket", "checkout_task"].every(
       (name) =>
         byName.get(name)._meta?.ui?.resourceUri === "ui://staple/ticket" &&
         byName.get(name)._meta?.["ui/resourceUri"] === "ui://staple/ticket",
-    ),
-    "show_ticket, get_task and checkout_task declare the ticket view (both _meta spellings)",
+    ) && byName.get("get_task")._meta === undefined,
+    "show_ticket and checkout_task declare the ticket view (both _meta spellings); get_task draws none",
   );
   const aboutHtml = (await rpc("resources/read", { uri: "ui://staple/about" })).contents[0];
   assert(
@@ -330,7 +328,10 @@ try {
     "structuredContent matches the text block payload",
   );
   assert(!toolText(claimedResult).includes("\n  "), "text block is compact, not pretty-printed");
-  assert(claimedResult._meta?.ui?.resourceUri === "ui://staple/ticket", "checkout_task's result carries the ticket view");
+  assert(
+    claimedResult._meta?.ui?.resourceUri === "ui://staple/ticket" && claimedResult.structuredContent?.ticket?.identifier === "SMO-1",
+    "checkout_task's result carries the ticket view and the card it draws",
+  );
 
   const shownTicket = await rpc("tools/call", { name: "show_ticket", arguments: { ref: "SMO-1" } });
   assert(

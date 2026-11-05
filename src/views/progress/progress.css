@@ -79,7 +79,7 @@
   font-size: 12px;
 }
 
-/* The live line: a dot that says whether the view is following, and why not. */
+/* The read line: a dot for the attempt's state, when it was read, and Refresh. */
 .progress-live {
   display: flex;
   align-items: center;
@@ -105,7 +105,7 @@
   min-width: 0;
 }
 
-.progress-live[data-live="live"] .progress-live-dot {
+.progress-live[data-live="open"] .progress-live-dot {
   background: var(--progress-success);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--progress-success) 25%, transparent);
 }

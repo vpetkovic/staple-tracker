@@ -1102,6 +1102,135 @@ type _CrossBlockerShapeMatchesInterface = Expect<
   Equals<z.infer<z.ZodObject<typeof crossBlockerShape>>, CrossBlockerState>
 >;
 
+/** The ticket card. show_ticket answers with it; checkout_task and the from-view gate tools carry it too, so the view never reads it back. */
+const ticketCardShape = {
+  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
+  identifier: z.string(),
+  title: z.string(),
+  status: z.object({ id: z.string(), label: z.string(), category: z.string() }),
+  kind: z.object({ id: z.string(), label: z.string() }),
+  priority: z.string(),
+  assignee: z.string().nullable(),
+  criteria: z
+    .array(z.object({ text: z.string(), mark: z.enum(["met", "unmet", "open"]) }))
+    .describe("Acceptance criteria. A milestone's marks are its goal check; any other ticket's are met once it is done"),
+  ...gateFields,
+  decision: z
+    .object({
+      state: z.enum(["approved", "changes_requested"]),
+      by: z.string().nullable().describe("Who the decision is recorded under"),
+      via: z
+        .string()
+        .nullable()
+        .describe("The view a person decided in (ticket_card, queue); null for an agent's approve_task / request_changes, the CLI or the web UI"),
+      at: z.string(),
+    })
+    .nullable()
+    .describe("How the gate was decided, while it stands decided; null while pending or never gated"),
+  attempt: z
+    .object({
+      ordinal: z.number().int(),
+      agent: z.string(),
+      state: z.string(),
+      current: z.boolean().describe("False when this is the newest ended attempt and none is open"),
+      startedAt: z.string(),
+      endedAt: z.string().nullable(),
+      outcome: z.string().nullable(),
+    })
+    .nullable(),
+  branch: z
+    .object({ name: z.string(), base: z.string().nullable(), author: z.string(), at: z.string() })
+    .nullable()
+    .describe("The newest branch pointer comment (\"Branch pointer: branch <name>, base <sha>.\"), read apart"),
+  timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
+  url: z
+    .string()
+    .nullable()
+    .describe("The web UI deep link, <base>?ws=<slug>&issue=<REF>. The base is STAPLE_UI_URL, else the configured UI port on 127.0.0.1; null when STAPLE_UI_URL=off"),
+  actions: z.object({ approve: z.boolean(), requestChanges: z.boolean() }),
+};
+type _TicketCardShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof ticketCardShape>>, TicketCard>>;
+
+/** The queue lanes. show_queue answers with them; approve_gate_from_view from the queue carries them too. */
+const queueLaneRowShape = {
+  identifier: z.string(),
+  title: z.string(),
+  position: z.number().int().describe("1-based position in EFFECTIVE order, as next_task and staple queue next speak it"),
+  planPosition: z.number().int().nullable().describe("The plan row this came from; null in the unqueued band"),
+  path: z.array(z.string()).describe("The milestone, then the ancestor epics, outermost first"),
+};
+
+const queueLanesShape = {
+  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
+  revision: z.number().int(),
+  scope: z.object({ identifier: z.string(), title: z.string(), kind: z.string() }).nullable(),
+  policy: z.enum(["advisory", "strict"]).describe("queue.policy: under strict, checkout_task takes only `expected`"),
+  expected: z
+    .object({ identifier: z.string(), title: z.string(), position: z.number().int() })
+    .nullable()
+    .describe("Under strict, the row checkout_task accepts now, checked against the WHOLE plan; null under advisory or when no plan row is ready"),
+  next: z.string().nullable().describe("What next_task answers for the same scope: the first ready row"),
+  ready: z
+    .array(z.object({ ...queueLaneRowShape, takeable: z.boolean().describe("checkout_task accepts it now") }))
+    .describe("Eligible rows in pickup order"),
+  gated: z
+    .array(
+      z.object({
+        identifier: z.string().describe("The ticket that carries the gate"),
+        title: z.string(),
+        state: z
+          .enum(["pending", "changes_requested"])
+          .nullable()
+          .describe("pending waits on the owner; changes_requested on the rework asked for; null when no gate is recorded"),
+        owner: z.string().nullable(),
+        requestedBy: z.string().nullable(),
+        requestedAt: z.string().nullable(),
+        resolvedBy: z.string().nullable().describe("Who sent it back, while changes_requested"),
+        resolvedVia: z
+          .string()
+          .nullable()
+          .describe("The view a person sent it back from (ticket_card), while changes_requested; null for an agent"),
+        behind: z
+          .object({ identifier: z.string(), owner: z.string() })
+          .nullable()
+          .describe("An outer gate this gate's own ticket waits behind: approving this one moves its rows there"),
+        holds: z.array(z.object(queueLaneRowShape)).describe("The queue rows this gate holds, in effective order; at most 20"),
+        heldTotal: z.number().int().describe("How many rows it holds in all"),
+        approve: z
+          .boolean()
+          .describe("The gate is active (pending or changes_requested): approve_task on `identifier` releases it (the view's Approve calls approve_gate_from_view)"),
+      }),
+    )
+    .describe("Gated rows, grouped by the gate that holds them"),
+  inProgress: z
+    .array(
+      z.object({
+        ...queueLaneRowShape,
+        heldBy: z.string(),
+        idleSeconds: z.number().nullable(),
+        attempt: z.object({ ordinal: z.number().int(), state: z.string(), startedAt: z.string() }).nullable(),
+        milestoneCount: z.number().int(),
+        lastMilestone: z.string().nullable(),
+        timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
+      }),
+    )
+    .describe("Claimed rows, with who holds each and how its current attempt is going"),
+  blocked: z.array(z.object({ identifier: z.string(), title: z.string(), blockers: z.array(z.string()) })),
+  unavailable: z.array(z.object({ identifier: z.string(), title: z.string(), status: z.string() })),
+  totals: z
+    .object({
+      ready: z.number().int(),
+      gated: z.number().int(),
+      gates: z.number().int(),
+      inProgress: z.number().int(),
+      blocked: z.number().int(),
+      unavailable: z.number().int(),
+    })
+    .describe("Each lane's full length in tickets (gates: how many gates hold the gated ones); a lane carries at most 20 entries"),
+  asOf: z.string(),
+};
+type _QueueLanesShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof queueLanesShape>>, QueueLanes>>;
+
 /**
  * Idempotent writes say so. `replayed: true` means the key had been used before
  * and this is the ORIGINAL row — the retry was absorbed, nothing was written
@@ -1136,9 +1265,6 @@ server.registerTool(
       ...pageTailShape,
     },
     annotations: { title: "Inbox: ready work", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-    // A host with MCP Apps draws the queue view for this result (the view reads the lanes
-    // with show_queue); the payload itself is unchanged.
-    _meta: viewToolMeta("queue"),
   },
   ({ assignee, limit, cursor, ws }) =>
     run(() => {
@@ -1282,9 +1408,6 @@ server.registerTool(
         ),
     },
     annotations: { title: "Get task context", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-    // A host with MCP Apps draws the ticket card for this result (the view fetches the
-    // card with show_ticket); the payload itself is unchanged.
-    _meta: viewToolMeta("ticket"),
   },
   ({ ref, include_documents, run_id, ws }) =>
     run(() => {
@@ -1635,7 +1758,12 @@ server.registerTool(
       ...attemptOpenFields,
       ws: wsSchema,
     },
-    outputSchema: { ...issueShape, ...attemptOutputField, ...instructionsField },
+    outputSchema: {
+      ...issueShape,
+      ...attemptOutputField,
+      ...instructionsField,
+      ticket: z.object(ticketCardShape).describe("The claimed ticket as show_ticket would answer it: what the ticket card draws"),
+    },
     /**
      * destructiveHint: TRUE since steal_if_idle_seconds exists. MCP defines the
      * hint as "may perform destructive updates" vs "only additive updates", and
@@ -1656,7 +1784,8 @@ server.registerTool(
       idempotentHint: true,
       openWorldHint: false,
     },
-    // The claimed ticket, as a card in a host with MCP Apps; the payload is unchanged.
+    // The claimed ticket, as a card in a host with MCP Apps. The card rides in the payload, so
+    // the view never calls back through the host (hosts such as T3 Code confirm every call).
     _meta: viewToolMeta("ticket"),
   },
   ({ ref, actor, agent, expected_statuses, steal_if_idle_seconds, override_reason, ws, ...attempt }) =>
@@ -1667,7 +1796,11 @@ server.registerTool(
         overrideReason: override_reason,
         attempt: attemptOptionsFromInput(attempt),
       });
-      return { ...withAttemptResult(store, issue), instructions: store.instructions(issue.id) };
+      return {
+        ...withAttemptResult(store, issue),
+        instructions: store.instructions(issue.id),
+        ticket: ticketCard(store, issue.identifier),
+      };
     }),
 );
 
@@ -1718,7 +1851,7 @@ server.registerTool(
   "record_attempt_event",
   {
     description:
-      "Report on the attempt you hold on an issue (design/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (design/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry. After a milestone, show_progress shows the person where the attempt stands (once: the view follows later milestones by itself).",
+      "Report on the attempt you hold on an issue (design/execution-telemetry.md): pause it before a usage-limit reset, resume it, record a milestone that points at your latest checkpoint, or report that it was interrupted. A worker attempt opens when you check out (or move an issue into an active status) and ends when the claim is cleared; this tool never opens or closes a claim. An ORCHESTRATOR coordinating work it does not claim opens its own lane with event open and role orchestrator on the issue it coordinates (design/timing-semantics.md), and ends it with event end; that time is orchestrationSeconds, never workSeconds. Refused with `conflict` when there is no open attempt in the state the event needs, and with `validation` for a reason the event cannot carry. After a milestone, show_progress shows the person where the attempt stands (once: they refresh that view for later milestones).",
     inputSchema: {
       ref: refSchema,
       ...recordAttemptEventInput,
@@ -1873,6 +2006,7 @@ const decisionShape = {
     source: z.enum(["config", "gate_owner"]).describe("config: the machine's humanName; gate_owner: humanName is unset"),
     via: z.enum(DECISION_VIEW_IDS).describe("The view the person clicked in"),
   }),
+  ticket: z.object(ticketCardShape).describe("The ticket as it now stands, as show_ticket answers it, so the card redraws without reading it back"),
 };
 const appOnly = { ui: { visibility: ["app"] } };
 const viewSchema = z.enum(DECISION_VIEW_IDS).describe("The view the person clicked in: ticket_card or queue");
@@ -1882,8 +2016,19 @@ server.registerTool(
   {
     description:
       "App-only: the Approve button on the ticket card and the queue view. Approves the whole gate on `ref` and records it under the person on this machine (config humanName, else the gate's owner), never the agent. Hosts hide it from the model; an agent approves with approve_task.",
-    inputSchema: { ref: refSchema, view: viewSchema, ws: wsSchema },
-    outputSchema: decisionShape,
+    inputSchema: {
+      ref: refSchema,
+      view: viewSchema,
+      scope: z.string().optional().describe("The queue view's scope, so the lanes it gets back match the ones on screen"),
+      ws: wsSchema,
+    },
+    outputSchema: {
+      ...decisionShape,
+      queue: z
+        .object(queueLanesShape)
+        .nullable()
+        .describe("The lanes after the approval, as show_queue answers them, when the person approved from the queue; null from the card"),
+    },
     annotations: {
       title: "Approve gate (from a view)",
       readOnlyHint: false,
@@ -1893,7 +2038,7 @@ server.registerTool(
     },
     _meta: appOnly,
   },
-  ({ ref, view, ws }) =>
+  ({ ref, view, scope, ws }) =>
     run(() => {
       const store = storeFor(ws);
       const person = personFor(store, ref);
@@ -1902,7 +2047,13 @@ server.registerTool(
         { comment: approvalComment(person.name, view), person: { via: view } },
         person.name,
       );
-      return { ...issue, gate: store.gate(issue.id), decision: { by: person.name, source: person.source, via: view } };
+      return {
+        ...issue,
+        gate: store.gate(issue.id),
+        decision: { by: person.name, source: person.source, via: view },
+        ticket: ticketCard(store, issue.identifier),
+        queue: view === "queue" ? queueLanes(store, { scope }) : null,
+      };
     }),
 );
 
@@ -1939,7 +2090,12 @@ server.registerTool(
         { comment: sendBackComment(comment, person.name, view), person: { via: view } },
         person.name,
       );
-      return { ...issue, gate: store.gate(issue.id), decision: { by: person.name, source: person.source, via: view } };
+      return {
+        ...issue,
+        gate: store.gate(issue.id),
+        decision: { by: person.name, source: person.source, via: view },
+        ticket: ticketCard(store, issue.identifier),
+      };
     }),
 );
 
@@ -3078,8 +3234,6 @@ server.registerTool(
     },
     outputSchema: queueViewShape,
     annotations: { title: "List queue", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
-    // The plan's lanes, as the queue view, in a host with MCP Apps; the payload is unchanged.
-    _meta: viewToolMeta("queue"),
   },
   ({ all, actor, ws }) => run(() => storeFor(ws).queue().view({ all, actor })),
 );
@@ -3814,59 +3968,11 @@ server.registerTool(
   },
 );
 
-const ticketCardShape = {
-  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
-  identifier: z.string(),
-  title: z.string(),
-  status: z.object({ id: z.string(), label: z.string(), category: z.string() }),
-  kind: z.object({ id: z.string(), label: z.string() }),
-  priority: z.string(),
-  assignee: z.string().nullable(),
-  criteria: z
-    .array(z.object({ text: z.string(), mark: z.enum(["met", "unmet", "open"]) }))
-    .describe("Acceptance criteria. A milestone's marks are its goal check; any other ticket's are met once it is done"),
-  ...gateFields,
-  decision: z
-    .object({
-      state: z.enum(["approved", "changes_requested"]),
-      by: z.string().nullable().describe("Who the decision is recorded under"),
-      via: z
-        .string()
-        .nullable()
-        .describe("The view a person decided in (ticket_card, queue); null for an agent's approve_task / request_changes, the CLI or the web UI"),
-      at: z.string(),
-    })
-    .nullable()
-    .describe("How the gate was decided, while it stands decided; null while pending or never gated"),
-  attempt: z
-    .object({
-      ordinal: z.number().int(),
-      agent: z.string(),
-      state: z.string(),
-      current: z.boolean().describe("False when this is the newest ended attempt and none is open"),
-      startedAt: z.string(),
-      endedAt: z.string().nullable(),
-      outcome: z.string().nullable(),
-    })
-    .nullable(),
-  branch: z
-    .object({ name: z.string(), base: z.string().nullable(), author: z.string(), at: z.string() })
-    .nullable()
-    .describe("The newest branch pointer comment (\"Branch pointer: branch <name>, base <sha>.\"), read apart"),
-  timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
-  url: z
-    .string()
-    .nullable()
-    .describe("The web UI deep link, <base>?ws=<slug>&issue=<REF>. The base is STAPLE_UI_URL, else the configured UI port on 127.0.0.1; null when STAPLE_UI_URL=off"),
-  actions: z.object({ approve: z.boolean(), requestChanges: z.boolean() }),
-};
-type _TicketCardShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof ticketCardShape>>, TicketCard>>;
-
 server.registerTool(
   "show_ticket",
   {
     description:
-      "Show one ticket to the person in the thread: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer, estimate against time spent, and a link to it in the web UI. In a host with MCP Apps it renders as the ticket card, whose Approve and Request changes buttons (shown while a gate is pending) are the person's: the host asks them first and the decision is recorded under their name, not yours, marked as from the card. To decide a gate yourself, call approve_task or request_changes. Any other host gets the same facts as text. Display only. Call it once right after you claim a ticket with the CLI (staple checkout); do not follow checkout_task with it, since that claim already drew this card (get_task draws it too). Call it when work waits on the person (a ticket you hand on for review, a parent you gate), and when a person asks to see a ticket. Not for reading a ticket yourself: get_task has the full context.",
+      "Show one ticket to the person in the thread: status, kind, assignee, acceptance criteria with their marks, the gate and its owner, the current attempt, the branch pointer, estimate against time spent, and a link to it in the web UI. In a host with MCP Apps it renders as the ticket card, whose Approve and Request changes buttons (shown while a gate is pending) are the person's: the host asks them first and the decision is recorded under their name, not yours, marked as from the card. To decide a gate yourself, call approve_task or request_changes. Any other host gets the same facts as text. Display only. Call it once right after you claim a ticket with the CLI (staple checkout); do not follow checkout_task with it, since that claim already drew this card. Call it when work waits on the person (a ticket you hand on for review, a parent you gate), and when a person asks to see a ticket. Not for reading a ticket yourself: get_task has the full context.",
     inputSchema: { ref: refSchema, ws: wsSchema },
     outputSchema: { ticket: z.object(ticketCardShape) },
     annotations: { title: "Show ticket", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -3917,8 +4023,7 @@ const progressShape = {
   milestoneCount: z.number().int(),
   timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
   lastActivityAt: z.string().nullable(),
-  live: z.boolean().describe("True while an attempt is open: a view keeps refreshing"),
-  refreshSeconds: z.number().int().describe("How often a live view reads show_progress again"),
+  live: z.boolean().describe("True while an attempt is open (running or paused)"),
   asOf: z.string(),
   url: z.string().nullable().describe("The web UI deep link, as on show_ticket; null when STAPLE_UI_URL=off"),
 };
@@ -3928,7 +4033,7 @@ server.registerTool(
   "show_progress",
   {
     description:
-      "Show a person, live in the thread, how one ticket's current attempt is going: status, the attempt and its agent, a timeline of the milestones recorded with record_attempt_event (and the comments posted while it runs), estimate against time spent, and the last activity. In a host with MCP Apps it renders as the progress view, which refreshes itself by calling show_progress again through the host (a read, so nobody is asked) while the attempt is open, and says so when the host stops answering. Any other host gets the status and the milestones as text. Display only. Call it after you record a milestone, unless you already showed this ticket's progress since the person last wrote (that view picks the milestone up by itself), and when a person asks how a ticket is going or wants to watch it. Never call it again to refresh: the view does that.",
+      "Show a person, in the thread, how one ticket's current attempt is going: status, the attempt and its agent, a timeline of the milestones recorded with record_attempt_event (and the comments posted while it runs), estimate against time spent, and the last activity. In a host with MCP Apps it renders as the progress view, which shows the progress as of this call; its Refresh button reads it again when the person clicks it. Any other host gets the status and the milestones as text. Display only. Call it after you record a milestone, unless you already showed this ticket's progress since the person last wrote (they can refresh that view), and when a person asks how a ticket is going or wants to watch it. Do not call it in a loop to keep a view current.",
     inputSchema: { ref: refSchema, ws: wsSchema },
     outputSchema: { progress: z.object(progressShape) },
     annotations: { title: "Show progress", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
@@ -3944,85 +4049,6 @@ server.registerTool(
     }
   },
 );
-
-const queueLaneRowShape = {
-  identifier: z.string(),
-  title: z.string(),
-  position: z.number().int().describe("1-based position in EFFECTIVE order, as next_task and staple queue next speak it"),
-  planPosition: z.number().int().nullable().describe("The plan row this came from; null in the unqueued band"),
-  path: z.array(z.string()).describe("The milestone, then the ancestor epics, outermost first"),
-};
-
-const queueLanesShape = {
-  workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
-  revision: z.number().int(),
-  scope: z.object({ identifier: z.string(), title: z.string(), kind: z.string() }).nullable(),
-  policy: z.enum(["advisory", "strict"]).describe("queue.policy: under strict, checkout_task takes only `expected`"),
-  expected: z
-    .object({ identifier: z.string(), title: z.string(), position: z.number().int() })
-    .nullable()
-    .describe("Under strict, the row checkout_task accepts now, checked against the WHOLE plan; null under advisory or when no plan row is ready"),
-  next: z.string().nullable().describe("What next_task answers for the same scope: the first ready row"),
-  ready: z
-    .array(z.object({ ...queueLaneRowShape, takeable: z.boolean().describe("checkout_task accepts it now") }))
-    .describe("Eligible rows in pickup order"),
-  gated: z
-    .array(
-      z.object({
-        identifier: z.string().describe("The ticket that carries the gate"),
-        title: z.string(),
-        state: z
-          .enum(["pending", "changes_requested"])
-          .nullable()
-          .describe("pending waits on the owner; changes_requested on the rework asked for; null when no gate is recorded"),
-        owner: z.string().nullable(),
-        requestedBy: z.string().nullable(),
-        requestedAt: z.string().nullable(),
-        resolvedBy: z.string().nullable().describe("Who sent it back, while changes_requested"),
-        resolvedVia: z
-          .string()
-          .nullable()
-          .describe("The view a person sent it back from (ticket_card), while changes_requested; null for an agent"),
-        behind: z
-          .object({ identifier: z.string(), owner: z.string() })
-          .nullable()
-          .describe("An outer gate this gate's own ticket waits behind: approving this one moves its rows there"),
-        holds: z.array(z.object(queueLaneRowShape)).describe("The queue rows this gate holds, in effective order; at most 20"),
-        heldTotal: z.number().int().describe("How many rows it holds in all"),
-        approve: z
-          .boolean()
-          .describe("The gate is active (pending or changes_requested): approve_task on `identifier` releases it (the view's Approve calls approve_gate_from_view)"),
-      }),
-    )
-    .describe("Gated rows, grouped by the gate that holds them"),
-  inProgress: z
-    .array(
-      z.object({
-        ...queueLaneRowShape,
-        heldBy: z.string(),
-        idleSeconds: z.number().nullable(),
-        attempt: z.object({ ordinal: z.number().int(), state: z.string(), startedAt: z.string() }).nullable(),
-        milestoneCount: z.number().int(),
-        lastMilestone: z.string().nullable(),
-        timing: z.object({ estimatedSeconds: z.number().nullable(), elapsedSeconds: z.number().nullable() }),
-      }),
-    )
-    .describe("Claimed rows, with who holds each and how its current attempt is going"),
-  blocked: z.array(z.object({ identifier: z.string(), title: z.string(), blockers: z.array(z.string()) })),
-  unavailable: z.array(z.object({ identifier: z.string(), title: z.string(), status: z.string() })),
-  totals: z
-    .object({
-      ready: z.number().int(),
-      gated: z.number().int(),
-      gates: z.number().int(),
-      inProgress: z.number().int(),
-      blocked: z.number().int(),
-      unavailable: z.number().int(),
-    })
-    .describe("Each lane's full length in tickets (gates: how many gates hold the gated ones); a lane carries at most 20 entries"),
-  asOf: z.string(),
-};
-type _QueueLanesShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof queueLanesShape>>, QueueLanes>>;
 
 server.registerTool(
   "show_queue",

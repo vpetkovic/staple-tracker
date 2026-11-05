@@ -155,16 +155,16 @@ an agent calls them.
 |---|---|---|---|
 | `show_about` | Which staple this is: version, workspace, tickets by status, the views it has | `ui://staple/about` | no |
 | `show_ticket` | One ticket as a card: status, criteria, gate, attempt, branch, time, and a link to it | `ui://staple/ticket` | no |
-| `show_progress` | One ticket's current attempt, live: its milestones, time against the estimate, last activity | `ui://staple/progress` | no |
+| `show_progress` | One ticket's current attempt: its milestones, time against the estimate, last activity | `ui://staple/progress` | no |
 | `show_queue` | The pickup queue in lanes: Ready in pickup order, Gated with the owner, In progress with who holds what | `ui://staple/queue` | no |
 
-`get_task` and `checkout_task` draw the same ticket card, so the ticket an agent reads or
-claims shows in the thread without an extra call. `inbox` and `list_queue` draw the queue
-view the same way. Their answers are unchanged.
+`checkout_task` draws the same ticket card (its answer carries it as `ticket`), so the
+ticket an agent claims shows in the thread without an extra call. A view never calls a
+tool on its own: some clients, T3 Code among them, ask you before every call a view makes.
 
 An agent calls `show_ticket` right after a `staple checkout` (it does not follow
 `checkout_task` with it: that claim already drew the card), `show_progress` after it
-records a milestone (once; the view follows later ones), and `show_queue` when you ask
+records a milestone (once; you refresh that view for later ones), and `show_queue` when you ask
 what is next. To choose its own work it calls `next_task`.
 
 The server lists its views as `ui://staple/<name>` resources (`resources/list`). Each is one

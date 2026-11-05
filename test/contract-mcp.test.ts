@@ -1219,6 +1219,25 @@ describe("tool response shapes (31/31)", () => {
         attempt: attemptGolden(),
         // The instructions it is worked under (core/instructions.ts). CON-1 inherits none.
         instructions: [],
+        // The card the ticket view draws, carried so the view never reads it back.
+        ticket: {
+          workspace: WS,
+          identifier: "CON-1",
+          title: "Contract root task",
+          status: { id: "in_progress", label: "In Progress", category: "active" },
+          kind: { id: "task", label: "Task" },
+          priority: "high",
+          assignee: CONTRACT_AGENT,
+          criteria: [{ text: "shape is pinned", mark: "open" }],
+          gate: null,
+          queuedBy: null,
+          decision: null,
+          attempt: { ordinal: 1, agent: CONTRACT_AGENT, state: "running", current: true, startedAt: ISO, endedAt: null, outcome: null },
+          branch: null,
+          timing: { estimatedSeconds: null, elapsedSeconds: null },
+          url: `http://127.0.0.1:4400/?ws=${WS}&issue=CON-1`,
+          actions: { approve: false, requestChanges: false },
+        },
       }),
     );
   });

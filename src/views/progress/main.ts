@@ -1,23 +1,15 @@
 /**
- * The progress view: one ticket's current attempt, live, in the agent's thread.
+ * The progress view: one ticket's current attempt, in the agent's thread.
  *
  * It renders a `show_progress` result (`structuredContent.progress`, built by
  * `src/mcp-progress.ts`): the attempt, its timeline of milestones and comments, estimate
  * against elapsed, and the last activity.
  *
- * LIVE. While the attempt is open the view reads the progress again every `refreshSeconds`
- * by calling `show_progress` through the host. That tool is read-only, so a host runs it
- * without asking anyone. One call is in flight at most, and none while the page is hidden.
- *
- * STOPPING. The view stops refreshing, and says why, when:
- *
- *   - the host refuses the call twice in a row (a host whose agent session has ended says so
- *     here: T3 Code answers "The app's thread is not running…"), or the call fails twice;
- *   - the host tears the view down (`ui/resource-teardown`);
- *   - the attempt is no longer open (nothing will move until someone claims the ticket);
- *   - the host said in the handshake that views cannot call tools.
- *
- * Check again reads once more on a person's click, and refreshing resumes if that works.
+ * It reads nothing on its own. Hosts such as T3 Code ask the person before every call a view
+ * makes, reads included, so a view that polled would ask on every tick. Refresh reads the
+ * progress once more through the host (`show_progress`) on a person's click, and the view
+ * says when that read fails, when the host has closed the view, and when the host does not
+ * let views call tools at all (then there is no Refresh).
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "../shared/base.css";
@@ -57,7 +49,6 @@ interface Progress {
   timing: { estimatedSeconds: number | null; elapsedSeconds: number | null };
   lastActivityAt: string | null;
   live: boolean;
-  refreshSeconds: number;
   asOf: string;
   url: string | null;
 }
@@ -75,20 +66,13 @@ function read(result: CallToolResult): Progress | null {
 
 const root = document.getElementById("view")!;
 
-/** Two failed reads in a row stop the refresh: one can be a blip, two is the host saying no. */
-const FAILURES_TO_STOP = 2;
-
-/** The refresh loop's state, for the ticket on screen. */
-const loop = {
+/** The Refresh read, for the ticket on screen. */
+const reading = {
   identifier: "",
-  timer: undefined as ReturnType<typeof setTimeout> | undefined,
   inFlight: false,
-  failures: 0,
-  /** Why refreshing stopped, in the host's or the server's words; null while it runs. */
-  stopped: null as string | null,
+  /** Why the last Refresh failed, in the host's or the server's words; null otherwise. */
+  failed: null as string | null,
   tornDown: false,
-  /** A Check again click is being answered. */
-  checking: false,
 };
 
 let host: ViewHost | undefined;
@@ -106,92 +90,38 @@ function refusal(result: CallToolResult): string {
   return text.replace(/^ERROR\([^)]*\):\s*/, "") || "The server gave no reason.";
 }
 
-/** The `ws` the agent called with, passed on so every refresh reads the same workspace. */
+/** The `ws` the agent called with, passed on so a Refresh reads the same workspace. */
 function wsArgument(): Record<string, unknown> {
   const ws = host?.toolArguments.ws;
   return typeof ws === "string" && ws.trim() !== "" ? { ws } : {};
-}
-
-function clearTimer(): void {
-  if (loop.timer !== undefined) clearTimeout(loop.timer);
-  loop.timer = undefined;
-}
-
-/** Whether the view should keep reading on its own, now. */
-function refreshing(progress: Progress): boolean {
-  return progress.live && loop.stopped === null && !loop.tornDown && host?.canCallTools !== false;
-}
-
-function schedule(): void {
-  if (shown === null || !refreshing(shown) || loop.timer !== undefined || loop.inFlight) return;
-  const seconds = Number.isFinite(shown.refreshSeconds) && shown.refreshSeconds > 0 ? shown.refreshSeconds : 5;
-  loop.timer = setTimeout(() => {
-    loop.timer = undefined;
-    void tick();
-  }, seconds * 1000);
-}
-
-function fail(reason: string): void {
-  loop.failures += 1;
-  if (loop.failures >= FAILURES_TO_STOP) {
-    loop.stopped = reason;
-    clearTimer();
-  }
-}
-
-/** A read for the previous ticket came back: start following the one on screen now. */
-function followSwitched(): void {
-  loop.inFlight = false;
-  schedule();
-}
-
-/** Read the progress once through the host and show it. */
-async function tick(): Promise<void> {
-  if (shown === null || host === undefined || loop.inFlight || loop.tornDown) return;
-  // A hidden page reads nothing; it reads at once when it is shown again.
-  if (document.visibilityState === "hidden") return;
-  loop.inFlight = true;
-  const identifier = shown.identifier;
-  try {
-    const result = await host.callTool("show_progress", { ref: identifier, ...wsArgument() });
-    if (loop.tornDown) return;
-    // Another ticket arrived while this read was out: drop the answer, follow that one.
-    if (identifier !== loop.identifier) return followSwitched();
-    const next = result.isError ? null : read(result);
-    if (next === null) {
-      fail(result.isError ? `The read failed: ${refusal(result)}` : "The answer had no progress in it.");
-    } else {
-      loop.failures = 0;
-      loop.stopped = null;
-      loop.inFlight = false;
-      loop.checking = false;
-      host.show(result);
-      return;
-    }
-  } catch (error) {
-    if (loop.tornDown) return;
-    if (identifier !== loop.identifier) return followSwitched();
-    fail(errorText(error));
-  } finally {
-    loop.inFlight = false;
-  }
-  loop.checking = false;
-  rerender();
-  schedule();
 }
 
 function rerender(): void {
   if (shown !== null && host !== undefined) render(shown, host);
 }
 
-function checkAgain(): void {
-  clearTimer();
-  loop.stopped = null;
-  // A person asked: one more refusal stops it again at once, with the reason.
-  loop.failures = FAILURES_TO_STOP - 1;
-  loop.checking = true;
+/** Read the progress once through the host, on a person's click, and show it. */
+async function refresh(): Promise<void> {
+  if (shown === null || host === undefined || reading.inFlight || reading.tornDown) return;
+  const identifier = shown.identifier;
+  reading.inFlight = true;
+  reading.failed = null;
   rerender();
-  void tick();
+  try {
+    const result = await host.callTool("show_progress", { ref: identifier, ...wsArgument() });
+    reading.inFlight = false;
+    // Another ticket arrived while this read was out: it is already on screen.
+    if (reading.tornDown || identifier !== reading.identifier) return rerender();
+    if (result.isError || read(result) === null) {
+      reading.failed = result.isError ? `The read failed: ${refusal(result)}` : "The answer had no progress in it.";
+      return rerender();
+    }
+    host.show(result);
+  } catch (error) {
+    reading.inFlight = false;
+    if (!reading.tornDown && identifier === reading.identifier) reading.failed = errorText(error);
+    rerender();
+  }
 }
 
 function duration(seconds: number): string {
@@ -247,24 +177,21 @@ function liveLine(progress: Progress, view: ViewHost): HTMLElement {
   const updated = formatted(progress.asOf, view, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   let state: string;
   let text: string;
-  if (loop.stopped !== null) {
+  if (reading.tornDown) {
     state = "stopped";
-    text = `Live updates stopped. ${loop.stopped} Last read ${updated}.`;
-  } else if (loop.tornDown) {
+    text = `The host closed this view · read ${updated}`;
+  } else if (reading.inFlight) {
+    state = "checking";
+    text = "Reading…";
+  } else if (reading.failed !== null) {
     state = "stopped";
-    text = `Live updates stopped: the host closed this view. Last read ${updated}.`;
+    text = `Refresh failed. ${reading.failed} Last read ${updated}.`;
   } else if (!progress.live) {
     state = "idle";
-    text = progress.attempt === null ? `No attempt yet, so nothing to follow · read ${updated}` : `Attempt ended, so not refreshing · read ${updated}`;
-  } else if (view.canCallTools === false) {
-    state = "static";
-    text = `This host does not let views read on their own, so this will not refresh · read ${updated}`;
-  } else if (loop.checking) {
-    state = "checking";
-    text = "Checking…";
+    text = progress.attempt === null ? `No attempt yet · read ${updated}` : `Attempt ended · read ${updated}`;
   } else {
-    state = "live";
-    text = `Live · updated ${updated}`;
+    state = "open";
+    text = `Attempt open · read ${updated}`;
   }
   const line = h(
     "div",
@@ -272,10 +199,10 @@ function liveLine(progress: Progress, view: ViewHost): HTMLElement {
     h("span", { class: "progress-live-dot", "aria-hidden": "true" }),
     h("span", { class: "progress-live-text" }, text),
   );
-  const canAsk = view.canCallTools !== false && !loop.tornDown;
-  if (canAsk && (state === "stopped" || state === "idle")) {
-    const again = h("button", { class: "view-button progress-again", type: "button", "data-action": "check-again" }, "Check again");
-    again.addEventListener("click", checkAgain);
+  if (view.canCallTools !== false && !reading.tornDown) {
+    const again = h("button", { class: "view-button progress-again", type: "button", "data-action": "refresh" }, "Refresh");
+    again.disabled = reading.inFlight;
+    again.addEventListener("click", () => void refresh());
     line.append(again);
   }
   return line;
@@ -382,10 +309,7 @@ function openButton(progress: Progress, view: ViewHost): HTMLElement | null {
 
 function render(progress: Progress, view: ViewHost): void {
   host = view;
-  if (progress.identifier !== loop.identifier) {
-    clearTimer();
-    Object.assign(loop, { identifier: progress.identifier, failures: 0, stopped: null, checking: false });
-  }
+  if (progress.identifier !== reading.identifier) Object.assign(reading, { identifier: progress.identifier, failed: null });
   shown = progress;
   root.replaceChildren(
     h(
@@ -411,18 +335,10 @@ function render(progress: Progress, view: ViewHost): void {
       openButton(progress, view),
     ),
   );
-  schedule();
 }
 
 const started = startView({ name: "progress", root, read, render });
 started.onTeardown(() => {
-  loop.tornDown = true;
-  clearTimer();
+  reading.tornDown = true;
   rerender();
-});
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && shown !== null && refreshing(shown)) {
-    clearTimer();
-    void tick();
-  }
 });

@@ -3,14 +3,15 @@
  * The queue view (`ui://staple/queue`), served by the packaged `staple mcp` and rendered in
  * the minimal, host-agnostic MCP Apps host (`npm run test:views`; also part of `npm test`).
  *
- * `show_queue` answers with the lanes, `inbox` and `list_queue` declare the same view, and a
- * host without MCP Apps gets the lanes as text. The lanes are the effective queue split by
+ * `show_queue` answers with the lanes and is the only tool that declares the view (`inbox` and
+ * `list_queue` are the agent's reads), and a host without MCP Apps gets the lanes as text. The lanes are the effective queue split by
  * eligibility, so they are checked against the resolver `staple queue next` and `next_task`
  * read, not against a hand-written list. Under `queue.policy = strict` only the row checkout
  * accepts offers Take. In the host the view paints at 360px in both themes; Take posts
  * "Work <REF>" into the thread through the host, and Approve calls the app-only
  * approve_gate_from_view through the host, which records the person (the machine's
- * humanName), never the server's STAPLE_AGENT; the released work then shows as ready. Each
+ * humanName), never the server's STAPLE_AGENT, and answers with the lanes, so the released work
+ * shows as ready without a second call (a host may ask the person before every call). Each
  * write is checked in the workspace afterwards, not only on screen.
  *
  * The browser half is skipped, saying why, when this machine has no Chromium for
@@ -210,7 +211,7 @@ afterAll(async () => {
 });
 
 describe("the queue view over MCP", () => {
-  it("serves ui://staple/queue, and show_queue, inbox and list_queue declare it", async () => {
+  it("serves ui://staple/queue, show_queue declares it, and inbox and list_queue do not", async () => {
     const client = await connect({ apps: true });
     const { resources } = await client.listResources();
     expect(resources.find((resource) => resource.uri === "ui://staple/queue")).toMatchObject({
@@ -218,14 +219,13 @@ describe("the queue view over MCP", () => {
       mimeType: "text/html;profile=mcp-app",
     });
     const { tools } = await client.listTools();
-    for (const name of ["show_queue", "inbox", "list_queue"]) {
-      const tool = tools.find((candidate) => candidate.name === name)!;
-      expect(tool._meta, name).toEqual({ ui: { resourceUri: "ui://staple/queue" }, "ui/resourceUri": "ui://staple/queue" });
-    }
-    expect(tools.find((tool) => tool.name === "show_queue")!.annotations).toMatchObject({ readOnlyHint: true });
-    // The payloads of the tools that only declare the view are unchanged.
+    const show = tools.find((tool) => tool.name === "show_queue")!;
+    expect(show._meta).toEqual({ ui: { resourceUri: "ui://staple/queue" }, "ui/resourceUri": "ui://staple/queue" });
+    expect(show.annotations).toMatchObject({ readOnlyHint: true });
+    // The agent's own reads draw nothing: a view per inbox call would be noise.
+    for (const name of ["inbox", "list_queue"]) expect(tools.find((tool) => tool.name === name)!._meta, name).toBeUndefined();
     const inbox = (await client.callTool({ name: "inbox", arguments: {} })) as CallToolResult;
-    expect(inbox._meta).toEqual({ ui: { resourceUri: "ui://staple/queue" } });
+    expect(inbox._meta).toBeUndefined();
     expect(Object.keys(inbox.structuredContent ?? {}).sort()).toEqual(["blocked", "hasMore", "nextCursor", "queued", "ready"]);
   });
 
@@ -493,18 +493,6 @@ describe.skipIf(Boolean(reason))("the queue view in a host", () => {
     }
   });
 
-  it("renders the lanes for an inbox result, reading them through the host", async () => {
-    const view = await queueView("light", "inbox");
-    try {
-      await view.frame.locator('[data-view="queue"]:not([data-partial])').waitFor();
-      expectPainted(await measurePaint(view), "light", WIDTH);
-      expect((await view.record()).toolCalls).toEqual(["show_queue"]);
-      expect(await view.frame.locator('[data-view="queue"]').getAttribute("data-next")).toBe(refs.first);
-    } finally {
-      await view.context.close();
-    }
-  });
-
   it("Approve approves the gate under the configured humanName, never the agent, and the released work shows as ready", async () => {
     updateConfig(process.env.STAPLE_HOME!, { humanName: "Mira Lane" });
     const view = await queueView();
@@ -512,7 +500,8 @@ describe.skipIf(Boolean(reason))("the queue view in a host", () => {
       expectPainted(await measurePaint(view), "light", WIDTH);
       await view.frame.locator(`[data-gate="${refs.gate}"] [data-action="approve"]`).click();
       await view.frame.getByText(`Approved ${refs.gate} by Mira Lane · from the queue.`).waitFor();
-      expect((await view.record()).toolCalls).toEqual(["approve_gate_from_view", "show_queue"]);
+      // The approval's answer carries the lanes: one call, so one host prompt.
+      expect((await view.record()).toolCalls).toEqual(["approve_gate_from_view"]);
       expect(await view.frame.locator(`[data-gate="${refs.gate}"]`).count()).toBe(0);
       const ready = await view.frame
         .locator('[data-lane="ready"] [data-row]')

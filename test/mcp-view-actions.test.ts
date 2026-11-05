@@ -6,6 +6,9 @@
  * the model), take no actor, and record the decision under the machine's `humanName`, else the
  * gate's owner: never the server's STAPLE_AGENT, even when the caller passes a name. The
  * comment is the person's and says which view it came from, and the gate event carries `via`.
+ * Each answers with the ticket's card as it now stands (and approve from the queue with the
+ * lanes), so a view redraws without a second call: hosts such as T3 Code ask the person
+ * before every call a view makes.
  * An agent's approve_task and request_changes are unchanged: recorded under the agent, no `via`.
  *
  * Served by the packaged `staple mcp`, the same server the views' tests drive.
@@ -121,6 +124,9 @@ describe("a person's decision from a view", () => {
       identifier: gates.ownerFallback,
       gate: { state: "approved", owner: "reviewer", resolvedBy: "reviewer" },
       decision: { by: "reviewer", source: "gate_owner", via: "ticket_card" },
+      // The card the view redraws from, decided; no lanes from the card.
+      ticket: { identifier: gates.ownerFallback, decision: { state: "approved", by: "reviewer", via: "ticket_card" }, actions: { approve: false } },
+      queue: null,
     });
     withStore((store) => {
       expect(store.listComments(gates.ownerFallback).at(-1)).toMatchObject({
@@ -136,13 +142,18 @@ describe("a person's decision from a view", () => {
     });
   });
 
-  it("records the configured humanName, from the queue", async () => {
+  it("records the configured humanName, from the queue, and answers with the lanes for the scope", async () => {
     setHumanName("Mira Lane");
-    const result = await call("approve_gate_from_view", { ref: gates.configured, view: "queue" });
+    const result = await call("approve_gate_from_view", { ref: gates.configured, view: "queue", scope: gates.configured });
     expect(result.structuredContent).toMatchObject({
       gate: { state: "approved", resolvedBy: "Mira Lane" },
       decision: { by: "Mira Lane", source: "config", via: "queue" },
+      ticket: { identifier: gates.configured, decision: { via: "queue" } },
+      queue: { scope: { identifier: gates.configured }, gated: [] },
     });
+    // The released child is ready in the lanes the view redraws from.
+    const lanes = (result.structuredContent as { queue: { ready: Array<{ title: string }> } }).queue;
+    expect(lanes.ready.map((row) => row.title)).toEqual(["configured: first step"]);
     withStore((store) => {
       expect(store.listComments(gates.configured).at(-1)).toMatchObject({ author: "Mira Lane", authorType: "user", body: "Approved by Mira Lane from the queue." });
       expect(store.gateDecision(gates.configured)).toMatchObject({ state: "approved", by: "Mira Lane", via: "queue" });
@@ -164,6 +175,7 @@ describe("a person's decision from a view", () => {
     expect(result.structuredContent).toMatchObject({
       gate: { state: "changes_requested", resolvedBy: "Mira Lane" },
       decision: { by: "Mira Lane", source: "config", via: "ticket_card" },
+      ticket: { identifier: gates.sendBack, decision: { state: "changes_requested", by: "Mira Lane", via: "ticket_card" } },
     });
     withStore((store) => {
       expect(store.listComments(gates.sendBack).at(-1)).toMatchObject({

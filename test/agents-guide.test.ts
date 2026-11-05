@@ -342,7 +342,7 @@ describe("the guide teaches the whole protocol", () => {
     // And the limits: no second card after checkout_task, no refresh loop, next_task for yourself.
     expect(section).toMatch(/do not follow `checkout_task` with `show_ticket`/);
     expect(section).toMatch(/only if you have\s+not shown that ticket's progress/);
-    expect(section).toMatch(/Never call it to\s+refresh/);
+    expect(section).toMatch(/Never call it in a\s+loop/);
     expect(section).toContain("`next_task`");
     expect(section).toContain("`Work DEM-42`");
     expect(section).toMatch(/MCP tools,\s+not CLI commands/);
@@ -363,7 +363,7 @@ describe("the guide teaches the whole protocol", () => {
 // The guide's claims about the views are claims about the server: the tools it names exist,
 // and the ones it says draw the ticket card by themselves do.
 describe("the views the guide names are the server's", () => {
-  it("lists show_ticket, show_progress and show_queue with their views, checkout_task and get_task draw the card, and the descriptions carry the guide's moments", async () => {
+  it("lists show_ticket, show_progress and show_queue with their views, checkout_task draws the card, the agent's reads draw nothing, and the descriptions carry the guide's moments", async () => {
     const harness = await startMcpClient({ home, cwd: scratch("views-cwd") });
     try {
       const tools = (await harness.client.listTools()).tools;
@@ -376,7 +376,9 @@ describe("the views the guide names are the server's", () => {
       expect(view("show_progress")).toBe("ui://staple/progress");
       expect(view("show_queue")).toBe("ui://staple/queue");
       expect(view("checkout_task")).toBe("ui://staple/ticket");
-      expect(view("get_task")).toBe("ui://staple/ticket");
+      // The agent's own reads draw nothing: each view a host draws costs the person a prompt
+      // in hosts that confirm a view's calls, and a card per read is noise anyway.
+      for (const read of ["get_task", "inbox", "list_queue"]) expect(view(read), read).toBeUndefined();
       expect(view("next_task")).toBeUndefined();
       expect(view("record_attempt_event")).toBeUndefined();
       // Agents that never read the guide learn the same moments from the tool descriptions.
@@ -385,7 +387,7 @@ describe("the views the guide names are the server's", () => {
       expect(description("show_ticket")).toMatch(/do not follow checkout_task with it/);
       expect(description("show_ticket")).toMatch(/hand on for review/);
       expect(description("show_progress")).toMatch(/after you record a milestone, unless you already showed/);
-      expect(description("show_progress")).toMatch(/Never call it again to refresh/);
+      expect(description("show_progress")).toMatch(/Do not call it in a loop/);
       expect(description("show_queue")).toMatch(/what to work on next[^.]*to pick work for yourself call next_task/);
       expect(description("checkout_task")).toMatch(/do not follow it with show_ticket/);
       expect(description("record_attempt_event")).toMatch(/After a milestone, show_progress[^.]*once/);
