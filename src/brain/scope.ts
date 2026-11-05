@@ -13,9 +13,8 @@
  * project slug that ends in `-<name>`, which is how a moved checkout still finds the
  * memories filed under its old path.
  */
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { GLOBAL_SCOPE, type BrainScope } from "./types.js";
 
 export function pathSlug(path: string): string {
@@ -33,35 +32,89 @@ export interface ProjectKeys {
   repoName: string | null;
 }
 
-function git(cwd: string, args: string[]): string | null {
+/**
+ * The repository around a directory, read from `.git` on disk rather than by running git:
+ * a hook runs on every prompt, and three `git` processes cost more than the whole retrieval.
+ * Covers the three layouts that occur: a plain checkout (`.git` directory), a worktree
+ * (`.git` file → `gitdir`, whose `commondir` names the shared directory) and a submodule
+ * (`.git` file → the parent's `.git/modules/…`, whose checkout is `core.worktree`).
+ */
+interface GitLayout {
+  top: string;
+  main: string | null;
+  origin: string | null;
+}
+
+function readText(path: string): string | null {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+    return readFileSync(path, "utf8");
   } catch {
     return null;
   }
 }
 
-/** The main checkout behind a worktree or a submodule's git dir, or null. */
-function mainCheckout(cwd: string): string | null {
-  const common = git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  if (!common) return null;
-  if (basename(common) === ".git") return dirname(common);
-  // A submodule's git dir sits under the parent's `.git/modules/…`; its checkout is `core.worktree`.
-  const worktree = git(cwd, ["--git-dir", common, "config", "--get", "core.worktree"]);
-  if (!worktree) return null;
-  const path = isAbsolute(worktree) ? worktree : resolve(common, worktree);
-  return existsSync(path) ? path : null;
+/** One key from a git config file: `[section "sub"]` then `key = value`. */
+function configValue(config: string, section: string, key: string): string | null {
+  let inSection = false;
+  for (const raw of config.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      inSection = line.replace(/\s+/g, " ").toLowerCase() === section.toLowerCase();
+      continue;
+    }
+    if (!inSection) continue;
+    const match = /^([A-Za-z0-9-]+)\s*=\s*(.*)$/.exec(line);
+    if (match && match[1]!.toLowerCase() === key.toLowerCase()) return match[2]!.trim().replace(/^"(.*)"$/, "$1");
+  }
+  return null;
+}
+
+export function gitLayout(start: string): GitLayout | null {
+  let dir = resolve(start);
+  for (;;) {
+    const dotGit = join(dir, ".git");
+    let stat;
+    try {
+      stat = statSync(dotGit);
+    } catch {
+      stat = null;
+    }
+    if (stat) {
+      let gitDir = dotGit;
+      if (stat.isFile()) {
+        const pointer = /^gitdir:\s*(.+)$/m.exec(readText(dotGit) ?? "")?.[1]?.trim();
+        if (!pointer) return null;
+        gitDir = isAbsolute(pointer) ? pointer : resolve(dir, pointer);
+      }
+      const commondir = readText(join(gitDir, "commondir"))?.trim();
+      const common = commondir ? (isAbsolute(commondir) ? commondir : resolve(gitDir, commondir)) : gitDir;
+      const config = readText(join(common, "config")) ?? "";
+      let main: string | null = null;
+      if (basename(common) === ".git") main = dirname(common);
+      else {
+        const worktree = configValue(config, "[core]", "worktree");
+        if (worktree) {
+          const path = isAbsolute(worktree) ? worktree : resolve(common, worktree);
+          main = existsSync(path) ? path : null;
+        }
+      }
+      return { top: dir, main, origin: configValue(config, '[remote "origin"]', "url") };
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 export function projectKeysFor(cwd: string): ProjectKeys {
   const dir = resolve(cwd);
   const candidates = [dir];
-  const top = git(dir, ["rev-parse", "--show-toplevel"]);
-  if (top) candidates.push(top);
-  const main = mainCheckout(dir);
-  if (main) candidates.push(main);
-  const origin = git(dir, ["remote", "get-url", "origin"]);
-  const repoName = origin ? basename(origin).replace(/\.git$/, "") || null : null;
+  const layout = gitLayout(dir);
+  if (layout) {
+    candidates.push(layout.top);
+    if (layout.main) candidates.push(layout.main);
+  }
+  const repoName = layout?.origin ? basename(layout.origin).replace(/\.git$/, "") || null : null;
   return { slugs: [...new Set(candidates.map(pathSlug))], repoName };
 }
 

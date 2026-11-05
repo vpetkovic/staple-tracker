@@ -50,7 +50,7 @@ import {
 } from "./core/cloud/surface.js";
 import { Hub, notifyHubResolvedSafe } from "./core/hub.js";
 import { registerBudgetTools } from "./core/telemetry/mcp-tools.js";
-import { registerBrainTools } from "./brain/mcp-tools.js";
+import { BRAIN_SERVER_INSTRUCTIONS, registerBrainTools } from "./brain/mcp-tools.js";
 import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
@@ -195,7 +195,7 @@ function resetWorkspaceCache(): void {
   byAlias.clear();
 }
 
-const server = new McpServer({ name: "staple", version: "0.1.0" });
+const server = new McpServer({ name: "staple", version: "0.1.0" }, { instructions: BRAIN_SERVER_INSTRUCTIONS });
 
 /**
  * S10: this server's automatic-sync registration.

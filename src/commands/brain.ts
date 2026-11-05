@@ -10,13 +10,21 @@
  *   brain verify <id>
  *   brain forget <id>
  *   brain list [--json]
- *   brain context [--cwd DIR] [--budget TOKENS] [--hook] [--json]
+ *   brain context [--cwd DIR] [--budget TOKENS] [--hook --provider P] [--json]
+ *   brain turn [--prompt TEXT] [--session S] [--cwd DIR] [--hook --provider P] [--json]
+ *   brain stop --hook --provider P
+ *   brain stats [--json]
  *   brain import [--from <claude config dir>/projects] [--dry-run] [--json]
  *   brain eval --questions FILE [--limit N] [--json]
  *
  * Every subcommand takes `--db PATH` (or `STAPLE_BRAIN_DB`) to use another brain file.
- * `context --hook` is the SessionStart hook for Claude Code and Codex: it reads the hook
- * payload on stdin for `cwd`, prints the hook answer, and never fails the session.
+ *
+ * The three hooks, the same commands for Claude Code and Codex (`--provider` only labels the
+ * usage log). Each reads the CLI's hook payload on stdin, answers in the shape both CLIs read,
+ * and never fails the session: an error is a line on stderr and an empty answer.
+ *   SessionStart       `context --hook`  the core memories and the working brief
+ *   UserPromptSubmit   `turn --hook`     memories matching this prompt, not yet shown this session
+ *   Stop               `stop --hook`     records which shown memories the answer cited
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -30,6 +38,31 @@ import { recall } from "../brain/recall.js";
 import { projectKeysFor, projectScope, type ProjectKeys } from "../brain/scope.js";
 import { stableId } from "../brain/store.js";
 import { GLOBAL_SCOPE, estimateTokens, isBrainKind, type BrainRecord } from "../brain/types.js";
+import { buildTurn, TURN_DEFAULTS } from "../brain/turn.js";
+import { hashPrompt, UsageLog, usagePath, withUsage } from "../brain/usage.js";
+import { computeStats } from "../brain/stats.js";
+import { citedIn, lastAssistantText } from "../brain/cite.js";
+
+/** Milliseconds since this process started: the hook's whole cost, startup included. */
+const sinceStart = () => Math.round(performance.now() * 10) / 10;
+
+const hookOptions = {
+  hook: { type: "boolean" },
+  provider: { type: "string" },
+  session: { type: "string" },
+} as const;
+
+/** Run a hook body; any failure is a stderr line and an empty answer, never a failed session. */
+function asHook(hook: boolean, name: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (error) {
+    if (!hook) throw error;
+    process.stderr.write(`staple brain ${name}: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
+
+const stringField = (payload: Record<string, unknown>, key: string) => (typeof payload[key] === "string" && payload[key] ? (payload[key] as string) : null);
 
 const common = {
   db: { type: "string" },
@@ -79,7 +112,10 @@ const USAGE = `staple brain — persistent agent memory (proof of concept)
   brain recall <question…> [--limit N] [--cwd DIR]
   brain show|verify|forget <id>
   brain list
-  brain context [--cwd DIR] [--budget TOKENS] [--hook]
+  brain context [--cwd DIR] [--budget TOKENS] [--hook --provider P]   SessionStart hook
+  brain turn [--prompt TEXT] [--session S] [--hook --provider P]      UserPromptSubmit hook
+  brain stop --hook --provider P                                     Stop hook (citations)
+  brain stats
   brain import [--from <claude config dir>/projects] [--dry-run]
   brain eval --questions FILE
 
@@ -134,6 +170,9 @@ export function runBrainCommand(argv: string[]): void {
           provisional: values.provisional === true,
           supersedes: values.supersedes ?? null,
         });
+        withUsage(opened.dbPath, (log) =>
+          log.log({ event: "remember", provider: "cli", session: process.env.CLAUDE_CODE_SESSION_ID ?? null, recordIds: [record.id], latencyMs: sinceStart(), detail: { source: record.source, supersedes: values.supersedes ?? null } }),
+        );
         print(values.json === true, record, () => `Remembered ${record.id} (${record.kind}, ${record.scope})`);
       } finally {
         opened.close();
@@ -152,7 +191,11 @@ export function runBrainCommand(argv: string[]): void {
       const opened = openBrain(values.db);
       try {
         const keys = projectKeysFor(values.cwd ?? process.cwd());
+        const started = performance.now();
         const hits = recall(opened.brain.live(), question, { limit: Number(values.limit ?? 3), keys });
+        withUsage(opened.dbPath, (log) =>
+          log.log({ event: "recall", provider: "cli", session: process.env.CLAUDE_CODE_SESSION_ID ?? null, promptHash: hashPrompt(question), recordIds: hits.map((h) => h.record.id), latencyMs: Math.round((performance.now() - started) * 10) / 10 }),
+        );
         print(
           values.json === true,
           hits.map((h) => ({ score: h.score, ...h.record })),
@@ -177,6 +220,7 @@ export function runBrainCommand(argv: string[]): void {
             : sub === "verify"
               ? opened.brain.verify(positionals[0])
               : opened.brain.forget(positionals[0]);
+        if (sub !== "show") withUsage(opened.dbPath, (log) => log.log({ event: sub, provider: "cli", recordIds: [record.id] }));
         print(values.json === true, record, () => (sub === "show" ? full(record) : `${sub === "verify" ? "Verified" : "Forgot"} ${record.id}`));
       } finally {
         opened.close();
@@ -201,24 +245,132 @@ export function runBrainCommand(argv: string[]): void {
     case "context": {
       const { values } = parseArgs({
         args: rest,
-        options: { ...common, budget: { type: "string" }, hook: { type: "boolean" } },
+        options: { ...common, ...hookOptions, budget: { type: "string" } },
       });
       const hook = values.hook === true;
-      try {
+      asHook(hook, "context", () => {
         const payload = hook ? readStdinJson() : {};
-        const cwd = values.cwd ?? (typeof payload.cwd === "string" ? payload.cwd : process.cwd());
+        const cwd = values.cwd ?? stringField(payload, "cwd") ?? process.cwd();
+        const session = values.session ?? stringField(payload, "session_id");
         const opened = openBrain(values.db);
         try {
           const block = buildContext(opened.brain.all(), projectKeysFor(cwd), Number(values.budget ?? DEFAULT_CONTEXT_BUDGET));
-          if (hook) process.stdout.write(renderHookOutput(block));
-          else print(values.json === true, { cwd, ...block }, () => block.text);
+          if (hook) {
+            process.stdout.write(renderHookOutput(block, "SessionStart"));
+            withUsage(opened.dbPath, (log) =>
+              log.log({
+                event: "session_start",
+                provider: values.provider ?? null,
+                session,
+                recordIds: block.ids,
+                tokens: block.tokens,
+                latencyMs: sinceStart(),
+                detail: { cwd, source: stringField(payload, "source"), eligible: block.eligible },
+              }),
+            );
+          } else print(values.json === true, { cwd, ...block }, () => block.text);
         } finally {
           opened.close();
         }
-      } catch (error) {
-        // A memory hook must never stop a session from starting.
-        if (!hook) throw error;
-        process.stderr.write(`staple brain context: ${error instanceof Error ? error.message : String(error)}\n`);
+      });
+      return;
+    }
+
+    case "turn": {
+      const { values } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { ...common, ...hookOptions, prompt: { type: "string" }, budget: { type: "string" }, "time-budget": { type: "string" } },
+      });
+      const hook = values.hook === true;
+      asHook(hook, "turn", () => {
+        const payload = hook ? readStdinJson() : {};
+        const prompt = values.prompt ?? stringField(payload, "prompt") ?? "";
+        const cwd = values.cwd ?? stringField(payload, "cwd") ?? process.cwd();
+        const session = values.session ?? stringField(payload, "session_id");
+        const timeBudget = Number(values["time-budget"] ?? TURN_DEFAULTS.timeBudgetMs);
+        const opened = openBrain(values.db);
+        let log: UsageLog | null = null;
+        try {
+          try {
+            log = new UsageLog(usagePath(opened.dbPath));
+          } catch {
+            log = null;
+          }
+          const seen = session && log ? log.injectedIn(session) : new Set<string>();
+          // Past the budget before scoring: say so in one line rather than make the prompt wait.
+          if (sinceStart() > timeBudget) {
+            const notice = `# Brain\n(per-prompt recall skipped: over its ${timeBudget} ms budget; call \`recall\` if this task touches past decisions.)`;
+            if (hook) process.stdout.write(renderHookOutput({ text: notice }, "UserPromptSubmit"));
+            log?.log({ event: "turn", provider: values.provider ?? null, session, promptHash: hashPrompt(prompt), tokens: 0, latencyMs: sinceStart(), detail: { skipped: "time_budget" } });
+            return;
+          }
+          const block = buildTurn(opened.brain.live(), prompt, {
+            keys: projectKeysFor(cwd),
+            seen,
+            tokenBudget: values.budget ? Number(values.budget) : undefined,
+          });
+          if (hook) process.stdout.write(renderHookOutput(block, "UserPromptSubmit"));
+          else print(values.json === true, { session, ...block }, () => block.text || "(nothing above the floor that this session has not seen)");
+          log?.log({
+            event: "turn",
+            provider: values.provider ?? null,
+            session,
+            promptHash: hashPrompt(prompt),
+            recordIds: block.ids,
+            tokens: block.tokens,
+            latencyMs: sinceStart(),
+            detail: { considered: block.considered, skippedAsSeen: block.skippedAsSeen, belowFloor: block.belowFloor, topScore: block.topScore },
+          });
+        } finally {
+          log?.close();
+          opened.close();
+        }
+      });
+      return;
+    }
+
+    case "stop": {
+      const { values } = parseArgs({ args: rest, options: { ...common, ...hookOptions } });
+      const hook = values.hook === true;
+      asHook(hook, "stop", () => {
+        const payload = hook ? readStdinJson() : {};
+        const session = values.session ?? stringField(payload, "session_id");
+        if (!session) return;
+        const text = stringField(payload, "last_assistant_message") ?? lastAssistantText(stringField(payload, "transcript_path"));
+        if (!text) return;
+        const opened = openBrain(values.db);
+        try {
+          withUsage(opened.dbPath, (log) => {
+            const shown = log.injectedIn(session);
+            const already = new Set(
+              log
+                .rows(5000)
+                .filter((r) => r.session === session && r.event === "cite")
+                .flatMap((r) => r.recordIds),
+            );
+            const cited = citedIn(text, opened.brain.all().filter((r) => shown.has(r.id) || text.includes(`[brain:${r.name ?? ""}]`))).filter((id) => !already.has(id));
+            if (cited.length) log.log({ event: "cite", provider: values.provider ?? null, session, recordIds: cited, latencyMs: sinceStart() });
+          });
+        } finally {
+          opened.close();
+        }
+      });
+      return;
+    }
+
+    case "stats": {
+      const { values } = parseArgs({ args: rest, options: common });
+      const opened = openBrain(values.db);
+      try {
+        let rows: ReturnType<UsageLog["rows"]> = [];
+        withUsage(opened.dbPath, (log) => {
+          rows = log.rows();
+        });
+        const stats = computeStats(opened.brain.all(), rows);
+        print(values.json === true, stats, () => JSON.stringify({ health: { ...stats.health, stale: stats.health.stale.length, duplicates: stats.health.duplicates.length }, usage: { ...stats.usage, perSession: undefined, neverUsed: stats.usage.neverUsed.length } }, null, 2));
+      } finally {
+        opened.close();
       }
       return;
     }
@@ -275,6 +427,22 @@ export function runBrainCommand(argv: string[]): void {
         const report = runEval(records, questions);
         const ms = performance.now() - started;
         const result = { ...report, questions: questions.length, records: records.length, msPerQuery: ms / questions.length };
+        withUsage(opened.dbPath, (log) =>
+          log.log({
+            event: "eval",
+            provider: "cli",
+            latencyMs: Math.round(result.msPerQuery * 10) / 10,
+            detail: {
+              questions: result.questions,
+              records: result.records,
+              all: result.all,
+              easy: result.easy,
+              hard: result.hard,
+              meanRecallTokensTop3: result.meanRecallTokensTop3,
+              misses: result.misses.map((m) => ({ id: m.id, difficulty: m.difficulty, target: m.target, rank: m.rankUnscoped, got: m.top3Unscoped })),
+            },
+          }),
+        );
         print(values.json === true, result, () => formatEval(result));
       } finally {
         opened.close();
@@ -285,7 +453,7 @@ export function runBrainCommand(argv: string[]): void {
     default:
       throw new StapleError(
         "validation",
-        `Unknown brain subcommand "${sub ?? ""}". One of: init, remember, recall, show, verify, forget, list, context, import, eval.`,
+        `Unknown brain subcommand "${sub ?? ""}". One of: init, remember, recall, show, verify, forget, list, context, turn, stop, stats, import, eval.`,
       );
   }
 }

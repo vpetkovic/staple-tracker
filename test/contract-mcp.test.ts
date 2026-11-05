@@ -311,8 +311,8 @@ describe("tool inventory", () => {
   // The ticket card added show_ticket: 70 -> 71. The progress view added show_progress: 71 -> 72.
   // The queue view added show_queue: 72 -> 73. A person's click in a view added the app-only
   // approve_gate_from_view and request_changes_from_view: 73 -> 75.
-  // The brain POC added remember, recall and forget: 75 -> 78.
-  it("exposes exactly these 78 tools with these annotations and output schemas", async () => {
+  // The brain POC added recall, remember, verify and forget: 75 -> 79.
+  it("exposes exactly these 79 tools with these annotations and output schemas", async () => {
     const tools = await harness.listTools();
     const inventory = tools.map((t) => ({
       name: t.name,
@@ -1043,14 +1043,20 @@ describe("tool inventory", () => {
         hasOutputSchema: true,
       },
       /** The brain POC (proof of concept): shared agent memory. */
+      // Recall first: an agent reading the list top-down meets the call it should make first.
+      {
+        name: "recall",
+        annotations: { title: "Recall", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        hasOutputSchema: false,
+      },
       {
         name: "remember",
         annotations: { title: "Remember", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
         hasOutputSchema: false,
       },
       {
-        name: "recall",
-        annotations: { title: "Recall", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+        name: "verify",
+        annotations: { title: "Verify memory", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         hasOutputSchema: false,
       },
       {
@@ -1995,6 +2001,7 @@ describe("tool response shapes (31/31)", () => {
       // and test/brain-sync.test.ts; the tools return the record they wrote or found.
       "remember",
       "recall",
+      "verify",
       "forget",
       // Execution attempts: pinned in test/attempts-surfaces.test.ts, against the CLI's
       // `staple attempt ... --json` payload from the same `recordAttemptEvent`.

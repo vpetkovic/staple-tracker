@@ -183,3 +183,6 @@ site/.wrangler/
 dist-package/
 # Its staging directory, which a build interrupted by a hard kill can leave behind.
 .dist-package.building-*
+
+# The brain POC hook bundle (scripts/build-brain.ts)
+dist-brain/

@@ -11,6 +11,9 @@ import { extractWhy, parseFrontmatter, planImport } from "../src/brain/import.js
 import { ftsQuery, recall } from "../src/brain/recall.js";
 import { pathSlug, scopeRelation } from "../src/brain/scope.js";
 import { estimateTokens, type BrainRecord } from "../src/brain/types.js";
+import { buildTurn } from "../src/brain/turn.js";
+import { citedIn } from "../src/brain/cite.js";
+import { computeStats } from "../src/brain/stats.js";
 
 const NOW = "2026-11-05T00:00:00.000Z";
 
@@ -107,5 +110,56 @@ describe("recall", () => {
       "what happens when I run the nightly export?",
     );
     expect(hits.map((h) => h.record.id)).toEqual(["a"]);
+  });
+});
+
+describe("per-prompt turn retrieval", () => {
+  const records = [
+    record({ id: "seed", kind: "project", name: "tests-need-seed", body: "Run the demo tests with DEMO_LEGACY_SEED=42 or they fail with a fixture checksum mismatch." }),
+    record({ id: "tag", kind: "project", name: "release-tag-format", body: "Release tags are named rel-YYYYMMDD-shortsha; CI rejects anything else." }),
+  ];
+
+  it("injects a strong match once per session and nothing below the floor", () => {
+    const first = buildTurn(records, "the demo tests fail with a fixture checksum mismatch, how do I run them?", { minScore: 0 });
+    expect(first.ids).toEqual(["seed"]);
+    expect(first.text).toContain("DEMO_LEGACY_SEED=42");
+    const again = buildTurn(records, "the demo tests fail with a fixture checksum mismatch, how do I run them?", { minScore: 0, seen: new Set(first.ids) });
+    expect(again.ids).toEqual([]);
+    expect(again.skippedAsSeen).toBe(1);
+    expect(again.text).toBe("");
+    expect(buildTurn(records, "write a haiku about autumn").ids).toEqual([]);
+  });
+});
+
+describe("citations", () => {
+  const shown = [record({ id: "49aa9815-0000", name: "demo-repo-tests-need-legacy-seed" }), record({ id: "93294a45-0000", name: "tag" })];
+
+  it("counts an explicit citation, a distinctive name or a short id, and not a common word", () => {
+    expect(citedIn("Used the saved requirement. [brain:demo-repo-tests-need-legacy-seed]", shown)).toEqual(["49aa9815-0000"]);
+    expect(citedIn("per demo-repo-tests-need-legacy-seed", shown)).toEqual(["49aa9815-0000"]);
+    expect(citedIn("see 93294a45 for the format", shown)).toEqual(["93294a45-0000"]);
+    expect(citedIn("I will tag the commit", shown)).toEqual([]);
+  });
+});
+
+describe("stats", () => {
+  it("counts usage, hit rates and latency from the log", () => {
+    const records = [record({ id: "a", name: "a-rule" }), record({ id: "b", name: "b-rule", provisional: true })];
+    const at = NOW;
+    const stats = computeStats(records, [
+      { at, event: "session_start", provider: "claude", session: "s1", promptHash: null, recordIds: ["a"], tokens: 1400, latencyMs: 60, detail: null },
+      { at, event: "turn", provider: "claude", session: "s1", promptHash: "h", recordIds: [], tokens: 0, latencyMs: 70, detail: null },
+      { at, event: "turn", provider: "claude", session: "s1", promptHash: "h2", recordIds: ["a"], tokens: 300, latencyMs: 80, detail: null },
+      { at, event: "recall", provider: "codex", session: null, promptHash: "h3", recordIds: [], tokens: null, latencyMs: 20, detail: null },
+      { at, event: "cite", provider: "claude", session: "s1", promptHash: null, recordIds: ["a"], tokens: null, latencyMs: 50, detail: null },
+    ], Date.parse(NOW));
+    expect(stats.usage.sessions).toBe(1);
+    expect(stats.usage.avgTokens).toEqual({ sessionStart: 1400, turn: 300 });
+    expect(stats.usage.turnInjectionRate).toBe(0.5);
+    expect(stats.usage.recallHitRate).toBe(0);
+    expect(stats.usage.mostUsed[0]).toMatchObject({ id: "a", uses: 2, cites: 1 });
+    expect(stats.usage.neverUsed.map((r) => r.id)).toEqual(["b"]);
+    expect(stats.health.provisional).toBe(1);
+    expect(stats.usage.latency.turn).toEqual({ n: 2, p50: 80, p95: 80 });
   });
 });
