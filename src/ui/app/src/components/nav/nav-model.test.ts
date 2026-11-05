@@ -33,8 +33,9 @@ describe("the rail's groups", () => {
   it("lists the machine's Usage in its own This computer group — Settings' name for it — after the workspace's views", () => {
     expect(NAV_GROUPS.map((group) => group.label)).toEqual(["Views", "This computer"]);
     const machine = NAV_GROUPS[1]!;
-    expect(machine.items.map((entry) => entry.label)).toEqual(["Usage"]);
-    expect(machine.items.map((entry) => entry.view)).toEqual(["budget"]);
+    // The brain POC's shared agent memory is the machine's too.
+    expect(machine.items.map((entry) => entry.label)).toEqual(["Usage", "Brain"]);
+    expect(machine.items.map((entry) => entry.view)).toEqual(["budget", "brain"]);
     expect(navItemForView("budget")).toMatchObject({ id: "view:budget", label: "Usage" });
   });
 

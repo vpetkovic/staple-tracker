@@ -1136,3 +1136,71 @@ export const bindBudgetSource = (input: BindInput) => postJson<BudgetConfigView>
 
 /** `staple budget unbind`. */
 export const unbindBudgetSource = (input: BindingHomeInput) => postJson<BudgetConfigView>("/api/budget/bindings/unbind", input);
+
+// ---------- brain (POC; machine-level, its own global workspace) ----------
+
+export type BrainKind = "user" | "feedback" | "project" | "reference";
+
+export interface BrainRecord {
+  id: string;
+  kind: BrainKind;
+  name: string | null;
+  description: string | null;
+  body: string;
+  why: string | null;
+  scope: string;
+  tags: string[];
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+  verifiedAt: string | null;
+  supersededBy: string | null;
+  provisional: boolean;
+}
+
+export interface BrainContextBlock {
+  budget: number;
+  text: string;
+  tokens: number;
+  shown: number;
+  eligible: number;
+  project: number;
+  global: number;
+}
+
+/** A project to preview or recall as: a stored scope (`project:<slug>`) or a directory. */
+export interface BrainTarget {
+  scope?: string;
+  cwd?: string;
+}
+
+/** `GET /api/brain/records` — every record, and the scopes they name. */
+export const getBrainRecords = () =>
+  request<{ records: BrainRecord[]; scopes: Array<{ scope: string; count: number }> }>("/api/brain/records");
+
+/** `GET /api/brain/recall` — `staple brain recall`: ranked hits with their bm25 score. */
+export const recallBrain = (q: string, target: BrainTarget = {}, limit = 10) =>
+  request<{ q: string; ms: number; hits: Array<{ score: number; record: BrainRecord }> }>(
+    `/api/brain/recall${qs({ q, limit, scope: target.scope, cwd: target.cwd })}`,
+  );
+
+/** `GET /api/brain/context` — exactly what `staple brain context --hook` injects. */
+export const getBrainContext = (target: BrainTarget, budget?: number) =>
+  request<BrainContextBlock>(`/api/brain/context${qs({ scope: target.scope, cwd: target.cwd, budget })}`);
+
+export interface BrainRememberInput {
+  kind: BrainKind;
+  body: string;
+  name?: string;
+  description?: string;
+  why?: string;
+  scope?: string;
+  cwd?: string;
+  provisional?: boolean;
+}
+
+/** `staple brain remember`. */
+export const rememberBrain = (input: BrainRememberInput) => postJson<BrainRecord>("/api/brain/remember", input);
+
+/** `staple brain forget`. */
+export const forgetBrain = (id: string) => postJson<BrainRecord>("/api/brain/forget", { id });

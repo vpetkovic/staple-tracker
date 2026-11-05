@@ -36,6 +36,7 @@ export const VIEW_SLUGS: Record<ViewName, string> = {
   milestones: "milestones",
   calibration: "estimate-accuracy",
   budget: "budget",
+  brain: "brain",
 };
 
 const SLUG_TO_VIEW = new Map<string, ViewName>([
