@@ -110,7 +110,9 @@ describe("join: the preview, then a code, then a credential", () => {
     expect(rendered).toContain(REPO_ID);
     expect(rendered).toContain("buddy-laptop");
     expect(rendered).toContain("no end-to-end encryption");
-    expect(rendered).toContain("AUTOMATIC SYNC STAYS OFF");
+    // Joining makes a shared workspace, so automatic sync is on, and the preview says so first.
+    expect(rendered).toContain("automatic sync on (shared workspace)");
+    expect(rendered).toContain("AUTOMATIC SYNC IS ON");
     expect(rendered).toContain("Nothing has been sent yet");
     // And nothing on disk: no device id, no credential, no record.
     expect(existsSync(join(home, "cloud"))).toBe(false);
@@ -158,7 +160,8 @@ describe("join: the preview, then a code, then a credential", () => {
     expect(create.authorization).toBeNull();
     expect(poll.device).toBeNull();
 
-    // The credential, exactly as `performConnect` stores one, with every consent OFF.
+    // The credential, exactly as `performConnect` stores one. Automatic sync ON, with its
+    // reason: a join makes a shared workspace. Backup and the registry stay off.
     const deviceId = (create.body as { deviceId: string }).deviceId;
     expect(fileCredentialStore(home).read(REPO_ID)).toBe(`stpl_joined_${deviceId}`);
     const record = readConnection(home, REPO_ID)!;
@@ -168,7 +171,8 @@ describe("join: the preview, then a code, then a credential", () => {
       deviceId,
       label: "buddy-laptop",
       credentialMechanism: "file",
-      auto: false,
+      auto: true,
+      autoReason: "shared-workspace",
       backup: false,
       registry: false,
       protocol: 4,
@@ -789,7 +793,8 @@ describe("a recorded removal, re-admission and the owner hint", () => {
     });
     expect(outcome.status).toBe("joined");
     expect(readConnection(home, REPO_ID)!.removed).toBeUndefined();
-    expect(localCloudStatus(home, REPO_ID).state).toBe("manual");
+    // A join turns automatic sync on: the workspace is shared.
+    expect(localCloudStatus(home, REPO_ID).state).toBe("automatic");
   });
 
   it("a refresh the service answers clears a stale recorded removal", async () => {

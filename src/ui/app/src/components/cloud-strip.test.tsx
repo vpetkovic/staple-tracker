@@ -38,6 +38,7 @@ function report(over: Partial<CloudSurfaceReport> = {}): CloudSurfaceReport {
     credentialPresent: false,
     auto: false,
     backup: false,
+    shared: null,
     connectedAt: null,
     checked: false,
     pending: 0,

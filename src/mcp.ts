@@ -3767,6 +3767,13 @@ const cloudStatusShape = {
   credentialPresent: z.boolean().describe("Whether a credential is retrievable, not merely recorded"),
   auto: z.boolean().describe("THIS device's automatic-sync consent"),
   backup: z.boolean().describe("THIS device's backup consent — a separate decision from auto"),
+  shared: z
+    .object({
+      members: z.array(z.object({ name: z.string(), memberId: z.string(), self: z.boolean() })),
+      autoSync: z.literal("locked-on"),
+    })
+    .nullable()
+    .describe("The current members when the workspace is shared (2+); automatic sync is then on for every device and cannot be turned off. Null when not shared"),
   connectedAt: z.string().nullable(),
   checked: z.boolean().describe("True only after a live probe. Always false here: this tool cannot probe"),
   pending: z.number().describe("Operations journalled locally and not yet acknowledged by the server"),
