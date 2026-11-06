@@ -1,5 +1,5 @@
 /**
- * SETTINGS → MEMBERS (STA-441): the people who share this workspace, their devices, and the
+ * SETTINGS → MEMBERS: the people who share this workspace, their devices, and the
  * requests waiting to join.
  *
  * Two components, the split `CloudSection` uses. `MembersPanel` is a pure function of state

@@ -386,7 +386,7 @@ export function SettingsShell({
   );
 }
 
-/** STA-441: join requests waiting, beside Members in the nav. The page heard it; reading it asks nobody. */
+/** join requests waiting, beside Members in the nav. The page heard it; reading it asks nobody. */
 function MembersCount() {
   const pending = usePendingJoinRequests();
   if (pending === 0) return null;

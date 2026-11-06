@@ -403,7 +403,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         */}
         {/* A run that ended: a notice naming why and what needs a person, on every view. */}
         <RunStopNotices placement={wide ? "corner" : "strip"} />
-        {/* STA-441: a join request toast, polled only with automatic sync on (JoinRequestToast). */}
+        {/* a join request toast, polled only with automatic sync on (JoinRequestToast). */}
         {all ? null : <JoinRequestWatcher report={cloud} slug={currentWorkspace(session)?.slug ?? ""} />}
         {wide ? null : <RunStrip />}
         {wide ? null : <ViewTabBar />}

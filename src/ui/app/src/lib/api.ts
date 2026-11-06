@@ -1153,7 +1153,7 @@ export const bindBudgetSource = (input: BindInput) => postJson<BudgetConfigView>
 /** `staple budget unbind`. */
 export const unbindBudgetSource = (input: BindingHomeInput) => postJson<BudgetConfigView>("/api/budget/bindings/unbind", input);
 
-// ---------- members and joining (STA-441) ----------
+// ---------- members and joining ----------
 //
 // Every POST below except `previewJoin` and `cancelJoin` makes the local server contact
 // the sync service, so none is called on mount except where a person's action opened the

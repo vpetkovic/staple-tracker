@@ -48,7 +48,7 @@ export interface CategoryContentProps {
   /** The workspace a per-workspace section edits (the cloud section's sync identity included). */
   ws?: string;
   /**
-   * STA-441: the workspace the sheet is pointed at, even on a global section. Cloud account
+   * the workspace the sheet is pointed at, even on a global section. Cloud account
    * offers "Join the shared workspace" for it, which `ws` cannot say on a single-workspace page.
    */
   joinWs?: string;
@@ -74,7 +74,7 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
   if (isCloudCategory(category.id)) {
     return (
       <>
-        {/* STA-441: the join card lives here too, for the workspace Settings is pointed at. */}
+        {/* the join card lives here too, for the workspace Settings is pointed at. */}
         {joinWs ?? ws ? <JoinOfferCard ws={(joinWs ?? ws)!} className="mb-6" /> : null}
         <CloudSection ws={ws} part="machine" />
       </>
@@ -87,7 +87,7 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
    */
   if (isHubRegistryCategory(category.id)) return <CloudSection ws={ws} part="registry" />;
   if (isWorkspaceCloudCategory(category.id)) return <CloudSection ws={ws} part="workspace" />;
-  /** STA-441: the people sharing this workspace. Fetches from the service on open; a person opened it. */
+  /** the people sharing this workspace. Fetches from the service on open; a person opened it. */
   if (isMembersCategory(category.id)) return <MembersSection key={ws} ws={ws} />;
   /** "Usage & budget": machine-local like Cloud, matched by id for the same reason (`telemetry-settings.ts`). */
   if (isTelemetryCategory(category.id)) return <TelemetrySection />;

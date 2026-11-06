@@ -141,7 +141,7 @@ import { buildConnectPreview } from "../core/cloud/preview.js";
 import { ConsentTicketStore, MAX_OUTSTANDING_CONSENTS, previewDigest } from "../core/cloud/consent.js";
 import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
 import { readConnection, setConsent } from "../core/cloud/connection.js";
-/** STA-441: Settings → Members, the approval toast and the join card (`cloud-members-routes.ts`). */
+/** Settings → Members, the approval toast and the join card (`cloud-members-routes.ts`). */
 import { createMemberRoutes, MEMBER_POST_ROUTES } from "./cloud-members-routes.js";
 import { readConfig, stapleHome } from "../config/index.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
@@ -323,7 +323,7 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
    */
   "/api/cloud/workspace/connect/preview",
   "/api/cloud/workspace/connect",
-  /** STA-441: members and joining. None journals an operation (`cloud-members-routes.ts`). */
+  /** members and joining. None journals an operation (`cloud-members-routes.ts`). */
   ...MEMBER_POST_ROUTES,
   "/api/cloud/workspace/consent",
   "/api/cloud/workspace/disconnect",
@@ -1068,7 +1068,7 @@ export function startUiServer(options: UiOptions): UiHandle {
    * from that id rather than from anything the request said.
    */
   const consents = new ConsentTicketStore();
-  /** STA-441: members and joining. Joins in flight hold their request secret in this process only. */
+  /** members and joining. Joins in flight hold their request secret in this process only. */
   const memberRoutes = createMemberRoutes({
     readBody,
     json,
@@ -1566,7 +1566,7 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/cloud/workspace/disconnect" ||
           url.pathname === "/api/cloud/workspace/sync" ||
           /**
-           * STA-441: members and joining, each named in `MEMBER_POST_ROUTES`. All but the
+           * members and joining, each named in `MEMBER_POST_ROUTES`. All but the
            * join preview and cancel contact the sync service, and every one is a person's
            * decision, so they sit behind the Origin check with the other cloud writes.
            */

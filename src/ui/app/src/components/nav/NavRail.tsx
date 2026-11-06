@@ -559,7 +559,7 @@ export function NavRail({
         >
           <Settings aria-hidden />
           Settings
-          {/* STA-441: join requests this page has heard of. Reading the count asks nobody. */}
+          {/* join requests this page has heard of. Reading the count asks nobody. */}
           <PendingBadge />
         </button>
         <ThemeToggle asRow={phone} />

@@ -783,25 +783,10 @@ export interface MemberRef {
 /**
  * This machine's copy of a shared workspace's member list, exactly as
  * `src/core/cloud/members-cache.ts` stores it. `GET /api/members-cache` answers it (or
- * null: not a shared workspace here), and `GET /api/cloud/members` answers the same shape
- * after refreshing it from the service.
+ * null: not a shared workspace here), and the members routes answer the same shape after
+ * refreshing it from the service. One shape, one name: see `CloudMemberList`.
  */
-export interface UiMembersCache {
-  version: 1;
-  repositoryId: string;
-  /** ISO-8601, when this copy was fetched from the service. */
-  fetchedAt: string;
-  /** Who this machine is. */
-  self: { memberId: string; deviceId: string };
-  members: Array<{
-    memberId: string;
-    /** Unique per workspace, case-insensitively. This is the string written into `assignee`. */
-    name: string;
-    isOwner: boolean;
-    removed: boolean;
-    devices: Array<{ deviceId: string; label: string | null; lastSeenAt: number | null; revoked: boolean }>;
-  }>;
-}
+export type UiMembersCache = CloudMemberList;
 
 /** A relation as the detail endpoint returns it: identifier + enough to render a chip. */
 export interface IssueRef {
@@ -3209,12 +3194,11 @@ export interface RunEntry {
   instructionsChanged: InstructionChange[];
 }
 
-// ---------------------------------------------------------------- members and joining (STA-441)
+// ---------------------------------------------------------------- members and joining
 
 /**
  * The local member list, as `src/core/cloud/members-cache.ts` stores it and the members
- * routes return it (`src/ui/cloud-members-routes.ts`). Prefixed `Cloud` so it can sit
- * beside the attribution lane's own cache mirror without a name clash.
+ * routes return it (`src/ui/cloud-members-routes.ts`). `UiMembersCache` is the same type.
  */
 export interface CloudMemberDevice {
   deviceId: string;

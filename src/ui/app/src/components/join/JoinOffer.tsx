@@ -1,5 +1,5 @@
 /**
- * "Join the shared workspace" (STA-441): the card on the empty task list and under Settings →
+ * "Join the shared workspace": the card on the empty task list and under Settings →
  * Cloud account, and the one-time banner after joining that offers automatic sync.
  *
  * The card shows only when the committed `.staple/repository.json` names a sync service

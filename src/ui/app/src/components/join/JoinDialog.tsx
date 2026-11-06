@@ -1,5 +1,5 @@
 /**
- * JOINING A SHARED WORKSPACE FROM THE PAGE (STA-441): consent preview → the code, large, with
+ * JOINING A SHARED WORKSPACE FROM THE PAGE: consent preview → the code, large, with
  * a live wait → joined. The same protocol and the same sentences as `staple cloud join`.
  *
  * ## Nothing leaves the machine before "Request to join"

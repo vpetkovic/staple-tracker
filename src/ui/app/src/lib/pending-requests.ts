@@ -1,5 +1,5 @@
 /**
- * How many join requests are waiting, as this page last heard (STA-441).
+ * How many join requests are waiting, as this page last heard.
  *
  * Written by whatever just asked the service (the toast's poll, Settings → Members) and read
  * by the Settings badge in the rail. A module-level value rather than context: the writer and

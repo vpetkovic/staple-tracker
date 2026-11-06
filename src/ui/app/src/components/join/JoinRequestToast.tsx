@@ -1,5 +1,5 @@
 /**
- * The approval toast (STA-441): "thinkpad wants to join AII · code K7QX-29MB  [Later] [Review]".
+ * The approval toast: "thinkpad wants to join AII · code K7QX-29MB  [Later] [Review]".
  *
  * ## When the page asks, and when it does not
  *

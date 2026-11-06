@@ -442,7 +442,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   );
 
   /**
-   * MINE / ALL, in a shared workspace (members, STA-438). Applied after every filter, as
+   * MINE / ALL, in a shared workspace. Applied after every filter, as
    * one more narrowing: Mine leaves out the rows assigned to ANOTHER member, and says how
    * many. A workspace with no member list on this machine has no toggle and loses nothing,
    * and All workspaces has none either — each workspace has its own members.
@@ -538,7 +538,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
         </div>
       ) : null}
       {/*
-        STA-441: "Join the shared workspace", for a clone whose committed manifest names a sync
+        "Join the shared workspace", for a clone whose committed manifest names a sync
         service this computer is not connected to, and the one-time banner after joining. Above
         the list rather than in its empty state, so the banner survives the board filling in.
         The card decides from local files whether to show; usually it renders nothing.

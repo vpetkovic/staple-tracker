@@ -1,5 +1,5 @@
 /**
- * Members on the page (STA-442): the chip an event's origin device earns, the Mine/All
+ * Members on the page: the chip an event's origin device earns, the Mine/All
  * split, and the order the assignee picker offers members in.
  *
  * Rendered to strings, like the other detail tests. What a browser shows of the open

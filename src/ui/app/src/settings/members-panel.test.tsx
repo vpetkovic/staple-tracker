@@ -1,5 +1,5 @@
 /**
- * Settings → Members, the approval toast and the join flow (STA-441).
+ * Settings → Members, the approval toast and the join flow.
  *
  * Rendered to a string, as every settings test here is (no DOM, no testing library). The
  * properties that matter are what each person is OFFERED and what the page is allowed to

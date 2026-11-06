@@ -1,5 +1,5 @@
 /**
- * SETTINGS → MEMBERS, the pure half (STA-441).
+ * SETTINGS → MEMBERS, the pure half.
  *
  * Everything the Members panel, the approval toast and the join flow decide without a DOM:
  * which approval choices a person gets, how a time reads, whether the toast may poll, and
