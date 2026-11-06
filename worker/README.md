@@ -658,6 +658,15 @@ enrollment secret or an existing device token. An unknown `repoId` fails closed 
 copied manifest than a new repository, and auto-creating turns that into a silently
 forked workspace.
 
+**Members (migration 0008).** In a repository that is not a hub, that first accepted
+connect also creates the repository's owner member, named `owner`, in the same batch.
+From then on the repository admits devices only through approved join requests
+(`staple cloud join`, then a member approves the short code), and `connect` refuses
+both the enrollment secret and device tokens with `forbidden`. Migration 0008 backfilled
+an `owner` member for every workspace repository that already had devices. A hub has no
+members, so later hub devices may still present the enrollment secret or an existing
+device token. `src/members.ts` covers the routes and who may do what.
+
 ### Provisioning a HUB
 
 A hub is a repository. There is no hub table and no separate route. Provisioning one is

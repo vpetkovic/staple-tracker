@@ -30,11 +30,14 @@
  * something worth having anyway.
  */
 import { readAutoSyncState } from "./auto-state.js";
-import { connectionIsPrivate, readConnection } from "./connection.js";
+import { clearRemoved, connectionIsPrivate, markRemoved, readConnection } from "./connection.js";
 import type { CredentialMechanism } from "./credential-store.js";
 import { credentialStoreFor, fileCredentialIsPrivate } from "./credential-store.js";
 import { cloudCodeOf, listRemoteDevices, type RemoteDevice, type RequestOptions } from "./client.js";
 import { parseEndpoint } from "./endpoint.js";
+import { StapleError } from "../types.js";
+import { readMembersCache } from "./members-cache.js";
+import { sharedStatus, type SharedStatus } from "./shared-status.js";
 
 export type CloudState =
   /** No connection record on this machine. Nothing to sync, nothing stored. */
@@ -47,6 +50,13 @@ export type CloudState =
   | "offline"
   /** The server says this device was revoked. Re-connect is the remedy. */
   | "revoked"
+  /**
+   * Revoked because the owner removed this device's MEMBER from the workspace, not only
+   * this device. The server says who (`removedBy`). Re-connecting is no remedy, since a
+   * workspace with members refuses the legacy enrolment. The way back is to ask again with
+   * `staple cloud join`.
+   */
+  | "removed"
   /** The credential was rejected, or there is no credential to present. */
   | "auth_failed";
 
@@ -74,6 +84,17 @@ export interface CloudStatus {
   readonly warnings: readonly string[];
   /** Populated only by a refresh that succeeded. */
   readonly devices: readonly RemoteDevice[] | null;
+  /**
+   * Who removed this device's member, when the state is `removed`. Null otherwise.
+   * Optional so the many literal statuses built elsewhere need not name it.
+   */
+  readonly removedBy?: string | null;
+  /**
+   * The workspace's current members when it is shared (2+ of them) on this machine's
+   * member list, with automatic sync locked on; null otherwise. Optional only so the
+   * literal statuses built elsewhere need not name it; `localCloudStatus` always sets it.
+   */
+  readonly shared?: SharedStatus | null;
 }
 
 function disconnected(repositoryId: string): CloudStatus {
@@ -91,6 +112,7 @@ function disconnected(repositoryId: string): CloudStatus {
     checked: false,
     warnings: [],
     devices: null,
+    shared: null,
   };
 }
 
@@ -157,7 +179,19 @@ export function localCloudStatus(
     );
   }
 
-  const state: CloudState = credential === null ? "auth_failed" : connection.auto ? "automatic" : "manual";
+  /**
+   * A recorded removal wins over everything else this file can see: the credential is
+   * useless whether or not it is still there, and the remedy is a join, not a re-connect.
+   * It was recorded when the service said so (`markRemoved`), so reporting it here is
+   * still a local read.
+   */
+  const state: CloudState = connection.removed
+    ? "removed"
+    : credential === null
+      ? "auth_failed"
+      : connection.auto
+        ? "automatic"
+        : "manual";
 
   return {
     state,
@@ -173,6 +207,8 @@ export function localCloudStatus(
     checked: false,
     warnings,
     devices: null,
+    removedBy: connection.removed?.by ?? null,
+    shared: connection.removed ? null : sharedStatus(readMembersCache(home, repositoryId)),
   };
 }
 
@@ -211,13 +247,25 @@ export async function refreshCloudStatus(
       { repositoryId, token, deviceId: local.deviceId },
       options,
     );
+    if (local.state === "removed") {
+      // The service accepts this device again, so the recorded removal is stale.
+      clearRemoved(home, repositoryId);
+      const live = localCloudStatus(home, repositoryId, options);
+      return { ...live, checked: true, devices };
+    }
     return { ...local, checked: true, devices };
   } catch (error) {
     const code = cloudCodeOf(error);
     if (code === "offline" || code === "unavailable" || code === "rate_limited") {
       return { ...local, state: "offline", checked: true };
     }
-    if (code === "revoked") return { ...local, state: "revoked", checked: true };
+    if (code === "revoked") {
+      const removedBy = removedByOf(error);
+      if (removedBy !== null) markRemoved(home, repositoryId, removedBy);
+      return removedBy === null
+        ? { ...local, state: "revoked", checked: true }
+        : { ...local, state: "removed", removedBy, checked: true };
+    }
     if (code === "auth" || code === "forbidden") {
       return { ...local, state: "auth_failed", checked: true };
     }
@@ -233,6 +281,19 @@ export async function refreshCloudStatus(
   }
 }
 
+/**
+ * The name of whoever removed this device's member, from a `revoked` refusal, or null
+ * when the refusal is a plain device revocation.
+ *
+ * Read from the error's detail and never parsed out of the message. The Worker puts
+ * `removedBy` in the body only when the device was revoked because its member was removed.
+ */
+export function removedByOf(error: unknown): string | null {
+  if (cloudCodeOf(error) !== "revoked" || !(error instanceof StapleError)) return null;
+  const value = error.detail?.removedBy;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 /** One line a human reads, for each state. The JSON carries the same `state` string. */
 export function describeState(status: CloudStatus): string {
   switch (status.state) {
@@ -246,6 +307,11 @@ export function describeState(status: CloudStatus): string {
       return "connected, but the endpoint could not be reached — local work is unaffected";
     case "revoked":
       return "this device was revoked — re-connect with `staple cloud connect` to get a new credential";
+    case "removed":
+      return (
+        `removed from this workspace by ${status.removedBy ?? "the owner"} — ` +
+        "rejoin: staple cloud join"
+      );
     case "auth_failed":
       return "the credential was rejected or is missing — re-connect with `staple cloud connect`";
   }

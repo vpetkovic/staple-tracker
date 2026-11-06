@@ -10,6 +10,7 @@
  * and both read and write routes pin their HTTP method.
  */
 import { EVENT_ORDER, EVENT_ORDER_DESC } from "../core/event-row.js";
+import { withEventMembers } from "../core/cloud/member-lens.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -41,7 +42,8 @@ import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
 import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
-import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
+import { SurfaceAutoSync, type SurfaceAutoSyncOptions } from "../core/cloud/auto-triggers.js";
+import { autoSyncConsented } from "../core/cloud/auto.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
 import {
@@ -140,6 +142,9 @@ import { buildConnectPreview } from "../core/cloud/preview.js";
 import { ConsentTicketStore, MAX_OUTSTANDING_CONSENTS, previewDigest } from "../core/cloud/consent.js";
 import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
 import { readConnection, setConsent } from "../core/cloud/connection.js";
+/** Settings → Members, the approval toast and the join card (`cloud-members-routes.ts`). */
+import { createMemberRoutes, MEMBER_POST_ROUTES } from "./cloud-members-routes.js";
+import { membersCachePath } from "../core/cloud/members-cache.js";
 import { readConfig, stapleHome } from "../config/index.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
 import { readDriver } from "../core/run-attachment.js";
@@ -173,6 +178,8 @@ interface UiOptions {
   ws?: string;
   /** Caller-managed credential (the CLI's persistent ~/.staple/ui-token). Absent = per-process random. */
   token?: string;
+  /** Tests only: the automatic-sync timing and transport. Production passes nothing. */
+  autoSync?: Pick<SurfaceAutoSyncOptions, "sessionIntervalMs" | "sharedSessionIntervalMs" | "scheduler" | "now">;
 }
 
 interface StoreHandle {
@@ -320,6 +327,8 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
    */
   "/api/cloud/workspace/connect/preview",
   "/api/cloud/workspace/connect",
+  /** members and joining. None journals an operation (`cloud-members-routes.ts`). */
+  ...MEMBER_POST_ROUTES,
   "/api/cloud/workspace/consent",
   "/api/cloud/workspace/disconnect",
   "/api/cloud/workspace/sync",
@@ -892,9 +901,26 @@ export function startUiServer(options: UiOptions): UiHandle {
           .prepare("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at),'') AS u FROM issues")
           .get() as { c: number; u: string };
         const comments = h.store.db.prepare("SELECT COUNT(*) AS c FROM comments").get() as { c: number };
-        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}${clockFingerprint(h)}`;
+        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
       })
       .join("|");
+  }
+
+  /**
+   * When this machine's member list for the workspace last changed. Pickup, Mine/All, the
+   * assignee picker and the member chips all read it, and it changes without a database write
+   * (a sync, an approval, a rename), so without this the page would keep the old member rule
+   * until something else moved. A stat of one file, and nothing when there is no list.
+   */
+  function membersFingerprint(h: StoreHandle): string {
+    try {
+      const repositoryId = readStoredRepositoryId(h.store.db);
+      if (repositoryId === null) return "";
+      const stat = statSync(membersCachePath(stapleHome(), repositoryId), { throwIfNoEntry: false });
+      return stat ? `:m${Math.floor(stat.mtimeMs)}` : "";
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -1063,6 +1089,16 @@ export function startUiServer(options: UiOptions): UiHandle {
    * from that id rather than from anything the request said.
    */
   const consents = new ConsentTicketStore();
+  /** members and joining. Joins in flight hold their request secret in this process only. */
+  const memberRoutes = createMemberRoutes({
+    readBody,
+    json,
+    deny,
+    hubRowFor,
+    hubRepositoryId,
+    recordIdentityIfOpenWould,
+    consents,
+  });
   /** Budget collection's plan consents: the same pattern, bound to the plan shown (`plan-consent.ts`). */
   const planConsents = new PlanConsentStore();
 
@@ -1083,12 +1119,35 @@ export function startUiServer(options: UiOptions): UiHandle {
    * one per surface.
    */
   const autoSync = new SurfaceAutoSync({
+    ...options.autoSync,
     home: () => stapleHome(),
     resolve: (ws) => {
       const handle = handleFor(ws);
       const repositoryId = readStoredRepositoryId(handle.store.db);
       return repositoryId === null ? null : { db: handle.store.db, repositoryId };
     },
+    /**
+     * In hub mode the startup and session triggers cover EVERY hub workspace whose
+     * connection consents to automatic sync, read again on each tick, so a workspace
+     * registered after this server started (a join from a link, made in this very page) is
+     * synced from its next tick. Only the consent is read here, from the hub row's identity
+     * and the connection record, so a workspace nobody connected is never opened for it;
+     * the gate inside each run stays the authority. A single-workspace server keeps its one.
+     */
+    targets: options.hub
+      ? () => {
+          const hub = Hub.open();
+          try {
+            const home = stapleHome();
+            return hub
+              .list()
+              .filter((entry) => entry.available && entry.repositoryId && autoSyncConsented(home, entry.repositoryId))
+              .map((entry) => entry.slug);
+          } finally {
+            hub.close();
+          }
+        }
+      : undefined,
   });
 
   /**
@@ -1550,6 +1609,12 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/cloud/workspace/consent" ||
           url.pathname === "/api/cloud/workspace/disconnect" ||
           url.pathname === "/api/cloud/workspace/sync" ||
+          /**
+           * members and joining, each named in `MEMBER_POST_ROUTES`. All but the
+           * join preview and cancel contact the sync service, and every one is a person's
+           * decision, so they sit behind the Origin check with the other cloud writes.
+           */
+          MEMBER_POST_ROUTES.includes(url.pathname) ||
           url.pathname === "/api/hub/unregister" ||
           url.pathname === "/api/hub/backup" ||
           /**
@@ -2308,6 +2373,8 @@ export function startUiServer(options: UiOptions): UiHandle {
        * for WHY, and mints no ticket. A ticket for something that will not happen
        * would be a consent with no subject.
        */
+      if (await memberRoutes.handle(url, req, res)) return;
+
       if (url.pathname === "/api/cloud/workspace/connect/preview") {
         const body = await readBody(req);
         const addressed = hubRowFor(res, body.slug);
@@ -4261,6 +4328,17 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
 
+      /**
+       * The workspace's member list as this machine last fetched it, or `null`: what the
+       * Mine/All toggle, the assignee picker and the member chips read. Local only, it
+       * never contacts the service. `/api/cloud/members` is the person's refresh that does.
+       */
+      if (url.pathname === "/api/members-cache") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.members()?.cache ?? null);
+        return;
+      }
+
       if (url.pathname === "/api/events") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
         const issue = url.searchParams.get("issue");
@@ -4295,19 +4373,25 @@ export function startUiServer(options: UiOptions): UiHandle {
             payload: string;
             dedup_key: string | null;
             created_at: string;
+            origin_device?: string | null;
           }>;
           json(
             res,
             200,
-            rows.map((row) => ({
-              seq: row.seq,
-              kind: row.kind,
-              issueId: row.issue_id,
-              actor: row.actor,
-              payload: JSON.parse(row.payload) as Record<string, unknown>,
-              dedupKey: row.dedup_key,
-              createdAt: row.created_at,
-            })),
+            // `member` rides along exactly as `listEvents()` adds it: only with a member list.
+            withEventMembers(
+              handle.store.members(),
+              rows.map((row) => ({
+                seq: row.seq,
+                kind: row.kind,
+                issueId: row.issue_id,
+                actor: row.actor,
+                payload: JSON.parse(row.payload) as Record<string, unknown>,
+                dedupKey: row.dedup_key,
+                createdAt: row.created_at,
+              })),
+              rows.map((row) => row.origin_device ?? null),
+            ),
           );
           return;
         }
@@ -5109,6 +5193,8 @@ export function startUiServer(options: UiOptions): UiHandle {
         const { revision, scope, next, skipped } = handle.store.queue().effectiveQueue({
           actor: queryActor(url.searchParams.get("actor")),
           scope: url.searchParams.get("scope") ?? undefined,
+          // The member rule, as `queue next` applies it; `anyAssignee=1` turns it off.
+          pickup: url.searchParams.get("anyAssignee") === "1" ? null : handle.store.members(),
         });
         // What `next` is worked under, as MCP next_task and `queue next --json` answer it.
         const instructions = next ? handle.store.instructions(next.issueId) : [];

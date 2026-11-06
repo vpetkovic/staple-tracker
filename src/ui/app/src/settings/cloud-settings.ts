@@ -495,6 +495,7 @@ const HUB_STATE_WORDS: Record<HubWorkspaceReport["state"], string> = {
   manual: "Connected, manual",
   automatic: "Connected, automatic",
   auth_failed: "Credential missing",
+  removed: "Removed from workspace",
 };
 
 /**
@@ -514,6 +515,9 @@ export function hubRowSummary(row: HubWorkspaceReport): string {
   }
   if (row.skip === "problem") {
     return "Its sync identity could not be read, so nothing here can act on it.";
+  }
+  if (row.state === "removed") {
+    return `Removed from this shared workspace by ${row.removedBy ?? "the owner"}. Ask to rejoin with staple cloud join.`;
   }
   if (row.state === "auth_failed") {
     return `Connected to ${row.endpoint ?? "a service"}, but this machine's credential is gone. Connecting again mints a new one.`;

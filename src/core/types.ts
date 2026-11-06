@@ -1081,6 +1081,12 @@ export interface StapleEvent {
   payload: Record<string, unknown>;
   dedupKey: string | null;
   createdAt: string;
+  /**
+   * The member whose device made this change, from the server-stamped origin device.
+   * Present only in a shared workspace with a member list on this machine, and only
+   * when the device is in it. Absent everywhere else, so the event reads as before.
+   */
+  member?: { memberId: string; name: string; removed: boolean };
 }
 
 export interface RelationEdge {

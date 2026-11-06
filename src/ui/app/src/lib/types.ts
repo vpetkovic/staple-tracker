@@ -765,7 +765,28 @@ export interface StapleEvent {
   payload: Record<string, unknown>;
   dedupKey: string | null;
   createdAt: string;
+  /** The member whose device made the change; only in a shared workspace with a member list. */
+  member?: MemberRef;
 }
+
+/**
+ * A member as an event names one: from the server-stamped origin device, so it cannot be
+ * typed in. Mirrors `MemberRef` in src/core/cloud/member-lens.ts.
+ */
+export interface MemberRef {
+  memberId: string;
+  name: string;
+  /** Removed members still name their history; drawn muted. */
+  removed: boolean;
+}
+
+/**
+ * This machine's copy of a shared workspace's member list, exactly as
+ * `src/core/cloud/members-cache.ts` stores it. `GET /api/members-cache` answers it (or
+ * null: not a shared workspace here), and the members routes answer the same shape after
+ * refreshing it from the service. One shape, one name: see `CloudMemberList`.
+ */
+export type UiMembersCache = CloudMemberList;
 
 /** A relation as the detail endpoint returns it: identifier + enough to render a chip. */
 export interface IssueRef {
@@ -1527,7 +1548,16 @@ export interface MilestoneGoal {
  * to leaf work and every row classified — what agents receive, and what the
  * READY list derives its order from.
  */
-export const QUEUE_ELIGIBILITIES = ["resolved", "gated", "blocked", "claimed", "unavailable", "eligible"] as const;
+export const QUEUE_ELIGIBILITIES = [
+  "resolved",
+  "gated",
+  "blocked",
+  "claimed",
+  "unavailable",
+  // Pickup answers only (`/api/queue/next`), in a shared workspace: another member's ticket.
+  "assigned_to_other_member",
+  "eligible",
+] as const;
 export type QueueEligibility = (typeof QUEUE_ELIGIBILITIES)[number];
 
 export interface QueueEntry {
@@ -1656,7 +1686,7 @@ export interface ProjectFieldsInput {
  * when there has not been one.
  */
 export interface CloudSurfaceReport {
-  state: "disconnected" | "manual" | "automatic" | "offline" | "revoked" | "auth_failed";
+  state: "disconnected" | "manual" | "automatic" | "offline" | "revoked" | "removed" | "auth_failed";
   /** What this page may OFFER. offline/revoked/auth_failed are still connected. */
   mode: "disconnected" | "manual" | "automatic";
   detail: string;
@@ -1668,6 +1698,8 @@ export interface CloudSurfaceReport {
   credentialPresent: boolean;
   auto: boolean;
   backup: boolean;
+  /** The current members when the workspace is shared (2+), automatic sync locked on; null otherwise. */
+  shared: { members: Array<{ name: string; memberId: string; self: boolean }>; autoSync: "locked-on" } | null;
   connectedAt: string | null;
   checked: boolean;
   pending: number;
@@ -1680,7 +1712,7 @@ export interface CloudSurfaceReport {
   leases: { held: number };
   warnings: string[];
   failure: {
-    code: "offline" | "revoked" | "auth_failed" | "no_identity";
+    code: "offline" | "revoked" | "removed" | "auth_failed" | "no_identity";
     summary: string;
     remedy: string;
   } | null;
@@ -1753,7 +1785,7 @@ export interface HubWorkspaceReport {
    * `revoked` need an authenticated round trip, and this route makes none — so
    * a union admitting them would promise information the server cannot produce.
    */
-  state: "disconnected" | "manual" | "automatic" | "auth_failed";
+  state: "disconnected" | "manual" | "automatic" | "auth_failed" | "removed";
   mode: "disconnected" | "manual" | "automatic";
   endpoint: string | null;
   deviceId: string | null;
@@ -1768,6 +1800,8 @@ export interface HubWorkspaceReport {
    * type.
    */
   credentialPresent: boolean | null;
+  /** Who removed this device's member, when `state` is `removed`. */
+  removedBy?: string | null;
   auto: boolean;
   /** When automatic sync next tries, if it is waiting; else null (`hub-surface.ts`). */
   autoWaitingUntil: string | null;
@@ -3160,4 +3194,160 @@ export interface RunEntry {
   goal: RunGoalReport | null;
   /** Instruction documents in scope that changed since the run's last take; [] once it ended. */
   instructionsChanged: InstructionChange[];
+}
+
+// ---------------------------------------------------------------- members and joining
+
+/**
+ * The local member list, as `src/core/cloud/members-cache.ts` stores it and the members
+ * routes return it (`src/ui/cloud-members-routes.ts`). `UiMembersCache` is the same type.
+ */
+export interface CloudMemberDevice {
+  deviceId: string;
+  label: string | null;
+  /** Unix milliseconds. Null when the device has never made a request. */
+  lastSeenAt: number | null;
+  revoked: boolean;
+}
+
+export interface CloudMember {
+  memberId: string;
+  name: string;
+  isOwner: boolean;
+  removed: boolean;
+  devices: CloudMemberDevice[];
+}
+
+export interface CloudMemberList {
+  version: 1;
+  repositoryId: string;
+  fetchedAt: string;
+  self: { memberId: string; deviceId: string };
+  members: CloudMember[];
+}
+
+/** One pending join request, as `GET /join-requests` lists it. Times in unix milliseconds. */
+export interface CloudJoinRequest {
+  requestId: string;
+  code: string;
+  label: string | null;
+  /** The name the share link suggested for this person, if it came from one. A hint only. */
+  invitedAs?: string | null;
+  createdAt: number | null;
+  expiresAt: number | null;
+}
+
+/** What every members route answers with: the refreshed list, and the requests when it read them. */
+export interface CloudMembersResponse {
+  members: CloudMemberList | null;
+  requests?: CloudJoinRequest[];
+}
+
+/** `GET /api/cloud/workspace/join/offer`: whether the empty state should offer to join. Local. */
+export interface CloudJoinOffer {
+  slug: string;
+  repositoryId: string;
+  /** The endpoint the committed manifest names (`staple cloud share-endpoint`), or null. */
+  endpoint: string | null;
+  connected: boolean;
+  removedBy: string | null;
+}
+
+/** The join consent preview. `endpoint` is the origin string; the rest mirrors `ConnectPreview`. */
+export interface CloudJoinPreview {
+  endpoint: string;
+  repositoryId: string;
+  deviceId: string | null;
+  label: string;
+  credentialMechanism: "keychain" | "secret-tool" | "file";
+  credentialFallbackReason: string | null;
+  alreadyConnected: boolean;
+  existingEndpoint: string | null;
+  autoAfterConnect: false;
+  endpointSource: "flag" | "manifest" | "link";
+  /** Set when joining from a share link: who invited whom, to what. */
+  link?: CloudShareLink | null;
+  /** A join always ends in a shared workspace, which syncs automatically. */
+  autoSync?: "on (shared workspace)";
+}
+
+export interface CloudJoinPreviewResponse {
+  slug: string;
+  preview: CloudJoinPreview;
+  consent: ConsentTicket;
+}
+
+export interface CloudJoinStarted {
+  /** Names the join in this server's memory. The request secret never leaves the server. */
+  joinId: string;
+  code: string;
+  /** Unix milliseconds. */
+  expiresAt: number;
+  label: string;
+  endpoint: string;
+}
+
+export type CloudJoinPoll =
+  | { status: "pending"; code: string; expiresAt: number; transient?: boolean }
+  | {
+      status: "joined";
+      code: string;
+      member: { memberId: string; name: string } | null;
+      endpoint: string;
+      deviceId: string;
+      auto: boolean;
+      membersCached: boolean;
+    }
+  | { status: "denied" | "expired" | "cancelled"; code: string; expiresAt: number }
+  | { status: "failed"; code: string; message: string };
+
+// ---------------------------------------------------------------- sharing by link
+
+/** A share link's fields, as `src/core/cloud/share-link.ts` reads them. */
+export interface CloudShareLink {
+  endpoint: string;
+  repositoryId: string;
+  name: string;
+  prefix: string | null;
+  sharedBy: string | null;
+  invitedAs: string | null;
+}
+
+/** `POST /api/cloud/workspace/share`: everything a person sends a teammate. Built locally. */
+export interface CloudShareOffer {
+  link: string;
+  command: string;
+  message: string;
+  name: string;
+  prefix: string | null;
+  invitedAs: string | null;
+  autoSyncMandatory: true;
+}
+
+/** One registered workspace's sharing, from the members list on this machine. Local. */
+export interface CloudSharedWorkspace {
+  slug: string;
+  shared: boolean;
+  autoSyncLocked: boolean;
+  members: Array<{ memberId: string; name: string; isOwner: boolean; self: boolean }>;
+}
+
+/** The join preview for a share link: the ordinary preview, plus who invited whom, and sync. */
+export interface CloudLinkJoinPreview extends CloudJoinPreview {
+  endpointSource: "link";
+  link: CloudShareLink;
+  autoSync: "on (shared workspace)";
+}
+
+export interface CloudLinkJoinPreviewResponse {
+  preview: CloudLinkJoinPreview;
+  consent: ConsentTicket;
+  /** Where the join lands. `created` true: a workspace will be made for it, after consent. */
+  target: { name: string; created: boolean; fromCheckout: boolean };
+}
+
+export interface CloudLinkJoinStarted extends CloudJoinStarted {
+  /** The workspace the join connects, under the owner's name for it. */
+  workspace: string;
+  created: boolean;
 }

@@ -54,6 +54,7 @@ import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import type { CrossBlockerState } from "./core/hub.js";
+import { requireMineLens } from "./core/cloud/member-lens.js";
 import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
 import { INSTRUCTION_SOURCE_KINDS, type InstructionChange, type ResolvedInstruction } from "./core/instructions.js";
 import {
@@ -1250,6 +1251,10 @@ server.registerTool(
       "Ready work in EFFECTIVE pickup order, dependency-aware. `ready` is not a presentation sort you may re-rank: it is the pickup queue resolved — the plan a human wrote, with every queued container expanded to its open leaf work, then everything unqueued in the ordinary sort (in_progress -> in_review -> todo -> backlog). Each entry carries its effective `position`, and a row the plan reaches carries `planPosition` too; `list_queue` shows the raw plan beside it. Three buckets: `ready` (take the FIRST one, or call next_task), `queued` (a HUMAN must approve a gate above it — checkout_task is refused with code `gated`, and retrying or waiting will not help), and `blocked` (waiting on other WORK, with its unresolved blockers). Start every session here. Paginated: the three buckets partition ONE page of open issues, so a page can be entirely one of them.",
     inputSchema: {
       assignee: z.string().optional().describe("Filter to one assignee (e.g. your agent name)"),
+      mine: z
+        .boolean()
+        .optional()
+        .describe("Shared workspaces: leave out work assigned to ANOTHER member (yours, unassigned and agents' stay). Refused with validation when this machine has no member list"),
       limit: limitSchema(ISSUE_PAGE_LIMITS),
       cursor: cursorSchema,
       ws: wsSchema,
@@ -1266,11 +1271,12 @@ server.registerTool(
     },
     annotations: { title: "Inbox: ready work", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ assignee, limit, cursor, ws }) =>
+  ({ assignee, mine, limit, cursor, ws }) =>
     run(() => {
-      const window = pageWindow({ t: "inbox", ws, assignee }, { limit, cursor }, ISSUE_PAGE_LIMITS);
+      const window = pageWindow({ t: "inbox", ws, assignee, ...(mine ? { mine } : {}) }, { limit, cursor }, ISSUE_PAGE_LIMITS);
       const store = storeFor(ws);
-      const { ready, queued, blocked, hasMore } = store.inbox(assignee, window);
+      const excludeAssignees = mine ? store.otherMemberAssignees(requireMineLens(store.members(), "mine")) : undefined;
+      const { ready, queued, blocked, hasMore } = store.inbox(assignee, window, excludeAssignees);
       const claims = store.claimActivityFor([...ready, ...queued, ...blocked].map((i) => i.id));
       // `gate`/`queuedBy` already ride on the entries — store.inbox() computes
       // them as part of the bucketing decision, so there is nothing to re-derive
@@ -1304,6 +1310,10 @@ server.registerTool(
       assignee: z.string().optional(),
       q: z.string().optional().describe("Substring match on title/identifier/description"),
       include_resolved: z.boolean().optional(),
+      mine: z
+        .boolean()
+        .optional()
+        .describe("Shared workspaces: leave out work assigned to ANOTHER member (yours, unassigned and agents' stay). Refused with validation when this machine has no member list"),
       limit: limitSchema(ISSUE_PAGE_LIMITS),
       cursor: cursorSchema,
       ws: wsSchema,
@@ -1311,16 +1321,18 @@ server.registerTool(
     outputSchema: { items: z.array(z.object(taskSummaryShape)), ...pageTailShape },
     annotations: { title: "List tasks", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ status, kind, assignee, q, include_resolved, limit, cursor, ws }) =>
+  ({ status, kind, assignee, q, include_resolved, mine, limit, cursor, ws }) =>
     run(() => {
       const window = pageWindow(
-        { t: "list_tasks", ws, status, kind, assignee, q, include_resolved },
+        // `mine` joins the cursor key only when set, so an existing cursor stays valid.
+        { t: "list_tasks", ws, status, kind, assignee, q, include_resolved, ...(mine ? { mine } : {}) },
         { limit, cursor },
         ISSUE_PAGE_LIMITS,
       );
       const store = storeFor(ws);
+      const excludeAssignees = mine ? store.otherMemberAssignees(requireMineLens(store.members(), "mine")) : undefined;
       const { items, hasMore } = store.listIssuesPage(
-        { status, kind, assignee, q, includeResolved: include_resolved },
+        { status, kind, assignee, q, includeResolved: include_resolved, ...(excludeAssignees ? { excludeAssignees } : {}) },
         window,
       );
       // One batched query per fact for the whole page, never one per row.
@@ -3196,8 +3208,8 @@ const effectiveRowShape = {
   via: z.string().nullable().describe("The queued container this row was expanded out of"),
   unqueued: z.boolean().describe("True for a row after the last plan row: still work, just later"),
   eligibility: z
-    .enum(["resolved", "gated", "blocked", "claimed", "unavailable", "eligible"])
-    .describe("First rule that matches: resolved, gated, blocked, claimed, unavailable, else eligible. Only `eligible` is takeable."),
+    .enum(["resolved", "gated", "blocked", "claimed", "unavailable", "assigned_to_other_member", "eligible"])
+    .describe("First rule that matches: resolved, gated, blocked, claimed, unavailable, assigned_to_other_member (pickup answers in a shared workspace only: another member's ticket), else eligible. Only `eligible` is takeable."),
   ...claimField,
   reason: z.string().nullable(),
   detail: z.record(z.string(), z.unknown()).nullable(),
@@ -3242,13 +3254,17 @@ server.registerTool(
   "next_task",
   {
     description:
-      "The ONE fresh leaf you should take next and everything it stepped over. `next` is the first eligible row in effective order; `skipped` lists what came before it with why (resolved, gated, blocked, claimed, unavailable). Each row carries full claim metadata or null. Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order. With `scope` the answer is limited to the work inside one container (an epic, a milestone, or any issue with children; a milestone means its members plus their descendants; inside means whatever queueing the scope would reach), queued or not: rows the plan reaches keep their effective order, then the scope's unqueued work in the order queueing the scope would give it, and the answer echoes `scope`. A null `next` with nothing unresolved in `skipped` means the scope has no open work left. An unknown scope is not_found; a leaf is validation. Under queue.policy = strict checkout_task still checks a scoped `next` against the WHOLE plan, so it is refused out_of_order whenever an eligible plan row outside the scope comes first — queued or not.",
+      "The ONE fresh leaf you should take next and everything it stepped over. `next` is the first eligible row in effective order; `skipped` lists what came before it with why (resolved, gated, blocked, claimed, unavailable, and in a shared workspace assigned_to_other_member: another member's ticket, which `anyAssignee: true` stops skipping). Each row carries full claim metadata or null. Under queue.policy = strict this is exactly what checkout_task will let you claim — call it before claiming and you will never see out_of_order. With `scope` the answer is limited to the work inside one container (an epic, a milestone, or any issue with children; a milestone means its members plus their descendants; inside means whatever queueing the scope would reach), queued or not: rows the plan reaches keep their effective order, then the scope's unqueued work in the order queueing the scope would give it, and the answer echoes `scope`. A null `next` with nothing unresolved in `skipped` means the scope has no open work left. An unknown scope is not_found; a leaf is validation. Under queue.policy = strict checkout_task still checks a scoped `next` against the WHOLE plan, so it is refused out_of_order whenever an eligible plan row outside the scope comes first — queued or not.",
     inputSchema: {
       actor: z.string().optional().describe("Whose view (defaults to unattributed)"),
       scope: z
         .string()
         .optional()
         .describe("Limit the answer to one container: an epic, a milestone, or any issue with children (identifier, bare number, or uuid)"),
+      anyAssignee: z
+        .boolean()
+        .optional()
+        .describe("Shared workspaces skip a ticket assigned to ANOTHER member (assigned_to_other_member); true turns that rule off for this answer"),
       ws: wsSchema,
     },
     outputSchema: {
@@ -3264,10 +3280,12 @@ server.registerTool(
     },
     annotations: { title: "Next task", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ actor, scope: scopeRef, ws }) =>
+  ({ actor, scope: scopeRef, anyAssignee, ws }) =>
     run(() => {
       const store = storeFor(ws);
-      const { revision, scope, next, skipped } = store.queue().effectiveQueue({ actor, scope: scopeRef });
+      const { revision, scope, next, skipped } = store
+        .queue()
+        .effectiveQueue({ actor, scope: scopeRef, pickup: anyAssignee === true ? null : store.members() });
       const instructions = next ? store.instructions(next.issueId) : [];
       return scope ? { revision, scope, next, skipped, instructions } : { revision, next, skipped, instructions };
     }),
@@ -3736,7 +3754,7 @@ server.registerTool(
  * MCP SDK silently stripping it from `structuredContent` at runtime.
  */
 const cloudStatusShape = {
-  state: z.enum(["disconnected", "manual", "automatic", "offline", "revoked", "auth_failed"]),
+  state: z.enum(["disconnected", "manual", "automatic", "offline", "revoked", "removed", "auth_failed"]),
   mode: z
     .enum(["disconnected", "manual", "automatic"])
     .describe("What this surface may OFFER — offline/revoked/auth_failed are still connected"),
@@ -3749,6 +3767,13 @@ const cloudStatusShape = {
   credentialPresent: z.boolean().describe("Whether a credential is retrievable, not merely recorded"),
   auto: z.boolean().describe("THIS device's automatic-sync consent"),
   backup: z.boolean().describe("THIS device's backup consent — a separate decision from auto"),
+  shared: z
+    .object({
+      members: z.array(z.object({ name: z.string(), memberId: z.string(), self: z.boolean() })),
+      autoSync: z.literal("locked-on"),
+    })
+    .nullable()
+    .describe("The current members when the workspace is shared (2+); automatic sync is then on for every device and cannot be turned off. Null when not shared"),
   connectedAt: z.string().nullable(),
   checked: z.boolean().describe("True only after a live probe. Always false here: this tool cannot probe"),
   pending: z.number().describe("Operations journalled locally and not yet acknowledged by the server"),
@@ -3761,7 +3786,7 @@ const cloudStatusShape = {
   warnings: z.array(z.string()),
   failure: z
     .object({
-      code: z.enum(["offline", "revoked", "auth_failed", "no_identity"]),
+      code: z.enum(["offline", "revoked", "removed", "auth_failed", "no_identity"]),
       summary: z.string(),
       remedy: z.string().describe("The command that fixes it"),
     })
@@ -3780,7 +3805,7 @@ server.registerTool(
   "cloud_status",
   {
     description:
-      "Whether THIS MACHINE has connected this repository to a sync service, and in what mode. States: disconnected (no credential, no endpoint, no cloud state here), manual (connected; nothing syncs until a human runs `staple cloud sync`), automatic (this device consented to background sync), offline, revoked, auth_failed. Reads local files only — it makes no network request and cannot be made to. Connecting, disconnecting, revoking a device and purging remote state are deliberately NOT available as tools: each is a human consent decision whose preview and typed confirmation only mean something to a person at a terminal.",
+      "Whether THIS MACHINE has connected this repository to a sync service, and in what mode. States: disconnected (no credential, no endpoint, no cloud state here), manual (connected; nothing syncs until a human runs `staple cloud sync`), automatic (this device consented to background sync), offline, revoked, auth_failed. Reads local files only — it makes no network request and cannot be made to. Connecting, joining, approving or denying a join, renaming or removing a member, disconnecting, revoking a device and purging remote state are deliberately NOT available as tools: each is a human consent decision whose preview and typed confirmation only mean something to a person at a terminal.",
     inputSchema: { ws: wsSchema },
     outputSchema: cloudStatusShape,
     annotations: { title: "Cloud status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },

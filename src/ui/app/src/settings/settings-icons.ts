@@ -3,7 +3,7 @@
  * wears in the rail where there is one (Usage). An unknown section gets the generic sliders.
  */
 import type { LucideIcon } from "lucide-react";
-import { BatteryMedium, CircleDashed, Cloud, HardDrive, ListOrdered, Monitor, RefreshCw, Shapes, SlidersHorizontal } from "lucide-react";
+import { BatteryMedium, CircleDashed, Cloud, HardDrive, ListOrdered, Monitor, RefreshCw, Shapes, SlidersHorizontal, Users } from "lucide-react";
 
 const ICONS: Record<string, LucideIcon> = {
   cloud: Cloud,
@@ -14,6 +14,7 @@ const ICONS: Record<string, LucideIcon> = {
   kinds: Shapes,
   queue: ListOrdered,
   "workspace-cloud": RefreshCw,
+  members: Users,
 };
 
 export function settingsIcon(id: string): LucideIcon {

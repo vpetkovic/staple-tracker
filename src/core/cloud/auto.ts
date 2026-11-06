@@ -83,6 +83,11 @@ export type AutoSyncSkip =
   | "disconnected"
   /** Connected here, and automatic sync was never consented to. The default. */
   | "manual"
+  /**
+   * The service removed this device's member from the workspace (recorded on the
+   * connection record). Every attempt would be refused, so none is made.
+   */
+  | "removed"
   /** A run for this trigger happened recently enough that another would be noise. */
   | "too-soon"
   /** The endpoint has been failing; the jittered backoff window has not elapsed. */
@@ -134,6 +139,14 @@ export const AUTO_SYNC_BOUNDS: Record<AutoSyncTrigger, AutoSyncBound> = {
 
 /** How often a long-running surface fires its `session` trigger. Five minutes. */
 export const AUTO_SYNC_SESSION_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * The session interval for a SHARED workspace (two or more current members): thirty
+ * seconds, the session trigger's own floor (`minIntervalMs` above), so a teammate's change
+ * reaches an open page within about that long. Five minutes is fine for one person's
+ * devices; it reads as "broken" to two people looking at the same tracker.
+ */
+export const AUTO_SYNC_SHARED_SESSION_INTERVAL_MS = 30 * 1000;
 
 /**
  * The backoff schedule, applied on top of whichever trigger asked.
@@ -242,6 +255,7 @@ export function autoSyncGate(input: AutoSyncGateInput): AutoSyncDecision {
    * than a promise in a document.
    */
   if (connection.auto !== true) return { allowed: false, reason: "manual" };
+  if (connection.removed) return { allowed: false, reason: "removed" };
 
   const state = readAutoSyncState(input.home, input.repositoryId);
   const bound = AUTO_SYNC_BOUNDS[input.trigger];

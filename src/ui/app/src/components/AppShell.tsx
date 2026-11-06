@@ -58,6 +58,9 @@
 import { ChevronRight, Menu, Monitor, PanelLeft, Plus, Search, SquarePen } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CloudStrip } from "@/components/CloudStrip";
+import { JoinRequestWatcher } from "@/components/join/JoinRequestToast";
+import { SharedBadge } from "@/components/SharedBadge";
+import { refreshSharedWorkspaces } from "@/lib/shared-workspaces";
 import { RunStrip } from "@/components/autopilot/RunBanner";
 import { RunStopNotices } from "@/components/autopilot/RunStopNotices";
 import { getCloudStatus, getCloudWorkspaces } from "@/lib/api";
@@ -77,7 +80,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
 import { openCommandPalette, openCreateIssue } from "@/lib/shell-events";
-import { isAllWorkspaces, isMachineView, scopeName, useSession, viewControls, viewLabel } from "@/lib/session";
+import { currentWorkspace, isAllWorkspaces, isMachineView, scopeName, useSession, viewControls, viewLabel } from "@/lib/session";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBackToClose } from "@/lib/back-to-close";
 import { cn } from "@/lib/utils";
@@ -169,6 +172,7 @@ export function TopBar({
         <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" />
         <h1 className="truncate pl-0.5 text-heading font-semibold">{title}</h1>
       </div>
+      {machine ? null : <SharedBadge slug={currentWorkspace(session)?.slug ?? ""} report={cloud} />}
       {machine ? null : <CloudStrip report={cloud} hub={hubCloud} />}
       <div className="ml-auto flex shrink-0 items-center gap-2">
         {doneLivesInTopBar(viewControls(session.view)) ? <DoneToggle /> : null}
@@ -240,6 +244,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       live = false;
     };
   }, [all, ws]);
+
+  useEffect(() => {
+    void refreshSharedWorkspaces();
+  }, [session.version, ws]);
 
   const [collapsed, setCollapsed] = useState(() => loadRailCollapsed(storage()));
   const [overlayOpen, setOverlayOpen] = useState(false);
@@ -361,6 +369,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <div className="flex min-w-0 flex-1 justify-start">
                 <WorkspaceSwitcher variant="bar" />
               </div>
+              {all ? null : <SharedBadge slug={currentWorkspace(session)?.slug ?? ""} report={cloud} compact />}
               <CloudStrip report={cloud} hub={hubCloud} compact />
               <BarButton label="Search and commands" onClick={openCommandPalette} data-bar-search>
                 <Search aria-hidden />
@@ -402,6 +411,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         */}
         {/* A run that ended: a notice naming why and what needs a person, on every view. */}
         <RunStopNotices placement={wide ? "corner" : "strip"} />
+        {/* a join request toast, polled only with automatic sync on (JoinRequestToast). */}
+        {all ? null : <JoinRequestWatcher report={cloud} slug={currentWorkspace(session)?.slug ?? ""} />}
         {wide ? null : <RunStrip />}
         {wide ? null : <ViewTabBar />}
       </div>

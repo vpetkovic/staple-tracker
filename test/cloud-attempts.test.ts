@@ -92,6 +92,11 @@ describe("an applied operation runs no attempt side effect", () => {
     const event = b.db.prepare("SELECT actor, dedup_key, created_at FROM events WHERE kind = 'attempt_started'").get() as Record<string, string>;
     const original = a.db.prepare("SELECT dedup_key FROM events WHERE kind = 'attempt_started'").get() as Record<string, string>;
     expect(event).toEqual({ actor: "agent-a", dedup_key: original.dedup_key, created_at: started!.at });
+    // It names the device it came from, so B does not read A's event as its own. A's stays local.
+    const originOn = (machine: Machine) =>
+      (machine.db.prepare("SELECT origin_device FROM events WHERE kind = 'attempt_started'").get() as { origin_device: string | null }).origin_device;
+    expect(originOn(b)).toBe("device-a");
+    expect(originOn(a)).toBeNull();
 
     // A pause on A replicates; nothing paused reads a measured zero, a pause and resume more.
     a.use();
@@ -110,6 +115,7 @@ describe("an applied operation runs no attempt side effect", () => {
       expect(views(machine, issue.id)[0]!.pausedSeconds, machine.label).toBe(views(a, issue.id)[0]!.pausedSeconds);
     }
     expect(outboxAttemptOps(fresh.db)).toBe(0);
+    expect(originOn(fresh), "a snapshot-bootstrapped device").toBe("device-a");
     converged(a, b, fresh);
   }, 60_000);
 });

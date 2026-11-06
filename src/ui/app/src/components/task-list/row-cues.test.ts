@@ -418,3 +418,26 @@ describe("the vocabulary", () => {
     );
   });
 });
+
+describe("in a shared workspace, another member's ticket is never Next", () => {
+  // AII-4 is marko's and first in the plan; AII-1 is mine. `queue next` on this machine
+  // skips AII-4 (assigned_to_other_member) and answers AII-1, so the cue must too.
+  const queue = view({
+    effective: [
+      effective({ identifier: "AII-4", position: 1, planPosition: 1 }),
+      effective({ identifier: "AII-1", position: 2, planPosition: null, unqueued: true }),
+    ],
+  });
+  const marko = (identifier: string) => identifier === "AII-4";
+
+  it("moves Next to the first row that is not another member's", () => {
+    const index = buildRowCueIndex(queue, new Map(), marko);
+    expect(index.cuesFor(row({ identifier: "AII-4" }))?.pickup?.state).toBe("queued");
+    expect(index.cuesFor(row({ identifier: "AII-1" }))?.pickup?.state).toBe("pickable");
+  });
+
+  it("without a member list, the first eligible row is Next, as before", () => {
+    expect(stateOf(queue, "AII-4")?.state).toBe("pickable");
+    expect(stateOf(queue, "AII-1")?.state).toBe("unqueued");
+  });
+});

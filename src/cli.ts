@@ -76,6 +76,9 @@ import {
   type StapleEvent,
 } from "./core/types.js";
 import type { WorkspaceStore } from "./core/store.js";
+import { requireMineLens, splitMine } from "./core/cloud/member-lens.js";
+import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
+import { readConnection } from "./core/cloud/connection.js";
 
 const STATUS_GLYPHS: Record<string, string> = {
   backlog: "◌",
@@ -225,6 +228,23 @@ function gateCue(gate: IssueGate | null, queuedBy: QueuedBy | null): string {
   if (queuedBy) return `  [queued: ${queuedBy.identifier}/${queuedBy.owner}]`;
   if (gate?.state === "pending") return `  [awaiting ${gate.owner}]`;
   return "";
+}
+
+/**
+ * `shared with marko · syncing automatically`, in a shared workspace, for the text of `ls`
+ * and `inbox`; null otherwise, so a solo workspace prints exactly what it always did. Reads
+ * the member list and the connection record on this machine, never the network.
+ */
+function sharedLineOf(store: WorkspaceStore): string | null {
+  const lens = store.members();
+  if (lens === null) return null;
+  let auto = false;
+  try {
+    auto = readConnection(stapleHome(), lens.cache.repositoryId)?.auto === true;
+  } catch {
+    // An unreadable record: say what is shared, not that it syncs.
+  }
+  return sharedLine(sharedStatus(lens.cache), auto);
 }
 
 function getStore(values: { db?: string; ws?: string; "ack-renumber"?: boolean }) {
@@ -921,6 +941,16 @@ Cloud (optional, off until you turn it on — see staple cloud --help)
   cloud auto on|off                     THIS device's consent to sync without being asked
   cloud devices [ls|revoke <id>]        devices registered to this repository; revoking is
               server-side and effective on that device's next request
+  cloud join ['<link>'] [--yes]         join a shared workspace from a member's invite link (no
+              clone needed): preview first, then a short code a member approves. No
+              secret travels over chat; once joined, the workspace syncs automatically
+  cloud requests                        pending join requests
+  cloud approve <code> (--as <name> | --to <member>)
+              admit a new person (owner only) or add a device to a member
+  cloud deny <code>                     refuse a pending join request
+  cloud members [ls|rename <m> <name>|remove <m> --confirm <name>]
+              who is in the workspace; removing is owner only and revokes their devices
+  cloud share-endpoint [--yes]          publish the service address in .staple/repository.json
   cloud backup enable|disable           THIS device's consent to keep point-in-time copies
               on the service. A THIRD consent: neither connecting nor automatic sync
               turns it on. Disabling stops new backups and deletes none
@@ -946,7 +976,9 @@ Tasks
               [--kind K]                epic|task|bug|chore|spike (default task),
               or whatever "staple kinds ls" shows for this workspace
               [--estimate <dur>]        record the plan-time estimate AT PLAN TIME
-  ls [--status s1,s2] [--kind k1,k2] [--assignee A] [-q text] [--all]
+  ls [--status s1,s2] [--kind k1,k2] [--assignee A] [-q text] [--all] [--mine]
+              --mine: in a shared workspace, leave out work assigned to another
+              member (yours, unassigned and agents' stay) and say how much it hid
   show <ref>                            full context (ancestry, relations, comments, docs)
   tree [ref]                            subtask tree
   compare <ref> [<ref> ...]             total labor, estimate coverage and critical path
@@ -975,10 +1007,10 @@ Tasks
               probability it leaves less than the reserve at the reset;
               staple forecast --help
   board                                 terminal kanban
-  inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
+  inbox [--assignee A] [--hub] [--mine] ready vs queued vs blocked (pickup order);
               QUEUED is work a HUMAN has to release (see Approval gates below) and
               checkout of it is refused; BLOCKED is work waiting on other WORK;
-              --hub = all workspaces
+              --hub = all workspaces; --mine as for ls
 
 Flow
   start|checkout <ref> [--agent A] [--steal-if-stale <dur>] [--override -m <why>]
@@ -1352,10 +1384,14 @@ function main() {
           assignee: { type: "string" },
           q: { type: "string", short: "q" },
           all: { type: "boolean" },
+          mine: { type: "boolean" },
         },
       });
       const { store } = getStore(values);
-      const issues = store.listIssues({
+      // `--mine`: everything not assigned to ANOTHER member — yours, unassigned, and
+      // agents' — from the member list on this machine. Refused without one.
+      const mineLens = values.mine === true ? requireMineLens(store.members()) : null;
+      const listed = store.listIssues({
         status: values.status?.split(",").map((s) => s.trim()) as never,
         // Comma-separated, for symmetry with --status. `--kind epic` is the
         // acceptance case; `--kind bug,chore` falls out of the same split.
@@ -1364,6 +1400,7 @@ function main() {
         q: values.q,
         includeResolved: values.all,
       });
+      const { mine: issues, hidden } = mineLens ? splitMine(mineLens, listed) : { mine: listed, hidden: [] };
       // One batched query per fact for the whole list, never one per row.
       const ids = issues.map((i) => i.id);
       const claims = store.claimActivityFor(ids);
@@ -1383,6 +1420,8 @@ function main() {
         );
         break;
       }
+      const shared = sharedLineOf(store);
+      if (shared !== null) console.log(shared);
       if (issues.length === 0) console.log("(no issues)");
       for (const issue of issues) {
         const claim = claims.get(issue.id);
@@ -1395,6 +1434,7 @@ function main() {
           ),
         );
       }
+      for (const { name, count } of hidden) console.log(`${count} assigned to ${name} not shown`);
       break;
     }
 
@@ -2124,8 +2164,11 @@ function main() {
     case "inbox": {
       const { values } = parseArgs({
         args: rest,
-        options: { ...common, assignee: { type: "string" }, hub: { type: "boolean" } },
+        options: { ...common, assignee: { type: "string" }, hub: { type: "boolean" }, mine: { type: "boolean" } },
       });
+      if (values.hub && values.mine) {
+        throw new StapleError("validation", "--mine reads one workspace's member list; it does not combine with --hub.");
+      }
       if (values.hub) {
         const hub = Hub.open();
         try {
@@ -2144,11 +2187,24 @@ function main() {
         break;
       }
       const { store } = getStore(values);
-      const inbox = store.inbox(values.assignee);
+      const mineLens = values.mine === true ? requireMineLens(store.members()) : null;
+      const full = store.inbox(values.assignee);
+      // `--mine` partitions each bucket the same way; the counts of what it left out are
+      // said once, after the list, so nobody mistakes a filtered inbox for an empty one.
+      const hiddenByName = new Map<string, number>();
+      const keepMine = <T extends Issue>(bucket: T[]): T[] => {
+        if (!mineLens) return bucket;
+        const { mine, hidden } = splitMine(mineLens, bucket);
+        for (const { name, count } of hidden) hiddenByName.set(name, (hiddenByName.get(name) ?? 0) + count);
+        return mine;
+      };
+      const inbox = { ...full, ready: keepMine(full.ready), queued: keepMine(full.queued), blocked: keepMine(full.blocked) };
       if (values.json) {
         outJson(inbox);
         break;
       }
+      const sharedInbox = sharedLineOf(store);
+      if (sharedInbox !== null) console.log(sharedInbox);
       console.log("READY (pickup order):");
       for (const issue of inbox.ready) console.log(`  ${line(issue)}`);
       if (inbox.ready.length === 0) console.log("  (nothing ready)");
@@ -2207,6 +2263,7 @@ function main() {
           console.log(`  ${line(issue, `  [${why}]`)}`);
         }
       }
+      for (const [name, count] of hiddenByName) console.log(`${count} assigned to ${name} not shown`);
       break;
     }
 

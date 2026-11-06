@@ -96,6 +96,7 @@ const DISCONNECTED: CloudSurfaceReport = {
   credentialPresent: false,
   auto: false,
   backup: false,
+  shared: null,
   connectedAt: null,
   checked: false,
   pending: 0,
@@ -188,7 +189,7 @@ const REGISTRY_NOOPS: HubRegistryActions = {
   onDismissAdoption: NOOP,
 };
 
-function panel(overrides: Partial<CloudPanelProps> = {}): string {
+function panel(overrides: Partial<CloudPanelProps> = {}, extra: { autoLocked?: boolean } = {}): string {
   const props: CloudPanelProps = {
     report: DISCONNECTED,
     error: null,
@@ -238,7 +239,7 @@ function panel(overrides: Partial<CloudPanelProps> = {}): string {
     onDisconnect: NOOP,
     ...overrides,
   };
-  return renderToStaticMarkup(<CloudPanel {...props} />);
+  return renderToStaticMarkup(<CloudPanel {...props} {...extra} />);
 }
 
 // ------------------------------------------------------ 1. it renders quietly
@@ -398,7 +399,9 @@ describe("nothing here is a workspace setting", () => {
     // the function that writes `/api/settings`, i.e. the workspace database.
     // Since Settings went global the one section is three parts (hub, registry, one
     // workspace's connection), each matched by id and none handed `applyTo`.
-    expect(file).toMatch(/isCloudCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="machine" \/>/);
+    // the machine part renders the join card above it (it is not a setting either),
+    // so the arm is a block rather than one line. Still matched by id, still no `applyTo`.
+    expect(file).toMatch(/isCloudCategory\(category\.id\)\)[\s\S]{0,400}?<CloudSection ws=\{ws\} part="machine" \/>/);
     expect(file).toMatch(/isHubRegistryCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="registry" \/>/);
     expect(file).toMatch(/isWorkspaceCloudCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="workspace" \/>/);
     for (const matcher of ["isCloudCategory", "isHubRegistryCategory", "isWorkspaceCloudCategory"]) {
@@ -2342,5 +2345,27 @@ describe("the not-on-this-machine group states what its rows share once", () => 
     expect(row).toContain("data-cloud-workspace-unavailable");
     // Its disconnect is live — the credential is on this machine — so it is drawn.
     expect(row).toContain('data-cloud-workspace-action="zulu:disconnect"');
+  });
+});
+
+describe("a shared workspace's automatic sync is on and locked", () => {
+  it("shows the switch on, disabled, with the reason, when the workspace is shared", () => {
+    const html = panel({ report: CONNECTED }, { autoLocked: true });
+    const toggle = /<input[^>]*data-cloud-consent-toggle="auto"[^>]*>/.exec(html)?.[0] ?? "";
+    for (const attribute of ['data-locked=""', 'aria-checked="true"', 'checked=""', 'disabled=""']) {
+      expect(toggle).toContain(attribute);
+    }
+    expect(html).toContain("On · locked");
+    expect(html).toContain("Shared workspaces always sync automatically. Leave or disconnect to stop.");
+    // Backups stay a separate, free choice.
+    expect(html).toMatch(/data-cloud-consent-toggle="backup"(?! data-locked)/);
+  });
+
+  it("changes nothing for a workspace that is not shared", () => {
+    const html = panel({ report: CONNECTED }, { autoLocked: false });
+    expect(html).not.toContain("data-locked");
+    expect(html).not.toContain("On · locked");
+    expect(html).not.toContain("Shared workspaces always sync automatically");
+    expect(panel({ report: CONNECTED })).toBe(html);
   });
 });

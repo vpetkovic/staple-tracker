@@ -465,7 +465,17 @@ export function sessionRefOf(harness: string, sessionId: string): string {
  * transition's own `at`: an applied transition is another device's, and dating it by the
  * apply would make that agent look active here, now.
  */
-export function emitTransitionEvent(db: DatabaseSync, transition: AttemptTransition, issueId: string | null): void {
+/**
+ * `originDevice` names the device the transition came from when it arrived by sync. A
+ * local transition passes nothing: a null origin means "this device", which is how a
+ * synced event is told apart from a local one when its member is shown.
+ */
+export function emitTransitionEvent(
+  db: DatabaseSync,
+  transition: AttemptTransition,
+  issueId: string | null,
+  originDevice: string | null = null,
+): void {
   const identifier =
     issueId === null ? null : ((db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined)?.identifier ?? null);
   writeEventRow(db, {
@@ -482,6 +492,7 @@ export function emitTransitionEvent(db: DatabaseSync, transition: AttemptTransit
     },
     dedupKey: transitionEventKey(transition.attemptId, transition.id),
     createdAt: transition.at,
+    originDevice,
   });
 }
 

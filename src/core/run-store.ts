@@ -754,7 +754,9 @@ export class RunStore {
 
     const workable: RunFacts["workable"] = [];
     const waiting: RunFacts["waiting"] = [];
-    for (const row of queue.effectiveQueue({ actor: run.actor, scope: rootId }).rows) {
+    // In a shared workspace, another member's ticket is theirs: it waits here as
+    // `assigned_to_other_member` rather than being taken (`QueueStore`'s member rung).
+    for (const row of queue.effectiveQueue({ actor: run.actor, scope: rootId, pickup: this.store.members() }).rows) {
       if (row.issueId === rootId || row.eligibility === "resolved") continue;
       const held = row.eligibility === "claimed" && row.detail?.heldBy === run.actor && !elsewhere.has(row.issueId);
       if (row.eligibility === "eligible" || held) workable.push({ issueId: row.issueId, identifier: row.identifier, held });

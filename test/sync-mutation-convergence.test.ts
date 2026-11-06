@@ -70,7 +70,7 @@ const READS: Record<StoreName, readonly string[]> = {
     "statusOrder", "openStatusOrder", "inboxPickupOrder", "checkoutExpectedStatuses", "categoryOf", "isResolvedStatus",
     "isActiveStatus", "primaryStatusFor", "assertConfiguredStatus", "assertConfiguredKind", "statusUsageCount",
     "kindUsageCount", "getSetting", "settingValue", "settingValues", "unknownSettingKeys", "movedOff", "removedByRestore", "getIssue",
-    "listEvents", "blockersOf", "dependentsOf", "unresolvedBlockersOf", "unresolvedBlockersFor", "openDependentsFor",
+    "listEvents", "members", "otherMemberAssignees", "blockersOf", "dependentsOf", "unresolvedBlockersOf", "unresolvedBlockersFor", "openDependentsFor",
     "blockingChildrenOf", "gate", "gateFor", "gateDecision", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
     "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "latestComments", "listCommentsPage",
     "getDocument", "listDocuments", "listDocumentRevisions", "instructions", "listIssues", "listIssuesPage", "inbox", "context", "tree",

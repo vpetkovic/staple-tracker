@@ -54,16 +54,20 @@ import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
 import { placeUnderMilestones } from "./tree/milestone-placement";
 import { AutopilotTreeContext, autopilotAncestors, useRuns } from "@/lib/runs";
-import { useSession } from "@/lib/session";
+import { currentWorkspace, useSession } from "@/lib/session";
+import { JoinOfferCard } from "@/components/join/JoinOffer";
 import type { InboxRow, IssueStatus, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
 import { rowQueueMenu, type RowQueue } from "./tree/row-queue";
 import { TreeGrid } from "./tree/TreeGrid";
 import { EmptyState, ViewState } from "./ViewChrome";
+import { MineToggle } from "@/components/members/MineToggle";
+import { otherMembersRule, partitionMine, useMembersCache, useMineToggle } from "@/lib/members";
 
 export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  const joinSlug = currentWorkspace(session)?.slug ?? "";
   const { mode, selection, filters, filterContext, groupBy, sort, publishVisibleOrder } = session;
 
   /**
@@ -397,9 +401,18 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
     [filterContext.milestones],
   );
 
+  /**
+   * MINE / ALL, in a shared workspace: the member list, read here so the
+   * "Next" cue below follows the same member rule `queue next` does. See `mineSplit`.
+   */
+  const membersWs = session.mode === "hub" && session.ws === "" ? undefined : session.ws;
+  const members = useMembersCache(membersWs, session.version, onAuthError as (error: Error) => void);
+  /** Another member's ticket is never "Next" here, in Mine or in All: `queue next` skips it. */
+  const isOtherMembers = useMemo(() => otherMembersRule(members, session.issues.data), [members, session.issues.data]);
+
   const cueIndex = useMemo(
-    () => (wantCues && queue.data ? buildRowCueIndex(queue.data, milestoneTitles) : EMPTY_ROW_CUE_INDEX),
-    [wantCues, queue.data, milestoneTitles],
+    () => (wantCues && queue.data ? buildRowCueIndex(queue.data, milestoneTitles, isOtherMembers) : EMPTY_ROW_CUE_INDEX),
+    [wantCues, queue.data, milestoneTitles, isOtherMembers],
   );
 
   /**
@@ -432,10 +445,23 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   const { claimed } = useRuns();
   const autopilotTree = useMemo(() => autopilotAncestors(all, claimed), [all, claimed]);
 
-  const rows = useMemo(
+  const filtered = useMemo(
     () => applyFilterDimensions(all, filters, filterContext),
     [all, filters, filterContext],
   );
+
+  /**
+   * MINE / ALL, in a shared workspace. Applied after every filter, as
+   * one more narrowing: Mine leaves out the rows assigned to ANOTHER member, and says how
+   * many. A workspace with no member list on this machine has no toggle and loses nothing,
+   * and All workspaces has none either — each workspace has its own members.
+   */
+  const [mine, setMine] = useMineToggle(session.ws);
+  const mineSplit = useMemo(
+    () => (members && mine ? partitionMine(members, filtered) : null),
+    [members, mine, filtered],
+  );
+  const rows = mineSplit ? mineSplit.mine : filtered;
 
   /**
    * Children whose parent a filter removed — V4's seam for V5's breadcrumb chip, and the
@@ -512,11 +538,19 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
         because the refusal is about the plan rather than about the task, and the row it came
         from may have been filtered away by the time the answer lands.
       */}
+      {members ? <MineToggle mine={mine} onChange={setMine} hidden={mineSplit?.hidden ?? []} /> : null}
       {queueRefusal ? (
         <div className="px-4 pt-3">
           <GuardRefusal refusal={queueRefusal} onDismiss={() => setQueueRefusal(null)} />
         </div>
       ) : null}
+      {/*
+        "Join the shared workspace", for a clone whose committed manifest names a sync
+        service this computer is not connected to, and the one-time banner after joining. Above
+        the list rather than in its empty state, so the banner survives the board filling in.
+        The card decides from local files whether to show; usually it renders nothing.
+      */}
+      {joinSlug ? <JoinOfferCard ws={joinSlug} className="mx-4 mt-3" /> : null}
       <ViewState resource={session.issues} empty="no open issues">
         {(loaded) => {
           if (loaded.length === 0) return <EmptyState>no issues yet</EmptyState>;

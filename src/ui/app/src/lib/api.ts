@@ -57,6 +57,7 @@ import type {
   RunEntry,
   RemoteDevice,
   StapleEvent,
+  UiMembersCache,
   VocabularyOp,
   TimingQualityReport,
   CalibrationReport,
@@ -76,6 +77,18 @@ import type {
   PollingStatus,
   RefreshResult,
 } from "./telemetry-types";
+import type {
+  CloudJoinOffer,
+  CloudLinkJoinPreviewResponse,
+  CloudLinkJoinStarted,
+  CloudShareOffer,
+  CloudSharedWorkspace,
+  CloudJoinPoll,
+  CloudJoinPreviewResponse,
+  CloudJoinRequest,
+  CloudJoinStarted,
+  CloudMembersResponse,
+} from "./types";
 // Type-only, so the cycle with lib/settings.ts (which imports `getSettings`) is erased.
 import type { SettingOp, WorkspaceSettingsEnvelope } from "./settings";
 
@@ -792,6 +805,13 @@ export const getGraph = () => request<Graph>("/api/graph");
 export const getEvents = (params: { ws?: string; since?: number; issue?: string } = {}) =>
   request<StapleEvent[]>(`/api/events${qs(params)}`);
 
+/**
+ * This machine's copy of the workspace's member list, or null when it is not a shared
+ * workspace here. A local read: it never contacts the sync service.
+ */
+export const getMembersCache = (params: { ws?: string } = {}) =>
+  request<UiMembersCache | null>(`/api/members-cache${qs(params)}`);
+
 // ---------- writes ----------
 
 /**
@@ -1136,3 +1156,77 @@ export const bindBudgetSource = (input: BindInput) => postJson<BudgetConfigView>
 
 /** `staple budget unbind`. */
 export const unbindBudgetSource = (input: BindingHomeInput) => postJson<BudgetConfigView>("/api/budget/bindings/unbind", input);
+
+// ---------- members and joining ----------
+//
+// Every POST below except `previewJoin` and `cancelJoin` makes the local server contact
+// the sync service, so none is called on mount except where a person's action opened the
+// surface (Settings → Members) or automatic sync was already consented to (the toast).
+
+/** Local read for the empty-state card: does the committed manifest name a service to join? */
+export const getJoinOffer = (params: { ws: string }) =>
+  request<CloudJoinOffer>(`/api/cloud/workspace/join/offer${qs(params)}`);
+
+/** Step one. Local: makes no request, mints a consent ticket for what it shows. */
+export const previewJoin = (target: { slug: string; endpoint?: string; label?: string; credentialFile?: boolean }) =>
+  postJson<CloudJoinPreviewResponse>("/api/cloud/workspace/join/preview", target);
+
+/** Step two. EGRESSES. Carries the ticket and nothing that could name a service. */
+export const startJoin = (target: { slug: string; consent: ConsentTicket }) =>
+  postJson<CloudJoinStarted>("/api/cloud/workspace/join/start", {
+    slug: target.slug,
+    consent: target.consent.id,
+    digest: target.consent.digest,
+  });
+
+export const pollJoin = (target: { joinId: string }) => postJson<CloudJoinPoll>("/api/cloud/workspace/join/poll", target);
+
+/** Local: forgets the join; the request expires on the service by itself. */
+export const cancelJoin = (target: { joinId: string }) =>
+  postJson<{ cancelled: boolean; code: string | null; expiresAt: number | null }>("/api/cloud/workspace/join/cancel", target);
+
+/** The list and the pending requests, fresh from the service. Opening Settings → Members calls it. */
+export const fetchMembers = (target: { slug: string }) => postJson<CloudMembersResponse>("/api/cloud/workspace/members", target);
+
+/** `background`: the toast asking on its own, which the server allows only with automatic sync on. */
+export const fetchJoinRequests = (target: { slug: string; background?: boolean }) =>
+  postJson<{ requests: CloudJoinRequest[] }>("/api/cloud/workspace/join-requests", target);
+
+export const approveJoinRequest = (target: { slug: string; code: string } & ({ newMember: string } | { memberId: string })) =>
+  postJson<CloudMembersResponse & { approved: { code: string; member: { memberId: string; name: string } | null; newMember: boolean } }>(
+    "/api/cloud/workspace/join-requests/approve",
+    target,
+  );
+
+export const denyJoinRequest = (target: { slug: string; code: string }) =>
+  postJson<CloudMembersResponse & { denied: { code: string } }>("/api/cloud/workspace/join-requests/deny", target);
+
+export const renameMember = (target: { slug: string; memberId: string; name: string }) =>
+  postJson<CloudMembersResponse>("/api/cloud/workspace/members/rename", target);
+
+export const removeMember = (target: { slug: string; memberId: string; confirm: string }) =>
+  postJson<CloudMembersResponse & { removed: { name: string; devicesRevoked: number } }>("/api/cloud/workspace/members/remove", target);
+
+export const revokeMemberDevice = (target: { slug: string; deviceId: string }) =>
+  postJson<CloudMembersResponse>("/api/cloud/workspace/members/device/revoke", target);
+
+// ---------- sharing by link ----------
+
+/** Local: builds the link, the command and a ready-to-send message. Sends nothing. */
+export const createShareOffer = (target: { slug: string; invitedAs?: string }) =>
+  postJson<CloudShareOffer>("/api/cloud/workspace/share", target);
+
+/** Local: which registered workspaces are shared, and with whom. */
+export const getSharedWorkspaces = () => request<{ workspaces: CloudSharedWorkspace[] }>("/api/cloud/shared-workspaces");
+
+/** Step one for a link. Local: makes no request and creates nothing. */
+export const previewLinkJoin = (target: { link: string; label?: string; credentialFile?: boolean }) =>
+  postJson<CloudLinkJoinPreviewResponse>("/api/cloud/join-link/preview", target);
+
+/** Step two. EGRESSES, and only now may a workspace be created for the link. */
+export const startLinkJoin = (target: { link: string; consent: ConsentTicket }) =>
+  postJson<CloudLinkJoinStarted>("/api/cloud/join-link/start", {
+    link: target.link,
+    consent: target.consent.id,
+    digest: target.consent.digest,
+  });

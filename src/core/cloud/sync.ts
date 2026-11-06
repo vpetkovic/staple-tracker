@@ -49,7 +49,8 @@ import {
   type RequestOptions,
 } from "./client.js";
 import { readAutoSyncState, writeAutoSyncState } from "./auto-state.js";
-import { readConnection } from "./connection.js";
+import { noteRemoval, readConnection } from "./connection.js";
+import { refreshMembersCacheBestEffort } from "./members.js";
 import { credentialStoreFor } from "./credential-store.js";
 import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
 import { ReferentMissing, applyToDatabase, bumpEntityVersion, refreshedIssuePayload } from "./apply.js";
@@ -482,6 +483,24 @@ export async function syncRepository(
   repositoryId: string,
   options: SyncOptions,
 ): Promise<SyncReport> {
+  try {
+    return await syncRepositoryOnce(db, repositoryId, options);
+  } catch (error) {
+    /**
+     * A refusal because this device's member was removed is recorded on the way out, so
+     * plain `staple cloud status`, the hub-wide list and the UI say "removed" from then on
+     * without asking the service. Every sync path, manual, `--all`, automatic and the UI's,
+     * comes through here. The error itself is rethrown unchanged.
+     */
+    throw noteRemoval(options.home, repositoryId, error);
+  }
+}
+
+async function syncRepositoryOnce(
+  db: DatabaseSync,
+  repositoryId: string,
+  options: SyncOptions,
+): Promise<SyncReport> {
   /**
    * First, before the session is even opened.
    *
@@ -708,6 +727,15 @@ export async function syncRepository(
   carryIdentifierMovesToHub(db, options.home);
   // And the attempts it changed, to this machine's presence index — after commit, best effort.
   refreshPresence(db, options.home);
+  /**
+   * And the member list, which every read path that shows members uses (`members-cache.ts`).
+   * Only from a service that serves it, so a sync against an older Worker makes no extra
+   * request. Best effort: the sync above already succeeded, and a list that could not be
+   * fetched leaves the previous copy in place rather than failing it.
+   */
+  if (capabilities.members === true) {
+    await refreshMembersCacheBestEffort(options.home, session, options);
+  }
 
   const conflicts = countOpenConflicts(db);
   const quarantined = countQuarantined(db);

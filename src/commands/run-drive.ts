@@ -264,7 +264,7 @@ export function runDriveCommand(rest: string[]): void {
       const pick = facts?.workable[0];
       if (pick) next = { ref: pick.identifier, title: store.getIssue(pick.issueId).title, issueId: pick.issueId };
     } else {
-      const row = store.queue().effectiveQueue({ actor, scope: values.scope === "queue" ? null : values.scope }).next;
+      const row = store.queue().effectiveQueue({ actor, scope: values.scope === "queue" ? null : values.scope, pickup: store.members() }).next;
       if (row) next = { ref: row.identifier, title: row.title, issueId: row.issueId };
     }
     const runId = existing?.id ?? "<new run>";

@@ -214,6 +214,12 @@ function noteContainer(facts: ContainerFacts, identifier: string, row: Effective
 export function buildRowCueIndex(
   queue: QueueView | null | undefined,
   milestoneTitles: ReadonlyMap<string, string> = new Map(),
+  /**
+   * In a shared workspace: whether a row is assigned to ANOTHER member (`lib/members.ts`).
+   * Such a row is never the one `queue next` hands this machine, so it never wears
+   * "Next". Absent, as everywhere without a member list, nothing changes.
+   */
+  isOtherMembers?: (identifier: string) => boolean,
 ): RowCueIndex {
   if (!queue) return EMPTY_ROW_CUE_INDEX;
 
@@ -237,7 +243,9 @@ export function buildRowCueIndex(
    * included. It is the row an agent would actually be handed, which is the only thing
    * `pickable` is allowed to mean.
    */
-  const nextUp = queue.effective.find((row) => row.eligibility === "eligible")?.identifier ?? null;
+  const nextUp =
+    queue.effective.find((row) => row.eligibility === "eligible" && !(isOtherMembers?.(row.identifier) ?? false))
+      ?.identifier ?? null;
 
   const size = effective.size + planned.size;
   if (size === 0) return EMPTY_ROW_CUE_INDEX;

@@ -58,6 +58,7 @@ the reference pages at the end are for looking things up.
 | Page | What it is for |
 |---|---|
 | [Cloud sync](cloud-sync.md) | Share one workspace between two machines |
+| [Working with a teammate](working-with-a-teammate.md) | Let another person join a workspace by approving a short code |
 | [Several repositories](hub.md) | Work across several repositories from one machine |
 
 ## The web UI

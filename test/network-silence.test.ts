@@ -950,6 +950,25 @@ describe("connect: nothing leaves the machine before consent", () => {
     expect(result.stderr).toContain("Nothing was sent");
   });
 
+  it("`cloud join` without --yes and without a terminal previews, exits 2, and sends nothing", async () => {
+    const result = await staple([
+      "cloud",
+      "join",
+      "--endpoint",
+      "https://staple-sync-dev.example.workers.dev",
+      "--label",
+      "buddy-laptop",
+    ]);
+
+    expect(result.violations, JSON.stringify(result.violations, null, 2)).toHaveLength(0);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("Join this shared workspace");
+    expect(result.stdout).toContain("staple-sync-dev.example.workers.dev");
+    expect(result.stdout).toContain("buddy-laptop");
+    expect(result.stdout).toContain("no end-to-end encryption");
+    expect(result.stderr).toContain("Nothing was sent");
+  });
+
   it("a declined connect leaves no credential, no record and no cloud directory entry", () => {
     const manifest = JSON.parse(readFileSync(join(repoDir, ".staple", "repository.json"), "utf8")) as {
       repositoryId: string;

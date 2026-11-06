@@ -131,6 +131,12 @@ export interface Capabilities {
    * an older fold would take it for a real end and could keep it over `coordination_ended`.
    */
   orphanEndReasons: string[];
+  /**
+   * This Worker serves members and join requests (`members.ts`). Additive: the protocol
+   * range does not move, and a client asks for a member list only from a service that
+   * says this.
+   */
+  members: true;
 }
 
 export function capabilities(env: Env): Capabilities {
@@ -142,6 +148,7 @@ export function capabilities(env: Env): Capabilities {
     defaultPullLimit: DEFAULT_PULL_LIMIT,
     maxSnapshotPageSize: MAX_SNAPSHOT_PAGE,
     orphanEndReasons: [...ORPHAN_END_REASONS].sort(),
+    members: true,
   };
 }
 

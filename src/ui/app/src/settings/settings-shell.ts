@@ -40,6 +40,7 @@ import type { WorkspaceScope } from "@/lib/session";
 import { PHONE_QUERY } from "@/lib/use-media";
 import { defaultTargetWorkspace } from "@/lib/session-workspace";
 import type { SettingCategoryView, SettingScope, WorkspaceSettingsEnvelope } from "@/lib/settings";
+import { MEMBERS_CATEGORY } from "./members-settings";
 
 /** The search parameter. `?settings` alone opens the shell; `?settings=<id>` focuses a category. */
 export const SETTINGS_PARAM = "settings";
@@ -202,7 +203,7 @@ export function isWorkspaceCloudCategory(id: string | null | undefined): boolean
 /** The registry plus the two split-out cloud sections; untouched while the registry is empty. */
 export function withShellCategories(categories: readonly SettingCategoryView[]): SettingCategoryView[] {
   if (categories.length === 0) return [...categories];
-  const extra = [HUB_REGISTRY_CATEGORY, WORKSPACE_CLOUD_CATEGORY].filter(
+  const extra = [HUB_REGISTRY_CATEGORY, WORKSPACE_CLOUD_CATEGORY, MEMBERS_CATEGORY].filter(
     (added) => !categories.some((category) => category.id === added.id),
   );
   return [...categories, ...extra].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));

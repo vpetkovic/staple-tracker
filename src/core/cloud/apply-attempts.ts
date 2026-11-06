@@ -75,6 +75,8 @@ export function applyAttemptTransition(db: DatabaseSync, input: ApplyInput): boo
     throw new ReferentMissing(`attempt ${transition.attemptId}, which transition ${input.entityId} belongs to`);
   }
   insertTransition(db, transition);
-  emitTransitionEvent(db, transition, attempt.issueId);
+  // The operation's device, else the device that opened the attempt (a snapshot entity has
+  // no operation). Never null here: null would read as this device's own event.
+  emitTransitionEvent(db, transition, attempt.issueId, input.deviceId ?? attempt.deviceId ?? null);
   return true;
 }

@@ -28,6 +28,7 @@ import { findWorkspaceDb } from "../workspace.js";
 import { openWorkspace } from "../open.js";
 import {
   AUTO_SYNC_SESSION_INTERVAL_MS,
+  AUTO_SYNC_SHARED_SESSION_INTERVAL_MS,
   autoSyncConsented,
   type AutoSyncTrigger,
 } from "./auto.js";
@@ -37,6 +38,8 @@ import {
   type AutoSyncSchedulerOptions,
   type AutoSyncTarget,
 } from "./auto-sync.js";
+import { Hub, isAbsentRow } from "../hub.js";
+import { isSharedWorkspace, readMembersCache } from "./members-cache.js";
 
 /**
  * The command→trigger table, and **absence means no trigger**.
@@ -203,7 +206,7 @@ export async function runCommandTrigger(
   const flags = globalFlagsOf(argv);
   let dbPath: string | null;
   try {
-    dbPath = flags.db ?? findWorkspaceDb(options.cwd ?? process.cwd());
+    dbPath = flags.db ?? (flags.ws !== undefined ? hubWorkspaceDb(flags.ws) : findWorkspaceDb(options.cwd ?? process.cwd()));
   } catch {
     return { status: "skipped", reason: "no-identity" };
   }
@@ -244,6 +247,22 @@ export async function runCommandTrigger(
 }
 
 /**
+ * The database a `--ws <slug|prefix>` names, read from the hub exactly as the CLI's own
+ * `resolveWorkspace` reads it, and nothing opened. Without this every `--ws` write was
+ * resolved against the current directory instead, so it was never pushed, and a workspace
+ * joined from a link (home-resident, with no checkout to stand in) never synced at all.
+ */
+function hubWorkspaceDb(ws: string): string | null {
+  const hub = Hub.open();
+  try {
+    const entry = hub.get(ws);
+    return entry && !isAbsentRow(entry) ? entry.path : null;
+  } finally {
+    hub.close();
+  }
+}
+
+/**
  * A handle of this trigger's OWN, closed in the caller's `finally`.
  *
  * Not the one the command used: by the time this runs that store is out of
@@ -269,7 +288,20 @@ export interface SurfaceAutoSyncOptions {
    * not throw**, because a trigger is never a reason for a request to fail.
    */
   readonly resolve: (ws?: string) => AutoSyncTarget | null;
+  /**
+   * The workspaces the startup and session triggers cover, read again on EVERY tick, so a
+   * workspace registered after the surface started (a join from a link, in the web UI) is
+   * covered from its next tick. Absent: the surface's one default workspace, as before.
+   * The UI server in hub mode lists every hub workspace whose connection consents to
+   * automatic sync; the gate inside each run stays the authority either way.
+   */
+  readonly targets?: () => ReadonlyArray<string | undefined>;
   readonly sessionIntervalMs?: number;
+  /** The session interval for a shared workspace. Defaults to {@link AUTO_SYNC_SHARED_SESSION_INTERVAL_MS}. */
+  readonly sharedSessionIntervalMs?: number;
+  /** Whether a repository is shared on this machine. Defaults to its members cache. */
+  readonly isShared?: (repositoryId: string) => boolean;
+  readonly now?: () => number;
   readonly scheduler?: (options: AutoSyncSchedulerOptions) => AutoSyncScheduler;
 }
 
@@ -291,19 +323,52 @@ export class SurfaceAutoSync {
    * the home a run uses is the home in force when the run happens, which is the
    * only reading that is ever right.
    */
-  private scheduler: AutoSyncScheduler | null = null;
+  /**
+   * One scheduler PER REPOSITORY. A scheduler coalesces every request that arrives while a
+   * run is in flight into that run and replays it with the in-flight run's target, so one
+   * scheduler shared by a hub's workspaces turned "sync B" into "sync A again": B never ran.
+   */
+  private readonly schedulers = new Map<string, AutoSyncScheduler>();
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
+  /** When the session trigger last fired for each repository. */
+  private readonly lastSession = new Map<string, number>();
+  private sessionStartedAt = 0;
 
   constructor(private readonly options: SurfaceAutoSyncOptions) {}
 
-  private ensure(): AutoSyncScheduler {
-    if (!this.scheduler) {
-      this.scheduler = (this.options.scheduler ?? ((o) => new AutoSyncScheduler(o)))({
+  private ensure(repositoryId: string): AutoSyncScheduler {
+    let scheduler = this.schedulers.get(repositoryId);
+    if (!scheduler) {
+      scheduler = (this.options.scheduler ?? ((o) => new AutoSyncScheduler(o)))({
         home: this.options.home(),
       });
+      this.schedulers.set(repositoryId, scheduler);
     }
-    return this.scheduler;
+    return scheduler;
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)();
+  }
+
+  private targetsOf(ws?: string): ReadonlyArray<string | undefined> {
+    if (ws !== undefined || !this.options.targets) return [ws];
+    try {
+      return this.options.targets();
+    } catch {
+      return [];
+    }
+  }
+
+  private shared(repositoryId: string): boolean {
+    try {
+      return this.options.isShared
+        ? this.options.isShared(repositoryId)
+        : isSharedWorkspace(readMembersCache(this.options.home(), repositoryId));
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -315,7 +380,7 @@ export class SurfaceAutoSync {
    * link, which is precisely the *"a tracker command never blocks indefinitely on
    * Cloudflare"* failure wearing a different hat.
    */
-  private fire(trigger: AutoSyncTrigger, ws?: string): void {
+  private fire(trigger: AutoSyncTrigger, ws?: string, due?: (repositoryId: string) => boolean): void {
     if (this.stopped) return;
     let target: AutoSyncTarget | null;
     try {
@@ -324,8 +389,9 @@ export class SurfaceAutoSync {
       return;
     }
     if (!target) return;
+    if (due && !due(target.repositoryId)) return;
     try {
-      void this.ensure()
+      void this.ensure(target.repositoryId)
         .request(target, trigger)
         .catch(() => undefined);
     } catch {
@@ -333,9 +399,9 @@ export class SurfaceAutoSync {
     }
   }
 
-  /** Once, when the server binds or the transport connects. */
+  /** Once, when the server binds or the transport connects: every workspace it covers. */
   startup(ws?: string): void {
-    this.fire("startup", ws);
+    for (const target of this.targetsOf(ws)) this.fire("startup", target);
   }
 
   /** After a mutating route or a mutating tool has already answered. */
@@ -355,8 +421,31 @@ export class SurfaceAutoSync {
   startSession(ws?: string): void {
     if (this.timer) return;
     const every = this.options.sessionIntervalMs ?? AUTO_SYNC_SESSION_INTERVAL_MS;
-    this.timer = setInterval(() => this.fire("session", ws), every);
+    const sharedEvery = Math.min(every, this.options.sharedSessionIntervalMs ?? AUTO_SYNC_SHARED_SESSION_INTERVAL_MS);
+    this.sessionStartedAt = this.now();
+    /**
+     * The timer ticks at the shorter of the two intervals; each workspace fires when ITS
+     * interval has passed since it last fired (or since the session started). A solo
+     * workspace therefore still syncs every `every`, exactly as before, and a shared one
+     * every `sharedEvery`. The targets are re-read on every tick.
+     */
+    this.timer = setInterval(() => this.tickSession(ws), sharedEvery);
     this.timer.unref?.();
+  }
+
+  /** Run one session tick now. For tests: the interval does exactly this. */
+  tickSession(ws?: string): void {
+    const every = this.options.sessionIntervalMs ?? AUTO_SYNC_SESSION_INTERVAL_MS;
+    const sharedEvery = Math.min(every, this.options.sharedSessionIntervalMs ?? AUTO_SYNC_SHARED_SESSION_INTERVAL_MS);
+    for (const target of this.targetsOf(ws)) {
+      this.fire("session", target, (repositoryId) => {
+        const now = this.now();
+        const last = this.lastSession.get(repositoryId) ?? this.sessionStartedAt;
+        if (now - last < (this.shared(repositoryId) ? sharedEvery : every)) return false;
+        this.lastSession.set(repositoryId, now);
+        return true;
+      });
+    }
   }
 
   /**
@@ -372,11 +461,11 @@ export class SurfaceAutoSync {
       clearInterval(this.timer);
       this.timer = null;
     }
-    this.scheduler?.stop();
+    for (const scheduler of this.schedulers.values()) scheduler.stop();
   }
 
   /** For tests, and for a surface that wants to report whether one is running. */
   get busy(): boolean {
-    return this.scheduler?.busy ?? false;
+    return [...this.schedulers.values()].some((scheduler) => scheduler.busy);
   }
 }

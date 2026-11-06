@@ -30,7 +30,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Across machines and repositories',
       collapsible: false,
-      items: ['cloud-sync', 'hub'],
+      items: ['cloud-sync', 'working-with-a-teammate', 'hub'],
     },
     {
       type: 'category',

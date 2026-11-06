@@ -23,10 +23,11 @@ readings, autopilot runs, and file paths.
 
 ## Before you start
 
-You need the service's address (the endpoint) and the repository's enrollment
-secret from whoever set the service up. Commit `.staple/repository.json` (the
-setup in [Install and first workspace](getting-started.md) does): it is how every
-clone recognises the same repository, and it holds no secret.
+The first machine needs the service's address (the endpoint) and the repository's
+enrollment secret from whoever set the service up. Every machine after that joins by
+approval instead, with no secret ([step 6](#6-add-a-device)). Commit
+`.staple/repository.json` (the setup in [Install and first workspace](getting-started.md)
+does): it is how every clone recognises the same repository, and it holds no secret.
 
 ## 1. See where you stand
 
@@ -87,6 +88,11 @@ This device then syncs on its own when a command starts, after a write, and
 during long sessions. A failed sync never blocks a command. `staple cloud auto off`
 stops it without disconnecting.
 
+A **shared** workspace, one with two or more members, is the exception: every
+device in it syncs automatically, and `auto off` is refused, so nobody works on a
+stale copy. Joining one says so before anything is sent. See
+[Working with a teammate](working-with-a-teammate.md).
+
 ## 5. Keep backups: the third consent
 
 ```bash
@@ -105,18 +111,36 @@ on for the build box. Each is withdrawn on its own: `cloud disconnect`,
 
 ## 6. Add a device
 
-On the second machine:
+The first machine to connect becomes the workspace's **owner**, listed as `owner`
+until you rename it (`staple cloud members rename owner <your name>`). Every other
+machine, yours or a teammate's, joins by approval. Nobody hands out a secret.
+
+The easiest way in is a share link. On a connected machine run
+`staple cloud share` (or use **Settings → Members → Invite someone**) and send the
+link. The new machine opens it, or runs `staple cloud join '<link>'`, and needs no
+clone. Inside a clone, plain `join` works too:
 
 ```bash
 git clone <your-repo> && cd <your-repo>
 staple init --yes
-staple cloud connect --endpoint https://sync.example.com --token <secret>
-staple cloud sync
+staple cloud join            # --endpoint <url> if the repository does not name one
 ```
 
-`init` sets up a local workspace under the repository id the clone already
-carries, and the first sync fills it with the shared tickets. The token is the
-enrollment secret, or the device token of a machine that is already connected.
+`join` shows the service, the repository and this device, and waits for your yes.
+Then it shows a short code and waits. On a machine that is already connected,
+approve it:
+
+```bash
+staple cloud approve GGQZ-AATR --to VP          # another device of yours
+staple cloud approve GGQZ-AATR --as marko       # a new person (owner only)
+```
+
+The code only names the request. The new machine picks up its own credential once
+it is approved, and `staple cloud sync` fills it with the shared tickets.
+`staple cloud share-endpoint` writes the service address into
+`.staple/repository.json`, so `join` needs no arguments. Working with another person
+has its own page: [Working with a teammate](working-with-a-teammate.md).
+
 This machine starts manual too: give its own consents with `cloud auto on` and
 `cloud backup enable` if you want them here.
 
@@ -162,9 +186,10 @@ or `lease`.
 | Command | What it does | Undo |
 | --- | --- | --- |
 | `staple cloud disconnect` | Removes this machine's credential and stops its sync traffic. Local data, pending changes and the service's copy are untouched. | Connect again |
-| `staple cloud devices revoke <id>` | **Destructive for that device.** Ends another device's access on the service, from its next request. Use it for a lost or retired machine. | Connect it again with the enrollment secret |
-| `staple cloud restore <backupId> --confirm <repositoryId>` | **Destructive.** Puts the whole repository back to the backup on every device and discards everything synced since. Takes a backup first. | Restore that pre-restore backup |
-| `staple cloud purge --confirm <repositoryId>` | **Destructive and final.** Deletes everything the service holds for the repository, backups included. Each machine keeps its local tickets. | None |
+| `staple cloud devices revoke <id>` | **Destructive for that device.** Ends a device's access on the service, from its next request. Use it for a lost or retired machine. Members revoke their own devices; the owner can revoke any, except their own last one. | Join it again (`staple cloud join`) |
+| `staple cloud members remove <name> --confirm <name>` | **Owner only.** Ends every device of that member. Their local copy stays, and their past work keeps their name. | Approve a new join `--as <name>`: they come back as the same member |
+| `staple cloud restore <backupId> --confirm <repositoryId>` | **Destructive, owner only.** Puts the whole repository back to the backup on every device and discards everything synced since. Takes a backup first. | Restore that pre-restore backup |
+| `staple cloud purge --confirm <repositoryId>` | **Destructive and final, owner only.** Deletes everything the service holds for the repository, backups included. Each machine keeps its local tickets. | None |
 
 `staple cloud devices` lists the devices first. Both restore and purge print what
 they will do and want the repository id typed back.
@@ -173,11 +198,13 @@ they will do and want the repository id typed back.
 
 - **May:** check `cloud_status`, list and settle conflicts, run `staple cloud sync`,
   and take a lease when a claim must hold across machines.
-- **May not:** connect, disconnect, switch automatic sync or backups, revoke a
-  device, restore or purge. These are a person's decisions, and have no MCP tool.
+- **May not:** connect, join, approve or deny a join, rename or remove a member,
+  disconnect, switch automatic sync or backups, revoke a device, restore or purge.
+  These are a person's decisions, and have no MCP tool.
 
 ## Next
 
+- [Working with a teammate](working-with-a-teammate.md): share a workspace with another person.
 - [Several repositories](hub.md): one machine, many workspaces.
 - [Handoff](handoff.md): hand a ticket from one session or machine to another.
 - [CLI reference](cli.md#cloud-sync): the `staple cloud` commands at a glance;

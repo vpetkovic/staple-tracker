@@ -2,7 +2,7 @@
  * `staple queue` — the CLI half of design/queue.md (STA-168, R2c).
  *
  *   queue [ls] [--all] [--effective] [--actor A]
- *   queue next [--actor A] [--scope <ref>]
+ *   queue next [--actor A] [--scope <ref>] [--any-assignee]
  *   queue add <ref> [--before R | --after R | --at N] [--base N] [-m note]
  *   queue rm <ref> [--base N]
  *   queue mv <ref> (--before R | --after R | --at N) [--base N]
@@ -44,7 +44,7 @@ const HELP = `staple queue — the pickup plan: an explicit, human-ordered seque
 agents take next, independent of status, priority and display grouping.
 
   queue [ls] [--all] [--effective] [--actor A]
-  queue next [--actor A] [--scope <ref>]
+  queue next [--actor A] [--scope <ref>] [--any-assignee]
   queue add <ref> [--before R | --after R | --at N] [--base N] [-m note]
   queue rm <ref> [--base N]
   queue mv <ref> (--before R | --after R | --at N) [--base N]
@@ -90,6 +90,13 @@ out_of_order (exit 10), naming what to take instead — it is neither conflict
 (exit 4, somebody got there first) nor gated (exit 9, a human must act), and
 retrying clears none of the three. A human steps over the plan on the record
 with "staple checkout <ref> --override -m <why>".
+
+SHARED WORKSPACES. With a member list on this machine (staple cloud members),
+"queue next" also skips a ticket assigned to ANOTHER member, as
+assigned_to_other_member: it is theirs to take. Unassigned work, your own and an
+agent's free-text assignee stay eligible, and strict ordering applies to what is
+left. --any-assignee turns the member rule off for one answer. Without a member
+list nothing changes.
 
 --json prints {revision, entries, effective} on every subcommand, and
 {revision, next, skipped} for "queue next" ({revision, scope, next, skipped}
@@ -175,6 +182,7 @@ export function runQueueCommand(rest: string[]): void {
       effective: { type: "boolean" },
       actor: { type: "string" },
       scope: { type: "string" },
+      "any-assignee": { type: "boolean" },
       before: { type: "string" },
       after: { type: "string" },
       at: { type: "string" },
@@ -189,6 +197,9 @@ export function runQueueCommand(rest: string[]): void {
   const actor = values.actor ?? process.env.STAPLE_AGENT ?? process.env.USER ?? "user";
   // Only the pickup answer is scoped; a listing or a plan write that silently
   // ignored it would read as though it had been honoured.
+  if (values["any-assignee"] === true && sub !== "next") {
+    throw new StapleError("validation", `--any-assignee applies to "queue next" only, not "queue ${sub}".`);
+  }
   if (values.scope !== undefined && sub !== "next") {
     throw new StapleError("validation", `--scope applies to "queue next" only, not "queue ${sub}".`);
   }
@@ -212,7 +223,11 @@ export function runQueueCommand(rest: string[]): void {
   }
 
   if (sub === "next") {
-    const result = queue.effectiveQueue({ actor, scope: values.scope });
+    const result = queue.effectiveQueue({
+      actor,
+      scope: values.scope,
+      pickup: values["any-assignee"] === true ? null : store.members(),
+    });
     if (values.json) {
       const { revision, scope, next, skipped } = result;
       // What `next` is worked under, as MCP next_task answers it (core/instructions.ts).
@@ -220,7 +235,14 @@ export function runQueueCommand(rest: string[]): void {
       return console.log(JSON.stringify(scope ? { revision, scope, next, skipped, instructions } : { revision, next, skipped, instructions }));
     }
     if (result.scope) console.log(`scope    ${result.scope.identifier} (${result.scope.kind}) ${result.scope.title}`);
-    for (const row of result.skipped) console.log(`skipped  ${row.identifier.padEnd(9)} ${row.eligibility.padEnd(9)} ${row.reason ?? ""}`);
+    for (const row of result.skipped) {
+      // The member rung reads as the storyboard says it: "(assigned to marko)".
+      if (row.eligibility === "assigned_to_other_member") {
+        console.log(`skipped  ${row.identifier.padEnd(9)} (assigned to ${String(row.detail?.assignee ?? "?")})`);
+        continue;
+      }
+      console.log(`skipped  ${row.identifier.padEnd(9)} ${row.eligibility.padEnd(9)} ${row.reason ?? ""}`);
+    }
     if (!result.next) return console.log(`next     (nothing eligible${result.scope ? " in scope" : ""})`);
     return console.log(`next     ${result.next.identifier} (position ${result.next.position}) ${result.next.title}`);
   }
