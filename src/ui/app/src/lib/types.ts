@@ -3290,5 +3290,5 @@ export type CloudJoinPoll =
       auto: boolean;
       membersCached: boolean;
     }
-  | { status: "denied" | "expired"; code: string; expiresAt: number }
+  | { status: "denied" | "expired" | "cancelled"; code: string; expiresAt: number }
   | { status: "failed"; code: string; message: string };
