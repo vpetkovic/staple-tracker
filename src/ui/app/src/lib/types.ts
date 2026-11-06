@@ -3231,6 +3231,8 @@ export interface CloudJoinRequest {
   requestId: string;
   code: string;
   label: string | null;
+  /** The name the share link suggested for this person, if it came from one. A hint only. */
+  invitedAs?: string | null;
   createdAt: number | null;
   expiresAt: number | null;
 }

@@ -100,6 +100,10 @@ describe("a pending request, as the owner and as a member sees it", () => {
     expect(html).not.toContain("Approve as mine");
     expect(approveChoices(owner).canAdmitNew).toBe(true);
     expect(defaultDraft(owner)).toMatchObject({ mode: "new" });
+    // A request from a share link arrives with the name the link suggested, ready to approve.
+    expect(defaultDraft(owner, { invitedAs: "dana" })).toMatchObject({ mode: "new", name: "dana" });
+    expect(draftReady(defaultDraft(owner, { invitedAs: "dana" }))).toBe(true);
+    expect(render({ list: owner, requests: [{ ...REQUEST, invitedAs: "dana" }] })).toMatch(/aria-label="New member&#x27;s name"[^>]*value="dana"/);
     // A new member needs a name before Approve is pressable.
     expect(draftReady(defaultDraft(owner))).toBe(false);
   });

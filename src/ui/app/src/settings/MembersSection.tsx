@@ -95,12 +95,16 @@ export interface MembersActions {
   onReload: () => void;
 }
 
-/** The default choice for a request: a new member for the owner, yourself for a member. */
-export function defaultDraft(list: CloudMemberList): ApproveDraft {
+/**
+ * The default choice for a request: a new member for the owner, yourself for a member. A
+ * request that came from a share link carries the name the link suggested, prefilled for the
+ * owner to keep or change.
+ */
+export function defaultDraft(list: CloudMemberList, request?: Pick<CloudJoinRequest, "invitedAs">): ApproveDraft {
   const choices = approveChoices(list);
   const self = selfOf(list);
   return choices.canAdmitNew
-    ? { mode: "new", name: "", memberId: self?.memberId ?? "" }
+    ? { mode: "new", name: request?.invitedAs?.trim() ?? "", memberId: self?.memberId ?? "" }
     : { mode: "existing", name: "", memberId: self?.memberId ?? "" };
 }
 
@@ -419,7 +423,7 @@ export function MembersPanel({
                 key={request.code}
                 request={request}
                 list={list}
-                draft={state.drafts[request.code] ?? defaultDraft(list)}
+                draft={state.drafts[request.code] ?? defaultDraft(list, request)}
                 busy={state.busy}
                 now={now}
                 actions={actions}
@@ -539,7 +543,7 @@ export function MembersSection({ ws }: { ws?: string }) {
   const actions: MembersActions = {
     onDraft: (code, draft) => setState((current) => ({ ...current, drafts: { ...current.drafts, [code]: draft } })),
     onApprove: (request) => {
-      const draft = state.drafts[request.code] ?? (state.list ? defaultDraft(state.list) : null);
+      const draft = state.drafts[request.code] ?? (state.list ? defaultDraft(state.list, request) : null);
       if (!draft) return;
       run(
         `approve:${request.code}`,
