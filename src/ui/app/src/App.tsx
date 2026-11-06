@@ -29,7 +29,7 @@ import { CreateIssueMount } from "@/components/CreateIssueMount";
 import { TokenGate } from "@/components/TokenGate";
 import { IssueDetailMount } from "@/detail/IssueDetailMount";
 import { SettingsMount } from "@/settings/SettingsMount";
-import { LinkJoinMount } from "@/components/join/LinkJoinMount";
+import { LinkJoinMount, joinLinkFromSearch } from "@/components/join/LinkJoinMount";
 import { ProjectDialogMount } from "@/components/projects/ProjectDialogMount";
 import {
   AuthError,
@@ -675,9 +675,23 @@ export function App() {
   }
 
   if (bootstrap.error) {
+    /**
+     * A computer with no workspace yet (an empty hub) cannot bootstrap a page, and that is
+     * exactly where a teammate lands from a share link. So `?join=<link>` is honoured here
+     * too: the join creates the workspace, and opening it then works.
+     */
+    const joining = typeof location !== "undefined" && joinLinkFromSearch(location.search) !== null;
     return (
       <div className="flex h-dvh items-start justify-center bg-sidebar p-6">
-        <ProblemState title="staple could not start this page" message={bootstrap.error.message} />
+        {joining ? (
+          <ProblemState
+            title="Joining a shared workspace"
+            message="There is no workspace on this computer yet. Joining from the link creates one."
+          />
+        ) : (
+          <ProblemState title="staple could not start this page" message={bootstrap.error.message} />
+        )}
+        <LinkJoinMount hubMode />
       </div>
     );
   }
