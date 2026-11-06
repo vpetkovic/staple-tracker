@@ -19,6 +19,12 @@ CREATE TABLE members (
   -- What the assignee field holds, and what a person sees on a member chip.
   name       TEXT    NOT NULL,
 
+  -- The name as uniqueness compares it: `name.normalize("NFKC").toLowerCase()`, computed
+  -- in the Worker (members.ts `nameKey`) on every write that sets `name`. Stored rather
+  -- than derived in SQL because SQLite's `lower` folds ASCII only, so "Ćiro" and "ćIRO"
+  -- would both pass a `lower(name)` index; this column is what the unique index holds.
+  name_key   TEXT    NOT NULL,
+
   -- The member who connected the repository first. There is no owner transfer in v1,
   -- and the owner cannot be removed.
   is_owner   INTEGER NOT NULL DEFAULT 0 CHECK (is_owner IN (0, 1)),
@@ -32,10 +38,9 @@ CREATE TABLE members (
   PRIMARY KEY (repo_id, member_id)
 ) STRICT;
 
--- Names are unique per repository, case-insensitively. SQLite's `lower` folds ASCII
--- only, so the route also compares with a Unicode-aware fold before it writes; this
--- index is the race-free floor under that check.
-CREATE UNIQUE INDEX members_name ON members (repo_id, lower(name));
+-- Names are unique per repository under the Unicode-aware fold `name_key` holds. Every
+-- lookup by name reads this index, and it is the race-free floor under the routes' checks.
+CREATE UNIQUE INDEX members_name ON members (repo_id, name_key);
 
 -- One owner per repository, by construction rather than by convention.
 CREATE UNIQUE INDEX members_owner ON members (repo_id) WHERE is_owner = 1;
@@ -88,7 +93,7 @@ CREATE INDEX join_requests_status ON join_requests (repo_id, status, expires_at)
 -- gets its owner at its next accepted connect (devices.ts).
 --
 -- `member_id` is a v4-shaped uuid from `randomblob`, the same shape the Worker mints.
-INSERT INTO members (repo_id, member_id, name, is_owner, created_at, removed_at)
+INSERT INTO members (repo_id, member_id, name, name_key, is_owner, created_at, removed_at)
   SELECT r.repo_id,
          lower(hex(randomblob(4))) || '-' ||
          lower(hex(randomblob(2))) || '-4' ||
@@ -96,6 +101,7 @@ INSERT INTO members (repo_id, member_id, name, is_owner, created_at, removed_at)
          substr('89ab', 1 + (abs(random()) % 4), 1) ||
          substr(lower(hex(randomblob(2))), 2) || '-' ||
          lower(hex(randomblob(6))),
+         'owner',
          'owner',
          1,
          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),

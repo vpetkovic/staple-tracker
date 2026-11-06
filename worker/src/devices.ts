@@ -8,7 +8,7 @@ import { SyncError, json } from "./errors.js";
 import { readJson } from "./http.js";
 import { capabilities } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
-import { assertMayRevoke } from "./members.js";
+import { assertMayRevoke, nameKey } from "./members.js";
 
 /** The name the first member of a repository gets. The owner renames it. */
 const FIRST_MEMBER_NAME = "owner";
@@ -129,25 +129,46 @@ export async function connect(
   if (!membersApply) {
     await upsertDevice.run();
   } else {
-    // The first accepted connect of a repository with no members creates its owner, in
-    // the same batch as the device, and adopts every device that has no member yet:
-    // until now everyone here held the one enrollment secret, so they were one party,
-    // exactly as the 0008 backfill reads it. The member insert is guarded on there
-    // being no member at all, so two first connects racing make one owner, and both
-    // devices land on it.
-    await env.DB.batch([
-      upsertDevice,
+    /**
+     * The first accepted connect of a repository with no members creates its owner, in the
+     * same batch as the device, and adopts every device that has no member yet: until now
+     * everyone here held the one enrollment secret, so they were one party, exactly as the
+     * 0008 backfill reads it.
+     *
+     * The refusal above read `has_members` before this write, so it is not enough on its
+     * own: a connect that read "no members" and then stalled while another first connect
+     * created the owner would still write here, and for the same device id it would replace
+     * the owner device's token. So the device write is conditioned on there being no member
+     * IN THE SAME STATEMENT, and a write that matched nothing is the same refusal. Two first
+     * connects racing end with one owner, the first one's device, and the other refused.
+     */
+    const [device] = await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO members (repo_id, member_id, name, is_owner, created_at, removed_at)
-         SELECT ?1, ?2, ?3, 1, ?4, NULL
+        `INSERT INTO devices (repo_id, device_id, token_sha256, label, created_at, last_seen_at, revoked_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?5, NULL
+          WHERE NOT EXISTS (SELECT 1 FROM members WHERE repo_id = ?1)
+         ON CONFLICT (repo_id, device_id)
+         DO UPDATE SET token_sha256 = excluded.token_sha256,
+                       label        = excluded.label,
+                       last_seen_at = excluded.last_seen_at,
+                       revoked_at   = NULL`,
+      ).bind(repoId, deviceId, bytes(tokenDigest), label, now),
+      env.DB.prepare(
+        `INSERT INTO members (repo_id, member_id, name, name_key, is_owner, created_at, removed_at)
+         SELECT ?1, ?2, ?3, ?5, 1, ?4, NULL
           WHERE NOT EXISTS (SELECT 1 FROM members WHERE repo_id = ?1)`,
-      ).bind(repoId, crypto.randomUUID(), FIRST_MEMBER_NAME, now),
+      ).bind(repoId, crypto.randomUUID(), FIRST_MEMBER_NAME, now, nameKey(FIRST_MEMBER_NAME)),
       env.DB.prepare(
         `UPDATE devices
             SET member_id = (SELECT member_id FROM members WHERE repo_id = ?1 AND is_owner = 1)
           WHERE repo_id = ?1 AND member_id IS NULL`,
       ).bind(repoId),
     ]);
+    if ((device?.meta.changes ?? 0) === 0) {
+      // Members appeared after the read above: nothing was written, and the minted token
+      // is dropped without ever having been stored.
+      throw new SyncError("forbidden", "this workspace uses member approval; run `staple cloud join`");
+    }
   }
 
   log({
@@ -231,6 +252,8 @@ export async function revokeDevice(
         AND NOT EXISTS (
           SELECT 1 FROM members m
            WHERE m.repo_id = ?1 AND m.member_id = devices.member_id AND m.is_owner = 1
+             -- A hub has no owner, whatever an older row says (see push.ts on the hub claim).
+             AND (SELECT r.vocabulary FROM repos r WHERE r.repo_id = ?1) IS NOT 'hub'
              AND (SELECT COUNT(*) FROM devices o
                    WHERE o.repo_id = ?1 AND o.member_id = m.member_id AND o.revoked_at IS NULL) <= 1)`,
   )
