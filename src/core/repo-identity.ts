@@ -27,6 +27,11 @@
  * read it. {@link REPOSITORY_MANIFEST_KEYS} is asserted against in the tests so
  * that a third key cannot arrive without somebody deciding it is publishable.
  *
+ * One has been decided: `endpoint`, the sync service's address, so that a teammate's
+ * `staple cloud join` knows where to ask. It is never written by default. Only an
+ * explicit `staple cloud share-endpoint`, with a preview, writes it, and it is an address
+ * and never a credential. See {@link REPOSITORY_MANIFEST_ENDPOINT_FORMAT}.
+ *
  * Credentials, the user identity and the device id and secret are machine-local
  * and live in the staple home. They are not here, and they are not in the
  * workspace database either — that database synchronizes, so a credential in it
@@ -49,6 +54,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { stapleHome } from "../config/home.js";
 import { isInsideCheckout } from "./checkout.js";
 import { hostFingerprint } from "./host-id.js";
+import { parseEndpoint } from "./cloud/endpoint.js";
 import { StapleError } from "./types.js";
 
 export const REPOSITORY_MANIFEST_FILENAME = "repository.json";
@@ -63,14 +69,41 @@ export const REPOSITORY_MANIFEST_FILENAME = "repository.json";
  */
 export const REPOSITORY_MANIFEST_FORMAT = 1;
 
-/** Every key the manifest is allowed to carry. Asserted in the tests. */
+/**
+ * The format a manifest carrying a shared `endpoint` is written in, and the highest this
+ * build reads.
+ *
+ * The endpoint is a third key, and every build before it refuses an unknown key outright
+ * (see {@link parseRepositoryManifest}). An extra key at format 1 would therefore make
+ * those builds fail with "nothing else belongs in it". A manifest with an endpoint
+ * declares format 2 instead, and older builds refuse it with the conflict that names the
+ * remedy: "written by a newer version of staple. Upgrade". A manifest without an endpoint
+ * is still written at format 1, so a repository that never runs `staple cloud
+ * share-endpoint` stays readable by every build.
+ */
+export const REPOSITORY_MANIFEST_ENDPOINT_FORMAT = 2;
+export const REPOSITORY_MANIFEST_FORMAT_MAX = REPOSITORY_MANIFEST_ENDPOINT_FORMAT;
+
+/** Every key a minted manifest carries. Asserted in the tests. */
 export const REPOSITORY_MANIFEST_KEYS = ["repositoryId", "format"] as const;
+
+/**
+ * The keys a manifest MAY add, and only from format 2. One so far: the sync service
+ * endpoint, written by an explicit `staple cloud share-endpoint` and nothing else.
+ */
+export const REPOSITORY_MANIFEST_OPTIONAL_KEYS = ["endpoint"] as const;
 
 export interface RepositoryManifest {
   /** The sync identity of this repository. Stable across clones. */
   readonly repositoryId: string;
   /** Manifest format version. */
   readonly format: number;
+  /**
+   * The sync service a teammate's `staple cloud join` uses when they pass no
+   * `--endpoint`. An https origin and nothing more: no path, no credential. Present only
+   * after someone decided to publish it with `staple cloud share-endpoint`.
+   */
+  readonly endpoint?: string;
 }
 
 /** Lower-case canonical UUID, the shape `randomUUID()` produces. */
@@ -178,11 +211,9 @@ export function isCheckoutBacked(dbPath: string, home?: string): boolean {
  * easier.
  */
 export function renderRepositoryManifest(manifest: RepositoryManifest): string {
-  return `${JSON.stringify(
-    { repositoryId: manifest.repositoryId, format: manifest.format },
-    null,
-    2,
-  )}\n`;
+  const body: Record<string, unknown> = { repositoryId: manifest.repositoryId, format: manifest.format };
+  if (manifest.endpoint !== undefined) body.endpoint = manifest.endpoint;
+  return `${JSON.stringify(body, null, 2)}\n`;
 }
 
 /**
@@ -216,7 +247,7 @@ export function parseRepositoryManifest(text: string, path: string): RepositoryM
       `${path} has no valid "format" number. Expected the integer ${REPOSITORY_MANIFEST_FORMAT}.`,
     );
   }
-  if (format > REPOSITORY_MANIFEST_FORMAT) {
+  if (format > REPOSITORY_MANIFEST_FORMAT_MAX) {
     /**
      * `conflict`, not `validation`: the file is not malformed, this build is
      * simply older than it. Same shape of refusal as the schema downgrade guard,
@@ -225,7 +256,7 @@ export function parseRepositoryManifest(text: string, path: string): RepositoryM
      */
     throw new StapleError(
       "conflict",
-      `${path} is format ${format}, but this build understands ${REPOSITORY_MANIFEST_FORMAT}. ` +
+      `${path} is format ${format}, but this build understands up to ${REPOSITORY_MANIFEST_FORMAT_MAX}. ` +
         `It was written by a newer version of staple. Upgrade rather than downgrading the file.`,
     );
   }
@@ -236,9 +267,14 @@ export function parseRepositoryManifest(text: string, path: string): RepositoryM
     );
   }
 
-  const unknownKeys = Object.keys(record).filter(
-    (key) => !(REPOSITORY_MANIFEST_KEYS as readonly string[]).includes(key),
-  );
+  // `endpoint` is a known key only from format 2. At format 1 it is a key every older
+  // build would refuse, so it is refused here too, rather than accepted by this build and
+  // then breaking the next teammate's older one.
+  const allowed: readonly string[] =
+    format >= REPOSITORY_MANIFEST_ENDPOINT_FORMAT
+      ? [...REPOSITORY_MANIFEST_KEYS, ...REPOSITORY_MANIFEST_OPTIONAL_KEYS]
+      : REPOSITORY_MANIFEST_KEYS;
+  const unknownKeys = Object.keys(record).filter((key) => !allowed.includes(key));
   if (unknownKeys.length > 0) {
     /**
      * Deliberately strict, and the opposite of the envelope's "unknown fields are
@@ -251,11 +287,59 @@ export function parseRepositoryManifest(text: string, path: string): RepositoryM
     throw new StapleError(
       "validation",
       `${path} carries unexpected keys (${unknownKeys.join(", ")}). The manifest holds only ` +
-        `${REPOSITORY_MANIFEST_KEYS.join(" and ")}; it is published, so nothing else belongs in it.`,
+        `${allowed.join(", ")}; it is published, so nothing else belongs in it.` +
+        (unknownKeys.includes("endpoint")
+          ? ` A shared endpoint needs "format": ${REPOSITORY_MANIFEST_ENDPOINT_FORMAT}; ` +
+            "`staple cloud share-endpoint` writes it that way."
+          : ""),
     );
   }
 
-  return { repositoryId, format };
+  if (record.endpoint === undefined) return { repositoryId, format };
+  if (typeof record.endpoint !== "string") {
+    throw new StapleError("validation", `${path} has an "endpoint" that is not a string.`);
+  }
+  let origin: string;
+  try {
+    // Parsing only, never resolving: `parseEndpoint` is a string operation.
+    origin = parseEndpoint(record.endpoint).origin;
+  } catch (error) {
+    throw new StapleError(
+      "validation",
+      `${path} has an "endpoint" that is not a usable sync service address: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return { repositoryId, format, endpoint: origin };
+}
+
+/**
+ * Publish (or, with null, withdraw) the sync service endpoint in the manifest — the
+ * write behind `staple cloud share-endpoint`, and the ONLY one that adds a third key.
+ *
+ * The id is carried over unchanged from the manifest on disk; this never mints and never
+ * forks. With an endpoint the file becomes format 2, and without one it goes back to
+ * format 1, so withdrawing the endpoint restores compatibility with older builds.
+ */
+export function writeRepositoryEndpoint(workspaceDir: string, endpoint: string | null): RepositoryManifest {
+  const existing = readRepositoryManifest(workspaceDir);
+  if (!existing) {
+    throw new StapleError(
+      "not_found",
+      `${repositoryManifestPath(workspaceDir)} does not exist, so there is no repository identity to ` +
+        "attach an endpoint to.",
+    );
+  }
+  const manifest: RepositoryManifest =
+    endpoint === null
+      ? { repositoryId: existing.repositoryId, format: REPOSITORY_MANIFEST_FORMAT }
+      : {
+          repositoryId: existing.repositoryId,
+          format: REPOSITORY_MANIFEST_ENDPOINT_FORMAT,
+          endpoint: parseEndpoint(endpoint).origin,
+        };
+  writeFileSync(repositoryManifestPath(workspaceDir), renderRepositoryManifest(manifest), "utf8");
+  return manifest;
 }
 
 /** Read the manifest, or null when the file is genuinely absent. */

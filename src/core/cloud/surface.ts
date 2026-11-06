@@ -93,7 +93,7 @@ export type CloudMode = "disconnected" | "manual" | "automatic";
  * field every consumer has to re-check.
  */
 export interface CloudFailure {
-  code: "offline" | "revoked" | "auth_failed" | "no_identity";
+  code: "offline" | "revoked" | "removed" | "auth_failed" | "no_identity";
   /** One sentence naming what is wrong. */
   summary: string;
   /** One sentence naming the command that fixes it. Never empty. */
@@ -196,8 +196,17 @@ function modeOf(status: CloudStatus): CloudMode {
  * as a failure is how a status widget turns into the nag `design/sync.md` forbids.
  * The static `hint` covers it instead.
  */
-function failureOf(state: CloudState): CloudFailure | null {
+function failureOf(status: CloudStatus): CloudFailure | null {
+  const state: CloudState = status.state;
   switch (state) {
+    case "removed":
+      return {
+        code: "removed",
+        summary:
+          `Removed from this workspace by ${status.removedBy ?? "the owner"}: every device of ` +
+          "your member was revoked. Local data and pending operations are untouched.",
+        remedy: "rejoin: staple cloud join (someone already in the workspace approves the code).",
+      };
     case "offline":
       return {
         code: "offline",
@@ -287,7 +296,7 @@ export function cloudSurfaceReport(status: CloudStatus, db: DatabaseSync): Cloud
       ),
     },
     warnings: [...status.warnings, ...copiedHomeWarning(db)],
-    failure: failureOf(status.state),
+    failure: failureOf(status),
     hint: status.state === "disconnected" ? CONNECT : null,
   };
 }

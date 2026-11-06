@@ -3736,7 +3736,7 @@ server.registerTool(
  * MCP SDK silently stripping it from `structuredContent` at runtime.
  */
 const cloudStatusShape = {
-  state: z.enum(["disconnected", "manual", "automatic", "offline", "revoked", "auth_failed"]),
+  state: z.enum(["disconnected", "manual", "automatic", "offline", "revoked", "removed", "auth_failed"]),
   mode: z
     .enum(["disconnected", "manual", "automatic"])
     .describe("What this surface may OFFER — offline/revoked/auth_failed are still connected"),
@@ -3761,7 +3761,7 @@ const cloudStatusShape = {
   warnings: z.array(z.string()),
   failure: z
     .object({
-      code: z.enum(["offline", "revoked", "auth_failed", "no_identity"]),
+      code: z.enum(["offline", "revoked", "removed", "auth_failed", "no_identity"]),
       summary: z.string(),
       remedy: z.string().describe("The command that fixes it"),
     })
@@ -3780,7 +3780,7 @@ server.registerTool(
   "cloud_status",
   {
     description:
-      "Whether THIS MACHINE has connected this repository to a sync service, and in what mode. States: disconnected (no credential, no endpoint, no cloud state here), manual (connected; nothing syncs until a human runs `staple cloud sync`), automatic (this device consented to background sync), offline, revoked, auth_failed. Reads local files only — it makes no network request and cannot be made to. Connecting, disconnecting, revoking a device and purging remote state are deliberately NOT available as tools: each is a human consent decision whose preview and typed confirmation only mean something to a person at a terminal.",
+      "Whether THIS MACHINE has connected this repository to a sync service, and in what mode. States: disconnected (no credential, no endpoint, no cloud state here), manual (connected; nothing syncs until a human runs `staple cloud sync`), automatic (this device consented to background sync), offline, revoked, auth_failed. Reads local files only — it makes no network request and cannot be made to. Connecting, joining, approving or denying a join, renaming or removing a member, disconnecting, revoking a device and purging remote state are deliberately NOT available as tools: each is a human consent decision whose preview and typed confirmation only mean something to a person at a terminal.",
     inputSchema: { ws: wsSchema },
     outputSchema: cloudStatusShape,
     annotations: { title: "Cloud status", readOnlyHint: true, idempotentHint: true, openWorldHint: false },

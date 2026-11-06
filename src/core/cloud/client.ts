@@ -61,6 +61,11 @@ export interface Capabilities {
   maxSnapshotPageSize: number;
   /** The stored orphan-end reasons the service's fold settles as subordinate; absent from an older Worker. */
   orphanEndReasons?: string[];
+  /**
+   * True on a Worker that serves the member and join routes. Absent on an older one,
+   * which this build then never asks for a member list or offers a join to.
+   */
+  members?: boolean;
 }
 
 export interface ConnectResult {
@@ -318,6 +323,10 @@ async function request<T>(call: Call): Promise<T> {
       "foldedSeq",
       "cutoffSeq",
       "retryAfterMs",
+      // A device revoked because its member was removed: who removed it (`cloud status`).
+      "removedBy",
+      // A join refused because the repository already holds its five pending requests.
+      "pendingCap",
     ]) {
       if (body[key] !== undefined) detail[key] = body[key];
     }
@@ -895,4 +904,301 @@ export function advanceRemoteRestore(
       }),
     options,
   );
+}
+
+// ------------------------------------------------------------ members and joining
+
+/**
+ * The join and member routes, which belong to the members wire contract.
+ *
+ * Two of them come before any credential exists. `POST /join-requests` authenticates
+ * nothing, the same way `/connect` does. `GET /join-requests/{id}` is authorized by the
+ * joiner's request secret as the bearer, and the Worker keeps only that secret's SHA-256.
+ * Every other route here is member auth: the device token, plus `Staple-Device`.
+ *
+ * Timestamps come back as epoch milliseconds. A Worker that sent ISO strings is read the
+ * same way, by {@link toMillis}, so this side does not depend on which of the two it sends.
+ */
+function toMillis(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+function repoPath(repositoryId: string, tail: string): string {
+  return `/v1/repos/${encodeURIComponent(repositoryId)}${tail}`;
+}
+
+export interface CreatedJoinRequest {
+  requestId: string;
+  /** The `XXXX-XXXX` code a person reads out. It names the request and grants nothing. */
+  code: string;
+  /** Epoch milliseconds. */
+  expiresAt: number;
+}
+
+/** `POST /v1/repos/{repoId}/join-requests`. Pre-credential, and rate limited per client IP. */
+export async function createJoinRequest(
+  endpoint: CloudEndpoint,
+  args: { repositoryId: string; deviceId: string; label: string; requestSecretSha256: string },
+  options: RequestOptions = {},
+): Promise<CreatedJoinRequest> {
+  const body = await request<Record<string, unknown>>({
+    ...options,
+    endpoint,
+    path: repoPath(args.repositoryId, "/join-requests"),
+    method: "POST",
+    body: { deviceId: args.deviceId, label: args.label, requestSecretSha256: args.requestSecretSha256 },
+  });
+  const expiresAt = toMillis(body.expiresAt);
+  if (typeof body.requestId !== "string" || typeof body.code !== "string" || expiresAt === null) {
+    throw cloudError("unavailable", `${endpoint.origin} answered the join request without a request id, code or expiry`);
+  }
+  return { requestId: body.requestId, code: body.code, expiresAt };
+}
+
+export type JoinRequestStatus = "pending" | "approved" | "denied" | "expired" | "collected";
+
+export interface JoinRequestState {
+  status: JoinRequestStatus;
+  expiresAt: number | null;
+  /** Present exactly once: on the first read after approval. Never logged. */
+  token?: string;
+  deviceId?: string;
+  member?: { memberId: string; name: string };
+  protocol?: number;
+}
+
+const JOIN_STATUSES: readonly JoinRequestStatus[] = ["pending", "approved", "denied", "expired", "collected"];
+
+/**
+ * `GET /v1/repos/{repoId}/join-requests/{requestId}`, with the request secret as the bearer.
+ *
+ * No `Staple-Device` header. The device is not registered yet, and the request secret is
+ * the only thing this call proves.
+ */
+export async function readJoinRequest(
+  endpoint: CloudEndpoint,
+  args: { repositoryId: string; requestId: string; requestSecret: string },
+  options: RequestOptions = {},
+): Promise<JoinRequestState> {
+  const body = await request<Record<string, unknown>>({
+    ...options,
+    endpoint,
+    path: repoPath(args.repositoryId, `/join-requests/${encodeURIComponent(args.requestId)}`),
+    method: "GET",
+    token: args.requestSecret,
+  });
+  const status = body.status;
+  if (typeof status !== "string" || !(JOIN_STATUSES as readonly string[]).includes(status)) {
+    throw cloudError("unavailable", `${endpoint.origin} answered the join request with an unknown status`);
+  }
+  const state: JoinRequestState = { status: status as JoinRequestStatus, expiresAt: toMillis(body.expiresAt) };
+  if (typeof body.token === "string" && body.token.length > 0) state.token = body.token;
+  if (typeof body.deviceId === "string") state.deviceId = body.deviceId;
+  const member = body.member as Record<string, unknown> | undefined;
+  if (member && typeof member.memberId === "string" && typeof member.name === "string") {
+    state.member = { memberId: member.memberId, name: member.name };
+  }
+  if (typeof body.protocol === "number") state.protocol = body.protocol;
+  return state;
+}
+
+export interface PendingJoinRequest {
+  requestId: string;
+  code: string;
+  label: string | null;
+  /** Epoch milliseconds. */
+  createdAt: number | null;
+  expiresAt: number | null;
+}
+
+/** `GET /v1/repos/{repoId}/join-requests`: pending, unexpired requests. Member auth. */
+export async function listJoinRequests(
+  endpoint: CloudEndpoint,
+  args: RepoCall,
+  options: RequestOptions = {},
+): Promise<PendingJoinRequest[]> {
+  const body = await request<unknown>({
+    ...options,
+    endpoint,
+    path: repoPath(args.repositoryId, "/join-requests"),
+    method: "GET",
+    token: args.token,
+    deviceId: args.deviceId,
+  });
+  // The contract writes the body as a bare array. A Worker that wraps it as `{requests}`,
+  // like every other list route does, is read the same way.
+  const rows = Array.isArray(body)
+    ? body
+    : Array.isArray((body as { requests?: unknown } | null)?.requests)
+      ? (body as { requests: unknown[] }).requests
+      : null;
+  if (rows === null) throw cloudError("unavailable", `${endpoint.origin} answered the request list with no list`);
+  return rows.flatMap((row) => {
+    const r = row as Record<string, unknown>;
+    if (typeof r.requestId !== "string" || typeof r.code !== "string") return [];
+    return [
+      {
+        requestId: r.requestId,
+        code: r.code,
+        label: typeof r.label === "string" ? r.label : null,
+        createdAt: toMillis(r.createdAt),
+        expiresAt: toMillis(r.expiresAt),
+      },
+    ];
+  });
+}
+
+/** Who an approval admits the device as: a new person (owner only), or an existing member. */
+export type ApproveTarget = { newMember: { name: string } } | { memberId: string };
+
+/** `POST /v1/repos/{repoId}/join-requests/{code}/approve`. Member auth; the Worker enforces who may. */
+export async function approveJoinRequest(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { code: string; target: ApproveTarget },
+  options: RequestOptions = {},
+): Promise<{ requestId: string; member: { memberId: string; name: string } | null }> {
+  const body = await request<Record<string, unknown>>({
+    ...options,
+    endpoint,
+    path: repoPath(args.repositoryId, `/join-requests/${encodeURIComponent(args.code)}/approve`),
+    method: "POST",
+    token: args.token,
+    deviceId: args.deviceId,
+    body: args.target,
+  });
+  const member = body.member as Record<string, unknown> | undefined;
+  return {
+    requestId: typeof body.requestId === "string" ? body.requestId : "",
+    member:
+      member && typeof member.memberId === "string" && typeof member.name === "string"
+        ? { memberId: member.memberId, name: member.name }
+        : null,
+  };
+}
+
+/** `POST /v1/repos/{repoId}/join-requests/{code}/deny`. Member auth. */
+export async function denyJoinRequest(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { code: string },
+  options: RequestOptions = {},
+): Promise<{ requestId: string }> {
+  const body = await request<Record<string, unknown>>({
+    ...options,
+    endpoint,
+    path: repoPath(args.repositoryId, `/join-requests/${encodeURIComponent(args.code)}/deny`),
+    method: "POST",
+    token: args.token,
+    deviceId: args.deviceId,
+    // An empty JSON body rather than none: the Worker caps bodies from `Content-Length`.
+    body: {},
+  });
+  return { requestId: typeof body.requestId === "string" ? body.requestId : "" };
+}
+
+export interface RemoteMemberDevice {
+  deviceId: string;
+  label: string | null;
+  lastSeenAt: number | null;
+  revoked: boolean;
+}
+
+export interface RemoteMember {
+  memberId: string;
+  name: string;
+  isOwner: boolean;
+  removed: boolean;
+  devices: RemoteMemberDevice[];
+}
+
+/** `GET /members`: exactly `MembersCache` minus `version`, `repositoryId` and `fetchedAt`. */
+export interface RemoteMembers {
+  self: { memberId: string; deviceId: string };
+  members: RemoteMember[];
+}
+
+/** `GET /v1/repos/{repoId}/members`. Member auth. */
+export async function fetchRemoteMembers(
+  endpoint: CloudEndpoint,
+  args: RepoCall,
+  options: RequestOptions = {},
+): Promise<RemoteMembers> {
+  const body = await request<Record<string, unknown>>({
+    ...options,
+    endpoint,
+    path: repoPath(args.repositoryId, "/members"),
+    method: "GET",
+    token: args.token,
+    deviceId: args.deviceId,
+  });
+  const self = body.self as Record<string, unknown> | undefined;
+  if (!self || typeof self.memberId !== "string" || typeof self.deviceId !== "string" || !Array.isArray(body.members)) {
+    throw cloudError("unavailable", `${endpoint.origin} answered the member list in a shape this build does not read`);
+  }
+  const members = (body.members as unknown[]).flatMap((row): RemoteMember[] => {
+    const m = row as Record<string, unknown>;
+    if (typeof m.memberId !== "string" || typeof m.name !== "string" || m.name.length === 0) return [];
+    const devices = Array.isArray(m.devices) ? (m.devices as unknown[]) : [];
+    return [
+      {
+        memberId: m.memberId,
+        name: m.name,
+        isOwner: m.isOwner === true,
+        removed: m.removed === true,
+        devices: devices.flatMap((d): RemoteMemberDevice[] => {
+          const r = d as Record<string, unknown>;
+          if (typeof r.deviceId !== "string") return [];
+          return [
+            {
+              deviceId: r.deviceId,
+              label: typeof r.label === "string" ? r.label : null,
+              lastSeenAt: toMillis(r.lastSeenAt),
+              revoked: r.revoked === true,
+            },
+          ];
+        }),
+      },
+    ];
+  });
+  return { self: { memberId: self.memberId, deviceId: self.deviceId }, members };
+}
+
+/** `PATCH /v1/repos/{repoId}/members/{memberId}`. Self, or the owner. Names are unique per repository. */
+export async function renameRemoteMember(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { memberId: string; name: string },
+  options: RequestOptions = {},
+): Promise<void> {
+  await request<unknown>({
+    ...options,
+    endpoint,
+    path: repoPath(args.repositoryId, `/members/${encodeURIComponent(args.memberId)}`),
+    method: "PATCH",
+    token: args.token,
+    deviceId: args.deviceId,
+    body: { name: args.name },
+  });
+}
+
+/**
+ * `DELETE /v1/repos/{repoId}/members/{memberId}`. Owner only, and never the owner themself.
+ * Revokes every device of that member; the member stays listed as removed.
+ */
+export async function removeRemoteMember(
+  endpoint: CloudEndpoint,
+  args: RepoCall & { memberId: string },
+  options: RequestOptions = {},
+): Promise<void> {
+  await request<unknown>({
+    ...options,
+    endpoint,
+    path: repoPath(args.repositoryId, `/members/${encodeURIComponent(args.memberId)}`),
+    method: "DELETE",
+    token: args.token,
+    deviceId: args.deviceId,
+  });
 }

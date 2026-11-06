@@ -47,7 +47,27 @@ import {
   describeHostBinding,
   forkWorkspaceIdentity,
   readWorkspaceManifest,
+  REPOSITORY_MANIFEST_ENDPOINT_FORMAT,
+  repositoryManifestPath,
+  workspaceIdentityDir,
+  writeRepositoryEndpoint,
 } from "../core/repo-identity.js";
+import {
+  buildJoinPreview,
+  renderJoinCode,
+  renderJoinPreview,
+  resolveJoinEndpoint,
+} from "../core/cloud/join-preview.js";
+import { performJoin } from "../core/cloud/join.js";
+import {
+  approveRequest,
+  denyRequest,
+  listPendingRequests,
+  refreshMembersCache,
+  removeMember,
+  renameMember,
+} from "../core/cloud/members.js";
+import type { MembersCache } from "../core/cloud/members-cache.js";
 import { Hub } from "../core/hub.js";
 import { acknowledgeRenumbers } from "../core/identifier-moves.js";
 import { resolveWorkspace } from "../core/workspace.js";
@@ -102,7 +122,8 @@ import {
 } from "../core/cloud/surface.js";
 
 const USAGE =
-  "Use: status, connect, disconnect, auto, sync, lease, devices, conflicts, resolve, backup, restore, fork-id, purge (staple cloud --help)";
+  "Use: status, connect, join, disconnect, auto, sync, lease, devices, requests, approve, deny, members, " +
+  "share-endpoint, conflicts, resolve, backup, restore, fork-id, purge (staple cloud --help)";
 
 const HELP = `staple cloud — connect this repository to a sync service, and manage the
 credential that connection produces. Three separate consents: connecting,
@@ -244,7 +265,50 @@ synchronizing automatically, and backing up. None of them implies another.
               DESTROY the repository's remote state. Separately named because
               it is not disconnecting. Prints what is stored, for how long and
               who can read it, and then requires the repository id typed back.
-              Never touches your local database. Not reversible.`;
+              Never touches your local database. Not reversible.
+
+Working with a teammate (a shared workspace has MEMBERS: named people, each
+with their own devices. The member who connected first is the owner.)
+
+  cloud join [--endpoint <url>] [--label L] [--yes] [--credential-file]
+              join a shared workspace from this machine. Shows the service, the
+              repository, this device's label and the no-end-to-end-encryption
+              warning, and sends NOTHING until you agree. Then it shows a short
+              code. Someone already in the workspace approves it: compare the
+              code out loud or on a call. The code is not a password, and no
+              secret travels over chat. Ctrl-C cancels locally. Without
+              --endpoint it uses the one published in .staple/repository.json.
+              Automatic sync stays OFF.
+  cloud requests
+              pending join requests: code, device label, and when each expires.
+  cloud approve <code> --as <new name>
+              admit a NEW person under that name. Owner only.
+  cloud approve <code> --to <member>
+              add the joining device to an existing member. Anyone may add a
+              device to themselves; only the owner may add one to someone else.
+  cloud deny <code>
+              refuse a pending request. Any member may.
+  cloud members [ls]
+              the members and their devices, from the service, and refreshes the
+              local copy every other command reads.
+  cloud members rename <member> <name>
+              rename yourself, or anyone if you are the owner. Names are unique,
+              ignoring case, and are what an issue's assignee holds.
+  cloud members remove <member> --confirm <name>
+              OWNER ONLY. Revokes every device of that member on their next
+              request. Requires their name typed back. The owner cannot remove
+              themselves.
+  cloud share-endpoint [--yes]
+              publish this repository's sync service address in
+              .staple/repository.json so a teammate's join needs no --endpoint.
+              An address, never a credential. Moves the file to format 2, which
+              older staple builds refuse until they upgrade.
+
+Agents may not (there is no MCP tool for any of these, on purpose): connect,
+join, approve, deny, members rename, members remove, share-endpoint, disconnect,
+devices revoke, restore, purge. Each is a person's decision about who can read
+the workspace or whether it exists, and its preview or typed confirmation only
+means something to that person.`;
 
 /**
  * Route an async failure through the same envelope the synchronous commands get.
@@ -416,6 +480,18 @@ export function runCloudCommand(argv: string[]): void {
       return runForkId(rest);
     case "purge":
       return runPurge(rest);
+    case "join":
+      return runJoin(rest);
+    case "requests":
+      return runRequests(rest);
+    case "approve":
+      return runApprove(rest);
+    case "deny":
+      return runDeny(rest);
+    case "members":
+      return runMembers(rest);
+    case "share-endpoint":
+      return runShareEndpoint(rest);
     default:
       throw new StapleError("validation", `Unknown subcommand "${sub}". ${USAGE}`);
   }
@@ -1980,4 +2056,378 @@ function runRestore(argv: string[]): void {
       .finally(() => opened.store.db.close()),
     json,
   );
+}
+
+// ------------------------------------------------------------- members and joining
+
+/**
+ * `staple cloud join`: the joining half of member approval.
+ *
+ * Shaped exactly like `connect`, because it is one. The preview comes from a module that
+ * cannot reach the network, it prints first, and without `--yes` or a terminal the
+ * command exits 2 having sent nothing. Only after a yes does `performJoin` make its first
+ * call.
+ */
+function runJoin(argv: string[]): void {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      ...common,
+      endpoint: { type: "string" },
+      label: { type: "string" },
+      yes: { type: "boolean" },
+      "credential-file": { type: "boolean" },
+    },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+
+  const opened = resolveWorkspace(values);
+  let manifest: ReturnType<typeof readWorkspaceManifest>;
+  try {
+    manifest = readWorkspaceManifest(opened.dbPath);
+    if (!manifest) throw noIdentity(opened.dbPath, "cannot join a shared workspace");
+  } finally {
+    opened.store.db.close();
+  }
+
+  const { endpoint, source } = resolveJoinEndpoint(values.endpoint, manifest.endpoint);
+  const credential = { forceFile: values["credential-file"] === true };
+  const preview = buildJoinPreview({
+    home,
+    repositoryId: manifest.repositoryId,
+    endpoint,
+    endpointSource: source,
+    label: values.label,
+    credential,
+  });
+
+  if (json) {
+    console.log(JSON.stringify({ preview: { ...preview, endpoint: preview.endpoint.origin } }, null, 2));
+  } else {
+    console.log(renderJoinPreview(preview));
+  }
+
+  if (values.yes !== true) {
+    const agreed = isInteractive() && confirm("\nSend a join request?", { default: false });
+    if (!agreed) {
+      console.error(
+        isInteractive()
+          ? "\nDeclined. Nothing was sent, and no credential or setting was written."
+          : "\nNothing was sent. Re-run with --yes to send the join request.",
+      );
+      process.exitCode = 2;
+      return;
+    }
+  }
+
+  /**
+   * Ctrl-C while waiting cancels LOCALLY. `on`, not `once`, for the reason the lease
+   * heartbeat gives: a second Ctrl-C must not fall through to the default disposition and
+   * kill the process before it says what happened.
+   */
+  const controller = new AbortController();
+  const stop = (): void => controller.abort();
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  settle(
+    performJoin(preview, {
+      home,
+      credential,
+      signal: controller.signal,
+      onCode: (ticket) => {
+        const until = new Date(ticket.expiresAt).toLocaleTimeString();
+        if (json) {
+          // stdout stays one document; the code a script must relay goes to stderr.
+          console.error(JSON.stringify({ code: ticket.code, expiresAt: ticket.expiresAt }));
+          return;
+        }
+        console.log("");
+        console.log("Your join code:");
+        console.log(renderJoinCode(ticket.code));
+        console.log("Read this code to someone already in the workspace. They run:");
+        console.log(`    staple cloud approve ${ticket.code} --as <your name>`);
+        console.log(`  or, if you are already a member adding another device of yours:`);
+        console.log(`    staple cloud approve ${ticket.code} --to <your name>`);
+        console.log("");
+        console.log(`Waiting for approval until ${until}. Ctrl-C cancels; nothing is stored until approval.`);
+      },
+    })
+      .then((outcome) => {
+        if (outcome.status === "cancelled") {
+          const message =
+            `Cancelled. Nothing was stored on this machine. Request ${outcome.code} expires on ` +
+            `the service by itself at ${new Date(outcome.expiresAt).toLocaleTimeString()}.`;
+          if (json) console.log(JSON.stringify({ joined: false, cancelled: true, code: outcome.code }));
+          else console.error(`\n${message}`);
+          process.exitCode = 130;
+          return;
+        }
+        if (json) {
+          console.log(
+            JSON.stringify(
+              { joined: true, connection: outcome.connection, member: outcome.member, membersCached: outcome.members !== null },
+              null,
+              2,
+            ),
+          );
+          return;
+        }
+        console.log("");
+        console.log(
+          `Joined ${outcome.connection.endpoint}` + (outcome.member ? ` as ${outcome.member.name}.` : "."),
+        );
+        console.log(`  device       ${outcome.connection.deviceId}  (${outcome.connection.label})`);
+        console.log(`  credential   stored in ${outcome.credentialLocation}`);
+        if (outcome.members === null) {
+          console.log("  members      the list could not be fetched yet; `staple cloud members` retries");
+        }
+        console.log("");
+        console.log("Automatic sync is OFF. Run `staple cloud sync` to download the workspace.");
+        console.log("Turn it on for THIS device with `staple cloud auto on`.");
+      })
+      .finally(() => {
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
+      }),
+    json,
+  );
+}
+
+function renderWhen(ms: number | null): string {
+  return ms === null ? "unknown" : new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** `staple cloud requests`: what is waiting for a yes or a no. */
+function runRequests(argv: string[]): void {
+  const { values } = parseArgs({ args: argv, options: common });
+  const json = values.json === true;
+  const home = stapleHome();
+  const repositoryId = repositoryIdFor(values);
+  settle(
+    listPendingRequests(home, repositoryId).then((requests) => {
+      if (json) {
+        console.log(JSON.stringify({ requests }, null, 2));
+        return;
+      }
+      if (requests.length === 0) {
+        console.log("No pending join requests.");
+        return;
+      }
+      for (const request of requests) {
+        console.log(
+          `${request.code}  ${request.label ?? "(no label)"}  requested ${renderWhen(request.createdAt)}  ` +
+            `expires ${renderWhen(request.expiresAt)}`,
+        );
+      }
+      console.log("");
+      console.log("Compare the code with the person before approving:");
+      console.log("  staple cloud approve <code> --as <new name>   (owner: a new person)");
+      console.log("  staple cloud approve <code> --to <member>     (a device for an existing member)");
+      console.log("  staple cloud deny <code>");
+    }),
+    json,
+  );
+}
+
+/** `staple cloud approve <code> (--as <name> | --to <member>)`. */
+function runApprove(argv: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { ...common, as: { type: "string" }, to: { type: "string" } },
+  });
+  const json = values.json === true;
+  const code = positionals[0];
+  if (!code) throw new StapleError("validation", "usage: staple cloud approve <code> (--as <new name> | --to <member>)");
+  if ((values.as === undefined) === (values.to === undefined)) {
+    throw new StapleError(
+      "validation",
+      "Say who the joining device belongs to, with exactly one of: --as <new name> to admit a new " +
+        "person (owner only), or --to <member> to add a device to an existing member.",
+    );
+  }
+  const home = stapleHome();
+  const repositoryId = repositoryIdFor(values);
+  const as = values.as !== undefined ? { asNewMember: values.as } : { toMember: values.to! };
+  settle(
+    approveRequest(home, repositoryId, code, as).then((outcome) => {
+      if (json) {
+        console.log(JSON.stringify({ approved: true, ...outcome, members: undefined }, null, 2));
+        return;
+      }
+      const who = outcome.member?.name ?? ("asNewMember" in as ? as.asNewMember : as.toMember);
+      console.log(
+        outcome.newMember
+          ? `Approved ${outcome.code}: ${who} joins as a new member.`
+          : `Approved ${outcome.code}: the device is added to ${who}.`,
+      );
+      console.log("The joining terminal picks up its credential on its own within seconds.");
+    }),
+    json,
+  );
+}
+
+/** `staple cloud deny <code>`. */
+function runDeny(argv: string[]): void {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: common });
+  const json = values.json === true;
+  const code = positionals[0];
+  if (!code) throw new StapleError("validation", "usage: staple cloud deny <code>");
+  const home = stapleHome();
+  const repositoryId = repositoryIdFor(values);
+  settle(
+    denyRequest(home, repositoryId, code).then((outcome) => {
+      if (json) console.log(JSON.stringify({ denied: true, ...outcome }));
+      else console.log(`Denied ${outcome.code}. The joining terminal is told, and nothing is stored there.`);
+    }),
+    json,
+  );
+}
+
+function renderMembers(cache: MembersCache): string {
+  const lines: string[] = [];
+  for (const member of cache.members) {
+    const marks = [
+      member.isOwner ? "owner" : null,
+      member.memberId === cache.self.memberId ? "you" : null,
+      member.removed ? "removed" : null,
+    ].filter(Boolean);
+    lines.push(`${member.name}${marks.length > 0 ? `  [${marks.join(", ")}]` : ""}`);
+    for (const device of member.devices) {
+      const deviceMarks = [
+        device.deviceId === cache.self.deviceId ? "this device" : null,
+        device.revoked ? "revoked" : null,
+      ].filter(Boolean);
+      lines.push(
+        `    ${device.deviceId}  ${device.label ?? "(no label)"}  last seen ${renderWhen(device.lastSeenAt)}` +
+          (deviceMarks.length > 0 ? `  [${deviceMarks.join(", ")}]` : ""),
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+/** `staple cloud members [ls|rename <member> <name>|remove <member> --confirm <name>]`. */
+function runMembers(argv: string[]): void {
+  // A typo is refused rather than becoming `ls`, the lesson `devices` and `backup` learned.
+  const subs = new Set(["ls", "rename", "remove"]);
+  const first = argv[0];
+  if (first !== undefined && !first.startsWith("-") && !subs.has(first)) {
+    throw new StapleError(
+      "validation",
+      `Unknown members subcommand "${first}". ` +
+        "usage: staple cloud members [ls|rename <member> <name>|remove <member> --confirm <name>]",
+    );
+  }
+  const sub = first !== undefined && subs.has(first) ? first : "ls";
+  const rest = first !== undefined && subs.has(first) ? argv.slice(1) : argv;
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: { ...common, confirm: { type: "string" } },
+  });
+  const json = values.json === true;
+  const home = stapleHome();
+  const repositoryId = repositoryIdFor(values);
+
+  if (sub === "ls") {
+    settle(
+      refreshMembersCache(home, repositoryId).then((cache) => {
+        console.log(json ? JSON.stringify(cache, null, 2) : renderMembers(cache));
+      }),
+      json,
+    );
+    return;
+  }
+
+  if (sub === "rename") {
+    const [who, name] = positionals;
+    if (!who || !name) throw new StapleError("validation", "usage: staple cloud members rename <member> <name>");
+    settle(
+      renameMember(home, repositoryId, who, name).then((outcome) => {
+        if (json) console.log(JSON.stringify({ renamed: true, ...outcome, members: undefined }));
+        else console.log(`Renamed ${outcome.from} to ${outcome.to}.`);
+      }),
+      json,
+    );
+    return;
+  }
+
+  const who = positionals[0];
+  if (!who) throw new StapleError("validation", "usage: staple cloud members remove <member> --confirm <name>");
+  settle(
+    removeMember(home, repositoryId, who, values.confirm).then((outcome) => {
+      if (json) {
+        console.log(JSON.stringify({ removed: true, ...outcome, members: undefined }));
+        return;
+      }
+      console.log(`Removed ${outcome.name}. ${outcome.devicesRevoked} device(s) lose access on their next request.`);
+      console.log("They keep their local data. Their past work stays attributed to them.");
+    }),
+    json,
+  );
+}
+
+/**
+ * `staple cloud share-endpoint`: publish where the service is, so a teammate's join needs
+ * no `--endpoint`. The endpoint comes from this machine's connection to the repository.
+ */
+function runShareEndpoint(argv: string[]): void {
+  const { values } = parseArgs({ args: argv, options: { ...common, yes: { type: "boolean" } } });
+  const json = values.json === true;
+  const home = stapleHome();
+
+  const opened = resolveWorkspace(values);
+  const dbPath = opened.dbPath;
+  opened.store.db.close();
+  const manifest = readWorkspaceManifest(dbPath);
+  if (!manifest) throw noIdentity(dbPath, "has nothing to publish an endpoint in");
+  const connection = readConnection(home, manifest.repositoryId);
+  if (!connection) {
+    throw new StapleError(
+      "not_found",
+      "This repository is not connected on this machine, so there is no endpoint to share. " +
+        "Share it from a machine that is connected.",
+    );
+  }
+  const identityDir = workspaceIdentityDir(dbPath);
+  const path = repositoryManifestPath(identityDir);
+
+  if (manifest.endpoint === connection.endpoint) {
+    const message = `${path} already shares ${connection.endpoint}. Nothing to do.`;
+    console.log(json ? JSON.stringify({ written: false, endpoint: connection.endpoint, path }) : message);
+    return;
+  }
+
+  if (!json) {
+    console.log(`Publish this repository's sync service in ${path}.`);
+    console.log("");
+    console.log(`  endpoint       ${connection.endpoint}`);
+    if (manifest.endpoint) console.log(`  replacing      ${manifest.endpoint}`);
+    console.log("");
+    console.log("  - the file is committed, so anyone who can read this repository sees the address");
+    console.log("  - it is an address and NOT a credential; joining still needs a member's approval");
+    console.log(`  - the file moves to format ${REPOSITORY_MANIFEST_ENDPOINT_FORMAT}: staple builds older than this one`);
+    console.log("    refuse to read it and ask to be upgraded");
+    console.log("  - commit and push it, then a teammate runs `staple cloud join` with no --endpoint");
+  }
+
+  if (values.yes !== true) {
+    if (!(isInteractive() && confirm("\nWrite it?", { default: false }))) {
+      const message = isInteractive() ? "Declined. Nothing was written." : "Nothing was written. Re-run with --yes to write it.";
+      if (json) console.error(JSON.stringify({ written: false, endpoint: connection.endpoint, path, message }));
+      else console.error(`\n${message}`);
+      process.exitCode = 2;
+      return;
+    }
+  }
+
+  const written = writeRepositoryEndpoint(identityDir, connection.endpoint);
+  if (json) {
+    console.log(JSON.stringify({ written: true, endpoint: written.endpoint, format: written.format, path }));
+    return;
+  }
+  console.log(`Wrote ${path}. Commit it so teammates can \`staple cloud join\`.`);
 }
