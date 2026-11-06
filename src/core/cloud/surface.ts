@@ -63,6 +63,7 @@ import {
 } from "../repo-identity.js";
 import { describeState, type CloudState, type CloudStatus } from "./status.js";
 import { pendingCount, readSyncState } from "./sync-state.js";
+import { sharedLine, type SharedStatus } from "./shared-status.js";
 
 /**
  * What a surface may OFFER, as distinct from what it observes.
@@ -149,6 +150,11 @@ export interface CloudSurfaceReport {
   auto: boolean;
   /** This DEVICE's backup consent. Separate decision, separate flag. */
   backup: boolean;
+  /**
+   * The current members when the workspace is shared, with automatic sync locked on; null
+   * when it is not shared on this machine's member list. What the shared badge renders.
+   */
+  shared: SharedStatus | null;
   connectedAt: string | null;
   /** True only when a live probe produced this. Always false on the silent path. */
   checked: boolean;
@@ -278,6 +284,7 @@ export function cloudSurfaceReport(status: CloudStatus, db: DatabaseSync): Cloud
     credentialPresent: status.credentialPresent,
     auto: status.auto,
     backup: status.backup,
+    shared: status.shared ?? null,
     connectedAt: status.connectedAt,
     checked: status.checked,
     pending: safely(() => pendingCount(db), 0),
@@ -391,6 +398,7 @@ export function noIdentityReport(dbPath?: string): CloudSurfaceReport {
       "to be about yet. Its data is untouched and every local command works as it did.",
     repositoryId: null,
     endpoint: null,
+    shared: null,
     deviceId: null,
     label: null,
     credentialMechanism: null,
@@ -426,7 +434,10 @@ export function noIdentityReport(dbPath?: string): CloudSurfaceReport {
  * "which epoch am I on", and a paragraph makes those hard to find.
  */
 export function describeReport(report: CloudSurfaceReport): string {
-  const lines = [report.detail, ""];
+  // In a shared workspace, the one line every surface prints, first; otherwise nothing,
+  // so a solo workspace's status reads exactly as it always did.
+  const shared = sharedLine(report.shared, report.auto);
+  const lines = shared === null ? [report.detail, ""] : [report.detail, shared, ""];
   const row = (label: string, value: string) => lines.push(`  ${label.padEnd(15)}${value}`);
 
   if (report.repositoryId) row("repository", report.repositoryId);
@@ -443,7 +454,7 @@ export function describeReport(report: CloudSurfaceReport): string {
 
   if (report.mode !== "disconnected") {
     row("mode", report.mode);
-    row("automatic sync", report.auto ? "on" : "off");
+    row("automatic sync", report.auto ? (report.shared ? "on (shared workspace: stays on)" : "on") : "off");
     row("backup", report.backup ? "on" : "off");
     if (report.connectedAt) row("connected at", report.connectedAt);
   }

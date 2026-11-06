@@ -37,6 +37,7 @@ import { join } from "node:path";
 import { writeFileAtomic } from "../../config/atomic.js";
 import { StapleError } from "../types.js";
 import { credentialDir } from "./credential-store.js";
+import { currentMembers, isSharedWorkspace, readMembersCache } from "./members-cache.js";
 import type { CredentialMechanism } from "./credential-store.js";
 
 export const CONNECTION_SCHEMA_VERSION = 1;
@@ -112,6 +113,15 @@ export interface CloudConnection {
    * connect writes a fresh record without it, which is how it clears.
    */
   readonly removed?: { readonly by: string; readonly at: string };
+  /**
+   * Why automatic sync is on when this machine did not say `staple cloud auto on`:
+   * `"shared-workspace"` when it was turned on because the workspace has more than one
+   * current member (a join, or a members refresh that saw a teammate). In a shared
+   * workspace every device syncs automatically and `auto off` is refused
+   * (`setConsent`); this field is the record of why, for status and for a person
+   * reading the file. Absent means the person turned it on, or it is off.
+   */
+  readonly autoReason?: "shared-workspace";
 }
 
 export function connectionPath(home: string, repositoryId: string): string {
@@ -194,6 +204,8 @@ export function readConnection(home: string, repositoryId: string): CloudConnect
       ? { by: removedRaw.by, at: removedRaw.at }
       : undefined;
 
+  const autoReason = record.autoReason === "shared-workspace" ? ("shared-workspace" as const) : undefined;
+
   return {
     schemaVersion: version,
     repositoryId: assertString(record, "repositoryId", path),
@@ -207,6 +219,7 @@ export function readConnection(home: string, repositoryId: string): CloudConnect
     registry,
     protocol,
     ...(removed ? { removed } : {}),
+    ...(autoReason && auto ? { autoReason } : {}),
   };
 }
 
@@ -280,9 +293,34 @@ export function setConsent(
         `Run \`staple cloud connect\` first.`,
     );
   }
+  /**
+   * In a shared workspace automatic sync stays on, on every device, the owner's included:
+   * two people working one tracker must not drift apart because one of them switched it
+   * off and forgot. Refused here, at the one writer of the flag, so the CLI, the web UI
+   * and anything else that changes consent all get the same answer.
+   */
+  if (patch.auto === false) {
+    const cache = readMembersCache(home, repositoryId);
+    if (isSharedWorkspace(cache)) {
+      const others = currentMembers(cache!)
+        .filter((member) => member.memberId !== cache!.self.memberId)
+        .map((member) => member.name);
+      throw new StapleError(
+        "forbidden",
+        `Automatic sync is on because this workspace is shared with ${others.join(", ") || "other members"}; ` +
+          "every device keeps it on, so nobody works on a stale copy. To stop syncing, leave the " +
+          "workspace or run `staple cloud disconnect`.",
+        { autoSync: "locked-on" },
+      );
+    }
+  }
+  const auto = patch.auto ?? existing.auto;
+  const { autoReason: _autoReason, ...base } = existing;
   const next: CloudConnection = {
-    ...existing,
-    auto: patch.auto ?? existing.auto,
+    ...base,
+    // A person's own `auto on` replaces the recorded reason; a locked one keeps it.
+    ...(existing.autoReason && auto && patch.auto === undefined ? { autoReason: existing.autoReason } : {}),
+    auto,
     backup: patch.backup ?? existing.backup,
     /**
      * Patched independently of the other two, which is the enforcement rather than a
@@ -338,4 +376,21 @@ export function listConnections(home: string): CloudConnection[] {
     if (connection) connections.push(connection);
   }
   return connections;
+}
+
+/**
+ * Turn automatic sync on because the workspace is shared, and record why. A no-op when it
+ * is already on for that reason, or when there is no connection record. Never throws: it
+ * runs after a members refresh, which has already succeeded.
+ */
+export function lockAutoSyncForSharedWorkspace(home: string, repositoryId: string): boolean {
+  try {
+    const existing = readConnection(home, repositoryId);
+    if (!existing || existing.removed) return false;
+    if (existing.auto && existing.autoReason === "shared-workspace") return false;
+    writeConnection(home, { ...existing, auto: true, autoReason: "shared-workspace" });
+    return true;
+  } catch {
+    return false;
+  }
 }

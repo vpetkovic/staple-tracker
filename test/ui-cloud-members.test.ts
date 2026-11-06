@@ -156,10 +156,11 @@ describe("joining from the page", () => {
     expect(await body(await post("/api/cloud/workspace/join/poll", { joinId: started.joinId }))).toMatchObject({ status: "pending" });
     service.approve(started.code, { name: "marko" });
     const joined = await body(await post("/api/cloud/workspace/join/poll", { joinId: started.joinId }));
-    expect(joined).toMatchObject({ status: "joined", member: { name: "marko" }, auto: false, membersCached: true });
+    // A join makes a shared workspace, so automatic sync is on.
+    expect(joined).toMatchObject({ status: "joined", member: { name: "marko" }, auto: true, membersCached: true });
 
     const record = readConnection(home, joinerId)!;
-    expect(record).toMatchObject({ auto: false, backup: false, label: "marko-laptop" });
+    expect(record).toMatchObject({ auto: true, autoReason: "shared-workspace", backup: false, label: "marko-laptop" });
     expect(readMembersCache(home, joinerId)!.members.map((m) => m.name)).toEqual(["vp", "marko"]);
     // Finished joins are forgotten: a second poll is told so.
     expect((await post("/api/cloud/workspace/join/poll", { joinId: started.joinId })).status).toBe(404);

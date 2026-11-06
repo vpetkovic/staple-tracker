@@ -943,7 +943,14 @@ export interface CreatedJoinRequest {
 /** `POST /v1/repos/{repoId}/join-requests`. Pre-credential, and rate limited per client IP. */
 export async function createJoinRequest(
   endpoint: CloudEndpoint,
-  args: { repositoryId: string; deviceId: string; label: string; requestSecretSha256: string },
+  args: {
+    repositoryId: string;
+    deviceId: string;
+    label: string;
+    requestSecretSha256: string;
+    /** From a share link's `as`. Sent only when there is one, so older services see no new key. */
+    invitedAs?: string | null;
+  },
   options: RequestOptions = {},
 ): Promise<CreatedJoinRequest> {
   const body = await request<Record<string, unknown>>({
@@ -951,7 +958,12 @@ export async function createJoinRequest(
     endpoint,
     path: repoPath(args.repositoryId, "/join-requests"),
     method: "POST",
-    body: { deviceId: args.deviceId, label: args.label, requestSecretSha256: args.requestSecretSha256 },
+    body: {
+      deviceId: args.deviceId,
+      label: args.label,
+      requestSecretSha256: args.requestSecretSha256,
+      ...(args.invitedAs ? { invitedAs: args.invitedAs } : {}),
+    },
   });
   const expiresAt = toMillis(body.expiresAt);
   if (typeof body.requestId !== "string" || typeof body.code !== "string" || expiresAt === null) {
@@ -1011,6 +1023,8 @@ export interface PendingJoinRequest {
   requestId: string;
   code: string;
   label: string | null;
+  /** The name the share link meant for this joiner, or null. A hint for the approver. */
+  invitedAs: string | null;
   /** Epoch milliseconds. */
   createdAt: number | null;
   expiresAt: number | null;
@@ -1046,6 +1060,7 @@ export async function listJoinRequests(
         requestId: r.requestId,
         code: r.code,
         label: typeof r.label === "string" ? r.label : null,
+        invitedAs: typeof r.invitedAs === "string" && r.invitedAs.length > 0 ? r.invitedAs : null,
         createdAt: toMillis(r.createdAt),
         expiresAt: toMillis(r.expiresAt),
       },

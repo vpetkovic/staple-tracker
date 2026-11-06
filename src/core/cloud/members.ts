@@ -19,7 +19,7 @@
  * ({@link refreshMembersCacheBestEffort}, called from `sync.ts`), and disconnect deletes it.
  */
 import { requireSession } from "./connect.js";
-import { noteRemoval, readConnection } from "./connection.js";
+import { lockAutoSyncForSharedWorkspace, noteRemoval, readConnection } from "./connection.js";
 import {
   approveJoinRequest,
   cloudCodeOf,
@@ -37,7 +37,7 @@ import {
 import type { SelectOptions } from "./credential-store.js";
 import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
 import { normalizeJoinCode } from "./join-preview.js";
-import { MEMBERS_CACHE_VERSION, writeMembersCache, type CachedMember, type MembersCache } from "./members-cache.js";
+import { MEMBERS_CACHE_VERSION, isSharedWorkspace, writeMembersCache, type CachedMember, type MembersCache } from "./members-cache.js";
 import { StapleError } from "../types.js";
 import { reassignMember } from "../member-assignees.js";
 import type { WorkspaceStore } from "../store.js";
@@ -94,7 +94,15 @@ export async function refreshMembersCacheWith(
    * back deleted the cache on purpose; writing it now would bring a shared workspace back to
    * life on a machine that has left it.
    */
-  if (connectionStillAsks(home, session)) writeMembersCache(home, cache);
+  if (connectionStillAsks(home, session)) {
+    writeMembersCache(home, cache);
+    /**
+     * The moment this machine learns the workspace is shared (2+ current members), automatic
+     * sync goes on here and the reason is recorded, on every device, the owner's included.
+     * It is not this person's toggle any more: `setConsent` refuses `auto off` while it lasts.
+     */
+    if (isSharedWorkspace(cache)) lockAutoSyncForSharedWorkspace(home, session.repositoryId);
+  }
   return cache;
 }
 

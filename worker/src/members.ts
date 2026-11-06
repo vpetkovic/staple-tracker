@@ -211,6 +211,10 @@ export async function createJoinRequest(
       ? null
       : requireBoundedString(body.label, "label", MAX_LABEL_LENGTH);
   const secretDigest = requireSha256Hex(body.requestSecretSha256);
+  // The name the person who shared the link meant for this joiner (`as` in the link). A
+  // hint, shown to the approver and prefilled as the new member's name; it grants nothing.
+  const invitedAs =
+    body.invitedAs === undefined || body.invitedAs === null ? null : requireName(body.invitedAs);
 
   const repo = await env.DB.prepare(
     `SELECT vocabulary, EXISTS (SELECT 1 FROM members m WHERE m.repo_id = r.repo_id) AS has_members
@@ -235,11 +239,11 @@ export async function createJoinRequest(
     env.DB.prepare(
       `INSERT INTO join_requests
               (repo_id, request_id, code, request_secret_sha256, device_id, label,
-               created_at, expires_at, status, member_id, approved_by_device)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL, NULL
+               created_at, expires_at, status, member_id, approved_by_device, invited_as)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL, NULL, ?10
         WHERE (SELECT COUNT(*) FROM join_requests
                 WHERE repo_id = ?1 AND status = 'pending' AND expires_at > ?7) < ?9`,
-    ).bind(repoId, requestId, code, secretDigest, deviceId, label, now, expiresAt, MAX_PENDING_JOIN_REQUESTS),
+    ).bind(repoId, requestId, code, secretDigest, deviceId, label, now, expiresAt, MAX_PENDING_JOIN_REQUESTS, invitedAs),
   ]);
 
   if ((inserted?.meta.changes ?? 0) === 0) {
@@ -413,12 +417,19 @@ export async function collectJoinRequest(
 export async function listJoinRequests(env: Env, session: Session): Promise<Response> {
   requireMember(await memberContext(env, session));
   const rows = await env.DB.prepare(
-    `SELECT request_id, code, label, created_at, expires_at FROM join_requests
+    `SELECT request_id, code, label, created_at, expires_at, invited_as FROM join_requests
       WHERE repo_id = ?1 AND status = 'pending' AND expires_at > ?2
       ORDER BY created_at`,
   )
     .bind(session.repoId, Date.now())
-    .all<{ request_id: string; code: string; label: string | null; created_at: number; expires_at: number }>();
+    .all<{
+      request_id: string;
+      code: string;
+      label: string | null;
+      created_at: number;
+      expires_at: number;
+      invited_as: string | null;
+    }>();
 
   // `request_secret_sha256` is not in the projection, and must never be: it is a verifier
   // for the joiner's secret, and every member can read this list.
@@ -429,6 +440,7 @@ export async function listJoinRequests(env: Env, session: Session): Promise<Resp
       label: r.label,
       createdAt: r.created_at,
       expiresAt: r.expires_at,
+      invitedAs: r.invited_as,
     })),
   );
 }

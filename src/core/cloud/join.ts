@@ -103,7 +103,15 @@ export async function startJoin(preview: JoinPreview, args: StartJoinArgs): Prom
   try {
     created = await createJoinRequest(
       preview.endpoint,
-      { repositoryId: preview.repositoryId, deviceId, label: preview.label, requestSecretSha256 },
+      {
+        repositoryId: preview.repositoryId,
+        deviceId,
+        label: preview.label,
+        requestSecretSha256,
+        // The name the link's sender meant for this person: shown to the approver, and
+        // offered as the new member's name. A hint; the approver decides.
+        invitedAs: preview.link?.invitedAs ?? null,
+      },
       args,
     );
   } catch (error) {
@@ -185,9 +193,14 @@ export async function completeJoin(
     label: ticket.label,
     credentialMechanism: selection.store.mechanism,
     connectedAt: new Date().toISOString(),
-    // All three consents OFF, for exactly the reasons `performConnect` gives: joining
-    // stores a credential, and agreeing to use it in the background is a separate decision.
-    auto: false,
+    /**
+     * Automatic sync ON. A join is always into a workspace that already has a member, so it
+     * makes a shared workspace, and in a shared workspace every device syncs automatically.
+     * The preview said so before the person agreed (`renderJoinPreview`). Backup and the
+     * registry stay off: those are still this machine's own decisions.
+     */
+    auto: true,
+    autoReason: "shared-workspace",
     backup: false,
     registry: false,
     protocol: state.protocol ?? Math.min(CLIENT_PROTOCOL, ticket.capabilities.protocol.max),

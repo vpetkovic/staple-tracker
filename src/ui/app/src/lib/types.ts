@@ -1698,6 +1698,8 @@ export interface CloudSurfaceReport {
   credentialPresent: boolean;
   auto: boolean;
   backup: boolean;
+  /** The current members when the workspace is shared (2+), automatic sync locked on; null otherwise. */
+  shared: { members: Array<{ name: string; memberId: string; self: boolean }>; autoSync: "locked-on" } | null;
   connectedAt: string | null;
   checked: boolean;
   pending: number;

@@ -14,12 +14,23 @@
 import { buildConnectPreview, type ConnectPreview } from "./preview.js";
 import type { SelectOptions } from "./credential-store.js";
 import { StapleError } from "../types.js";
+import type { ShareLink } from "./share-link.js";
 
 /** Where the endpoint in a join preview came from. Shown, so a person knows who chose it. */
-export type JoinEndpointSource = "flag" | "manifest";
+export type JoinEndpointSource = "flag" | "manifest" | "link";
+
+/** What a join does to automatic sync: it is on, because joining makes a shared workspace. */
+export const JOIN_AUTO_SYNC = "on (shared workspace)" as const;
 
 export interface JoinPreview extends ConnectPreview {
   readonly endpointSource: JoinEndpointSource;
+  /** The share link this join came from, or null for `--endpoint` / the manifest. */
+  readonly link: ShareLink | null;
+  /**
+   * Said before consent: joining makes this a shared workspace, and in a shared workspace
+   * every device syncs automatically. Not something the joiner can decline and still join.
+   */
+  readonly autoSync: typeof JOIN_AUTO_SYNC;
 }
 
 /**
@@ -43,23 +54,46 @@ export function resolveJoinEndpoint(
 
 export interface BuildJoinPreviewArgs {
   home: string;
-  repositoryId: string;
-  endpoint: string;
-  endpointSource: JoinEndpointSource;
+  /** Required without `link`; with one, taken from it. */
+  repositoryId?: string;
+  /** Required without `link`; with one, taken from it. */
+  endpoint?: string;
+  /** Required without `link`; with one, `"link"`. */
+  endpointSource?: JoinEndpointSource;
+  /** A share link (`parseShareLink`). Its service and repository are the ones joined. */
+  link?: ShareLink;
   label?: string;
   credential?: SelectOptions;
 }
 
 /** Local only: parses a URL, reads two files, probes the local credential store. */
 export function buildJoinPreview(args: BuildJoinPreviewArgs): JoinPreview {
+  const link = args.link ?? null;
+  const repositoryId = link?.repositoryId ?? args.repositoryId;
+  const endpoint = link?.endpoint ?? args.endpoint;
+  if (repositoryId === undefined || endpoint === undefined) {
+    throw new StapleError("validation", "A join preview needs a share link, or a repository id and an endpoint.");
+  }
+  if (link && args.repositoryId !== undefined && args.repositoryId !== link.repositoryId) {
+    throw new StapleError(
+      "validation",
+      `That link is for repository ${link.repositoryId}, and this workspace is ${args.repositoryId}. ` +
+        "Run the join outside this checkout, or use a link for this repository.",
+    );
+  }
   const base = buildConnectPreview({
     home: args.home,
-    repositoryId: args.repositoryId,
-    endpoint: args.endpoint,
+    repositoryId,
+    endpoint,
     label: args.label,
     credential: args.credential,
   });
-  return { ...base, endpointSource: args.endpointSource };
+  return {
+    ...base,
+    endpointSource: link ? "link" : (args.endpointSource ?? "flag"),
+    link,
+    autoSync: JOIN_AUTO_SYNC,
+  };
 }
 
 /** The join preview as a person reads it. Full sentences, because it asks for consent. */
@@ -67,14 +101,26 @@ export function renderJoinPreview(preview: JoinPreview): string {
   const lines: string[] = [];
   lines.push("Join this shared workspace");
   lines.push("");
+  if (preview.link) {
+    lines.push(
+      `  workspace      ${preview.link.name}${preview.link.prefix ? ` (${preview.link.prefix})` : ""}` +
+        (preview.link.sharedBy ? `, shared by ${preview.link.sharedBy}` : ""),
+    );
+    if (preview.link.invitedAs) lines.push(`  invited as     ${preview.link.invitedAs}   (the approver can change it)`);
+  }
   lines.push(
     `  service        ${preview.endpoint.origin}` +
-      (preview.endpointSource === "manifest" ? "   (from .staple/repository.json)" : ""),
+      (preview.endpointSource === "manifest"
+        ? "   (from .staple/repository.json)"
+        : preview.endpointSource === "link"
+          ? "   (from the share link)"
+          : ""),
   );
   lines.push(`  repository     ${preview.repositoryId}`);
   lines.push(`  device         ${preview.deviceId ?? "a new device id will be minted for this machine"}`);
   lines.push(`  label          ${preview.label}   (sent to the server and shown to the approver; override with --label)`);
   lines.push(`  credential     ${describeMechanism(preview.credentialMechanism)}`);
+  lines.push(`  automatic sync ${preview.autoSync}`);
   if (preview.credentialFallbackReason) {
     lines.push(`                 falling back because ${preview.credentialFallbackReason}`);
   }
@@ -93,7 +139,9 @@ export function renderJoinPreview(preview: JoinPreview): string {
   lines.push("    or on a call. The code only names your request; it is not a password, and no");
   lines.push("    secret has to travel over chat");
   lines.push("  - once approved, this device gets its own credential, stored on this machine only");
-  lines.push("  - AUTOMATIC SYNC STAYS OFF. Nothing is uploaded until you run `staple cloud sync`.");
+  lines.push("  - AUTOMATIC SYNC IS ON. In a shared workspace every device syncs in the background, so");
+  lines.push("    nobody works on a stale copy. It stays on while the workspace is shared; to stop");
+  lines.push("    syncing, leave the workspace or run `staple cloud disconnect`.");
   lines.push("  - issue titles, descriptions, comments and documents are stored in PLAINTEXT on that");
   lines.push("    service. There is no end-to-end encryption. Whoever holds that Cloudflare account");
   lines.push("    can read them, and so can every member of the workspace.");
