@@ -133,7 +133,8 @@ describe("the member list", () => {
     expect(html).toContain("mac-studio");
     expect(html).toContain("2h ago");
     expect(html).toContain("2 devices");
-    expect(html).toContain("No one is waiting to join");
+    expect(html).toContain("No one is waiting to join. Invite someone above: they open the link");
+    expect(html).not.toContain("clone");
   });
 
   it("owner-only controls are hidden from a member", () => {
