@@ -140,6 +140,8 @@ import { buildConnectPreview } from "../core/cloud/preview.js";
 import { ConsentTicketStore, MAX_OUTSTANDING_CONSENTS, previewDigest } from "../core/cloud/consent.js";
 import { fetchDevices, performConnect, performDisconnect, performRevoke } from "../core/cloud/connect.js";
 import { readConnection, setConsent } from "../core/cloud/connection.js";
+/** STA-441: Settings → Members, the approval toast and the join card (`cloud-members-routes.ts`). */
+import { createMemberRoutes, MEMBER_POST_ROUTES } from "./cloud-members-routes.js";
 import { readConfig, stapleHome } from "../config/index.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
 import { readDriver } from "../core/run-attachment.js";
@@ -320,6 +322,8 @@ const CLOUD_LIFECYCLE_WRITES = new Set([
    */
   "/api/cloud/workspace/connect/preview",
   "/api/cloud/workspace/connect",
+  /** STA-441: members and joining. None journals an operation (`cloud-members-routes.ts`). */
+  ...MEMBER_POST_ROUTES,
   "/api/cloud/workspace/consent",
   "/api/cloud/workspace/disconnect",
   "/api/cloud/workspace/sync",
@@ -1063,6 +1067,16 @@ export function startUiServer(options: UiOptions): UiHandle {
    * from that id rather than from anything the request said.
    */
   const consents = new ConsentTicketStore();
+  /** STA-441: members and joining. Joins in flight hold their request secret in this process only. */
+  const memberRoutes = createMemberRoutes({
+    readBody,
+    json,
+    deny,
+    hubRowFor,
+    hubRepositoryId,
+    recordIdentityIfOpenWould,
+    consents,
+  });
   /** Budget collection's plan consents: the same pattern, bound to the plan shown (`plan-consent.ts`). */
   const planConsents = new PlanConsentStore();
 
@@ -1550,6 +1564,12 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname === "/api/cloud/workspace/consent" ||
           url.pathname === "/api/cloud/workspace/disconnect" ||
           url.pathname === "/api/cloud/workspace/sync" ||
+          /**
+           * STA-441: members and joining, each named in `MEMBER_POST_ROUTES`. All but the
+           * join preview and cancel contact the sync service, and every one is a person's
+           * decision, so they sit behind the Origin check with the other cloud writes.
+           */
+          MEMBER_POST_ROUTES.includes(url.pathname) ||
           url.pathname === "/api/hub/unregister" ||
           url.pathname === "/api/hub/backup" ||
           /**
@@ -2308,6 +2328,8 @@ export function startUiServer(options: UiOptions): UiHandle {
        * for WHY, and mints no ticket. A ticket for something that will not happen
        * would be a consent with no subject.
        */
+      if (await memberRoutes.handle(url, req, res)) return;
+
       if (url.pathname === "/api/cloud/workspace/connect/preview") {
         const body = await readBody(req);
         const addressed = hubRowFor(res, body.slug);
