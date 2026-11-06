@@ -295,7 +295,8 @@ describe("cancel tells the truth about a join whose credential is being collecte
     await new Promise((resolve) => setTimeout(resolve, 100));
     const cancel = await body<Record<string, unknown>>(await post("/api/cloud/workspace/join/cancel", { joinId: started.joinId }));
     expect(cancel).toMatchObject({ cancelled: true, code: started.code });
-    await polling;
+    // The poll that was out says so too, rather than "pending" for a join that no longer exists.
+    expect(await body(await polling)).toMatchObject({ status: "cancelled", code: started.code });
     readDelayMs = 0;
     service.approve(started.code, { name: "marko" });
     expect((await post("/api/cloud/workspace/join/poll", { joinId: started.joinId })).status).toBe(404);
