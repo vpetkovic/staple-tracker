@@ -402,7 +402,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   );
 
   /**
-   * MINE / ALL, in a shared workspace (members, STA-438): the member list, read here so the
+   * MINE / ALL, in a shared workspace: the member list, read here so the
    * "Next" cue below follows the same member rule `queue next` does. See `mineSplit`.
    */
   const membersWs = session.mode === "hub" && session.ws === "" ? undefined : session.ws;
