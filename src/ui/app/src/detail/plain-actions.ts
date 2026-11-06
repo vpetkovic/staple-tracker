@@ -544,12 +544,21 @@ export interface QueueRowLike {
  * the store's order check decides it: an eligible row in the plan band that comes before this
  * one (or any eligible plan row, when this one is not in the plan). Null when nothing is ahead.
  */
-export function queueAheadOf(rows: readonly QueueRowLike[], issueId: string): { identifier: string; title: string } | null {
+export function queueAheadOf(
+  rows: readonly QueueRowLike[],
+  issueId: string,
+  /**
+   * The member rule (`lib/members.ts`): the store's strict check does not count another
+   * member's ticket as ahead of anything, so neither does this hint.
+   */
+  isOtherMembers?: (identifier: string) => boolean,
+): { identifier: string; title: string } | null {
   const target = rows.find((row) => row.issueId === issueId) ?? null;
   const ahead = rows.find(
     (row) =>
       !row.unqueued &&
       row.eligibility === "eligible" &&
+      !(isOtherMembers?.(row.identifier) ?? false) &&
       row.issueId !== issueId &&
       (target === null || target.unqueued || row.position < target.position),
   );

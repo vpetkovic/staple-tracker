@@ -7,7 +7,7 @@
  * list the page is exactly the single-person page it always was: no toggle, no chips, and
  * the assignee is the read-only value it has always been.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getMembersCache } from "./api";
 import type { UiMembersCache } from "./types";
 import { useResource } from "./useStaple";
@@ -140,4 +140,34 @@ export function useMineToggle(ws: string): [boolean, (mine: boolean) => void] {
     [ws],
   );
   return [mine, setMine];
+}
+
+/**
+ * THE MEMBER RULE, for anything on the page that names "the next ticket": whether a row
+ * (by identifier) is assigned to ANOTHER member. `queue next` and the strict checkout guard
+ * skip such a row on this machine, so the row cue, the Queue view's next band and the
+ * strict-order hint must too, or the page would name a ticket the CLI never would.
+ *
+ * Undefined without a member list: every caller then behaves exactly as before.
+ */
+export type OtherMembersRule = (identifier: string) => boolean;
+
+export function otherMembersRule(
+  cache: UiMembersCache | null,
+  issues: ReadonlyArray<{ issue: { identifier: string; assignee: string | null } }> | undefined,
+): OtherMembersRule | undefined {
+  if (!cache) return undefined;
+  const assignees = new Map((issues ?? []).map((row) => [row.issue.identifier, row.issue.assignee]));
+  return (identifier: string) => otherMemberOf(cache, assignees.get(identifier) ?? null) !== null;
+}
+
+/** {@link otherMembersRule} for one workspace, from its member list and the page's issues. */
+export function useOtherMembersRule(
+  ws: string | undefined,
+  version: number,
+  onAuthError: (error: Error) => void,
+  issues: ReadonlyArray<{ issue: { identifier: string; assignee: string | null } }> | undefined,
+): OtherMembersRule | undefined {
+  const cache = useMembersCache(ws, version, onAuthError);
+  return useMemo(() => otherMembersRule(cache, issues), [cache, issues]);
 }

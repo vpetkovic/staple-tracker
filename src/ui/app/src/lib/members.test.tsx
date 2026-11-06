@@ -11,7 +11,10 @@ import { MineToggle } from "@/components/members/MineToggle";
 import { MemberChip } from "@/detail/parts/MemberChip";
 import { CommentRow, EventRow } from "@/detail/tabs/ActivityTab";
 import { buildTimeline } from "@/detail/timeline";
-import { assignableMembers, memberHue, memberInitials, otherMemberOf, partitionMine } from "./members";
+import { queueAheadOf } from "@/detail/plain-actions";
+import { effectivePreview, nextEligible } from "@/views/queue/queue-model";
+import { assignableMembers, memberHue, memberInitials, otherMemberOf, otherMembersRule, partitionMine } from "./members";
+import type { EffectiveQueueRow } from "./types";
 import type { UiMembersCache } from "./types";
 
 const CACHE: UiMembersCache = {
@@ -136,5 +139,56 @@ describe("the assignee picker", () => {
     ]);
     const html = renderToStaticMarkup(<MemberChip member={offered[0]!} you withName />);
     expect(html).toContain("(you)");
+  });
+});
+
+describe("the next ticket, wherever the page names it, follows the member rule", () => {
+  // AII-4 is marko's and heads the plan; AII-1 is mine, second; AII-2 is unqueued.
+  const effectiveRow = (identifier: string, position: number, unqueued = false): EffectiveQueueRow => ({
+    issueId: `id-${identifier}`,
+    identifier,
+    title: identifier,
+    kind: "task",
+    status: "todo",
+    position,
+    planPosition: unqueued ? null : position,
+    via: null,
+    unqueued,
+    eligibility: "eligible",
+    claim: null,
+    reason: null,
+    detail: null,
+    dueAt: null,
+    milestonePath: [],
+    epicPath: [],
+    parent: null,
+  });
+  const rows = [effectiveRow("AII-4", 1), effectiveRow("AII-1", 2), effectiveRow("AII-2", 3, true)];
+  const issues = [
+    { issue: { identifier: "AII-4", assignee: "marko" } },
+    { issue: { identifier: "AII-1", assignee: "VP" } },
+    { issue: { identifier: "AII-2", assignee: null } },
+  ];
+  const rule = otherMembersRule(CACHE, issues);
+
+  it("the shared rule names marko's ticket and nobody else's, and is absent without a member list", () => {
+    expect(rule?.("AII-4")).toBe(true);
+    expect(rule?.("AII-1")).toBe(false);
+    expect(rule?.("AII-2")).toBe(false);
+    expect(otherMembersRule(null, issues)).toBeUndefined();
+  });
+
+  it("the Queue view's next band skips marko's ticket, as queue next does", () => {
+    expect(nextEligible(rows, rule)?.identifier).toBe("AII-1");
+    expect(effectivePreview({ revision: 1, entries: [], effective: rows }, undefined, rule).next?.identifier).toBe("AII-1");
+    // Without a member list: the first eligible row, as before.
+    expect(nextEligible(rows)?.identifier).toBe("AII-4");
+  });
+
+  it("the strict-order hint never names marko's ticket as ahead", () => {
+    expect(queueAheadOf(rows, "id-AII-2", rule)?.identifier).toBe("AII-1");
+    expect(queueAheadOf(rows, "id-AII-1", rule)).toBeNull();
+    // Without a member list: marko's ticket is ahead, as before.
+    expect(queueAheadOf(rows, "id-AII-1")?.identifier).toBe("AII-4");
   });
 });

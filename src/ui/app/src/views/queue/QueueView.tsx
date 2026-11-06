@@ -108,6 +108,7 @@ import {
 } from "@/lib/api";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
+import { useOtherMembersRule } from "@/lib/members";
 import type { EffectiveQueueRow, IssueRow, QueueEligibility, QueueView as QueueViewData } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { cn } from "@/lib/utils";
@@ -1047,7 +1048,9 @@ function WorkspaceQueue({ workspace, onAuthError }: { workspace: string; onAuthE
   const now = useMemo(() => new Date(), [view]);
   const known = useMemo(() => knownRows(issues), [issues]);
   const rows = useMemo(() => (view ? planRows(view, issues, workspace) : []), [view, issues, workspace]);
-  const preview = useMemo(() => (view ? effectivePreview(view) : null), [view]);
+  // The member rule, as `queue next` applies it on this machine: another member's ticket is never next.
+  const isOtherMembers = useOtherMembersRule(workspace, session.version, onAuthError as (error: Error) => void, session.issues.data);
+  const preview = useMemo(() => (view ? effectivePreview(view, undefined, isOtherMembers) : null), [view, isOtherMembers]);
   /**
    * WHAT YOU MAY QUEUE: this workspace's work, minus what is already in the plan.
    *
