@@ -727,11 +727,12 @@ describe("the CLI", () => {
       "cloud members rename",
       "cloud members remove",
       "cloud share-endpoint",
+      "cloud share [--as <name>]",
     ]) {
       expect(result.stdout).toContain(verb);
     }
     const agents = result.stdout.slice(result.stdout.indexOf("Agents may not"));
-    for (const verb of ["join", "approve", "deny", "members rename", "members remove", "share-endpoint"]) {
+    for (const verb of ["share", "join", "approve", "deny", "members rename", "members remove", "share-endpoint"]) {
       expect(agents).toContain(verb);
     }
   });

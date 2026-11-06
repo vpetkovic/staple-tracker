@@ -46,6 +46,8 @@ export interface FakeRequest {
   expiresAt: number;
   status: "pending" | "approved" | "denied" | "expired" | "collected";
   member: { memberId: string; name: string } | null;
+  /** From a share link's `as`, as the Worker stores it (migration 0009). */
+  invitedAs?: string | null;
 }
 
 /** The members routes of the wire contract, statefully, plus capabilities. */
@@ -159,6 +161,7 @@ export class MembersServer {
         expiresAt: this.now + 600_000,
         status: "pending",
         member: null,
+        invitedAs: typeof body.invitedAs === "string" ? body.invitedAs : null,
       };
       this.requests.push(request);
       return { requestId: request.requestId, code, expiresAt: request.expiresAt, protocol: 4 };
@@ -199,7 +202,7 @@ export class MembersServer {
     if (tail === "/join-requests" && method === "GET") {
       return this.requests
         .filter((r) => r.status === "pending")
-        .map(({ requestId, code, label, createdAt, expiresAt }) => ({ requestId, code, label, createdAt, expiresAt }));
+        .map(({ requestId, code, label, createdAt, expiresAt, invitedAs }) => ({ requestId, code, label, createdAt, expiresAt, invitedAs: invitedAs ?? null }));
     }
     const decide = /^\/join-requests\/([^/]+)\/(approve|deny)$/.exec(tail);
     if (decide && method === "POST") {
