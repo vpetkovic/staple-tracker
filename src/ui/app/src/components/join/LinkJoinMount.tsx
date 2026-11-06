@@ -41,9 +41,12 @@ export function withoutJoin(href: string): string {
   return url.pathname + (url.search ? url.search : "") + url.hash;
 }
 
-/** Where a joined workspace is opened: the hub view, on that workspace. */
+/**
+ * Where a joined workspace is opened: the hub view, on that workspace. `view` is what makes the
+ * app read an address at all (`lib/session-url.ts`), so it goes with `ws`.
+ */
 export function workspaceHref(name: string): string {
-  return `/?ws=${encodeURIComponent(name)}`;
+  return `/?ws=${encodeURIComponent(name)}&view=tasks`;
 }
 
 export function LinkJoinMount({ hubMode }: { hubMode: boolean }) {

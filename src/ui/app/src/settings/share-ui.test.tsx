@@ -15,6 +15,7 @@ import { AUTO_SYNC_NOTE, IDLE_INVITE, InviteBoxView, copyText, textFor, type Inv
 import { JoinDialogView, joinTitle, type JoinDialogActions } from "@/components/join/JoinDialog";
 import { joinLinkFromSearch, withoutJoin, workspaceHref } from "@/components/join/LinkJoinMount";
 import { SharedBadgeView } from "@/components/SharedBadge";
+import { readShellUrl } from "@/lib/session-url";
 import { sharedBadgeText, sharedChips, sharedRow, syncDot } from "@/lib/shared-workspaces";
 
 const NOOP = () => {};
@@ -116,7 +117,9 @@ describe("joining from a link", () => {
     expect(joinLinkFromSearch("?join=not%20a%20url")).toBeNull();
     expect(joinLinkFromSearch("?view=tasks")).toBeNull();
     expect(withoutJoin(`http://localhost:4400/${search}`)).toBe("/?view=tasks");
-    expect(workspaceHref("ai inbox")).toBe("/?ws=ai%20inbox");
+    expect(workspaceHref("ai inbox")).toBe("/?ws=ai%20inbox&view=tasks");
+    // The app reads an address only when it names a view, so a bare ?ws= would land on All workspaces.
+    expect(readShellUrl(workspaceHref("ai inbox").slice(1))?.ws).toBe("ai inbox");
   });
 
   it("says who invited you to what, the service, the device, and that sync will be on", () => {
