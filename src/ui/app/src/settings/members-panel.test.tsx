@@ -237,6 +237,9 @@ describe("the join flow", () => {
     const html = view({ stage: "preview", preview: PREVIEW, consent: CONSENT, label: PREVIEW.label });
     expect(html).toMatch(/<input[^>]*aria-label="Device name"[^>]*value="Vojislavs-MacBook-Pro.local"/);
     expect(html).toContain("shown to the member who approves you");
+    // The field shows what was typed, not the preview's default.
+    const edited = view({ stage: "preview", preview: PREVIEW, consent: CONSENT, label: "thinkpad" });
+    expect(edited).toMatch(/<input[^>]*aria-label="Device name"[^>]*value="thinkpad"/);
     const blank = view({ stage: "preview", preview: PREVIEW, consent: CONSENT, label: "  " });
     expect(blank).toMatch(/<button[^>]*disabled=""[^>]*data-join-request-button/);
   });
