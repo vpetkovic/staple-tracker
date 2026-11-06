@@ -38,6 +38,7 @@ p { margin: 0 0 16px; color: var(--muted); overflow-wrap: anywhere; }
 code { flex: 1; min-width: 0; display: block; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; white-space: nowrap; }
 button { flex: none; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; }
 .hint { font-size: 13px; margin: 0; }
+.hint code.inline { display: inline; padding: 1px 4px; white-space: normal; }
 `;
 
 /**
@@ -94,7 +95,7 @@ const BODY = `<!doctype html>
 <a class="open" id="open" href="${LOCAL_APP_ORIGIN}/" rel="noreferrer">Open in Staple</a>
 <p class="label">Or paste this into a terminal:</p>
 <div class="row"><code id="command">staple cloud join '&lt;this link&gt;'</code><button type="button" id="copy">Copy</button></div>
-<p class="hint">Don't have Staple yet? Install it with <code style="display:inline;padding:1px 4px">npm install -g staple-cli</code>, run <code style="display:inline;padding:1px 4px">staple open</code>, then come back to this link.</p>
+<p class="hint">Don't have Staple yet? Install it with <code class="inline">npm install -g staple-cli</code>, run <code class="inline">staple open</code>, then come back to this link.</p>
 </main>
 <script>${SCRIPT}</script>
 </body>
@@ -117,9 +118,8 @@ function contentSecurityPolicy(): Promise<string> {
     return [
       "default-src 'none'",
       `script-src 'sha256-${script}'`,
-      // The inline `style` attributes on the two hint <code> spans need 'unsafe-hashes'
-      // with their own hashes; simpler and stricter to allow exactly one stylesheet and
-      // no attributes, so those spans' styling falls back to the stylesheet's `code`.
+      // Exactly one stylesheet. The page has no `style=` or `on*=` attributes: a hash
+      // does not cover those, and the browser would block them.
       `style-src 'sha256-${style}'`,
       "img-src 'none'",
       "connect-src 'none'",

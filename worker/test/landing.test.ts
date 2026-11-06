@@ -63,6 +63,9 @@ describe("GET /join/{repoId}", () => {
     expect(csp).not.toContain("unsafe-inline");
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(response.headers.get("x-frame-options")).toBe("DENY");
+    // Nothing the CSP would block: no style or event-handler attribute, which a hash
+    // cannot admit (a real browser found the first version's two `style=` attributes).
+    expect(body).not.toMatch(/\sstyle=|\son[a-z]+=/i);
     // No external asset of any kind.
     expect(body).not.toMatch(/<(link|img|iframe)\b/);
     expect(body).not.toMatch(/src=["']?https?:/);
