@@ -37,7 +37,8 @@ beforeAll(async () => {
   expect((await cli("new", "Supabase RLS for inbox")).status).toBe(0);
   expect((await cli("new", "Retry backoff config", "--assignee", "VP")).status).toBe(0);
   expect((await cli("new", "Label suggestions", "--assignee", "claude-ab12")).status).toBe(0);
-  // Connected, with no member list: what every solo workspace is. Its status must read as before.
+  // Connected, with no member list, in manual mode: one person's workspace. Its status must
+  // read as before, and no command here may reach for the network (the endpoint is not real).
   const repositoryId = readWorkspaceManifest(join(home, "workspaces", `${WS}.db`), home)!.repositoryId;
   credentialStoreFor(home, "file").write(repositoryId, "stpl_solo");
   writeConnection(home, {
@@ -48,7 +49,7 @@ beforeAll(async () => {
     label: "solo",
     credentialMechanism: "file",
     connectedAt: "2026-11-06T00:00:00.000Z",
-    auto: true,
+    auto: false,
     backup: false,
     protocol: 4,
   });

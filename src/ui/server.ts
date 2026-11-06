@@ -42,7 +42,8 @@ import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
 import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
-import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
+import { SurfaceAutoSync, type SurfaceAutoSyncOptions } from "../core/cloud/auto-triggers.js";
+import { autoSyncConsented } from "../core/cloud/auto.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
 import {
@@ -177,6 +178,8 @@ interface UiOptions {
   ws?: string;
   /** Caller-managed credential (the CLI's persistent ~/.staple/ui-token). Absent = per-process random. */
   token?: string;
+  /** Tests only: the automatic-sync timing and transport. Production passes nothing. */
+  autoSync?: Pick<SurfaceAutoSyncOptions, "sessionIntervalMs" | "sharedSessionIntervalMs" | "scheduler" | "now">;
 }
 
 interface StoreHandle {
@@ -1116,12 +1119,35 @@ export function startUiServer(options: UiOptions): UiHandle {
    * one per surface.
    */
   const autoSync = new SurfaceAutoSync({
+    ...options.autoSync,
     home: () => stapleHome(),
     resolve: (ws) => {
       const handle = handleFor(ws);
       const repositoryId = readStoredRepositoryId(handle.store.db);
       return repositoryId === null ? null : { db: handle.store.db, repositoryId };
     },
+    /**
+     * In hub mode the startup and session triggers cover EVERY hub workspace whose
+     * connection consents to automatic sync, read again on each tick, so a workspace
+     * registered after this server started (a join from a link, made in this very page) is
+     * synced from its next tick. Only the consent is read here, from the hub row's identity
+     * and the connection record, so a workspace nobody connected is never opened for it;
+     * the gate inside each run stays the authority. A single-workspace server keeps its one.
+     */
+    targets: options.hub
+      ? () => {
+          const hub = Hub.open();
+          try {
+            const home = stapleHome();
+            return hub
+              .list()
+              .filter((entry) => entry.available && entry.repositoryId && autoSyncConsented(home, entry.repositoryId))
+              .map((entry) => entry.slug);
+          } finally {
+            hub.close();
+          }
+        }
+      : undefined,
   });
 
   /**

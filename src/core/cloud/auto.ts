@@ -141,6 +141,14 @@ export const AUTO_SYNC_BOUNDS: Record<AutoSyncTrigger, AutoSyncBound> = {
 export const AUTO_SYNC_SESSION_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
+ * The session interval for a SHARED workspace (two or more current members): thirty
+ * seconds, the session trigger's own floor (`minIntervalMs` above), so a teammate's change
+ * reaches an open page within about that long. Five minutes is fine for one person's
+ * devices; it reads as "broken" to two people looking at the same tracker.
+ */
+export const AUTO_SYNC_SHARED_SESSION_INTERVAL_MS = 30 * 1000;
+
+/**
  * The backoff schedule, applied on top of whichever trigger asked.
  *
  * Jittered, and the jitter is not decoration. Several devices pointed at one
