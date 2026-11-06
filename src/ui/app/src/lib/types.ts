@@ -3163,3 +3163,103 @@ export interface RunEntry {
   /** Instruction documents in scope that changed since the run's last take; [] once it ended. */
   instructionsChanged: InstructionChange[];
 }
+
+// ---------------------------------------------------------------- members and joining (STA-441)
+
+/**
+ * The local member list, as `src/core/cloud/members-cache.ts` stores it and the members
+ * routes return it (`src/ui/cloud-members-routes.ts`). Prefixed `Cloud` so it can sit
+ * beside the attribution lane's own cache mirror without a name clash.
+ */
+export interface CloudMemberDevice {
+  deviceId: string;
+  label: string | null;
+  /** Unix milliseconds. Null when the device has never made a request. */
+  lastSeenAt: number | null;
+  revoked: boolean;
+}
+
+export interface CloudMember {
+  memberId: string;
+  name: string;
+  isOwner: boolean;
+  removed: boolean;
+  devices: CloudMemberDevice[];
+}
+
+export interface CloudMemberList {
+  version: 1;
+  repositoryId: string;
+  fetchedAt: string;
+  self: { memberId: string; deviceId: string };
+  members: CloudMember[];
+}
+
+/** One pending join request, as `GET /join-requests` lists it. Times in unix milliseconds. */
+export interface CloudJoinRequest {
+  requestId: string;
+  code: string;
+  label: string | null;
+  createdAt: number | null;
+  expiresAt: number | null;
+}
+
+/** What every members route answers with: the refreshed list, and the requests when it read them. */
+export interface CloudMembersResponse {
+  members: CloudMemberList | null;
+  requests?: CloudJoinRequest[];
+}
+
+/** `GET /api/cloud/workspace/join/offer`: whether the empty state should offer to join. Local. */
+export interface CloudJoinOffer {
+  slug: string;
+  repositoryId: string;
+  /** The endpoint the committed manifest names (`staple cloud share-endpoint`), or null. */
+  endpoint: string | null;
+  connected: boolean;
+  removedBy: string | null;
+}
+
+/** The join consent preview. `endpoint` is the origin string; the rest mirrors `ConnectPreview`. */
+export interface CloudJoinPreview {
+  endpoint: string;
+  repositoryId: string;
+  deviceId: string | null;
+  label: string;
+  credentialMechanism: "keychain" | "secret-tool" | "file";
+  credentialFallbackReason: string | null;
+  alreadyConnected: boolean;
+  existingEndpoint: string | null;
+  autoAfterConnect: false;
+  endpointSource: "flag" | "manifest";
+}
+
+export interface CloudJoinPreviewResponse {
+  slug: string;
+  preview: CloudJoinPreview;
+  consent: ConsentTicket;
+}
+
+export interface CloudJoinStarted {
+  /** Names the join in this server's memory. The request secret never leaves the server. */
+  joinId: string;
+  code: string;
+  /** Unix milliseconds. */
+  expiresAt: number;
+  label: string;
+  endpoint: string;
+}
+
+export type CloudJoinPoll =
+  | { status: "pending"; code: string; expiresAt: number; transient?: boolean }
+  | {
+      status: "joined";
+      code: string;
+      member: { memberId: string; name: string } | null;
+      endpoint: string;
+      deviceId: string;
+      auto: boolean;
+      membersCached: boolean;
+    }
+  | { status: "denied" | "expired"; code: string; expiresAt: number }
+  | { status: "failed"; code: string; message: string };

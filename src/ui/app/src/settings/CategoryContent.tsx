@@ -31,6 +31,9 @@ import { servedGlyphMap } from "./glyph-picker/glyph-picker-model";
 import { sanitizeThroughServer } from "./glyph-picker/sanitize";
 import { kindRows, statusRows } from "./settings-ops";
 import { isHubRegistryCategory, isWorkspaceCloudCategory } from "./settings-shell";
+import { isMembersCategory } from "./members-settings";
+import { MembersSection } from "./MembersSection";
+import { JoinOfferCard } from "@/components/join/JoinOffer";
 
 export interface ApplyTo {
   (target: "statuses" | "kinds", ops: VocabularyOp[]): Promise<Refusal | null>;
@@ -63,7 +66,15 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
    * down: `applyTo` writes `/api/settings`, and there is nothing in this section
    * that route could ever legally carry.
    */
-  if (isCloudCategory(category.id)) return <CloudSection ws={ws} part="machine" />;
+  if (isCloudCategory(category.id)) {
+    return (
+      <>
+        {/* STA-441: the join card lives here too, for the workspace Settings is pointed at. */}
+        {ws ? <JoinOfferCard ws={ws} className="mb-6" /> : null}
+        <CloudSection ws={ws} part="machine" />
+      </>
+    );
+  }
   /**
    * The two sections split out of Cloud when Settings became global: the hub registry
    * (the computer's, like Cloud) and one workspace's own connection (per workspace, `ws`
@@ -71,6 +82,8 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
    */
   if (isHubRegistryCategory(category.id)) return <CloudSection ws={ws} part="registry" />;
   if (isWorkspaceCloudCategory(category.id)) return <CloudSection ws={ws} part="workspace" />;
+  /** STA-441: the people sharing this workspace. Fetches from the service on open; a person opened it. */
+  if (isMembersCategory(category.id)) return <MembersSection key={ws} ws={ws} />;
   /** "Usage & budget": machine-local like Cloud, matched by id for the same reason (`telemetry-settings.ts`). */
   if (isTelemetryCategory(category.id)) return <TelemetrySection />;
 
