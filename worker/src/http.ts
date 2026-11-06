@@ -142,3 +142,26 @@ export async function assertRateLimit(
     );
   }
 }
+
+/**
+ * Rate limiting for the pre-credential join routes, keyed on the client IP.
+ *
+ * The one place this Worker keys on IP, and only because there is nothing else: a
+ * joiner has no device credential yet, by definition. The `join:` prefix keeps these
+ * counters apart from the per-device ones on the same binding. Fails open when the
+ * binding is absent, exactly as `assertRateLimit` does. The pending cap per repository
+ * (`members.ts`) is the bound that does not depend on where a request comes from.
+ */
+export async function assertJoinRateLimit(request: Request, env: Env): Promise<void> {
+  if (!env.SYNC_LIMITER) return;
+  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
+  const { success } = await env.SYNC_LIMITER.limit({ key: `join:${ip}` });
+  if (!success) {
+    throw new SyncError(
+      "rate_limited",
+      "too many join requests from this address",
+      {},
+      { "retry-after": "60" },
+    );
+  }
+}
