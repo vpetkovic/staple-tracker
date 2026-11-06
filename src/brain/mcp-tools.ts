@@ -18,6 +18,8 @@ import { projectKeysFor, projectScope } from "./scope.js";
 import type { BrainStore } from "./store.js";
 import { BRAIN_KINDS, GLOBAL_SCOPE } from "./types.js";
 import { hashPrompt, withUsage, type UsageEvent } from "./usage.js";
+import { agentOf } from "./config.js";
+import { StapleError } from "../core/types.js";
 
 type Run = (fn: () => unknown) => { content: Array<{ type: "text"; text: string }>; isError?: true };
 
@@ -45,6 +47,22 @@ const dbSchema = z.string().optional().describe("Path of another brain database;
 export function registerBrainTools(server: McpServer, helpers: { run: Run }): void {
   const { run } = helpers;
   const provider = () => server.server.getClientVersion()?.name ?? "mcp";
+  /**
+   * The synced policy, applied to this client: the brain and this agent must be on, and a
+   * write needs the agent's write permission and a write policy other than off. Returns
+   * whether a write must land provisional (the `review` policy).
+   */
+  const gate = (brain: BrainStore, need: "read" | "write"): { provisional: boolean } => {
+    const config = brain.config();
+    const agent = agentOf(provider());
+    if (!config.enabled) throw new StapleError("forbidden", "The brain is turned off (Settings → Brain).");
+    if (!config.agents[agent].enabled) throw new StapleError("forbidden", `The brain is turned off for ${agent} (Settings → Brain).`);
+    if (need === "write") {
+      if (config.writePolicy === "off") throw new StapleError("forbidden", "Agent writes to the brain are off (Settings → Brain → Write policy).");
+      if (!config.agents[agent].write) throw new StapleError("forbidden", `${agent} may not write to the brain (Settings → Brain).`);
+    }
+    return { provisional: config.writePolicy === "review" };
+  };
   const logUse = (dbPath: string, event: UsageEvent, recordIds: string[], extra: { promptHash?: string; latencyMs?: number; detail?: Record<string, unknown> } = {}) =>
     withUsage(dbPath, (log) => log.log({ event, provider: provider(), session: null, recordIds, ...extra }));
 
@@ -64,6 +82,7 @@ export function registerBrainTools(server: McpServer, helpers: { run: Run }): vo
     (args) =>
       run(() =>
         withBrain(args.db, (brain, dbPath) => {
+          gate(brain, "read");
           const started = performance.now();
           const hits = recall(brain.live(), args.question, { limit: args.limit ?? 3, keys: projectKeysFor(args.cwd ?? process.cwd()) });
           logUse(dbPath, "recall", hits.map((h) => h.record.id), { promptHash: hashPrompt(args.question), latencyMs: Math.round((performance.now() - started) * 10) / 10 });
@@ -99,6 +118,7 @@ export function registerBrainTools(server: McpServer, helpers: { run: Run }): vo
     (args) =>
       run(() =>
         withBrain(args.db, (brain, dbPath) => {
+          const { provisional: mustReview } = gate(brain, "write");
           const cwd = args.cwd ?? process.cwd();
           const scope = args.scope === "global" ? GLOBAL_SCOPE : !args.scope || args.scope === "project" ? projectScope(cwd) : args.scope;
           const record = brain.remember({
@@ -110,7 +130,7 @@ export function registerBrainTools(server: McpServer, helpers: { run: Run }): vo
             scope,
             tags: args.tags ?? [],
             source: args.source ?? (process.env.STAPLE_AGENT ? `agent:${process.env.STAPLE_AGENT}` : `agent:${provider()}`),
-            provisional: args.provisional ?? false,
+            provisional: mustReview || (args.provisional ?? false),
             supersedes: args.supersedes ?? null,
           });
           logUse(dbPath, "remember", [record.id], { detail: { supersedes: args.supersedes ?? null } });
@@ -130,6 +150,7 @@ export function registerBrainTools(server: McpServer, helpers: { run: Run }): vo
     (args) =>
       run(() =>
         withBrain(args.db, (brain, dbPath) => {
+          gate(brain, "write");
           const record = brain.verify(args.id);
           logUse(dbPath, "verify", [record.id]);
           return record;
@@ -148,6 +169,7 @@ export function registerBrainTools(server: McpServer, helpers: { run: Run }): vo
     (args) =>
       run(() =>
         withBrain(args.db, (brain, dbPath) => {
+          gate(brain, "write");
           const record = brain.forget(args.id, process.env.STAPLE_AGENT ?? null);
           logUse(dbPath, "forget", [record.id]);
           return record;

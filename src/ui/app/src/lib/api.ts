@@ -1273,3 +1273,99 @@ export interface BrainTurnPreview {
 /** `GET /api/brain/turn` — what the UserPromptSubmit hook would add for this prompt (unlogged). */
 export const previewBrainTurn = (target: BrainTarget, prompt: string) =>
   request<BrainTurnPreview>(`/api/brain/turn${qs({ scope: target.scope, cwd: target.cwd, prompt, seen: "start" })}`);
+
+// ---------- Settings → Brain ----------
+
+export type BrainSeverity = "ok" | "warn" | "critical";
+
+export interface BrainOverview {
+  generatedAt: string;
+  verdict: BrainSeverity | "off";
+  checks: Array<{ id: string; severity: BrainSeverity; text: string }>;
+  budget: { tokens: number; avgTokens: number | null; utilization: number | null; shown: number | null; eligible: number | null };
+  corpus: {
+    live: number;
+    byKind: Record<BrainKind, number>;
+    global: number;
+    projects: number;
+    provisional: number;
+    awaitingReview: number;
+    promoted: number;
+    expired: number;
+    stale: number;
+    superseded: number;
+  };
+  helping: {
+    sessions: number;
+    sessionsWithMemories: number;
+    turnHitRate: number | null;
+    recallHitRate: number | null;
+    citationRate: number | null;
+    citations: number;
+    tokensPerSessionStart: number | null;
+    tokensPerTurn: number | null;
+    latency: Record<"start" | "turn" | "recall", { p50: number | null; p95: number | null }>;
+    eval: { at: string; r1: number; r3: number; questions: number; misses: number } | null;
+  };
+  agents: Array<{ agent: string; label: string; sessions: number; turnInjections: number; recalls: number; remembers: number; citations: number }>;
+  mostUsed: Array<{ id: string; name: string | null; uses: number; cites: number }>;
+  neverUsed: number;
+  delta: {
+    days: number;
+    recordsAdded: number;
+    recordsAddedBefore: number;
+    sessions: number;
+    sessionsBefore: number;
+    turnsInjected: number;
+    turnsInjectedBefore: number;
+    citations: number;
+    citationsBefore: number;
+    remembers: number;
+    remembersBefore: number;
+  };
+}
+
+/** `GET /api/brain/overview` — is the brain healthy, and is it helping? */
+export const getBrainOverview = (days: 7 | 30) => request<BrainOverview>(`/api/brain/overview${qs({ days })}`);
+
+export type BrainAgentId = "claude" | "codex" | "mcp";
+export type BrainWritePolicy = "auto" | "review" | "off";
+
+export interface BrainConfig {
+  enabled: boolean;
+  sync: { enabled: boolean; scopes: string[] };
+  agents: Record<BrainAgentId, { enabled: boolean; write: boolean }>;
+  writePolicy: BrainWritePolicy;
+  budgets: { sessionTokens: number; turnTokens: number; turnMs: number };
+  provisionalExpiryDays: number;
+}
+
+export interface BrainHookStatus {
+  agent: "claude" | "codex";
+  label: string;
+  home: string | null;
+  file: string | null;
+  refusal: string | null;
+  events: Record<"SessionStart" | "UserPromptSubmit" | "Stop", boolean>;
+}
+
+export interface BrainConfigView {
+  synced: BrainConfig;
+  machine: {
+    brainDb: string;
+    hookBundle: string;
+    hookBundlePresent: boolean;
+    hooks: BrainHookStatus[];
+    sync: { connected: boolean; everSynced: boolean; repositoryId: string | null };
+  };
+  scopes: Array<{ scope: string; count: number }>;
+}
+
+/** `GET /api/brain/config` — the synced policy and this computer's hook and sync state. */
+export const getBrainConfig = () => request<BrainConfigView>("/api/brain/config");
+
+/** `POST /api/brain/config` — replace the synced policy. */
+export const saveBrainConfig = (config: BrainConfig) => postJson<BrainConfig>("/api/brain/config", { config });
+
+/** `POST /api/brain/hooks` — install or remove the brain's hooks in one CLI's (isolated) config home. */
+export const setBrainHooks = (agent: "claude" | "codex", action: "install" | "remove") => postJson<BrainHookStatus>("/api/brain/hooks", { agent, action });

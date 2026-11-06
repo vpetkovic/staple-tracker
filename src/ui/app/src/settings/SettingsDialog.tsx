@@ -67,6 +67,7 @@ import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { CategoryContent, type ApplyTo } from "./CategoryContent";
 import { withCloudCategory } from "./cloud-settings";
 import { withTelemetryCategory } from "./telemetry-settings";
+import { withBrainCategory } from "./brain/brain-settings";
 import { UnsavedChangesDialog } from "./form/ConfirmDialog";
 import { leaveDecision } from "./form/form-model";
 import { SettingsShell } from "./SettingsShell";
@@ -218,7 +219,7 @@ export function SettingsDialog({
    * (global) and Cloud sync (per workspace). None of those is a back door into the
    * registry: nothing they hold ever travels on `/api/settings`.
    */
-  const categories = withShellCategories(withTelemetryCategory(withCloudCategory(page.registry.categories)));
+  const categories = withShellCategories(withBrainCategory(withTelemetryCategory(withCloudCategory(page.registry.categories))));
   const active = resolveCategory(categories, category);
 
   const stacked = useStacked();

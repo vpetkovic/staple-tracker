@@ -2,8 +2,8 @@
  * The brain POC's pure parts: the memory-file parser, the session-start block's budget and
  * ranking, and recall. Sync is `brain-sync.test.ts`; the Worker half is in `worker/test`.
  */
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildContext, renderHookOutput } from "../src/brain/context.js";
@@ -14,6 +14,9 @@ import { estimateTokens, type BrainRecord } from "../src/brain/types.js";
 import { buildTurn } from "../src/brain/turn.js";
 import { citedIn } from "../src/brain/cite.js";
 import { computeStats } from "../src/brain/stats.js";
+import { agentOf, isExpired, normalizeConfig, syncsScope } from "../src/brain/config.js";
+import { hookTarget, installHooks, removeHooks } from "../src/brain/hooks-install.js";
+import { computeOverview } from "../src/brain/overview.js";
 
 const NOW = "2026-11-05T00:00:00.000Z";
 
@@ -161,5 +164,73 @@ describe("stats", () => {
     expect(stats.usage.neverUsed.map((r) => r.id)).toEqual(["b"]);
     expect(stats.health.provisional).toBe(1);
     expect(stats.usage.latency.turn).toEqual({ n: 2, p50: 80, p95: 80 });
+  });
+});
+
+describe("brain policy", () => {
+  it("normalizes a partial or malformed config to whole defaults", () => {
+    const c = normalizeConfig({ writePolicy: "nonsense", budgets: { turnMs: 5 }, sync: { scopes: ["global", "bogus", "project:-x"] } });
+    expect(c.writePolicy).toBe("auto");
+    expect(c.budgets.turnMs).toBe(50);
+    expect(c.sync.scopes).toEqual(["global", "project:-x"]);
+    expect(c.agents.codex).toEqual({ enabled: true, write: true });
+  });
+
+  it("keeps a left-out scope local and expires an old provisional record", () => {
+    const c = normalizeConfig({ sync: { enabled: true, scopes: ["global"] }, provisionalExpiryDays: 30 });
+    expect(syncsScope(c, "global")).toBe(true);
+    expect(syncsScope(c, "project:-x")).toBe(false);
+    expect(syncsScope(normalizeConfig({ sync: { enabled: false } }), "global")).toBe(false);
+    expect(isExpired(c, { provisional: true, createdAt: "2026-01-01T00:00:00.000Z" }, Date.parse(NOW))).toBe(true);
+    expect(isExpired(c, { provisional: false, createdAt: "2026-01-01T00:00:00.000Z" }, Date.parse(NOW))).toBe(false);
+    expect(agentOf("codex-mcp-client")).toBe("codex");
+    expect(agentOf("some-ide")).toBe("mcp");
+  });
+});
+
+describe("hook installs", () => {
+  it("refuses the user's real config home and an unset one, and round-trips an isolated one", () => {
+    const real = { CLAUDE_CONFIG_DIR: join(userInfo().homedir, ".claude") };
+    expect(hookTarget("claude", real).refusal).toMatch(/real Claude Code home/);
+    expect(() => installHooks("claude", "/x/brain.mjs", "/x/brain.db", real)).toThrow(/real Claude Code home/);
+    expect(hookTarget("codex", {}).refusal).toMatch(/CODEX_HOME is not set/);
+
+    const home = mkdtempSync(join(tmpdir(), "brain-hooks-"));
+    const bundle = join(home, "brain.mjs");
+    writeFileSync(bundle, "");
+    writeFileSync(join(home, "hooks.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "other-tool" }] }] } }));
+    const env = { CODEX_HOME: home };
+    const installed = installHooks("codex", bundle, "/x/brain.db", env);
+    expect(installed.events).toEqual({ SessionStart: true, UserPromptSubmit: true, Stop: true });
+    // Installing twice does not duplicate; the user's own hooks stay.
+    installHooks("codex", bundle, "/x/brain.db", env);
+    const file = JSON.parse(readFileSync(join(home, "hooks.json"), "utf8"));
+    expect(file.hooks.SessionStart).toHaveLength(1);
+    expect(file.hooks.Stop.map((g: { hooks: Array<{ command: string }> }) => g.hooks[0]!.command.includes("brain.mjs"))).toEqual([false, true]);
+    const removed = removeHooks("codex", env);
+    expect(removed.events).toEqual({ SessionStart: false, UserPromptSubmit: false, Stop: false });
+    expect(JSON.parse(readFileSync(join(home, "hooks.json"), "utf8")).hooks.Stop[0].hooks[0].command).toBe("other-tool");
+  });
+});
+
+describe("overview", () => {
+  it("reports the worst check, off when the brain is off, and leaves probes and config saves out", () => {
+    const records = [record({ id: "a", name: "a-rule" })];
+    const usage = [
+      { at: NOW, event: "session_start" as const, provider: "claude", session: "s1", promptHash: null, recordIds: ["a"], tokens: 1400, latencyMs: 60, detail: { eligible: 3 } },
+      { at: NOW, event: "turn" as const, provider: "probe", session: "p1", promptHash: "h", recordIds: ["a"], tokens: 300, latencyMs: 900, detail: null },
+      { at: NOW, event: "remember" as const, provider: "web", session: null, promptHash: null, recordIds: [], tokens: null, latencyMs: null, detail: { config: true } },
+    ];
+    const hooks = [
+      { agent: "claude" as const, label: "Claude Code", home: "/h", file: "/h/settings.json", refusal: null, events: { SessionStart: true, UserPromptSubmit: true, Stop: true } },
+      { agent: "codex" as const, label: "Codex", home: "/c", file: "/c/hooks.json", refusal: null, events: { SessionStart: false, UserPromptSubmit: false, Stop: false } },
+    ];
+    const o = computeOverview(records, usage, normalizeConfig({}), hooks, { now: Date.parse(NOW) + 60_000 });
+    expect(o.verdict).toBe("warn");
+    expect(o.checks.find((c) => c.id === "hooks-codex")?.severity).toBe("warn");
+    expect(o.checks.find((c) => c.id === "latency")).toBeUndefined();
+    expect(o.agents.map((a) => a.agent)).toEqual(["claude"]);
+    expect(o.budget.utilization).toBe(0.93);
+    expect(computeOverview(records, usage, normalizeConfig({ enabled: false }), hooks).verdict).toBe("off");
   });
 });

@@ -28,6 +28,7 @@ import type { WorkspaceStore } from "../core/store.js";
 import { WORKSPACE_SETTING_META_PREFIX } from "../core/settings-registry.js";
 import { StapleError, nowIso } from "../core/types.js";
 import { GLOBAL_SCOPE, isBrainKind, type BrainKind, type BrainRecord } from "./types.js";
+import { isExpired, readConfig, syncsScope, type BrainConfig } from "./config.js";
 
 export const BRAIN_SETTING_PREFIX = "brain.";
 
@@ -111,9 +112,21 @@ export class BrainStore {
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
-  /** Records an agent should still read: not superseded. */
+  /** Records an agent should still read: not superseded, and not a provisional one past its expiry. */
   live(): BrainRecord[] {
-    return this.all().filter((r) => r.supersededBy === null);
+    const config = this.config();
+    const now = Date.now();
+    return this.all().filter((r) => r.supersededBy === null && !isExpired(config, r, now));
+  }
+
+  /** The synced policy (`config.ts`). */
+  config(): BrainConfig {
+    return readConfig(this.workspace);
+  }
+
+  /** Whether a change to a record in this scope is journaled for the sync service. */
+  private leaves(scope: string): boolean {
+    return syncsScope(this.config(), scope);
   }
 
   get(idOrPrefix: string): BrainRecord {
@@ -180,13 +193,15 @@ export class BrainStore {
       const record = this.get(idOrPrefix);
       this.db.prepare("DELETE FROM meta WHERE key = ?").run(`${META_PREFIX}${record.id}`);
       this.bumpRevision();
-      this.workspace.journal.record({
-        entity: "setting",
-        entityId: `${BRAIN_SETTING_PREFIX}${record.id}`,
-        verb: "delete",
-        payload: {},
-        actor: actor ?? null,
-      });
+      if (this.leaves(record.scope)) {
+        this.workspace.journal.record({
+          entity: "setting",
+          entityId: `${BRAIN_SETTING_PREFIX}${record.id}`,
+          verb: "delete",
+          payload: {},
+          actor: actor ?? null,
+        });
+      }
       return record;
     });
   }
@@ -202,6 +217,8 @@ export class BrainStore {
       .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(`${META_PREFIX}${id}`, JSON.stringify({ v: 1, value }));
     this.bumpRevision();
+    // A scope the policy keeps local is written here and never journaled (`config.ts`).
+    if (!this.leaves(record.scope)) return;
     const entityId = `${BRAIN_SETTING_PREFIX}${id}`;
     // After a forget, only a `create` brings the entity back, here and in the service's fold.
     const verb = created || this.workspace.journal.isTombstoned("setting", entityId) ? "create" : "update";

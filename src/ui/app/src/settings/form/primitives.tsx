@@ -107,6 +107,7 @@ export function Field({
   description,
   scope,
   source,
+  tag,
   error,
   dirty,
   children,
@@ -120,6 +121,8 @@ export function Field({
   scope?: SettingScope;
   /** Where the current value came from (`default`, `workspace`, `config`), shown in the tag. */
   source?: string;
+  /** A tag of the section's own, in place of the scope tag (e.g. "Synced", "This computer"). */
+  tag?: ReactNode;
   error?: string | null;
   dirty?: boolean;
   /**
@@ -151,6 +154,7 @@ export function Field({
             {label}
           </Label>
           {scope ? <ScopeTag scope={scope} source={source} /> : null}
+          {tag}
           {dirty ? (
             <span data-dirty-marker className="text-[11px] text-muted-foreground" title="Unsaved change">
               edited

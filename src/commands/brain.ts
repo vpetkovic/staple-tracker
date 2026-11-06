@@ -42,6 +42,7 @@ import { buildTurn, TURN_DEFAULTS } from "../brain/turn.js";
 import { hashPrompt, UsageLog, usagePath, withUsage } from "../brain/usage.js";
 import { computeStats } from "../brain/stats.js";
 import { citedIn, lastAssistantText } from "../brain/cite.js";
+import { agentOf } from "../brain/config.js";
 
 /** Milliseconds since this process started: the hook's whole cost, startup included. */
 const sinceStart = () => Math.round(performance.now() * 10) / 10;
@@ -254,7 +255,15 @@ export function runBrainCommand(argv: string[]): void {
         const session = values.session ?? stringField(payload, "session_id");
         const opened = openBrain(values.db);
         try {
-          const block = buildContext(opened.brain.all(), projectKeysFor(cwd), Number(values.budget ?? DEFAULT_CONTEXT_BUDGET));
+          const config = opened.brain.config();
+          // Off for the brain or for this agent: answer nothing, and say so in the log.
+          if (hook && (!config.enabled || !config.agents[agentOf(values.provider)].enabled)) {
+            withUsage(opened.dbPath, (log) =>
+              log.log({ event: "session_start", provider: values.provider ?? null, session, tokens: 0, latencyMs: sinceStart(), detail: { skipped: config.enabled ? "agent_off" : "brain_off" } }),
+            );
+            return;
+          }
+          const block = buildContext(opened.brain.live(), projectKeysFor(cwd), Number(values.budget ?? config.budgets.sessionTokens ?? DEFAULT_CONTEXT_BUDGET));
           if (hook) {
             process.stdout.write(renderHookOutput(block, "SessionStart"));
             withUsage(opened.dbPath, (log) =>
@@ -288,14 +297,19 @@ export function runBrainCommand(argv: string[]): void {
         const prompt = values.prompt ?? stringField(payload, "prompt") ?? "";
         const cwd = values.cwd ?? stringField(payload, "cwd") ?? process.cwd();
         const session = values.session ?? stringField(payload, "session_id");
-        const timeBudget = Number(values["time-budget"] ?? TURN_DEFAULTS.timeBudgetMs);
         const opened = openBrain(values.db);
+        const config = opened.brain.config();
+        const timeBudget = Number(values["time-budget"] ?? config.budgets.turnMs ?? TURN_DEFAULTS.timeBudgetMs);
         let log: UsageLog | null = null;
         try {
           try {
             log = new UsageLog(usagePath(opened.dbPath));
           } catch {
             log = null;
+          }
+          if (hook && (!config.enabled || !config.agents[agentOf(values.provider)].enabled)) {
+            log?.log({ event: "turn", provider: values.provider ?? null, session, promptHash: hashPrompt(prompt), tokens: 0, latencyMs: sinceStart(), detail: { skipped: config.enabled ? "agent_off" : "brain_off" } });
+            return;
           }
           const seen = session && log ? log.injectedIn(session) : new Set<string>();
           // Past the budget before scoring: say so in one line rather than make the prompt wait.
@@ -308,7 +322,7 @@ export function runBrainCommand(argv: string[]): void {
           const block = buildTurn(opened.brain.live(), prompt, {
             keys: projectKeysFor(cwd),
             seen,
-            tokenBudget: values.budget ? Number(values.budget) : undefined,
+            tokenBudget: values.budget ? Number(values.budget) : config.budgets.turnTokens,
           });
           if (hook) process.stdout.write(renderHookOutput(block, "UserPromptSubmit"));
           else print(values.json === true, { session, ...block }, () => block.text || "(nothing above the floor that this session has not seen)");

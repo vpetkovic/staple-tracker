@@ -14,6 +14,12 @@ import { GLOBAL_SCOPE, isBrainKind } from "../brain/types.js";
 import { computeStats } from "../brain/stats.js";
 import { buildTurn } from "../brain/turn.js";
 import { withUsage, type UsageRow } from "../brain/usage.js";
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { writeConfig } from "../brain/config.js";
+import { HOOK_AGENTS, hookStatus, installHooks, removeHooks } from "../brain/hooks-install.js";
+import { computeOverview } from "../brain/overview.js";
 import { StapleError } from "../core/types.js";
 
 function withBrain<T>(fn: (brain: BrainStore, dbPath: string) => T): T {
@@ -142,4 +148,64 @@ export function brainTurnPreview(params: URLSearchParams) {
     const block = buildTurn(brain.live(), prompt, { keys, seen });
     return { prompt, ms: Math.round((performance.now() - started) * 10) / 10, ...block };
   });
+}
+
+// ---------------------------------------------------------------- Settings → Brain
+
+/** The hook bundle this server's checkout builds (`scripts/build-brain.ts`). */
+const HOOK_BUNDLE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "dist-brain", "brain.mjs");
+
+/** `GET /api/brain/overview?days=7|30` — is the brain healthy, and is it helping? */
+export function brainOverview(params: URLSearchParams) {
+  const days = params.get("days") === "30" ? 30 : 7;
+  return withBrain((brain, dbPath) => {
+    let rows: UsageRow[] = [];
+    withUsage(dbPath, (log) => {
+      rows = log.rows();
+    });
+    const hooks = HOOK_AGENTS.map((agent) => hookStatus(agent));
+    return computeOverview(brain.all(), rows, brain.config(), hooks, { days });
+  });
+}
+
+/**
+ * `GET /api/brain/config` — the synced policy, and beside it what is true of THIS computer only:
+ * each agent's hook install in its config home, and whether the brain is connected to a sync service.
+ */
+export function brainConfigView() {
+  return withBrain((brain, dbPath) => {
+    const sync = brain.workspace.db.prepare("SELECT repository_id, cursor FROM sync_state WHERE id = 1").get() as
+      | { repository_id: string | null; cursor: string | null }
+      | undefined;
+    const scopes = new Map<string, number>();
+    for (const r of brain.all()) scopes.set(r.scope, (scopes.get(r.scope) ?? 0) + 1);
+    return {
+      synced: brain.config(),
+      machine: {
+        brainDb: dbPath,
+        hookBundle: HOOK_BUNDLE,
+        hookBundlePresent: existsSync(HOOK_BUNDLE),
+        hooks: HOOK_AGENTS.map((agent) => hookStatus(agent)),
+        sync: { connected: brain.workspace.journal.armed(), everSynced: Boolean(sync?.cursor), repositoryId: sync?.repository_id ?? null },
+      },
+      scopes: [...scopes.entries()].map(([scope, count]) => ({ scope, count })).sort((a, b) => (a.scope === "global" ? -1 : b.scope === "global" ? 1 : b.count - a.count)),
+    };
+  });
+}
+
+/** `POST /api/brain/config` with the whole synced policy. */
+export function brainConfigWrite(body: Record<string, unknown>) {
+  return withBrain((brain) => {
+    const saved = writeConfig(brain.workspace, body.config ?? body, "human:web-ui");
+    return saved;
+  });
+}
+
+/** `POST /api/brain/hooks` with `{ agent: "claude" | "codex", action: "install" | "remove" }` — an isolated config home only. */
+export function brainHooksWrite(body: Record<string, unknown>) {
+  const agent = body.agent;
+  if (agent !== "claude" && agent !== "codex") throw new StapleError("validation", "agent must be claude or codex.");
+  if (body.action === "install") return withBrain((_brain, dbPath) => installHooks(agent, HOOK_BUNDLE, dbPath));
+  if (body.action === "remove") return removeHooks(agent);
+  throw new StapleError("validation", "action must be install or remove.");
 }

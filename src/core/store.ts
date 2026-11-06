@@ -1185,7 +1185,7 @@ export class WorkspaceStore {
     // (`cloud/repository-prefix.ts`); this one knows it, and it is not a workspace setting.
     stored.delete(REPOSITORY_PREFIX_SETTING);
     // Brain records ride setting keys for the same reason (`src/brain/store.ts`); they are not settings.
-    for (const key of [...stored.keys()]) if (key.startsWith("brain.")) stored.delete(key);
+    for (const key of [...stored.keys()]) if (key.startsWith("brain.") || key === "brainconfig") stored.delete(key);
     for (const key of stored.keys()) unknownSettingKeys.push(key);
 
     const snapshot: SettingsSnapshot = {
