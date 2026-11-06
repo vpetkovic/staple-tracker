@@ -47,10 +47,10 @@ on, and time spent against the estimate.
   The criteria show as met once the ticket is done; a milestone's show its goal
   check.
 
-`get_task` and `checkout_task` draw the same card, so a ticket an agent reads or
-claims over MCP shows up without an extra call.
+`checkout_task` draws the same card, so a ticket an agent claims over MCP shows up
+without an extra call.
 
-### Live progress: `show_progress`
+### Progress: `show_progress`
 
 ![The progress view for DEM-1 Retry failed card payments: Live, updated a few seconds ago, 34s of a 3h estimate, and a timeline of the attempt with three milestones and two comments](../site/static/img/screens/mcp-progress-light.webp)
 
@@ -58,15 +58,14 @@ How one ticket's current attempt is going: its status, the agent, a timeline of
 the milestones it recorded and the comments it posted, time against the estimate,
 and its last activity.
 
-The view keeps itself up to date. While the attempt is open it reads
-`show_progress` again every few seconds through your client, and each milestone
-the agent records shows up without anyone asking. That read changes nothing, so
-the client asks nobody before it.
+The view shows the attempt as it stood when the agent called it. **Refresh**
+reads it again through your client. Some clients, T3 Code among them, ask you
+before every call a view makes, so the views never call anything on their own:
+nothing asks you unless you click.
 
-It says when it stops following: when the client refuses its reads twice in a row
-(a client whose agent session has ended does), when the client closes the view,
-when the attempt ends, and in a client that does not let views call tools.
-**Check again** reads once more and picks the refresh back up if that works.
+If a read fails the view says why, in your client's words, and when it last read.
+There is no Refresh once the client has closed the view, or in a client that
+does not let views call tools.
 
 ### The queue: `show_queue`
 
@@ -84,12 +83,12 @@ the lanes to one epic or milestone.
   The view claims nothing itself.
 - **Approve** on a gated row approves the gate as you, the same way the card
   does: the client asks first, the view says "Approved DEM-4 by Mira Lane · from
-  the queue", then reads the lanes again. A gate someone sent back from the card
+  the queue", and redraws the lanes from the approval's answer. A gate someone sent back from the card
   says so on its row.
 - Under `queue.policy = strict` only the row checkout accepts now has a Take
   button; the others say which row they wait for.
 
-`inbox` and `list_queue` draw the same view.
+**Refresh** reads the lanes again.
 
 ## Your clicks are recorded as you
 

@@ -86,16 +86,14 @@ and so on. Call them at these moments:
 | When | Call | The person sees |
 |---|---|---|
 | right after you claim with the CLI, \`staple checkout ${ref}\` (not after \`checkout_task\`, which drew the card) | \`show_ticket\` with the ref, once | the ticket card: status, criteria, gate, branch, time against the estimate |
-| after you record a milestone (\`staple attempt milestone ${ref} -m "…"\`, MCP \`record_attempt_event\`) | \`show_progress\` with the ref | the attempt's milestones, refreshing on their own |
+| after you record a milestone (\`staple attempt milestone ${ref} -m "…"\`, MCP \`record_attempt_event\`) | \`show_progress\` with the ref | the attempt's milestones as of now, with a Refresh button |
 | a person asks what is next, what is queued, or what waits on them | \`show_queue\` (\`scope\` for one epic or milestone) | the queue in lanes: Ready, Gated, In progress |
 
-- **One card per claim.** \`checkout_task\` and \`get_task\` draw the same ticket
-  card by themselves, so do not follow \`checkout_task\` with \`show_ticket\`: the
-  claim already drew it.
-- **One progress view per stretch of work.** The view follows every later
-  milestone by itself. After a milestone, call \`show_progress\` only if you have
-  not shown that ticket's progress since the person last wrote. Never call it to
-  refresh.
+- **One card per claim.** \`checkout_task\` draws the ticket card by itself, so
+  do not follow \`checkout_task\` with \`show_ticket\`: the claim already drew it.
+- **One progress view per stretch of work.** The person refreshes it. After a
+  milestone, call \`show_progress\` only if you have not shown that ticket's progress
+  since the person last wrote. Never call it in a loop.
 - **Show what waits on the person.** When you hand a ticket on for review, or
   gate a parent, call \`show_ticket\` on it: the card's Approve and Request
   changes buttons answer the gate.

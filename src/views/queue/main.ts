@@ -3,17 +3,18 @@
  *
  * It renders a `show_queue` result (`structuredContent.queue`, built by
  * `src/mcp-queue.ts`): Ready in pickup order, Gated grouped by the gate that holds the
- * work, In progress with who holds each ticket and how its attempt is going. `inbox` and
- * `list_queue` declare this view too; their payloads are not lanes, so the view asks for
- * the lanes with `show_queue` through the host (a read, so no host asks the person first).
+ * work, In progress with who holds each ticket and how its attempt is going. Only
+ * `show_queue` declares it: hosts such as T3 Code ask the person before every call a view
+ * makes, reads included, so the view reads nothing back on its own.
  *
  * Take on a ready row posts "Work <REF>" into the thread as the person's message
  * (`ui/message`; the host confirms it first), which hands the ticket to the agent. Under a
  * strict queue only the row checkout accepts now offers Take. Approve on a gated row calls
  * the app-only `approve_gate_from_view` through the host (hidden from the model), which asks
  * the person before it runs it; the server records the approval under that person, not the
- * agent, and the view says so ("Approved DEMO-2 by Mira Lane · from the queue") and reads the
- * lanes again. Refresh reads them again on a click.
+ * agent, and the view says so ("Approved DEMO-2 by Mira Lane · from the queue"). Its answer
+ * carries the lanes after the approval, so the view redraws without a second call. Refresh
+ * reads them again on a click.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "../shared/base.css";
@@ -74,22 +75,17 @@ interface Lanes {
 }
 
 /** A result that is not lanes (inbox, list_queue): the view reads the lanes itself. */
-type Shown = { lanes: Lanes } | { pending: true };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function read(result: CallToolResult): Shown | null {
-  const data = result.structuredContent;
-  if (!isRecord(data)) return null;
-  const queue = data.queue;
-  if (isRecord(queue) && Array.isArray(queue.ready) && Array.isArray(queue.gated) && Array.isArray(queue.inProgress)) {
-    return { lanes: queue as unknown as Lanes };
-  }
-  // inbox answers {ready, queued, blocked}; list_queue answers {revision, entries, effective}.
-  if (Array.isArray(data.ready) || Array.isArray(data.effective)) return { pending: true };
-  return null;
+/** The lanes in show_queue's answer, or in approve_gate_from_view's when it came from here. */
+function read(result: CallToolResult): Lanes | null {
+  const queue = isRecord(result.structuredContent) ? result.structuredContent.queue : undefined;
+  return isRecord(queue) && Array.isArray(queue.ready) && Array.isArray(queue.gated) && Array.isArray(queue.inProgress)
+    ? (queue as unknown as Lanes)
+    : null;
 }
 
 const root = document.getElementById("view")!;
@@ -118,8 +114,6 @@ const state = {
   refreshing: false,
   /** Lanes a person unfolded. */
   unfolded: new Set<string>(),
-  /** A show_queue read for a non-lanes result is in flight. */
-  fetching: false,
 };
 
 /** The arguments every follow-up read passes on: the same workspace and the same scope. */
@@ -129,11 +123,6 @@ function readArguments(host: ViewHost): Record<string, unknown> {
   if (typeof ws === "string" && ws.trim() !== "") args.ws = ws;
   if (typeof scope === "string" && scope.trim() !== "") args.scope = scope;
   return args;
-}
-
-function wsArgument(host: ViewHost): Record<string, unknown> {
-  const ws = host.toolArguments.ws;
-  return typeof ws === "string" && ws.trim() !== "" ? { ws } : {};
 }
 
 /** A refusal's prose line, without the `ERROR(code):` prefix and the JSON envelope under it. */
@@ -157,7 +146,7 @@ function duration(seconds: number): string {
   return rest === 0 ? `${hours}h` : `${hours}h ${String(rest).padStart(2, "0")}m`;
 }
 
-let lastShown: Shown | null = null;
+let lastShown: Lanes | null = null;
 function rerender(host: ViewHost): void {
   if (lastShown) render(lastShown, host);
 }
@@ -179,8 +168,7 @@ async function refresh(host: ViewHost, after: string): Promise<void> {
     const result = await host.callTool("show_queue", readArguments(host));
     state.busy = false;
     state.refreshing = false;
-    const shown = result.isError ? null : read(result);
-    if (shown === null || !("lanes" in shown)) {
+    if (result.isError || read(result) === null) {
       say(host, `${after ? `${after} ` : ""}Reading the queue again failed: ${refusal(result)}`, "error");
       return;
     }
@@ -218,7 +206,7 @@ async function approve(host: ViewHost, group: GateGroup): Promise<void> {
   state.busy = true;
   say(host, `Asking the host to approve ${group.identifier}…`);
   try {
-    const result = await host.callTool(APPROVE_TOOL, { ref: group.identifier, view: "queue", ...wsArgument(host) });
+    const result = await host.callTool(APPROVE_TOOL, { ref: group.identifier, view: "queue", ...readArguments(host) });
     if (result.isError) {
       state.busy = false;
       say(host, refusal(result), "error");
@@ -226,7 +214,18 @@ async function approve(host: ViewHost, group: GateGroup): Promise<void> {
     }
     const decision = (result.structuredContent as { decision?: { by?: unknown } } | undefined)?.decision;
     const by = typeof decision?.by === "string" && decision.by !== "" ? decision.by : null;
-    await refresh(host, `Approved ${group.identifier}${by ? ` by ${by} · from the queue` : ""}.`);
+    const done = `Approved ${group.identifier}${by ? ` by ${by} · from the queue` : ""}.`;
+    state.busy = false;
+    if (read(result) === null) {
+      // The approval went through, but the answer has no lanes: read them once, as Refresh does.
+      await refresh(host, done);
+      return;
+    }
+    // Fresh lanes say what is ready now, so the Sent marks of the last read go.
+    state.sent.clear();
+    state.note = done;
+    state.noteTone = "info";
+    host.show(result);
   } catch (error) {
     state.busy = false;
     say(host, `Approve did not go through: ${errorText(error)}`, "error");
@@ -481,56 +480,9 @@ function renderLanes(lanes: Lanes, host: ViewHost): void {
   );
 }
 
-function renderPending(host: ViewHost): void {
-  const failed = state.noteTone === "error";
-  let retry: HTMLElement | null = null;
-  if (failed && host.canCallTools !== false) {
-    retry = h("button", { class: "view-button", type: "button", "data-action": "retry" }, "Try again");
-    retry.addEventListener("click", () => {
-      state.note = "";
-      state.noteTone = "info";
-      rerender(host);
-    });
-  }
-  root.replaceChildren(
-    h(
-      "article",
-      { class: "view-card queue", "data-view": "queue", "data-partial": "" },
-      h("header", { class: "queue-head" }, h("h1", { class: "queue-name" }, "Queue")),
-      h("p", { class: `queue-note queue-note-${state.noteTone}`, role: "status", "data-action-note": "" }, state.note || "Loading the queue…"),
-      retry ? h("footer", { class: "queue-foot" }, h("div", { class: "queue-asides" }), retry) : null,
-    ),
-  );
-  if (state.fetching || failed) return;
-  if (host.canCallTools === false) {
-    state.note = "This host does not let views read the queue. Ask the agent to call show_queue.";
-    state.noteTone = "error";
-    rerender(host);
-    return;
-  }
-  state.fetching = true;
-  host
-    .callTool("show_queue", wsArgument(host))
-    .finally(() => {
-      state.fetching = false;
-    })
-    .then((result) => {
-      const shown = result.isError ? null : read(result);
-      if (shown === null || !("lanes" in shown)) {
-        say(host, `Could not load the queue: ${refusal(result)}`, "error");
-        return;
-      }
-      host.show(result);
-    })
-    .catch((error: unknown) => {
-      say(host, `Could not load the queue: ${errorText(error)}`, "error");
-    });
-}
-
-function render(shown: Shown, host: ViewHost): void {
-  lastShown = shown;
-  if ("lanes" in shown) renderLanes(shown.lanes, host);
-  else renderPending(host);
+function render(lanes: Lanes, host: ViewHost): void {
+  lastShown = lanes;
+  renderLanes(lanes, host);
 }
 
 startView({ name: "queue", root, read, render });

@@ -1,11 +1,11 @@
 /**
  * The progress view: how one ticket's current attempt is going, as the `ui://staple/progress`
- * view draws it in an agent's thread, live.
+ * view draws it in an agent's thread.
  *
  * `ticketProgress` reads everything the view shows, and both halves of a `show_progress`
  * answer come from it: `structuredContent.progress` for a host that renders the view, and
- * `progressText` for a host that does not. The view refreshes itself by calling
- * `show_progress` again through the host, which is a read, so no host asks a person first.
+ * `progressText` for a host that does not. The view reads nothing on its own: its Refresh
+ * button calls `show_progress` again through the host on a person's click.
  *
  * The attempt shown is the open worker attempt, else the newest ended one (the ticket card
  * reads it the same way). Its TIMELINE, oldest first, is:
@@ -62,10 +62,8 @@ export interface TicketProgress {
   timing: { estimatedSeconds: number | null; elapsedSeconds: number | null };
   /** The newest thing the attempt recorded: its last activity, or its newest timeline entry. */
   lastActivityAt: string | null;
-  /** True while an attempt is open (running or paused): the view keeps refreshing. */
+  /** True while an attempt is open (running or paused). */
   live: boolean;
-  /** How often a view polls `show_progress` while `live`. */
-  refreshSeconds: number;
   /** When this was read. */
   asOf: string;
   /** The web UI's deep link to this ticket; null when no UI base is known. */
@@ -74,9 +72,6 @@ export interface TicketProgress {
 
 /** How many timeline entries a payload carries at most. */
 export const TIMELINE_LIMIT = 20;
-
-/** How often a live view reads the progress again. */
-export const REFRESH_SECONDS = 5;
 
 /**
  * How many of a ticket's newest comments are read for the timeline. A ticket with more
@@ -198,7 +193,6 @@ export function ticketProgress(store: WorkspaceStore, ref: string, uiBase: strin
     },
     lastActivityAt,
     live: summary.current !== null,
-    refreshSeconds: REFRESH_SECONDS,
     asOf: now,
     url: uiBase === null ? null : ticketUrl(uiBase, store.slug, issue.identifier),
   };

@@ -1,18 +1,18 @@
 /**
  * The ticket card: one ticket in the agent's thread.
  *
- * It renders a `show_ticket` result (`structuredContent.ticket`, built by
- * `src/mcp-ticket-card.ts`). `get_task` and `checkout_task` declare this view too; their
- * payloads are not cards, so the view paints what they carry at once and asks for the card
- * with `show_ticket` through the host (a read, so no host asks the person first).
+ * It renders the card in a tool result (`structuredContent.ticket`, built by
+ * `src/mcp-ticket-card.ts`). `show_ticket` answers with it, `checkout_task` carries it, and
+ * so do the two gate tools below. The view never reads the ticket back through the host:
+ * hosts such as T3 Code ask the person before every call a view makes, reads included.
  *
  * While the ticket's gate is pending the card offers Approve and Request changes, which
  * call the app-only `approve_gate_from_view` and `request_changes_from_view` through the host
  * (hidden from the model). They write, so the host asks the person before it runs them, and
  * the server records the decision under the person (the machine's humanName, else the gate's
- * owner), never the agent. The card then reads the ticket again and shows the gate as it now
- * stands: "Gate approved by <person> · from the card". Open in Staple asks the host to open
- * the web UI's deep link.
+ * owner), never the agent. Their answer carries the ticket as it now stands, so the card
+ * redraws with the gate decided: "Gate approved by <person> · from the card". Open in Staple
+ * asks the host to open the web UI's deep link.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import "../shared/base.css";
@@ -58,36 +58,13 @@ interface Card {
   actions: { approve: boolean; requestChanges: boolean };
 }
 
-/** What a get_task or checkout_task result carries: enough for the header, not the card. */
-interface Header {
-  identifier: string;
-  title: string;
-  status: string;
-  kind: string;
-}
-
-type Shown = { card: Card } | { header: Header };
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function headerFrom(issue: Record<string, unknown>): Header | null {
-  const { identifier, title, status, kind } = issue;
-  if (typeof identifier !== "string" || typeof title !== "string") return null;
-  return { identifier, title, status: typeof status === "string" ? status : "", kind: typeof kind === "string" ? kind : "" };
-}
-
-function read(result: CallToolResult): Shown | null {
-  const data = result.structuredContent;
-  if (!isRecord(data)) return null;
-  const ticket = data.ticket;
-  if (isRecord(ticket) && typeof ticket.identifier === "string" && Array.isArray(ticket.criteria)) {
-    return { card: ticket as unknown as Card };
-  }
-  // get_task: the issue is nested. checkout_task: the issue's fields are the payload.
-  const header = isRecord(data.issue) ? headerFrom(data.issue) : headerFrom(data);
-  return header ? { header } : null;
+function read(result: CallToolResult): Card | null {
+  const ticket = isRecord(result.structuredContent) ? result.structuredContent.ticket : undefined;
+  return isRecord(ticket) && typeof ticket.identifier === "string" && Array.isArray(ticket.criteria) ? (ticket as unknown as Card) : null;
 }
 
 const root = document.getElementById("view")!;
@@ -118,18 +95,16 @@ const state = {
   draft: "",
   note: "",
   noteTone: "info" as "info" | "error",
-  /** A show_ticket fetch for the header is in flight, so a re-render does not start another. */
-  fetching: false,
   /**
-   * A write went through but the card on screen predates it (re-reading it failed): its gate
-   * buttons stay hidden until a fresh card arrives, so nobody approves or sends back twice.
+   * A write went through but its answer carried no card, so the card on screen predates it:
+   * its gate buttons stay hidden until a fresh card arrives, so nobody approves or sends back twice.
    */
   stale: false,
 };
 
 function resetFor(identifier: string): void {
   if (state.identifier === identifier) return;
-  Object.assign(state, { identifier, busy: false, composing: false, draft: "", note: "", noteTone: "info", fetching: false, stale: false });
+  Object.assign(state, { identifier, busy: false, composing: false, draft: "", note: "", noteTone: "info", stale: false });
 }
 
 /** The `ws` the agent called with, passed on so every follow-up call reads the same workspace. */
@@ -170,33 +145,7 @@ function when(iso: string, host: ViewHost): string {
   }
 }
 
-/** Read the card again through the host and show it; `after` is the note to keep showing. */
-async function refresh(host: ViewHost, identifier: string, after: string): Promise<void> {
-  try {
-    const result = await host.callTool("show_ticket", { ref: identifier, ...wsArgument(host) });
-    state.busy = false;
-    if (result.isError || read(result) === null) {
-      // The write went through; keep the card on screen and say the re-read did not.
-      state.stale = true;
-      state.note = `${after} Reading the ticket again failed: ${refusal(result)}`;
-      state.noteTone = "error";
-      rerender(host);
-      return;
-    }
-    state.note = after;
-    state.noteTone = "info";
-    state.stale = false;
-    host.show(result);
-  } catch (error) {
-    state.busy = false;
-    state.stale = true;
-    state.note = `${after} Reading the ticket again failed: ${errorText(error)}`;
-    state.noteTone = "error";
-    rerender(host);
-  }
-}
-
-let lastShown: Shown | null = null;
+let lastShown: Card | null = null;
 function rerender(host: ViewHost): void {
   if (lastShown) render(lastShown, host);
 }
@@ -218,7 +167,18 @@ async function act(host: ViewHost, card: Card, tool: GateTool, args: Record<stri
     state.composing = false;
     state.draft = "";
     const by = decidedBy(result);
-    await refresh(host, card.identifier, by ? `${done} Recorded as ${by}.` : done);
+    state.busy = false;
+    state.note = by ? `${done} Recorded as ${by}.` : done;
+    state.noteTone = "info";
+    if (read(result) === null) {
+      // The write went through, but the answer has no card to redraw from.
+      state.stale = true;
+      state.note += " The card below predates it.";
+      rerender(host);
+      return;
+    }
+    state.stale = false;
+    host.show(result);
   } catch (error) {
     state.busy = false;
     state.note = `${tool === APPROVE_TOOL ? "Approve" : "Request changes"} did not go through: ${errorText(error)}`;
@@ -388,45 +348,6 @@ function factsSection(card: Card, host: ViewHost): HTMLElement | null {
   return rows.length === 0 ? null : h("dl", { class: "ticket-facts" }, ...rows);
 }
 
-function renderHeader(partial: Header, host: ViewHost): void {
-  resetFor(partial.identifier);
-  root.replaceChildren(
-    h(
-      "article",
-      { class: "view-card ticket", "data-view": "ticket", "data-ticket": partial.identifier, "data-partial": "" },
-      h(
-        "header",
-        { class: "ticket-head" },
-        h("span", { class: "ticket-id view-mono" }, partial.identifier),
-        partial.status ? statusPill(partial.status.replace(/_/g, " "), "") : null,
-      ),
-      h("h1", { class: "ticket-title" }, partial.title),
-      h("p", { class: `ticket-note ticket-note-${state.noteTone}`, role: "status", "data-action-note": "" }, state.note || "Loading the card…"),
-    ),
-  );
-  if (state.fetching) return;
-  state.fetching = true;
-  host
-    .callTool("show_ticket", { ref: partial.identifier, ...wsArgument(host) })
-    .finally(() => {
-      state.fetching = false;
-    })
-    .then((result) => {
-      if (result.isError || read(result) === null) {
-        state.note = `Could not load the card: ${refusal(result)}`;
-        state.noteTone = "error";
-        rerender(host);
-        return;
-      }
-      host.show(result);
-    })
-    .catch((error: unknown) => {
-      state.note = `Could not load the card: ${errorText(error)}`;
-      state.noteTone = "error";
-      rerender(host);
-    });
-}
-
 function renderCard(card: Card, host: ViewHost): void {
   resetFor(card.identifier);
   const meta = [card.kind.label, `${card.priority} priority`, card.assignee ? card.assignee : "unassigned"];
@@ -472,10 +393,9 @@ function renderCard(card: Card, host: ViewHost): void {
   );
 }
 
-function render(shown: Shown, host: ViewHost): void {
-  lastShown = shown;
-  if ("card" in shown) renderCard(shown.card, host);
-  else renderHeader(shown.header, host);
+function render(card: Card, host: ViewHost): void {
+  lastShown = card;
+  renderCard(card, host);
 }
 
 startView({ name: "ticket", root, read, render });

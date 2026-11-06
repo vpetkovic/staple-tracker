@@ -5,11 +5,11 @@
  *
  * `show_progress` answers with the ticket's current attempt: its timeline of milestones and
  * comments, estimate against elapsed and last activity; a host without MCP Apps gets the
- * milestones as prose. In the host the view paints at 360px in both themes and keeps itself
- * current: a milestone recorded from outside the thread appears with no click, through
- * nothing but `show_progress`, which is read-only (a host asks nobody before it). When the
- * host refuses the reads (its agent session is gone) or tears the view down, the view stops
- * and says so; Check again resumes it.
+ * milestones as prose. In the host the view paints at 360px in both themes and reads nothing
+ * on its own: hosts such as T3 Code ask the person before every call a view makes, so a view
+ * that polled would ask on every tick. Refresh reads `show_progress` once on a click; a
+ * refused read says why, and a torn-down view or a host that lets views call no tools has
+ * no Refresh.
  *
  * The browser half is skipped, saying why, when this machine has no Chromium for
  * playwright-core (and fails in CI instead). The protocol half always runs.
@@ -59,8 +59,6 @@ if (reason && process.env.CI) {
 
 const WIDTH = 360;
 const UI_BASE = "http://127.0.0.1:4999/";
-/** The refresh period the tests run the view at, so a wait is a second, not five. */
-const FAST_REFRESH = 1;
 const HOST_REFUSAL = "The app's thread is not running. Send a message in the thread that created it to use the app again.";
 
 let home: string;
@@ -73,9 +71,9 @@ const clients: Client[] = [];
 const refs = {
   /** In progress: claimed by pat, two milestones (one pointing at a comment), one comment. */
   worked: "",
-  /** In progress, for the refresh test: one milestone so far. */
+  /** In progress, for the Refresh test: one milestone so far. */
   live: "",
-  /** In progress, for the refusal and Check again test. */
+  /** In progress, for the refused Refresh test. */
   refused: "",
   /** In progress, for the teardown test. */
   torn: "",
@@ -187,7 +185,6 @@ type Progress = {
   earlier: number;
   milestoneCount: number;
   live: boolean;
-  refreshSeconds: number;
   url: string | null;
 };
 
@@ -203,7 +200,6 @@ describe("show_progress over MCP", () => {
     });
     const tool = (await client.listTools()).tools.find((candidate) => candidate.name === "show_progress")!;
     expect(tool._meta).toEqual({ ui: { resourceUri: "ui://staple/progress" }, "ui/resourceUri": "ui://staple/progress" });
-    // Read-only is what lets a host run the view's refresh without asking anyone.
     expect(tool.annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true });
   });
 
@@ -218,7 +214,6 @@ describe("show_progress over MCP", () => {
       earlier: 0,
       milestoneCount: 2,
       live: true,
-      refreshSeconds: 5,
       url: `${UI_BASE}?ws=${slug}&issue=${refs.worked}`,
     });
     expect(progress.timeline.map(({ kind, text: line, detail }) => ({ kind, text: line, detail }))).toEqual([
@@ -283,40 +278,21 @@ describe("show_progress over MCP", () => {
 });
 
 describe.skipIf(Boolean(reason))("the progress view in a host", () => {
-  /** The view's own refresh period, made short for the test; the product sends 5 seconds. */
-  function fast(source: ViewSource): ViewSource {
-    const structured = source.toolResult.structuredContent as { progress: { refreshSeconds: number } };
-    return { ...source, toolResult: { ...source.toolResult, structuredContent: { progress: { ...structured.progress, refreshSeconds: FAST_REFRESH } } } };
-  }
+  /** How long a test watches for a call the view must not make on its own. */
+  const QUIET_MS = 2_500;
 
-  /** Every read the view makes through the host comes back with the short period too. */
-  async function keepFast(view: RenderedView): Promise<void> {
-    await view.page.evaluate((seconds) => {
-      const forward = window.hostCallTool;
-      window.hostCallTool = async (params) => {
-        const result = await forward(params);
-        const progress = (result.structuredContent as { progress?: { refreshSeconds: number } } | undefined)?.progress;
-        if (progress) progress.refreshSeconds = seconds;
-        return result;
-      };
-    }, FAST_REFRESH);
-  }
-
-  async function show(ref: string, options: { theme?: "light" | "dark"; serverTools?: boolean; quick?: boolean } = {}): Promise<RenderedView> {
+  async function show(ref: string, options: { theme?: "light" | "dark"; serverTools?: boolean } = {}): Promise<RenderedView> {
     const client = await connect({ apps: true });
-    const source = await loadView(client, "show_progress", { ref });
-    const view = await renderView(browser!, client, options.quick === false ? source : fast(source), {
+    return renderView(browser!, client, await loadView(client, "show_progress", { ref }), {
       theme: options.theme ?? "light",
       width: WIDTH,
       serverTools: options.serverTools,
     });
-    if (options.quick !== false) await keepFast(view);
-    return view;
   }
 
   for (const theme of ["light", "dark"] as const) {
     it(`paints the timeline at ${WIDTH}px in the host's ${theme} theme`, async () => {
-      const view = await show(refs.worked, { theme, quick: false });
+      const view = await show(refs.worked, { theme });
       try {
         expectPainted(await measurePaint(view), theme, WIDTH);
         const article = view.frame.locator('[data-view="progress"]');
@@ -330,39 +306,44 @@ describe.skipIf(Boolean(reason))("the progress view in a host", () => {
           expect.stringContaining("Order log shows each retry with its outcome."),
         ]);
         expect(await view.frame.locator('[data-entry="comment"]').innerText()).toContain("comment by pat");
-        expect(await view.frame.locator('[data-live="live"]').innerText()).toMatch(/^Live · updated /);
+        expect(await view.frame.locator('[data-live="open"]').innerText()).toMatch(/^Attempt open · read /);
+        expect(await view.frame.locator('[data-action="refresh"]').count()).toBe(1);
       } finally {
         await view.context.close();
       }
     });
   }
 
-  it("shows a milestone recorded outside the thread with no click, reading only show_progress", async () => {
+  it("reads nothing on its own, and Refresh shows a milestone recorded outside the thread through show_progress alone", async () => {
     const view = await show(refs.live);
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
       expect(await view.frame.locator('[data-entry="milestone"]').count()).toBe(1);
       const before = await view.frame.locator('[data-view="progress"]').getAttribute("data-as-of");
-      // Recorded by the agent's own surface, from outside the view: nothing in the view is touched.
+      // Recorded by the agent's own surface, from outside the view.
       withStore((store) => store.recordAttemptEvent(refs.live, "milestone", "pat", { label: "Balances shown on the account page" }));
+      // A host that confirms every call would ask the person here if the view polled.
+      await view.page.waitForTimeout(QUIET_MS);
+      expect((await view.record()).toolCalls).toEqual([]);
+      expect(await view.frame.getByText("Balances shown on the account page").count()).toBe(0);
+      await view.frame.locator('[data-action="refresh"]').click();
       await view.frame.getByText("Balances shown on the account page").waitFor({ timeout: 10_000 });
       expect(await view.frame.locator('[data-entry="milestone"]').count()).toBe(2);
       expect(await view.frame.locator("[data-milestones]").innerText()).toBe("2");
       expect(await view.frame.locator('[data-view="progress"]').getAttribute("data-as-of")).not.toBe(before);
       const { toolCalls, messages } = await view.record();
-      expect(toolCalls.length).toBeGreaterThan(0);
-      expect(new Set(toolCalls)).toEqual(new Set(["show_progress"]));
+      expect(toolCalls).toEqual(["show_progress"]);
       expect(messages).toEqual([]);
     } finally {
       await view.context.close();
     }
   });
 
-  it("stops and says so when the host refuses the reads, and Check again resumes", async () => {
+  it("says why a Refresh failed, keeps the timeline, and the next Refresh works", async () => {
     const view = await show(refs.refused);
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
-      // From here the host refuses every call, as a host whose agent session ended does.
+      // The host refuses the call, as a host whose agent session ended does.
       await view.page.evaluate((refusal) => {
         const forward = window.hostCallTool;
         (window as unknown as { hostForward: typeof forward }).hostForward = forward;
@@ -370,112 +351,101 @@ describe.skipIf(Boolean(reason))("the progress view in a host", () => {
           throw new Error(refusal);
         };
       }, HOST_REFUSAL);
+      await view.frame.locator('[data-action="refresh"]').click();
       const stopped = view.frame.locator('[data-live="stopped"]');
       await stopped.waitFor({ timeout: 10_000 });
-      expect(await stopped.innerText()).toContain(`Live updates stopped. ${HOST_REFUSAL}`);
-      // The timeline that was on screen stays.
+      expect(await stopped.innerText()).toContain(`Refresh failed. ${HOST_REFUSAL}`);
+      // The timeline that was on screen stays, and nothing reads again by itself.
       expect(await view.frame.getByText("Balance endpoint drafted").count()).toBe(1);
-      // Stopped means stopped: no further reads.
-      const calls = (await view.record()).toolCalls.length;
-      await view.page.waitForTimeout(2_500);
-      expect((await view.record()).toolCalls.length).toBe(calls);
+      await view.page.waitForTimeout(QUIET_MS);
+      expect((await view.record()).toolCalls).toEqual(["show_progress"]);
       expectPainted(await measurePaint(view), "light", WIDTH);
 
-      // The session is back; a person checks again, and the view follows again.
+      // The session is back; the person refreshes again.
       await view.page.evaluate(() => {
         window.hostCallTool = (window as unknown as { hostForward: typeof window.hostCallTool }).hostForward;
       });
-      await keepFast(view);
       withStore((store) => store.recordAttemptEvent(refs.refused, "milestone", "pat", { label: "Partial payments accepted" }));
-      await view.frame.locator('[data-action="check-again"]').click();
+      await view.frame.locator('[data-action="refresh"]').click();
       await view.frame.getByText("Partial payments accepted").waitFor({ timeout: 10_000 });
-      await view.frame.locator('[data-live="live"]').waitFor();
-      const resumed = (await view.record()).toolCalls.length;
-      await expect.poll(async () => (await view.record()).toolCalls.length, { timeout: 5_000 }).toBeGreaterThan(resumed);
+      await view.frame.locator('[data-live="open"]').waitFor();
     } finally {
       await view.context.close();
     }
   });
 
-  it("follows the new ticket when the host hands the view another one while a read is out", async () => {
+  it("drops a Refresh that comes back after the host handed the view another ticket", async () => {
     const client = await connect({ apps: true });
-    const view = await renderView(browser!, client, fast(await loadView(client, "show_progress", { ref: refs.live })), {
+    const view = await renderView(browser!, client, await loadView(client, "show_progress", { ref: refs.live }), {
       theme: "light",
       width: WIDTH,
     });
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
-      // The next read is slow to come back; the host hands over another ticket meanwhile.
-      await view.page.evaluate((seconds) => {
+      // The read is slow to come back; the host hands over another ticket meanwhile.
+      await view.page.evaluate(() => {
         const forward = window.hostCallTool;
-        let first = true;
         window.hostCallTool = async (params) => {
-          if (first) {
-            first = false;
-            await new Promise((resolve) => setTimeout(resolve, 1_500));
-          }
-          const result = await forward(params);
-          const progress = (result.structuredContent as { progress?: { refreshSeconds: number } } | undefined)?.progress;
-          if (progress) progress.refreshSeconds = seconds;
-          return result;
+          await new Promise((resolve) => setTimeout(resolve, 1_500));
+          return forward(params);
         };
-      }, FAST_REFRESH);
+      });
+      await view.frame.locator('[data-action="refresh"]').click();
       await expect.poll(async () => (await view.record()).toolCalls.length, { timeout: 5_000 }).toBeGreaterThan(0);
-      await view.sendResult(fast(await loadView(client, "show_progress", { ref: refs.next })).toolResult);
+      await view.sendResult((await loadView(client, "show_progress", { ref: refs.next })).toolResult);
       await view.frame.locator(`[data-ticket="${refs.next}"]`).waitFor();
-      withStore((store) => store.recordAttemptEvent(refs.next, "milestone", "pat", { label: "Balance shown on receipts" }));
-      await view.frame.getByText("Balance shown on receipts").waitFor({ timeout: 10_000 });
-      expect(await view.frame.locator('[data-live="live"]').count()).toBe(1);
+      await view.page.waitForTimeout(QUIET_MS);
+      expect(await view.frame.locator(`[data-ticket="${refs.next}"]`).count()).toBe(1);
+      expect(await view.frame.locator('[data-live="open"]').count()).toBe(1);
     } finally {
       await view.context.close();
     }
   });
 
-  it("stops when the host tears the view down", async () => {
+  it("drops Refresh when the host tears the view down", async () => {
     const view = await show(refs.torn);
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
       await view.teardown();
       await view.frame.locator('[data-live="stopped"]').waitFor();
-      expect(await view.frame.locator('[data-live="stopped"]').innerText()).toContain("the host closed this view");
-      const calls = (await view.record()).toolCalls.length;
-      await view.page.waitForTimeout(2_500);
-      expect((await view.record()).toolCalls.length).toBe(calls);
+      expect(await view.frame.locator('[data-live="stopped"]').innerText()).toContain("The host closed this view");
+      expect(await view.frame.locator('[data-action="refresh"]').count()).toBe(0);
+      expect((await view.record()).toolCalls).toEqual([]);
     } finally {
       await view.context.close();
     }
   });
 
-  it("does not poll an ended attempt, and offers Check again", async () => {
+  it("shows an ended attempt, and Refresh reads it once", async () => {
     const view = await show(refs.finished, { theme: "dark" });
     try {
       expectPainted(await measurePaint(view), "dark", WIDTH);
-      expect(await view.frame.locator('[data-live="idle"]').innerText()).toContain("Attempt ended, so not refreshing");
+      expect(await view.frame.locator('[data-live="idle"]').innerText()).toContain("Attempt ended");
       expect(await view.frame.locator('[data-entry="ended"]').count()).toBe(1);
-      await view.page.waitForTimeout(2_500);
+      await view.page.waitForTimeout(QUIET_MS);
       expect((await view.record()).toolCalls).toEqual([]);
-      await view.frame.locator('[data-action="check-again"]').click();
+      await view.frame.locator('[data-action="refresh"]').click();
       await expect.poll(async () => (await view.record()).toolCalls).toEqual(["show_progress"]);
     } finally {
       await view.context.close();
     }
   });
 
-  it("says it will not refresh in a host that lets views call no tools", async () => {
+  it("offers no Refresh in a host that lets views call no tools", async () => {
     const view = await show(refs.worked, { serverTools: false });
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
-      expect(await view.frame.locator('[data-live="static"]').innerText()).toContain("will not refresh");
-      await view.page.waitForTimeout(2_500);
+      expect(await view.frame.locator('[data-live="open"]').count()).toBe(1);
+      expect(await view.frame.locator('[data-action="refresh"]').count()).toBe(0);
+      await view.page.waitForTimeout(QUIET_MS);
       expect((await view.record()).toolCalls).toEqual([]);
-      expect(await view.frame.locator('[data-action="check-again"]').count()).toBe(0);
     } finally {
       await view.context.close();
     }
   });
 
   it("paints a ticket that was never started", async () => {
-    const view = await show(refs.idle, { quick: false });
+    const view = await show(refs.idle);
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
       expect(await view.frame.locator('[data-live="idle"]').innerText()).toContain("No attempt yet");

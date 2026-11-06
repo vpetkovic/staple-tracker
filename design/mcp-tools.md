@@ -495,15 +495,20 @@ actions: {approve, requestChanges}}`. Its text is the same card as prose.
   `request_changes`, the CLI or the web UI. The card
   shows it as "Gate approved by Mira Lane · from the card", the text as "Gate approved by
   Mira Lane from the ticket card (owner ...)".
-- `get_task` and `checkout_task` declare the ticket view too. Their payloads are not
-  cards, so the view paints the header from the payload and reads the card with
-  `show_ticket` through the host, passing on the call's `ws`.
+- `checkout_task` declares the ticket view too, and its answer carries the claimed
+  ticket's card as `ticket`, so the view draws it without a second call. `get_task` is
+  the agent's own read and declares no view.
+- A view never calls a tool on its own. Hosts such as T3 Code ask the person before every
+  call a view makes, reads included, so a view that read data back after it rendered
+  prompted the person once per draw (and the progress view once per poll). Every view
+  draws from the result it was given; only a person's click (Refresh, Approve, Request
+  changes) calls through the host.
 
 `show_progress {ref, ws?}` answers `{progress}`, built by `ticketProgress` in
 `src/mcp-progress.ts`: `{workspace, identifier, title, status: {id, label, category},
 assignee, attempt: {id, ordinal, agent, state, current, startedAt, endedAt, outcome,
 endReason} | null, timeline: [{kind, at, actor, text, detail}], earlier, milestoneCount,
-timing: {estimatedSeconds, elapsedSeconds}, lastActivityAt, live, refreshSeconds, asOf,
+timing: {estimatedSeconds, elapsedSeconds}, lastActivityAt, live, asOf,
 url}`. Its text is the status, the time and the milestones as prose.
 
 - The attempt is the open worker attempt, else the newest ended one, as on the card.
@@ -517,16 +522,13 @@ url}`. Its text is the status, the time and the milestones as prose.
   200. Only the newest 20 entries are sent; `earlier` counts the rest.
 - `timing` is the card's; `lastActivityAt` is the attempt's last activity or its newest
   entry, whichever is later.
-- `live` is true while an attempt is open (running or paused). `refreshSeconds` is 5.
-- The view polls `show_progress` through the host every `refreshSeconds` while `live`,
-  one call in flight at most and none while the page is hidden. The tool is read-only,
-  so a host runs it without a prompt; it is the only call the view makes on its own. It
-  stops, and says why, after two refused or failed reads in a row (the host's error
-  message is shown as given, with the time of the last good read), on
-  `ui/resource-teardown`, when `live` turns false, and when the host's handshake offers
-  no `serverTools`. Check again reads once; one more refusal stops it again at once. A
-  read that comes back after the host handed the view another ticket is dropped, and the
-  view follows the new one.
+- `live` is true while an attempt is open (running or paused).
+- The view does not poll. Refresh reads `show_progress` once through the host on a
+  click, passing on the call's `ws`; one read is in flight at most. A refused or failed
+  read is shown in the host's words with the time of the last good read. There is no
+  Refresh after `ui/resource-teardown` or when the host's handshake offers no
+  `serverTools`. A read that comes back after the host handed the view another ticket
+  is dropped.
 - The store read behind the timeline is `attemptTransitions(attemptId)`, a pure read.
 
 `show_queue {scope?, ws?}` answers `{queue}`, built by `queueLanes` in `src/mcp-queue.ts`:
@@ -561,21 +563,23 @@ asOf}`. Its text lists the lanes as prose.
 - Take on a takeable ready row posts `Work <REF>` into the thread through the host
   (`ui/message`, which the host confirms), as the person's message. The view claims
   nothing itself; the agent that reads the message takes the ticket. Approve on a gated
-  group calls the app-only `approve_gate_from_view {ref: <gate>, view: "queue"}` through
-  the host, says "Approved <REF> by <person> · from the queue", then reads `show_queue`
-  again with the call's `scope` and `ws`. Refresh reads it again on a click,
+  group calls the app-only `approve_gate_from_view {ref: <gate>, view: "queue", scope?}`
+  through the host with the call's `scope` and `ws`, says "Approved <REF> by <person> ·
+  from the queue", and redraws from the lanes in its answer. Refresh reads them again on a click,
   and stays usable while a Take or an Approve waits on the host; the view does not poll.
   A Sent mark lasts until the lanes are read again: a ticket nobody took offers Take again.
-- `inbox` and `list_queue` declare the queue view too. Their payloads are not lanes, so
-  the view reads `show_queue` through the host, passing on the call's `ws` only: an
-  `inbox {assignee}` call still draws the whole queue. A failed read offers Try again.
+- Only `show_queue` declares the queue view. `inbox` and `list_queue` are the agent's
+  reads and declare none.
 
 ### A person's decision from a view
 
-`approve_gate_from_view {ref, view, ws?}` and `request_changes_from_view {ref, comment,
-view, ws?}` (`src/mcp-view-actions.ts`) are what the views' gate buttons call. `view` is
-`ticket_card` or `queue`. Both answer the issue with `gate` and `decision: {by, source,
-via}`, like `approve_task` / `request_changes` plus the decision.
+`approve_gate_from_view {ref, view, scope?, ws?}` and `request_changes_from_view {ref,
+comment, view, ws?}` (`src/mcp-view-actions.ts`) are what the views' gate buttons call.
+`view` is `ticket_card` or `queue`. Both answer the issue with `gate` and `decision: {by,
+source, via}`, like `approve_task` / `request_changes` plus the decision, and with
+`ticket`, the card as it now stands. `approve_gate_from_view` also answers `queue`: the
+lanes for `scope` after the approval when `view` is `queue`, else null. The views redraw
+from these, so a decision costs the person one host prompt, not two.
 
 - They declare `_meta.ui.visibility: ["app"]` and no `resourceUri`. A host that follows
   the MCP Apps spec lets a view of this server call them and leaves them out of the

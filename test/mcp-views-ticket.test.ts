@@ -3,13 +3,16 @@
  * The ticket card (`ui://staple/ticket`), served by the packaged `staple mcp` and rendered in
  * the minimal, host-agnostic MCP Apps host (`npm run test:views`; also part of `npm test`).
  *
- * `show_ticket` answers with the card, `get_task` and `checkout_task` declare the same view,
- * and a host without MCP Apps gets the card as prose. In the host the card paints at 360px
- * in both themes, and its buttons go through the host: Approve and Request changes call the
+ * `show_ticket` answers with the card, `checkout_task` declares the same view and carries
+ * the card, `get_task` (the agent's own read) declares none, and a host without MCP Apps
+ * gets the card as prose. In the host the card paints at 360px in both themes, never calls a
+ * tool on its own (hosts such as T3 Code ask the person before every call a view makes), and
+ * its buttons go through the host: Approve and Request changes call the
  * app-only approve_gate_from_view and request_changes_from_view (the note rides along), which
  * record the person (the machine's humanName, else the gate's owner), never the server's
- * STAPLE_AGENT; Open in Staple asks the host to open the web UI's deep link. Each write is
- * checked in the workspace afterwards, not only on screen.
+ * STAPLE_AGENT, and answer with the card the view redraws from; Open in Staple asks the host
+ * to open the web UI's deep link. Each write is checked in the workspace afterwards, not only
+ * on screen.
  *
  * The browser half is skipped, saying why, when this machine has no Chromium for
  * playwright-core (and fails in CI instead). The protocol half always runs.
@@ -76,7 +79,7 @@ const refs = {
   approveGate: "",
   /** An epic with a pending gate, for Request changes. */
   sendBackGate: "",
-  /** An epic with a pending gate, approved while the re-read fails. */
+  /** An epic with a pending gate, approved through a host that drops the card from the answer. */
   rereadFails: "",
   /** A todo task nobody holds, for checkout_task. */
   free: "",
@@ -162,7 +165,7 @@ afterAll(async () => {
 });
 
 describe("the ticket card over MCP", () => {
-  it("serves ui://staple/ticket, and show_ticket, get_task and checkout_task declare it", async () => {
+  it("serves ui://staple/ticket, show_ticket and checkout_task declare it, and get_task does not", async () => {
     const client = await connect({ apps: true });
     const { resources } = await client.listResources();
     expect(resources.find((resource) => resource.uri === "ui://staple/ticket")).toMatchObject({
@@ -170,10 +173,12 @@ describe("the ticket card over MCP", () => {
       mimeType: "text/html;profile=mcp-app",
     });
     const { tools } = await client.listTools();
-    for (const name of ["show_ticket", "get_task", "checkout_task"]) {
+    for (const name of ["show_ticket", "checkout_task"]) {
       const tool = tools.find((candidate) => candidate.name === name)!;
       expect(tool._meta, name).toEqual({ ui: { resourceUri: "ui://staple/ticket" }, "ui/resourceUri": "ui://staple/ticket" });
     }
+    // The agent reads tickets with get_task all the time: a card for each would be noise.
+    expect(tools.find((tool) => tool.name === "get_task")!._meta).toBeUndefined();
     expect(tools.find((tool) => tool.name === "show_ticket")!.annotations).toMatchObject({ readOnlyHint: true });
   });
 
@@ -290,7 +295,8 @@ describe.skipIf(Boolean(reason))("the ticket card in a host", () => {
       expect(await view.frame.locator('[data-gate="approved"] .ticket-gate-line').innerText()).toBe("Gate approved by reviewer · from the card");
       expect(await view.frame.locator('[data-action="approve"]').count()).toBe(0);
       expect(await view.frame.locator("[data-action-note]").innerText()).toBe("Approved. Recorded as reviewer.");
-      expect((await view.record()).toolCalls).toEqual(["approve_gate_from_view", "show_ticket"]);
+      // The answer carries the card: one call, so one host prompt.
+      expect((await view.record()).toolCalls).toEqual(["approve_gate_from_view"]);
       const now = store();
       try {
         expect(now.gate(refs.approveGate)).toMatchObject({ state: "approved", resolvedBy: "reviewer" });
@@ -329,7 +335,7 @@ describe.skipIf(Boolean(reason))("the ticket card in a host", () => {
       expect(await view.frame.locator('[data-gate="changes_requested"] .ticket-gate-line').innerText()).toBe(
         "Changes requested by Mira Lane · from the card",
       );
-      expect((await view.record()).toolCalls).toEqual(["request_changes_from_view", "show_ticket"]);
+      expect((await view.record()).toolCalls).toEqual(["request_changes_from_view"]);
       const now = store();
       try {
         expect(now.gate(refs.sendBackGate)).toMatchObject({ state: "changes_requested", resolvedBy: "Mira Lane" });
@@ -348,20 +354,23 @@ describe.skipIf(Boolean(reason))("the ticket card in a host", () => {
     }
   });
 
-  it("hides the gate buttons when a write went through but reading the ticket again failed", async () => {
+  it("hides the gate buttons when a write went through but its answer carried no card", async () => {
     const view = await card(refs.rereadFails);
     try {
       expectPainted(await measurePaint(view), "light", WIDTH);
-      // From here on the host refuses show_ticket: the card on screen cannot be refreshed.
+      // A host that passes the answer on without its structured card.
       await view.page.evaluate(() => {
         const forward = window.hostCallTool;
-        window.hostCallTool = async (params) =>
-          params.name === "show_ticket"
-            ? { content: [{ type: "text", text: "ERROR(unavailable): the host is offline" }], isError: true }
-            : forward(params);
+        window.hostCallTool = async (params) => {
+          const result = await forward(params);
+          const structured = result.structuredContent as Record<string, unknown> | undefined;
+          if (structured) delete structured.ticket;
+          return result;
+        };
       });
       await view.frame.locator('[data-action="approve"]').click();
-      await view.frame.getByText("Reading the ticket again failed: the host is offline").waitFor();
+      await view.frame.getByText("The card below predates it.", { exact: false }).waitFor();
+      expect((await view.record()).toolCalls).toEqual(["approve_gate_from_view"]);
       expect(await view.frame.locator('[data-action="approve"], [data-action="request-changes"]').count()).toBe(0);
       const now = store();
       try {
@@ -385,28 +394,17 @@ describe.skipIf(Boolean(reason))("the ticket card in a host", () => {
     }
   });
 
-  it("renders the card for a get_task result, reading the card through the host", async () => {
-    const client = await connect({ apps: true });
-    const view = await renderView(browser!, client, await loadView(client, "get_task", { ref: refs.worked }), { theme: "dark", width: WIDTH });
-    try {
-      await view.frame.locator('[data-view="ticket"]:not([data-partial])').waitFor();
-      expectPainted(await measurePaint(view), "dark", WIDTH);
-      expect(await view.frame.locator("[data-branch]").innerText()).toContain("fix/payment-retry");
-      expect((await view.record()).toolCalls).toEqual(["show_ticket"]);
-    } finally {
-      await view.context.close();
-    }
-  });
-
-  it("renders the card for a checkout_task result", async () => {
+  it("renders the card from a checkout_task result, calling nothing back", async () => {
     const client = await connect({ apps: true });
     const source = await loadView(client, "checkout_task", { ref: refs.free });
     expect(source.toolResult.isError).toBeFalsy();
     const view = await renderView(browser!, client, source, { theme: "light", width: WIDTH });
     try {
-      await view.frame.locator('[data-view="ticket"]:not([data-partial])').waitFor();
+      await view.frame.locator('[data-view="ticket"]').waitFor();
       expectPainted(await measurePaint(view), "light", WIDTH);
       expect(await view.frame.locator("[data-attempt]").innerText()).toContain(`#1 · ${AGENT} · running`);
+      await view.page.waitForTimeout(1_500);
+      expect((await view.record()).toolCalls).toEqual([]);
     } finally {
       await view.context.close();
     }
