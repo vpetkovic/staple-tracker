@@ -36,6 +36,8 @@ import { credentialStoreFor, fileCredentialIsPrivate } from "./credential-store.
 import { cloudCodeOf, listRemoteDevices, type RemoteDevice, type RequestOptions } from "./client.js";
 import { parseEndpoint } from "./endpoint.js";
 import { StapleError } from "../types.js";
+import { readMembersCache } from "./members-cache.js";
+import { sharedStatus, type SharedStatus } from "./shared-status.js";
 
 export type CloudState =
   /** No connection record on this machine. Nothing to sync, nothing stored. */
@@ -87,6 +89,12 @@ export interface CloudStatus {
    * Optional so the many literal statuses built elsewhere need not name it.
    */
   readonly removedBy?: string | null;
+  /**
+   * The workspace's current members when it is shared (2+ of them) on this machine's
+   * member list, with automatic sync locked on; null otherwise. Optional only so the
+   * literal statuses built elsewhere need not name it; `localCloudStatus` always sets it.
+   */
+  readonly shared?: SharedStatus | null;
 }
 
 function disconnected(repositoryId: string): CloudStatus {
@@ -104,6 +112,7 @@ function disconnected(repositoryId: string): CloudStatus {
     checked: false,
     warnings: [],
     devices: null,
+    shared: null,
   };
 }
 
@@ -199,6 +208,7 @@ export function localCloudStatus(
     warnings,
     devices: null,
     removedBy: connection.removed?.by ?? null,
+    shared: connection.removed ? null : sharedStatus(readMembersCache(home, repositoryId)),
   };
 }
 

@@ -27,6 +27,7 @@ import {
   setBackupConsent,
 } from "./backups.js";
 import { connect, listDevices, revokeDevice } from "./devices.js";
+import { joinLandingPage } from "./landing.js";
 import {
   approveJoinRequest,
   collectJoinRequest,
@@ -98,6 +99,12 @@ async function handle(request: Request, env: Env, startedAt: number): Promise<Re
 
   const url = new URL(request.url);
   const segments = url.pathname.split("/").filter((s) => s.length > 0);
+
+  // GET /join/{repoId} — the page a share link opens in a browser. Outside /v1 because
+  // it is a page, not an API: no credential, no protocol, no database (landing.ts).
+  if (segments.length === 2 && segments[0] === "join") {
+    return joinLandingPage(request, segments[1]!);
+  }
 
   if (segments[0] !== "v1") {
     throw new SyncError("not_found", "unknown route");
@@ -301,6 +308,8 @@ function routeShape(request: Request): string {
         // short enough to pass the length rule below, and it is not a credential, but it
         // is also nothing a log line needs.
         if (i === 4 && segments[3] === "join-requests") return ":id";
+        // `/join/<repoId>`: an unauthenticated visitor's path, never logged as typed.
+        if (i === 1 && segments[0] === "join") return ":id";
         return i >= 2 && i !== 3 && s.length > 12 ? ":id" : s;
       })
       .join("/")}`;
