@@ -77,6 +77,8 @@ import {
 } from "./core/types.js";
 import type { WorkspaceStore } from "./core/store.js";
 import { requireMineLens, splitMine } from "./core/cloud/member-lens.js";
+import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
+import { readConnection } from "./core/cloud/connection.js";
 
 const STATUS_GLYPHS: Record<string, string> = {
   backlog: "◌",
@@ -226,6 +228,23 @@ function gateCue(gate: IssueGate | null, queuedBy: QueuedBy | null): string {
   if (queuedBy) return `  [queued: ${queuedBy.identifier}/${queuedBy.owner}]`;
   if (gate?.state === "pending") return `  [awaiting ${gate.owner}]`;
   return "";
+}
+
+/**
+ * `shared with marko · syncing automatically`, in a shared workspace, for the text of `ls`
+ * and `inbox`; null otherwise, so a solo workspace prints exactly what it always did. Reads
+ * the member list and the connection record on this machine, never the network.
+ */
+function sharedLineOf(store: WorkspaceStore): string | null {
+  const lens = store.members();
+  if (lens === null) return null;
+  let auto = false;
+  try {
+    auto = readConnection(stapleHome(), lens.cache.repositoryId)?.auto === true;
+  } catch {
+    // An unreadable record: say what is shared, not that it syncs.
+  }
+  return sharedLine(sharedStatus(lens.cache), auto);
 }
 
 function getStore(values: { db?: string; ws?: string; "ack-renumber"?: boolean }) {
@@ -1400,6 +1419,8 @@ function main() {
         );
         break;
       }
+      const shared = sharedLineOf(store);
+      if (shared !== null) console.log(shared);
       if (issues.length === 0) console.log("(no issues)");
       for (const issue of issues) {
         const claim = claims.get(issue.id);
@@ -2181,6 +2202,8 @@ function main() {
         outJson(inbox);
         break;
       }
+      const sharedInbox = sharedLineOf(store);
+      if (sharedInbox !== null) console.log(sharedInbox);
       console.log("READY (pickup order):");
       for (const issue of inbox.ready) console.log(`  ${line(issue)}`);
       if (inbox.ready.length === 0) console.log("  (nothing ready)");

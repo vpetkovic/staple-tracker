@@ -394,3 +394,36 @@ function explainRefusal(error: unknown, rule: string, code?: string): unknown {
   }
   return error;
 }
+
+/**
+ * Who `cloud approve` admits a device as: the flag given, or, with neither flag, the name the
+ * request's share link invited them as (`invitedAs`). A request without one still needs a flag.
+ * The approver can always override the hint by passing `--as` or `--to`.
+ */
+export async function approveTargetFor(
+  home: string,
+  repositoryId: string,
+  rawCode: string,
+  flags: { as?: string; to?: string },
+  options: MemberOptions = {},
+): Promise<{ as: ApproveAs; fromLink: boolean }> {
+  if (flags.as !== undefined && flags.to !== undefined) {
+    throw new StapleError(
+      "validation",
+      "Say who the joining device belongs to with ONE of --as <new name> or --to <member>, not both.",
+    );
+  }
+  if (flags.as !== undefined) return { as: { asNewMember: flags.as }, fromLink: false };
+  if (flags.to !== undefined) return { as: { toMember: flags.to }, fromLink: false };
+  const code = normalizeJoinCode(rawCode);
+  const pending = (await listPendingRequests(home, repositoryId, options)).find(
+    (request) => normalizeJoinCode(request.code) === code,
+  );
+  if (pending?.invitedAs) return { as: { asNewMember: pending.invitedAs }, fromLink: true };
+  throw new StapleError(
+    "validation",
+    "Say who the joining device belongs to: --as <new name> to admit a new person (owner only), or " +
+      "--to <member> to add a device to an existing member." +
+      (pending ? "" : ` No pending request has the code ${code}; \`staple cloud requests\` lists them.`),
+  );
+}

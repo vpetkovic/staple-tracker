@@ -98,6 +98,7 @@ describe("the report is one shape in every state", () => {
     "credentialPresent",
     "auto",
     "backup",
+    "shared",
     "connectedAt",
     "checked",
     "pending",

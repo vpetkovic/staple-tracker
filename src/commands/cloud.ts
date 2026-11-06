@@ -57,12 +57,14 @@ import {
   renderJoinCode,
   renderJoinPreview,
   resolveJoinEndpoint,
+  normalizeJoinCode,
 } from "../core/cloud/join-preview.js";
 import { performJoin } from "../core/cloud/join.js";
 import {
   approveRequest,
   denyRequest,
   listPendingRequests,
+  approveTargetFor,
   membersAfterConnect,
   ownerRenameHint,
   refreshMembersCache,
@@ -122,6 +124,8 @@ import {
   missingIdentityRemedy,
   type CloudSurfaceReport,
 } from "../core/cloud/surface.js";
+import { createShareOffer, resolveJoinTarget, type JoinTarget } from "../core/cloud/share.js";
+import { looksLikeShareLink, parseShareLink, type ShareLink } from "../core/cloud/share-link.js";
 
 const USAGE =
   "Use: status, connect, join, disconnect, auto, sync, lease, devices, requests, approve, deny, members, " +
@@ -272,21 +276,32 @@ synchronizing automatically, and backing up. None of them implies another.
 Working with a teammate (a shared workspace has MEMBERS: named people, each
 with their own devices. The member who connected first is the owner.)
 
-  cloud join [--endpoint <url>] [--label L] [--yes] [--credential-file]
-              join a shared workspace from this machine. Shows the service, the
-              repository, this device's label and the no-end-to-end-encryption
+  cloud share [--as <name>] [--json]
+              a link a teammate opens to join this workspace, the command they
+              can paste instead, and a message ready to send. The link holds no
+              secret: you still approve the code their device shows. Sharing
+              means automatic sync is on for EVERY device once they join.
+  cloud join ['<link>'] [--endpoint <url>] [--label L] [--yes] [--credential-file]
+              join a shared workspace from this machine. With a share link, no
+              clone is needed: inside a checkout of that repository it joins that
+              workspace, otherwise it creates one in your staple home named as the
+              link names it (only after you agree). Shows the workspace, the
+              service, this device's label and the no-end-to-end-encryption
               warning, and sends NOTHING until you agree. Then it shows a short
               code. Someone already in the workspace approves it: compare the
               code out loud or on a call. The code is not a password, and no
-              secret travels over chat. Ctrl-C cancels locally. Without
-              --endpoint it uses the one published in .staple/repository.json.
-              Automatic sync stays OFF.
+              secret travels over chat. Ctrl-C cancels locally. Without a link
+              or --endpoint it uses the one published in .staple/repository.json.
+              Automatic sync is ON once you join: a shared workspace syncs on
+              every device, and "cloud auto off" is refused while it is shared.
   cloud requests
-              pending join requests: code, device label, and when each expires.
+              pending join requests: code, device label, the name a share link
+              invited them as, and when each expires.
   cloud approve <code> --as <new name>
               admit a NEW person under that name. Owner only. With the name of a
               REMOVED member it reinstates them, under the same member, so their
-              past work stays theirs.
+              past work stays theirs. Without --as or --to, a request that came
+              from a share link naming the person is approved under that name.
   cloud approve <code> --to <member>
               add the joining device to an existing member. Anyone may add a
               device to themselves; only the owner may add one to someone else.
@@ -309,7 +324,7 @@ with their own devices. The member who connected first is the owner.)
               older staple builds refuse until they upgrade.
 
 Agents may not (there is no MCP tool for any of these, on purpose): connect,
-join, approve, deny, members rename, members remove, share-endpoint, disconnect,
+share, join, approve, deny, members rename, members remove, share-endpoint, disconnect,
 devices revoke, restore, purge. Each is a person's decision about who can read
 the workspace or whether it exists, and its preview or typed confirmation only
 means something to that person.`;
@@ -496,6 +511,8 @@ export function runCloudCommand(argv: string[]): void {
       return runMembers(rest);
     case "share-endpoint":
       return runShareEndpoint(rest);
+    case "share":
+      return runShare(rest);
     default:
       throw new StapleError("validation", `Unknown subcommand "${sub}". ${USAGE}`);
   }
@@ -2078,8 +2095,9 @@ function runRestore(argv: string[]): void {
  * call.
  */
 function runJoin(argv: string[]): void {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args: argv,
+    allowPositionals: true,
     options: {
       ...common,
       endpoint: { type: "string" },
@@ -2090,30 +2108,67 @@ function runJoin(argv: string[]): void {
   });
   const json = values.json === true;
   const home = stapleHome();
+  const credential = { forceFile: values["credential-file"] === true };
+  const linkArg = positionals[0];
+  if (positionals.length > 1) throw new StapleError("validation", "usage: staple cloud join ['<share link>'] [--label L] [--yes]");
 
-  const opened = resolveWorkspace(values);
-  let manifest: ReturnType<typeof readWorkspaceManifest>;
-  try {
-    manifest = readWorkspaceManifest(opened.dbPath);
-    if (!manifest) throw noIdentity(opened.dbPath, "cannot join a shared workspace");
-  } finally {
-    opened.store.db.close();
+  let preview: ReturnType<typeof buildJoinPreview>;
+  /** With a link: the workspace it joins. Created only after consent, below. */
+  let target: JoinTarget | null = null;
+  let link: ShareLink | null = null;
+  if (linkArg !== undefined) {
+    if (!looksLikeShareLink(linkArg)) {
+      throw new StapleError(
+        "validation",
+        "That is not a share link. A share link looks like https://<service>/join/<id>?n=<name>; for a " +
+          "service address on its own, use --endpoint <url>.",
+      );
+    }
+    if (values.endpoint !== undefined || values.db !== undefined || values.ws !== undefined) {
+      throw new StapleError(
+        "validation",
+        "A share link names its service and its workspace, so it does not take --endpoint, --db or --ws.",
+      );
+    }
+    link = parseShareLink(linkArg);
+    target = resolveJoinTarget({ home, cwd: process.cwd(), link, create: false });
+    preview = buildJoinPreview({ home, link, label: values.label, credential });
+  } else {
+    const opened = resolveWorkspace(values);
+    let manifest: ReturnType<typeof readWorkspaceManifest>;
+    try {
+      manifest = readWorkspaceManifest(opened.dbPath);
+      if (!manifest) throw noIdentity(opened.dbPath, "cannot join a shared workspace");
+    } finally {
+      opened.store.db.close();
+    }
+    const { endpoint, source } = resolveJoinEndpoint(values.endpoint, manifest.endpoint);
+    preview = buildJoinPreview({
+      home,
+      repositoryId: manifest.repositoryId,
+      endpoint,
+      endpointSource: source,
+      label: values.label,
+      credential,
+    });
   }
 
-  const { endpoint, source } = resolveJoinEndpoint(values.endpoint, manifest.endpoint);
-  const credential = { forceFile: values["credential-file"] === true };
-  const preview = buildJoinPreview({
-    home,
-    repositoryId: manifest.repositoryId,
-    endpoint,
-    endpointSource: source,
-    label: values.label,
-    credential,
-  });
-
   if (json) {
-    console.log(JSON.stringify({ preview: { ...preview, endpoint: preview.endpoint.origin } }, null, 2));
+    console.log(JSON.stringify({ preview: { ...preview, endpoint: preview.endpoint.origin }, target }, null, 2));
   } else {
+    if (target) {
+      console.log(
+        `Workspace on this machine: ${target.name}  ` +
+          (target.fromCheckout
+            ? target.created
+              ? "(this checkout; its tracker database is created when you agree)"
+              : "(this checkout)"
+            : target.created
+              ? `(new, created in your staple home when you agree: ${target.dbPath})`
+              : "(already on this machine)"),
+      );
+      console.log("");
+    }
     console.log(renderJoinPreview(preview));
   }
 
@@ -2139,6 +2194,10 @@ function runJoin(argv: string[]): void {
   const stop = (): void => controller.abort();
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+
+  // The workspace, now that the person agreed: created here if it is new.
+  if (link !== null) target = resolveJoinTarget({ home, cwd: process.cwd(), link, create: true });
+  const joinedAs = target;
 
   settle(
     performJoin(preview, {
@@ -2176,7 +2235,13 @@ function runJoin(argv: string[]): void {
         if (json) {
           console.log(
             JSON.stringify(
-              { joined: true, connection: outcome.connection, member: outcome.member, membersCached: outcome.members !== null },
+              {
+                joined: true,
+                connection: outcome.connection,
+                member: outcome.member,
+                membersCached: outcome.members !== null,
+                workspace: joinedAs,
+              },
               null,
               2,
             ),
@@ -2192,9 +2257,14 @@ function runJoin(argv: string[]): void {
         if (outcome.members === null) {
           console.log("  members      the list could not be fetched yet; `staple cloud members` retries");
         }
+        if (joinedAs) console.log(`  workspace    ${joinedAs.name}  (${joinedAs.dbPath})`);
         console.log("");
-        console.log("Automatic sync is OFF. Run `staple cloud sync` to download the workspace.");
-        console.log("Turn it on for THIS device with `staple cloud auto on`.");
+        console.log("Automatic sync is ON: this is a shared workspace, so every device keeps in step on its own.");
+        console.log(
+          joinedAs && !joinedAs.fromCheckout
+            ? `Download it now with \`staple cloud sync --ws ${joinedAs.name}\`, or open it in \`staple open\`.`
+            : "Download it now with `staple cloud sync`, or open it in `staple open`.",
+        );
       })
       .finally(() => {
         process.off("SIGINT", stop);
@@ -2226,8 +2296,9 @@ function runRequests(argv: string[]): void {
       }
       for (const request of requests) {
         console.log(
-          `${request.code}  ${request.label ?? "(no label)"}  requested ${renderWhen(request.createdAt)}  ` +
-            `expires ${renderWhen(request.expiresAt)}`,
+          `${request.code}  ${request.label ?? "(no label)"}` +
+            (request.invitedAs ? `  invited as ${request.invitedAs}` : "") +
+            `  requested ${renderWhen(request.createdAt)}  expires ${renderWhen(request.expiresAt)}`,
         );
       }
       console.log("");
@@ -2250,18 +2321,13 @@ function runApprove(argv: string[]): void {
   const json = values.json === true;
   const code = positionals[0];
   if (!code) throw new StapleError("validation", "usage: staple cloud approve <code> (--as <new name> | --to <member>)");
-  if ((values.as === undefined) === (values.to === undefined)) {
-    throw new StapleError(
-      "validation",
-      "Say who the joining device belongs to, with exactly one of: --as <new name> to admit a new " +
-        "person (owner only), or --to <member> to add a device to an existing member.",
-    );
-  }
   const home = stapleHome();
   const repositoryId = repositoryIdFor(values);
-  const as = values.as !== undefined ? { asNewMember: values.as } : { toMember: values.to! };
   settle(
-    approveRequest(home, repositoryId, code, as).then((outcome) => {
+    approveTargetFor(home, repositoryId, code, { as: values.as, to: values.to }).then(({ as, fromLink }) =>
+      approveRequest(home, repositoryId, code, as).then((outcome) => ({ outcome, as, fromLink })),
+    ).then(({ outcome, as, fromLink }) => {
+      if (fromLink && !json) console.log(`Approving as ${(as as { asNewMember: string }).asNewMember}, the name the share link invited them as.`);
       if (json) {
         console.log(JSON.stringify({ approved: true, ...outcome, members: undefined }, null, 2));
         return;
@@ -2276,6 +2342,32 @@ function runApprove(argv: string[]): void {
     }),
     json,
   );
+}
+
+/** `staple cloud share [--as <name>]`: the link, the command and a message to send. */
+function runShare(argv: string[]): void {
+  const { values } = parseArgs({ args: argv, options: { ...common, as: { type: "string" } } });
+  const opened = resolveWorkspace(values);
+  const dbPath = opened.dbPath;
+  opened.store.db.close();
+  const offer = createShareOffer({ home: stapleHome(), dbPath, invitedAs: values.as ?? null });
+  if (values.json === true) {
+    console.log(JSON.stringify(offer, null, 2));
+    return;
+  }
+  console.log(`Share "${offer.name}"${offer.invitedAs ? ` with ${offer.invitedAs}` : ""}:`);
+  console.log("");
+  console.log(`  link      ${offer.link}`);
+  console.log(`  command   ${offer.command}`);
+  console.log("");
+  console.log("Send them the link (or the command). It holds no secret: their device shows a short code,");
+  console.log("they read it to you, and you approve it with `staple cloud approve <code>`" + (offer.invitedAs ? ` (as ${offer.invitedAs} by default).` : " --as <their name>."));
+  console.log("Once they join, automatic sync is ON for every device, yours included, and stays on");
+  console.log("while the workspace is shared.");
+  console.log("");
+  console.log("A message you can send as it is:");
+  console.log("");
+  console.log(offer.message.split("\n").map((line) => `  ${line}`).join("\n"));
 }
 
 /** `staple cloud deny <code>`. */
