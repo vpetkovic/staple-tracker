@@ -474,6 +474,24 @@ describe("the power table", () => {
     expect((await call(`/v1/repos/${REPO}/devices/ana-laptop`, { method: "DELETE", token: ana.token, device: null })).status).toBe(200);
   });
 
+  it("the owner cannot revoke their own last active device", async () => {
+    const owner = await workspaceWithOwner();
+    const revoke = (deviceId: string, token: string) =>
+      call(`/v1/repos/${REPO}/devices/${deviceId}`, { method: "DELETE", token, device: null });
+
+    const refused = await expectError(await revoke("owner-laptop", owner.token), "conflict", 409);
+    expect(refused.message).toBe("this is the owner's last device; add another device first");
+    expect((await call(`/v1/repos/${REPO}/ops`, { token: owner.token, device: null })).status).toBe(200);
+
+    // With a second device the first may go, and then the second is the last one.
+    const desktop = await requestJoin("owner-desktop");
+    expect((await approve(owner.token, desktop.code, { memberId: owner.memberId })).status).toBe(200);
+    const desktopToken = (await jsonOf(await poll(desktop))).token as string;
+    expect((await revoke("owner-laptop", desktopToken)).status).toBe(200);
+    await expectError(await revoke("owner-desktop", desktopToken), "conflict", 409);
+    expect((await call(`/v1/repos/${REPO}/ops`, { token: desktopToken, device: null })).status).toBe(200);
+  });
+
   it("a member cannot restore or purge; the owner can", async () => {
     const owner = await workspaceWithOwner();
     const ana = await admit(owner, "Ana", "ana-laptop");

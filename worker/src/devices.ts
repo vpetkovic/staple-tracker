@@ -220,20 +220,34 @@ export async function revokeDevice(
   // In a repository with members: the owner any device, a member only their own.
   await assertMayRevoke(env, session, targetDeviceId);
 
+  // The owner's last active device is never revoked, whoever asks. Only the owner can
+  // approve a device for the owner, so revoking that one would leave nobody able to act
+  // as owner again. The guard is in the statement rather than read before it, so two
+  // revokes racing for the owner's last two devices cannot both pass. A hub has no
+  // members, so for a hub the guard is vacuously true and the statement is as before.
   const result = await env.DB.prepare(
     `UPDATE devices SET revoked_at = ?3
-      WHERE repo_id = ?1 AND device_id = ?2 AND revoked_at IS NULL`,
+      WHERE repo_id = ?1 AND device_id = ?2 AND revoked_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM members m
+           WHERE m.repo_id = ?1 AND m.member_id = devices.member_id AND m.is_owner = 1
+             AND (SELECT COUNT(*) FROM devices o
+                   WHERE o.repo_id = ?1 AND o.member_id = m.member_id AND o.revoked_at IS NULL) <= 1)`,
   )
     .bind(session.repoId, targetDeviceId, Date.now())
     .run();
 
   if ((result.meta.changes ?? 0) === 0) {
     const exists = await env.DB.prepare(
-      `SELECT device_id FROM devices WHERE repo_id = ?1 AND device_id = ?2`,
+      `SELECT revoked_at FROM devices WHERE repo_id = ?1 AND device_id = ?2`,
     )
       .bind(session.repoId, targetDeviceId)
-      .first<{ device_id: string }>();
+      .first<{ revoked_at: number | null }>();
     if (!exists) throw new SyncError("not_found", "no such device in this repository");
+    if (exists.revoked_at === null) {
+      // Still active, so the guard above is what held it.
+      throw new SyncError("conflict", "this is the owner's last device; add another device first");
+    }
     // Already revoked. Idempotent, and reported as such rather than as an error.
   }
 
