@@ -13,7 +13,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { CloudLinkJoinPreview, CloudShareOffer, CloudSharedWorkspace } from "@/lib/types";
 import { AUTO_SYNC_NOTE, IDLE_INVITE, InviteBoxView, copyText, textFor, type InviteActions } from "./InviteBox";
 import { JoinDialogView, joinTitle, type JoinDialogActions } from "@/components/join/JoinDialog";
-import { joinLinkFromSearch, withoutJoin, workspaceHref } from "@/components/join/LinkJoinMount";
+import { joinLinkFromSearch, openJoinedWorkspace, withoutJoin, workspaceHref } from "@/components/join/LinkJoinMount";
 import { SharedBadgeView } from "@/components/SharedBadge";
 import { readShellUrl } from "@/lib/session-url";
 import { sharedBadgeText, sharedChips, sharedRow, syncDot } from "@/lib/shared-workspaces";
@@ -131,6 +131,21 @@ describe("joining from a link", () => {
     expect(html).toContain("A workspace named &quot;ai-inbox-supabase&quot; is made on this computer, after you continue.");
     expect(html).toContain("Not end-to-end encrypted");
     expect(joinTitle(STATE, "ai-inbox-supabase")).toBe("VP invited you to join ai-inbox-supabase");
+  });
+
+  it("opening the joined workspace syncs it first, so the board is not empty, and opens it even if that fails", async () => {
+    const steps: string[] = [];
+    await openJoinedWorkspace("ai-inbox-supabase", {
+      sync: async (slug) => void steps.push(`sync:${slug}`),
+      assign: (href) => void steps.push(`open:${href}`),
+    });
+    expect(steps).toEqual(["sync:ai-inbox-supabase", "open:/?ws=ai-inbox-supabase&view=tasks"]);
+    steps.length = 0;
+    await openJoinedWorkspace("ai-inbox-supabase", {
+      sync: async () => Promise.reject(new Error("offline")),
+      assign: (href) => void steps.push(`open:${href}`),
+    });
+    expect(steps).toEqual(["open:/?ws=ai-inbox-supabase&view=tasks"]);
   });
 
   it("shows the code with a copy button, then offers to open the workspace it joined", () => {

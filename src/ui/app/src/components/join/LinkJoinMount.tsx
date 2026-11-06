@@ -13,6 +13,7 @@
  */
 import { useEffect, useState } from "react";
 import { replaceUrl } from "@/lib/back-to-close";
+import { syncWorkspace } from "@/lib/api";
 import { JoinDialog } from "./JoinDialog";
 
 /** The search parameter the landing page uses. */
@@ -49,6 +50,26 @@ export function workspaceHref(name: string): string {
   return `/?ws=${encodeURIComponent(name)}&view=tasks`;
 }
 
+/**
+ * Open a workspace a link join just connected: its first sync, then the page on it.
+ *
+ * The join turned automatic sync on, but automatic sync waits for its triggers (a start, a
+ * write), and this server started before the workspace existed. Without this first sync the
+ * teammate would land on an empty board. A sync that fails still opens the workspace, which
+ * then says why on its sync pill.
+ */
+export async function openJoinedWorkspace(
+  name: string,
+  deps: { sync: (slug: string) => Promise<unknown>; assign: (href: string) => void },
+): Promise<void> {
+  try {
+    await deps.sync(name);
+  } catch {
+    // Opened anyway: the cloud pill shows what went wrong.
+  }
+  deps.assign(workspaceHref(name));
+}
+
 export function LinkJoinMount({ hubMode }: { hubMode: boolean }) {
   const [request, setRequest] = useState<{ link: string; name: string } | null>(() =>
     typeof location === "undefined" ? null : joinLinkFromSearch(location.search),
@@ -82,7 +103,17 @@ export function LinkJoinMount({ hubMode }: { hubMode: boolean }) {
           );
         }
       }}
-      onOpenWorkspace={hubMode ? (workspace) => location.assign(workspaceHref(workspace)) : undefined}
+      onOpenWorkspace={
+        hubMode
+          ? (workspace) => {
+              setNotice(`Getting ${workspace}'s tasks…`);
+              void openJoinedWorkspace(workspace, {
+                sync: (slug) => syncWorkspace({ slug }),
+                assign: (href) => location.assign(href),
+              });
+            }
+          : undefined
+      }
     />
   );
 }
