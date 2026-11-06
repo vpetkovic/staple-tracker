@@ -58,6 +58,7 @@
 import { ChevronRight, Menu, Monitor, PanelLeft, Plus, Search, SquarePen } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CloudStrip } from "@/components/CloudStrip";
+import { JoinRequestWatcher } from "@/components/join/JoinRequestToast";
 import { RunStrip } from "@/components/autopilot/RunBanner";
 import { RunStopNotices } from "@/components/autopilot/RunStopNotices";
 import { getCloudStatus, getCloudWorkspaces } from "@/lib/api";
@@ -77,7 +78,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { floatingSurfaceIsOpen, isTyping } from "@/lib/keyboard";
 import { openCommandPalette, openCreateIssue } from "@/lib/shell-events";
-import { isAllWorkspaces, isMachineView, scopeName, useSession, viewControls, viewLabel } from "@/lib/session";
+import { currentWorkspace, isAllWorkspaces, isMachineView, scopeName, useSession, viewControls, viewLabel } from "@/lib/session";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useBackToClose } from "@/lib/back-to-close";
 import { cn } from "@/lib/utils";
@@ -402,6 +403,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         */}
         {/* A run that ended: a notice naming why and what needs a person, on every view. */}
         <RunStopNotices placement={wide ? "corner" : "strip"} />
+        {/* STA-441: a join request toast, polled only with automatic sync on (JoinRequestToast). */}
+        {all ? null : <JoinRequestWatcher report={cloud} slug={currentWorkspace(session)?.slug ?? ""} />}
         {wide ? null : <RunStrip />}
         {wide ? null : <ViewTabBar />}
       </div>

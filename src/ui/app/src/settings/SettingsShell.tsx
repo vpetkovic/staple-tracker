@@ -56,6 +56,8 @@ import {
   type ShellPane,
 } from "./settings-shell";
 import { settingsIcon } from "./settings-icons";
+import { isMembersCategory } from "./members-settings";
+import { usePendingJoinRequests } from "@/lib/pending-requests";
 
 /** Exactly this, everywhere: the sheet is the computer's, never one workspace's. The dialog's accessible name. */
 export const SETTINGS_TITLE = "Settings";
@@ -244,6 +246,7 @@ export function SettingsShell({
                     >
                       {stacked ? null : <Icon aria-hidden />}
                       <span className="min-w-0 flex-1 truncate">{settingsName(category)}</span>
+                      {isMembersCategory(category.id) ? <MembersCount /> : null}
                       {stacked ? <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" /> : null}
                     </button>
                   </li>
@@ -380,5 +383,20 @@ export function SettingsShell({
         </div>
       </div>
     </div>
+  );
+}
+
+/** STA-441: join requests waiting, beside Members in the nav. The page heard it; reading it asks nobody. */
+function MembersCount() {
+  const pending = usePendingJoinRequests();
+  if (pending === 0) return null;
+  return (
+    <span
+      data-members-badge={pending}
+      aria-label={`${pending} waiting`}
+      className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground"
+    >
+      {pending}
+    </span>
   );
 }

@@ -361,6 +361,7 @@ export function SettingsDialog({
                   applyTo={perWorkspace ? applyTarget : applyGlobal}
                   onDirtyChange={setDirty}
                   ws={perWorkspace ? target : session.ws || undefined}
+                  joinWs={target || undefined}
                 />
               );
             }}

@@ -56,6 +56,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { projectsForWorkspace } from "@/lib/projects";
 import { isResolvedStatus } from "@/lib/settings";
 import { openProjectDialog, openSettings } from "@/lib/shell-events";
+import { usePendingJoinRequests } from "@/lib/pending-requests";
 import { isAllWorkspaces, scopeName, useSession, type ViewName } from "@/lib/session";
 import { useRuns } from "@/lib/runs";
 import { openRunHistory } from "@/lib/shell-events";
@@ -558,9 +559,26 @@ export function NavRail({
         >
           <Settings aria-hidden />
           Settings
+          {/* STA-441: join requests this page has heard of. Reading the count asks nobody. */}
+          <PendingBadge />
         </button>
         <ThemeToggle asRow={phone} />
       </div>
     </nav>
+  );
+}
+
+/** How many join requests are waiting, as a small count beside Settings. Nothing when none. */
+function PendingBadge() {
+  const pending = usePendingJoinRequests();
+  if (pending === 0) return null;
+  return (
+    <span
+      data-settings-badge={pending}
+      aria-label={`${pending} join ${pending === 1 ? "request" : "requests"} waiting`}
+      className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground"
+    >
+      {pending}
+    </span>
   );
 }

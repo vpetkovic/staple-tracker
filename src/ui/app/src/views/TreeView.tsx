@@ -54,7 +54,8 @@ import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
 import { placeUnderMilestones } from "./tree/milestone-placement";
 import { AutopilotTreeContext, autopilotAncestors, useRuns } from "@/lib/runs";
-import { useSession } from "@/lib/session";
+import { currentWorkspace, useSession } from "@/lib/session";
+import { JoinOfferCard } from "@/components/join/JoinOffer";
 import type { InboxRow, IssueStatus, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
@@ -66,6 +67,7 @@ import { partitionMine, useMembersCache, useMineToggle } from "@/lib/members";
 
 export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
+  const joinSlug = currentWorkspace(session)?.slug ?? "";
   const { mode, selection, filters, filterContext, groupBy, sort, publishVisibleOrder } = session;
 
   /**
@@ -535,6 +537,13 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
           <GuardRefusal refusal={queueRefusal} onDismiss={() => setQueueRefusal(null)} />
         </div>
       ) : null}
+      {/*
+        STA-441: "Join the shared workspace", for a clone whose committed manifest names a sync
+        service this computer is not connected to, and the one-time banner after joining. Above
+        the list rather than in its empty state, so the banner survives the board filling in.
+        The card decides from local files whether to show; usually it renders nothing.
+      */}
+      {joinSlug ? <JoinOfferCard ws={joinSlug} className="mx-4 mt-3" /> : null}
       <ViewState resource={session.issues} empty="no open issues">
         {(loaded) => {
           if (loaded.length === 0) return <EmptyState>no issues yet</EmptyState>;

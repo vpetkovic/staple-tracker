@@ -398,7 +398,9 @@ describe("nothing here is a workspace setting", () => {
     // the function that writes `/api/settings`, i.e. the workspace database.
     // Since Settings went global the one section is three parts (hub, registry, one
     // workspace's connection), each matched by id and none handed `applyTo`.
-    expect(file).toMatch(/isCloudCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="machine" \/>/);
+    // STA-441: the machine part renders the join card above it (it is not a setting either),
+    // so the arm is a block rather than one line. Still matched by id, still no `applyTo`.
+    expect(file).toMatch(/isCloudCategory\(category\.id\)\)[\s\S]{0,400}?<CloudSection ws=\{ws\} part="machine" \/>/);
     expect(file).toMatch(/isHubRegistryCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="registry" \/>/);
     expect(file).toMatch(/isWorkspaceCloudCategory\(category\.id\)\) return <CloudSection ws=\{ws\} part="workspace" \/>/);
     for (const matcher of ["isCloudCategory", "isHubRegistryCategory", "isWorkspaceCloudCategory"]) {
