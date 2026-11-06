@@ -31,6 +31,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
 import type { Journal } from "./journal.js";
+import type { MemberLens } from "./cloud/member-lens.js";
 import { parseIdentifier } from "./ids.js";
 import { milestoneDateBounds, MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
 import type { WorkspaceStore } from "./store.js";
@@ -652,7 +653,7 @@ export class QueueStore {
   /** Every issue in the file, keyed by id: the tree the expansion walks. */
   private nodes(): Map<string, IssueNode> {
     const rows = this.db
-      .prepare("SELECT id, identifier, title, kind, status, parent_id, checkout_agent FROM issues")
+      .prepare("SELECT id, identifier, title, kind, status, parent_id, checkout_agent, assignee FROM issues")
       .all() as unknown as IssueNode[];
     return new Map(rows.map((row) => [row.id, row]));
   }
@@ -897,6 +898,21 @@ export class QueueStore {
         eligibility = "unavailable";
         reason = `${node.identifier} is ${node.status}, which cannot be checked out.`;
         detail = { status: node.status };
+      } else if (opts.pickup) {
+        /**
+         * THE MEMBER RUNG, on pickup answers only (`next`, `next_task`, `run continue`
+         * and the strict guard), and only in a shared workspace with a member list on
+         * this machine. Last on the ladder, so it names only work that would otherwise
+         * be taken: a ticket assigned to ANOTHER member is theirs to take. Unassigned
+         * work, this machine's member's own, and an agent's free-text assignee all stay
+         * eligible. `--any-assignee` is the caller not passing `pickup` at all.
+         */
+        const other = opts.pickup.otherMember(node.assignee);
+        if (other !== null) {
+          eligibility = "assigned_to_other_member";
+          reason = `${node.identifier} is assigned to ${other.name}, another member.`;
+          detail = { assignee: node.assignee, memberId: other.memberId };
+        }
       }
       return {
         issueId: node.id,
@@ -1105,7 +1121,15 @@ export class QueueStore {
  */
 
 /** The eligibility ladder, in order. The first rule that matches wins. */
-export type QueueEligibility = "resolved" | "gated" | "blocked" | "claimed" | "unavailable" | "eligible";
+export type QueueEligibility =
+  | "resolved"
+  | "gated"
+  | "blocked"
+  | "claimed"
+  | "unavailable"
+  /** Only on a pickup answer in a shared workspace: another member's ticket. */
+  | "assigned_to_other_member"
+  | "eligible";
 
 /** One row of the effective order — what an agent receives. */
 export interface EffectiveQueueRow {
@@ -1225,6 +1249,12 @@ export interface EffectiveQueueOptions {
    * with children (`queue next --scope`). Absent or null is the whole queue.
    */
   scope?: string | null;
+  /**
+   * The pickup rule for a shared workspace: skip tickets assigned to another member
+   * (`assigned_to_other_member`). Passed by pickup answers only, from
+   * `store.members()`; absent or null is the single-person answer, unchanged.
+   */
+  pickup?: MemberLens | null;
 }
 
 interface IssueNode {
@@ -1235,4 +1265,5 @@ interface IssueNode {
   status: string;
   parent_id: string | null;
   checkout_agent: string | null;
+  assignee: string | null;
 }

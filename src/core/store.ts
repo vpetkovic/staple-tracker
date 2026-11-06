@@ -4,6 +4,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { EVENT_ORDER, EVENT_ORDER_DESC, insertEvent } from "./event-log.js";
 import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
 import { connectionPath } from "./cloud/connection.js";
+import { MemberLens, withEventMembers } from "./cloud/member-lens.js";
+import { readMembersCache } from "./cloud/members-cache.js";
 import { readLocalLease } from "./cloud/lease-store.js";
 import { REPOSITORY_PREFIX_SETTING } from "./cloud/repository-prefix.js";
 import { JOURNAL_MAX_OP_BYTES, type Journal, journalFor, resolveDeviceId } from "./journal.js";
@@ -255,6 +257,11 @@ export interface IssueFilters {
   parent?: string | null;
   q?: string;
   includeResolved?: boolean;
+  /**
+   * Leave out issues whose assignee is exactly one of these strings (`--mine`: the
+   * assignees naming another member, from `otherMemberAssignees`). Unassigned issues stay.
+   */
+  excludeAssignees?: readonly string[];
 }
 
 /**
@@ -874,6 +881,42 @@ export class WorkspaceStore {
    */
   get journal(): Journal {
     return journalFor(this.db);
+  }
+
+  /**
+   * This workspace's member list, as this machine last fetched it, or null.
+   *
+   * Read fresh on every call from the members cache (`cloud/members-cache.ts`) of the
+   * repository this workspace is bound to, so a long-running UI or MCP server sees a
+   * sync's refresh on its next read. Never a network call. Null means not a shared
+   * workspace here, and every caller then behaves exactly as it did before members.
+   */
+  members(home: string = stapleHome()): MemberLens | null {
+    let repositoryId: string | null = null;
+    try {
+      const row = this.db.prepare("SELECT repository_id FROM sync_state WHERE id = 1").get() as
+        | { repository_id: string | null }
+        | undefined;
+      repositoryId = row?.repository_id ?? null;
+    } catch {
+      // A database without sync state has no members: the single-person answer.
+      return null;
+    }
+    if (repositoryId === null) return null;
+    const cache = readMembersCache(home, repositoryId);
+    return cache === null ? null : new MemberLens(cache);
+  }
+
+  /**
+   * The exact assignee strings in this workspace that name another member — what
+   * `IssueFilters.excludeAssignees` takes for "mine". Matched in JavaScript, because
+   * member names fold case beyond ASCII and SQLite's `lower` does not.
+   */
+  otherMemberAssignees(lens: MemberLens): string[] {
+    const rows = this.db.prepare("SELECT DISTINCT assignee FROM issues WHERE assignee IS NOT NULL").all() as Array<{
+      assignee: string;
+    }>;
+    return rows.map((r) => r.assignee).filter((assignee) => lens.otherMember(assignee) !== null);
   }
 
   /**
@@ -2444,16 +2487,21 @@ export class WorkspaceStore {
       payload: string;
       dedup_key: string | null;
       created_at: string;
+      origin_device?: string | null;
     }>;
-    return rows.map((row) => ({
-      seq: row.seq,
-      kind: row.kind,
-      issueId: row.issue_id,
-      actor: row.actor,
-      payload: JSON.parse(row.payload) as Record<string, unknown>,
-      dedupKey: row.dedup_key,
-      createdAt: row.created_at,
-    }));
+    return withEventMembers(
+      this.members(),
+      rows.map((row) => ({
+        seq: row.seq,
+        kind: row.kind,
+        issueId: row.issue_id,
+        actor: row.actor,
+        payload: JSON.parse(row.payload) as Record<string, unknown>,
+        dedupKey: row.dedup_key,
+        createdAt: row.created_at,
+      })),
+      rows.map((row) => row.origin_device ?? null),
+    );
   }
 
   // ---------- creation ----------
@@ -6640,7 +6688,9 @@ export class WorkspaceStore {
     issueId: string,
     actor: string,
   ): { expected: string[]; position: number | null; expectedPosition: number | null } {
-    const { rows } = this.queue().effectiveQueue({ actor });
+    // The member rule applies here as on `next`: another member's ticket is not ahead of
+    // anything this machine may take, so strict never refuses `next`'s own answer.
+    const { rows } = this.queue().effectiveQueue({ actor, pickup: this.members() });
     const target = rows.find((row) => row.issueId === issueId) ?? null;
     const earlier = rows.filter(
       (row) =>
@@ -7645,6 +7695,10 @@ export class WorkspaceStore {
       where.push("assignee = ?");
       params.push(filters.assignee);
     }
+    if (filters.excludeAssignees && filters.excludeAssignees.length > 0) {
+      where.push(`(assignee IS NULL OR assignee NOT IN (${filters.excludeAssignees.map(() => "?").join(",")}))`);
+      params.push(...filters.excludeAssignees);
+    }
     if (filters.parent !== undefined) {
       if (filters.parent === null) where.push("parent_id IS NULL");
       else {
@@ -7723,6 +7777,8 @@ export class WorkspaceStore {
   inbox(
     assignee?: string,
     page?: { limit: number; offset: number },
+    /** `--mine`: leave out work assigned to these exact assignee strings. */
+    excludeAssignees?: readonly string[],
   ): {
     ready: Array<InboxEntry>;
     queued: Array<InboxEntry>;
@@ -7730,6 +7786,7 @@ export class WorkspaceStore {
     hasMore: boolean;
   } {
     const filters: IssueFilters = assignee ? { assignee } : {};
+    if (excludeAssignees && excludeAssignees.length > 0) filters.excludeAssignees = excludeAssignees;
     // The three buckets partition ONE window over the open issues, so the page
     // is over the scan, not over any one list.
     const { items, hasMore } = page

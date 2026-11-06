@@ -10,6 +10,7 @@
  * and both read and write routes pin their HTTP method.
  */
 import { EVENT_ORDER, EVENT_ORDER_DESC } from "../core/event-row.js";
+import { withEventMembers } from "../core/cloud/member-lens.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -4261,6 +4262,17 @@ export function startUiServer(options: UiOptions): UiHandle {
         return;
       }
 
+      /**
+       * The workspace's member list as this machine last fetched it, or `null`: what the
+       * Mine/All toggle, the assignee picker and the member chips read. Local only, it
+       * never contacts the service. `/api/cloud/members` is the person's refresh that does.
+       */
+      if (url.pathname === "/api/members-cache") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.members()?.cache ?? null);
+        return;
+      }
+
       if (url.pathname === "/api/events") {
         const handle = handleFor(url.searchParams.get("ws") ?? undefined);
         const issue = url.searchParams.get("issue");
@@ -4295,19 +4307,25 @@ export function startUiServer(options: UiOptions): UiHandle {
             payload: string;
             dedup_key: string | null;
             created_at: string;
+            origin_device?: string | null;
           }>;
           json(
             res,
             200,
-            rows.map((row) => ({
-              seq: row.seq,
-              kind: row.kind,
-              issueId: row.issue_id,
-              actor: row.actor,
-              payload: JSON.parse(row.payload) as Record<string, unknown>,
-              dedupKey: row.dedup_key,
-              createdAt: row.created_at,
-            })),
+            // `member` rides along exactly as `listEvents()` adds it: only with a member list.
+            withEventMembers(
+              handle.store.members(),
+              rows.map((row) => ({
+                seq: row.seq,
+                kind: row.kind,
+                issueId: row.issue_id,
+                actor: row.actor,
+                payload: JSON.parse(row.payload) as Record<string, unknown>,
+                dedupKey: row.dedup_key,
+                createdAt: row.created_at,
+              })),
+              rows.map((row) => row.origin_device ?? null),
+            ),
           );
           return;
         }
@@ -5109,6 +5127,8 @@ export function startUiServer(options: UiOptions): UiHandle {
         const { revision, scope, next, skipped } = handle.store.queue().effectiveQueue({
           actor: queryActor(url.searchParams.get("actor")),
           scope: url.searchParams.get("scope") ?? undefined,
+          // The member rule, as `queue next` applies it; `anyAssignee=1` turns it off.
+          pickup: url.searchParams.get("anyAssignee") === "1" ? null : handle.store.members(),
         });
         // What `next` is worked under, as MCP next_task and `queue next --json` answer it.
         const instructions = next ? handle.store.instructions(next.issueId) : [];
