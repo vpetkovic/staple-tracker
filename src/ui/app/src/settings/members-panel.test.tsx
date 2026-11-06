@@ -23,7 +23,7 @@ import {
   relativeTime,
   removeConfirmMatches,
 } from "./members-settings";
-import { JoinDialogView, joinTitle, type JoinDialogActions, type JoinStage } from "@/components/join/JoinDialog";
+import { JoinDialogView, joinTitle, requestJoin, type JoinDialogActions, type JoinStage } from "@/components/join/JoinDialog";
 import { JoinOfferView, offersJoin } from "@/components/join/JoinOffer";
 import { JoinRequestToastView, toastRequest } from "@/components/join/JoinRequestToast";
 
@@ -215,14 +215,62 @@ describe("the toast polls only with automatic sync on and the tab visible", () =
 });
 
 describe("the join flow", () => {
-  const JOIN_ACTIONS: JoinDialogActions = { onRequest: NOOP, onCancel: NOOP, onRetry: NOOP, onClose: NOOP };
+  const JOIN_ACTIONS: JoinDialogActions = { onRequest: NOOP, onLabel: NOOP, onCancel: NOOP, onRetry: NOOP, onClose: NOOP };
   const view = (state: JoinStage) =>
     renderToStaticMarkup(<JoinDialogView state={state} slug="AII" now={NOW} actions={JOIN_ACTIONS} />);
+
+  const PREVIEW = {
+    endpoint: "https://staple-tracker-sync.example.workers.dev",
+    repositoryId: "60fff10e-0000-4000-8000-000000000000",
+    deviceId: null,
+    label: "Vojislavs-MacBook-Pro.local",
+    credentialMechanism: "keychain" as const,
+    credentialFallbackReason: null,
+    alreadyConnected: false,
+    existingEndpoint: null,
+    autoAfterConnect: false as const,
+    endpointSource: "manifest" as const,
+  };
+  const CONSENT = { id: "ticket-default", digest: "digest-default", expiresAt: "x" };
+
+  it("the Device field is editable, starts from the default label, and needs a name", () => {
+    const html = view({ stage: "preview", preview: PREVIEW, consent: CONSENT, label: PREVIEW.label });
+    expect(html).toMatch(/<input[^>]*aria-label="Device name"[^>]*value="Vojislavs-MacBook-Pro.local"/);
+    expect(html).toContain("shown to the member who approves you");
+    // The field shows what was typed, not the preview's default.
+    const edited = view({ stage: "preview", preview: PREVIEW, consent: CONSENT, label: "thinkpad" });
+    expect(edited).toMatch(/<input[^>]*aria-label="Device name"[^>]*value="thinkpad"/);
+    const blank = view({ stage: "preview", preview: PREVIEW, consent: CONSENT, label: "  " });
+    expect(blank).toMatch(/<button[^>]*disabled=""[^>]*data-join-request-button/);
+  });
+
+  it("a changed label is previewed again locally before the request, and only the fresh ticket is sent", async () => {
+    const calls: string[] = [];
+    const fresh = { id: "ticket-thinkpad", digest: "digest-thinkpad", expiresAt: "x" };
+    const api = {
+      previewJoin: async (target: { slug: string; label?: string }) => {
+        calls.push(`preview:${target.label}`);
+        return { slug: target.slug, preview: { ...PREVIEW, label: target.label ?? PREVIEW.label }, consent: fresh };
+      },
+      startJoin: async (target: { slug: string; consent: { id: string } }) => {
+        calls.push(`start:${target.consent.id}`);
+        return { joinId: "j", code: "K7QX-29MB", expiresAt: NOW, label: "thinkpad", endpoint: PREVIEW.endpoint };
+      },
+    };
+    await requestJoin({ slug: "AII", preview: PREVIEW, consent: CONSENT, label: " thinkpad " }, api);
+    expect(calls).toEqual(["preview:thinkpad", "start:ticket-thinkpad"]);
+
+    // Unchanged: the ticket on screen is the one sent, with no second preview.
+    calls.length = 0;
+    await requestJoin({ slug: "AII", preview: PREVIEW, consent: CONSENT, label: PREVIEW.label }, api);
+    expect(calls).toEqual(["start:ticket-default"]);
+  });
 
   it("the preview names the service, the repository, the device and the encryption warning", () => {
     const html = view({
       stage: "preview",
       consent: { id: "c", digest: "d", expiresAt: "x" },
+      label: "thinkpad",
       preview: {
         endpoint: "https://staple-tracker-sync.example.workers.dev",
         repositoryId: "60fff10e-0000-4000-8000-000000000000",
@@ -322,7 +370,7 @@ describe("the join preview makes no request of its own", () => {
         state={{ stage: "loading" }}
         slug="AII"
         now={NOW}
-        actions={{ onRequest: NOOP, onCancel: NOOP, onRetry: NOOP, onClose: NOOP }}
+        actions={{ onRequest: NOOP, onLabel: NOOP, onCancel: NOOP, onRetry: NOOP, onClose: NOOP }}
       />,
     );
     expect(seen).toEqual([]);
