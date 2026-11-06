@@ -243,6 +243,7 @@ describe("join, approve, collect", () => {
         label: "ana-laptop label",
         createdAt: expect.any(Number),
         expiresAt: expect.any(Number),
+        invitedAs: null,
       },
     ]);
 
