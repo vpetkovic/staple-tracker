@@ -420,6 +420,11 @@ export async function listJoinRequests(env: Env, session: Session): Promise<Resp
  * `{newMember: {name}}` admits a new person, and is the owner's alone. `{memberId}` adds
  * a device to an existing member: the owner may name anyone, a member only themselves.
  *
+ * Re-admission: when `newMember.name` is the name of a REMOVED member of this repository,
+ * that member is reinstated rather than refused. `removed_at` is cleared and the memberId is
+ * kept, so the history attributed to them stays one person. Their old devices stay revoked;
+ * only the approved device is bound. A name held by a member who was not removed is a 409.
+ *
  * The device id the joiner asked for may already exist in this repository. An active one
  * is refused, because approving it would hand somebody's working device id, and with it
  * their history, to the joiner. A revoked one is taken back by the member it belonged to,
@@ -447,6 +452,7 @@ export async function approveJoinRequest(
   let memberId: string;
   let name: string;
   let isNew = false;
+  let reinstate = false;
   if (hasNew) {
     if (!self.isOwner) {
       throw new SyncError("forbidden", "only the workspace owner can admit a new person");
@@ -456,9 +462,18 @@ export async function approveJoinRequest(
       throw new SyncError("validation", "newMember must be an object with a name");
     }
     name = requireName((newMember as Record<string, unknown>).name);
-    await assertNameFree(env, session.repoId, name, null);
-    memberId = crypto.randomUUID();
-    isNew = true;
+    const holder = await memberNamed(env, session.repoId, name);
+    if (holder === null) {
+      memberId = crypto.randomUUID();
+      isNew = true;
+    } else if (holder.removed_at !== null) {
+      // Coming back: the same member, under the name they already hold.
+      memberId = holder.member_id;
+      name = holder.name;
+      reinstate = true;
+    } else {
+      throw nameTaken();
+    }
   } else {
     memberId = requireBoundedString(body.memberId, "memberId", MAX_DEVICE_ID_LENGTH);
     if (!self.isOwner && memberId !== self.memberId) {
@@ -504,6 +519,18 @@ export async function approveJoinRequest(
                          WHERE repo_id = ?1 AND request_id = ?5 AND status = 'pending' AND expires_at > ?4)
             AND NOT EXISTS (SELECT 1 FROM members WHERE repo_id = ?1 AND lower(name) = lower(?3))`,
       ).bind(session.repoId, memberId, name, now, pending.request_id),
+    );
+  }
+  if (reinstate) {
+    // Guarded like the insert above: in the same batch as the approval, and only while
+    // the request is still pending, so a failed approval reinstates nobody.
+    statements.push(
+      env.DB.prepare(
+        `UPDATE members SET removed_at = NULL
+          WHERE repo_id = ?1 AND member_id = ?2 AND removed_at IS NOT NULL AND is_owner = 0
+            AND EXISTS (SELECT 1 FROM join_requests
+                         WHERE repo_id = ?1 AND request_id = ?3 AND status = 'pending' AND expires_at > ?4)`,
+      ).bind(session.repoId, memberId, pending.request_id, now),
     );
   }
   statements.push(
@@ -774,6 +801,19 @@ async function assertNameFree(env: Env, repoId: string, name: string, exceptMemb
   if (rows.results.some((r) => r.member_id !== exceptMemberId && r.name.toLowerCase() === wanted)) {
     throw nameTaken();
   }
+}
+
+/** The member holding this name, under the same Unicode-aware fold, or null. */
+async function memberNamed(
+  env: Env,
+  repoId: string,
+  name: string,
+): Promise<{ member_id: string; name: string; removed_at: number | null } | null> {
+  const rows = await env.DB.prepare(`SELECT member_id, name, removed_at FROM members WHERE repo_id = ?1`)
+    .bind(repoId)
+    .all<{ member_id: string; name: string; removed_at: number | null }>();
+  const wanted = name.toLowerCase();
+  return rows.results.find((r) => r.name.toLowerCase() === wanted) ?? null;
 }
 
 function nameTaken(): SyncError {
