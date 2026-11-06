@@ -94,6 +94,8 @@ import {
 } from "@/lib/view-prefs";
 import { useDataVersion, useResource } from "@/lib/useStaple";
 import { BudgetView } from "@/views/budget/BudgetView";
+import { BrainView } from "@/views/brain/BrainView";
+import { openSettings } from "@/lib/shell-events";
 import { CalibrationView } from "@/views/calibration/CalibrationView";
 import { GraphView } from "@/views/GraphView";
 import { MilestonesView } from "@/views/milestones/MilestonesView";
@@ -114,6 +116,7 @@ const VIEW_COMPONENTS: Record<ViewName, typeof TreeView> = {
   queue: QueueView,
   calibration: CalibrationView,
   budget: BudgetView,
+  brain: BrainView,
 };
 
 /**
@@ -149,7 +152,11 @@ export function App() {
   const [initialUrl] = useState<ShellUrlState | null>(() =>
     typeof window === "undefined" ? null : readShellUrl(window.location.search),
   );
-  const [view, setView] = useState<ViewName>(initialUrl?.view ?? DEFAULT_VIEW);
+  // Brain is a section of Settings: an address naming it opens the sheet over the default view.
+  const [view, setView] = useState<ViewName>(initialUrl?.view && initialUrl.view !== "brain" ? initialUrl.view : DEFAULT_VIEW);
+  useEffect(() => {
+    if (initialUrl?.view === "brain") openSettings({ section: "brain" });
+  }, [initialUrl]);
   /**
    * R4c (STA-188). Which milestone the page was pointed at, and by what. Beside `view`
    * because it is the second half of one navigation act; see lib/session.ts.
@@ -453,6 +460,11 @@ export function App() {
    * next time somebody clicked the tab.
    */
   const goToView = useCallback((next: ViewName) => {
+    // The rail's and the tab bar's Brain row is a door into Settings → Brain, not a page.
+    if (next === "brain") {
+      openSettings({ section: "brain" });
+      return;
+    }
     setMilestoneFocus(null);
     setView(next);
   }, []);
@@ -575,7 +587,7 @@ export function App() {
       if (!next) return;
       lastSynced.current = next;
       setWsState(next.ws);
-      setView(next.view);
+      if (next.view !== "brain") setView(next.view);
       setMilestoneFocus(next.focus);
       setFilterPrefs((current) => withFiltersForScope(current, sortScopeKey(next.ws, next.view), next.filters));
     };

@@ -1136,3 +1136,238 @@ export const bindBudgetSource = (input: BindInput) => postJson<BudgetConfigView>
 
 /** `staple budget unbind`. */
 export const unbindBudgetSource = (input: BindingHomeInput) => postJson<BudgetConfigView>("/api/budget/bindings/unbind", input);
+
+// ---------- brain (POC; machine-level, its own global workspace) ----------
+
+export type BrainKind = "user" | "feedback" | "project" | "reference";
+
+export interface BrainRecord {
+  id: string;
+  kind: BrainKind;
+  name: string | null;
+  description: string | null;
+  body: string;
+  why: string | null;
+  scope: string;
+  tags: string[];
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+  verifiedAt: string | null;
+  supersededBy: string | null;
+  provisional: boolean;
+}
+
+export interface BrainContextBlock {
+  budget: number;
+  text: string;
+  tokens: number;
+  shown: number;
+  eligible: number;
+  project: number;
+  global: number;
+}
+
+/** A project to preview or recall as: a stored scope (`project:<slug>`) or a directory. */
+export interface BrainTarget {
+  scope?: string;
+  cwd?: string;
+}
+
+/** `GET /api/brain/records` — every record, and the scopes they name. */
+export const getBrainRecords = () =>
+  request<{ records: BrainRecord[]; scopes: Array<{ scope: string; count: number }> }>("/api/brain/records");
+
+/** `GET /api/brain/recall` — `staple brain recall`: ranked hits with their bm25 score. */
+export const recallBrain = (q: string, target: BrainTarget = {}, limit = 10) =>
+  request<{ q: string; ms: number; hits: Array<{ score: number; record: BrainRecord }> }>(
+    `/api/brain/recall${qs({ q, limit, scope: target.scope, cwd: target.cwd })}`,
+  );
+
+/** `GET /api/brain/context` — exactly what `staple brain context --hook` injects. */
+export const getBrainContext = (target: BrainTarget, budget?: number) =>
+  request<BrainContextBlock>(`/api/brain/context${qs({ scope: target.scope, cwd: target.cwd, budget })}`);
+
+export interface BrainRememberInput {
+  /** Edit this record in place. */
+  id?: string;
+  /** Write a new record that replaces this one. */
+  supersedes?: string;
+  kind: BrainKind;
+  body: string;
+  name?: string;
+  description?: string;
+  why?: string;
+  scope?: string;
+  cwd?: string;
+  provisional?: boolean;
+}
+
+/** `staple brain remember`. */
+export const rememberBrain = (input: BrainRememberInput) => postJson<BrainRecord>("/api/brain/remember", input);
+
+/** `staple brain forget`. */
+export const forgetBrain = (id: string) => postJson<BrainRecord>("/api/brain/forget", { id });
+
+export interface BrainStats {
+  generatedAt: string;
+  health: {
+    total: number;
+    live: number;
+    byKind: Record<BrainKind, number>;
+    global: number;
+    projects: Array<{ scope: string; count: number }>;
+    provisional: number;
+    durable: number;
+    superseded: number;
+    stale: Array<{ id: string; name: string | null; reason: string }>;
+    duplicates: Array<{ a: { id: string; name: string | null }; b: { id: string; name: string | null }; similarity: number }>;
+  };
+  usage: {
+    events: number;
+    sessions: number;
+    byProvider: Array<{ provider: string; sessions: number; injections: number; recalls: number; writes: number; cites: number }>;
+    perSession: Array<{ session: string; provider: string | null; startedAt: string; turns: number; injected: number; tokens: number; cites: number }>;
+    avgTokens: { sessionStart: number | null; turn: number | null };
+    turnInjectionRate: number | null;
+    recallHitRate: number | null;
+    citations: number;
+    latency: Record<string, { n: number; p50: number | null; p95: number | null }>;
+    mostUsed: Array<{ id: string; name: string | null; uses: number; cites: number }>;
+    neverUsed: Array<{ id: string; name: string | null; kind: BrainKind }>;
+  };
+  activity: {
+    recentWrites: Array<{ id: string; name: string | null; kind: BrainKind; source: string | null; at: string; superseded: boolean }>;
+    bySource: Array<{ source: string; count: number }>;
+    timeline: Array<{ day: string; created: number; updated: number; injections: number; recalls: number }>;
+  };
+  eval: {
+    at: string;
+    detail: {
+      questions?: number;
+      records?: number;
+      all?: { n: number; unscoped: { r1: number; r3: number } };
+      easy?: { n: number; unscoped: { r1: number; r3: number } };
+      hard?: { n: number; unscoped: { r1: number; r3: number } };
+      meanRecallTokensTop3?: number;
+      misses?: Array<{ id: string; difficulty: string; target: string; rank: number | null; got: string[] }>;
+    };
+  } | null;
+}
+
+/** `GET /api/brain/stats` — `staple brain stats --json`. */
+export const getBrainStats = () => request<BrainStats>("/api/brain/stats");
+
+export interface BrainTurnPreview {
+  prompt: string;
+  ms: number;
+  text: string;
+  ids: string[];
+  tokens: number;
+  considered: number;
+  skippedAsSeen: number;
+  belowFloor: number;
+  topScore: number | null;
+}
+
+/** `GET /api/brain/turn` — what the UserPromptSubmit hook would add for this prompt (unlogged). */
+export const previewBrainTurn = (target: BrainTarget, prompt: string) =>
+  request<BrainTurnPreview>(`/api/brain/turn${qs({ scope: target.scope, cwd: target.cwd, prompt, seen: "start" })}`);
+
+// ---------- Settings → Brain ----------
+
+export type BrainSeverity = "ok" | "warn" | "critical";
+
+export interface BrainOverview {
+  generatedAt: string;
+  verdict: BrainSeverity | "off";
+  checks: Array<{ id: string; severity: BrainSeverity; text: string }>;
+  budget: { tokens: number; avgTokens: number | null; utilization: number | null; shown: number | null; eligible: number | null };
+  corpus: {
+    live: number;
+    byKind: Record<BrainKind, number>;
+    global: number;
+    projects: number;
+    provisional: number;
+    awaitingReview: number;
+    promoted: number;
+    expired: number;
+    stale: number;
+    importedUnverified: number;
+    superseded: number;
+  };
+  helping: {
+    sessions: number;
+    sessionsWithMemories: number;
+    turnHitRate: number | null;
+    recallHitRate: number | null;
+    citationRate: number | null;
+    citations: number;
+    tokensPerSessionStart: number | null;
+    tokensPerTurn: number | null;
+    latency: Record<"start" | "turn" | "recall", { p50: number | null; p95: number | null }>;
+    eval: { at: string; r1: number; r3: number; questions: number; misses: number } | null;
+  };
+  agents: Array<{ agent: string; label: string; sessions: number; turnInjections: number; recalls: number; remembers: number; citations: number }>;
+  mostUsed: Array<{ id: string; name: string | null; uses: number; cites: number }>;
+  neverUsed: number;
+  delta: {
+    days: number;
+    recordsAdded: number;
+    recordsAddedBefore: number;
+    sessions: number;
+    sessionsBefore: number;
+    turnsInjected: number;
+    turnsInjectedBefore: number;
+    citations: number;
+    citationsBefore: number;
+    remembers: number;
+    remembersBefore: number;
+  };
+  trend: Array<{ day: string; added: number; recalls: number; citations: number; injections: number }>;
+}
+
+/** `GET /api/brain/overview` — is the brain healthy, and is it helping? */
+export const getBrainOverview = (days: 7 | 30) => request<BrainOverview>(`/api/brain/overview${qs({ days })}`);
+
+export type BrainAgentId = "claude" | "codex" | "mcp";
+export type BrainWritePolicy = "auto" | "review" | "off";
+
+export interface BrainConfig {
+  enabled: boolean;
+  sync: { enabled: boolean; scopes: string[] };
+  agents: Record<BrainAgentId, { enabled: boolean; write: boolean }>;
+  writePolicy: BrainWritePolicy;
+  budgets: { sessionTokens: number; turnTokens: number; turnMs: number };
+  provisionalExpiryDays: number;
+}
+
+export interface BrainHookStatus {
+  agent: "claude" | "codex";
+  label: string;
+  home: string | null;
+  file: string | null;
+  refusal: string | null;
+  events: Record<"SessionStart" | "UserPromptSubmit" | "Stop", boolean>;
+}
+
+export interface BrainConfigView {
+  synced: BrainConfig;
+  machine: {
+    brainDb: string;
+    hookBundle: string;
+    hookBundlePresent: boolean;
+    hooks: BrainHookStatus[];
+    sync: { connected: boolean; everSynced: boolean; repositoryId: string | null };
+  };
+  scopes: Array<{ scope: string; count: number }>;
+}
+
+/** `GET /api/brain/config` — the synced policy and this computer's hook and sync state. */
+export const getBrainConfig = () => request<BrainConfigView>("/api/brain/config");
+
+/** `POST /api/brain/config` — replace the synced policy. */
+export const saveBrainConfig = (config: BrainConfig) => postJson<BrainConfig>("/api/brain/config", { config });
+
+/** `POST /api/brain/hooks` — install or remove the brain's hooks in one CLI's (isolated) config home. */
+export const setBrainHooks = (agent: "claude" | "codex", action: "install" | "remove") => postJson<BrainHookStatus>("/api/brain/hooks", { agent, action });

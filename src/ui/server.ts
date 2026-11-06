@@ -41,6 +41,7 @@ import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
 import { forgetBudgetSamples } from "../core/telemetry/budget-forget.js";
+import { brainConfigView, brainConfigWrite, brainContext, brainForget, brainHooksWrite, brainOverview, brainRecall, brainRecords, brainRemember, brainStats, brainTurnPreview } from "./brain-routes.js";
 import { SurfaceAutoSync } from "../core/cloud/auto-triggers.js";
 import { listConflicts, resolveConflict } from "../core/cloud/conflicts.js";
 import { localCloudStatus } from "../core/cloud/status.js";
@@ -1619,9 +1620,13 @@ export function startUiServer(options: UiOptions): UiHandle {
           BUDGET_CONFIG_WRITES.has(url.pathname) ||
           /** The Usage page's Refresh: a POST, and the one write exempt from the Origin check (below). */
           url.pathname === BUDGET_REFRESH_ROUTE ||
-          url.pathname === "/api/budget/forget"
+          url.pathname === "/api/budget/forget" ||
+          /** The brain POC's two writes (`src/ui/brain-routes.ts`). */
+          url.pathname === "/api/brain/remember" ||
+          url.pathname === "/api/brain/forget" ||
+          url.pathname === "/api/brain/hooks"
             ? ["POST"]
-            : url.pathname === "/api/settings"
+            : url.pathname === "/api/settings" || url.pathname === "/api/brain/config"
               ? ["GET", "POST"]
               : ["GET"];
         const allow = expected.join(", ");
@@ -1681,6 +1686,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           !BUDGET_CONFIG_WRITES.has(url.pathname) &&
           url.pathname !== BUDGET_REFRESH_ROUTE &&
           url.pathname !== "/api/budget/forget" &&
+          // The brain is its own workspace, not the one in `ws`: nothing to send for this one.
+          !url.pathname.startsWith("/api/brain/") &&
           // A run is machine-local and never synchronized (core/run-store.ts): nothing to send.
           !url.pathname.startsWith("/api/run/")
         ) {
@@ -1698,6 +1705,72 @@ export function startUiServer(options: UiOptions): UiHandle {
        */
       if (url.pathname === "/api/budget/collection") {
         json(res, 200, budgetCollectionStatus({ home: stapleHome() }));
+        return;
+      }
+      /**
+       * The brain POC (`src/ui/brain-routes.ts`): the shared agent memory, machine-level like
+       * the budget. Three reads and two POSTs, each the call `staple brain …` makes.
+       */
+      if (url.pathname === "/api/brain/records") {
+        json(res, 200, brainRecords());
+        return;
+      }
+      if (url.pathname === "/api/brain/recall") {
+        json(res, 200, brainRecall(url.searchParams));
+        return;
+      }
+      if (url.pathname === "/api/brain/context") {
+        json(res, 200, brainContext(url.searchParams));
+        return;
+      }
+      if (url.pathname === "/api/brain/turn") {
+        json(res, 200, brainTurnPreview(url.searchParams));
+        return;
+      }
+      if (url.pathname === "/api/brain/stats") {
+        json(res, 200, brainStats());
+        return;
+      }
+      if (url.pathname === "/api/brain/overview") {
+        json(res, 200, brainOverview(url.searchParams));
+        return;
+      }
+      if (url.pathname === "/api/brain/config" && req.method === "GET") {
+        json(res, 200, brainConfigView());
+        return;
+      }
+      if (url.pathname === "/api/brain/config" || url.pathname === "/api/brain/hooks") {
+        const raw = await readRawBody(req);
+        let parsed: unknown;
+        try {
+          parsed = raw.trim() ? JSON.parse(raw) : {};
+        } catch {
+          parsed = null;
+        }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          const bad = "The request body must be a JSON object.";
+          json(res, 400, { error: bad, message: bad, code: "validation", detail: { reason: "invalid_body" }, retryable: false });
+          return;
+        }
+        const body = parsed as Record<string, unknown>;
+        json(res, 200, url.pathname === "/api/brain/config" ? brainConfigWrite(body) : brainHooksWrite(body));
+        return;
+      }
+      if (url.pathname === "/api/brain/remember" || url.pathname === "/api/brain/forget") {
+        const raw = await readRawBody(req);
+        let parsed: unknown;
+        try {
+          parsed = raw.trim() ? JSON.parse(raw) : {};
+        } catch {
+          parsed = null;
+        }
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          const bad = "The request body must be a JSON object.";
+          json(res, 400, { error: bad, message: bad, code: "validation", detail: { reason: "invalid_body" }, retryable: false });
+          return;
+        }
+        const body = parsed as Record<string, unknown>;
+        json(res, 200, url.pathname === "/api/brain/remember" ? brainRemember(body) : brainForget(body));
         return;
       }
       /**

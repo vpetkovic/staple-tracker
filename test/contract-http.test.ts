@@ -407,6 +407,25 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/action",
       "/api/agent-context",
       "/api/bootstrap",
+      /**
+       * The brain POC (src/ui/brain-routes.ts): three GET reads and two POST writes, each the
+       * call `staple brain recall|context|list|remember|forget` makes. Machine-level, never `ws`,
+       * and skipped by the post-write sync trigger (the brain is its own workspace).
+       */
+      // Settings → Brain: the synced policy (GET and POST) beside this computer's hook state.
+      "/api/brain/config",
+      "/api/brain/context",
+      "/api/brain/forget",
+      // Hook install and remove: POST, into an isolated config home only.
+      "/api/brain/hooks",
+      // Is the brain healthy, and is it helping (Settings → Brain → Overview).
+      "/api/brain/overview",
+      "/api/brain/recall",
+      "/api/brain/records",
+      "/api/brain/remember",
+      // The raw numbers (`staple brain stats`) and the per-prompt preview (`staple brain turn`, unlogged).
+      "/api/brain/stats",
+      "/api/brain/turn",
       // `staple budget` / MCP `get_budget`: GET-only, a read of this machine's hub, no `ws`.
       "/api/budget",
       /**

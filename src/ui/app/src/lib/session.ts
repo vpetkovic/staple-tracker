@@ -27,7 +27,7 @@ import type { Resource } from "./useStaple";
  * preference. What the user sees is `VIEW_LABELS` — the tree view is called "Tasks"
  * everywhere a human reads it.
  */
-export const VIEWS = ["tree", "queue", "graph", "milestones", "calibration", "budget"] as const;
+export const VIEWS = ["tree", "queue", "graph", "milestones", "calibration", "budget", "brain"] as const;
 export type ViewName = (typeof VIEWS)[number];
 
 /** The human name of each view — the rail row, the content header, the palette command. */
@@ -41,6 +41,8 @@ export const VIEW_LABELS: Record<ViewName, string> = {
   // the palette, and the same word Settings uses for the matching section ("Usage").
   calibration: "Estimates",
   budget: "Usage",
+  // The shared agent memory (POC): machine-level, its own global workspace.
+  brain: "Brain",
 };
 
 /**
@@ -49,7 +51,7 @@ export const VIEW_LABELS: Record<ViewName, string> = {
  * lists them in their own "Machine" group (`components/nav/nav-model.ts`), apart from the
  * workspace's views.
  */
-export const MACHINE_VIEWS: readonly ViewName[] = ["budget"];
+export const MACHINE_VIEWS: readonly ViewName[] = ["budget", "brain"];
 
 export function isMachineView(view: ViewName): boolean {
   return MACHINE_VIEWS.includes(view);
@@ -85,6 +87,7 @@ const VIEW_CONTROLS: Record<ViewName, ViewControls> = {
   queue: { arrange: false, filter: false, done: false },
   calibration: { arrange: false, filter: false, done: false },
   budget: { arrange: false, filter: false, done: false },
+  brain: { arrange: false, filter: false, done: false },
 };
 
 export function viewControls(view: ViewName): ViewControls {

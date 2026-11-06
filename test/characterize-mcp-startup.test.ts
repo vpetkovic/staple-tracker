@@ -152,7 +152,8 @@ describe("a server started with no workspace in reach", () => {
     // about view's show_about (70), the ticket card's show_ticket (71), the
     // progress view's show_progress (72), the queue view's show_queue (73), and the
     // app-only approve_gate_from_view and request_changes_from_view the views' buttons call (75).
-    expect(tools).toHaveLength(75);
+    // The brain POC's recall, remember, verify and forget (79).
+    expect(tools).toHaveLength(79);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {

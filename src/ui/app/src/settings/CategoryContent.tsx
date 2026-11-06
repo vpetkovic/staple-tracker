@@ -25,6 +25,8 @@ import { CloudSection } from "./CloudSection";
 import { isCloudCategory } from "./cloud-settings";
 import { isTelemetryCategory } from "./telemetry-settings";
 import { TelemetrySection } from "./TelemetrySection";
+import { isBrainCategory } from "./brain/brain-settings";
+import { BrainSection } from "./brain/BrainSection";
 import { FieldsForm } from "./FieldsForm";
 import { VocabularyList } from "./VocabularyList";
 import { servedGlyphMap } from "./glyph-picker/glyph-picker-model";
@@ -73,6 +75,8 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
   if (isWorkspaceCloudCategory(category.id)) return <CloudSection ws={ws} part="workspace" />;
   /** "Usage & budget": machine-local like Cloud, matched by id for the same reason (`telemetry-settings.ts`). */
   if (isTelemetryCategory(category.id)) return <TelemetrySection />;
+  /** The shared agent memory: its own global workspace and machine-local hooks, matched by id like Usage. */
+  if (isBrainCategory(category.id)) return <BrainSection />;
 
   switch (category.editor) {
     case "statuses":

@@ -17,7 +17,7 @@
  * `lib/view-prefs.ts` treats the sort envelope.
  */
 import type { LucideIcon } from "lucide-react";
-import { BatteryMedium, Gauge, GitFork, Layers, ListOrdered, Milestone } from "lucide-react";
+import { BatteryMedium, Brain, Gauge, GitFork, Layers, ListOrdered, Milestone } from "lucide-react";
 import { MACHINE_VIEWS, VIEWS, VIEW_LABELS, isMachineView, type ViewName } from "@/lib/session";
 
 export interface NavItem {
@@ -54,6 +54,7 @@ const ICONS: Record<ViewName, LucideIcon> = {
   milestones: Milestone,
   calibration: Gauge,
   budget: BatteryMedium,
+  brain: Brain,
 };
 
 /** The icon a view wears everywhere it is listed — the rail row and the phone's tab bar. */

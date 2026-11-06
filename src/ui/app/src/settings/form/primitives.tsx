@@ -107,6 +107,7 @@ export function Field({
   description,
   scope,
   source,
+  tag,
   error,
   dirty,
   children,
@@ -120,6 +121,8 @@ export function Field({
   scope?: SettingScope;
   /** Where the current value came from (`default`, `workspace`, `config`), shown in the tag. */
   source?: string;
+  /** A tag of the section's own, in place of the scope tag (e.g. "Synced", "This computer"). */
+  tag?: ReactNode;
   error?: string | null;
   dirty?: boolean;
   /**
@@ -151,6 +154,7 @@ export function Field({
             {label}
           </Label>
           {scope ? <ScopeTag scope={scope} source={source} /> : null}
+          {tag}
           {dirty ? (
             <span data-dirty-marker className="text-[11px] text-muted-foreground" title="Unsaved change">
               edited
@@ -186,6 +190,7 @@ export function ActionBar({
   onReset,
   saveLabel = "Save changes",
   summary,
+  sticky = true,
 }: {
   state: ActionBarState;
   /** The failed save's sentence, when it belongs to no field or row. */
@@ -197,6 +202,8 @@ export function ActionBar({
   saveLabel?: string;
   /** "3 unsaved changes", or nothing. */
   summary?: string;
+  /** False: the bar sits at the end of its form and never floats over the rows above it. */
+  sticky?: boolean;
 }) {
   /**
    * "Saved", for a few seconds after a save lands — the answer to "did that work?" that used
@@ -221,7 +228,10 @@ export function ActionBar({
       data-saving={state.saving ? "" : undefined}
       // STICKY at the foot of the section's scroll pane, so Save is on screen however long
       // the section is — it used to sit below the fold with nothing saying it was there.
-      className="sticky bottom-0 z-[1] -mx-1 flex flex-wrap items-center gap-2 border-t bg-surface-raised px-1 py-3 shadow-[0_-8px_12px_-10px_var(--elevation)]"
+      className={cn(
+        "-mx-1 flex flex-wrap items-center gap-2 border-t bg-surface-raised px-1 py-3",
+        sticky && "sticky bottom-0 z-[1] shadow-[0_-8px_12px_-10px_var(--elevation)]",
+      )}
     >
       <Button type="button" size="sm" disabled={!state.canSave} onClick={onSave} aria-busy={state.saving}>
         {state.saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
