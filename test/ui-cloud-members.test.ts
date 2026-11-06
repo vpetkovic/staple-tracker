@@ -20,6 +20,8 @@ import { credentialStoreFor } from "../src/core/cloud/credential-store.js";
 import { deleteConnection, readConnection, writeConnection } from "../src/core/cloud/connection.js";
 import { readMembersCache, writeMembersCache } from "../src/core/cloud/members-cache.js";
 import { openWorkspace } from "../src/core/open.js";
+import { buildShareLink, parseShareLink } from "../src/core/cloud/share-link.js";
+import { listHubWorkspaces } from "../src/core/cloud/hub-scope.js";
 import { MEMBER_POST_ROUTES } from "../src/ui/cloud-members-routes.js";
 import { MembersServer, OWNER_DEVICE, OWNER_MEMBER, OWNER_TOKEN } from "./fixtures/fake-members-server.js";
 
@@ -382,5 +384,117 @@ describe("renaming from the page moves the member's tickets", () => {
     const after = openWorkspace(join(scratch, "owner", ".staple", "staple.db"));
     expect(after.store.getIssue(ticket.identifier).assignee).toBe("Mark");
     after.store.db.close();
+  });
+});
+
+// -------------------------------------------------------------------- sharing by link
+
+describe("sharing by link", () => {
+  const twoMembers = () =>
+    writeMembersCache(home, {
+      version: 1,
+      repositoryId: ownerId,
+      fetchedAt: "2026-11-06T00:00:00.000Z",
+      self: { memberId: OWNER_MEMBER, deviceId: OWNER_DEVICE },
+      members: [
+        { memberId: OWNER_MEMBER, name: "vp", isOwner: true, removed: false, devices: [] },
+        { memberId: "mem_m", name: "marko", isOwner: false, removed: false, devices: [] },
+      ],
+    });
+
+  it("builds the invite locally: the link, the command and a message, and asks nobody", async () => {
+    const offer = await body<{ link: string; command: string; message: string; invitedAs: string | null; autoSyncMandatory: boolean }>(
+      await post("/api/cloud/workspace/share", { slug: "owner", invitedAs: "marko" }),
+    );
+    const link = parseShareLink(offer.link);
+    expect(link).toMatchObject({ repositoryId: ownerId, endpoint, invitedAs: "marko" });
+    expect(offer.command).toContain(offer.link);
+    expect(offer.message).toContain(offer.link);
+    expect(offer.autoSyncMandatory).toBe(true);
+    for (const fake of fakes.values()) expect(fake.calls).toHaveLength(0);
+  });
+
+  it("lists which workspaces are shared, from the member lists on this machine, and asks nobody", async () => {
+    rmSync(join(home, "cloud", "members"), { recursive: true, force: true });
+    const before = await body<{ workspaces: Array<{ slug: string; shared: boolean }> }>(
+      await fetch(`${origin}/api/cloud/shared-workspaces`, { headers: { "x-staple-token": token } }),
+    );
+    expect(before.workspaces.every((row) => row.shared === false)).toBe(true);
+    twoMembers();
+    const after = await body<{ workspaces: Array<{ slug: string; shared: boolean; autoSyncLocked: boolean; members: Array<{ name: string; self: boolean }> }> }>(
+      await fetch(`${origin}/api/cloud/shared-workspaces`, { headers: { "x-staple-token": token } }),
+    );
+    const owner = after.workspaces.find((row) => row.slug === "owner")!;
+    expect(owner).toMatchObject({ shared: true, autoSyncLocked: true });
+    expect(owner.members.map((m) => [m.name, m.self])).toEqual([["vp", true], ["marko", false]]);
+    expect(after.workspaces.find((row) => row.slug === "joiner")!.shared).toBe(false);
+    // One member is a connected workspace, not a shared one.
+    writeMembersCache(home, {
+      version: 1,
+      repositoryId: joinerId,
+      fetchedAt: "2026-11-06T00:00:00.000Z",
+      self: { memberId: "solo", deviceId: "d" },
+      members: [{ memberId: "solo", name: "solo", isOwner: true, removed: false, devices: [] }],
+    });
+    const solo = await body<{ workspaces: Array<{ slug: string; shared: boolean }> }>(
+      await fetch(`${origin}/api/cloud/shared-workspaces`, { headers: { "x-staple-token": token } }),
+    );
+    expect(solo.workspaces.find((row) => row.slug === "joiner")!.shared).toBe(false);
+    for (const fake of fakes.values()) expect(fake.calls).toHaveLength(0);
+  });
+
+  it("previews a link join with no request and creates nothing; the start joins", async () => {
+    const service = fakes.get(joinerId)!;
+    const link = buildShareLink({ endpoint, repositoryId: joinerId, name: "joiner", prefix: null, sharedBy: "vp", invitedAs: "marko" });
+    const registered = listHubWorkspaces().length;
+
+    const previewed = await body<{
+      preview: { endpointSource: string; autoSync: string; link: { name: string; sharedBy: string } };
+      consent: { id: string; digest: string };
+      target: { name: string };
+    }>(await post("/api/cloud/join-link/preview", { link, label: "marko-laptop", credentialFile: true }));
+    expect(previewed.preview).toMatchObject({ endpointSource: "link", autoSync: "on (shared workspace)", link: { name: "joiner", sharedBy: "vp" } });
+    for (const fake of fakes.values()) expect(fake.calls).toHaveLength(0);
+    expect(listHubWorkspaces().length).toBe(registered);
+
+    const started = await body<{ joinId: string; code: string; workspace: string }>(
+      await post("/api/cloud/join-link/start", { link, consent: previewed.consent.id, digest: previewed.consent.digest }),
+    );
+    expect(started.workspace.length).toBeGreaterThan(0);
+    service.approve(started.code, { name: "marko" });
+    expect(await body(await post("/api/cloud/workspace/join/poll", { joinId: started.joinId }))).toMatchObject({ status: "joined" });
+    expect(readConnection(home, joinerId)).not.toBeNull();
+  });
+
+  it("refuses a start whose ticket was minted for another link, and sends nothing", async () => {
+    const link = buildShareLink({ endpoint, repositoryId: joinerId, name: "joiner", prefix: null, sharedBy: null, invitedAs: null });
+    const other = buildShareLink({ endpoint, repositoryId: ownerId, name: "owner", prefix: null, sharedBy: null, invitedAs: null });
+    const previewed = await body<{ consent: { id: string; digest: string } }>(
+      await post("/api/cloud/join-link/preview", { link: other, credentialFile: true }),
+    );
+    const refused = await post("/api/cloud/join-link/start", { link, consent: previewed.consent.id, digest: previewed.consent.digest });
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { message: string }).message).toContain("different workspace or service than this link names");
+    for (const fake of fakes.values()) expect(fake.calls).toHaveLength(0);
+  });
+});
+
+describe("a link preview never creates a workspace", () => {
+  it("for a repository with no workspace on this computer, says where it would land and makes none", async () => {
+    const link = buildShareLink({
+      endpoint,
+      repositoryId: "22222222-0000-4000-8000-000000000000",
+      name: "fresh-share",
+      prefix: null,
+      sharedBy: "vp",
+      invitedAs: null,
+    });
+    const registered = listHubWorkspaces().map((row) => row.slug);
+    const previewed = await body<{ target: { name: string; created: boolean } }>(
+      await post("/api/cloud/join-link/preview", { link, credentialFile: true }),
+    );
+    expect(previewed.target).toMatchObject({ created: true });
+    expect(listHubWorkspaces().map((row) => row.slug)).toEqual(registered);
+    for (const fake of fakes.values()) expect(fake.calls).toHaveLength(0);
   });
 });

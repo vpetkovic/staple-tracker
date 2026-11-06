@@ -57,6 +57,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { sharedRow, useSharedWorkspaces } from "@/lib/shared-workspaces";
 import {
   cloudConnect,
   cloudDisconnect,
@@ -406,7 +407,10 @@ function ConnectDisclosure({ hasDraft, children }: { hasDraft: boolean; children
  */
 export type CloudPart = "all" | "machine" | "registry" | "workspace";
 
-export function CloudPanel(props: CloudPanelProps & { part?: CloudPart }) {
+/** Why the automatic-sync switch cannot be turned off in a shared workspace. */
+export const AUTO_LOCKED_REASON = "Shared workspaces always sync automatically. Leave or disconnect to stop.";
+
+export function CloudPanel(props: CloudPanelProps & { part?: CloudPart; autoLocked?: boolean }) {
   const { report, busy, draft, pending, devices, part = "all" } = props;
   const showsHub = part === "all" || part === "machine";
   const showsRegistry = part === "all" || part === "registry";
@@ -580,31 +584,36 @@ export function CloudPanel(props: CloudPanelProps & { part?: CloudPart }) {
             title="Consents"
             description="Three separate decisions. You have made the first; these are the other two, and each is for this machine alone."
           >
-            {consentControls(report).map((control) => (
-              <Field
-                key={control.key}
-                id={`cloud-consent-${control.key}`}
-                label={control.label}
-                description={control.description}
-              >
-                {(aria) => (
-                  <label className="flex h-7 items-center gap-2 text-[13px]">
-                    <input
-                      {...aria}
-                      type="checkbox"
-                      role="switch"
-                      data-cloud-consent-toggle={control.key}
-                      aria-checked={control.value}
-                      checked={control.value}
-                      disabled={busy !== null}
-                      onChange={(event) => props.onConsent(control.key, event.target.checked)}
-                      className="accent-primary size-4"
-                    />
-                    <span>{control.value ? "On" : "Off"}</span>
-                  </label>
-                )}
-              </Field>
-            ))}
+            {consentControls(report).map((control) => {
+              // A shared workspace always syncs automatically: shown on, and not a choice here.
+              const locked = control.key === "auto" && props.autoLocked === true;
+              return (
+                <Field
+                  key={control.key}
+                  id={`cloud-consent-${control.key}`}
+                  label={control.label}
+                  description={locked ? AUTO_LOCKED_REASON : control.description}
+                >
+                  {(aria) => (
+                    <label className="flex h-7 items-center gap-2 text-[13px]">
+                      <input
+                        {...aria}
+                        type="checkbox"
+                        role="switch"
+                        data-cloud-consent-toggle={control.key}
+                        data-locked={locked ? "" : undefined}
+                        aria-checked={locked ? true : control.value}
+                        checked={locked ? true : control.value}
+                        disabled={busy !== null || locked}
+                        onChange={(event) => props.onConsent(control.key, event.target.checked)}
+                        className="accent-primary size-4"
+                      />
+                      <span>{locked ? "On · locked" : control.value ? "On" : "Off"}</span>
+                    </label>
+                  )}
+                </Field>
+              );
+            })}
           </Section>
 
           <Section title="State">
@@ -1704,7 +1713,10 @@ function HubControl({
   locked: boolean;
   actions: HubActions;
 }) {
-  const disabled = control.disabledReason !== null;
+  const sharedRows = useSharedWorkspaces();
+  // A shared workspace always syncs automatically: this row shows it on, and not as a choice.
+  const autoLocked = control.action === "auto" && sharedRow(sharedRows, slug)?.autoSyncLocked === true;
+  const disabled = control.disabledReason !== null || autoLocked;
 
   if (control.action === "auto" || control.action === "backup") {
     return (
@@ -1717,15 +1729,16 @@ function HubControl({
         // margin cancels the padding, so the checkbox still lines up with the
         // buttons beside and above it — the target grows, the layout does not.
         className={`-mx-1.5 flex min-h-8 min-w-8 items-center gap-1.5 rounded-md px-1.5 text-[12px] ${disabled || locked ? "" : "cursor-pointer hover:bg-accent"}`}
-        title={control.disabledReason ?? control.effect}
+        title={autoLocked ? AUTO_LOCKED_REASON : (control.disabledReason ?? control.effect)}
       >
         <input
           type="checkbox"
           role="switch"
           data-cloud-workspace-toggle={`${slug}:${control.action}`}
-          aria-checked={control.value === true}
+          data-locked={autoLocked ? "" : undefined}
+          aria-checked={autoLocked || control.value === true}
           aria-label={`${control.label} for ${slug}`}
-          checked={control.value === true}
+          checked={autoLocked || control.value === true}
           disabled={disabled || locked}
           onChange={(event) => actions.onConsent(slug, control.action as "auto" | "backup", event.target.checked)}
           className="accent-primary size-4"
@@ -1775,6 +1788,9 @@ const IDLE_WIDE: HubWideState = {
 /** The data half: one read on mount, and one round trip per press. */
 export function CloudSection({ ws, part = "all" }: { ws?: string; part?: CloudPart }) {
   const [report, setReport] = useState<CloudSurfaceReport | null>(null);
+  // A shared workspace locks automatic sync on (local: this machine's member list).
+  const sharedRows = useSharedWorkspaces();
+  const autoLocked = ws ? sharedRow(sharedRows, ws)?.autoSyncLocked === true : false;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<CloudBusy>(null);
@@ -2380,6 +2396,7 @@ export function CloudSection({ ws, part = "all" }: { ws?: string; part?: CloudPa
   return (
     <CloudPanel
       part={part}
+      autoLocked={autoLocked}
       report={report}
       error={error}
       busy={busy}
