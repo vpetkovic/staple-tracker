@@ -908,6 +908,23 @@ export class WorkspaceStore {
   }
 
   /**
+   * What a claim (checkout, or a steal) writes into `assignee`.
+   *
+   * Without a member list, or when the current assignee names no current member, the
+   * claiming agent: exactly what a claim always wrote. In a shared workspace a ticket
+   * assigned to a member stays theirs while an agent works it, because `checkout_agent`
+   * already says who holds it ("@VP · held by claude-ab12"). Overwriting the member with
+   * the agent would lose whose work it is, and once released the ticket would read as
+   * nobody's to the other member's pickup. A removed member's name is not kept: nobody
+   * can act for them any more.
+   */
+  private assigneeOnClaim(current: string | null, agent: string): string {
+    if (current === null || current.trim() === "") return agent;
+    const member = this.members()?.memberNamed(current) ?? null;
+    return member !== null && !member.removed ? current : agent;
+  }
+
+  /**
    * The exact assignee strings in this workspace that name another member — what
    * `IssueFilters.excludeAssignees` takes for "mine". Matched in JavaScript, because
    * member names fold case beyond ASCII and SQLite's `lower` does not.
@@ -6868,7 +6885,7 @@ export class WorkspaceStore {
              )
            RETURNING *`,
         )
-        .get(activeStatus, agent, agent, now, now, now, row.id, ...expected) as unknown as
+        .get(activeStatus, this.assigneeOnClaim(row.assignee, agent), agent, now, now, now, row.id, ...expected) as unknown as
         | IssueRow
         | undefined;
       if (!claimed) {
@@ -6900,7 +6917,7 @@ export class WorkspaceStore {
                    WHERE id = ? AND status IN ${sqlIdList(this.settings().active)} AND checkout_agent = ?
                    RETURNING *`,
                 )
-                .get(activeStatus, agent, agent, now, now, now, row.id, claim.heldBy) as unknown as
+                .get(activeStatus, this.assigneeOnClaim(row.assignee, agent), agent, now, now, now, row.id, claim.heldBy) as unknown as
                 | IssueRow
                 | undefined;
               if (stolen) {
