@@ -427,6 +427,18 @@ describe("sharing by link", () => {
     expect(owner).toMatchObject({ shared: true, autoSyncLocked: true });
     expect(owner.members.map((m) => [m.name, m.self])).toEqual([["vp", true], ["marko", false]]);
     expect(after.workspaces.find((row) => row.slug === "joiner")!.shared).toBe(false);
+    // One member is a connected workspace, not a shared one.
+    writeMembersCache(home, {
+      version: 1,
+      repositoryId: joinerId,
+      fetchedAt: "2026-11-06T00:00:00.000Z",
+      self: { memberId: "solo", deviceId: "d" },
+      members: [{ memberId: "solo", name: "solo", isOwner: true, removed: false, devices: [] }],
+    });
+    const solo = await body<{ workspaces: Array<{ slug: string; shared: boolean }> }>(
+      await fetch(`${origin}/api/cloud/shared-workspaces`, { headers: { "x-staple-token": token } }),
+    );
+    expect(solo.workspaces.find((row) => row.slug === "joiner")!.shared).toBe(false);
     for (const fake of fakes.values()) expect(fake.calls).toHaveLength(0);
   });
 
@@ -461,6 +473,27 @@ describe("sharing by link", () => {
     );
     const refused = await post("/api/cloud/join-link/start", { link, consent: previewed.consent.id, digest: previewed.consent.digest });
     expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { message: string }).message).toContain("different workspace or service than this link names");
+    for (const fake of fakes.values()) expect(fake.calls).toHaveLength(0);
+  });
+});
+
+describe("a link preview never creates a workspace", () => {
+  it("for a repository with no workspace on this computer, says where it would land and makes none", async () => {
+    const link = buildShareLink({
+      endpoint,
+      repositoryId: "22222222-0000-4000-8000-000000000000",
+      name: "fresh-share",
+      prefix: null,
+      sharedBy: "vp",
+      invitedAs: null,
+    });
+    const registered = listHubWorkspaces().map((row) => row.slug);
+    const previewed = await body<{ target: { name: string; created: boolean } }>(
+      await post("/api/cloud/join-link/preview", { link, credentialFile: true }),
+    );
+    expect(previewed.target).toMatchObject({ created: true });
+    expect(listHubWorkspaces().map((row) => row.slug)).toEqual(registered);
     for (const fake of fakes.values()) expect(fake.calls).toHaveLength(0);
   });
 });
