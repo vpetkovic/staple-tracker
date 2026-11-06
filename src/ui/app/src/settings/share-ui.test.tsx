@@ -234,6 +234,12 @@ describe("the shared badge and the switcher's marker", () => {
     expect(html).toContain('data-member-chip="m-vp"');
     expect(html).toContain("Shared with marko");
     expect(sharedBadgeText(SHARED)).toBe("Shared · 2 members");
+    // Legible: the chips do not overlap, and each is ringed in the badge's colour.
+    const chips = /<span aria-hidden="true" data-shared-chips="true" class="([^"]*)">/.exec(html)?.[1] ?? "";
+    expect(chips).not.toMatch(/-space-x-/);
+    expect(chips).toContain("gap-");
+    const ringed = html.match(/data-member-chip="[^"]+"[^>]*class="[^"]*\[&amp;&gt;span\]:ring-1/g) ?? [];
+    expect(ringed).toHaveLength(2);
     // Others first, yourself last.
     expect(sharedChips(SHARED).shown.map((m) => m.name)).toEqual(["marko", "VP"]);
   });

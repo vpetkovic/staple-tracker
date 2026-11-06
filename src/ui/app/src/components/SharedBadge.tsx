@@ -21,6 +21,15 @@ import {
 import type { CloudSharedWorkspace, CloudSurfaceReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+/**
+ * The chips sit side by side with a hair of space, each ringed in the badge's background.
+ * They used to overlap by a few pixels, and a two-letter disc lost its second letter under
+ * its neighbour ("VP" read "VI"); a ring alone cannot fix that, because the neighbour is
+ * drawn on top of it.
+ */
+export const CHIP_ROW_CLASS = "flex items-center gap-0.5";
+export const CHIP_RING_CLASS = "[&>span]:ring-1 [&>span]:ring-[var(--surface-raised)]";
+
 const DOT_CLASS: Record<SyncDot, string> = {
   syncing: "bg-[var(--status-task-done)]",
   attention: "bg-[var(--status-task-in-review,#d4a72c)]",
@@ -59,9 +68,9 @@ export function SharedBadgeView({
       <span aria-hidden className={cn("size-2 shrink-0 rounded-full", DOT_CLASS[dot], dot === "syncing" && "animate-pulse")} />
       <ArrowLeftRight aria-hidden className="size-3.5 shrink-0" />
       {compact ? <span>{row.members.length}</span> : <span className="whitespace-nowrap">{sharedBadgeText(row)}</span>}
-      <span aria-hidden className="flex items-center -space-x-1.5">
+      <span aria-hidden data-shared-chips className={CHIP_ROW_CLASS}>
         {shown.map((member) => (
-          <MemberChip key={member.memberId} member={member} you={member.self} className="[&>span]:ring-2 [&>span]:ring-surface-raised" />
+          <MemberChip key={member.memberId} member={member} you={member.self} className={CHIP_RING_CLASS} />
         ))}
         {more > 0 ? <span className="pl-2 text-caption tabular-nums">+{more}</span> : null}
       </span>

@@ -391,7 +391,7 @@ export function MembersPanel({
           <Section title="Members" error={state.error}>
             <p className="text-[13px] text-muted-foreground">
               This workspace is not connected to a sync service on this computer, so it has no members here. Connect it
-              under Cloud sync, or join a shared workspace from the empty task list.
+              under Cloud sync, or open the invite link a member sent you to join their shared workspace.
             </p>
             <Button type="button" variant="outline" size="sm" onClick={actions.onReload}>
               Try again
@@ -446,8 +446,7 @@ export function MembersPanel({
         </ul>
         {state.requests.length === 0 ? (
           <p className="text-[12px] text-muted-foreground" data-no-requests>
-            No one is waiting to join. Someone joins with <code className="font-mono">staple cloud join</code> in their
-            clone, or from the empty task list, and their request shows here.
+            No one is waiting to join. Invite someone above: they open the link, and their request shows up here.
           </p>
         ) : null}
       </Section>
