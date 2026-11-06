@@ -113,6 +113,20 @@ export function memberOfDevice(cache: MembersCache, deviceId: string | null): Ca
   return cache.members.find((m) => m.devices.some((d) => d.deviceId === id)) ?? null;
 }
 
+/** Members who have not been removed. */
+export function currentMembers(cache: MembersCache): CachedMember[] {
+  return cache.members.filter((m) => !m.removed);
+}
+
+/**
+ * A shared workspace: more than one current member. This is the single definition every
+ * surface uses, the shared badge, the CLI's "shared with" line, and the rule that
+ * automatic sync is on and cannot be switched off.
+ */
+export function isSharedWorkspace(cache: MembersCache | null): boolean {
+  return cache !== null && currentMembers(cache).length > 1;
+}
+
 /** The member with this exact name, case-insensitively, or null. */
 export function memberByName(cache: MembersCache, name: string): CachedMember | null {
   const wanted = name.trim().toLowerCase();
