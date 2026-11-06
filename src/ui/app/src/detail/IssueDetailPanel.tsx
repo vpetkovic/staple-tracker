@@ -60,7 +60,7 @@ import {
   type IssueActionsController,
 } from "./IssueActions";
 import { InlineAssignee, InlineKind, InlineLabels, InlinePriority, InlineProject, InlineTitle } from "./InlineProperties";
-import { useMembersCache } from "@/lib/members";
+import { useMembersCache, useOtherMembersRule } from "@/lib/members";
 import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout } from "./PropertyGrid";
 import { PersonChip, RelativeTime } from "./parts";
 import { MilestoneCrumb, MilestoneDue, MilestoneSentence, MilestoneValue, OpenPlanAction, opensPlan, planOf } from "./MilestoneParts";
@@ -227,7 +227,10 @@ function useQueueAhead(detail: IssueDetail | undefined, onAuthError: (error: Aut
   const settings = useResource(useCallback(() => (ws ? getSettings({ ws }) : Promise.resolve(null)), [ws]), [ws, version], onAuthError);
   const strict = settings.data ? settingValueIn(settings.data, "queue.policy")?.value === "strict" : false;
   const queue = useResource(useCallback(() => (ws && strict ? getQueue({ ws }) : Promise.resolve(null)), [ws, strict]), [ws, strict, version], onAuthError);
-  return strict && queue.data && issueId ? queueAheadOf(queue.data.effective, issueId) : null;
+  // The member rule, as the store's strict check applies it: another member's ticket is never ahead.
+  const session = useSession();
+  const isOtherMembers = useOtherMembersRule(ws, version, onAuthError as (error: Error) => void, session.issues.data);
+  return strict && queue.data && issueId ? queueAheadOf(queue.data.effective, issueId, isOtherMembers) : null;
 }
 
 function prefersReducedMotion(): boolean {

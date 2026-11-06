@@ -229,17 +229,29 @@ export interface EffectivePreview {
   next: EffectiveQueueRow | null;
 }
 
-export function effectivePreview(view: QueueView, limit = UNQUEUED_PREVIEW_LIMIT): EffectivePreview {
+export function effectivePreview(
+  view: QueueView,
+  limit = UNQUEUED_PREVIEW_LIMIT,
+  /** The member rule (`lib/members.ts`): another member's ticket is never next here. */
+  isOtherMembers?: (identifier: string) => boolean,
+): EffectivePreview {
   const band = previewOf(
     view.effective.filter((row) => row.unqueued),
     limit,
   );
-  return { unqueued: band.shown, unqueuedHidden: band.hidden, next: nextEligible(view.effective) };
+  return { unqueued: band.shown, unqueuedHidden: band.hidden, next: nextEligible(view.effective, isOtherMembers) };
 }
 
 /** The resolver's next item for an actorless read: the first eligible row. See the header. */
-export function nextEligible(rows: readonly EffectiveQueueRow[]): EffectiveQueueRow | null {
-  return rows.find((row) => row.eligibility === "eligible") ?? null;
+export function nextEligible(
+  rows: readonly EffectiveQueueRow[],
+  /**
+   * In a shared workspace: whether a row is assigned to ANOTHER member. `queue next` on this
+   * machine skips such a row (`assigned_to_other_member`), so the band does too.
+   */
+  isOtherMembers?: (identifier: string) => boolean,
+): EffectiveQueueRow | null {
+  return rows.find((row) => row.eligibility === "eligible" && !(isOtherMembers?.(row.identifier) ?? false)) ?? null;
 }
 
 /** "next: STA-67 (#2)", or the honest sentence when the whole order is waiting on something. */
