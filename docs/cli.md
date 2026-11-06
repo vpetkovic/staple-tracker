@@ -208,6 +208,12 @@ Guide: [Cloud sync](cloud-sync.md). Off until you connect.
 | `staple cloud sync` | Send this machine's changes and fetch the others'. `--all` does every connected workspace. |
 | `staple cloud auto on\|off` | Let this machine sync without being asked. |
 | `staple cloud conflicts` | Fields two machines set differently. `cloud resolve <id> --take local\|remote` settles one. |
+| `staple cloud join` | Join a shared workspace from this machine: shows a code that a member approves. `--endpoint U` if the repository does not name one. |
+| `staple cloud requests` | Join requests waiting for approval. |
+| `staple cloud approve <code> --as N \| --to N` | Admit a new person (owner) or add a device to an existing member. `cloud deny <code>` refuses one. |
+| `staple cloud members` | Who shares this workspace, with their devices. `members rename`, `members remove <name> --confirm <name>` (owner). |
+| `staple cloud share-endpoint` | Write the service address into `.staple/repository.json` so `join` needs no arguments. |
+| `staple ls --mine` | Hide tickets assigned to other members. `inbox --mine` too; `queue next --any-assignee` stops skipping them. |
 | `staple cloud devices` | Machines connected to this repository. `devices revoke <id>` cuts one off. |
 | `staple cloud backup enable` | Allow backups on the service. `backup create`, `backup ls`, `backup rm`; `cloud restore <id> --confirm <repo>` rewinds. |
 | `staple cloud lease acquire <ref>` | Claim a ticket across machines, not only on this one. |
