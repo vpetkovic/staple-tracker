@@ -79,6 +79,10 @@ import type {
 } from "./telemetry-types";
 import type {
   CloudJoinOffer,
+  CloudLinkJoinPreviewResponse,
+  CloudLinkJoinStarted,
+  CloudShareOffer,
+  CloudSharedWorkspace,
   CloudJoinPoll,
   CloudJoinPreviewResponse,
   CloudJoinRequest,
@@ -1205,3 +1209,24 @@ export const removeMember = (target: { slug: string; memberId: string; confirm: 
 
 export const revokeMemberDevice = (target: { slug: string; deviceId: string }) =>
   postJson<CloudMembersResponse>("/api/cloud/workspace/members/device/revoke", target);
+
+// ---------- sharing by link ----------
+
+/** Local: builds the link, the command and a ready-to-send message. Sends nothing. */
+export const createShareOffer = (target: { slug: string; invitedAs?: string }) =>
+  postJson<CloudShareOffer>("/api/cloud/workspace/share", target);
+
+/** Local: which registered workspaces are shared, and with whom. */
+export const getSharedWorkspaces = () => request<{ workspaces: CloudSharedWorkspace[] }>("/api/cloud/shared-workspaces");
+
+/** Step one for a link. Local: makes no request and creates nothing. */
+export const previewLinkJoin = (target: { link: string; label?: string; credentialFile?: boolean }) =>
+  postJson<CloudLinkJoinPreviewResponse>("/api/cloud/join-link/preview", target);
+
+/** Step two. EGRESSES, and only now may a workspace be created for the link. */
+export const startLinkJoin = (target: { link: string; consent: ConsentTicket }) =>
+  postJson<CloudLinkJoinStarted>("/api/cloud/join-link/start", {
+    link: target.link,
+    consent: target.consent.id,
+    digest: target.consent.digest,
+  });

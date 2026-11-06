@@ -53,6 +53,10 @@ import {
 } from "../core/cloud/members.js";
 import { readMembersCache, type MembersCache } from "../core/cloud/members-cache.js";
 import { StapleError } from "../core/types.js";
+import { listHubWorkspaces } from "../core/cloud/hub-scope.js";
+import { isSharedWorkspace } from "../core/cloud/members-cache.js";
+import { parseShareLink, type ShareLink } from "../core/cloud/share-link.js";
+import { autoSyncLocked, createShareOffer, resolveJoinTarget } from "./share-shim.js";
 import { openWorkspace } from "../core/open.js";
 
 /** Every POST route in this file. The server pins each to POST and keeps it off the sync trigger. */
@@ -68,7 +72,13 @@ export const MEMBER_POST_ROUTES: readonly string[] = [
   "/api/cloud/workspace/join/start",
   "/api/cloud/workspace/join/poll",
   "/api/cloud/workspace/join/cancel",
+  "/api/cloud/workspace/share",
+  "/api/cloud/join-link/preview",
+  "/api/cloud/join-link/start",
 ];
+
+/** Which registered workspaces are shared, and with whom: a local read for the badge and switcher. */
+export const SHARED_WORKSPACES_ROUTE = "/api/cloud/shared-workspaces";
 
 /** The one GET: a local read for the empty-state card. */
 export const JOIN_OFFER_ROUTE = "/api/cloud/workspace/join/offer";
@@ -215,11 +225,60 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
     return { ...preview, endpoint: preview.endpoint.origin };
   }
 
+  /**
+   * The join preview for a share link. Local only: parses, reads files, probes the credential
+   * store. The link names the service and the repository; nothing is created or sent here.
+   */
+  function linkPreview(link: ShareLink, label: string | undefined, credentialFile: boolean): JoinPreview {
+    return buildJoinPreview({
+      home: stapleHome(),
+      repositoryId: link.repositoryId,
+      endpoint: link.endpoint,
+      endpointSource: "flag",
+      label,
+      credential: { forceFile: credentialFile },
+    });
+  }
+
+  /** The link preview as the page reads it: who invited whom to what, and that sync will be on. */
+  function wireLinkPreview(preview: JoinPreview, link: ShareLink) {
+    return { ...wirePreview(preview), endpointSource: "link" as const, link, autoSync: "on (shared workspace)" as const };
+  }
+
   /** Handle the request when it is one of ours. Returns false for every other path. */
   async function handle(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const home = stapleHome();
 
     // ------------------------------------------------------------ the join card's read
+    if (url.pathname === SHARED_WORKSPACES_ROUTE) {
+      // Local: the hub registry and each workspace's member list, no request.
+      const workspaces = listHubWorkspaces().flatMap((workspace) => {
+        if (workspace.repositoryId === null) return [];
+        const cache = readMembersCache(home, workspace.repositoryId);
+        const shared = isSharedWorkspace(cache);
+        return [
+          {
+            slug: workspace.slug,
+            shared,
+            autoSyncLocked: shared && autoSyncLocked(home, workspace.repositoryId),
+            members:
+              cache === null
+                ? []
+                : cache.members
+                    .filter((member) => !member.removed)
+                    .map((member) => ({
+                      memberId: member.memberId,
+                      name: member.name,
+                      isOwner: member.isOwner,
+                      self: member.memberId === cache.self.memberId,
+                    })),
+          },
+        ];
+      });
+      ctx.json(res, 200, { workspaces });
+      return true;
+    }
+
     if (url.pathname === JOIN_OFFER_ROUTE) {
       const addressed = workspaceFor(res, url.searchParams.get("ws"));
       if (addressed === null) return true;
@@ -260,6 +319,64 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
         slug: workspace.slug,
         preview: wirePreview(preview),
         consent: ctx.consents.mint(preview, { credentialFile }),
+      });
+      return true;
+    }
+
+    // ------------------------------------------------------------- sharing by link
+    if (url.pathname === "/api/cloud/workspace/share") {
+      // Local: builds the link from this machine's connection and member list; sends nothing.
+      const addressed = workspaceFor(res, body.slug);
+      if (addressed === null) return true;
+      const invitedAs = typeof body.invitedAs === "string" && body.invitedAs.trim() !== "" ? body.invitedAs.trim() : null;
+      ctx.json(res, 200, createShareOffer({ home, dbPath: addressed.workspace.path, invitedAs }));
+      return true;
+    }
+
+    if (url.pathname === "/api/cloud/join-link/preview") {
+      const link = parseShareLink(typeof body.link === "string" ? body.link : "");
+      const credentialFile = body.credentialFile === true;
+      // Where the join would land, decided and NOT created: creating waits for consent.
+      const target = resolveJoinTarget({ home, cwd: process.cwd(), link, create: false });
+      const preview = linkPreview(link, typeof body.label === "string" ? body.label : undefined, credentialFile);
+      ctx.json(res, 200, {
+        preview: wireLinkPreview(preview, link),
+        consent: ctx.consents.mint(preview, { credentialFile }),
+        target: { name: target.name, created: target.created, fromCheckout: target.fromCheckout },
+      });
+      return true;
+    }
+
+    if (url.pathname === "/api/cloud/join-link/start") {
+      const link = parseShareLink(typeof body.link === "string" ? body.link : "");
+      sweep();
+      if (joins.size >= MAX_JOINS) {
+        throw new StapleError("conflict", "Too many joins are already waiting in this window. Cancel one first.");
+      }
+      let preview: JoinPreview | null = null;
+      const { context } = ctx.consents.redeem(body.consent, body.digest, (stored, choices) => {
+        if (stored.repositoryId !== link.repositoryId || stored.endpoint.origin !== link.endpoint) {
+          throw new StapleError(
+            "validation",
+            "That confirmation was for a different workspace or service than this link names. Nothing was sent.",
+          );
+        }
+        preview = linkPreview(link, stored.label, choices.credentialFile);
+        return preview;
+      });
+      // Consent given: only now may a workspace be created for the link.
+      const target = resolveJoinTarget({ home, cwd: process.cwd(), link, create: true });
+      const ticket = await startJoin(preview!, { home, ...options(context.credentialFile) });
+      const joinId = randomUUID();
+      joins.set(joinId, { ticket, slug: target.name, credentialFile: context.credentialFile, busy: null, cancelled: false });
+      ctx.json(res, 200, {
+        joinId,
+        code: ticket.code,
+        expiresAt: ticket.expiresAt,
+        label: ticket.label,
+        endpoint: ticket.endpoint.origin,
+        workspace: target.name,
+        created: target.created,
       });
       return true;
     }

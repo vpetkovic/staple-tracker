@@ -3292,3 +3292,54 @@ export type CloudJoinPoll =
     }
   | { status: "denied" | "expired" | "cancelled"; code: string; expiresAt: number }
   | { status: "failed"; code: string; message: string };
+
+// ---------------------------------------------------------------- sharing by link
+
+/** A share link's fields, as `src/core/cloud/share-link.ts` reads them. */
+export interface CloudShareLink {
+  endpoint: string;
+  repositoryId: string;
+  name: string;
+  prefix: string | null;
+  sharedBy: string | null;
+  invitedAs: string | null;
+}
+
+/** `POST /api/cloud/workspace/share`: everything a person sends a teammate. Built locally. */
+export interface CloudShareOffer {
+  link: string;
+  command: string;
+  message: string;
+  name: string;
+  prefix: string | null;
+  invitedAs: string | null;
+  autoSyncMandatory: true;
+}
+
+/** One registered workspace's sharing, from the members list on this machine. Local. */
+export interface CloudSharedWorkspace {
+  slug: string;
+  shared: boolean;
+  autoSyncLocked: boolean;
+  members: Array<{ memberId: string; name: string; isOwner: boolean; self: boolean }>;
+}
+
+/** The join preview for a share link: the ordinary preview, plus who invited whom, and sync. */
+export interface CloudLinkJoinPreview extends Omit<CloudJoinPreview, "endpointSource"> {
+  endpointSource: "link";
+  link: CloudShareLink;
+  autoSync: "on (shared workspace)";
+}
+
+export interface CloudLinkJoinPreviewResponse {
+  preview: CloudLinkJoinPreview;
+  consent: ConsentTicket;
+  /** Where the join lands. `created` true: a workspace will be made for it, after consent. */
+  target: { name: string; created: boolean; fromCheckout: boolean };
+}
+
+export interface CloudLinkJoinStarted extends CloudJoinStarted {
+  /** The workspace the join connects, under the owner's name for it. */
+  workspace: string;
+  created: boolean;
+}

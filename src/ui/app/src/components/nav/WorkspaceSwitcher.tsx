@@ -38,6 +38,7 @@ import {
   switcherTriggerLabel,
 } from "./switcher-model";
 import { useBackToClose } from "@/lib/back-to-close";
+import { sharedRow, useSharedWorkspaces } from "@/lib/shared-workspaces";
 
 /** The brand mark the trigger wears as its avatar — the app's own name did not leave the page. */
 function BrandMark({ large = false }: { large?: boolean }) {
@@ -64,6 +65,7 @@ function SwitcherList({ onChosen, phone }: { onChosen: () => void; phone: boolea
     [session, session.issues.data],
   );
   const rows = switcherRows(session, counts);
+  const sharedRows = useSharedWorkspaces();
   const prefixes = useMemo(
     () => new Map(session.workspaces.map((workspace) => [workspace.slug, workspace.prefix])),
     [session.workspaces],
@@ -123,7 +125,18 @@ function SwitcherList({ onChosen, phone }: { onChosen: () => void; phone: boolea
             className={cn("items-start gap-3 rounded-lg px-2.5", phone ? "min-h-12 py-2.5" : "min-h-10 py-2")}
           >
             <span className="flex min-w-0 flex-1 flex-col">
-              <span className={cn("font-medium break-words", phone ? "text-[16px]" : "text-[13px]")}>{row.name}</span>
+              <span className={cn("font-medium break-words", phone ? "text-[16px]" : "text-[13px]")}>
+                {row.name}
+                {sharedRow(sharedRows, row.value) ? (
+                  <span
+                    data-switcher-shared={row.value}
+                    title="Shared with other members; syncs automatically"
+                    className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-surface-sunken px-1.5 align-middle text-[11px] font-normal text-text-secondary"
+                  >
+                    ⇄ shared
+                  </span>
+                ) : null}
+              </span>
               <span className={cn("text-text-tertiary", phone ? "text-[13px]" : "text-[12px]")}>{row.caption}</span>
             </span>
             {row.prefix ? (
