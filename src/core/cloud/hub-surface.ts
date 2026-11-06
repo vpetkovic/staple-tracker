@@ -76,9 +76,10 @@ import type { CloudMode } from "./surface.js";
  * A deliberate subset of {@link import("./status.js").CloudState}: `offline` and
  * `revoked` require an authenticated round trip and this module cannot make one,
  * so a union that admitted them would be a type promising information the code
- * cannot produce.
+ * cannot produce. `removed` is the exception that proves it: it is not probed here, it
+ * was RECORDED on the connection record when the service last said so (`markRemoved`).
  */
-export type HubConnectionState = "disconnected" | "manual" | "automatic" | "auth_failed";
+export type HubConnectionState = "disconnected" | "manual" | "automatic" | "auth_failed" | "removed";
 
 /** One workspace's row in the hub-wide list. */
 export interface HubWorkspaceReport {
@@ -136,6 +137,8 @@ export interface HubWorkspaceReport {
   credentialMechanism: CredentialMechanism | null;
   /** `null` when the credential was deliberately not probed. See the header. */
   credentialPresent: boolean | null;
+  /** Who removed this device's member, when `state` is `removed`. Absent otherwise. */
+  removedBy?: string | null;
   /** This device's automatic-sync consent FOR THIS WORKSPACE. */
   auto: boolean;
   /**
@@ -672,8 +675,13 @@ function reportFor(
     }
   }
 
-  const state: HubConnectionState =
-    credentialPresent === false ? "auth_failed" : connection.auto ? "automatic" : "manual";
+  const state: HubConnectionState = connection.removed
+    ? "removed"
+    : credentialPresent === false
+      ? "auth_failed"
+      : connection.auto
+        ? "automatic"
+        : "manual";
 
   return {
     ...base,
@@ -684,6 +692,7 @@ function reportFor(
     label: connection.label,
     credentialMechanism: connection.credentialMechanism,
     credentialPresent,
+    removedBy: connection.removed?.by ?? null,
     auto: connection.auto,
     backup: connection.backup,
     connectedAt: connection.connectedAt,
@@ -715,6 +724,7 @@ export function describeHubReport(report: HubCloudReport): string {
     if (row.auto) marks.push(row.autoWaitingUntil ? `auto, waiting until ${row.autoWaitingUntil}` : "auto");
     if (row.backup) marks.push("backup");
     if (!row.available) marks.push("MISSING");
+    if (row.state === "removed") marks.push(`removed by ${row.removedBy ?? "the owner"}; rejoin: staple cloud join`);
     lines.push(
       `  ${row.slug.padEnd(slugWidth)}  ${row.state.padEnd(12)} ` +
         `${row.endpoint ?? "-"}${marks.length > 0 ? `  [${marks.join(", ")}]` : ""}`,

@@ -19,6 +19,7 @@
  * ({@link refreshMembersCacheBestEffort}, called from `sync.ts`), and disconnect deletes it.
  */
 import { requireSession } from "./connect.js";
+import { noteRemoval } from "./connection.js";
 import {
   approveJoinRequest,
   cloudCodeOf,
@@ -74,11 +75,16 @@ export async function refreshMembersCacheWith(
   session: MemberSession,
   options: RequestOptions = {},
 ): Promise<MembersCache> {
-  const remote = await fetchRemoteMembers(
-    session.endpoint,
-    { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId },
-    options,
-  );
+  let remote: RemoteMembers;
+  try {
+    remote = await fetchRemoteMembers(
+      session.endpoint,
+      { repositoryId: session.repositoryId, token: session.token, deviceId: session.deviceId },
+      options,
+    );
+  } catch (error) {
+    throw noteRemoval(home, session.repositoryId, error);
+  }
   const cache = membersCacheFrom(session.repositoryId, remote);
   writeMembersCache(home, cache);
   return cache;
@@ -106,6 +112,37 @@ export async function refreshMembersCacheBestEffort(
   }
 }
 
+/**
+ * The one-line nudge after a connect makes this device the owner of a workspace whose
+ * owner is still called `owner` — the name the migration backfills and the first connect
+ * gets. Null in every other case. Pure: it reads the list it is given.
+ */
+export function ownerRenameHint(cache: MembersCache | null): string | null {
+  if (!cache) return null;
+  const self = cache.members.find((member) => member.memberId === cache.self.memberId);
+  if (!self?.isOwner || self.name !== "owner") return null;
+  return `You are this workspace's owner, listed as "owner". Rename with: staple cloud members rename owner <your name>`;
+}
+
+/**
+ * After a connect: fetch the member list once, when the service has members, and write it.
+ * Best effort; null when the service has no members or the list could not be fetched.
+ * Connecting was consented to, and this read is part of the same act.
+ */
+export async function membersAfterConnect(
+  home: string,
+  repositoryId: string,
+  capabilities: { members?: boolean },
+  options: MemberOptions = {},
+): Promise<MembersCache | null> {
+  if (capabilities.members !== true) return null;
+  try {
+    return await refreshMembersCache(home, repositoryId, options);
+  } catch {
+    return null;
+  }
+}
+
 /** `staple cloud requests`: pending join requests, newest last. */
 export async function listPendingRequests(
   home: string,
@@ -113,7 +150,12 @@ export async function listPendingRequests(
   options: MemberOptions = {},
 ): Promise<PendingJoinRequest[]> {
   const session = sessionFor(home, repositoryId, options);
-  const requests = await listJoinRequests(session.endpoint, session, options);
+  let requests: PendingJoinRequest[];
+  try {
+    requests = await listJoinRequests(session.endpoint, session, options);
+  } catch (error) {
+    throw noteRemoval(home, repositoryId, error);
+  }
   return [...requests].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
 }
 
@@ -131,8 +173,8 @@ export interface ApproveOutcome {
 }
 
 const APPROVE_RULE =
-  "Only the workspace owner may admit a new person (`--as <name>`). Any member may add a " +
-  "device to themselves (`--to <your own name>`).";
+  "Only the workspace owner may admit a new person (`--as <name>`), and `--as` with a removed " +
+  "member's name reinstates them. Any member may add a device to themselves (`--to <your own name>`).";
 
 /**
  * `staple cloud approve <code> (--as <name> | --to <member>)`.
@@ -157,6 +199,25 @@ export async function approveRequest(
     target = { newMember: { name } };
   } else {
     const list = await refreshMembersCacheWith(home, session, options);
+    const wanted = as.toMember.trim().toLowerCase();
+    const removed = list.members.find(
+      (member) => member.removed && (member.memberId === as.toMember.trim() || member.name.toLowerCase() === wanted),
+    );
+    const current = list.members.find((member) => !member.removed && member.name.toLowerCase() === wanted);
+    if (removed && !current) {
+      /**
+       * A device cannot be added to a member who was removed: the service refuses it
+       * (`forbidden`). Bringing the person back is the owner's `--as`, which reinstates
+       * the removed member under the same id, so their history stays theirs.
+       */
+      throw new StapleError(
+        "validation",
+        `${removed.name} was removed from this workspace, so no device can be added to them. ` +
+          `To bring them back, the owner approves with: staple cloud approve ${code} --as ${removed.name}` +
+          " (this reinstates the same member, and their past work stays attributed to them).",
+        { removedMember: removed.memberId },
+      );
+    }
     target = { memberId: findMember(list.members, as.toMember).memberId };
   }
 
@@ -183,7 +244,7 @@ export async function denyRequest(
     const denied = await denyJoinRequest(session.endpoint, { ...session, code }, options);
     return { requestId: denied.requestId, code };
   } catch (error) {
-    throw explainRefusal(error, "Any member may deny a pending request.", code);
+    throw explainRefusal(noteRemoval(home, repositoryId, error), "Any member may deny a pending request.", code);
   }
 }
 

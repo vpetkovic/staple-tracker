@@ -1396,6 +1396,7 @@ const STATE_DOT: Record<HubWorkspaceReport["state"], string> = {
   automatic: "var(--status-task-done)",
   manual: "var(--status-task-done)",
   auth_failed: "var(--status-task-blocked)",
+  removed: "var(--status-task-blocked)",
   disconnected: "var(--status-task-backlog)",
 };
 

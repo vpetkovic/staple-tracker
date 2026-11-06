@@ -30,7 +30,7 @@
  * something worth having anyway.
  */
 import { readAutoSyncState } from "./auto-state.js";
-import { connectionIsPrivate, readConnection } from "./connection.js";
+import { clearRemoved, connectionIsPrivate, markRemoved, readConnection } from "./connection.js";
 import type { CredentialMechanism } from "./credential-store.js";
 import { credentialStoreFor, fileCredentialIsPrivate } from "./credential-store.js";
 import { cloudCodeOf, listRemoteDevices, type RemoteDevice, type RequestOptions } from "./client.js";
@@ -170,7 +170,19 @@ export function localCloudStatus(
     );
   }
 
-  const state: CloudState = credential === null ? "auth_failed" : connection.auto ? "automatic" : "manual";
+  /**
+   * A recorded removal wins over everything else this file can see: the credential is
+   * useless whether or not it is still there, and the remedy is a join, not a re-connect.
+   * It was recorded when the service said so (`markRemoved`), so reporting it here is
+   * still a local read.
+   */
+  const state: CloudState = connection.removed
+    ? "removed"
+    : credential === null
+      ? "auth_failed"
+      : connection.auto
+        ? "automatic"
+        : "manual";
 
   return {
     state,
@@ -186,6 +198,7 @@ export function localCloudStatus(
     checked: false,
     warnings,
     devices: null,
+    removedBy: connection.removed?.by ?? null,
   };
 }
 
@@ -224,6 +237,12 @@ export async function refreshCloudStatus(
       { repositoryId, token, deviceId: local.deviceId },
       options,
     );
+    if (local.state === "removed") {
+      // The service accepts this device again, so the recorded removal is stale.
+      clearRemoved(home, repositoryId);
+      const live = localCloudStatus(home, repositoryId, options);
+      return { ...live, checked: true, devices };
+    }
     return { ...local, checked: true, devices };
   } catch (error) {
     const code = cloudCodeOf(error);
@@ -232,6 +251,7 @@ export async function refreshCloudStatus(
     }
     if (code === "revoked") {
       const removedBy = removedByOf(error);
+      if (removedBy !== null) markRemoved(home, repositoryId, removedBy);
       return removedBy === null
         ? { ...local, state: "revoked", checked: true }
         : { ...local, state: "removed", removedBy, checked: true };

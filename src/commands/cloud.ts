@@ -63,6 +63,8 @@ import {
   approveRequest,
   denyRequest,
   listPendingRequests,
+  membersAfterConnect,
+  ownerRenameHint,
   refreshMembersCache,
   removeMember,
   renameMember,
@@ -282,7 +284,9 @@ with their own devices. The member who connected first is the owner.)
   cloud requests
               pending join requests: code, device label, and when each expires.
   cloud approve <code> --as <new name>
-              admit a NEW person under that name. Owner only.
+              admit a NEW person under that name. Owner only. With the name of a
+              REMOVED member it reinstates them, under the same member, so their
+              past work stays theirs.
   cloud approve <code> --to <member>
               add the joining device to an existing member. Anyone may add a
               device to themselves; only the owner may add one to someone else.
@@ -687,7 +691,11 @@ function runConnect(argv: string[]): void {
       home,
       enrollmentSecret: values.token,
       credential: { forceFile: values["credential-file"] === true },
-    }).then((outcome) => {
+    }).then(async (outcome) => {
+      const members = await membersAfterConnect(home, repositoryId, outcome.capabilities, {
+        forceFile: values["credential-file"] === true,
+      });
+      const ownerHint = ownerRenameHint(members);
       if (json) {
         // The connection record, which by construction has no token in it.
         console.log(
@@ -712,6 +720,7 @@ function runConnect(argv: string[]): void {
       }
       console.log("Automatic sync is OFF. Nothing leaves this machine until you run `staple cloud sync`.");
       console.log("Turn it on for THIS device with `staple cloud auto on`.");
+      if (ownerHint) console.log(ownerHint);
     }),
     json,
   );

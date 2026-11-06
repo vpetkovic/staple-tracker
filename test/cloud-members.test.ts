@@ -42,12 +42,16 @@ import {
   approveRequest,
   denyRequest,
   listPendingRequests,
+  membersAfterConnect,
+  ownerRenameHint,
   refreshMembersCache,
   removeMember,
   renameMember,
 } from "../src/core/cloud/members.js";
 import { membersCachePath, readMembersCache, writeMembersCache } from "../src/core/cloud/members-cache.js";
-import { describeState, refreshCloudStatus } from "../src/core/cloud/status.js";
+import { describeState, localCloudStatus, refreshCloudStatus } from "../src/core/cloud/status.js";
+import { hubCloudReport } from "../src/core/cloud/hub-surface.js";
+import { autoSyncGate } from "../src/core/cloud/auto.js";
 import { cloudSurfaceReport } from "../src/core/cloud/surface.js";
 import { syncRepository } from "../src/core/cloud/sync.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
@@ -749,9 +753,72 @@ describe("the members cache follows sync and disconnect", () => {
     return {
       calls,
       store,
+      sync,
       run: () => syncRepository(db, REPO_ID, { home, fetchImpl, sleep: async () => undefined }),
     };
   }
+
+  it("a sync refused because the member was removed records it, so plain status says so", async () => {
+    const device = syncDevice({ on: true });
+    try {
+      // The first request that carries the credential refuses with `removedBy`.
+      device.sync.failNext = {
+        route: "POST /v1/repos/:id/ops",
+        times: 1,
+        status: 403,
+        code: "revoked",
+        detail: { removedBy: "olga" },
+      };
+      const error = await device.run().then(() => null, (e: unknown) => e);
+      expect((error as StapleError).code).toBe("revoked");
+
+      // No network from here on: the local status reads the record.
+      const local = localCloudStatus(home, REPO_ID);
+      expect(local.state).toBe("removed");
+      expect(local.removedBy).toBe("olga");
+      expect(describeState(local)).toBe("removed from this workspace by olga — rejoin: staple cloud join");
+      expect(readConnection(home, REPO_ID)!.removed?.by).toBe("olga");
+
+      // The hub-wide list reads the same record.
+      const row = hubCloudReport(home, {
+        workspaces: [
+          {
+            slug: "shared",
+            prefix: "TST",
+            path: "/nonexistent/shared/.staple/staple.db",
+            kind: "repo",
+            available: true,
+            identityDir: "/nonexistent/shared/.staple",
+            recordsIdentityOnOpen: false,
+            repositoryId: REPO_ID,
+            problem: null,
+          },
+        ],
+        crossLinks: 0,
+      }).workspaces[0];
+      expect(row).toMatchObject({ state: "removed", removedBy: "olga" });
+
+      // Automatic sync stops trying.
+      writeConnection(home, { ...readConnection(home, REPO_ID)!, auto: true });
+      expect(
+        autoSyncGate({ home, repositoryId: REPO_ID, trigger: "post-write" }),
+      ).toMatchObject({ allowed: false, reason: "removed" });
+    } finally {
+      device.store.db.close();
+    }
+  });
+
+  it("a plain revocation is not recorded as a removal", async () => {
+    const device = syncDevice({ on: true });
+    try {
+      device.sync.failNext = { route: "POST /v1/repos/:id/ops", times: 1, status: 403, code: "revoked" };
+      await device.run().then(() => null, (e: unknown) => e);
+      expect(readConnection(home, REPO_ID)!.removed).toBeUndefined();
+      expect(localCloudStatus(home, REPO_ID).state).toBe("manual");
+    } finally {
+      device.store.db.close();
+    }
+  });
 
   it("a successful sync writes the member list", async () => {
     const device = syncDevice({ on: true });
@@ -964,3 +1031,72 @@ describe("the CLI", () => {
   });
 });
 
+
+// ---------------------------------------------------------------- wave 2 client gaps
+
+describe("a recorded removal, re-admission and the owner hint", () => {
+  it("a successful join clears a recorded removal", async () => {
+    connectAsOwner();
+    writeConnection(home, { ...readConnection(home, REPO_ID)!, removed: { by: "olga", at: "2026-11-06T00:00:00.000Z" } });
+    expect(localCloudStatus(home, REPO_ID).state).toBe("removed");
+
+    const server = new MembersServer();
+    let code = "";
+    const outcome = await performJoin(joinPreview(), {
+      home,
+      credential: { forceFile: true },
+      fetchImpl: server.fetch,
+      now: () => server.now,
+      onCode: (ticket) => (code = ticket.code),
+      sleep: async () => server.approve(code, { name: "buddy" }),
+    });
+    expect(outcome.status).toBe("joined");
+    expect(readConnection(home, REPO_ID)!.removed).toBeUndefined();
+    expect(localCloudStatus(home, REPO_ID).state).toBe("manual");
+  });
+
+  it("a refresh the service answers clears a stale recorded removal", async () => {
+    connectAsOwner();
+    writeConnection(home, { ...readConnection(home, REPO_ID)!, removed: { by: "olga", at: "2026-11-06T00:00:00.000Z" } });
+    const server = new MembersServer();
+    const status = await refreshCloudStatus(home, REPO_ID, { fetchImpl: server.fetch });
+    expect(status.state).toBe("manual");
+    expect(readConnection(home, REPO_ID)!.removed).toBeUndefined();
+  });
+
+  it("approve --to a REMOVED member says so and points at --as, sending no approval", async () => {
+    connectAsOwner();
+    const server = new MembersServer();
+    server.members.push({ memberId: "mem_m", name: "marko", isOwner: false, removedAt: server.now, removedBy: "vp" });
+    const created = await server.fetch(`${ENDPOINT}/v1/repos/${REPO_ID}/join-requests`, {
+      method: "POST",
+      body: JSON.stringify({ deviceId: "cccccccc-0000-4000-8000-000000000003", label: "marko-laptop", requestSecretSha256: "00" }),
+    });
+    const code = ((await created.json()) as { code: string }).code;
+
+    const error = await approveRequest(home, REPO_ID, code, { toMember: "Marko" }, { fetchImpl: server.fetch }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((error as StapleError).code).toBe("validation");
+    expect((error as StapleError).message).toContain("marko was removed from this workspace");
+    expect((error as StapleError).message).toContain(`staple cloud approve ${code} --as marko`);
+    expect(server.calls.filter((c) => c.path.endsWith("/approve"))).toHaveLength(0);
+  });
+
+  it("after a connect that made this device the owner named `owner`, says how to rename", async () => {
+    connectAsOwner();
+    const server = new MembersServer();
+    server.members[0]!.name = "owner";
+    const cache = await membersAfterConnect(home, REPO_ID, { members: true }, { fetchImpl: server.fetch });
+    expect(ownerRenameHint(cache)).toBe(
+      `You are this workspace's owner, listed as "owner". Rename with: staple cloud members rename owner <your name>`,
+    );
+    // Renamed already, not the owner, or an older service: no hint, and no request for the last.
+    server.members[0]!.name = "vp";
+    expect(ownerRenameHint(await membersAfterConnect(home, REPO_ID, { members: true }, { fetchImpl: server.fetch }))).toBeNull();
+    const before = server.calls.length;
+    expect(await membersAfterConnect(home, REPO_ID, {}, { fetchImpl: server.fetch })).toBeNull();
+    expect(server.calls.length).toBe(before);
+  });
+});
