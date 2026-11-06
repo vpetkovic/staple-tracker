@@ -49,7 +49,7 @@ import {
   type RequestOptions,
 } from "./client.js";
 import { readAutoSyncState, writeAutoSyncState } from "./auto-state.js";
-import { readConnection } from "./connection.js";
+import { noteRemoval, readConnection } from "./connection.js";
 import { refreshMembersCacheBestEffort } from "./members.js";
 import { credentialStoreFor } from "./credential-store.js";
 import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
@@ -479,6 +479,24 @@ function localSchemaVersion(db: DatabaseSync): number {
  * boundary.
  */
 export async function syncRepository(
+  db: DatabaseSync,
+  repositoryId: string,
+  options: SyncOptions,
+): Promise<SyncReport> {
+  try {
+    return await syncRepositoryOnce(db, repositoryId, options);
+  } catch (error) {
+    /**
+     * A refusal because this device's member was removed is recorded on the way out, so
+     * plain `staple cloud status`, the hub-wide list and the UI say "removed" from then on
+     * without asking the service. Every sync path, manual, `--all`, automatic and the UI's,
+     * comes through here. The error itself is rethrown unchanged.
+     */
+    throw noteRemoval(options.home, repositoryId, error);
+  }
+}
+
+async function syncRepositoryOnce(
   db: DatabaseSync,
   repositoryId: string,
   options: SyncOptions,

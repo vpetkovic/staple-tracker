@@ -102,6 +102,16 @@ export interface CloudConnection {
   readonly registry?: boolean;
   /** Protocol version negotiated at connect. Advisory; re-read per session. */
   readonly protocol: number;
+  /**
+   * Set when the service refused this device because its MEMBER was removed from the
+   * workspace (a `revoked` carrying `removedBy`), so plain `staple cloud status`, the
+   * hub-wide list and the UI can say so without asking the service again.
+   *
+   * Optional, and absent means "not known to be removed". An older build ignores it,
+   * which costs nothing: the service still refuses the device. A successful join or
+   * connect writes a fresh record without it, which is how it clears.
+   */
+  readonly removed?: { readonly by: string; readonly at: string };
 }
 
 export function connectionPath(home: string, repositoryId: string): string {
@@ -178,6 +188,11 @@ export function readConnection(home: string, repositoryId: string): CloudConnect
   const backup = record.backup === true;
   const registry = record.registry === true;
   const protocol = typeof record.protocol === "number" ? record.protocol : 1;
+  const removedRaw = record.removed as Record<string, unknown> | undefined;
+  const removed =
+    removedRaw && typeof removedRaw === "object" && typeof removedRaw.by === "string" && typeof removedRaw.at === "string"
+      ? { by: removedRaw.by, at: removedRaw.at }
+      : undefined;
 
   return {
     schemaVersion: version,
@@ -191,7 +206,51 @@ export function readConnection(home: string, repositoryId: string): CloudConnect
     backup,
     registry,
     protocol,
+    ...(removed ? { removed } : {}),
   };
+}
+
+/**
+ * Record that the service refused this device because its member was removed.
+ *
+ * A no-op when there is no connection record (nothing to describe) or when the same
+ * removal is already recorded. Never throws: it runs on the way out of a failure, and a
+ * write that failed here must not replace the error the person needs to see.
+ */
+export function markRemoved(home: string, repositoryId: string, by: string, now: Date = new Date()): boolean {
+  try {
+    const existing = readConnection(home, repositoryId);
+    if (!existing || existing.removed?.by === by) return false;
+    writeConnection(home, { ...existing, removed: { by, at: now.toISOString() } });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Forget a recorded removal, when the service has since accepted this device again. */
+export function clearRemoved(home: string, repositoryId: string): boolean {
+  try {
+    const existing = readConnection(home, repositoryId);
+    if (!existing?.removed) return false;
+    const { removed: _removed, ...rest } = existing;
+    writeConnection(home, rest);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Record the removal when `error` is the service saying this device's member was removed,
+ * then hand the error back unchanged so the caller can rethrow it.
+ */
+export function noteRemoval(home: string, repositoryId: string, error: unknown): unknown {
+  if (error instanceof StapleError && error.code === "revoked") {
+    const by = error.detail?.removedBy;
+    if (typeof by === "string" && by.trim().length > 0) markRemoved(home, repositoryId, by);
+  }
+  return error;
 }
 
 /** Write the record. `0600` in a `0700` directory, atomically, like every secret-adjacent file. */

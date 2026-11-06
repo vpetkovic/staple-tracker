@@ -101,7 +101,7 @@ export function syncSummary(report: CloudSurfaceReport | null, now: number = Dat
     const tone: PlainStatus = report.failure.code === "offline" ? "tight" : "at_risk";
     return {
       tone,
-      pill: report.failure.code === "offline" ? "Offline" : "Sync stopped",
+      pill: report.failure.code === "offline" ? "Offline" : report.failure.code === "removed" ? "Removed" : "Sync stopped",
       headline: `${report.failure.summary} ${report.failure.remedy}`,
       facts,
       details,

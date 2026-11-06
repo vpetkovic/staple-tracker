@@ -1753,7 +1753,7 @@ export interface HubWorkspaceReport {
    * `revoked` need an authenticated round trip, and this route makes none — so
    * a union admitting them would promise information the server cannot produce.
    */
-  state: "disconnected" | "manual" | "automatic" | "auth_failed";
+  state: "disconnected" | "manual" | "automatic" | "auth_failed" | "removed";
   mode: "disconnected" | "manual" | "automatic";
   endpoint: string | null;
   deviceId: string | null;
@@ -1768,6 +1768,8 @@ export interface HubWorkspaceReport {
    * type.
    */
   credentialPresent: boolean | null;
+  /** Who removed this device's member, when `state` is `removed`. */
+  removedBy?: string | null;
   auto: boolean;
   /** When automatic sync next tries, if it is waiting; else null (`hub-surface.ts`). */
   autoWaitingUntil: string | null;

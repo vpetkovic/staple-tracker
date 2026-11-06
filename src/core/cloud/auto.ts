@@ -83,6 +83,11 @@ export type AutoSyncSkip =
   | "disconnected"
   /** Connected here, and automatic sync was never consented to. The default. */
   | "manual"
+  /**
+   * The service removed this device's member from the workspace (recorded on the
+   * connection record). Every attempt would be refused, so none is made.
+   */
+  | "removed"
   /** A run for this trigger happened recently enough that another would be noise. */
   | "too-soon"
   /** The endpoint has been failing; the jittered backoff window has not elapsed. */
@@ -242,6 +247,7 @@ export function autoSyncGate(input: AutoSyncGateInput): AutoSyncDecision {
    * than a promise in a document.
    */
   if (connection.auto !== true) return { allowed: false, reason: "manual" };
+  if (connection.removed) return { allowed: false, reason: "removed" };
 
   const state = readAutoSyncState(input.home, input.repositoryId);
   const bound = AUTO_SYNC_BOUNDS[input.trigger];
