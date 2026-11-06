@@ -29,6 +29,7 @@ import { CreateIssueMount } from "@/components/CreateIssueMount";
 import { TokenGate } from "@/components/TokenGate";
 import { IssueDetailMount } from "@/detail/IssueDetailMount";
 import { SettingsMount } from "@/settings/SettingsMount";
+import { LinkJoinMount } from "@/components/join/LinkJoinMount";
 import { ProjectDialogMount } from "@/components/projects/ProjectDialogMount";
 import {
   AuthError,
@@ -713,6 +714,8 @@ export function App() {
         <ProjectDialogMount />
         {/* The autopilot run history: opened from the rail, the phone strip and a task's detail. */}
         <RunHistoryMount />
+        {/* `?join=<link>`: join a shared workspace from a link, on any page, even with no workspace. */}
+        <LinkJoinMount hubMode={session.mode === "hub"} />
 
         <AppShell>
           <View onAuthError={onAuthError} />

@@ -158,7 +158,8 @@ export function JoinOfferCard({ ws, className, onSynced }: { ws: string; classNa
           onClose={() => setOpen(false)}
           onJoined={(result) => {
             setOffer((current) => (current ? { ...current, connected: true, removedBy: null } : current));
-            setJoined({ name: result.name, synced: "no", auto: "off" });
+            // A join ends in a shared workspace, which syncs automatically; the result says so.
+            setJoined({ name: result.name, synced: "no", auto: result.auto ? "on" : "off" });
           }}
         />
       ) : null}

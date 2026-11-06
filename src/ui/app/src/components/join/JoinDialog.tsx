@@ -18,8 +18,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { ApiError, cancelJoin, pollJoin, previewJoin, startJoin } from "@/lib/api";
+import { Check, Copy } from "lucide-react";
+import { ApiError, cancelJoin, pollJoin, previewJoin, previewLinkJoin, startJoin, startLinkJoin } from "@/lib/api";
+import { copyText } from "@/settings/InviteBox";
 import type { CloudJoinPreview, CloudJoinPreviewResponse, CloudJoinStarted, ConsentTicket } from "@/lib/types";
+
+/** Where a link join lands: the workspace it connects, and whether one is made for it. */
+export interface JoinTargetView {
+  name: string;
+  created: boolean;
+  fromCheckout: boolean;
+}
 import { countdown, joinPollDelay, serviceName } from "@/settings/members-settings";
 
 export type JoinStage =
@@ -33,9 +42,11 @@ export type JoinStage =
       sending?: boolean;
       /** The preview was redrawn because more than the name changed. Said, so it is read again. */
       changed?: boolean;
+      /** Joining from a link: the workspace it lands in. */
+      target?: JoinTargetView;
     }
-  | { stage: "waiting"; started: CloudJoinStarted; transient?: boolean }
-  | { stage: "joined"; name: string | null; endpoint: string }
+  | { stage: "waiting"; started: CloudJoinStarted & { workspace?: string }; transient?: boolean }
+  | { stage: "joined"; name: string | null; endpoint: string; workspace?: string; auto?: boolean }
   | { stage: "denied"; code: string }
   | { stage: "expired"; code: string }
   | { stage: "too_many"; cap: number }
@@ -48,6 +59,49 @@ export interface JoinDialogActions {
   onCancel: () => void;
   onRetry: () => void;
   onClose: () => void;
+  /** After joining from a link: go to the workspace that was joined. */
+  onOpenWorkspace?: () => void;
+}
+
+/** "VP invited you to join ai-inbox-supabase", for a preview that came from a link. */
+export function invitationLine(preview: CloudJoinPreview): string | null {
+  if (!preview.link) return null;
+  return `${preview.link.sharedBy ?? "Someone"} invited you to join ${preview.link.name}`;
+}
+
+/** The code, copied, or shown selected where the clipboard cannot be reached. */
+function CopyCode({ code }: { code: string }) {
+  const [result, setResult] = useState<"idle" | "copied" | "fallback">("idle");
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-copy-code
+        data-copied={result === "copied" ? "" : undefined}
+        onClick={() => {
+          const board = typeof navigator === "undefined" ? null : (navigator.clipboard ?? null);
+          const secure = typeof window === "undefined" ? true : window.isSecureContext !== false;
+          void copyText(code, board, secure).then(setResult);
+        }}
+      >
+        {result === "copied" ? <Check aria-hidden /> : <Copy aria-hidden />}
+        {result === "copied" ? "Copied" : "Copy code"}
+      </Button>
+      {result === "fallback" ? (
+        <Input
+          readOnly
+          autoFocus
+          value={code}
+          aria-label="The join code, selected"
+          data-copy-fallback
+          onFocus={(event) => event.currentTarget.select()}
+          className="w-40 text-center font-mono"
+        />
+      ) : null}
+    </div>
+  );
 }
 
 function Fact({ term, children }: { term: string; children: React.ReactNode }) {
@@ -85,9 +139,25 @@ export function JoinDialogView({
               request to join.
             </p>
           ) : null}
+          {invitationLine(preview) ? (
+            <p data-join-invitation className="text-[14px] font-medium">
+              {invitationLine(preview)}
+            </p>
+          ) : null}
           <dl className="space-y-1.5 rounded-lg border bg-surface-sunken p-3">
-            <Fact term="Repository">
-              {slug} · <span className="font-mono">{preview.repositoryId.slice(0, 8)}</span>
+            <Fact term={preview.link ? "Workspace" : "Repository"}>
+              {preview.link?.name ?? slug}
+              {preview.link?.prefix ? <span className="text-text-tertiary"> ({preview.link.prefix})</span> : null} ·{" "}
+              <span className="font-mono">{preview.repositoryId.slice(0, 8)}</span>
+              {state.target ? (
+                <span data-join-target className="mt-1 block text-[12px] text-text-tertiary">
+                  {state.target.fromCheckout
+                    ? "Uses the workspace in this checkout."
+                    : state.target.created
+                      ? `A workspace named "${state.target.name}" is made on this computer, after you continue.`
+                      : `Joins your workspace "${state.target.name}".`}
+                </span>
+              ) : null}
             </Fact>
             <Fact term="Service">
               {preview.endpoint}
@@ -108,6 +178,9 @@ export function JoinDialogView({
                 Sent to the service and shown to the member who approves you.
               </span>
             </Fact>
+            <Fact term="Auto sync">
+              <span data-join-auto-sync>On (this is a shared workspace)</span>
+            </Fact>
             <Fact term="Credential">
               {preview.credentialMechanism === "keychain"
                 ? "macOS keychain"
@@ -121,7 +194,7 @@ export function JoinDialogView({
           </p>
           <p className="text-[12px] text-muted-foreground">
             Nothing is sent until you continue. Then a member approves this device by comparing a short code with you.
-            Automatic sync stays off.
+            Once you join, this device syncs automatically, like every device in a shared workspace.
           </p>
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" size="sm" onClick={actions.onClose}>
@@ -148,6 +221,7 @@ export function JoinDialogView({
           <p data-join-code className="font-mono text-4xl font-semibold tracking-[0.2em] max-md:text-3xl">
             {state.started.code}
           </p>
+          <CopyCode code={state.started.code} />
           <p className="text-[13px] text-muted-foreground" aria-live="polite">
             Waiting for approval · expires in {countdown(state.started.expiresAt, now)}
             {state.transient ? " · the service did not answer, still trying" : ""}
@@ -174,13 +248,21 @@ export function JoinDialogView({
             ) : null}
             . This device has its own credential, stored on this computer.
           </p>
-          <p className="text-[12px] text-muted-foreground">
-            Automatic sync is off. Sync now to fill in the board, and turn automatic sync on if you want it.
+          <p className="text-[12px] text-muted-foreground" data-joined-auto={state.auto === false ? "off" : "on"}>
+            {state.auto === false
+              ? "Automatic sync is off on this device. Sync now to fill in the board."
+              : "Automatic sync is on: this is a shared workspace, so it stays the same on every device."}
           </p>
-          <div className="flex justify-end">
-            <Button type="button" size="sm" onClick={actions.onClose}>
-              Done
-            </Button>
+          <div className="flex flex-wrap justify-end gap-2">
+            {state.workspace && actions.onOpenWorkspace ? (
+              <Button type="button" size="sm" onClick={actions.onOpenWorkspace} data-join-open-workspace>
+                Open {state.workspace}
+              </Button>
+            ) : (
+              <Button type="button" size="sm" onClick={actions.onClose}>
+                Done
+              </Button>
+            )}
           </div>
         </div>
       );
@@ -253,7 +335,7 @@ export function joinTitle(state: JoinStage, slug: string): string {
     case "waiting":
       return "Waiting for approval";
     case "joined":
-      return `Joined ${slug}`;
+      return `Joined ${state.workspace ?? slug}`;
     case "expired":
       return "Code expired";
     case "denied":
@@ -262,6 +344,8 @@ export function joinTitle(state: JoinStage, slug: string): string {
       return "Too many waiting";
     case "error":
       return "Could not join";
+    case "preview":
+      return invitationLine(state.preview) ?? `Join ${slug}`;
     default:
       return `Join ${slug}`;
   }
@@ -327,31 +411,75 @@ export function stageForStartFailure(error: unknown): JoinStage {
   return { stage: "error", message: error instanceof Error ? error.message : String(error) };
 }
 
+/**
+ * The two ways a join is described to the server: a registered workspace (by slug), or a share
+ * link. Both preview locally and start only on "Request to join"; a link also says where the
+ * join lands, and that workspace is created only by the start.
+ */
+export function joinApi(slug: string, link: string | undefined): Parameters<typeof requestJoin>[1] & {
+  preview: (label?: string) => Promise<{ preview: CloudJoinPreview; consent: ConsentTicket; target?: JoinTargetView }>;
+} {
+  if (link === undefined) {
+    return {
+      preview: (label) => previewJoin({ slug, ...(label ? { label } : {}) }),
+      previewJoin,
+      startJoin,
+    };
+  }
+  return {
+    preview: (label) => previewLinkJoin({ link, ...(label ? { label } : {}) }),
+    previewJoin: (target) =>
+      previewLinkJoin({ link, ...(target.label ? { label: target.label } : {}) }).then((answer) => ({
+        slug: answer.target.name,
+        preview: answer.preview,
+        consent: answer.consent,
+      })),
+    startJoin: (target) => startLinkJoin({ link, consent: target.consent }),
+  };
+}
+
 export function JoinDialog({
   open,
   slug,
+  link,
   onClose,
   onJoined,
+  onOpenWorkspace,
 }: {
   open: boolean;
   slug: string;
+  /** A share link: preview from it, and land in the workspace it names. */
+  link?: string;
   onClose: () => void;
-  onJoined: (result: { name: string | null; endpoint: string }) => void;
+  onJoined: (result: { name: string | null; endpoint: string; workspace?: string; auto?: boolean }) => void;
+  /** Go to the workspace a link join connected. Absent: the dialog offers Done instead. */
+  onOpenWorkspace?: (workspace: string) => void;
 }) {
+  const api = joinApi(slug, link);
   const [state, setState] = useState<JoinStage>({ stage: "loading" });
   const [now, setNow] = useState(() => Date.now());
   const live = useRef(true);
   const joinId = useRef<string | null>(null);
+  /** The workspace a link join is landing in, from the start's answer. */
+  const landed = useRef<string | null>(null);
 
   const preview = useCallback(() => {
     setState({ stage: "loading" });
-    previewJoin({ slug }).then(
-      (answer) =>
-        live.current &&
-        setState({ stage: "preview", preview: answer.preview, consent: answer.consent, label: answer.preview.label }),
-      (error: unknown) => live.current && setState({ stage: "error", message: error instanceof Error ? error.message : String(error) }),
-    );
-  }, [slug]);
+    joinApi(slug, link)
+      .preview()
+      .then(
+        (answer) =>
+          live.current &&
+          setState({
+            stage: "preview",
+            preview: answer.preview,
+            consent: answer.consent,
+            label: answer.preview.label,
+            ...(answer.target ? { target: answer.target } : {}),
+          }),
+        (error: unknown) => live.current && setState({ stage: "error", message: error instanceof Error ? error.message : String(error) }),
+      );
+  }, [slug, link]);
 
   useEffect(() => {
     live.current = true;
@@ -388,8 +516,9 @@ export function JoinDialog({
             }
             joinId.current = null;
             if (answer.status === "joined") {
-              setState({ stage: "joined", name: answer.member?.name ?? null, endpoint: answer.endpoint });
-              onJoined({ name: answer.member?.name ?? null, endpoint: answer.endpoint });
+              const workspace = link === undefined ? undefined : landed.current ?? undefined;
+              setState({ stage: "joined", name: answer.member?.name ?? null, endpoint: answer.endpoint, workspace, auto: answer.auto });
+              onJoined({ name: answer.member?.name ?? null, endpoint: answer.endpoint, workspace, auto: answer.auto });
             } else if (answer.status === "denied" || answer.status === "expired") {
               setState({ stage: answer.status, code: answer.code });
             } else if (answer.status === "failed") {
@@ -424,7 +553,7 @@ export function JoinDialog({
     onRequest: () => {
       if (state.stage !== "preview") return;
       setState({ ...state, sending: true });
-      requestJoin({ slug, preview: state.preview, consent: state.consent, label: state.label }, { previewJoin, startJoin }).then(
+      requestJoin({ slug, preview: state.preview, consent: state.consent, label: state.label }, api).then(
         (outcome) => {
           if (!live.current) return;
           if (outcome.kind === "review") {
@@ -440,6 +569,7 @@ export function JoinDialog({
           }
           const { started } = outcome;
           joinId.current = started.joinId;
+          landed.current = (started as { workspace?: string }).workspace ?? null;
           setNow(Date.now());
           setState({ stage: "waiting", started });
         },
@@ -450,6 +580,9 @@ export function JoinDialog({
     onCancel: cancel,
     onRetry: preview,
     onClose: cancel,
+    ...(onOpenWorkspace && state.stage === "joined" && state.workspace
+      ? { onOpenWorkspace: () => onOpenWorkspace(state.workspace!) }
+      : {}),
   };
 
   return (

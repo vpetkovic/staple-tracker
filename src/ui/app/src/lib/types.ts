@@ -3260,7 +3260,11 @@ export interface CloudJoinPreview {
   alreadyConnected: boolean;
   existingEndpoint: string | null;
   autoAfterConnect: false;
-  endpointSource: "flag" | "manifest";
+  endpointSource: "flag" | "manifest" | "link";
+  /** Set when joining from a share link: who invited whom, to what. */
+  link?: CloudShareLink | null;
+  /** A join always ends in a shared workspace, which syncs automatically. */
+  autoSync?: "on (shared workspace)";
 }
 
 export interface CloudJoinPreviewResponse {
@@ -3325,7 +3329,7 @@ export interface CloudSharedWorkspace {
 }
 
 /** The join preview for a share link: the ordinary preview, plus who invited whom, and sync. */
-export interface CloudLinkJoinPreview extends Omit<CloudJoinPreview, "endpointSource"> {
+export interface CloudLinkJoinPreview extends CloudJoinPreview {
   endpointSource: "link";
   link: CloudShareLink;
   autoSync: "on (shared workspace)";
