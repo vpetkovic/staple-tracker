@@ -53,6 +53,7 @@ import {
 } from "../core/cloud/members.js";
 import { readMembersCache, type MembersCache } from "../core/cloud/members-cache.js";
 import { StapleError } from "../core/types.js";
+import { openWorkspace } from "../core/open.js";
 
 /** Every POST route in this file. The server pins each to POST and keeps it off the sync trigger. */
 export const MEMBER_POST_ROUTES: readonly string[] = [
@@ -90,7 +91,27 @@ interface JoinInFlight {
   ticket: JoinTicket;
   slug: string;
   credentialFile: boolean;
+  /** The read in flight, if any. A cancel waits for it rather than racing it. */
+  busy: Promise<PollResult> | null;
+  /** A person pressed Cancel. A read that comes back pending ends the join here. */
+  cancelled: boolean;
 }
+
+/** What one read of a join request led to, as the poll route answers it. */
+type PollResult =
+  | { status: "pending"; code: string; expiresAt: number; transient?: boolean }
+  | {
+      status: "joined";
+      code: string;
+      member: { memberId: string; name: string } | null;
+      endpoint: string;
+      deviceId: string;
+      auto: boolean;
+      membersCached: boolean;
+    }
+  | { status: "denied" | "expired" | "cancelled"; code: string; expiresAt: number }
+  | { status: "failed"; code: string; message: string }
+  | { status: "error"; error: unknown };
 
 /** At most this many joins in flight per server. A person starts one; a page that loops is cut off. */
 const MAX_JOINS = 8;
@@ -109,6 +130,70 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
     for (const [id, join] of joins) {
       if (now > join.ticket.expiresAt + EXPIRY_GRACE_MS) joins.delete(id);
     }
+  }
+
+  /**
+   * One read of a join request, and everything it leads to. The credential is collected here
+   * and only here, so a join that was reported cancelled can never reach `completeJoin`: the
+   * cancel either found no read in flight and ended the join first, or waited for this one.
+   */
+  async function readOnce(joinId: string, join: JoinInFlight): Promise<PollResult> {
+    const home = stapleHome();
+    const { ticket } = join;
+    if (Date.now() > ticket.expiresAt + EXPIRY_GRACE_MS) {
+      joins.delete(joinId);
+      return { status: "expired", code: ticket.code, expiresAt: ticket.expiresAt };
+    }
+    let state;
+    try {
+      state = await pollJoin(ticket, options(join.credentialFile));
+    } catch (error) {
+      const code = cloudCodeOf(error);
+      if (join.cancelled) return { status: "cancelled", code: ticket.code, expiresAt: ticket.expiresAt };
+      if (code === "offline" || code === "unavailable" || code === "rate_limited") {
+        return { status: "pending", code: ticket.code, expiresAt: ticket.expiresAt, transient: true };
+      }
+      joins.delete(joinId);
+      return { status: "error", error };
+    }
+    if (state.status === "approved" && state.token !== undefined) {
+      // The credential is in hand and the service will not hand it out again: store it, even
+      // if Cancel was pressed while this read was out. The cancel reports this outcome.
+      joins.delete(joinId);
+      try {
+        const outcome = await completeJoin(ticket, state, {
+          home,
+          credential: { forceFile: join.credentialFile },
+          ...(ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {}),
+        });
+        return {
+          status: "joined",
+          code: ticket.code,
+          member: outcome.member,
+          endpoint: outcome.connection.endpoint,
+          deviceId: outcome.connection.deviceId,
+          auto: outcome.connection.auto,
+          membersCached: outcome.members !== null,
+        };
+      } catch (error) {
+        return { status: "error", error };
+      }
+    }
+    if (join.cancelled) return { status: "cancelled", code: ticket.code, expiresAt: ticket.expiresAt };
+    if (state.status === "pending") return { status: "pending", code: ticket.code, expiresAt: ticket.expiresAt };
+    joins.delete(joinId);
+    if (state.status === "denied" || state.status === "expired") {
+      return { status: state.status, code: ticket.code, expiresAt: ticket.expiresAt };
+    }
+    // Approved, but the credential was handed out to something that is not this process.
+    return {
+      status: "failed",
+      code: ticket.code,
+      message:
+        `Join request ${ticket.code} was approved, but its credential was already collected and ` +
+        `this window never received it. Ask the approver to remove device ${ticket.deviceId}, then ` +
+        "start again.",
+    };
   }
 
   function workspaceFor(res: ServerResponse, slug: unknown): { workspace: HubWorkspace; repositoryId: string } | null {
@@ -208,7 +293,7 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
       });
       const ticket = await startJoin(joinPreview!, { home, ...options(context.credentialFile) });
       const joinId = randomUUID();
-      joins.set(joinId, { ticket, slug: addressed.workspace.slug, credentialFile: context.credentialFile });
+      joins.set(joinId, { ticket, slug: addressed.workspace.slug, credentialFile: context.credentialFile, busy: null, cancelled: false });
       ctx.json(res, 200, {
         joinId,
         code: ticket.code,
@@ -229,72 +314,39 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
             "Start again for a new code.",
         );
       }
-      const { ticket } = join;
-      if (Date.now() > ticket.expiresAt + EXPIRY_GRACE_MS) {
-        joins.delete(joinId);
-        ctx.json(res, 200, { status: "expired", code: ticket.code, expiresAt: ticket.expiresAt });
-        return true;
-      }
-      let state;
-      try {
-        state = await pollJoin(ticket, options(join.credentialFile));
-      } catch (error) {
-        const code = cloudCodeOf(error);
-        if (code === "offline" || code === "unavailable" || code === "rate_limited") {
-          ctx.json(res, 200, { status: "pending", code: ticket.code, expiresAt: ticket.expiresAt, transient: true });
-          return true;
-        }
-        joins.delete(joinId);
-        throw error;
-      }
-      if (state.status === "pending") {
-        ctx.json(res, 200, { status: "pending", code: ticket.code, expiresAt: ticket.expiresAt });
-        return true;
-      }
-      joins.delete(joinId);
-      if (state.status === "approved" && state.token !== undefined) {
-        const outcome = await completeJoin(ticket, state, {
-          home,
-          credential: { forceFile: join.credentialFile },
-          ...(ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {}),
-        });
-        ctx.json(res, 200, {
-          status: "joined",
-          code: ticket.code,
-          member: outcome.member,
-          endpoint: outcome.connection.endpoint,
-          deviceId: outcome.connection.deviceId,
-          auto: outcome.connection.auto,
-          membersCached: outcome.members !== null,
-        });
-        return true;
-      }
-      if (state.status === "denied" || state.status === "expired") {
-        ctx.json(res, 200, { status: state.status, code: ticket.code, expiresAt: ticket.expiresAt });
-        return true;
-      }
-      // Approved, but the credential was handed out to something that is not this process.
-      ctx.json(res, 200, {
-        status: "failed",
-        code: ticket.code,
-        message:
-          `Join request ${ticket.code} was approved, but its credential was already collected and ` +
-          `this window never received it. Ask the approver to remove device ${ticket.deviceId}, then ` +
-          "start again.",
-      });
+      // One read at a time per join, and the one in flight is what a cancel waits for.
+      const result = await (join.busy ??= readOnce(joinId, join).finally(() => {
+        join.busy = null;
+      }));
+      if (result.status === "error") throw result.error;
+      ctx.json(res, 200, result);
       return true;
     }
 
     if (url.pathname === "/api/cloud/workspace/join/cancel") {
       const joinId = typeof body.joinId === "string" ? body.joinId : "";
       const join = joins.get(joinId);
+      if (!join) {
+        ctx.json(res, 200, { cancelled: false, code: null, expiresAt: null });
+        return true;
+      }
+      join.cancelled = true;
+      /**
+       * A read may be in flight, and it may be the one that collects the credential (the
+       * service hands it out once). Cancelling around it would say "cancelled" about a device
+       * that is about to be connected. So the cancel waits for that read and reports what it
+       * did: a join that completed is answered as joined, never as cancelled.
+       */
+      if (join.busy) {
+        const outcome = await join.busy;
+        if (outcome.status === "joined") {
+          ctx.json(res, 200, { cancelled: false, ...outcome });
+          return true;
+        }
+      }
       joins.delete(joinId);
       // Local only: the service is not told, and the request expires by itself.
-      ctx.json(res, 200, {
-        cancelled: join !== undefined,
-        code: join?.ticket.code ?? null,
-        expiresAt: join?.ticket.expiresAt ?? null,
-      });
+      ctx.json(res, 200, { cancelled: true, code: join.ticket.code, expiresAt: join.ticket.expiresAt });
       return true;
     }
 
@@ -318,6 +370,31 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
     }
 
     if (url.pathname === "/api/cloud/workspace/join-requests") {
+      /**
+       * The approval toast asks on its own, so it says so (`background: true`) and is held to
+       * what this device agreed to, decided here, from local files, before any request: the
+       * page's copy of the consent may be minutes old. Automatic sync must be on for this
+       * workspace right now, and this machine must hold a member list, which it has only if
+       * the service supports members and this workspace is shared. A person's own request
+       * (opening Members, or Refresh) is never gated.
+       */
+      if (body.background === true) {
+        const connection = readConnection(home, repositoryId);
+        if (!connection || connection.auto !== true || connection.removed) {
+          throw new StapleError(
+            "forbidden",
+            "Automatic sync is off for this workspace on this computer, so the page does not ask the service on its own.",
+            { reason: "auto_sync_off" },
+          );
+        }
+        if (readMembersCache(home, repositoryId) === null) {
+          throw new StapleError(
+            "forbidden",
+            "This computer has no member list for this workspace, so there is nobody to approve requests here.",
+            { reason: "no_members" },
+          );
+        }
+      }
       ctx.json(res, 200, { requests: await listPendingRequests(home, repositoryId, opts) });
       return true;
     }
@@ -353,8 +430,18 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
     if (url.pathname === "/api/cloud/workspace/members/rename") {
       const memberId = typeof body.memberId === "string" ? body.memberId : "";
       const name = typeof body.name === "string" ? body.name : "";
-      const outcome = await renameMember(home, repositoryId, memberId, name, opts);
-      ctx.json(res, 200, { renamed: { from: outcome.from, to: outcome.to }, ...membersPayload(outcome.members) });
+      // The addressed workspace, opened by its own path, so its tickets move with the member.
+      const opened = openWorkspace(addressed.workspace.path);
+      let outcome: Awaited<ReturnType<typeof renameMember>>;
+      try {
+        outcome = await renameMember(home, repositoryId, memberId, name, opts, { store: opened.store, actor: null });
+      } finally {
+        opened.store.db.close();
+      }
+      ctx.json(res, 200, {
+        renamed: { from: outcome.from, to: outcome.to, reassigned: outcome.reassigned },
+        ...membersPayload(outcome.members),
+      });
       return true;
     }
 

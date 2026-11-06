@@ -19,7 +19,7 @@
  * ({@link refreshMembersCacheBestEffort}, called from `sync.ts`), and disconnect deletes it.
  */
 import { requireSession } from "./connect.js";
-import { noteRemoval } from "./connection.js";
+import { noteRemoval, readConnection } from "./connection.js";
 import {
   approveJoinRequest,
   cloudCodeOf,
@@ -39,6 +39,8 @@ import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
 import { normalizeJoinCode } from "./join-preview.js";
 import { MEMBERS_CACHE_VERSION, writeMembersCache, type CachedMember, type MembersCache } from "./members-cache.js";
 import { StapleError } from "../types.js";
+import { reassignMember } from "../member-assignees.js";
+import type { WorkspaceStore } from "../store.js";
 
 export type MemberOptions = RequestOptions & SelectOptions;
 
@@ -86,8 +88,23 @@ export async function refreshMembersCacheWith(
     throw noteRemoval(home, session.repositoryId, error);
   }
   const cache = membersCacheFrom(session.repositoryId, remote);
-  writeMembersCache(home, cache);
+  /**
+   * Written only while the connection that asked still exists, checked at the moment of the
+   * write. A disconnect (or a re-connect as another device) while the list was on its way
+   * back deleted the cache on purpose; writing it now would bring a shared workspace back to
+   * life on a machine that has left it.
+   */
+  if (connectionStillAsks(home, session)) writeMembersCache(home, cache);
   return cache;
+}
+
+function connectionStillAsks(home: string, session: MemberSession): boolean {
+  try {
+    const connection = readConnection(home, session.repositoryId);
+    return connection !== null && connection.repositoryId === session.repositoryId && connection.deviceId === session.deviceId;
+  } catch {
+    return false;
+  }
 }
 
 /** {@link refreshMembersCacheWith}, from this machine's connection for the repository. */
@@ -255,7 +272,13 @@ export async function renameMember(
   who: string,
   newName: string,
   options: MemberOptions = {},
-): Promise<{ memberId: string; from: string; to: string; members: MembersCache | null }> {
+  /**
+   * This workspace, so the tickets assigned to the old name move with the member
+   * (`reassignMember`). Omitted only by a caller with no workspace open, which then leaves
+   * them on the old name.
+   */
+  local?: { store: WorkspaceStore; actor: string | null },
+): Promise<{ memberId: string; from: string; to: string; members: MembersCache | null; reassigned: string[] }> {
   const name = newName.trim();
   if (name.length === 0) throw new StapleError("validation", "The new name cannot be empty.");
   const session = sessionFor(home, repositoryId, options);
@@ -270,8 +293,10 @@ export async function renameMember(
         "workspace, ignoring case.",
     );
   }
+  // After the service accepted it, and not before: a refused rename must move no ticket.
+  const reassigned = local ? reassignMember(local.store, member.name, name, local.actor) : [];
   const members = await refreshMembersCacheBestEffort(home, session, options);
-  return { memberId: member.memberId, from: member.name, to: name, members };
+  return { memberId: member.memberId, from: member.name, to: name, members, reassigned };
 }
 
 /**

@@ -31,6 +31,8 @@ export type JoinStage =
       /** The device name as typed, starting from the preview's default label. */
       label: string;
       sending?: boolean;
+      /** The preview was redrawn because more than the name changed. Said, so it is read again. */
+      changed?: boolean;
     }
   | { stage: "waiting"; started: CloudJoinStarted; transient?: boolean }
   | { stage: "joined"; name: string | null; endpoint: string }
@@ -77,6 +79,12 @@ export function JoinDialogView({
       const { preview } = state;
       return (
         <div data-join-stage="preview" className="space-y-4">
+          {state.changed ? (
+            <p role="alert" data-join-preview-changed className="rounded-md border px-3 py-2 text-[13px]">
+              This workspace&apos;s sync settings changed while the dialog was open. Read the details again before you
+              request to join.
+            </p>
+          ) : null}
           <dl className="space-y-1.5 rounded-lg border bg-surface-sunken p-3">
             <Fact term="Repository">
               {slug} · <span className="font-mono">{preview.repositoryId.slice(0, 8)}</span>
@@ -265,23 +273,50 @@ export function joinTitle(state: JoinStage, slug: string): string {
  * The label is part of what the person consents to, so it is inside the consent ticket's
  * digest. When they changed it, the ticket on screen no longer describes the request. So the
  * label goes back through `previewJoin` first, the same way `staple cloud join --label` builds
- * its preview, and only that fresh ticket is sent. `previewJoin` is answered by this computer
- * from local files and contacts no service, so nothing leaves the machine until `startJoin`.
+ * its preview. `previewJoin` is answered by this computer from local files and contacts no
+ * service, so nothing leaves the machine until `startJoin`.
+ *
+ * The fresh preview is read from files that may have changed since the screen was drawn (a
+ * pull can rewrite `.staple/repository.json` to name another service). So it may only be
+ * acted on unseen when the name is the ONLY difference. Anything else (the service, the
+ * repository, the device, where the credential goes, a connection now on file) comes back as
+ * `review`: the dialog shows the new preview and waits for a fresh "Request to join".
  */
+export type RequestJoinOutcome =
+  | { kind: "started"; started: CloudJoinStarted }
+  | { kind: "review"; preview: CloudJoinPreview; consent: ConsentTicket };
+
+/** Does `next` describe the same request as `shown`, apart from the device name? */
+export function sameRequestApartFromLabel(shown: CloudJoinPreview, next: CloudJoinPreview): boolean {
+  return (
+    shown.endpoint === next.endpoint &&
+    shown.repositoryId === next.repositoryId &&
+    shown.deviceId === next.deviceId &&
+    shown.credentialMechanism === next.credentialMechanism &&
+    shown.credentialFallbackReason === next.credentialFallbackReason &&
+    shown.alreadyConnected === next.alreadyConnected &&
+    shown.existingEndpoint === next.existingEndpoint &&
+    shown.endpointSource === next.endpointSource
+  );
+}
+
 export async function requestJoin(
   input: { slug: string; preview: CloudJoinPreview; consent: ConsentTicket; label: string },
   api: {
     previewJoin: (target: { slug: string; label?: string }) => Promise<CloudJoinPreviewResponse>;
     startJoin: (target: { slug: string; consent: ConsentTicket }) => Promise<CloudJoinStarted>;
   },
-): Promise<CloudJoinStarted> {
+): Promise<RequestJoinOutcome> {
   const label = input.label.trim();
   let consent = input.consent;
   if (label !== input.preview.label) {
     const fresh = await api.previewJoin({ slug: input.slug, label });
+    if (!sameRequestApartFromLabel(input.preview, fresh.preview)) {
+      return { kind: "review", preview: fresh.preview, consent: fresh.consent };
+    }
     consent = fresh.consent;
   }
-  return api.startJoin({ slug: input.slug, consent });
+  return { kind: "started", started: await api.startJoin({ slug: input.slug, consent }) };
 }
 
 /** A refusal to START, as the stage that explains it. */
@@ -390,8 +425,20 @@ export function JoinDialog({
       if (state.stage !== "preview") return;
       setState({ ...state, sending: true });
       requestJoin({ slug, preview: state.preview, consent: state.consent, label: state.label }, { previewJoin, startJoin }).then(
-        (started) => {
+        (outcome) => {
           if (!live.current) return;
+          if (outcome.kind === "review") {
+            // Something besides the name changed: show what a request would now do, and ask again.
+            setState({
+              stage: "preview",
+              preview: outcome.preview,
+              consent: outcome.consent,
+              label: outcome.preview.label,
+              changed: true,
+            });
+            return;
+          }
+          const { started } = outcome;
           joinId.current = started.joinId;
           setNow(Date.now());
           setState({ stage: "waiting", started });

@@ -143,6 +143,7 @@ import { fetchDevices, performConnect, performDisconnect, performRevoke } from "
 import { readConnection, setConsent } from "../core/cloud/connection.js";
 /** Settings → Members, the approval toast and the join card (`cloud-members-routes.ts`). */
 import { createMemberRoutes, MEMBER_POST_ROUTES } from "./cloud-members-routes.js";
+import { membersCachePath } from "../core/cloud/members-cache.js";
 import { readConfig, stapleHome } from "../config/index.js";
 import { attemptLinkerFor } from "../core/telemetry/attempt-link.js";
 import { readDriver } from "../core/run-attachment.js";
@@ -897,9 +898,26 @@ export function startUiServer(options: UiOptions): UiHandle {
           .prepare("SELECT COUNT(*) AS c, COALESCE(MAX(updated_at),'') AS u FROM issues")
           .get() as { c: number; u: string };
         const comments = h.store.db.prepare("SELECT COUNT(*) AS c FROM comments").get() as { c: number };
-        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}${clockFingerprint(h)}`;
+        return `${h.slug}:${events.s}:${issues.c}:${issues.u}:${comments.c}${driverFingerprint(h)}${clockFingerprint(h)}${membersFingerprint(h)}`;
       })
       .join("|");
+  }
+
+  /**
+   * When this machine's member list for the workspace last changed. Pickup, Mine/All, the
+   * assignee picker and the member chips all read it, and it changes without a database write
+   * (a sync, an approval, a rename), so without this the page would keep the old member rule
+   * until something else moved. A stat of one file, and nothing when there is no list.
+   */
+  function membersFingerprint(h: StoreHandle): string {
+    try {
+      const repositoryId = readStoredRepositoryId(h.store.db);
+      if (repositoryId === null) return "";
+      const stat = statSync(membersCachePath(stapleHome(), repositoryId), { throwIfNoEntry: false });
+      return stat ? `:m${Math.floor(stat.mtimeMs)}` : "";
+    } catch {
+      return "";
+    }
   }
 
   /**

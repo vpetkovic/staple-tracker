@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { fetchJoinRequests } from "@/lib/api";
+import { fetchJoinRequests, getMembersCache } from "@/lib/api";
 import { setPendingJoinRequests } from "@/lib/pending-requests";
 import { openSettings } from "@/lib/shell-events";
 import type { CloudJoinRequest, CloudSurfaceReport } from "@/lib/types";
@@ -65,6 +65,65 @@ export function JoinRequestToastView({
   );
 }
 
+/** Why the watch stopped asking: no member list here, or the server held it to the consent. */
+export type WatchStop = "no_members" | "auto_sync_off" | string;
+
+/**
+ * The toast's loop, without React, so its two refusals can be tested with a hand-turned clock.
+ *
+ * First a LOCAL read: does this machine hold a member list for the workspace? Without one the
+ * workspace is not shared here, or the service does not support members, and the loop stops
+ * before asking the service anything. A single-person workspace gains no traffic at all.
+ *
+ * Then it asks every `every` ms, marked as background, and the server refuses it unless
+ * automatic sync is on for the workspace right now. That refusal ends the loop for good: the
+ * page's copy of the consent was stale, and asking again would only be refused again.
+ */
+export function watchJoinRequests(deps: {
+  every: number;
+  hasMembers: () => Promise<boolean>;
+  fetchRequests: () => Promise<{ requests: CloudJoinRequest[] }>;
+  onRequests: (requests: CloudJoinRequest[]) => void;
+  onStop: (reason: WatchStop) => void;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (id: unknown) => void;
+}): () => void {
+  const setTimer = deps.setTimer ?? ((fn, ms) => setInterval(fn, ms));
+  const clearTimer = deps.clearTimer ?? ((id) => clearInterval(id as ReturnType<typeof setInterval>));
+  let stopped = false;
+  let timer: unknown = null;
+  const stop = (reason?: WatchStop) => {
+    if (stopped) return;
+    stopped = true;
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+    if (reason !== undefined) deps.onStop(reason);
+  };
+  const ask = () =>
+    deps.fetchRequests().then(
+      (answer) => {
+        if (!stopped) deps.onRequests(answer.requests);
+      },
+      (error: unknown) => {
+        const reason = (error as { detail?: Record<string, unknown> } | null)?.detail?.["reason"];
+        if (reason === "auto_sync_off" || reason === "no_members") stop(reason);
+      },
+    );
+  deps.hasMembers().then(
+    (has) => {
+      if (stopped) return;
+      if (!has) {
+        stop("no_members");
+        return;
+      }
+      void ask();
+      if (!stopped) timer = setTimer(() => void ask(), deps.every);
+    },
+    () => stop("no_members"),
+  );
+  return () => stop();
+}
+
 /** Polls (only when allowed), shows the toast, and publishes the count for the badge. */
 export function JoinRequestWatcher({ report, slug }: { report: CloudSurfaceReport | null; slug: string }) {
   const [visible, setVisible] = useState(() => typeof document === "undefined" || document.visibilityState === "visible");
@@ -86,22 +145,16 @@ export function JoinRequestWatcher({ report, slug }: { report: CloudSurfaceRepor
 
   useEffect(() => {
     if (!allowed) return;
-    let live = true;
-    const ask = () =>
-      fetchJoinRequests({ slug }).then(
-        (answer) => {
-          if (!live) return;
-          setRequests(answer.requests);
-          setPendingJoinRequests(answer.requests.length);
-        },
-        () => undefined,
-      );
-    void ask();
-    const timer = setInterval(() => void ask(), JOIN_REQUEST_POLL_MS);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
+    return watchJoinRequests({
+      every: JOIN_REQUEST_POLL_MS,
+      hasMembers: () => getMembersCache({ ws: slug }).then((cache) => cache !== null),
+      fetchRequests: () => fetchJoinRequests({ slug, background: true }),
+      onRequests: (next) => {
+        setRequests(next);
+        setPendingJoinRequests(next.length);
+      },
+      onStop: () => setRequests([]),
+    });
   }, [allowed, slug]);
 
   const request = toastRequest(requests, dismissed);

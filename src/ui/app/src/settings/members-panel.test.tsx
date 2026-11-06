@@ -25,7 +25,7 @@ import {
 } from "./members-settings";
 import { JoinDialogView, joinTitle, requestJoin, type JoinDialogActions, type JoinStage } from "@/components/join/JoinDialog";
 import { JoinOfferView, offersJoin } from "@/components/join/JoinOffer";
-import { JoinRequestToastView, toastRequest } from "@/components/join/JoinRequestToast";
+import { JoinRequestToastView, toastRequest, watchJoinRequests } from "@/components/join/JoinRequestToast";
 
 const NOW = 1_800_000_000_000;
 const NOOP = () => {};
@@ -198,7 +198,75 @@ describe("the toast polls only with automatic sync on and the tab visible", () =
       .replace(/\/\/[^\n]*/g, "");
     expect(source.match(/fetchJoinRequests\(/g)).toHaveLength(1);
     expect(source).toMatch(/const allowed = slug !== "" && mayPollJoinRequests\(report, visible\);/);
-    expect(source).toMatch(/if \(!allowed\) return;[\s\S]*fetchJoinRequests\(/);
+    expect(source).toMatch(/if \(!allowed\) return;[\s\S]*watchJoinRequests\(/);
+  });
+
+  /** A clock the test turns by hand, and a record of every request the loop makes. */
+  function harness(options: { members: boolean; refuse?: string }) {
+    const asked: string[] = [];
+    const timers = new Map<number, () => void>();
+    let next = 0;
+    const stopped: string[] = [];
+    const seen: number[] = [];
+    const stop = watchJoinRequests({
+      every: 20_000,
+      hasMembers: async () => {
+        asked.push("members-cache");
+        return options.members;
+      },
+      fetchRequests: async () => {
+        asked.push("join-requests");
+        if (options.refuse) {
+          const error = Object.assign(new Error("refused"), { code: "forbidden", detail: { reason: options.refuse } });
+          throw error;
+        }
+        return { requests: [REQUEST] };
+      },
+      onRequests: (requests) => seen.push(requests.length),
+      onStop: (reason) => stopped.push(reason),
+      setTimer: (fn) => {
+        next += 1;
+        timers.set(next, fn);
+        return next;
+      },
+      clearTimer: (id) => void timers.delete(id as number),
+    });
+    const tick = async () => {
+      for (const fn of [...timers.values()]) fn();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    return { asked, timers, stopped, seen, stop, tick };
+  }
+
+  it("with no member list on this machine, makes no request to the service at all", async () => {
+    const h = harness({ members: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await h.tick();
+    await h.tick();
+    expect(h.asked).toEqual(["members-cache"]);
+    expect(h.timers.size).toBe(0);
+    expect(h.stopped).toEqual(["no_members"]);
+  });
+
+  it("stops for good when the server refuses because automatic sync was turned off", async () => {
+    const h = harness({ members: true, refuse: "auto_sync_off" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await h.tick();
+    await h.tick();
+    expect(h.asked.filter((call) => call === "join-requests")).toHaveLength(1);
+    expect(h.timers.size).toBe(0);
+    expect(h.stopped).toEqual(["auto_sync_off"]);
+  });
+
+  it("asks every 20 seconds while it is allowed, until stopped", async () => {
+    const h = harness({ members: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await h.tick();
+    expect(h.asked.filter((call) => call === "join-requests")).toHaveLength(2);
+    expect(h.seen).toEqual([1, 1]);
+    h.stop();
+    await h.tick();
+    expect(h.asked.filter((call) => call === "join-requests")).toHaveLength(2);
   });
 
   it("renders the newest request not put off, and nothing once all are", () => {
@@ -264,6 +332,32 @@ describe("the join flow", () => {
     calls.length = 0;
     await requestJoin({ slug: "AII", preview: PREVIEW, consent: CONSENT, label: PREVIEW.label }, api);
     expect(calls).toEqual(["start:ticket-default"]);
+  });
+
+  it("a fresh preview that names another service or repository is shown, not joined", async () => {
+    for (const changed of [
+      { endpoint: "https://elsewhere.example.workers.dev" },
+      { repositoryId: "11111111-0000-4000-8000-000000000000" },
+      { alreadyConnected: true },
+    ]) {
+      const calls: string[] = [];
+      const moved = { id: "ticket-moved", digest: "digest-moved", expiresAt: "x" };
+      const outcome = await requestJoin(
+        { slug: "AII", preview: PREVIEW, consent: CONSENT, label: "thinkpad" },
+        {
+          previewJoin: async (target) => {
+            calls.push(`preview:${target.label}`);
+            return { slug: "AII", preview: { ...PREVIEW, ...changed, label: "thinkpad" }, consent: moved };
+          },
+          startJoin: async () => {
+            calls.push("start");
+            throw new Error("must not start");
+          },
+        },
+      );
+      expect(calls).toEqual(["preview:thinkpad"]);
+      expect(outcome).toMatchObject({ kind: "review", consent: moved, preview: { ...changed, label: "thinkpad" } });
+    }
   });
 
   it("the preview names the service, the repository, the device and the encryption warning", () => {

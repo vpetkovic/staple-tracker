@@ -1184,7 +1184,8 @@ export const cancelJoin = (target: { joinId: string }) =>
 /** The list and the pending requests, fresh from the service. Opening Settings → Members calls it. */
 export const fetchMembers = (target: { slug: string }) => postJson<CloudMembersResponse>("/api/cloud/workspace/members", target);
 
-export const fetchJoinRequests = (target: { slug: string }) =>
+/** `background`: the toast asking on its own, which the server allows only with automatic sync on. */
+export const fetchJoinRequests = (target: { slug: string; background?: boolean }) =>
   postJson<{ requests: CloudJoinRequest[] }>("/api/cloud/workspace/join-requests", target);
 
 export const approveJoinRequest = (target: { slug: string; code: string } & ({ newMember: string } | { memberId: string })) =>
