@@ -47,9 +47,14 @@ export interface CategoryContentProps {
   onDirtyChange: (dirty: boolean) => void;
   /** The workspace a per-workspace section edits (the cloud section's sync identity included). */
   ws?: string;
+  /**
+   * STA-441: the workspace the sheet is pointed at, even on a global section. Cloud account
+   * offers "Join the shared workspace" for it, which `ws` cannot say on a single-workspace page.
+   */
+  joinWs?: string;
 }
 
-export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws }: CategoryContentProps) {
+export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws, joinWs }: CategoryContentProps) {
   /**
    * CLOUD IS MATCHED BY ID, BEFORE THE EDITOR SWITCH — S13 (STA-258).
    *
@@ -70,7 +75,7 @@ export function CategoryContent({ category, settings, applyTo, onDirtyChange, ws
     return (
       <>
         {/* STA-441: the join card lives here too, for the workspace Settings is pointed at. */}
-        {ws ? <JoinOfferCard ws={ws} className="mb-6" /> : null}
+        {joinWs ?? ws ? <JoinOfferCard ws={(joinWs ?? ws)!} className="mb-6" /> : null}
         <CloudSection ws={ws} part="machine" />
       </>
     );

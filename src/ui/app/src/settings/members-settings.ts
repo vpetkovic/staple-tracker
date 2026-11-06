@@ -163,7 +163,10 @@ export function joinPollDelay(attempt: number): number {
 /** The service's host, short, for a sentence ("…on staple-tracker-sync."). */
 export function serviceName(endpoint: string): string {
   try {
-    return new URL(endpoint).hostname.split(".")[0] ?? endpoint;
+    const url = new URL(endpoint);
+    // An address or localhost (a local dev Worker) has no name to shorten: show it whole.
+    if (url.hostname === "localhost" || /^[\d.]+$/.test(url.hostname) || url.hostname.includes(":")) return url.host;
+    return url.hostname.split(".")[0] ?? endpoint;
   } catch {
     return endpoint;
   }
