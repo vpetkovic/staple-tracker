@@ -203,7 +203,11 @@ describe.skipIf(Boolean(reason))("the files gallery", () => {
     expect(download.suggestedFilename()).toBe("notes.pdf");
     expect(await p.locator("[data-file-panel]").count()).toBe(0);
 
-    const image = p.locator('[data-file-kind="image"]').first();
+    // Both images are attached in the same millisecond, so their order is not fixed: find the
+    // row by its file, as the lightbox test does, rather than by position.
+    const image = p.locator('[data-file-kind="image"]', {
+      has: p.getByRole("button", { name: "Open before.png" }),
+    });
     const opened = p.waitForEvent("popup");
     await image.getByRole("button", { name: "Open before.png" }).click();
     const popup = await opened;
