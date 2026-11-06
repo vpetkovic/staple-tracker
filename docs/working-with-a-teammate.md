@@ -1,6 +1,6 @@
 ---
 title: Working with a teammate
-description: Share one synced workspace with another person. They join by showing a short code that someone already in the workspace approves, so no secret travels over chat.
+description: Share one synced workspace with another person. Send them a link, they show a short code, you approve it, and from then on both machines stay in sync on their own.
 ---
 
 # Working with a teammate
@@ -45,79 +45,90 @@ staple cloud members rename owner VP
 Renamed owner to VP.
 ```
 
-## 2. Let the repository say where the service is
+## 2. Send your teammate a link
+
+In the web UI open **Settings → Members → Invite someone**, type their name if
+you like, and press **Generate**. Copy the link, the terminal command, or a
+ready-to-send message, and send it however you talk to them. From a terminal:
 
 ```bash
-staple cloud share-endpoint --yes
+staple cloud share --as marko
 ```
 
 ```text
-Wrote .staple/repository.json. Commit it so teammates can `staple cloud join`.
+Hi marko, VP invited you to the Staple workspace "ai-inbox-supabase".
+
+Open this link to join:
+https://sync.example.com/join/1a06b9f7-…?n=ai-inbox-supabase&p=AII&by=VP&as=marko
+
+Or paste this into a terminal:
+staple cloud join 'https://sync.example.com/join/1a06b9f7-…?n=ai-inbox-supabase&p=AII&by=VP&as=marko'
 ```
 
-Commit and push `.staple/repository.json`. It now carries the service address,
-which is not a secret, so your teammate's `join` needs no arguments. Skip this
-step if you'd rather send the address yourself: they then run
-`staple cloud join --endpoint <url>`.
+The link holds no secret. It names the service, the workspace and who invited
+whom. Nobody gets in without the approval in step 4, so a link that leaks admits
+nobody.
 
-## 3. Your teammate joins
+## 3. Your teammate joins from the link
 
-On their machine:
-
-```bash
-git clone <your-repo> && cd <your-repo>
-staple init --yes
-staple cloud join
-```
-
-`join` first shows the service, the repository and their device, with the
-warning above, and waits for a yes. Nothing is sent before that. Then it shows a
-code and waits:
+They don't need a clone. Opening the link shows a page with **Open in Staple**
+and the same command to copy. Either one shows a preview first: your name, the
+workspace's name, the service, their device, and that automatic sync will be on.
+Nothing is sent before they agree. Then their device shows a code and waits:
 
 ```text
 Your join code:
 
    ┌─────────────────────────┐
-   │    G G Q Z - A A T R    │
+   │    1 D C 9 - S C R M    │
    └─────────────────────────┘
-
-Waiting for approval until 12:08:16 PM. Ctrl-C cancels; nothing is stored until approval.
 ```
 
-In the web UI the same flow starts from **Join the shared workspace**, on the
-empty task list or under **Settings → Cloud account**.
+If they run the command inside a clone of the repository, staple uses that
+clone. Otherwise it creates the workspace on their machine with your workspace's
+name, so they see `ai-inbox-supabase` exactly as you do.
 
 ## 4. You approve
 
 The code is not a password. It only names their request, so read it to each
-other on a call, or compare it in chat. Then approve it:
+other on a call, or compare it in chat. In the web UI a toast says
+**Join request**, and **Settings → Members** lists it with the name from your
+invite already filled in. From a terminal:
 
 ```bash
 staple cloud requests
-staple cloud approve GGQZ-AATR --as marko
+staple cloud approve 1DC9-SCRM            # takes the name from the invite
 ```
+
+Their side finishes on its own, opens the workspace, and starts syncing.
+
+## 5. A shared workspace always syncs
+
+Once a workspace has two or more members, every device in it syncs
+automatically, the owner's included. A change on one machine reaches the other
+within about half a minute with the web UI open, and at the next command
+otherwise. Nobody has to run `staple cloud sync`. Turning it off is refused:
 
 ```text
-Approved GGQZ-AATR: marko joins as a new member.
-The joining terminal picks up its credential on its own within seconds.
+error(forbidden): Automatic sync is on because this workspace is shared with marko;
+every device keeps it on, so nobody works on a stale copy. To stop syncing, leave
+the workspace or run `staple cloud disconnect`.
 ```
 
-In the web UI, a toast says **Join request** while automatic sync is on, and
-**Settings → Members** lists every pending request with **Approve** and **Deny**.
-Their terminal finishes on its own:
+You can always tell a shared workspace apart. The web UI shows
+**⇄ Shared · 2 members** with each member's initials and a sync dot next to the
+workspace name, and the workspace switcher marks it **⇄ shared**. The command
+line starts `ls`, `inbox` and `cloud status` with:
 
 ```text
-Joined https://sync.example.com as marko.
-Automatic sync is OFF. Run `staple cloud sync` to download the workspace.
+shared with marko · syncing automatically
 ```
 
-Their device starts with automatic sync and backups off, like any new device.
-They turn them on with `staple cloud auto on` if they want them.
+To add **another device of your own**, open the same kind of link on it (or
+run `staple cloud join`) and approve it from a device you already have with
+`--to <your name>`.
 
-To add **another device of your own**, run `staple cloud join` on it and
-approve it from a device you already have with `--to <your name>`.
-
-## 5. Split the work
+## 6. Split the work
 
 Assign tickets to members by name. The assignee picker in the web UI lists the
 members first, and `--assignee marko` works on the command line.
@@ -137,7 +148,7 @@ members first, and `--assignee marko` works on the command line.
   reads `VP · claude-ab12 Working`. When a claim must hold across both machines,
   take a lease: `staple cloud lease acquire AII-21`.
 
-## 6. See who did what
+## 7. See who did what
 
 Every change carries the device that made it, stamped by the service, so it
 cannot be faked. The web UI shows that device's member as a chip next to the
@@ -145,7 +156,7 @@ agent on activity, documents and comments: `VP claude-ab12 moved AII-14 to
 in_review`. If two of you edit the same field while apart, staple keeps both
 values for you to settle ([conflicts](cloud-sync.md#7-settle-conflicts)).
 
-## 7. Remove someone
+## 8. Remove someone
 
 Only the owner removes a member, and must type the name back:
 
@@ -165,7 +176,7 @@ let them back in, they run `staple cloud join` again and you approve it with
 
 ## What agents may do
 
-Agents may sync, read the member list and work tickets. They may not join,
+Agents may sync, read the member list and work tickets. They may not share, join,
 approve, deny, rename or remove anyone. These are people's decisions, and there
 is no MCP tool for them.
 

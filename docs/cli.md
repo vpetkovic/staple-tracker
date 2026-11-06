@@ -208,7 +208,8 @@ Guide: [Cloud sync](cloud-sync.md). Off until you connect.
 | `staple cloud sync` | Send this machine's changes and fetch the others'. `--all` does every connected workspace. |
 | `staple cloud auto on\|off` | Let this machine sync without being asked. |
 | `staple cloud conflicts` | Fields two machines set differently. `cloud resolve <id> --take local\|remote` settles one. |
-| `staple cloud join` | Join a shared workspace from this machine: shows a code that a member approves. `--endpoint U` if the repository does not name one. |
+| `staple cloud share [--as N]` | Make a share link, the command to paste and a ready-to-send message for a teammate. Sharing makes automatic sync mandatory once they join. |
+| `staple cloud join '<link>'` | Join from a share link, with no clone needed: shows a code that a member approves. Plain `cloud join` in a clone works too; `--endpoint U` if the repository does not name one. |
 | `staple cloud requests` | Join requests waiting for approval. |
 | `staple cloud approve <code> --as N \| --to N` | Admit a new person (owner) or add a device to an existing member. `cloud deny <code>` refuses one. |
 | `staple cloud members` | Who shares this workspace, with their devices. `members rename`, `members remove <name> --confirm <name>` (owner). |

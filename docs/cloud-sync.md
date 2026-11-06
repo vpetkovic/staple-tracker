@@ -88,6 +88,11 @@ This device then syncs on its own when a command starts, after a write, and
 during long sessions. A failed sync never blocks a command. `staple cloud auto off`
 stops it without disconnecting.
 
+A **shared** workspace, one with two or more members, is the exception: every
+device in it syncs automatically, and `auto off` is refused, so nobody works on a
+stale copy. Joining one says so before anything is sent. See
+[Working with a teammate](working-with-a-teammate.md).
+
 ## 5. Keep backups: the third consent
 
 ```bash
@@ -110,7 +115,10 @@ The first machine to connect becomes the workspace's **owner**, listed as `owner
 until you rename it (`staple cloud members rename owner <your name>`). Every other
 machine, yours or a teammate's, joins by approval. Nobody hands out a secret.
 
-On the new machine:
+The easiest way in is a share link. On a connected machine run
+`staple cloud share` (or use **Settings → Members → Invite someone**) and send the
+link. The new machine opens it, or runs `staple cloud join '<link>'`, and needs no
+clone. Inside a clone, plain `join` works too:
 
 ```bash
 git clone <your-repo> && cd <your-repo>
