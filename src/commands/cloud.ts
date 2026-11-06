@@ -2355,10 +2355,28 @@ function runMembers(argv: string[]): void {
     const [who, name] = positionals;
     if (!who || !name) throw new StapleError("validation", "usage: staple cloud members rename <member> <name>");
     settle(
-      renameMember(home, repositoryId, who, name).then((outcome) => {
-        if (json) console.log(JSON.stringify({ renamed: true, ...outcome, members: undefined }));
-        else console.log(`Renamed ${outcome.from} to ${outcome.to}.`);
-      }),
+      (async () => {
+        const opened = resolveWorkspace(values);
+        try {
+          const outcome = await renameMember(home, repositoryId, who, name, {}, {
+            store: opened.store,
+            actor: process.env.STAPLE_AGENT ?? null,
+          });
+          if (json) {
+            console.log(JSON.stringify({ renamed: true, ...outcome, members: undefined }));
+            return;
+          }
+          console.log(`Renamed ${outcome.from} to ${outcome.to}.`);
+          if (outcome.reassigned.length > 0) {
+            console.log(
+              `Moved ${outcome.reassigned.length} ${outcome.reassigned.length === 1 ? "ticket" : "tickets"} ` +
+                `assigned to ${outcome.from} onto ${outcome.to}; they reach the other devices on the next sync.`,
+            );
+          }
+        } finally {
+          opened.store.db.close();
+        }
+      })(),
       json,
     );
     return;

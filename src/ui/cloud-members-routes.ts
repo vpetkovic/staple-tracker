@@ -53,6 +53,7 @@ import {
 } from "../core/cloud/members.js";
 import { readMembersCache, type MembersCache } from "../core/cloud/members-cache.js";
 import { StapleError } from "../core/types.js";
+import { openWorkspace } from "../core/open.js";
 
 /** Every POST route in this file. The server pins each to POST and keeps it off the sync trigger. */
 export const MEMBER_POST_ROUTES: readonly string[] = [
@@ -353,8 +354,18 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
     if (url.pathname === "/api/cloud/workspace/members/rename") {
       const memberId = typeof body.memberId === "string" ? body.memberId : "";
       const name = typeof body.name === "string" ? body.name : "";
-      const outcome = await renameMember(home, repositoryId, memberId, name, opts);
-      ctx.json(res, 200, { renamed: { from: outcome.from, to: outcome.to }, ...membersPayload(outcome.members) });
+      // The addressed workspace, opened by its own path, so its tickets move with the member.
+      const opened = openWorkspace(addressed.workspace.path);
+      let outcome: Awaited<ReturnType<typeof renameMember>>;
+      try {
+        outcome = await renameMember(home, repositoryId, memberId, name, opts, { store: opened.store, actor: null });
+      } finally {
+        opened.store.db.close();
+      }
+      ctx.json(res, 200, {
+        renamed: { from: outcome.from, to: outcome.to, reassigned: outcome.reassigned },
+        ...membersPayload(outcome.members),
+      });
       return true;
     }
 
