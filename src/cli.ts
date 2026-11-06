@@ -76,6 +76,7 @@ import {
   type StapleEvent,
 } from "./core/types.js";
 import type { WorkspaceStore } from "./core/store.js";
+import { requireMineLens, splitMine } from "./core/cloud/member-lens.js";
 
 const STATUS_GLYPHS: Record<string, string> = {
   backlog: "◌",
@@ -955,7 +956,9 @@ Tasks
               [--kind K]                epic|task|bug|chore|spike (default task),
               or whatever "staple kinds ls" shows for this workspace
               [--estimate <dur>]        record the plan-time estimate AT PLAN TIME
-  ls [--status s1,s2] [--kind k1,k2] [--assignee A] [-q text] [--all]
+  ls [--status s1,s2] [--kind k1,k2] [--assignee A] [-q text] [--all] [--mine]
+              --mine: in a shared workspace, leave out work assigned to another
+              member (yours, unassigned and agents' stay) and say how much it hid
   show <ref>                            full context (ancestry, relations, comments, docs)
   tree [ref]                            subtask tree
   compare <ref> [<ref> ...]             total labor, estimate coverage and critical path
@@ -984,10 +987,10 @@ Tasks
               probability it leaves less than the reserve at the reset;
               staple forecast --help
   board                                 terminal kanban
-  inbox [--assignee A] [--hub]          ready vs queued vs blocked (pickup order);
+  inbox [--assignee A] [--hub] [--mine] ready vs queued vs blocked (pickup order);
               QUEUED is work a HUMAN has to release (see Approval gates below) and
               checkout of it is refused; BLOCKED is work waiting on other WORK;
-              --hub = all workspaces
+              --hub = all workspaces; --mine as for ls
 
 Flow
   start|checkout <ref> [--agent A] [--steal-if-stale <dur>] [--override -m <why>]
@@ -1361,10 +1364,14 @@ function main() {
           assignee: { type: "string" },
           q: { type: "string", short: "q" },
           all: { type: "boolean" },
+          mine: { type: "boolean" },
         },
       });
       const { store } = getStore(values);
-      const issues = store.listIssues({
+      // `--mine`: everything not assigned to ANOTHER member — yours, unassigned, and
+      // agents' — from the member list on this machine. Refused without one.
+      const mineLens = values.mine === true ? requireMineLens(store.members()) : null;
+      const listed = store.listIssues({
         status: values.status?.split(",").map((s) => s.trim()) as never,
         // Comma-separated, for symmetry with --status. `--kind epic` is the
         // acceptance case; `--kind bug,chore` falls out of the same split.
@@ -1373,6 +1380,7 @@ function main() {
         q: values.q,
         includeResolved: values.all,
       });
+      const { mine: issues, hidden } = mineLens ? splitMine(mineLens, listed) : { mine: listed, hidden: [] };
       // One batched query per fact for the whole list, never one per row.
       const ids = issues.map((i) => i.id);
       const claims = store.claimActivityFor(ids);
@@ -1404,6 +1412,7 @@ function main() {
           ),
         );
       }
+      for (const { name, count } of hidden) console.log(`${count} assigned to ${name} not shown`);
       break;
     }
 
@@ -2133,8 +2142,11 @@ function main() {
     case "inbox": {
       const { values } = parseArgs({
         args: rest,
-        options: { ...common, assignee: { type: "string" }, hub: { type: "boolean" } },
+        options: { ...common, assignee: { type: "string" }, hub: { type: "boolean" }, mine: { type: "boolean" } },
       });
+      if (values.hub && values.mine) {
+        throw new StapleError("validation", "--mine reads one workspace's member list; it does not combine with --hub.");
+      }
       if (values.hub) {
         const hub = Hub.open();
         try {
@@ -2153,7 +2165,18 @@ function main() {
         break;
       }
       const { store } = getStore(values);
-      const inbox = store.inbox(values.assignee);
+      const mineLens = values.mine === true ? requireMineLens(store.members()) : null;
+      const full = store.inbox(values.assignee);
+      // `--mine` partitions each bucket the same way; the counts of what it left out are
+      // said once, after the list, so nobody mistakes a filtered inbox for an empty one.
+      const hiddenByName = new Map<string, number>();
+      const keepMine = <T extends Issue>(bucket: T[]): T[] => {
+        if (!mineLens) return bucket;
+        const { mine, hidden } = splitMine(mineLens, bucket);
+        for (const { name, count } of hidden) hiddenByName.set(name, (hiddenByName.get(name) ?? 0) + count);
+        return mine;
+      };
+      const inbox = { ...full, ready: keepMine(full.ready), queued: keepMine(full.queued), blocked: keepMine(full.blocked) };
       if (values.json) {
         outJson(inbox);
         break;
@@ -2216,6 +2239,7 @@ function main() {
           console.log(`  ${line(issue, `  [${why}]`)}`);
         }
       }
+      for (const [name, count] of hiddenByName) console.log(`${count} assigned to ${name} not shown`);
       break;
     }
 

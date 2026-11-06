@@ -765,6 +765,42 @@ export interface StapleEvent {
   payload: Record<string, unknown>;
   dedupKey: string | null;
   createdAt: string;
+  /** The member whose device made the change; only in a shared workspace with a member list. */
+  member?: MemberRef;
+}
+
+/**
+ * A member as an event names one: from the server-stamped origin device, so it cannot be
+ * typed in. Mirrors `MemberRef` in src/core/cloud/member-lens.ts.
+ */
+export interface MemberRef {
+  memberId: string;
+  name: string;
+  /** Removed members still name their history; drawn muted. */
+  removed: boolean;
+}
+
+/**
+ * This machine's copy of a shared workspace's member list, exactly as
+ * `src/core/cloud/members-cache.ts` stores it. `GET /api/members-cache` answers it (or
+ * null: not a shared workspace here), and `GET /api/cloud/members` answers the same shape
+ * after refreshing it from the service.
+ */
+export interface UiMembersCache {
+  version: 1;
+  repositoryId: string;
+  /** ISO-8601, when this copy was fetched from the service. */
+  fetchedAt: string;
+  /** Who this machine is. */
+  self: { memberId: string; deviceId: string };
+  members: Array<{
+    memberId: string;
+    /** Unique per workspace, case-insensitively. This is the string written into `assignee`. */
+    name: string;
+    isOwner: boolean;
+    removed: boolean;
+    devices: Array<{ deviceId: string; label: string | null; lastSeenAt: number | null; revoked: boolean }>;
+  }>;
 }
 
 /** A relation as the detail endpoint returns it: identifier + enough to render a chip. */
@@ -1527,7 +1563,16 @@ export interface MilestoneGoal {
  * to leaf work and every row classified — what agents receive, and what the
  * READY list derives its order from.
  */
-export const QUEUE_ELIGIBILITIES = ["resolved", "gated", "blocked", "claimed", "unavailable", "eligible"] as const;
+export const QUEUE_ELIGIBILITIES = [
+  "resolved",
+  "gated",
+  "blocked",
+  "claimed",
+  "unavailable",
+  // Pickup answers only (`/api/queue/next`), in a shared workspace: another member's ticket.
+  "assigned_to_other_member",
+  "eligible",
+] as const;
 export type QueueEligibility = (typeof QUEUE_ELIGIBILITIES)[number];
 
 export interface QueueEntry {

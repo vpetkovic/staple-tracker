@@ -18,6 +18,8 @@ export const BUCKET_OF: Readonly<Record<QueueEligibility, QueueBucket>> = {
   blocked: "waiting",
   gated: "waiting",
   unavailable: "waiting",
+  // Another member's ticket: not this machine's to take, so waiting from here.
+  assigned_to_other_member: "waiting",
 };
 
 /** Bar order, left to right: what is finished, then what is moving, then what is not. */

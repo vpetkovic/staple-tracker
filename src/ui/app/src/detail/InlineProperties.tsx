@@ -31,7 +31,9 @@ import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { configuredKindOrder, kindLabel } from "@/lib/settings";
 import { cn } from "./parts/cn";
-import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssueKind, type IssuePriority } from "@/lib/types";
+import { ISSUE_PRIORITIES, type ActionPayload, type Issue, type IssueKind, type IssuePriority, type UiMembersCache } from "@/lib/types";
+import { assignableMembers, memberNamed } from "@/lib/members";
+import { MemberChip } from "./parts/MemberChip";
 import { RefusalNotice } from "./IssueActions";
 import { personActor } from "./parts/person";
 
@@ -79,7 +81,9 @@ function useUpdate(issue: Issue, workspace: string, refresh: () => void) {
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const update = async (patch: Extract<ActionPayload, { type: "update" }>): Promise<boolean> => {
+  const update = async (
+    patch: Extract<ActionPayload, { type: "update" }> | Extract<ActionPayload, { type: "assignee" }>,
+  ): Promise<boolean> => {
     if (busy) return false;
     setBusy(true);
     setRefusal(null);
@@ -521,5 +525,117 @@ export function InlineLabels({ issue, workspace, refresh, report }: EditorProps)
       </div>
       <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />
     </div>
+  );
+}
+
+// --------------------------------------------------------------- assignee
+
+const UNASSIGNED_VALUE = "__unassigned__";
+const SOMEONE_ELSE_VALUE = "__someone_else__";
+
+/**
+ * The assignee, as a picker over the workspace's members — drawn only in a shared
+ * workspace, where the assignee is a member's name. This machine's member comes first,
+ * marked "(you)", then the other members, then Unassigned. An agent's handle is still
+ * free text: "Someone else…" takes any name, and a current assignee that is no member
+ * (an agent) stays listed as itself.
+ */
+export function InlineAssignee({ issue, workspace, refresh, members, variant = "row", report }: EditorProps & { members: UiMembersCache }) {
+  const { update, busy, refusal, dismiss } = useUpdate(issue, workspace, refresh);
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState("");
+  const offered = assignableMembers(members);
+  const current = issue.assignee ? memberNamed(members, issue.assignee) : null;
+  const value = issue.assignee ? (current ? current.memberId : `free:${issue.assignee}`) : UNASSIGNED_VALUE;
+
+  const assign = async (assignee: string | null) => {
+    if (await update({ type: "assignee", assignee })) setTyping(false);
+  };
+
+  if (typing) {
+    return (
+      <form
+        className="flex items-center gap-1.5"
+        data-edit-assignee-free=""
+        onSubmit={(event) => {
+          event.preventDefault();
+          const name = draft.trim();
+          if (name) void assign(name);
+        }}
+      >
+        <Input
+          autoFocus
+          value={draft}
+          aria-label="Assignee name"
+          placeholder="An agent or a name"
+          className="h-8 w-44 text-[13px] md:text-[13px]"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setTyping(false);
+          }}
+        />
+        <Button type="submit" size="sm" variant="secondary" disabled={busy || draft.trim() === ""}>
+          Assign
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setTyping(false)}>
+          Cancel
+        </Button>
+        <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />
+      </form>
+    );
+  }
+
+  return (
+    <>
+      <Select
+        value={value}
+        disabled={busy}
+        onValueChange={(next) => {
+          if (next === SOMEONE_ELSE_VALUE) {
+            setDraft("");
+            setTyping(true);
+            return;
+          }
+          if (next === UNASSIGNED_VALUE) return void assign(null);
+          if (next.startsWith("free:")) return;
+          const member = offered.find((m) => m.memberId === next);
+          if (member) void assign(member.name);
+        }}
+      >
+        <SelectTrigger size="sm" data-edit-assignee aria-label="Assignee" className={triggerClass(variant)}>
+          {current ? (
+            <MemberChip member={current} you={current.memberId === members.self.memberId} withName />
+          ) : issue.assignee ? (
+            <span className="truncate">{issue.assignee}</span>
+          ) : (
+            <span className="text-text-tertiary">Unassigned</span>
+          )}
+        </SelectTrigger>
+        <SelectContent position="popper" align="start">
+          {offered.map((member) => (
+            <SelectItem key={member.memberId} value={member.memberId} className="pointer-coarse:min-h-11" data-assignee-option={member.name}>
+              <MemberChip member={member} you={member.self} withName />
+            </SelectItem>
+          ))}
+          {current?.removed ? (
+            <SelectItem value={current.memberId} disabled className="pointer-coarse:min-h-11">
+              <MemberChip member={current} withName />
+            </SelectItem>
+          ) : null}
+          {issue.assignee && !current ? (
+            <SelectItem value={`free:${issue.assignee}`} className="pointer-coarse:min-h-11">
+              <span className="truncate">{issue.assignee}</span>
+            </SelectItem>
+          ) : null}
+          <SelectItem value={UNASSIGNED_VALUE} className="pointer-coarse:min-h-11" data-assignee-option="unassigned">
+            <span className="text-text-secondary">– Unassigned</span>
+          </SelectItem>
+          <SelectItem value={SOMEONE_ELSE_VALUE} className="pointer-coarse:min-h-11" data-assignee-option="someone-else">
+            <span className="text-text-secondary">Someone else…</span>
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <RefusalSlot refusal={refusal} onDismiss={dismiss} report={report} />
+    </>
   );
 }

@@ -782,6 +782,9 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/inbox",
       "/api/issue",
       "/api/issues",
+      // This machine's copy of a shared workspace's member list, or null. GET-only, local,
+      // never a call to the sync service (`/api/cloud/members` is the refresh that is).
+      "/api/members-cache",
       "/api/milestone",
       "/api/milestone/add",
       "/api/milestone/create",

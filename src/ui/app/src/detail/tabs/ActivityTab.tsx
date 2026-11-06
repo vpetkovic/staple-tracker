@@ -50,7 +50,7 @@ import { statusLabel } from "@/lib/settings";
 import { WORKLOG_KEY, type DocumentRevision } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
-import { EmptyState, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, isWebAppActor, personActor, useNow } from "../parts";
+import { EmptyState, MemberChip, PersonChip, PersonDisc, RelativeTime, actorLabel, cn, formatExact, isWebAppActor, personActor, useNow } from "../parts";
 import { Dot } from "./Dot";
 import { commentWrite } from "./writes";
 import { isClear, shouldBringBack } from "./keep-in-view";
@@ -134,7 +134,7 @@ function Sentence({ entry }: { entry: TimelineEntry }) {
 }
 
 /** A system event: one quiet line on the rail. */
-function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean; now: Date }) {
+export function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean; now: Date }) {
   // Revision and checkpoint rows carry the author's own words about the change; the
   // sentence above already says "updated plan", so the words go underneath, quoted.
   const note =
@@ -151,6 +151,13 @@ function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean;
         {/* Inline text, not a flex row: a long sentence wraps like a sentence, under the
             name, instead of dropping to a line of its own. */}
         <p className="text-body text-text-secondary [overflow-wrap:anywhere]">
+          {/* The member behind the change, from the device the server stamped on it, beside
+              the agent string that is only ever free text. Absent outside a shared workspace. */}
+          {entry.member ? (
+            <>
+              <MemberChip member={entry.member} />{" "}
+            </>
+          ) : null}
           {entry.actor ? (
             <PersonChip name={entry.actor} kind={personKind(entry)} className="max-w-full" />
           ) : (
@@ -188,7 +195,7 @@ function EventRow({ entry, today, now }: { entry: TimelineEntry; today: boolean;
 }
 
 /** A comment: a readable card with the person and the time on top. */
-function CommentRow({ entry, today, now }: { entry: TimelineEntry; today: boolean; now: Date }) {
+export function CommentRow({ entry, today, now }: { entry: TimelineEntry; today: boolean; now: Date }) {
   const kind = personKind(entry);
   return (
     <li data-timeline-kind="comment" className="activity-item relative flex gap-3 py-2">
@@ -209,6 +216,7 @@ function CommentRow({ entry, today, now }: { entry: TimelineEntry; today: boolea
       </span>
       <article className="min-w-0 flex-1 rounded-xl border border-border bg-surface-raised">
         <header className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 pt-2.5 text-body">
+          {entry.member ? <MemberChip member={entry.member} /> : null}
           <span className="min-w-0 truncate font-medium text-foreground">{actorLabel(entry.actor)}</span>{" "}
           {kind === "agent" ? (
             <>

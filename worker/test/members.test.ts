@@ -605,6 +605,44 @@ describe("remove", () => {
     expect(body.removedBy).toBeUndefined();
   });
 
+  it("re-admits a removed member under their name, as the same member", async () => {
+    const owner = await workspaceWithOwner();
+    const marko = await admit(owner, "Marko", "marko-laptop");
+    const phone = await requestJoin("marko-phone");
+    await approve(marko.token, phone.code, { memberId: marko.memberId });
+    await poll(phone);
+    await call(`/v1/repos/${REPO}/members/${marko.memberId}`, { method: "DELETE", token: owner.token, device: null });
+
+    // Back from the same machine, approved by name, typed in another case.
+    const back = await requestJoin("marko-laptop");
+    const approved = await approve(owner.token, back.code, { newMember: { name: "marko" } });
+    expect(approved.status).toBe(200);
+    expect((await jsonOf(approved)).member).toEqual({ memberId: marko.memberId, name: "Marko" });
+    const collected = await jsonOf(await poll(back));
+    expect(collected.member).toEqual({ memberId: marko.memberId, name: "Marko" });
+    expect((await call(`/v1/repos/${REPO}/ops`, { token: collected.token, device: null })).status).toBe(200);
+    // The credential from before the removal is not revived.
+    await expectError(await call(`/v1/repos/${REPO}/ops`, { token: marko.token, device: null }), "auth", 401);
+
+    const list = await jsonOf(await members(owner.token));
+    expect(list.members.filter((m: any) => m.name === "Marko")).toHaveLength(1);
+    const entry = list.members.find((m: any) => m.memberId === marko.memberId);
+    expect(entry.removed).toBe(false);
+    expect(Object.fromEntries(entry.devices.map((d: any) => [d.deviceId, d.revoked]))).toEqual({
+      "marko-laptop": false,
+      // Only the approved device comes back.
+      "marko-phone": true,
+    });
+
+    // A name held by a member who was not removed is still refused, and a member cannot
+    // re-admit anyone.
+    const other = await requestJoin("someone");
+    await expectError(await approve(owner.token, other.code, { newMember: { name: "MARKO" } }), "conflict", 409);
+    await call(`/v1/repos/${REPO}/members/${marko.memberId}`, { method: "DELETE", token: owner.token, device: null });
+    const bo = await admit(owner, "Bo", "bo-laptop");
+    await expectError(await approve(bo.token, other.code, { newMember: { name: "Marko" } }), "forbidden", 403);
+  });
+
   it("the owner cannot remove themselves", async () => {
     const owner = await workspaceWithOwner();
     await expectError(

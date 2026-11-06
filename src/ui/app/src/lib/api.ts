@@ -57,6 +57,7 @@ import type {
   RunEntry,
   RemoteDevice,
   StapleEvent,
+  UiMembersCache,
   VocabularyOp,
   TimingQualityReport,
   CalibrationReport,
@@ -791,6 +792,13 @@ export const getGraph = () => request<Graph>("/api/graph");
  */
 export const getEvents = (params: { ws?: string; since?: number; issue?: string } = {}) =>
   request<StapleEvent[]>(`/api/events${qs(params)}`);
+
+/**
+ * This machine's copy of the workspace's member list, or null when it is not a shared
+ * workspace here. A local read: it never contacts the sync service.
+ */
+export const getMembersCache = (params: { ws?: string } = {}) =>
+  request<UiMembersCache | null>(`/api/members-cache${qs(params)}`);
 
 // ---------- writes ----------
 

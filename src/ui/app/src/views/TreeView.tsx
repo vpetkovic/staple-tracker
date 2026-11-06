@@ -61,6 +61,8 @@ import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
 import { rowQueueMenu, type RowQueue } from "./tree/row-queue";
 import { TreeGrid } from "./tree/TreeGrid";
 import { EmptyState, ViewState } from "./ViewChrome";
+import { MineToggle } from "@/components/members/MineToggle";
+import { partitionMine, useMembersCache, useMineToggle } from "@/lib/members";
 
 export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
@@ -432,10 +434,25 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
   const { claimed } = useRuns();
   const autopilotTree = useMemo(() => autopilotAncestors(all, claimed), [all, claimed]);
 
-  const rows = useMemo(
+  const filtered = useMemo(
     () => applyFilterDimensions(all, filters, filterContext),
     [all, filters, filterContext],
   );
+
+  /**
+   * MINE / ALL, in a shared workspace (members, STA-438). Applied after every filter, as
+   * one more narrowing: Mine leaves out the rows assigned to ANOTHER member, and says how
+   * many. A workspace with no member list on this machine has no toggle and loses nothing,
+   * and All workspaces has none either — each workspace has its own members.
+   */
+  const membersWs = session.mode === "hub" && session.ws === "" ? undefined : session.ws;
+  const members = useMembersCache(membersWs, session.version, onAuthError as (error: Error) => void);
+  const [mine, setMine] = useMineToggle(session.ws);
+  const mineSplit = useMemo(
+    () => (members && mine ? partitionMine(members, filtered) : null),
+    [members, mine, filtered],
+  );
+  const rows = mineSplit ? mineSplit.mine : filtered;
 
   /**
    * Children whose parent a filter removed — V4's seam for V5's breadcrumb chip, and the
@@ -512,6 +529,7 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
         because the refusal is about the plan rather than about the task, and the row it came
         from may have been filtered away by the time the answer lands.
       */}
+      {members ? <MineToggle mine={mine} onChange={setMine} hidden={mineSplit?.hidden ?? []} /> : null}
       {queueRefusal ? (
         <div className="px-4 pt-3">
           <GuardRefusal refusal={queueRefusal} onDismiss={() => setQueueRefusal(null)} />
