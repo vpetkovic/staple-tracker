@@ -33,6 +33,11 @@ export class MemberLens {
     return selfMember(this.cache);
   }
 
+  /** The member with this name, case-insensitively, removed or not; null when none. */
+  memberNamed(name: string): CachedMember | null {
+    return memberByName(this.cache, name);
+  }
+
   /**
    * The member an assignee names when that member is somebody else, or null.
    *

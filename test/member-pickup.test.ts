@@ -197,6 +197,26 @@ describe("with a member list on this machine", () => {
     expect(local.member).toEqual({ memberId: VP_MEMBER, name: "VP", removed: false });
   });
 
+  it("a claim keeps a member's assignment; a non-member assignee is replaced as before", async () => {
+    const show = async (ref: string) => (await cliJson("show", ref)).issue as { assignee: string | null; checkoutAgent: string | null };
+
+    // MEM-3 is VP's ("vp"): an agent's checkout leaves it VP's, held by the agent.
+    expect((await cli("checkout", "MEM-3", "--agent", "claude-ab12")).status).toBe(0);
+    expect(await show("MEM-3")).toMatchObject({ assignee: "vp", checkoutAgent: "claude-ab12" });
+    // A steal by another agent keeps it too.
+    const stolen = await cli("checkout", "MEM-3", "--agent", "codex-77", "--steal-if-stale", "0s");
+    expect(stolen.status, stolen.stderr).toBe(0);
+    expect(await show("MEM-3")).toMatchObject({ assignee: "vp", checkoutAgent: "codex-77" });
+    // Released, it is still VP's, so marko's pickup still skips it.
+    expect((await cli("release", "MEM-3", "--agent", "codex-77")).status).toBe(0);
+    expect(await show("MEM-3")).toMatchObject({ assignee: "vp", checkoutAgent: null });
+
+    // MEM-4's assignee is an agent's handle, no member: the claim writes the claimer, as always.
+    expect((await cli("checkout", "MEM-4", "--agent", "agent-one")).status).toBe(0);
+    expect(await show("MEM-4")).toMatchObject({ assignee: "agent-one", checkoutAgent: "agent-one" });
+    expect((await cli("release", "MEM-4", "--agent", "agent-one")).status).toBe(0);
+  });
+
   it("under strict ordering, checkout takes what next answers, past marko's earlier ticket", async () => {
     expect((await cli("settings", "set", "queue.policy", "strict")).status).toBe(0);
     expect((await cli("queue", "add", "MEM-1")).status).toBe(0);

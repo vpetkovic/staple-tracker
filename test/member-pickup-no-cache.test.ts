@@ -55,6 +55,16 @@ describe("no member list: output identical to master", () => {
       expect(result.status, result.stderr).toBe(0);
       outputs[name] = normalise(result.stdout);
     }
+    // A claim on a ticket whose assignee looks like a member's name: without a member list
+    // the claimer becomes the assignee, as it always has.
+    const checkout = await cli("checkout", "MEM-1", "--agent", "claude-ab12");
+    expect(checkout.status, checkout.stderr).toBe(0);
+    const shown = await cli("show", "MEM-1", "--json");
+    const issue = JSON.parse(shown.stdout).issue as { assignee: string | null; checkoutAgent: string | null };
+    outputs["checkout MEM-1 -> assignee, checkoutAgent"] = JSON.stringify([issue.assignee, issue.checkoutAgent]);
+    expect((await cli("release", "MEM-1", "--agent", "claude-ab12")).status).toBe(0);
+    const after = JSON.parse((await cli("show", "MEM-1", "--json")).stdout).issue as { assignee: string | null };
+    outputs["release MEM-1 -> assignee"] = JSON.stringify(after.assignee);
     await expect(JSON.stringify(outputs, null, 2)).toMatchFileSnapshot("./__snapshots__/member-pickup-no-cache.json");
   }, 60_000);
 });

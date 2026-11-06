@@ -63,7 +63,7 @@ import { rowQueueMenu, type RowQueue } from "./tree/row-queue";
 import { TreeGrid } from "./tree/TreeGrid";
 import { EmptyState, ViewState } from "./ViewChrome";
 import { MineToggle } from "@/components/members/MineToggle";
-import { partitionMine, useMembersCache, useMineToggle } from "@/lib/members";
+import { otherMemberOf, partitionMine, useMembersCache, useMineToggle } from "@/lib/members";
 
 export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => void }) {
   const session = useSession();
@@ -401,9 +401,22 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
     [filterContext.milestones],
   );
 
+  /**
+   * MINE / ALL, in a shared workspace (members, STA-438): the member list, read here so the
+   * "Next" cue below follows the same member rule `queue next` does. See `mineSplit`.
+   */
+  const membersWs = session.mode === "hub" && session.ws === "" ? undefined : session.ws;
+  const members = useMembersCache(membersWs, session.version, onAuthError as (error: Error) => void);
+  /** Another member's ticket is never "Next" here, in Mine or in All: `queue next` skips it. */
+  const isOtherMembers = useMemo(() => {
+    if (!members) return undefined;
+    const assignees = new Map((session.issues.data ?? []).map((row) => [row.issue.identifier, row.issue.assignee]));
+    return (identifier: string) => otherMemberOf(members, assignees.get(identifier) ?? null) !== null;
+  }, [members, session.issues.data]);
+
   const cueIndex = useMemo(
-    () => (wantCues && queue.data ? buildRowCueIndex(queue.data, milestoneTitles) : EMPTY_ROW_CUE_INDEX),
-    [wantCues, queue.data, milestoneTitles],
+    () => (wantCues && queue.data ? buildRowCueIndex(queue.data, milestoneTitles, isOtherMembers) : EMPTY_ROW_CUE_INDEX),
+    [wantCues, queue.data, milestoneTitles, isOtherMembers],
   );
 
   /**
@@ -447,8 +460,6 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
    * many. A workspace with no member list on this machine has no toggle and loses nothing,
    * and All workspaces has none either — each workspace has its own members.
    */
-  const membersWs = session.mode === "hub" && session.ws === "" ? undefined : session.ws;
-  const members = useMembersCache(membersWs, session.version, onAuthError as (error: Error) => void);
   const [mine, setMine] = useMineToggle(session.ws);
   const mineSplit = useMemo(
     () => (members && mine ? partitionMine(members, filtered) : null),
