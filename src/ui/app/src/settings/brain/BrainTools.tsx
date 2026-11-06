@@ -8,6 +8,7 @@ import { Brain, Pencil, Replace, Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { EmptyState, LoadingState } from "@/components/plain/States";
 import {
@@ -39,7 +40,6 @@ export const shortTime = (iso: string) => {
 };
 export const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export const FIELD = "h-control-md min-w-0 rounded-md border border-input bg-background px-2 text-body text-foreground focus-ring";
 export const EYEBROW = "text-caption font-medium uppercase tracking-wide text-muted-foreground";
 
 export type Load<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "error"; message: string };
@@ -76,17 +76,31 @@ export function KindTag({ kind, provisional }: { kind: BrainKind; provisional?: 
 
 // ------------------------------------------------------------------ tools
 
-export function ScopeSelect({ value, onChange, projectScopes, withGlobal, label, emptyLabel = "no project (global only)" }: { value: string; onChange: (value: string) => void; projectScopes: Array<{ scope: string; count: number }>; withGlobal?: boolean; label: string; emptyLabel?: string }) {
+/**
+ * The Settings sheet's select (`FieldsForm`'s enum control), for a list of options. Radix
+ * Select refuses an empty value, so "" travels as a sentinel.
+ */
+export function Picker({ label, value, onChange, options, className }: { label: string; value: string; onChange: (value: string) => void; options: ReadonlyArray<{ value: string; label: string }>; className?: string }) {
+  const NONE = "__none__";
   return (
-    <select aria-label={label} className={cn(FIELD, "flex-1")} value={value} onChange={(e) => onChange(e.target.value)}>
-      {withGlobal ? <option value="global">global</option> : <option value="">{emptyLabel}</option>}
-      {projectScopes.map((s) => (
-        <option key={s.scope} value={s.scope}>
-          {scopeLabel(s.scope)} ({s.count})
-        </option>
-      ))}
-    </select>
+    <Select value={value === "" ? NONE : value} onValueChange={(next) => onChange(next === NONE ? "" : next)}>
+      <SelectTrigger aria-label={label} size="sm" className={cn("w-full min-w-0 text-[12px]", className)}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value || NONE} value={o.value === "" ? NONE : o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
+}
+
+export function ScopeSelect({ value, onChange, projectScopes, withGlobal, label, emptyLabel = "no project (global only)", className }: { value: string; onChange: (value: string) => void; projectScopes: Array<{ scope: string; count: number }>; withGlobal?: boolean; label: string; emptyLabel?: string; className?: string }) {
+  const first = withGlobal ? { value: "global", label: "Global" } : { value: "", label: emptyLabel };
+  return <Picker label={label} value={value} onChange={onChange} className={cn("md:flex-1", className)} options={[first, ...projectScopes.map((s) => ({ value: s.scope, label: `${scopeLabel(s.scope)} (${s.count})` }))]} />;
 }
 
 export function RecallTool({ projectScopes, onOpen, onAuthError }: { projectScopes: Array<{ scope: string; count: number }>; onOpen: (id: string) => void; onAuthError: (e: AuthError) => void }) {
@@ -106,9 +120,9 @@ export function RecallTool({ projectScopes, onOpen, onAuthError }: { projectScop
     <div className="flex flex-col gap-3">
       <p className="text-label text-muted-foreground">Full-text search (bm25), as an agent's `recall` runs it. A chosen project boosts its own memories 1.5×.</p>
       <form className="flex flex-col gap-2 md:flex-row" onSubmit={submit} role="search">
-        <Input aria-label="Question" className="md:flex-[2]" placeholder="Ask what an agent would ask…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <Input aria-label="Question" className="h-8 text-[13px] md:flex-[2]" placeholder="Ask what an agent would ask…" value={q} onChange={(e) => setQ(e.target.value)} />
         <ScopeSelect label="Boost project" value={scope} onChange={setScope} projectScopes={projectScopes} emptyLabel="no project boost" />
-        <Button type="submit" disabled={!q.trim()}>
+        <Button type="submit" size="sm" disabled={!q.trim()}>
           <Search /> Search
         </Button>
       </form>
@@ -183,15 +197,9 @@ export function ContextTool({ projectScopes, version, onAuthError, desk }: { pro
         Exactly what the brain's hooks hand an agent in this project: the session-start block, then what its first prompt adds (memories the start block already showed are left out, as in a real session).
       </p>
       <div className="flex flex-col gap-2 md:flex-row">
-        <select aria-label="Agent" className={cn(FIELD, "md:w-40")} value={agent} onChange={(e) => setAgent(e.target.value as typeof agent)}>
-          {AGENTS.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.label}
-            </option>
-          ))}
-        </select>
+        <Picker label="Agent" value={agent} onChange={(v) => setAgent(v as typeof agent)} className="md:w-40" options={AGENTS.map((a) => ({ value: a.id, label: a.label }))} />
         <ScopeSelect label="Project" value={scope} onChange={setScope} projectScopes={projectScopes} />
-        <Input aria-label="Token budget" className="md:w-28" inputMode="numeric" value={budget} onChange={(e) => setBudget(e.target.value)} />
+        <Input aria-label="Token budget" className="h-8 text-[13px] md:w-28" inputMode="numeric" value={budget} onChange={(e) => setBudget(e.target.value)} />
       </div>
       <div className={cn("grid gap-4", desk ? "grid-cols-2" : "grid-cols-1")}>
         <div className="flex min-w-0 flex-col gap-2">
@@ -210,8 +218,8 @@ export function ContextTool({ projectScopes, version, onAuthError, desk }: { pro
               setAsked(prompt);
             }}
           >
-            <Input aria-label="Sample prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-            <Button type="submit" variant="outline">
+            <Input aria-label="Sample prompt" className="h-8 text-[13px]" value={prompt} onChange={(e) => setPrompt(e.target.value)} />
+            <Button type="submit" size="sm" variant="outline">
               Preview turn
             </Button>
           </form>
@@ -242,23 +250,9 @@ export function RecordsTool({ records, scopes, onOpen }: { records: BrainRecord[
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-2 md:flex-row md:items-center">
-        <Input aria-label="Filter by name" className="md:flex-[2]" placeholder="Filter by name or description" value={text} onChange={(e) => setText(e.target.value)} />
-        <select aria-label="Kind" className={cn(FIELD, "md:w-36")} value={kind} onChange={(e) => setKind(e.target.value as "" | BrainKind)}>
-          <option value="">all kinds</option>
-          {KINDS.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
-        <select aria-label="Scope" className={cn(FIELD, "md:flex-1")} value={scope} onChange={(e) => setScope(e.target.value)}>
-          <option value="">all scopes</option>
-          {scopes.map((s) => (
-            <option key={s.scope} value={s.scope}>
-              {scopeLabel(s.scope)} ({s.count})
-            </option>
-          ))}
-        </select>
+        <Input aria-label="Filter by name" className="h-8 text-[13px] md:flex-[2]" placeholder="Filter by name or description" value={text} onChange={(e) => setText(e.target.value)} />
+        <Picker label="Kind" value={kind} onChange={(v) => setKind(v as "" | BrainKind)} className="md:w-36" options={[{ value: "", label: "All kinds" }, ...KINDS.map((k) => ({ value: k, label: k }))]} />
+        <Picker label="Scope" value={scope} onChange={setScope} className="md:flex-1" options={[{ value: "", label: "All scopes" }, ...scopes.map((s) => ({ value: s.scope, label: `${s.scope === "global" ? "Global" : scopeLabel(s.scope)} (${s.count})` }))]} />
         <label className="flex shrink-0 items-center gap-2 text-label text-muted-foreground">
           <input type="checkbox" checked={showSuperseded} onChange={(e) => setShowSuperseded(e.target.checked)} /> superseded
         </label>
@@ -269,9 +263,9 @@ export function RecordsTool({ records, scopes, onOpen }: { records: BrainRecord[
       {shown.length === 0 ? (
         <EmptyState compact icon={Brain} title="No records here" />
       ) : (
-        <ul className="grid divide-y divide-border/60" data-slot="record-list">
+        <ul className="flex min-w-0 flex-col divide-y divide-border/60" data-slot="record-list">
           {shown.slice(0, 200).map((r) => (
-            <li key={r.id}>
+            <li key={r.id} className="min-w-0">
               <button type="button" className="flex w-full min-w-0 items-center gap-2 py-2 text-left hover:bg-surface-hover focus-ring" onClick={() => onOpen(r)}>
                 <KindTag kind={r.kind} provisional={r.provisional} />
                 <span className="min-w-0 flex-1">
@@ -441,19 +435,13 @@ function RecordForm({ mode, record, projectScopes, onSaved, onError, onCancel }:
   return (
     <form className="flex flex-col gap-2" onSubmit={submit}>
       <div className="flex flex-col gap-2 sm:flex-row">
-        <select aria-label="Kind" className={cn(FIELD, "sm:w-36")} value={kind} onChange={(e) => setKind(e.target.value as BrainKind)}>
-          {KINDS.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
+        <Picker label="Kind" value={kind} onChange={(v) => setKind(v as BrainKind)} className="sm:w-36" options={KINDS.map((k) => ({ value: k, label: k }))} />
         <ScopeSelect label="Scope" value={scope} onChange={setScope} projectScopes={scopes} withGlobal />
       </div>
-      <Input aria-label="Name" placeholder="short-kebab-name" value={name} onChange={(e) => setName(e.target.value)} />
-      <Input aria-label="Description" placeholder="One line: what this is about" value={description} onChange={(e) => setDescription(e.target.value)} />
+      <Input aria-label="Name" className="h-8 text-[13px]" placeholder="short-kebab-name" value={name} onChange={(e) => setName(e.target.value)} />
+      <Input aria-label="Description" className="h-8 text-[13px]" placeholder="One line: what this is about" value={description} onChange={(e) => setDescription(e.target.value)} />
       <Textarea aria-label="Body" placeholder="The fact, in full" rows={6} value={body} onChange={(e) => setBody(e.target.value)} />
-      <Input aria-label="Why" placeholder="Why it matters (optional)" value={why} onChange={(e) => setWhy(e.target.value)} />
+      <Input aria-label="Why" className="h-8 text-[13px]" placeholder="Why it matters (optional)" value={why} onChange={(e) => setWhy(e.target.value)} />
       <label className="flex items-center gap-2 text-label text-muted-foreground">
         <input type="checkbox" checked={provisional} onChange={(e) => setProvisional(e.target.checked)} /> Provisional (unconfirmed)
       </label>
