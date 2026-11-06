@@ -67,7 +67,7 @@ import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { CategoryContent, type ApplyTo } from "./CategoryContent";
 import { withCloudCategory } from "./cloud-settings";
 import { withTelemetryCategory } from "./telemetry-settings";
-import { withBrainCategory } from "./brain/brain-settings";
+import { BRAIN_CATEGORY_ID, withBrainCategory } from "./brain/brain-settings";
 import { UnsavedChangesDialog } from "./form/ConfirmDialog";
 import { leaveDecision } from "./form/form-model";
 import { SettingsShell } from "./SettingsShell";
@@ -255,6 +255,15 @@ export function SettingsDialog({
    */
   useBackToClose(stacked && pane === "content", () => setPane("nav"));
   const toggleMode = useCallback(() => setMode((current) => otherShellMode(current)), []);
+  /**
+   * Brain is a dashboard, so it opens full screen; every other section keeps the drawer. Only
+   * ARRIVING at Brain changes the mode, so the person's own toggle afterwards stands.
+   */
+  const lastActive = useRef<string | null>(null);
+  useEffect(() => {
+    if (active === BRAIN_CATEGORY_ID && lastActive.current !== BRAIN_CATEGORY_ID) setMode("full");
+    lastActive.current = active;
+  }, [active]);
   const close = useCallback(() => guard(() => onOpenChange(false)), [guard, onOpenChange]);
   /** A Back the mount held for a decision: ask exactly as the X does. Only a NEW request asks. */
   const answeredLeave = useRef(leaveRequest);

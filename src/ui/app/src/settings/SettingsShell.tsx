@@ -36,12 +36,12 @@
  * ELEMENT is a prop and the TEXT is the constant `SETTINGS_TITLE` — "Settings", which never
  * claims a workspace.
  */
-import { useEffect, useLayoutEffect, useRef, type ElementType, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ElementType, type ReactNode } from "react";
 import { ArrowLeft, ChevronRight, Folder, Globe, Maximize2, Minimize2, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SettingCategoryView } from "@/lib/settings";
 import { cn } from "@/lib/utils";
-import {
+import { isWideCategory,
   SCOPE_ORDER,
   appliesToText,
   recallScroll,
@@ -164,7 +164,14 @@ export function SettingsShell({
   }, [categories.length, stacked]);
 
   // Save the offset of whatever is showing on the way out of the pane, too.
+  /**
+   * Whether the pane has scrolled. The full-screen and close buttons sit over the pane's top
+   * right; once content scrolls under them, their strip takes the pane's background and a
+   * hairline so nothing is read through them.
+   */
+  const [scrolled, setScrolled] = useState(false);
   const onContentScroll = () => {
+    if (contentRef.current) setScrolled(contentRef.current.scrollTop > 4);
     if (contentRef.current) rememberScroll(memory.current, active, contentRef.current.scrollTop);
   };
 
@@ -175,7 +182,7 @@ export function SettingsShell({
       aria-label="Close settings"
       title="Close (Esc)"
       onClick={onClose}
-      className={cn("rounded-lg text-text-tertiary hover:text-foreground", stacked ? "-mr-2 size-11" : "")}
+      className={cn("pointer-events-auto rounded-lg text-text-tertiary hover:text-foreground", stacked ? "-mr-2 size-11" : "")}
     >
       <XIcon className={stacked ? "size-5" : "size-4"} />
     </Button>
@@ -257,7 +264,7 @@ export function SettingsShell({
   );
 
   const section = current ? (
-    <section aria-labelledby={`settings-category-${current.id}`} className={cn(!stacked && "mx-auto max-w-[52rem]")}>
+    <section aria-labelledby={`settings-category-${current.id}`} className={cn(!stacked && (isWideCategory(current.id) ? "w-full" : "mx-auto max-w-[52rem]"))}>
       <div className={stacked ? "mb-3" : "mb-6"}>
         <h3
           id={`settings-category-${current.id}`}
@@ -305,7 +312,14 @@ export function SettingsShell({
       <div data-settings-shell data-layout={layout} data-pane={pane} data-mode={mode} className="flex h-full min-h-0">
         {nav}
         <div className="relative flex min-w-0 flex-1 flex-col bg-surface-raised">
-          <div className="absolute top-3 right-3 z-10 flex items-center gap-1" data-settings-actions>
+          <div
+            data-settings-actions
+            data-scrolled={scrolled ? "" : undefined}
+            className={cn(
+              "pointer-events-none absolute inset-x-0 top-0 z-10 flex h-14 items-start justify-end gap-1 px-3 pt-3 transition-colors",
+              scrolled && "border-b bg-surface-raised",
+            )}
+          >
             <Button
               variant="ghost"
               size="icon"
@@ -313,7 +327,7 @@ export function SettingsShell({
               title={mode === "full" ? "Exit full screen" : "Full screen"}
               aria-pressed={mode === "full"}
               onClick={onToggleMode}
-              className="rounded-lg text-text-tertiary hover:text-foreground"
+              className="pointer-events-auto rounded-lg text-text-tertiary hover:text-foreground"
             >
               {mode === "full" ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
             </Button>

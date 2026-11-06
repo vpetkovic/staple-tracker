@@ -56,7 +56,10 @@ export interface BrainOverview {
     awaitingReview: number;
     promoted: number;
     expired: number;
+    /** Genuinely stale: an agent or person wrote it and nobody re-verified it in 30 days, or it names a missing path. */
     stale: number;
+    /** Imported and not verified since: expected right after an import, not an alarm. */
+    importedUnverified: number;
     superseded: number;
   };
   helping: {
@@ -75,6 +78,8 @@ export interface BrainOverview {
   mostUsed: BrainStats["usage"]["mostUsed"];
   neverUsed: number;
   delta: WindowDelta;
+  /** One entry per day of the window, oldest first, zero days included. */
+  trend: Array<{ day: string; added: number; recalls: number; citations: number; injections: number }>;
   stats: BrainStats;
 }
 
@@ -122,6 +127,27 @@ function deltaFor(records: readonly BrainRecord[], usage: readonly UsageRow[], d
     remembers: now_.remembers,
     remembersBefore: prev.remembers,
   };
+}
+
+function trendFor(records: readonly BrainRecord[], usage: readonly UsageRow[], days: number, now: number): BrainOverview["trend"] {
+  const out = new Map<string, BrainOverview["trend"][number]>();
+  for (let i = days - 1; i >= 0; i--) {
+    const day = new Date(now - i * DAY).toISOString().slice(0, 10);
+    out.set(day, { day, added: 0, recalls: 0, citations: 0, injections: 0 });
+  }
+  for (const r of records) {
+    if (r.source?.startsWith("import:")) continue;
+    const slot = out.get(r.createdAt.slice(0, 10));
+    if (slot) slot.added++;
+  }
+  for (const row of usage) {
+    const slot = out.get(row.at.slice(0, 10));
+    if (!slot) continue;
+    if (row.event === "recall") slot.recalls++;
+    if (row.event === "cite") slot.citations += row.recordIds.length;
+    if ((row.event === "session_start" || row.event === "turn") && row.recordIds.length) slot.injections++;
+  }
+  return [...out.values()];
 }
 
 export function computeOverview(
@@ -196,8 +222,16 @@ export function computeOverview(
   else if (turnP95 !== null) add("latency", "ok", `Per-prompt retrieval p95 is ${Math.round(turnP95)} ms, inside its ${config.budgets.turnMs} ms budget.`);
   const awaitingReview = live.filter((r) => r.provisional).length;
   if (config.writePolicy === "review" && awaitingReview > 0) add("review", "warn", `${awaitingReview} agent-written memories are waiting for review.`);
-  const staleShare = live.length ? stats.health.stale.length / live.length : 0;
-  if (staleShare > 0.5) add("stale", "warn", `${stats.health.stale.length} of ${live.length} memories are stale (unverified for 30+ days, or naming a missing path). Verify or supersede them.`);
+  // An import carries its file's date, so a fresh import of old notes is "unverified" by
+  // construction. That is expected, and said as such; stale means a memory somebody
+  // wrote or verified here that has since aged, or one that names a path that is gone.
+  const staleIds = new Set(stats.health.stale.map((s) => s.id));
+  const missingPath = new Set(stats.health.stale.filter((s) => s.reason.startsWith("names a missing path")).map((s) => s.id));
+  const isImportUnverified = (r: BrainRecord) => Boolean(r.source?.startsWith("import:")) && (r.verifiedAt ?? "") <= r.createdAt;
+  const importedUnverified = live.filter((r) => isImportUnverified(r) && !missingPath.has(r.id)).length;
+  const stale = live.filter((r) => staleIds.has(r.id) && (missingPath.has(r.id) || !isImportUnverified(r))).length;
+  if (live.length && stale / live.length > 0.25) add("stale", "warn", `${stale} of ${live.length} memories are stale (unverified for 30+ days since someone wrote or checked them, or naming a missing path). Verify or supersede them under Records.`);
+  if (importedUnverified > 0) add("imported", "ok", `${importedUnverified} imported memories are not verified yet. That is expected after an import; each is verified as agents confirm it.`);
   if (!evalDetail?.all) add("eval", "warn", "Recall has not been measured: run `staple brain eval` with a question set.");
   else if (evalDetail.all.unscoped.r3 < 0.8) add("eval", "warn", `Recall puts the right memory in the top 3 for only ${Math.round(evalDetail.all.unscoped.r3 * 100)}% of eval questions.`);
   else add("eval", "ok", `Recall puts the right memory in the top 3 for ${Math.round(evalDetail.all.unscoped.r3 * 100)}% of eval questions.`);
@@ -221,7 +255,8 @@ export function computeOverview(
       awaitingReview: config.writePolicy === "review" ? awaitingReview : 0,
       promoted,
       expired,
-      stale: stats.health.stale.length,
+      stale,
+      importedUnverified,
       superseded: stats.health.superseded,
     },
     helping: {
@@ -245,6 +280,7 @@ export function computeOverview(
     mostUsed: stats.usage.mostUsed.slice(0, 5),
     neverUsed: stats.usage.neverUsed.length,
     delta: deltaFor(records, real, days, now),
+    trend: trendFor(records, real, days, now),
     stats,
   };
 }

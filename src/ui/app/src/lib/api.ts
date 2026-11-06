@@ -1293,6 +1293,7 @@ export interface BrainOverview {
     promoted: number;
     expired: number;
     stale: number;
+    importedUnverified: number;
     superseded: number;
   };
   helping: {
@@ -1323,6 +1324,7 @@ export interface BrainOverview {
     remembers: number;
     remembersBefore: number;
   };
+  trend: Array<{ day: string; added: number; recalls: number; citations: number; injections: number }>;
 }
 
 /** `GET /api/brain/overview` — is the brain healthy, and is it helping? */

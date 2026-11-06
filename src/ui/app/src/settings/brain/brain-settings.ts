@@ -52,6 +52,12 @@ export function changeText(now: number, before: number, days: number): string {
   return `${d > 0 ? "+" : "−"}${Math.abs(d).toLocaleString()} vs the ${days} days before`;
 }
 
+/** "+2 vs prior 7 days" — the trend row's compact form of `changeText`. */
+export function shortChange(now: number, before: number, days: number): string {
+  const d = now - before;
+  return d === 0 ? `same as prior ${days} days` : `${d > 0 ? "+" : "−"}${Math.abs(d).toLocaleString()} vs prior ${days} days`;
+}
+
 export const VERDICT_WORDS = {
   ok: { label: "Healthy", status: "on_track", headline: "The brain is healthy and your agents are using it." },
   warn: { label: "Needs attention", status: "tight", headline: "The brain is working, with something to look at." },

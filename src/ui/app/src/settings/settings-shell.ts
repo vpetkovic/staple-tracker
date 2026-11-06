@@ -191,6 +191,17 @@ export const WORKSPACE_CLOUD_CATEGORY: SettingCategoryView = {
   order: 40,
 };
 
+/**
+ * Sections that are dashboards rather than forms take the pane's whole width; every form keeps
+ * the 52rem column, where a label and its control stay one glance apart. The description line
+ * keeps its readable measure either way.
+ */
+const WIDE_CATEGORIES: ReadonlySet<string> = new Set(["brain"]);
+
+export function isWideCategory(id: string | null | undefined): boolean {
+  return id != null && WIDE_CATEGORIES.has(id);
+}
+
 export function isHubRegistryCategory(id: string | null | undefined): boolean {
   return id === HUB_REGISTRY_CATEGORY.id;
 }

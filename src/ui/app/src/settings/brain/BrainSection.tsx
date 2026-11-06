@@ -11,7 +11,7 @@
  * computer" in the same quiet tag the other sections use for their scope.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { CircleCheck, Loader2, OctagonAlert, TriangleAlert } from "lucide-react";
+import { Check, CircleCheck, Copy, Info, Loader2, OctagonAlert, TriangleAlert } from "lucide-react";
 import { PlainCard } from "@/components/plain/PlainCard";
 import { StatusPill } from "@/components/plain/StatusPill";
 import { LoadingState, ProblemState } from "@/components/plain/States";
@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AuthError,
   getBrainConfig,
@@ -33,10 +34,10 @@ import {
 } from "@/lib/api";
 import { DESK_QUERY, useMediaQuery } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
-import { ActionBar, Field, Section } from "../form/primitives";
+import { ActionBar, DestructiveConfirm, Field, Section } from "../form/primitives";
 import { actionBarState, type SaveStatus } from "../form/form-model";
 import { ContextTool, KINDS, RecallTool, RecordDialog, RecordsTool, errorText, scopeLabel, useLoad } from "./BrainTools";
-import { BRAIN_TABS, VERDICT_WORDS, changeText, ms, num, pct, type BrainTab } from "./brain-settings";
+import { BRAIN_TABS, VERDICT_WORDS, ms, num, pct, shortChange, type BrainTab } from "./brain-settings";
 
 /** The shell answers auth failures itself (the api module broadcasts them); a section only stops loading. */
 const ignoreAuth = (_error: AuthError) => undefined;
@@ -62,6 +63,39 @@ function Meter({ value, description }: { value: number; description: string }) {
     <div role="img" aria-label={description} className="h-3.5 overflow-hidden rounded-full border border-[var(--viz-track-edge)] bg-[var(--viz-track)]">
       <div className="h-full bg-[var(--viz-likely)]" style={{ width: `${width}%` }} />
     </div>
+  );
+}
+
+/** `…/claude/settings.json`: the last two parts of a path, the whole of it in a tooltip, and a copy button. */
+function PathLine({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false);
+  const short = `…/${path.split("/").filter(Boolean).slice(-2).join("/")}`;
+  return (
+    <span className="inline-flex max-w-full items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span tabIndex={0} className="truncate font-mono text-[11px] text-text-tertiary focus-ring">
+            {short}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-[32rem] font-mono text-[11px] break-all">
+          {path}
+        </TooltipContent>
+      </Tooltip>
+      <button
+        type="button"
+        aria-label="Copy the full path"
+        className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:text-foreground focus-ring"
+        onClick={() =>
+          void navigator.clipboard?.writeText(path).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+        }
+      >
+        {copied ? <Check aria-hidden className="size-3.5" /> : <Copy aria-hidden className="size-3.5" />}
+      </button>
+    </span>
   );
 }
 
@@ -160,116 +194,207 @@ function CheckIcon({ severity }: { severity: "ok" | "warn" | "critical" }) {
   return <Icon aria-hidden className="mt-0.5 size-4 shrink-0" style={{ color: `var(--plain-${tone}-fg)` }} />;
 }
 
+/** The one info affordance a card carries: an icon in its header, its explanation in a tooltip. */
+function InfoTip({ children, label }: { children: ReactNode; label: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" aria-label={label} className="inline-flex size-6 items-center justify-center rounded-md text-text-tertiary hover:text-foreground focus-ring">
+          <Info aria-hidden className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-72 text-left leading-relaxed">
+        {children}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** One day per bar, in the gauge's own tokens. A zero day is a hairline, so the shape of the window stays readable. */
+function DayBars({ values, label }: { values: number[]; label: string }) {
+  const max = Math.max(1, ...values);
+  const total = values.reduce((a, b) => a + b, 0);
+  return (
+    <svg role="img" aria-label={`${label}: ${total} over ${values.length} days`} viewBox={`0 0 ${values.length * 6} 28`} preserveAspectRatio="none" className="h-6 w-full">
+      {values.map((v, i) => {
+        const h = v === 0 ? 1 : Math.max(3, (v / max) * 28);
+        return <rect key={i} x={i * 6 + 0.5} y={28 - h} width={5} height={h} rx={1} fill={v === 0 ? "var(--viz-track-edge)" : "var(--viz-likely)"} />;
+      })}
+    </svg>
+  );
+}
+
+const CARD = "h-full";
+
 function OverviewTab({ onOpen }: { onOpen: (id: string) => void }) {
   const [days, setDays] = useState<7 | 30>(7);
   const [overview, reload] = useLoad(() => getBrainOverview(days), [days], ignoreAuth);
-  const desk = useMediaQuery(DESK_QUERY, true);
 
   if (overview.state === "loading") return <LoadingState rows={6} label="Reading the brain" />;
   if (overview.state === "error") return <ProblemState title="The brain could not be read" message={overview.message} action={<Button size="sm" variant="outline" onClick={reload}>Try again</Button>} />;
   const o = overview.value;
   const v = VERDICT_WORDS[o.verdict];
   const h = o.helping;
+  const d = o.delta;
+  const trend = [
+    { key: "added", label: "Memories added", values: o.trend.map((t) => t.added), now: d.recordsAdded, before: d.recordsAddedBefore },
+    { key: "recalls", label: "Recalls", values: o.trend.map((t) => t.recalls), now: o.trend.reduce((n, t) => n + t.recalls, 0), before: null },
+    { key: "citations", label: "Citations", values: o.trend.map((t) => t.citations), now: d.citations, before: d.citationsBefore },
+  ];
 
   return (
     <div data-brain-overview className="space-y-4">
-      <PlainCard
-        title="At a glance"
-        pill={<StatusPill status={v.status} label={v.label} />}
-        headline={v.headline}
-        help="The verdict is the worst of the checks below. Each check that is not green says what to do about it."
-        data-brain-verdict={o.verdict}
-      >
-        <ul className="space-y-1.5">
-          {o.checks.map((c) => (
-            <li key={c.id} className="flex items-start gap-2 text-[13px] leading-relaxed">
-              <CheckIcon severity={c.severity} />
-              <span className="min-w-0">{c.text}</span>
-            </li>
-          ))}
-        </ul>
-      </PlainCard>
-
-      <div className={cn("grid gap-4", desk ? "grid-cols-2" : "grid-cols-1")}>
+      <div className="grid gap-4 lg:grid-cols-3">
         <PlainCard
-          title="Always-loaded memory"
-          figure={pct(o.budget.utilization)}
-          headline={
-            o.budget.avgTokens === null
-              ? `No session has started with the brain yet. The block may use up to ${num(o.budget.tokens)} tokens.`
-              : `of the ${num(o.budget.tokens)}-token session-start budget: about ${num(o.budget.avgTokens)} tokens, ${num(o.budget.shown)} of the ${num(o.budget.eligible)} memories that apply.`
+          className={cn(CARD, "lg:col-span-2")}
+          title="At a glance"
+          pill={
+            <span className="flex items-center gap-1.5">
+              <StatusPill status={v.status} label={v.label} />
+              <InfoTip label="About the verdict">The verdict is the worst of these checks. Each one that is not green says what to do about it.</InfoTip>
+            </span>
           }
-          help="Every session starts with a short working brief and the memories that matter most for its project, ranked, cut at this budget. The rest stay one recall away."
-          data-brain-card="budget"
+          headline={v.headline}
+          data-brain-verdict={o.verdict}
         >
-          {o.budget.utilization !== null ? <Meter value={o.budget.utilization} description={`${pct(o.budget.utilization)} of the session-start budget used`} /> : null}
+          <ul className="space-y-1.5">
+            {o.checks.map((c) => (
+              <li key={c.id} className="flex items-start gap-2 text-[13px] leading-relaxed">
+                <CheckIcon severity={c.severity} />
+                <span className="min-w-0">{c.text}</span>
+              </li>
+            ))}
+          </ul>
         </PlainCard>
 
         <PlainCard
-          title="Is it helping"
-          figure={pct(h.citationRate)}
-          headline="of sessions cited a memory they were shown."
-          help="A citation is an agent naming a memory it relied on ([brain:name]). Prompts that found a memory are turns where per-prompt retrieval had something above its score floor that the session had not seen."
-          data-brain-card="helping"
+          className={CARD}
+          title="Trend"
+          pill={
+            <Tabs value={String(days)} onValueChange={(value) => setDays(value === "30" ? 30 : 7)}>
+              <TabsList className="h-7">
+                <TabsTrigger value="7" className="flex-none text-[12px]">
+                  7 days
+                </TabsTrigger>
+                <TabsTrigger value="30" className="flex-none text-[12px]">
+                  30 days
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          }
+          headline={`${num(d.sessions)} sessions used the brain in the last ${days} days.`}
+          data-brain-card="trend"
         >
-          <div>
-            <MetricRow label="Sessions that were given memories" value={`${num(h.sessionsWithMemories)} of ${num(h.sessions)}`} />
-            <MetricRow label="Prompts that found a memory" value={pct(h.turnHitRate)} />
-            <MetricRow label="Recalls that found something" value={pct(h.recallHitRate)} />
-            <MetricRow label="Citations" value={num(h.citations)} />
+          <div className="space-y-3">
+            {trend.map((line) => (
+              <div key={line.key} className="space-y-1">
+                <div className="flex items-baseline gap-2 text-[13px]">
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{line.label}</span>
+                  {line.before !== null ? <span className="shrink-0 whitespace-nowrap text-[12px] text-text-tertiary">{shortChange(line.now, line.before, days)}</span> : null}
+                  <span className="w-8 shrink-0 text-right tabular-nums text-foreground">{num(line.now)}</span>
+                </div>
+                <DayBars values={line.values} label={line.label} />
+              </div>
+            ))}
           </div>
         </PlainCard>
+      </div>
 
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <PlainCard
+          className={CARD}
+          title="Always-loaded memory"
+          pill={<InfoTip label="About always-loaded memory">Every session starts with a short working brief and the memories that matter most for its project, ranked and cut at this budget. The rest stay one recall away.</InfoTip>}
+          figure={pct(o.budget.utilization)}
+          headline={o.budget.avgTokens === null ? "No session has started with the brain yet." : `of the ${num(o.budget.tokens)}-token budget, ${num(o.budget.shown)} of ${num(o.budget.eligible)} memories.`}
+          data-brain-card="budget"
+        >
+          <div className="mt-auto">{o.budget.utilization !== null ? <Meter value={o.budget.utilization} description={`${pct(o.budget.utilization)} of the session-start budget used`} /> : null}</div>
+        </PlainCard>
+        <PlainCard
+          className={CARD}
+          title="Cited"
+          pill={<InfoTip label="About citations">A citation is an agent naming a memory it relied on, as [brain:name]. This is the share of sessions that did.</InfoTip>}
+          figure={pct(h.citationRate)}
+          headline={`of sessions cited a memory they were shown (${num(h.citations)} citations).`}
+          data-brain-card="cited"
+        />
+        <PlainCard
+          className={CARD}
           title="Recall quality"
+          pill={<InfoTip label="About recall quality">Questions written from the memories themselves; recall should rank the memory that answers each one first, or at least in the top three.</InfoTip>}
           figure={h.eval ? pct(h.eval.r3) : "—"}
-          headline={
-            h.eval
-              ? `of eval questions find the right memory in the top 3, ${pct(h.eval.r1)} first. ${num(h.eval.misses)} misses in ${num(h.eval.questions)} questions.`
-              : "Not measured yet. Run staple brain eval with a question set."
-          }
-          help="The eval asks questions a person wrote from the memories themselves and checks whether recall ranks the memory that answers each one first, or in the top three."
+          headline={h.eval ? `in the top 3, ${pct(h.eval.r1)} first. ${num(h.eval.misses)} misses in ${num(h.eval.questions)} questions.` : "Not measured yet: run staple brain eval."}
           data-brain-card="eval"
         />
-
         <PlainCard
-          title="Cost and speed"
+          className={CARD}
+          title="Cost per session"
+          pill={<InfoTip label="About cost">Token counts are estimates (characters divided by four). A prompt adds tokens only when it finds a memory the session has not seen.</InfoTip>}
           figure={h.tokensPerSessionStart === null ? "—" : `≈${num(h.tokensPerSessionStart)}`}
-          headline={`tokens per session start, plus about ${num(h.tokensPerTurn)} on a prompt that finds something. Token counts are estimates.`}
+          headline={`tokens at session start, ≈${num(h.tokensPerTurn)} more on a prompt that finds something.`}
           data-brain-card="cost"
-        >
+        />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <PlainCard className={CARD} title="Is it helping" headline={`${num(h.sessionsWithMemories)} of ${num(h.sessions)} sessions were given memories.`} data-brain-card="helping">
+          <div>
+            <MetricRow label="Prompts that found a memory" value={pct(h.turnHitRate)} />
+            <MetricRow label="Recalls that found something" value={pct(h.recallHitRate)} />
+            <MetricRow label="Sessions that cited a memory" value={pct(h.citationRate)} />
+            <MetricRow label="Memories never used" value={num(o.neverUsed)} />
+          </div>
+        </PlainCard>
+        <PlainCard className={CARD} title="Speed" headline="How long the brain makes an agent wait, median and slowest 5%." data-brain-card="speed">
           <div>
             <MetricRow label="Session start" value={ms(h.latency.start.p50)} hint={`p95 ${ms(h.latency.start.p95)}`} />
             <MetricRow label="Each prompt" value={ms(h.latency.turn.p50)} hint={`p95 ${ms(h.latency.turn.p95)}`} />
             <MetricRow label="Recall" value={ms(h.latency.recall.p50)} hint={`p95 ${ms(h.latency.recall.p95)}`} />
           </div>
         </PlainCard>
-
-        <PlainCard
-          title="What it holds"
-          figure={num(o.corpus.live)}
-          headline={`memories in use: ${num(o.corpus.global)} global, the rest across ${num(o.corpus.projects)} projects.`}
-          data-brain-card="corpus"
-        >
+        <PlainCard className={CARD} title="What it holds" headline={`${num(o.corpus.live)} memories in use: ${num(o.corpus.global)} global, the rest in ${num(o.corpus.projects)} projects.`} data-brain-card="corpus">
           <div>
             {KINDS.map((k) => (
               <MetricRow key={k} label={k} value={num(o.corpus.byKind[k])} />
             ))}
           </div>
         </PlainCard>
+      </div>
 
+      <div className="grid gap-4 lg:grid-cols-3">
         <PlainCard
-          title="Provisional to durable"
-          figure={num(o.corpus.provisional)}
-          headline={`provisional now. ${num(o.corpus.promoted)} promoted by verify, ${num(o.corpus.expired)} expired unreviewed.`}
-          help="Under the review policy, what agents write lands provisional until someone verifies it; a provisional memory past its expiry stops being used."
-          data-brain-card="flow"
+          className={CARD}
+          title="Freshness"
+          pill={<InfoTip label="About freshness">Imported memories carry their file's date and count as unverified until an agent or a person confirms them. That is expected after an import. Stale means a memory written or verified here that has aged past 30 days, or one naming a path that no longer exists.</InfoTip>}
+          headline={o.corpus.stale ? `${num(o.corpus.stale)} memories need a look.` : "Nothing written here has gone stale."}
+          data-brain-card="freshness"
         >
           <div>
-            <MetricRow label="Awaiting review" value={num(o.corpus.awaitingReview)} />
-            <MetricRow label="Stale (unverified 30+ days, or a missing path)" value={num(o.corpus.stale)} />
-            <MetricRow label="Superseded" value={num(o.corpus.superseded)} />
+            <MetricRow label="Imported, not yet verified" value={num(o.corpus.importedUnverified)} />
+            <MetricRow label="Stale" value={num(o.corpus.stale)} />
+            <MetricRow label="Provisional (awaiting review)" value={`${num(o.corpus.provisional)} (${num(o.corpus.awaitingReview)})`} />
+            <MetricRow label="Promoted by verify" value={num(o.corpus.promoted)} />
+            <MetricRow label="Superseded · expired" value={`${num(o.corpus.superseded)} · ${num(o.corpus.expired)}`} />
           </div>
+        </PlainCard>
+        <PlainCard className={cn(CARD, "lg:col-span-2")} title="Most used" headline="The memories agents were shown, recalled and cited most." data-brain-card="most-used">
+          {o.mostUsed.length === 0 ? (
+            <p className="text-[13px] text-muted-foreground">No memory has been used yet.</p>
+          ) : (
+            <div>
+              {o.mostUsed.map((m) => (
+                <div key={m.id} className={ROW}>
+                  <button type="button" className="min-w-0 truncate text-left text-foreground underline-offset-2 hover:underline focus-ring" onClick={() => onOpen(m.id)}>
+                    {m.name ?? m.id.slice(0, 8)}
+                  </button>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                    {m.uses} shown · {m.cites} cited
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </PlainCard>
       </div>
 
@@ -304,52 +429,6 @@ function OverviewTab({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
         )}
       </PlainCard>
-
-      <div className={cn("grid gap-4", desk ? "grid-cols-2" : "grid-cols-1")}>
-        <PlainCard
-          title={`Last ${days} days`}
-          pill={
-            <Tabs value={String(days)} onValueChange={(value) => setDays(value === "30" ? 30 : 7)}>
-              <TabsList className="h-7">
-                <TabsTrigger value="7" className="flex-none text-[12px]">
-                  7 days
-                </TabsTrigger>
-                <TabsTrigger value="30" className="flex-none text-[12px]">
-                  30 days
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          }
-          headline={`${num(o.delta.sessions)} sessions used the brain.`}
-          data-brain-card="delta"
-        >
-          <div>
-            <MetricRow label="Sessions" value={num(o.delta.sessions)} hint={changeText(o.delta.sessions, o.delta.sessionsBefore, o.delta.days)} />
-            <MetricRow label="Prompts with memories" value={num(o.delta.turnsInjected)} hint={changeText(o.delta.turnsInjected, o.delta.turnsInjectedBefore, o.delta.days)} />
-            <MetricRow label="Memories written by agents" value={num(o.delta.recordsAdded)} hint={changeText(o.delta.recordsAdded, o.delta.recordsAddedBefore, o.delta.days)} />
-            <MetricRow label="Citations" value={num(o.delta.citations)} hint={changeText(o.delta.citations, o.delta.citationsBefore, o.delta.days)} />
-          </div>
-        </PlainCard>
-
-        <PlainCard title="Most used" headline={`${num(o.neverUsed)} memories have never been shown, recalled or cited.`} data-brain-card="most-used">
-          {o.mostUsed.length === 0 ? (
-            <p className="text-[13px] text-muted-foreground">No memory has been used yet.</p>
-          ) : (
-            <div>
-              {o.mostUsed.map((m) => (
-                <div key={m.id} className={ROW}>
-                  <button type="button" className="min-w-0 truncate text-left text-foreground underline-offset-2 hover:underline focus-ring" onClick={() => onOpen(m.id)}>
-                    {m.name ?? m.id.slice(0, 8)}
-                  </button>
-                  <span className="shrink-0 tabular-nums text-muted-foreground">
-                    {m.uses} shown · {m.cites} cited
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </PlainCard>
-      </div>
     </div>
   );
 }
@@ -403,6 +482,7 @@ function ControlsTab() {
   const [error, setError] = useState<string | null>(null);
   const [hookBusy, setHookBusy] = useState<string | null>(null);
   const [hookError, setHookError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const served = view.state === "ok" ? view.value.synced : null;
   useEffect(() => {
     if (served && draft === null) setDraft(served);
@@ -448,7 +528,7 @@ function ControlsTab() {
   };
 
   return (
-    <div data-brain-controls className="space-y-8">
+    <div data-brain-controls className="max-w-[52rem] space-y-8">
       <Section title="On this computer" description="What is true of this computer only, and never syncs: the hooks that put the brain in front of each CLI, and the sync connection. This preview only writes an isolated config home." error={hookError}>
         <div className="space-y-4">
           {machine.hooks.map((h) => {
@@ -459,7 +539,7 @@ function ControlsTab() {
                 id={`brain-hooks-${h.agent}`}
                 label={`${h.label} hooks`}
                 tag={local}
-                description={h.file ? `In ${h.file}` : (h.refusal ?? "")}
+                description={h.file ? <PathLine path={h.file} /> : (h.refusal ?? "")}
               >
                 <div className="space-y-2">
                   <ul className="flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
@@ -471,8 +551,25 @@ function ControlsTab() {
                       </li>
                     ))}
                   </ul>
-                  {h.file ? (
-                    <Button size="sm" variant={installed ? "ghost" : "outline"} disabled={hookBusy !== null || (!installed && !machine.hookBundlePresent)} onClick={() => hook(h, installed ? "remove" : "install")}>
+                  {h.file && removing === h.agent ? (
+                    <DestructiveConfirm
+                      message={`Remove the brain's hooks from ${h.label}? Its next sessions start without the brain.`}
+                      confirmLabel="Remove hooks"
+                      disabled={hookBusy !== null}
+                      onConfirm={() => {
+                        setRemoving(null);
+                        hook(h, "remove");
+                      }}
+                      onCancel={() => setRemoving(null)}
+                    />
+                  ) : h.file ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-32"
+                      disabled={hookBusy !== null || (!installed && !machine.hookBundlePresent)}
+                      onClick={() => (installed ? setRemoving(h.agent) : hook(h, "install"))}
+                    >
                       {hookBusy === h.agent ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
                       {installed ? "Remove hooks" : "Install hooks"}
                     </Button>
@@ -574,6 +671,7 @@ function ControlsTab() {
       </Section>
 
       <ActionBar
+        sticky={false}
         state={actionBarState({ dirty, status, resettable: true })}
         error={status === "failed" ? error : null}
         onSave={save}
