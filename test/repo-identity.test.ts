@@ -574,12 +574,18 @@ describe("what identity does NOT do", () => {
      * looking for a `.git` marker — no subprocess, no socket, and asserted so in
      * that module's own test — and it decides only which COPY story a workspace
      * has, never whether it gets an identity at all.
+     *
+     * The members work added `./cloud/endpoint.js`, which validates the optional shared
+     * `endpoint` a manifest may carry. That module is parsing only (`new URL`, no lookup),
+     * and `test/network-silence.test.ts` asserts it resolves nothing even on a valid address.
+     * It is NOT `./cloud/client.js`, and identity must never import that.
      */
     const source = readFileSync(new URL("../src/core/repo-identity.ts", import.meta.url), "utf8");
     const imports = [...source.matchAll(/from "([^"]+)"/g)].map((m) => m[1]!);
     expect(imports.sort()).toEqual([
       "../config/home.js",
       "./checkout.js",
+      "./cloud/endpoint.js",
       "./host-id.js",
       "./types.js",
       "node:crypto",

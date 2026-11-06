@@ -50,6 +50,7 @@ import {
 } from "./client.js";
 import { readAutoSyncState, writeAutoSyncState } from "./auto-state.js";
 import { readConnection } from "./connection.js";
+import { refreshMembersCacheBestEffort } from "./members.js";
 import { credentialStoreFor } from "./credential-store.js";
 import { parseEndpoint, type CloudEndpoint } from "./endpoint.js";
 import { ReferentMissing, applyToDatabase, bumpEntityVersion, refreshedIssuePayload } from "./apply.js";
@@ -708,6 +709,15 @@ export async function syncRepository(
   carryIdentifierMovesToHub(db, options.home);
   // And the attempts it changed, to this machine's presence index — after commit, best effort.
   refreshPresence(db, options.home);
+  /**
+   * And the member list, which every read path that shows members uses (`members-cache.ts`).
+   * Only from a service that serves it, so a sync against an older Worker makes no extra
+   * request. Best effort: the sync above already succeeded, and a list that could not be
+   * fetched leaves the previous copy in place rather than failing it.
+   */
+  if (capabilities.members === true) {
+    await refreshMembersCacheBestEffort(options.home, session, options);
+  }
 
   const conflicts = countOpenConflicts(db);
   const quarantined = countQuarantined(db);

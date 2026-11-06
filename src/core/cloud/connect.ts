@@ -14,6 +14,7 @@ import { cloudCodeOf, cloudError, connectDevice, fetchCapabilities, purgeRemoteR
 import { CONNECTION_SCHEMA_VERSION, deleteConnection, readConnection, writeConnection, type CloudConnection } from "./connection.js";
 import { credentialStoreFor, selectCredentialStore, type SelectOptions } from "./credential-store.js";
 import { ensureDeviceId } from "./device.js";
+import { deleteMembersCache } from "./members-cache.js";
 import { parseEndpoint } from "./endpoint.js";
 import { StapleError } from "../types.js";
 import type { ConnectPreview } from "./preview.js";
@@ -199,6 +200,12 @@ export function performDisconnect(
    * the repository is still connected.
    */
   clearAutoSyncState(home, repositoryId);
+  /**
+   * And the member list. It describes a shared workspace this machine no longer takes
+   * part in, and readers treat a present cache as "this is a shared workspace", so a
+   * leftover one would keep `--mine` and the member chips going after disconnecting.
+   */
+  deleteMembersCache(home, repositoryId);
   return { wasConnected: true, credentialRemoved, recordRemoved };
 }
 

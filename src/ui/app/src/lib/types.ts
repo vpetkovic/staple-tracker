@@ -1656,7 +1656,7 @@ export interface ProjectFieldsInput {
  * when there has not been one.
  */
 export interface CloudSurfaceReport {
-  state: "disconnected" | "manual" | "automatic" | "offline" | "revoked" | "auth_failed";
+  state: "disconnected" | "manual" | "automatic" | "offline" | "revoked" | "removed" | "auth_failed";
   /** What this page may OFFER. offline/revoked/auth_failed are still connected. */
   mode: "disconnected" | "manual" | "automatic";
   detail: string;
@@ -1680,7 +1680,7 @@ export interface CloudSurfaceReport {
   leases: { held: number };
   warnings: string[];
   failure: {
-    code: "offline" | "revoked" | "auth_failed" | "no_identity";
+    code: "offline" | "revoked" | "removed" | "auth_failed" | "no_identity";
     summary: string;
     remedy: string;
   } | null;

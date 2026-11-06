@@ -921,6 +921,15 @@ Cloud (optional, off until you turn it on — see staple cloud --help)
   cloud auto on|off                     THIS device's consent to sync without being asked
   cloud devices [ls|revoke <id>]        devices registered to this repository; revoking is
               server-side and effective on that device's next request
+  cloud join [--endpoint <url>] [--yes] join a shared workspace: preview first, then a short
+              code a member approves. No secret travels over chat; auto sync stays OFF
+  cloud requests                        pending join requests
+  cloud approve <code> (--as <name> | --to <member>)
+              admit a new person (owner only) or add a device to a member
+  cloud deny <code>                     refuse a pending join request
+  cloud members [ls|rename <m> <name>|remove <m> --confirm <name>]
+              who is in the workspace; removing is owner only and revokes their devices
+  cloud share-endpoint [--yes]          publish the service address in .staple/repository.json
   cloud backup enable|disable           THIS device's consent to keep point-in-time copies
               on the service. A THIRD consent: neither connecting nor automatic sync
               turns it on. Disabling stops new backups and deletes none
