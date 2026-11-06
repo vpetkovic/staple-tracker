@@ -298,6 +298,29 @@ async function applyBatch(
     );
   }
 
+  /**
+   * [N+2..N+4] Members never bind on a hub. A repository whose vocabulary was unclaimed got
+   * an owner member at its first connect (devices.ts), as a workspace must; when this batch
+   * claims it as a HUB, that membership is dropped here, in the same transaction as the
+   * claim: the members, every device's member, and any join request. Each statement acts
+   * only when the repository now holds `hub`, so a claim `[1]` refused writes nothing.
+   *
+   * Only on a batch that may be the claiming one — the session saw the vocabulary unset —
+   * so every later push still costs exactly the N + 4 the limits advertise, and the first
+   * one costs three statements more, well inside the free plan's fifty. Appended last, so
+   * the per-operation results keep their positions.
+   */
+  if (session.vocabulary === null && vocabulary === "hub") {
+    const isHub = `(SELECT vocabulary FROM repos WHERE repo_id = ?1) = 'hub'`;
+    statements.push(
+      env.DB.prepare(`DELETE FROM join_requests WHERE repo_id = ?1 AND ${isHub}`).bind(session.repoId),
+      env.DB.prepare(
+        `UPDATE devices SET member_id = NULL WHERE repo_id = ?1 AND member_id IS NOT NULL AND ${isHub}`,
+      ).bind(session.repoId),
+      env.DB.prepare(`DELETE FROM members WHERE repo_id = ?1 AND ${isHub}`).bind(session.repoId),
+    );
+  }
+
   let batch: D1Result[];
   try {
     batch = await env.DB.batch(statements);

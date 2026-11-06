@@ -64,6 +64,12 @@ export interface MemberContext {
 /**
  * Whether members apply to the session's repository, and who the session's device is.
  *
+ * The member is found through the device row that holds THIS request's credential and is
+ * not revoked, in the same statement, never through the device id alone. A request that
+ * authenticated, and then saw its device revoked and the id collected into another member
+ * (the owner, say) before acting, would otherwise act with that member's powers on its old
+ * token. Matched by digest, like every credential here.
+ *
  * One query. Read fresh rather than carried on the session, for the same reason the
  * backup routes read the repository row fresh: a power check decides from the value it
  * read in the request that acts on it.
@@ -78,10 +84,11 @@ export async function memberContext(env: Env, session: Session): Promise<MemberC
             m.removed_at AS removed_at
        FROM repos r
        LEFT JOIN devices d ON d.repo_id = r.repo_id AND d.device_id = ?2
+                          AND d.token_sha256 = ?3 AND d.revoked_at IS NULL
        LEFT JOIN members m ON m.repo_id = d.repo_id AND m.member_id = d.member_id
       WHERE r.repo_id = ?1`,
   )
-    .bind(session.repoId, session.deviceId)
+    .bind(session.repoId, session.deviceId, bytes(session.digest))
     .first<{
       vocabulary: string | null;
       has_members: number;
@@ -289,6 +296,7 @@ export async function collectJoinRequest(
             jr.expires_at AS expires_at,
             jr.device_id  AS device_id,
             jr.member_id  AS member_id,
+            jr.approved_by_device AS approved_by_device,
             m.name        AS member_name,
             r.epoch       AS epoch
        FROM join_requests jr
@@ -302,6 +310,7 @@ export async function collectJoinRequest(
       expires_at: number;
       device_id: string;
       member_id: string | null;
+      approved_by_device: string | null;
       member_name: string | null;
       epoch: number;
     }>();
@@ -338,9 +347,18 @@ export async function collectJoinRequest(
                      member_id    = excluded.member_id
                -- Only a revoked device id is taken over. An active one is somebody's
                -- working credential, and approval was refused for it already; this is
-               -- the race-free half of that check.
-               WHERE devices.revoked_at IS NOT NULL`,
-    ).bind(repoId, requestId, bytes(tokenDigest), now),
+               -- the race-free half of that check. And it is taken over under approve's
+               -- rule, checked again here because another collect may have created the
+               -- row since the approval: by the member it belonged to, or for anyone an
+               -- OWNER approved it for. Otherwise a second approval for one unused id
+               -- would move the id, and its history, to a different member.
+               WHERE devices.revoked_at IS NOT NULL
+                 AND (devices.member_id IS excluded.member_id
+                      OR EXISTS (SELECT 1 FROM devices ad
+                                   JOIN members am ON am.repo_id = ad.repo_id AND am.member_id = ad.member_id
+                                  WHERE ad.repo_id = ?1 AND ad.device_id = ?5
+                                    AND am.is_owner = 1 AND am.removed_at IS NULL))`,
+    ).bind(repoId, requestId, bytes(tokenDigest), now, row.approved_by_device ?? ""),
     env.DB.prepare(
       `UPDATE join_requests SET status = 'collected'
         WHERE repo_id = ?1 AND request_id = ?2 AND status = 'approved'
@@ -359,7 +377,8 @@ export async function collectJoinRequest(
     throw new SyncError(
       "conflict",
       "this join request could not be completed: the device is already active in this " +
-        "workspace, or the member it was approved for was removed. Ask for a new approval.",
+        "workspace, belongs to another member, or the member it was approved for was removed. " +
+        "Ask for a new approval.",
     );
   }
 
@@ -513,12 +532,12 @@ export async function approveJoinRequest(
   if (isNew) {
     statements.push(
       env.DB.prepare(
-        `INSERT INTO members (repo_id, member_id, name, is_owner, created_at, removed_at)
-         SELECT ?1, ?2, ?3, 0, ?4, NULL
+        `INSERT INTO members (repo_id, member_id, name, name_key, is_owner, created_at, removed_at)
+         SELECT ?1, ?2, ?3, ?6, 0, ?4, NULL
           WHERE EXISTS (SELECT 1 FROM join_requests
                          WHERE repo_id = ?1 AND request_id = ?5 AND status = 'pending' AND expires_at > ?4)
-            AND NOT EXISTS (SELECT 1 FROM members WHERE repo_id = ?1 AND lower(name) = lower(?3))`,
-      ).bind(session.repoId, memberId, name, now, pending.request_id),
+            AND NOT EXISTS (SELECT 1 FROM members WHERE repo_id = ?1 AND name_key = ?6)`,
+      ).bind(session.repoId, memberId, name, now, pending.request_id, nameKey(name)),
     );
   }
   if (reinstate) {
@@ -661,12 +680,12 @@ export async function renameMember(
   await assertNameFree(env, session.repoId, name, memberId);
 
   const result = await env.DB.prepare(
-    `UPDATE members SET name = ?3
+    `UPDATE members SET name = ?3, name_key = ?4
       WHERE repo_id = ?1 AND member_id = ?2
         AND NOT EXISTS (SELECT 1 FROM members
-                         WHERE repo_id = ?1 AND member_id <> ?2 AND lower(name) = lower(?3))`,
+                         WHERE repo_id = ?1 AND member_id <> ?2 AND name_key = ?4)`,
   )
-    .bind(session.repoId, memberId, name)
+    .bind(session.repoId, memberId, name, nameKey(name))
     .run();
   if ((result.meta.changes ?? 0) !== 1) throw nameTaken();
 
@@ -789,31 +808,32 @@ async function findPending(
 }
 
 /**
- * Names are unique per repository case-insensitively, with a Unicode-aware fold: the
- * client matches names with `toLowerCase()`, and SQLite's `lower` folds ASCII only.
- * The unique index on `lower(name)` is the race-free floor under this check.
+ * The key a name is unique under: NFKC, then a Unicode-aware lower case. Stored beside the
+ * name as `members.name_key` on every write, and the column the unique index holds, so
+ * "Ćiro" and "ćIRO" (or a full-width "Ｃiro" and "ciro") are one name even when two
+ * requests race. SQLite's `lower` folds ASCII only, which is why this is not SQL.
  */
-async function assertNameFree(env: Env, repoId: string, name: string, exceptMemberId: string | null): Promise<void> {
-  const rows = await env.DB.prepare(`SELECT member_id, name FROM members WHERE repo_id = ?1`)
-    .bind(repoId)
-    .all<{ member_id: string; name: string }>();
-  const wanted = name.toLowerCase();
-  if (rows.results.some((r) => r.member_id !== exceptMemberId && r.name.toLowerCase() === wanted)) {
-    throw nameTaken();
-  }
+export function nameKey(name: string): string {
+  return name.normalize("NFKC").toLowerCase();
 }
 
-/** The member holding this name, under the same Unicode-aware fold, or null. */
+/** A friendly refusal before the write; the guarded write and the index are the guarantee. */
+async function assertNameFree(env: Env, repoId: string, name: string, exceptMemberId: string | null): Promise<void> {
+  const holder = await memberNamed(env, repoId, name);
+  if (holder !== null && holder.member_id !== exceptMemberId) throw nameTaken();
+}
+
+/** The member holding this name, by its `name_key`, removed or not; null when none. */
 async function memberNamed(
   env: Env,
   repoId: string,
   name: string,
 ): Promise<{ member_id: string; name: string; removed_at: number | null } | null> {
-  const rows = await env.DB.prepare(`SELECT member_id, name, removed_at FROM members WHERE repo_id = ?1`)
-    .bind(repoId)
-    .all<{ member_id: string; name: string; removed_at: number | null }>();
-  const wanted = name.toLowerCase();
-  return rows.results.find((r) => r.name.toLowerCase() === wanted) ?? null;
+  return await env.DB.prepare(
+    `SELECT member_id, name, removed_at FROM members WHERE repo_id = ?1 AND name_key = ?2`,
+  )
+    .bind(repoId, nameKey(name))
+    .first<{ member_id: string; name: string; removed_at: number | null }>();
 }
 
 function nameTaken(): SyncError {
