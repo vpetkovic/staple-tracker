@@ -54,7 +54,8 @@ import { applyFilterDimensions } from "@/lib/filter-dimensions";
 import { hiddenParents } from "@/lib/filters";
 import { placeUnderMilestones } from "./tree/milestone-placement";
 import { AutopilotTreeContext, autopilotAncestors, useRuns } from "@/lib/runs";
-import { useSession } from "@/lib/session";
+import { currentWorkspace, useSession } from "@/lib/session";
+import { JoinOfferCard } from "@/components/join/JoinOffer";
 import type { InboxRow, IssueStatus, QueueView } from "@/lib/types";
 import { useResource } from "@/lib/useStaple";
 import { buildPickupIndex, EMPTY_PICKUP_INDEX } from "./tree/pickup-model";
@@ -519,7 +520,20 @@ export function TreeView({ onAuthError }: { onAuthError: (error: AuthError) => v
       ) : null}
       <ViewState resource={session.issues} empty="no open issues">
         {(loaded) => {
-          if (loaded.length === 0) return <EmptyState>no issues yet</EmptyState>;
+          if (loaded.length === 0) {
+            /*
+             * STA-441: a fresh clone of a repository that already shares a tracker offers to
+             * join it. The card decides from local files whether to show; when it does not,
+             * this is the ordinary empty state.
+             */
+            const here = currentWorkspace(session);
+            return (
+              <div className="space-y-3 px-4 pt-4">
+                {here ? <JoinOfferCard ws={here.slug} onSynced={() => window.location.reload()} /> : null}
+                <EmptyState>no issues yet</EmptyState>
+              </div>
+            );
+          }
           /*
            * R4b (STA-187). The standard empty state, plus a sentence naming the dimensions
            * responsible — including the combinations that cannot match anything at all. See
