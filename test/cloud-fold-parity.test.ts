@@ -11,6 +11,7 @@ import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 const REPO = "f01d0000-0000-4000-8000-00000000fa11";
 const ENDPOINT = "https://sync.test.example";
 
+// One test drives a whole fold fixture end to end; it runs close to the default budget on CI.
 it("answers the fold's limits exactly as the Worker does", async () => {
   const server = new FakeSyncServer({ repositoryId: REPO, ...FOLD_PARITY_LIMITS });
   server.enroll("device-a", "stpl_parity");
@@ -63,4 +64,4 @@ it("answers the fold's limits exactly as the Worker does", async () => {
     },
   });
   expect(observed).toEqual(FOLD_PARITY_OBSERVED);
-});
+}, 60_000);
