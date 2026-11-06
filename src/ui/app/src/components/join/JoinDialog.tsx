@@ -16,14 +16,22 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { ApiError, cancelJoin, pollJoin, previewJoin, startJoin } from "@/lib/api";
-import type { CloudJoinPreview, CloudJoinStarted, ConsentTicket } from "@/lib/types";
+import type { CloudJoinPreview, CloudJoinPreviewResponse, CloudJoinStarted, ConsentTicket } from "@/lib/types";
 import { countdown, joinPollDelay, serviceName } from "@/settings/members-settings";
 
 export type JoinStage =
   | { stage: "loading" }
-  | { stage: "preview"; preview: CloudJoinPreview; consent: ConsentTicket; sending?: boolean }
+  | {
+      stage: "preview";
+      preview: CloudJoinPreview;
+      consent: ConsentTicket;
+      /** The device name as typed, starting from the preview's default label. */
+      label: string;
+      sending?: boolean;
+    }
   | { stage: "waiting"; started: CloudJoinStarted; transient?: boolean }
   | { stage: "joined"; name: string | null; endpoint: string }
   | { stage: "denied"; code: string }
@@ -33,6 +41,8 @@ export type JoinStage =
 
 export interface JoinDialogActions {
   onRequest: () => void;
+  /** The Device field changed. Local: nothing is sent, and no preview is asked for, per keystroke. */
+  onLabel: (label: string) => void;
   onCancel: () => void;
   onRetry: () => void;
   onClose: () => void;
@@ -77,7 +87,19 @@ export function JoinDialogView({
                 <span className="text-text-tertiary"> (from .staple/repository.json)</span>
               ) : null}
             </Fact>
-            <Fact term="Device">{preview.label}</Fact>
+            <Fact term="Device">
+              <Input
+                aria-label="Device name"
+                data-join-label
+                value={state.label}
+                maxLength={120}
+                onChange={(event) => actions.onLabel(event.target.value)}
+                className="h-control-sm"
+              />
+              <span className="mt-1 block text-[12px] text-text-tertiary">
+                Sent to the service and shown to the member who approves you.
+              </span>
+            </Fact>
             <Fact term="Credential">
               {preview.credentialMechanism === "keychain"
                 ? "macOS keychain"
@@ -97,7 +119,13 @@ export function JoinDialogView({
             <Button type="button" variant="outline" size="sm" onClick={actions.onClose}>
               Cancel
             </Button>
-            <Button type="button" size="sm" onClick={actions.onRequest} disabled={state.sending === true} data-join-request-button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={actions.onRequest}
+              disabled={state.sending === true || state.label.trim().length === 0}
+              data-join-request-button
+            >
               {state.sending ? "Sending…" : "Request to join"}
             </Button>
           </div>
@@ -231,6 +259,31 @@ export function joinTitle(state: JoinStage, slug: string): string {
   }
 }
 
+/**
+ * "Request to join", given what the preview stage holds.
+ *
+ * The label is part of what the person consents to, so it is inside the consent ticket's
+ * digest. When they changed it, the ticket on screen no longer describes the request. So the
+ * label goes back through `previewJoin` first, the same way `staple cloud join --label` builds
+ * its preview, and only that fresh ticket is sent. `previewJoin` is answered by this computer
+ * from local files and contacts no service, so nothing leaves the machine until `startJoin`.
+ */
+export async function requestJoin(
+  input: { slug: string; preview: CloudJoinPreview; consent: ConsentTicket; label: string },
+  api: {
+    previewJoin: (target: { slug: string; label?: string }) => Promise<CloudJoinPreviewResponse>;
+    startJoin: (target: { slug: string; consent: ConsentTicket }) => Promise<CloudJoinStarted>;
+  },
+): Promise<CloudJoinStarted> {
+  const label = input.label.trim();
+  let consent = input.consent;
+  if (label !== input.preview.label) {
+    const fresh = await api.previewJoin({ slug: input.slug, label });
+    consent = fresh.consent;
+  }
+  return api.startJoin({ slug: input.slug, consent });
+}
+
 /** A refusal to START, as the stage that explains it. */
 export function stageForStartFailure(error: unknown): JoinStage {
   if (error instanceof ApiError && error.code === "rate_limited" && error.detail?.["pendingCap"] !== undefined) {
@@ -258,7 +311,9 @@ export function JoinDialog({
   const preview = useCallback(() => {
     setState({ stage: "loading" });
     previewJoin({ slug }).then(
-      (answer) => live.current && setState({ stage: "preview", preview: answer.preview, consent: answer.consent }),
+      (answer) =>
+        live.current &&
+        setState({ stage: "preview", preview: answer.preview, consent: answer.consent, label: answer.preview.label }),
       (error: unknown) => live.current && setState({ stage: "error", message: error instanceof Error ? error.message : String(error) }),
     );
   }, [slug]);
@@ -334,7 +389,7 @@ export function JoinDialog({
     onRequest: () => {
       if (state.stage !== "preview") return;
       setState({ ...state, sending: true });
-      startJoin({ slug, consent: state.consent }).then(
+      requestJoin({ slug, preview: state.preview, consent: state.consent, label: state.label }, { previewJoin, startJoin }).then(
         (started) => {
           if (!live.current) return;
           joinId.current = started.joinId;
@@ -344,6 +399,7 @@ export function JoinDialog({
         (error: unknown) => live.current && setState(stageForStartFailure(error)),
       );
     },
+    onLabel: (label) => setState((current) => (current.stage === "preview" ? { ...current, label } : current)),
     onCancel: cancel,
     onRetry: preview,
     onClose: cancel,
