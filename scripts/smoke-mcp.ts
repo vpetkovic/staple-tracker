@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 30 &&
+    readOnly.length === 31 &&
       [
         "inbox",
         "list_tasks",
@@ -168,8 +168,10 @@ try {
         "show_progress",
         // MCP Apps: the queue view reads the effective queue in lanes.
         "show_queue",
+        // The brain: recall reads memories and writes nothing.
+        "recall",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 30 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 31 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   // A host decides from these hints whether to ask a person first, including for a tool a
   // view's button calls through it.
