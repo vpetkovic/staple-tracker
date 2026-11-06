@@ -684,10 +684,9 @@ export function App() {
     return (
       <div className="flex h-dvh items-start justify-center bg-sidebar p-6">
         {joining ? (
-          <ProblemState
-            title="Joining a shared workspace"
-            message="There is no workspace on this computer yet. Joining from the link creates one."
-          />
+          <p data-no-workspace-join className="max-w-md pt-10 text-center text-[13px] text-muted-foreground">
+            There is no workspace on this computer yet. Joining from the link creates one.
+          </p>
         ) : (
           <ProblemState title="staple could not start this page" message={bootstrap.error.message} />
         )}

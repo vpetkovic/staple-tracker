@@ -345,7 +345,7 @@ export function joinTitle(state: JoinStage, slug: string): string {
     case "error":
       return "Could not join";
     case "preview":
-      return invitationLine(state.preview) ?? `Join ${slug}`;
+      return `Join ${state.preview.link?.name ?? slug}`;
     default:
       return `Join ${slug}`;
   }

@@ -130,7 +130,9 @@ describe("joining from a link", () => {
     expect(html).toContain("On (this is a shared workspace)");
     expect(html).toContain("A workspace named &quot;ai-inbox-supabase&quot; is made on this computer, after you continue.");
     expect(html).toContain("Not end-to-end encrypted");
-    expect(joinTitle(STATE, "ai-inbox-supabase")).toBe("VP invited you to join ai-inbox-supabase");
+    expect(joinTitle(STATE, "ai-inbox-supabase")).toBe("Join ai-inbox-supabase");
+    // Said once, in the body, not repeated as the title.
+    expect(html.match(/VP invited you to join ai-inbox-supabase/g)).toHaveLength(1);
   });
 
   it("opening the joined workspace syncs it first, so the board is not empty, and opens it even if that fails", async () => {
