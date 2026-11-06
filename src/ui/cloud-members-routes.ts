@@ -56,7 +56,7 @@ import { StapleError } from "../core/types.js";
 import { listHubWorkspaces } from "../core/cloud/hub-scope.js";
 import { isSharedWorkspace } from "../core/cloud/members-cache.js";
 import { parseShareLink, type ShareLink } from "../core/cloud/share-link.js";
-import { autoSyncLocked, createShareOffer, resolveJoinTarget } from "./share-shim.js";
+import { autoSyncLocked, createShareOffer, resolveJoinTarget } from "../core/cloud/share.js";
 import { openWorkspace } from "../core/open.js";
 
 /** Every POST route in this file. The server pins each to POST and keeps it off the sync trigger. */
@@ -230,19 +230,15 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
    * store. The link names the service and the repository; nothing is created or sent here.
    */
   function linkPreview(link: ShareLink, label: string | undefined, credentialFile: boolean): JoinPreview {
-    return buildJoinPreview({
-      home: stapleHome(),
-      repositoryId: link.repositoryId,
-      endpoint: link.endpoint,
-      endpointSource: "flag",
-      label,
-      credential: { forceFile: credentialFile },
-    });
+    return buildJoinPreview({ home: stapleHome(), link, label, credential: { forceFile: credentialFile } });
   }
 
-  /** The link preview as the page reads it: who invited whom to what, and that sync will be on. */
-  function wireLinkPreview(preview: JoinPreview, link: ShareLink) {
-    return { ...wirePreview(preview), endpointSource: "link" as const, link, autoSync: "on (shared workspace)" as const };
+  /**
+   * The link preview as the page reads it. The preview itself carries who invited whom to
+   * what (`link`) and that sync will be on (`autoSync`).
+   */
+  function wireLinkPreview(preview: JoinPreview) {
+    return wirePreview(preview);
   }
 
   /** Handle the request when it is one of ours. Returns false for every other path. */
@@ -340,7 +336,7 @@ export function createMemberRoutes(ctx: MemberRouteContext) {
       const target = resolveJoinTarget({ home, cwd: process.cwd(), link, create: false });
       const preview = linkPreview(link, typeof body.label === "string" ? body.label : undefined, credentialFile);
       ctx.json(res, 200, {
-        preview: wireLinkPreview(preview, link),
+        preview: wireLinkPreview(preview),
         consent: ctx.consents.mint(preview, { credentialFile }),
         target: { name: target.name, created: target.created, fromCheckout: target.fromCheckout },
       });
