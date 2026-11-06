@@ -27,6 +27,16 @@ import {
   setBackupConsent,
 } from "./backups.js";
 import { connect, listDevices, revokeDevice } from "./devices.js";
+import {
+  approveJoinRequest,
+  collectJoinRequest,
+  createJoinRequest,
+  denyJoinRequest,
+  listJoinRequests,
+  listMembers,
+  removeMember,
+  renameMember,
+} from "./members.js";
 import { scheduledCatchUp } from "./catch-up.js";
 import type { Env } from "./env.js";
 import { SyncError, json } from "./errors.js";
@@ -116,6 +126,18 @@ async function handle(request: Request, env: Env, startedAt: number): Promise<Re
   if (tail.length === 1 && tail[0] === "connect" && request.method === "POST") {
     assertBodySize(request, planOf(env));
     return connect(request, env, repoId, protocol, startedAt);
+  }
+
+  // The joiner's two routes are pre-credential for the same reason: a joining device has
+  // no token yet. Creating a request presents nothing, and the poll that collects the
+  // token presents the request secret, looked up by digest inside the route. Listing
+  // requests (`GET /join-requests`) and acting on them are member routes, below.
+  if (tail.length === 1 && tail[0] === "join-requests" && request.method === "POST") {
+    assertBodySize(request, planOf(env));
+    return createJoinRequest(request, env, repoId, protocol, startedAt);
+  }
+  if (tail.length === 2 && tail[0] === "join-requests" && request.method === "GET") {
+    return collectJoinRequest(request, env, repoId, decodeURIComponent(tail[1]!), protocol, startedAt);
   }
 
   // Everything past here is authenticated, scoped and rate limited, in that order.
@@ -215,6 +237,29 @@ async function route(
     return revokeDevice(env, session, protocol, decodeURIComponent(tail[1]!));
   }
 
+  // Members and join requests. See members.ts for who may do what.
+  // /v1/repos/{repoId}/join-requests
+  if (tail.length === 1 && tail[0] === "join-requests" && method === "GET") {
+    return listJoinRequests(env, session);
+  }
+  // /v1/repos/{repoId}/join-requests/{code}/approve and /deny
+  if (tail.length === 3 && tail[0] === "join-requests" && method === "POST") {
+    const code = decodeURIComponent(tail[1]!);
+    if (tail[2] === "approve") return approveJoinRequest(request, env, session, protocol, code);
+    if (tail[2] === "deny") return denyJoinRequest(env, session, protocol, code);
+  }
+  // /v1/repos/{repoId}/members
+  if (tail.length === 1 && tail[0] === "members" && method === "GET") {
+    return listMembers(env, session);
+  }
+  // /v1/repos/{repoId}/members/{memberId}
+  if (tail.length === 2 && tail[0] === "members") {
+    const memberId = decodeURIComponent(tail[1]!);
+    if (method === "PATCH") return renameMember(request, env, session, protocol, memberId);
+    if (method === "DELETE") return removeMember(env, session, protocol, memberId);
+    throw new SyncError("validation", "method not allowed");
+  }
+
   throw new SyncError("not_found", "unknown route");
 }
 
@@ -250,7 +295,15 @@ function hasBody(request: Request): boolean {
 function routeShape(request: Request): string {
   try {
     const segments = new URL(request.url).pathname.split("/").filter(Boolean);
-    return `/${segments.map((s, i) => (i >= 2 && i !== 3 && s.length > 12 ? ":id" : s)).join("/")}`;
+    return `/${segments
+      .map((s, i) => {
+        // The segment after `join-requests` is a request id or a join code. A code is
+        // short enough to pass the length rule below, and it is not a credential, but it
+        // is also nothing a log line needs.
+        if (i === 4 && segments[3] === "join-requests") return ":id";
+        return i >= 2 && i !== 3 && s.length > 12 ? ":id" : s;
+      })
+      .join("/")}`;
   } catch {
     return "/";
   }

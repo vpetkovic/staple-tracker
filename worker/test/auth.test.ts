@@ -239,6 +239,10 @@ describe("POST /v1/repos/{repoId}/connect", () => {
   });
 
   it("returns a different token on every connect", async () => {
+    // A HUB repository: a workspace's first connect creates its owner member, and from
+    // then on it admits devices only through join requests (members.test.ts). A hub has
+    // no members, so repeated enrollment connects still rotate its credential as before.
+    await env.DB.prepare(`UPDATE repos SET vocabulary = 'hub' WHERE repo_id = ?1`).bind(REPO).run();
     const first = await jsonOf(
       await call(`/v1/repos/${REPO}/connect`, {
         method: "POST",

@@ -102,6 +102,7 @@ import {
   restoreStageEntities,
 } from "./limits.js";
 import { log, tokenFingerprint } from "./log.js";
+import { assertOwnerForRecovery } from "./members.js";
 import {
   type Vocabulary,
   mixedBackupRefusal,
@@ -533,6 +534,8 @@ export async function restoreBackup(
   backupId: string,
   startedAt: number,
 ): Promise<Response> {
+  // In a repository with members, every turn of a restore is the owner's.
+  await assertOwnerForRecovery(env, session, "restore");
   const repo = await readRepo(env, session.repoId);
   assertBackupConsent(repo);
 
@@ -1412,6 +1415,8 @@ export async function purgeRepository(
   protocol: number,
   startedAt: number,
 ): Promise<Response> {
+  // In a repository with members, purge is the owner's.
+  await assertOwnerForRecovery(env, session, "purge");
   const confirm = await readPurgeConfirmation(request, env);
   if (confirm === undefined) {
     throw new SyncError(
@@ -1440,6 +1445,8 @@ export async function purgeRepository(
     env.DB.prepare(`DELETE FROM fold_versions WHERE repo_id = ?1`).bind(session.repoId),
     env.DB.prepare(`DELETE FROM fold_marks WHERE repo_id = ?1`).bind(session.repoId),
     env.DB.prepare(`DELETE FROM repos WHERE repo_id = ?1`).bind(session.repoId),
+    env.DB.prepare(`DELETE FROM join_requests WHERE repo_id = ?1`).bind(session.repoId),
+    env.DB.prepare(`DELETE FROM members WHERE repo_id = ?1`).bind(session.repoId),
     env.DB.prepare(`DELETE FROM devices WHERE repo_id = ?1`).bind(session.repoId),
   ]);
 

@@ -225,6 +225,100 @@ describe("secret redaction in responses", () => {
   });
 });
 
+describe("secret redaction in the join flow", () => {
+  /**
+   * Join, approve and collect, end to end, with every console line captured. Two secrets
+   * are in play: the joiner's request secret (presented as a bearer on every poll) and
+   * the device token minted at collect. Neither may reach a log line or a D1 row, in
+   * whole or in part. The join code is not a credential, and it stays out of logs too.
+   */
+  const requestSecret = "jrs_this-is-the-joiners-request-secret-0123456789abcdef";
+
+  async function joinFlow(): Promise<{ minted: string; code: string; secretHex: string }> {
+    // The seeded repository's first enrollment connect makes device-a's member the owner.
+    await call(`/v1/repos/${REPO}/connect`, {
+      method: "POST",
+      token: `enroll_${REPO}`,
+      body: { deviceId: "owner-new" },
+      device: null,
+    });
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(requestSecret));
+    const secretHex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const created = await jsonOf(
+      await call(`/v1/repos/${REPO}/join-requests`, {
+        method: "POST",
+        body: { deviceId: "joiner", label: "laptop", requestSecretSha256: secretHex },
+        device: null,
+      }),
+    );
+    const pollIt = () =>
+      call(`/v1/repos/${REPO}/join-requests/${created.requestId}`, { token: requestSecret, device: null });
+    await pollIt();
+    await call(`/v1/repos/${REPO}/join-requests/${created.code}/approve`, {
+      method: "POST",
+      token,
+      body: { newMember: { name: "Ana" } },
+      device: null,
+    });
+    const minted = (await jsonOf(await pollIt())).token as string;
+    expect(minted).toMatch(/^stpl_/);
+    await pollIt();
+    // A wrong secret, and an approve with a code that matches nothing, both logged as errors.
+    await call(`/v1/repos/${REPO}/join-requests/${created.requestId}`, { token: "jrs_wrong_secret_value", device: null });
+    await call(`/v1/repos/${REPO}/join-requests/${created.code}/deny`, { method: "POST", token, body: {}, device: null });
+    return { minted, code: created.code as string, secretHex };
+  }
+
+  it("logs no request secret, no minted token and no join code", async () => {
+    const { minted, code } = await joinFlow();
+    const all = captured.join("\n");
+    expect(captured.length).toBeGreaterThan(0);
+    for (const secret of [requestSecret, minted, "jrs_wrong_secret_value"]) {
+      expect(all).not.toContain(secret);
+      expect(all).not.toContain(secret.slice(0, 16));
+      expect(all).not.toContain(secret.slice(5, 21));
+    }
+    expect(all).not.toMatch(/stpl_|jrs_/);
+    expect(all).not.toContain(code);
+    expect(all).not.toContain(code.replace("-", ""));
+    for (const line of captured) expect(() => JSON.parse(line)).not.toThrow();
+  });
+
+  it("stores no request secret and no token in any D1 row", async () => {
+    const { minted } = await joinFlow();
+    const tables = ["repos", "devices", "members", "join_requests"];
+    for (const table of tables) {
+      const rows = await env.DB.prepare(`SELECT * FROM ${table}`).all();
+      const text = JSON.stringify(rows.results, (_key, value) =>
+        // BLOBs come back as arrays of bytes; render them as text too, so a plaintext
+        // stored as a BLOB would still be caught.
+        value instanceof ArrayBuffer
+          ? new TextDecoder().decode(new Uint8Array(value))
+          : Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "number")
+            ? new TextDecoder().decode(new Uint8Array(value))
+            : value,
+      );
+      expect(text, table).not.toContain(requestSecret);
+      expect(text, table).not.toContain(minted);
+      expect(text, table).not.toContain(minted.slice(5, 21));
+      expect(text, table).not.toMatch(/stpl_|jrs_/);
+    }
+  });
+
+  it("never returns the request secret or its digest, and the token only once", async () => {
+    const { minted, secretHex } = await joinFlow();
+    const listed = await call(`/v1/repos/${REPO}/join-requests`, { token });
+    const members = await call(`/v1/repos/${REPO}/members`, { token });
+    const devices = await call(`/v1/repos/${REPO}/devices`, { token });
+    for (const response of [listed, members, devices]) {
+      const text = await response.text();
+      expect(text).not.toContain(requestSecret);
+      expect(text).not.toContain(secretHex);
+      expect(text).not.toContain(minted);
+    }
+  });
+});
+
 describe("the log allowlist has no bypass", () => {
   it("routes every console call through src/log.ts", async () => {
     // The static half of this guarantee is `npm run lint:logs`, which fails if any

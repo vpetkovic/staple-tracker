@@ -16,6 +16,7 @@
 
 import type { Env } from "./env.js";
 import { SyncError } from "./errors.js";
+import { removedMemberRefusal } from "./members.js";
 import { type Vocabulary, storedVocabulary } from "./vocabulary.js";
 
 export interface Session {
@@ -80,6 +81,7 @@ export async function authenticate(request: Request, env: Env): Promise<Session>
     `SELECT d.repo_id     AS repo_id,
             d.device_id   AS device_id,
             d.revoked_at  AS revoked_at,
+            d.member_id   AS member_id,
             r.epoch       AS epoch,
             r.last_seq    AS last_seq,
             r.vocabulary  AS vocabulary
@@ -92,6 +94,7 @@ export async function authenticate(request: Request, env: Env): Promise<Session>
       repo_id: string;
       device_id: string;
       revoked_at: number | null;
+      member_id: string | null;
       epoch: number;
       last_seq: number;
       vocabulary: string | null;
@@ -101,6 +104,12 @@ export async function authenticate(request: Request, env: Env): Promise<Session>
     throw new SyncError("auth", "invalid credential", {}, { "www-authenticate": "Bearer" });
   }
   if (row.revoked_at !== null) {
+    // A device revoked because its member was removed says so, and by whom. One more
+    // statement, on this branch only: the hot path never pays for it.
+    if (row.member_id !== null && row.vocabulary !== "hub") {
+      const removed = await removedMemberRefusal(env, row.repo_id, row.member_id);
+      if (removed) throw removed;
+    }
     throw new SyncError("revoked", "this device was revoked; re-connect required");
   }
 
