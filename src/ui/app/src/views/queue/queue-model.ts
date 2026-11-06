@@ -45,6 +45,8 @@ export const ELIGIBILITY_PRESENTATION: Readonly<Record<QueueEligibility, { glyph
   blocked: { glyph: "⊘", label: "Blocked" },
   gated: { glyph: "◇", label: "Gated" },
   resolved: { glyph: "✓", label: "Resolved" },
+  // Only on a pickup answer in a shared workspace; the plan listing never carries it.
+  assigned_to_other_member: { glyph: "@", label: "Another member's" },
 };
 
 /**

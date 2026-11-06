@@ -47,6 +47,8 @@ export interface TimelineEvent {
   actor: string | null;
   payload: Record<string, unknown>;
   createdAt: string;
+  /** The member whose device made it, in a shared workspace (server-stamped, never typed). */
+  member?: { memberId: string; name: string; removed: boolean };
 }
 
 export interface TimelineRevision {
@@ -92,6 +94,8 @@ export interface TimelineEntry {
   document?: { key: string; revision: number };
   /** Extra chips: blocker identifiers, document key + revision. */
   chips?: string[];
+  /** The member behind an event entry, when the workspace has a member list here. */
+  member?: { memberId: string; name: string; removed: boolean };
 }
 
 const asString = (value: unknown): string | null => (typeof value === "string" ? value : null);
@@ -247,11 +251,22 @@ export function buildTimeline(input: {
   // doc_updated is dropped from the thread but is the only place a revision's *actor*
   // is recorded, so keep it as a lookup for revisions whose author column is null.
   const revisionActors = new Map<string, string>();
+  // The same lookup gives a revision its member: revisions carry no origin device, the
+  // event that recorded them does.
+  const revisionMembers = new Map<string, NonNullable<TimelineEvent["member"]>>();
+  // And a comment its member, from the `comment_added` event that names it.
+  const commentMembers = new Map<string, NonNullable<TimelineEvent["member"]>>();
   for (const event of input.events) {
-    if (event.kind !== "doc_updated" || !event.actor) continue;
+    if (event.kind === "comment_added" && event.member) {
+      const commentId = asString(event.payload?.commentId);
+      if (commentId) commentMembers.set(commentId, event.member);
+    }
+    if (event.kind !== "doc_updated") continue;
     const key = asString(event.payload?.key);
     const revision = event.payload?.revision;
-    if (key && typeof revision === "number") revisionActors.set(`${key}@${revision}`, event.actor);
+    if (!key || typeof revision !== "number") continue;
+    if (event.actor) revisionActors.set(`${key}@${revision}`, event.actor);
+    if (event.member) revisionMembers.set(`${key}@${revision}`, event.member);
   }
 
   const entries: Array<TimelineEntry & { order: number; seq: number }> = [];
@@ -265,6 +280,7 @@ export function buildTimeline(input: {
       authorType: comment.authorType,
       summary: "commented",
       body: comment.body,
+      ...(commentMembers.has(comment.id) ? { member: commentMembers.get(comment.id)! } : {}),
       order: 2,
       seq: 0,
     });
@@ -278,6 +294,7 @@ export function buildTimeline(input: {
       at: event.createdAt,
       actor: event.actor,
       ...described,
+      ...(event.member ? { member: event.member } : {}),
       order: event.kind === "issue_created" ? 0 : 1,
       seq: event.seq,
     });
@@ -307,6 +324,7 @@ export function buildTimeline(input: {
       summary: isCheckpoint ? `checkpoint · ${written}` : written,
       chips: [`${revision.key} r${revision.revision}`],
       document: { key: revision.key, revision: revision.revision },
+      ...(revisionMembers.has(id) ? { member: revisionMembers.get(id)! } : {}),
       // Same slot as any revision: promotion changes how a row reads, not when it
       // happened, so a checkpoint and the status change beside it keep their order.
       order: 3,

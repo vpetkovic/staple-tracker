@@ -59,7 +59,8 @@ import {
   useIssueActions,
   type IssueActionsController,
 } from "./IssueActions";
-import { InlineKind, InlineLabels, InlinePriority, InlineProject, InlineTitle } from "./InlineProperties";
+import { InlineAssignee, InlineKind, InlineLabels, InlinePriority, InlineProject, InlineTitle } from "./InlineProperties";
+import { useMembersCache } from "@/lib/members";
 import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout } from "./PropertyGrid";
 import { PersonChip, RelativeTime } from "./parts";
 import { MilestoneCrumb, MilestoneDue, MilestoneSentence, MilestoneValue, OpenPlanAction, opensPlan, planOf } from "./MilestoneParts";
@@ -610,6 +611,9 @@ function StatusLine({
 
 // ─────────────────────────────────────────────────────────── properties
 
+/** lib/api broadcasts an auth failure on its own channel; the page handles it there. */
+const ignoreMembersAuthError = () => {};
+
 /**
  * The readable properties. Kind leads (what IS this), then priority, the people, where it is
  * filed, and when things happened. Kind, priority, project and labels are editable where they
@@ -633,6 +637,9 @@ function Properties({
   const { issue, workspace } = detail;
   const editor = { issue, workspace, refresh };
   const plan = planOf(detail);
+  // A shared workspace's members make the assignee a picker; without them it stays a fact.
+  const session = useSession();
+  const members = useMembersCache(workspace, session.version, ignoreMembersAuthError);
 
   return (
     <div className="flex flex-col gap-3">
@@ -646,7 +653,13 @@ function Properties({
               <InlinePriority {...editor} />
             </PropertyRow>
             <PropertyRow label="Assignee">
-              {issue.assignee ? <PersonChip name={issue.assignee} kind={issue.assignee === issue.checkoutAgent ? "agent" : "human"} /> : <EmptyValue>No one yet</EmptyValue>}
+              {members ? (
+                <InlineAssignee {...editor} members={members} />
+              ) : issue.assignee ? (
+                <PersonChip name={issue.assignee} kind={issue.assignee === issue.checkoutAgent ? "agent" : "human"} />
+              ) : (
+                <EmptyValue>No one yet</EmptyValue>
+              )}
             </PropertyRow>
           </>
         )}
@@ -721,11 +734,16 @@ function SummaryChips({
   // Chip editors report a refusal to the panel's one refusal slot instead of drawing it inside
   // the chip row, where it would break the row and fall out of view on a phone.
   const editor = { issue, workspace, refresh, variant: "chip" as const, report: controller.report };
+  const session = useSession();
+  const members = useMembersCache(workspace, session.version, ignoreMembersAuthError);
   return (
     <div className={cn("flex flex-wrap items-center gap-2", className)} data-summary-chips="">
       <StatusMenu detail={detail} controller={controller} onRequestApproval={onRequestApproval} className="h-9 px-3" />
       <InlinePriority {...editor} />
       <InlineKind {...editor} />
+      {members ? (
+        <InlineAssignee {...editor} members={members} />
+      ) : (
       <span className="inline-flex h-9 max-w-full min-w-0 items-center rounded-full border border-border bg-surface-raised px-3 text-label font-medium pointer-coarse:h-11" data-summary-assignee="">
         {issue.assignee ? (
           <PersonChip name={issue.assignee} kind={issue.assignee === issue.checkoutAgent ? "agent" : "human"} />
@@ -733,6 +751,7 @@ function SummaryChips({
           <span className="text-text-tertiary">No assignee</span>
         )}
       </span>
+      )}
     </div>
   );
 }
