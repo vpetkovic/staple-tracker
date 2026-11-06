@@ -395,7 +395,7 @@ describe("the join flow", () => {
     expect(waiting).toContain("K7QX-29MB");
     expect(waiting).toContain("expires in 9:12");
     expect(waiting).toContain("Cancel request");
-    expect(view({ stage: "joined", name: "marko", endpoint: "https://x.example" })).toContain("Automatic sync is off");
+    expect(view({ stage: "joined", name: "marko", endpoint: "https://x.example" })).toContain("Automatic sync is on");
     expect(view({ stage: "expired", code: "K7QX-29MB" })).toContain("No one approved K7QX-29MB within 10 minutes");
     expect(view({ stage: "expired", code: "K7QX-29MB" })).toContain("Get a new code");
     expect(view({ stage: "denied", code: "K7QX-29MB" })).toContain("Nothing was sent to this device");
