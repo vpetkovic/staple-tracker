@@ -23,11 +23,11 @@ describe("the rail's groups", () => {
     expect(new Set(views).size).toBe(views.length);
   });
 
-  it("opens with the Views group, in the order Tasks, Queue, Graph, Milestones, Estimates (the calibration view)", () => {
+  it("opens with the Views group, in the order Tasks, Queue, Graph, Milestones, Plan, Estimates (the calibration view)", () => {
     const first = NAV_GROUPS[0]!;
     expect(first.label).toBe("Views");
-    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Estimates"]);
-    expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "calibration"]);
+    expect(first.items.map((entry) => entry.label)).toEqual(["Tasks", "Queue", "Graph", "Milestones", "Plan", "Estimates"]);
+    expect(first.items.map((entry) => entry.view)).toEqual(["tree", "queue", "graph", "milestones", "plan", "calibration"]);
   });
 
   it("lists the machine's Usage in its own This computer group — Settings' name for it — after the workspace's views", () => {

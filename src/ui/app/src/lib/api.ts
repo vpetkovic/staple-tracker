@@ -14,6 +14,7 @@
  * WAVE 2: import from here. Adding an endpoint means adding a function here.
  */
 import { replaceUrl } from "./back-to-close";
+import type { IdeaDetailData, PlanData, PlanWriteResult } from "./plan-types";
 import type {
   ActionPayload,
   AgentContext,
@@ -1229,4 +1230,22 @@ export const startLinkJoin = (target: { link: string; consent: ConsentTicket }) 
     link: target.link,
     consent: target.consent.id,
     digest: target.consent.digest,
+  });
+
+// ---------- the plan layer (design/plan.md) ----------
+
+export const getPlan = (params: { ws?: string } = {}) => request<PlanData>(`/api/plan${qs(params)}`);
+
+export const getPlanIdea = (params: { ws?: string; ref: string }) => request<IdeaDetailData>(`/api/plan-idea${qs(params)}`);
+
+/**
+ * Every plan write: the route's verb and its fields. The page is the person, so the server
+ * records each write as the person's from the Plan view. Answers the whole plan, and the
+ * idea's detail when the write named one.
+ */
+export const planWrite = (verb: string, body: Record<string, unknown>) =>
+  request<PlanWriteResult>(`/api/plan/${verb}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ actor: "ui", ...body }),
   });

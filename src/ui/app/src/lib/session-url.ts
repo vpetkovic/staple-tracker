@@ -34,6 +34,7 @@ export const VIEW_SLUGS: Record<ViewName, string> = {
   queue: "queue",
   graph: "graph",
   milestones: "milestones",
+  plan: "plan",
   calibration: "estimate-accuracy",
   budget: "budget",
 };

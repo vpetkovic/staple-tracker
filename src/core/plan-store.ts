@@ -87,6 +87,8 @@ export interface IdeaView {
   actual: ActualWindow;
   late: boolean;
   childIds: string[];
+  /** Questions not yet resolved, from the `questions` document. */
+  openQuestions: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -509,6 +511,7 @@ export class PlanStore {
           today,
         }),
         childIds: childIds.get(row.id) ?? [],
+        openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };

@@ -1542,6 +1542,11 @@ export function startUiServer(options: UiOptions): UiHandle {
           url.pathname.startsWith("/api/gate/") ||
           url.pathname.startsWith("/api/milestone/") ||
           /**
+           * The plan writes. The reads are `/api/plan` and `/api/plan-idea`, which do not
+           * share this prefix, so the family admits no read.
+           */
+          url.pathname.startsWith("/api/plan/") ||
+          /**
            * The project writes. `/api/projects` (plural) is the read and does not
            * share this prefix, so the family test admits no read.
            */
@@ -4988,6 +4993,115 @@ export function startUiServer(options: UiOptions): UiHandle {
             return;
         }
         json(res, 200, runEntry(handle, runs.status(id)));
+        return;
+      }
+
+      /**
+       * The plan layer (design/plan.md). Two reads and a POST family. The page is the
+       * person: every write carries a person decision from the Plan view, which is what
+       * lets it set maturity, horizons, dates and the baseline that an agent may not.
+       * Each write answers the whole plan, and the idea's detail when it names one.
+       */
+      if (url.pathname === "/api/plan") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.plan().view());
+        return;
+      }
+
+      if (url.pathname === "/api/plan-idea") {
+        const handle = handleFor(url.searchParams.get("ws") ?? undefined);
+        json(res, 200, handle.store.plan().detail(url.searchParams.get("ref") ?? ""));
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/plan/")) {
+        const body = await readBody(req);
+        const handle = handleFor((body.ws as string) ?? undefined);
+        const plan = handle.store.plan();
+        const actor = bodyActor(body);
+        const person = { person: { via: "plan_view" } };
+        const ref = body.ref as string;
+        const optional = <T>(key: string): T | undefined => (key in body ? (body[key] as T) : undefined);
+        let idea: string | null = ref ?? null;
+        switch (url.pathname) {
+          case "/api/plan/enable":
+            plan.enable(actor);
+            break;
+          case "/api/plan/capture":
+            idea = plan.capture(
+              {
+                title: (body.title as string) ?? "",
+                parent: optional<string | null>("parent"),
+                brief: optional<string | null>("brief"),
+                maturity: optional<string>("maturity"),
+                horizon: optional<string | null>("horizon"),
+                plannedStart: optional<string | null>("plannedStart"),
+                plannedTarget: optional<string | null>("plannedTarget"),
+              },
+              actor,
+              person,
+            ).id;
+            break;
+          case "/api/plan/update":
+            plan.update(
+              ref,
+              {
+                title: optional<string>("title"),
+                brief: optional<string | null>("brief"),
+                maturity: optional<string>("maturity"),
+                horizon: optional<string | null>("horizon"),
+                parent: optional<string | null>("parent"),
+                plannedStart: optional<string | null>("plannedStart"),
+                plannedTarget: optional<string | null>("plannedTarget"),
+                before: optional<string | null>("before"),
+              },
+              actor,
+              person,
+            );
+            break;
+          case "/api/plan/question":
+            plan.addQuestion(ref, (body.text as string) ?? "", actor);
+            break;
+          case "/api/plan/resolve":
+            plan.resolveQuestion(ref, Number(body.position), actor, body.resolved !== false);
+            break;
+          case "/api/plan/decision":
+            plan.addDecision(ref, (body.text as string) ?? "", actor);
+            break;
+          case "/api/plan/start":
+            plan.start(ref, { title: optional<string>("title") }, actor, person);
+            break;
+          case "/api/plan/adopt":
+            plan.adopt(ref, (body.issue as string) ?? "", actor);
+            break;
+          case "/api/plan/unlink":
+            plan.unlink(ref, (body.issue as string) ?? "", actor);
+            break;
+          case "/api/plan/reset-baseline":
+            plan.resetBaseline(ref, actor, person);
+            break;
+          case "/api/plan/horizon-create":
+            plan.createHorizon({ name: (body.name as string) ?? "", date: optional<string | null>("date") }, actor, person);
+            idea = null;
+            break;
+          case "/api/plan/horizon-update":
+            plan.updateHorizon(
+              ref,
+              { name: optional<string>("name"), date: optional<string | null>("date"), before: optional<string | null>("before") },
+              actor,
+              person,
+            );
+            idea = null;
+            break;
+          case "/api/plan/horizon-remove":
+            plan.removeHorizon(ref, actor, person);
+            idea = null;
+            break;
+          default:
+            json(res, 404, { error: "not found" });
+            return;
+        }
+        json(res, 200, { plan: plan.view(), idea: idea ? plan.detail(idea) : null });
         return;
       }
 
