@@ -228,7 +228,7 @@ export function IdeaDetail({ plan, detail, write, onClose, onOpen }: { plan: Pla
                 Start as an epic
               </Button>
             </div>
-            <AddLine placeholder="Adopt an issue, e.g. EXE-135" onAdd={(issue) => write("adopt", { ref, issue })} testId="adopt" icon={<Link2 className="size-4" aria-hidden />} button="Adopt" />
+            <AddLine placeholder="Adopt an issue by its identifier" onAdd={(issue) => write("adopt", { ref, issue })} testId="adopt" icon={<Link2 className="size-4" aria-hidden />} button="Adopt" />
           </div>
         </Section>
       </div>
