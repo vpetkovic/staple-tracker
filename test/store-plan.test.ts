@@ -91,6 +91,20 @@ describe("guards: an idea never enters the tracker", () => {
     expect(ideaOnly.queue().effectiveQueue({ actor: "agent" }).rows).toHaveLength(0);
   });
 
+  it("is never emitted by the resolver even when another device's plan holds it", () => {
+    const ref = idea("Synced into the plan", { maturity: "shaped" });
+    const epic = store.createIssue({ title: "Epic", kind: "epic" });
+    const stray = idea("Stray under the epic");
+    // Shapes the local guards refuse but a sync could still deliver: an idea in the queue,
+    // and an idea under a queued container.
+    store.db.prepare("INSERT INTO queue_entries (issue_id, rank, added_by, added_at) VALUES (?, 1024, 'other', '2026-11-01T00:00:00.000Z')").run(store.getIssue(ref).id);
+    store.db.prepare("UPDATE issues SET parent_id = ?, depth = 1 WHERE identifier = ?").run(epic.id, stray);
+    store.queue().enqueue(epic.identifier, {}, "vp");
+    const rows = store.queue().effectiveQueue({ actor: "agent" }).rows.map((r) => r.identifier);
+    expect(rows).not.toContain(ref);
+    expect(rows).not.toContain(stray);
+  });
+
   it("is never counted in a non-idea parent's derived status", () => {
     const epic = store.createIssue({ title: "Epic", kind: "epic" });
     const task = store.createIssue({ title: "Only task", parent: epic.identifier });
@@ -227,6 +241,9 @@ describe("Start, Adopt and Unlink", () => {
     expect(plan.ideaView(waiting)).toMatchObject({ late: false, notStarted: true });
     const future = idea("Future", { plannedStart: "2026-12-01", plannedTarget: "2026-12-20" });
     expect(plan.ideaView(future)).toMatchObject({ late: false, notStarted: false });
+    const underway = idea("Underway", { plannedStart: "2026-10-01", plannedTarget: "2026-12-20" });
+    plan.adopt(underway, store.createIssue({ title: "its work" }).identifier, "agent");
+    expect(plan.ideaView(underway)).toMatchObject({ notStarted: false });
     expect(plan.view().horizons.find((h) => h.id === now.id)).toMatchObject({ lateCount: 1, notStartedCount: 1 });
   });
 });
@@ -235,9 +252,17 @@ describe("the baseline", () => {
   it("does not exist before the idea is started; moving the window just moves it", () => {
     const ref = idea("Rung", { plannedStart: "2026-11-01", plannedTarget: "2026-11-30" });
     plan.update(ref, { plannedTarget: "2026-12-15" }, "vp", PERSON);
+    plan.update(ref, { plannedTarget: "2026-12-31" }, "vp", PERSON);
     const view = plan.ideaView(ref);
     expect(view.baseline).toBeNull();
-    expect(view.planned).toEqual({ start: "2026-11-01", target: "2026-12-15" });
+    expect(view.planned).toEqual({ start: "2026-11-01", target: "2026-12-31" });
+    expect(store.db.prepare("SELECT plan_baseline_start, plan_baseline_target FROM issues WHERE identifier = ?").get(ref)).toEqual({
+      plan_baseline_start: null,
+      plan_baseline_target: null,
+    });
+    // So the baseline is the window it has when it starts, not one it had on the way.
+    plan.adopt(ref, store.createIssue({ title: "work" }).identifier, "agent");
+    expect(plan.ideaView(ref).baseline).toEqual({ start: "2026-11-01", target: "2026-12-31" });
   });
 
   it("keeps the first window it has once started, through any re-plan, until reset explicitly", () => {
