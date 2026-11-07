@@ -178,6 +178,9 @@ const GOAL_SCHEMA_OBJECTS = ["index:sqlite_autoindex_milestone_criterion_marks_1
 /** Everything migration 017 (derived status) adds besides its column: the triggers that hold it to the status. */
 const DERIVED_STATUS_SCHEMA_OBJECTS = ["trigger:issues_derived_status_cleared", "trigger:issues_derived_status_created"];
 
+/** Migration 020 (the plan layer): the link table, its primary key, and the partial index that says planning is on. */
+const PLAN_SCHEMA_OBJECTS = ["index:issues_plan_ranked_idx", "index:sqlite_autoindex_plan_links_1", "table:plan_links"];
+
 /** Everything migration 018 (attachments) adds: two tables, their primary keys, two indexes, and the blob trigger. */
 const ATTACHMENT_SCHEMA_OBJECTS = [
   "index:attachments_issue_idx",
@@ -469,6 +472,7 @@ describe("a v2 workspace — the last shape before estimates", () => {
           ...GOAL_SCHEMA_OBJECTS,
           ...DERIVED_STATUS_SCHEMA_OBJECTS,
           ...ATTACHMENT_SCHEMA_OBJECTS,
+          ...PLAN_SCHEMA_OBJECTS,
         ].sort(),
       );
     });
@@ -548,6 +552,7 @@ describe("a v2 workspace created by the SHIPPED pre-A4 fresh-create path", () =>
           ...GOAL_SCHEMA_OBJECTS,
           ...DERIVED_STATUS_SCHEMA_OBJECTS,
           ...ATTACHMENT_SCHEMA_OBJECTS,
+          ...PLAN_SCHEMA_OBJECTS,
         ].sort(),
       );
     });

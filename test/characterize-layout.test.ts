@@ -206,6 +206,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:issues_live_origin_uq",
       "index:issues_normalized_title_open_idx",
       "index:issues_parent_idx",
+      // 020-plan-fields: the partial index that says planning is on.
+      "index:issues_plan_ranked_idx",
       // 009-projects: the partial index over `issues.project_id`, indexed only
       // over the rows that carry a project.
       "index:issues_project_idx",
@@ -236,6 +238,8 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_milestone_members_1",
       "index:sqlite_autoindex_milestone_members_2",
       "index:sqlite_autoindex_milestone_meta_1",
+      // 020-plan-fields: one link per (idea, issue).
+      "index:sqlite_autoindex_plan_links_1",
       // 009-projects: the projects table's `id` primary key and its `UNIQUE (slug)`.
       "index:sqlite_autoindex_projects_1",
       "index:sqlite_autoindex_projects_2",
@@ -287,6 +291,7 @@ describe("a fresh repo-local `staple init`", () => {
       "table:milestone_criterion_marks",
       "table:milestone_members",
       "table:milestone_meta",
+      "table:plan_links",
       "table:projects",
       "table:queue_entries",
       "table:relations",

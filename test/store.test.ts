@@ -335,6 +335,8 @@ describe("schema migration against a live database", () => {
       const issue = legacy.createIssue({ title: "Existing work", assignee: "claude" });
       legacy.addComment(issue.id, "historic note", "vlad", "user");
       // Rewind to the v1 shape: the column and its index disappear, the rows stay.
+      // Migration 020's partial index reads issues.kind, which an earlier rewind below drops.
+      legacyDb.exec("DROP INDEX IF EXISTS issues_plan_ranked_idx");
       legacyDb.exec("DROP INDEX IF EXISTS comments_idempotency_uq");
       legacyDb.exec("ALTER TABLE comments DROP COLUMN idempotency_key");
       // STA-81 added migration 003. This rewind builds a synthetic v1 out of a
@@ -427,7 +429,6 @@ describe("schema migration against a live database", () => {
       // Migration 019's revision column (its `runs` columns went with the table above).
       legacyDb.exec("ALTER TABLE document_revisions DROP COLUMN instructions");
       // Migration 020 added the plan columns: off they come, as every later column does.
-      legacyDb.exec("DROP INDEX IF EXISTS issues_plan_ranked_idx");
       for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank"]) legacyDb.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
       legacyDb.exec("DROP TABLE IF EXISTS plan_links");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
