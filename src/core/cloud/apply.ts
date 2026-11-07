@@ -148,7 +148,33 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   updatedAt: col("updated_at"),
   // The status derivation last wrote, cleared by any other move (migration 017).
   derivedStatus: col("derived_status"),
+  // The plan layer, meaningful on ideas and horizons only (migration 020, design/plan.md).
+  planMaturity: col("plan_maturity"),
+  planHorizonId: col("plan_horizon_id"),
+  planStart: col("plan_start"),
+  planTarget: col("plan_target"),
+  planBaselineStart: col("plan_baseline_start"),
+  planBaselineTarget: col("plan_baseline_target"),
+  planRank: col("plan_rank"),
+  planLinks: col("plan_links", "json"),
 };
+
+/**
+ * The plan fields, left out of an issue's `create` while they are null. They are null on
+ * every issue that is not an idea or a horizon, so a task's create carries exactly the
+ * fields it carried before the plan layer existed, and an absent key on a create reads as
+ * null on the receiver, which is the value the column defaults to.
+ */
+export const PLAN_ISSUE_FIELDS: ReadonlySet<string> = new Set([
+  "planMaturity",
+  "planHorizonId",
+  "planStart",
+  "planTarget",
+  "planBaselineStart",
+  "planBaselineTarget",
+  "planRank",
+  "planLinks",
+]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {
   issueId: col("issue_id"),
@@ -282,6 +308,7 @@ export function payloadFromRow(
   const payload: Record<string, unknown> = {};
   for (const [key, mapped] of Object.entries(fields)) {
     if (!(mapped.column in row)) continue;
+    if (table === "issues" && PLAN_ISSUE_FIELDS.has(key) && row[mapped.column] === null) continue;
     payload[key] = decodeColumn(row[mapped.column], mapped.encoding);
   }
   return payload;

@@ -95,6 +95,8 @@ import {
   type KindWithAppearance,
 } from "./kind-appearance.js";
 import { MILESTONE_KIND, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
+import { IDEA_KIND, PLAN_KINDS, assertPlanParent, assertPlanRekind, isPlanKind, planKindRefusal } from "./plan.js";
+import { PlanStore } from "./plan-store.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
 import { QueueStore } from "./queue-store.js";
@@ -262,6 +264,8 @@ export interface IssueFilters {
    * assignees naming another member, from `otherMemberAssignees`). Unassigned issues stay.
    */
   excludeAssignees?: readonly string[];
+  /** List ideas and horizons too. Without it (and without a `kind` filter) they are left out. */
+  includePlan?: boolean;
 }
 
 /**
@@ -1942,6 +1946,17 @@ export class WorkspaceStore {
           );
         }
       }
+      /**
+       * The plan kinds go only when nothing uses them: `--migrate-to` would turn every idea
+       * into tracker work at once, which is the move `assertPlanRekind` refuses one at a time.
+       */
+      if (isPlanKind(id) && this.kindUsageCount(id) > 0) {
+        throw new StapleError(
+          "validation",
+          `Cannot remove the ${id} kind while ${this.kindUsageCount(id)} ${id === IDEA_KIND ? "idea" : "horizon"}${this.kindUsageCount(id) === 1 ? "" : "s"} still use it.`,
+          { kind: id },
+        );
+      }
       if (this.settings().kinds.length === 1) {
         throw new StapleError("validation", `"${id}" is the only kind left; a workspace needs at least one.`);
       }
@@ -2580,6 +2595,7 @@ export class WorkspaceStore {
           throw new StapleError("validation", `Tree depth cap (${MAX_TREE_DEPTH}) exceeded`);
         }
       }
+      assertPlanParent({ kind }, parent);
 
       // Duplicate guard: same normalized title among open siblings.
       const normalized = normalizeTitle(title);
@@ -3428,20 +3444,28 @@ export class WorkspaceStore {
   private derivationInputRows(
     ancestor: Pick<IssueRow, "id" | "kind">,
   ): Array<{ id: string; identifier: string; status: string; title: string }> {
+    /**
+     * Plans carry no derived status, and a plan-kind row is never an input to tracker work's:
+     * an idea or a horizon that reached a task's subtree (a sync from a device without the
+     * parent guard, say) must not move that task's status.
+     */
+    if (isPlanKind(ancestor.kind)) return [];
     const rows =
       ancestor.kind === MILESTONE_KIND
         ? this.db
             .prepare(
-              `SELECT id, identifier, status, title FROM issues
+              `SELECT id, identifier, status, title, kind FROM issues
                 WHERE parent_id = ?
                    OR id IN (SELECT issue_id FROM milestone_members WHERE milestone_id = ?)
                 ORDER BY created_at`,
             )
             .all(ancestor.id, ancestor.id)
         : this.db
-            .prepare("SELECT id, identifier, status, title FROM issues WHERE parent_id = ?")
+            .prepare("SELECT id, identifier, status, title, kind FROM issues WHERE parent_id = ?")
             .all(ancestor.id);
-    const typed = rows as Array<{ id: string; identifier: string; status: string; title: string }>;
+    const typed = (rows as Array<{ id: string; identifier: string; status: string; title: string; kind: string }>)
+      .filter((row) => !isPlanKind(row.kind))
+      .map(({ kind: _kind, ...row }) => row);
     if (ancestor.kind !== MILESTONE_KIND) return typed;
     /**
      * A milestone filed under an issue it also holds does not read that issue. The
@@ -4626,7 +4650,10 @@ export class WorkspaceStore {
       // kind carries no category and therefore no behaviour to violate. The one
       // documented exception (design/milestones.md): a milestone that still owns
       // members or dates cannot stop being one.
-      if (patch.kind !== undefined && patch.kind !== row.kind) assertRekindAllowed(this.db, row, patch.kind);
+      if (patch.kind !== undefined && patch.kind !== row.kind) {
+        assertPlanRekind(row, patch.kind);
+        assertRekindAllowed(this.db, row, patch.kind);
+      }
       if (patch.kind !== undefined) next.kind = patch.kind;
       if (patch.priority !== undefined) next.priority = patch.priority;
       if (patch.assignee !== undefined) next.assignee = patch.assignee;
@@ -6771,6 +6798,8 @@ export class WorkspaceStore {
     const stealIfIdleSeconds = assertIdleThreshold(opts.stealIfIdleSeconds, "stealIfIdleSeconds");
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      // Ideas and horizons are plans, never work an agent holds (design/plan.md, "Guards").
+      if (isPlanKind(row.kind)) throw planKindRefusal(row, "checked out");
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         // crash-recovery re-claim: the open attempt stays open, or a new one resumes an ended one
         this.attempts().reclaimed(row, agent, opts.attempt);
@@ -7707,6 +7736,10 @@ export class WorkspaceStore {
     if (filters.kind && filters.kind.length > 0) {
       where.push(`kind IN (${filters.kind.map(() => "?").join(",")})`);
       params.push(...filters.kind);
+    } else if (!filters.includePlan) {
+      // Ideas and horizons live in the Plan view; a task view lists them only when asked by kind.
+      where.push(`kind NOT IN (${[...PLAN_KINDS].map(() => "?").join(",")})`);
+      params.push(...PLAN_KINDS);
     }
     if (filters.assignee) {
       where.push("assignee = ?");
@@ -7981,7 +8014,9 @@ export class WorkspaceStore {
             : "SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at",
         )
         .all(...(parentId === null ? [] : [parentId])) as unknown as IssueRow[];
-      return rows.map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));
+      return rows
+        .filter((r) => !isPlanKind(r.kind) || (ref !== undefined && depth > 0))
+        .map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));
     };
     if (ref) {
       const row = this.requireRow(ref);
@@ -8020,6 +8055,15 @@ export class WorkspaceStore {
   /** The queue service over this store: the ordered plan and its revision. Built on first use. */
   queue(): QueueStore {
     return (this.queueStore ??= new QueueStore(this));
+  }
+
+  // ---------- the plan layer (design/plan.md) ----------
+
+  private planStore: PlanStore | null = null;
+
+  /** Ideas, horizons and the links from ideas to work. Built on first use. */
+  plan(): PlanStore {
+    return (this.planStore ??= new PlanStore(this));
   }
 
   // ---------- autopilot runs (migration 015) ----------

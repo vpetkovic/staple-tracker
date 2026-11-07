@@ -34,6 +34,7 @@ import type { Journal } from "./journal.js";
 import type { MemberLens } from "./cloud/member-lens.js";
 import { parseIdentifier } from "./ids.js";
 import { milestoneDateBounds, MILESTONE_KIND, nearestMilestone, rankBetween, renumberedRanks } from "./milestones.js";
+import { isPlanKind, planKindRefusal } from "./plan.js";
 import type { WorkspaceStore } from "./store.js";
 import { type BuiltinIssueKind, type ClaimActivity, type Issue, MAX_TREE_DEPTH, StapleError, nowIso } from "./types.js";
 
@@ -453,6 +454,8 @@ export class QueueStore {
     actor: string | null = null,
   ): QueuePlan & { replayed: boolean } {
     const issue = this.requireIssue(ref);
+    // Ideas and horizons are plans above the tracker; nothing queues them (design/plan.md).
+    if (isPlanKind(issue.kind)) throw planKindRefusal(issue, "queued");
     return this.journaled(() => {
       const current = this.entryOf(issue.id);
       if (current !== undefined && !hasPosition(options)) {
@@ -655,7 +658,8 @@ export class QueueStore {
     const rows = this.db
       .prepare("SELECT id, identifier, title, kind, status, parent_id, checkout_agent, assignee FROM issues")
       .all() as unknown as IssueNode[];
-    return new Map(rows.map((row) => [row.id, row]));
+    // The resolver never sees a plan: no idea or horizon is ever an effective row.
+    return new Map(rows.filter((row) => !isPlanKind(row.kind)).map((row) => [row.id, row]));
   }
 
   /**

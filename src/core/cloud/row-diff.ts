@@ -34,6 +34,7 @@ import {
   DERIVED_ISSUE_FIELDS,
   ISSUE_FIELDS,
   MILESTONE_FIELDS,
+  PLAN_ISSUE_FIELDS,
   PROJECT_FIELDS,
   decodeColumn,
   type Column,
@@ -54,13 +55,15 @@ export interface CapturedTable {
    * A write that does clear a date declares it in its own payload (`MilestoneStore.update`).
    */
   readonly insertNullsAreDefaults?: boolean;
+  /** The same rule for named fields only: the plan fields, null on every row but an idea or a horizon. */
+  readonly nullOmittedOnInsert?: ReadonlySet<string>;
 }
 
 const withoutDerived = (fields: Record<string, Column>): Record<string, Column> =>
   Object.fromEntries(Object.entries(fields).filter(([field]) => !DERIVED_ISSUE_FIELDS.has(field)));
 
 export const CAPTURED_TABLES: readonly CapturedTable[] = [
-  { table: "issues", entity: "issue", key: "id", fields: withoutDerived(ISSUE_FIELDS) },
+  { table: "issues", entity: "issue", key: "id", fields: withoutDerived(ISSUE_FIELDS), nullOmittedOnInsert: PLAN_ISSUE_FIELDS },
   { table: "comments", entity: "comment", key: "id", fields: COMMENT_FIELDS },
   { table: "projects", entity: "project", key: "id", fields: PROJECT_FIELDS },
   { table: "milestone_meta", entity: "milestone", key: "issue_id", fields: MILESTONE_FIELDS, insertNullsAreDefaults: true },
@@ -163,6 +166,7 @@ export function takeRowChanges(db: DatabaseSync): RowChange[] {
       const after = row[column.column];
       if (before !== null && (!(column.column in before) || sameValue(before[column.column], after))) continue;
       if (before === null && spec.insertNullsAreDefaults === true && (after === null || after === undefined)) continue;
+      if (before === null && spec.nullOmittedOnInsert?.has(field) === true && (after === null || after === undefined)) continue;
       fields[field] = decodeColumn(after, column.encoding);
     }
     if (Object.keys(fields).length === 0) continue;

@@ -53,6 +53,15 @@ const EXCLUDED: Record<string, string> = {
   gate_resolved_by: "as gate_state",
   gate_resolved_at: "as gate_state",
   gate_released: "0 at create; as gate_state",
+  plan_maturity:
+    "null on every issue but an idea or a horizon, and left out of a create while null; the plan layer's own writes journal it (test/cloud-plan-sync.test.ts)",
+  plan_horizon_id: "as plan_maturity",
+  plan_start: "as plan_maturity",
+  plan_target: "as plan_maturity",
+  plan_baseline_start: "as plan_maturity",
+  plan_baseline_target: "as plan_maturity",
+  plan_rank: "as plan_maturity",
+  plan_links: "as plan_maturity",
 };
 
 function armed(): WorkspaceStore {

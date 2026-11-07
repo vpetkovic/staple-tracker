@@ -44,6 +44,7 @@ import {
   rankBetween,
   renumberedRanks,
 } from "./milestones.js";
+import { isPlanKind, planKindRefusal } from "./plan.js";
 import {
   CRITERION_VERDICTS,
   type CriterionMark,
@@ -1205,6 +1206,7 @@ export class MilestoneStore {
           ? null
           : { id: current.milestone_id, identifier: this.store.getIssue(current.milestone_id).identifier };
       assertMembershipAllowed(milestone, member, currentMilestone);
+      if (isPlanKind(member.kind)) throw planKindRefusal(member, "added to a milestone");
       if (current !== undefined && !hasPosition(options)) {
         return { ...this.view(milestone.id), replayed: true };
       }
