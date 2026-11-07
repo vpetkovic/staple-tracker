@@ -29,7 +29,7 @@ import { readWorkspaceManifest } from "./core/repo-identity.js";
 import { SurfaceAutoSync } from "./core/cloud/auto-triggers.js";
 import { VIEWS, RESOURCE_MIME_TYPE, linkToolView, readViewHtml, viewToolMeta, viewUri } from "./mcp-views.js";
 import { ticketCard, ticketCardText, type TicketCard } from "./mcp-ticket-card.js";
-import { DECISION_VIEW_IDS, approvalComment, personFor, sendBackComment } from "./mcp-view-actions.js";
+import { DECISION_VIEW_IDS, approvalComment, configuredHumanName, personFor, sendBackComment } from "./mcp-view-actions.js";
 import { queueLanes, queueText, type QueueLanes } from "./mcp-queue.js";
 import { progressText, ticketProgress, type TicketProgress } from "./mcp-progress.js";
 import {
@@ -3126,6 +3126,179 @@ server.registerTool(
   },
   ({ milestone, order, base_revision, actor, ws }) =>
     run(() => storeFor(ws).milestones().reorderMembers(milestone, order, { baseRevision: base_revision }, requireActor(actor))),
+);
+
+/**
+ * The plan layer (design/plan.md): ideas and horizons above the tracker. An agent captures
+ * raw ideas, edits titles and briefs, adds and resolves questions, adds decisions, adopts and
+ * unlinks work, and starts an idea the person has marked shaped. Maturity, horizons, dates and
+ * the baseline are the person's: these tools carry no person, so the store refuses those
+ * fields with `validation` saying so. The one person path here is the app-only baseline reset.
+ */
+const ideaRefSchema = refSchema.describe("An idea: its identifier or id");
+const planDateSchema = z.string().nullable().optional().describe("A UTC calendar day, YYYY-MM-DD; null clears it");
+
+server.registerTool(
+  "list_ideas",
+  {
+    description:
+      "The plan: every horizon in order (name, date, idea count, late and not-started counts) and every open idea with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates and the late / notStarted flags. Ideas are issues of the reserved `idea` kind and never appear in list_tasks, the queue or next_task. Filter with maturity or horizon (an identifier or name). A workspace without planning answers enabled: false.",
+    inputSchema: {
+      maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
+      horizon: z.string().optional().describe("A horizon's identifier or name"),
+      ws: wsSchema,
+    },
+    annotations: { title: "List ideas", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ maturity, horizon, ws }) =>
+    run(() => {
+      const view = storeFor(ws).plan().view();
+      const on = horizon === undefined ? undefined : view.horizons.find((h) => h.identifier === horizon.toUpperCase() || h.id === horizon || h.name.toLowerCase() === horizon.toLowerCase());
+      return {
+        ...view,
+        ideas: view.ideas.filter((idea) => (maturity === undefined || idea.maturity === maturity) && (horizon === undefined || idea.horizonId === (on?.id ?? null))),
+      };
+    }),
+);
+
+server.registerTool(
+  "get_idea",
+  {
+    description: "One idea: its view (stage, windows, flags), parent, sub-ideas, horizon, brief, open questions, decisions, and each linked issue with its progress and the milestone (and live run) holding it.",
+    inputSchema: { ref: ideaRefSchema, ws: wsSchema },
+    annotations: { title: "Get idea", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ref, ws }) => run(() => storeFor(ws).plan().detail(ref)),
+);
+
+server.registerTool(
+  "list_horizons",
+  {
+    description: "The horizons in order: name, optional date (a dated horizon is a release line), idea count, and the late and not-started counts. Horizons are defined by the person.",
+    inputSchema: { ws: wsSchema },
+    annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  },
+  ({ ws }) => run(() => storeFor(ws).plan().view().horizons),
+);
+
+server.registerTool(
+  "capture_idea",
+  {
+    description:
+      "Capture a raw idea: a title, optionally a brief and a parent idea. It stays out of the task list and the queue. Maturity, horizon and dates are the person's to set in the Plan view; this tool always captures raw.",
+    inputSchema: {
+      title: z.string(),
+      brief: z.string().optional().describe("What it is, who it is for, what done looks like"),
+      parent: refSchema.optional().describe("The idea this one is part of"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    annotations: { title: "Capture idea", ...milestoneWriteAnnotations },
+  },
+  ({ title, brief, parent, actor, ws }) =>
+    run(() => {
+      const plan = storeFor(ws).plan();
+      return plan.detail(plan.capture({ title, brief: brief ?? null, parent: parent ?? null }, requireActor(actor)).id);
+    }),
+);
+
+server.registerTool(
+  "update_idea",
+  {
+    description:
+      "Edit an idea as an agent may: title, brief, add_question, resolve_question (1-based; reopen with resolved: false), add_decision. maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. Answers the idea's detail.",
+    inputSchema: {
+      ref: ideaRefSchema,
+      title: z.string().optional(),
+      brief: z.string().optional(),
+      add_question: z.string().optional(),
+      resolve_question: z.number().int().min(1).optional(),
+      resolved: z.boolean().optional().describe("With resolve_question: false reopens it"),
+      add_decision: z.string().optional(),
+      maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
+      horizon: z.string().nullable().optional(),
+      parent: z.string().nullable().optional(),
+      planned_start: planDateSchema,
+      planned_target: planDateSchema,
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    annotations: { title: "Update idea", ...milestoneWriteAnnotations },
+  },
+  (input) =>
+    run(() => {
+      const plan = storeFor(input.ws).plan();
+      const actor = requireActor(input.actor);
+      const fields = { title: input.title, brief: input.brief, maturity: input.maturity, horizon: input.horizon, parent: input.parent, plannedStart: input.planned_start, plannedTarget: input.planned_target };
+      if (Object.values(fields).some((value) => value !== undefined)) plan.update(input.ref, fields, actor);
+      if (input.add_question !== undefined) plan.addQuestion(input.ref, input.add_question, actor);
+      if (input.resolve_question !== undefined) plan.resolveQuestion(input.ref, input.resolve_question, actor, input.resolved !== false);
+      if (input.add_decision !== undefined) plan.addDecision(input.ref, input.add_decision, actor);
+      return plan.detail(input.ref);
+    }),
+);
+
+server.registerTool(
+  "start_idea",
+  {
+    description:
+      "Link an idea to work, the only way into the tracker. With adopt: link that existing issue (an epic or a ticket). Without: create an epic from the idea (title defaults to the idea's), store its brief as the epic's `plan` document, and link it; an agent may start only an idea the person has marked shaped. Once linked, the idea reads started and its progress and actual dates come from the work.",
+    inputSchema: {
+      ref: ideaRefSchema,
+      adopt: refSchema.optional().describe("An existing issue to link instead of creating an epic"),
+      title: z.string().optional().describe("The new epic's title"),
+      actor: actorSchema,
+      ws: wsSchema,
+    },
+    annotations: { title: "Start idea", ...milestoneWriteAnnotations },
+  },
+  ({ ref, adopt, title, actor, ws }) =>
+    run(() => {
+      const plan = storeFor(ws).plan();
+      const who = requireActor(actor);
+      if (adopt !== undefined) {
+        plan.adopt(ref, adopt, who);
+        return { idea: plan.detail(ref), epic: null };
+      }
+      const started = plan.start(ref, { title }, who);
+      return { idea: plan.detail(ref), epic: started.epic };
+    }),
+);
+
+server.registerTool(
+  "unlink_idea",
+  {
+    description: "Remove one linked issue from an idea. The issue itself is untouched.",
+    inputSchema: { ref: ideaRefSchema, issue: refSchema, actor: actorSchema, ws: wsSchema },
+    annotations: { title: "Unlink idea", ...milestoneWriteAnnotations },
+  },
+  ({ ref, issue, actor, ws }) =>
+    run(() => {
+      const plan = storeFor(ws).plan();
+      plan.unlink(ref, issue, requireActor(actor));
+      return plan.detail(ref);
+    }),
+);
+
+server.registerTool(
+  "reset_idea_baseline",
+  {
+    description:
+      "App-only: the Reset baseline button in a Staple view. The idea's current planned window becomes its baseline, recorded under the person on this machine (config humanName). Hosts hide it from the model; an agent cannot reset a baseline.",
+    inputSchema: { ref: ideaRefSchema, ws: wsSchema },
+    annotations: { title: "Reset idea baseline (from a view)", ...milestoneWriteAnnotations },
+    _meta: appOnly,
+  },
+  ({ ref, ws }) =>
+    run(() => {
+      const name = configuredHumanName();
+      if (name === null) {
+        throw new StapleError("validation", 'Resetting a baseline is recorded as the person\'s, so it needs their name: run `staple config set humanName "Your Name"`.');
+      }
+      const plan = storeFor(ws).plan();
+      plan.resetBaseline(ref, name, { person: { via: "mcp_view" } });
+      return plan.detail(ref);
+    }),
 );
 
 /**

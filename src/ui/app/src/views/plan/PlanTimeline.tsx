@@ -65,7 +65,8 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
     const element = frame.current;
     if (!element || element.clientWidth === 0 || centred.current === zoom) return;
     centred.current = zoom;
-    if (width > frameWidth) element.scrollLeft = Math.max(0, x(today) - (frameWidth - nameWidth) / 3);
+    const visible = element.clientWidth;
+    if (width > visible - nameWidth) element.scrollLeft = Math.max(0, x(today) - (visible - nameWidth) / 3);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom, frameWidth, width]);
 
@@ -104,7 +105,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
   return (
     <div className="flex h-full min-h-0 flex-col" data-plan-timeline>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-gutter pt-2">
-        <p className="min-w-0 flex-1 text-caption text-text-tertiary">
+        <p className="hidden min-w-0 flex-1 text-caption text-text-tertiary md:block">
           Drag a planned bar to move it, its ends to change the dates. Actual dates come from the linked work.
         </p>
         <div className="flex items-center gap-1" role="group" aria-label="Zoom">

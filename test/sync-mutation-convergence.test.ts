@@ -44,6 +44,7 @@ const SOURCES = {
   MilestoneStore: "src/core/milestone-store.ts",
   QueueStore: "src/core/queue-store.ts",
   ProjectStore: "src/core/project-store.ts",
+  PlanStore: "src/core/plan-store.ts",
 } as const;
 type StoreName = keyof typeof SOURCES;
 
@@ -74,7 +75,7 @@ const READS: Record<StoreName, readonly string[]> = {
     "blockingChildrenOf", "gate", "gateFor", "gateDecision", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
     "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "latestComments", "listCommentsPage",
     "getDocument", "listDocuments", "listDocumentRevisions", "instructions", "listIssues", "listIssuesPage", "inbox", "context", "tree",
-    "edges", "milestones", "queue", "projects", "writeTarget",
+    "edges", "milestones", "queue", "projects", "plan", "writeTarget",
     // The attempt ledger the mutators write through; its own writes are the store's methods below.
     "attempts",
     // The attempt read surfaces: pure reads, which write no stored orphan end either.
@@ -99,6 +100,8 @@ const READS: Record<StoreName, readonly string[]> = {
   // `scopeMembership`: which issues a scope holds, the same resolution a scoped `effectiveQueue` reads.
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
+  // The plan layer's reads: derived on every call, nothing stored.
+  PlanStore: ["today", "enabled", "view", "ideaView", "detail"],
 };
 
 interface World {
@@ -347,6 +350,53 @@ const SCENARIOS: readonly Scenario[] = [
     },
   },
   { method: "WorkspaceStore.restoreDocumentRevision", name: "restore a revision", run: (w) => void w.a.store.restoreDocumentRevision(w.ids["Everything"]!, "spec", 1, "carol") },
+
+  // ---- the plan layer: every write is issue fields, documents or a new issue
+  { method: "PlanStore.enable", name: "turn planning on", run: (w) => void w.a.store.plan().enable("alice") },
+  {
+    method: "PlanStore.capture",
+    name: "capture a scheduled, dated idea",
+    run: (w) => {
+      const plan = w.a.store.plan();
+      const now = plan.view().horizons[0]!.id;
+      w.ids["Idea"] = plan.capture({ title: "Idea", maturity: "shaped", horizon: now, plannedStart: "2026-10-01", plannedTarget: "2026-12-01", brief: "why" }, "alice", { person: { via: "test" } }).id;
+      w.ids["Child idea"] = plan.capture({ title: "Child idea", parent: w.ids["Idea"] }, "alice").id;
+    },
+  },
+  {
+    method: "PlanStore.update",
+    name: "re-plan, re-file and re-order an idea",
+    run: (w) =>
+      void w.a.store.plan().update(w.ids["Child idea"]!, { maturity: "exploring", plannedTarget: "2026-11-20", parent: null, before: w.ids["Idea"]!, brief: "more" }, "alice", { person: { via: "test" } }),
+  },
+  { method: "PlanStore.addQuestion", name: "ask on an idea", run: (w) => void w.a.store.plan().addQuestion(w.ids["Idea"]!, "Which units?", "alice") },
+  { method: "PlanStore.resolveQuestion", name: "resolve a question", run: (w) => void w.a.store.plan().resolveQuestion(w.ids["Idea"]!, 1, "alice") },
+  { method: "PlanStore.addDecision", name: "record a decision", run: (w) => void w.a.store.plan().addDecision(w.ids["Idea"]!, "Metric only", "alice") },
+  { method: "PlanStore.start", name: "start an idea as an epic", run: (w) => void w.a.store.plan().start(w.ids["Idea"]!, {}, "alice") },
+  {
+    method: "PlanStore.adopt",
+    name: "adopt existing work",
+    prep: (w) => void issue(w, "Adoptable"),
+    run: (w) => void w.a.store.plan().adopt(w.ids["Child idea"]!, w.ids["Adoptable"]!, "alice"),
+  },
+  { method: "PlanStore.unlink", name: "unlink work", run: (w) => void w.a.store.plan().unlink(w.ids["Child idea"]!, w.ids["Adoptable"]!, "alice") },
+  {
+    method: "PlanStore.resetBaseline",
+    name: "re-plan a started idea and reset its baseline",
+    run: (w) => {
+      const plan = w.a.store.plan();
+      plan.update(w.ids["Idea"]!, { plannedTarget: "2027-01-15" }, "alice", { person: { via: "test" } });
+      plan.resetBaseline(w.ids["Idea"]!, "alice", { person: { via: "test" } });
+    },
+  },
+  { method: "PlanStore.createHorizon", name: "add a dated horizon", run: (w) => void (w.ids["Q2"] = w.a.store.plan().createHorizon({ name: "Q2", date: "2027-06-30" }, "alice", { person: { via: "test" } }).id) },
+  { method: "PlanStore.updateHorizon", name: "rename, re-date and move a horizon", run: (w) => void w.a.store.plan().updateHorizon(w.ids["Q2"]!, { name: "Q2 launch", date: "2027-06-15", before: null }, "alice", { person: { via: "test" } }) },
+  {
+    method: "PlanStore.removeHorizon",
+    name: "remove a horizon its ideas sat on",
+    prep: (w) => void w.a.store.plan().update(w.ids["Idea"]!, { horizon: w.ids["Q2"]! }, "alice", { person: { via: "test" } }),
+    run: (w) => void w.a.store.plan().removeHorizon(w.ids["Q2"]!, "alice", { person: { via: "test" } }),
+  },
 
   // ---- milestones
   {

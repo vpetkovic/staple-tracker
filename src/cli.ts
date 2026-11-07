@@ -17,6 +17,7 @@ import { runDoctorCommand } from "./commands/doctor.js";
 import { runAddCommand } from "./commands/add.js";
 import { runDiscoverCommand } from "./commands/discover.js";
 import { runMilestoneCommand } from "./commands/milestone.js";
+import { runHorizonCommand, runIdeaCommand, runPlanCommand } from "./commands/plan.js";
 import { assertNotReservedActor } from "./core/milestones.js";
 import { renderInstructions } from "./core/instructions.js";
 import { runQueueCommand } from "./commands/queue.js";
@@ -1101,6 +1102,36 @@ Milestones
               --base N is the members revision "show" printed; a stale base is
               refused (exit 7) and the order stands. Membership never changes an
               issue's parent, blockers, status or claim
+
+The plan (ideas and horizons above the tracker)
+  plan enable                           turn planning on: adds the "idea" and "horizon"
+              kinds and the horizons Now, Next and Later
+  plan show                             the horizons in order with their late and
+              not-started counts
+  idea ls [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
+              never queued, checked out, picked by next or listed by ls
+  idea new <title> [--brief T] [--parent REF]
+              capture a raw idea (an agent captures raw ideas only)
+  idea show <ref>                       stage, windows, brief, questions, decisions, links
+  idea set <ref> [--title T] [--brief T]
+              the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
+              --horizon H|none, --parent REF|none, --start D|none, --target D|none and
+              --before REF|end
+  idea start <ref> [--title T]          create an epic with the brief as its plan document
+              and link it; an agent starts only an idea the person marked shaped
+  idea adopt <ref> <issue>              link existing work to the idea
+  idea unlink <ref> <issue>
+  idea ask <ref> <question>             add an open question
+  idea resolve <ref> <n> [--reopen]     resolve question n (1-based)
+  idea decide <ref> <decision>          record a decision
+  idea reset-baseline <ref> --person    the current planned window becomes the baseline
+  horizon ls
+  horizon new <name> [--date D] --person
+  horizon set <ref> [--name N] [--date D|none] --person
+  horizon mv <ref> (--before H|--end) --person
+  horizon rm <ref> --person             cancels the horizon; its ideas become unscheduled
+              --person records a steering write as the person's, under the machine's
+              configured humanName; maturity, horizons, dates and the baseline need it
 
 The pickup queue
   queue [--all] [--effective]           the PLAN (what a human ordered), with each
@@ -2755,6 +2786,20 @@ function main() {
 
     case "milestone": {
       runMilestoneCommand(rest);
+      break;
+    }
+
+    /** The plan layer: ideas and horizons above the tracker (src/commands/plan.ts). */
+    case "plan": {
+      runPlanCommand(rest);
+      break;
+    }
+    case "idea": {
+      runIdeaCommand(rest);
+      break;
+    }
+    case "horizon": {
+      runHorizonCommand(rest);
       break;
     }
 

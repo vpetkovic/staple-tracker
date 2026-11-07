@@ -794,6 +794,26 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/milestone/reorder",
       "/api/milestone/update",
       "/api/milestones",
+      /**
+       * The plan layer (design/plan.md): two reads that do not share the write family's prefix,
+       * and the POST family `/api/plan/*`, the page writing as the person. Pinned in
+       * test/plan-surfaces.test.ts against the CLI and MCP projections of the same plan.
+       */
+      "/api/plan",
+      "/api/plan-idea",
+      "/api/plan/adopt",
+      "/api/plan/capture",
+      "/api/plan/decision",
+      "/api/plan/enable",
+      "/api/plan/horizon-create",
+      "/api/plan/horizon-remove",
+      "/api/plan/horizon-update",
+      "/api/plan/question",
+      "/api/plan/reset-baseline",
+      "/api/plan/resolve",
+      "/api/plan/start",
+      "/api/plan/unlink",
+      "/api/plan/update",
       "/api/poll",
       // Migration 009: one read (plural, GET-only) and four writes under the
       // singular prefix, the milestone family's shape.

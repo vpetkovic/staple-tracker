@@ -130,7 +130,7 @@ describe("a server started with no workspace in reach", () => {
     await client?.close();
   });
 
-  it("still connects and still lists all 71 tools", async () => {
+  it("still connects and still lists all 83 tools", async () => {
     const { tools } = await client.listTools();
     // The inventory does not shrink when there is nowhere to write: a harness
     // configured before the user ever ran `init` sees the full tool set.
@@ -152,7 +152,9 @@ describe("a server started with no workspace in reach", () => {
     // about view's show_about (70), the ticket card's show_ticket (71), the
     // progress view's show_progress (72), the queue view's show_queue (73), and the
     // app-only approve_gate_from_view and request_changes_from_view the views' buttons call (75).
-    expect(tools).toHaveLength(75);
+    // The plan layer then added list_ideas, get_idea, list_horizons, capture_idea, update_idea,
+    // start_idea, unlink_idea and the app-only reset_idea_baseline (83).
+    expect(tools).toHaveLength(83);
   });
 
   it("pins the not_found guidance a read tool returns instead of an empty result", async () => {
