@@ -217,13 +217,17 @@ describe("Start, Adopt and Unlink", () => {
     expect(plan.adopt(ref, task, "agent").links).toHaveLength(1);
   });
 
-  it("flags lateness against the planned target and the horizon's date", () => {
+  it("calls linked work past its line late, and an unlinked idea past its planned start not started", () => {
     const now = plan.createHorizon({ name: "MVP", date: "2026-11-01" }, "vp", PERSON);
-    const ref = idea("Late one", { maturity: "shaped", horizon: now.id });
-    expect(plan.ideaView(ref).late).toBe(true);
-    expect(plan.view().horizons.find((h) => h.id === now.id)!.late).toBe(true);
-    const fine = idea("On time", { plannedStart: "2026-11-01", plannedTarget: "2026-12-01" });
-    expect(plan.ideaView(fine).late).toBe(false);
+    const late = idea("Late one", { maturity: "shaped", horizon: now.id });
+    expect(plan.ideaView(late).late).toBe(false);
+    plan.adopt(late, store.createIssue({ title: "open work" }).identifier, "agent");
+    expect(plan.ideaView(late).late).toBe(true);
+    const waiting = idea("Waiting", { horizon: now.id, plannedStart: "2026-10-01", plannedTarget: "2026-12-01" });
+    expect(plan.ideaView(waiting)).toMatchObject({ late: false, notStarted: true });
+    const future = idea("Future", { plannedStart: "2026-12-01", plannedTarget: "2026-12-20" });
+    expect(plan.ideaView(future)).toMatchObject({ late: false, notStarted: false });
+    expect(plan.view().horizons.find((h) => h.id === now.id)).toMatchObject({ lateCount: 1, notStartedCount: 1 });
   });
 });
 

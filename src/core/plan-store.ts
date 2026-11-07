@@ -28,6 +28,7 @@ import {
   deriveStage,
   forecastEnd,
   isLate,
+  isNotStarted,
   isPlanKind,
   parseMaturity,
   parsePlanDate,
@@ -55,7 +56,10 @@ export interface HorizonView {
   date: string | null;
   rank: number;
   ideaCount: number;
+  /** Ideas on it whose linked work is past its line. */
   lateCount: number;
+  /** Ideas on it with nothing linked whose planned start has passed. */
+  notStartedCount: number;
   late: boolean;
 }
 
@@ -85,7 +89,10 @@ export interface IdeaView {
   /** Done leaves over counted leaves of the linked work, 0..1; null with nothing linked. */
   progress: number | null;
   actual: ActualWindow;
+  /** Linked work landed, or is forecast to land, past the planned end or the horizon line. */
   late: boolean;
+  /** Nothing linked yet and the planned start has passed. */
+  notStarted: boolean;
   childIds: string[];
   /** Questions not yet resolved, from the `questions` document. */
   openQuestions: number;
@@ -376,6 +383,7 @@ export class PlanStore {
       rank: row.plan_rank ?? 0,
       ideaCount: on.length,
       lateCount,
+      notStartedCount: on.filter((idea) => idea.notStarted).length,
       late: lateCount > 0,
     };
   }
@@ -507,9 +515,11 @@ export class PlanStore {
           plannedTarget: row.plan_target,
           horizonDate: horizonId === null ? null : (horizonDates.get(horizonId) ?? null),
           actual,
+          links: links.length,
           open: stage !== "shipped" && stage !== "dropped",
           today,
         }),
+        notStarted: isNotStarted({ plannedStart: row.plan_start, links: links.length, dropped: maturity === "dropped", today }),
         childIds: childIds.get(row.id) ?? [],
         openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
         createdAt: row.created_at,

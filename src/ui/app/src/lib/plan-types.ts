@@ -25,6 +25,7 @@ export interface HorizonData {
   rank: number;
   ideaCount: number;
   lateCount: number;
+  notStartedCount: number;
   late: boolean;
 }
 
@@ -46,6 +47,7 @@ export interface IdeaData {
   progress: number | null;
   actual: ActualWindow;
   late: boolean;
+  notStarted: boolean;
   childIds: string[];
   openQuestions: number;
   createdAt: string;

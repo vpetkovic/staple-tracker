@@ -117,23 +117,32 @@ export function forecastEnd(input: { start: string | null; end: string | null; p
 }
 
 /**
- * Late when the work landed, or is forecast to land, after the earlier of the planned target
- * and the horizon's date; or when that day has passed and the idea is still open.
+ * Late is about linked work only: it landed, or is forecast to land, after the earlier of the
+ * planned target and the horizon's date, or that day has passed while it is still open. An
+ * idea with nothing linked is never late; see {@link isNotStarted}.
  */
 export function isLate(input: {
   plannedTarget: string | null;
   horizonDate: string | null;
   actual: ActualWindow;
+  /** Linked issues, own and rolled up. */
+  links: number;
   /** Not shipped and not dropped. */
   open: boolean;
   today: string;
 }): boolean {
+  if (input.links === 0) return false;
   const lines = [input.plannedTarget, input.horizonDate].filter((day): day is string => day !== null);
   if (lines.length === 0) return false;
   const line = lines.reduce((a, b) => (a < b ? a : b));
   const landing = input.actual.end ?? input.actual.forecastEnd;
   if (landing !== null && landing > line) return true;
   return input.open && input.today > line;
+}
+
+/** Not started: nothing is linked yet, and the planned start has passed. */
+export function isNotStarted(input: { plannedStart: string | null; links: number; dropped: boolean; today: string }): boolean {
+  return !input.dropped && input.links === 0 && input.plannedStart !== null && input.today > input.plannedStart;
 }
 
 // ---------- guards ----------
