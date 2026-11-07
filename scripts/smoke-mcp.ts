@@ -118,7 +118,7 @@ try {
   );
   const readOnly = tools.tools.filter((t: any) => t.annotations?.readOnlyHint === true).map((t: any) => t.name);
   assert(
-    readOnly.length === 30 &&
+    readOnly.length === 33 &&
       [
         "inbox",
         "list_tasks",
@@ -168,8 +168,12 @@ try {
         "show_progress",
         // MCP Apps: the queue view reads the effective queue in lanes.
         "show_queue",
+        // Reading ideas and horizons writes nothing.
+        "list_ideas",
+        "get_idea",
+        "list_horizons",
       ].every((n) => readOnly.includes(n)),
-    `exactly the 30 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
+    `exactly the 33 read-only tools flagged readOnlyHint (${readOnly.join(", ")})`,
   );
   // A host decides from these hints whether to ask a person first, including for a tool a
   // view's button calls through it.
@@ -991,8 +995,10 @@ try {
   // Apps about view's show_about, which reports on one workspace, 60, and the ticket card's
   // show_ticket, 61, and the progress view's show_progress, 62, and the queue view's show_queue, 63.
   // The app-only approve_gate_from_view and request_changes_from_view the views' buttons call
-  // decide a gate in the view's workspace, 65.
-  assert(wsTargetable.length === 65, `65 workspace tools accept ws targeting (${wsTargetable.length} found)`);
+  // decide a gate in the view's workspace, 65. The plan tools list_ideas, get_idea,
+  // list_horizons, capture_idea, update_idea, start_idea, unlink_idea and the app-only
+  // reset_idea_baseline read and write one workspace's ideas, 73.
+  assert(wsTargetable.length === 73, `73 workspace tools accept ws targeting (${wsTargetable.length} found)`);
   // A person's click in a view is recorded under the person only while hosts keep these two
   // away from the model: both declare MCP Apps visibility ["app"] and take no actor.
   for (const name of ["approve_gate_from_view", "request_changes_from_view"]) {
@@ -1196,6 +1202,8 @@ try {
         "approve_task",
         // Attaching a file records who attached it.
         "attach_file",
+        // Plan writes: capturing, editing, starting and unlinking an idea are attributed.
+        "capture_idea",
         "checkout_task",
         // S7 (STA-73): settling a conflict emits a NEW operation carrying the
         // choice, so it is a write and is attributed like one.
@@ -1233,9 +1241,12 @@ try {
         // STA-179: a setting write is attributed like one too.
         "set_setting",
         // Autopilot runs: starting and stopping one is attributed; stop records who.
+        "start_idea",
         "start_run",
         "stop_run",
+        "unlink_idea",
         // STA-140: a vocabulary edit is a write and is attributed like one.
+        "update_idea",
         "update_kinds",
         "update_milestone",
         "update_statuses",
