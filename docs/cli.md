@@ -170,6 +170,26 @@ staple milestone new "Launch" --target 2026-10-31 --from-epic APP-1 --criteria "
 staple milestone criterion APP-7 1 --met --evidence APP-4
 ```
 
+### The plan
+
+Guide: [The plan](plan.md). Ideas and horizons sit above the tracker: they are never queued,
+checked out or listed by `ls`. Maturity, horizons, dates and the baseline are the person's and
+need `--person`, which records the change under `humanName`.
+
+| Command | What it does |
+|---|---|
+| `staple plan enable` | Turn planning on: the `idea` and `horizon` kinds and the horizons Now, Next and Later. |
+| `staple plan show` / `staple horizon ls` | Horizons in order, with their late and not-started counts. |
+| `staple idea ls` | Ideas with stage, horizon and progress. `--maturity M`, `--horizon H` filter. |
+| `staple idea new <title>` | Capture a raw idea. `--brief T`, `--parent REF`. |
+| `staple idea show <ref>` | Stage, planned and actual windows, baseline, brief, questions, decisions and links. |
+| `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`. |
+| `staple idea start <ref>` | Create an epic with the brief as its plan and link it. An agent may start only a shaped idea. |
+| `staple idea adopt <ref> <issue>` / `unlink` | Link existing work, or remove a link. |
+| `staple idea ask` / `resolve <ref> <n>` / `decide` | Add a question, resolve question `n`, record a decision. |
+| `staple idea reset-baseline <ref> --person` | The current planned window becomes the baseline. |
+| `staple horizon new <name> --person` | Add a horizon; `--date D` makes it a release line. `set`, `mv --before H\|--end` and `rm` likewise need `--person`. |
+
 ## Autopilot runs
 
 Guide: [Autopilot runs](runs.md).

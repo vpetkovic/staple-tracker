@@ -76,6 +76,13 @@ The loop an agent follows, described in
 | `remove_milestone_member` | Remove a member | `staple milestone rm` | yes |
 | `move_milestone_member` | Move a member, or into another milestone | `staple milestone mv` | yes |
 | `reorder_milestone_members` | Set the members' order | `staple milestone reorder` | yes |
+| `list_ideas` | The plan: horizons and ideas with stage, late and not started | `staple idea ls` | no |
+| `get_idea` | One idea: brief, questions, decisions, links | `staple idea show` | no |
+| `list_horizons` | Horizons in order | `staple horizon ls` | no |
+| `capture_idea` | Capture a raw idea | `staple idea new` | yes |
+| `update_idea` | Edit title, brief, questions and decisions | `staple idea set`, `ask`, `resolve`, `decide` | yes |
+| `start_idea` | Start an epic from an idea, or adopt an issue | `staple idea start`, `adopt` | yes |
+| `unlink_idea` | Remove a link from an idea | `staple idea unlink` | yes |
 
 ## Autopilot runs
 

@@ -27,6 +27,7 @@ Every tool, by area:
 | Approval gates | `gate_task`, `approve_task`, `request_changes` |
 | Pickup queue | `list_queue`, `next_task`, `enqueue_task`, `dequeue_task`, `move_queue_entry`, `reorder_queue`, `prune_queue` |
 | Milestones | `list_milestones`, `get_milestone`, `create_milestone`, `update_milestone`, `mark_milestone_criterion`, `add_milestone_member`, `remove_milestone_member`, `move_milestone_member`, `reorder_milestone_members` |
+| The plan | `list_ideas`, `get_idea`, `list_horizons`, `capture_idea`, `update_idea`, `start_idea`, `unlink_idea`, and the app-only `reset_idea_baseline`; the contract is [plan.md](plan.md#surfaces) |
 | Autopilot runs ([runs.md](../docs/runs.md)) | `start_run`, `continue_run`, `run_status`, `pause_run`, `resume_run`, `stop_run` |
 | Vocabulary and settings | `list_statuses`, `list_kinds`, `update_statuses`, `update_kinds`, `get_setting`, `set_setting` |
 | Plans and forecasts | `compare_plans`, `timing_quality`, `calibration_cohorts`, `forecast` |

@@ -110,7 +110,7 @@ The [documentation](https://github.com/vpetkovic/staple-tracker/blob/master/docs
   [Views in the thread](https://github.com/vpetkovic/staple-tracker/blob/master/docs/mcp-apps.md)
 - **Planning:** [Epics and dependencies](https://github.com/vpetkovic/staple-tracker/blob/master/docs/epics-and-dependencies.md),
   [Approval gates](https://github.com/vpetkovic/staple-tracker/blob/master/docs/approval-gates.md), [The pickup queue](https://github.com/vpetkovic/staple-tracker/blob/master/docs/queue.md),
-  [Milestones and goals](https://github.com/vpetkovic/staple-tracker/blob/master/docs/milestones.md), [Autopilot runs](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md)
+  [Milestones and goals](https://github.com/vpetkovic/staple-tracker/blob/master/docs/milestones.md), [The plan](https://github.com/vpetkovic/staple-tracker/blob/master/docs/plan.md), [Autopilot runs](https://github.com/vpetkovic/staple-tracker/blob/master/docs/runs.md)
 - **Across machines and repositories:** [Cloud sync](https://github.com/vpetkovic/staple-tracker/blob/master/docs/cloud-sync.md),
   [Several repositories](https://github.com/vpetkovic/staple-tracker/blob/master/docs/hub.md)
 - **The web UI:** [Tour](https://github.com/vpetkovic/staple-tracker/blob/master/docs/web-ui.md),
