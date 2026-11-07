@@ -50,10 +50,17 @@ export interface StageInputs {
   links: number;
   /** How many of them are resolved. */
   resolvedLinks: number;
+  /** Links whose issue this device no longer holds: still links, judged by nothing. */
+  missingLinks?: number;
 }
 
+/**
+ * Shipped is judged on the linked work that is here; a link whose issue is gone keeps the idea
+ * started rather than letting it slip back to a maturity it had already left.
+ */
 export function deriveStage(input: StageInputs): Stage {
-  if (input.links > 0) return input.resolvedLinks >= input.links ? "shipped" : "started";
+  const present = input.links - (input.missingLinks ?? 0);
+  if (input.links > 0) return present > 0 && input.resolvedLinks >= present ? "shipped" : "started";
   if (input.maturity === "dropped") return "dropped";
   if (input.scheduled) return "scheduled";
   return input.maturity;
@@ -216,6 +223,7 @@ export function assertPlanRekind(row: { identifier: string; kind: string }, next
  * and is refused here, naming what the agent can do instead.
  */
 export type SteeringWrite =
+  | "status"
   | "maturity"
   | "horizon"
   | "parent"
@@ -229,7 +237,9 @@ export function steeringRefusal(what: SteeringWrite, identifier: string | null):
   const message =
     what === "start"
       ? `${subject} is not shaped yet; an agent may start only an idea the person has marked shaped. Capture questions or decisions on it instead, or ask the person to shape it.`
-      : `Changing ${what === "horizons" ? "horizons" : `the ${what} of ${subject}`} is the person's call, not an agent's. ` +
+      : what === "status"
+        ? `${subject} is an idea; its status does not move. Its maturity is its state, and the person sets it, or drops the idea, in the Plan view (or the CLI with --person). Start or adopt work to track progress.`
+        : `Changing ${what === "horizons" ? "horizons" : `the ${what} of ${subject}`} is the person's call, not an agent's. ` +
         "Agents capture ideas, edit titles and briefs, add questions and decisions, and adopt or unlink work; " +
         "the person sets maturity, horizons, dates and the baseline in the Plan view (or the CLI with --person).";
   return new StapleError("validation", message, { steering: what, ...(identifier ? { identifier } : {}) });

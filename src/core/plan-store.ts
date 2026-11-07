@@ -23,7 +23,7 @@ import {
   DEFAULT_HORIZONS,
   HORIZON_KIND,
   IDEA_KIND,
-  assertPlanKindsConfigured,
+  PLAN_KINDS_MISSING_MESSAGE,
   assertPlanWindow,
   deriveStage,
   forecastEnd,
@@ -40,6 +40,7 @@ import {
   type Stage,
   type SteeringWrite,
 } from "./plan.js";
+import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
 import type { WorkspaceStore } from "./store.js";
 import { StapleError, type PersonDecision } from "./types.js";
 
@@ -81,8 +82,10 @@ export interface IdeaView {
   /** The window kept when the idea was started; null before it is started or when it had no window. */
   baseline: PlanWindow | null;
   rank: number;
-  /** The issues this idea itself links. */
+  /** The issues this idea itself links, by id; some may be missing (see `missingLinks`). */
   links: string[];
+  /** Own links whose issue this device no longer holds (a rewind, say): shown as missing, still unlinkable. */
+  missingLinks: string[];
   /** Linked issues, own and rolled up from child ideas. */
   linkCount: number;
   resolvedLinks: number;
@@ -108,6 +111,8 @@ export interface PlanView {
 }
 
 export interface LinkView {
+  /** The linked issue is gone from this device (a rewind, say); it can still be unlinked. */
+  missing: boolean;
   id: string;
   identifier: string;
   title: string;
@@ -186,7 +191,6 @@ interface PlanRow {
   plan_baseline_start: string | null;
   plan_baseline_target: string | null;
   plan_rank: number | null;
-  plan_links: string | null;
 }
 
 interface WorkRow {
@@ -203,7 +207,7 @@ interface WorkRow {
 
 const RANK_STEP = 1024;
 const PLAN_COLUMNS = `id, identifier, title, description, kind, status, parent_id, depth, created_at, updated_at,
-  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_links`;
+  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank`;
 
 /** Column name to the payload field the issue entity carries it as. */
 const FIELD_OF: Record<string, string> = {
@@ -214,23 +218,12 @@ const FIELD_OF: Record<string, string> = {
   plan_baseline_start: "planBaselineStart",
   plan_baseline_target: "planBaselineTarget",
   plan_rank: "planRank",
-  plan_links: "planLinks",
   parent_id: "parentId",
 };
 
 const QUESTIONS_KEY = "questions";
 const DECISIONS_KEY = "decisions";
 const BRIEF_KEY = "brief";
-
-function linksOf(row: Pick<PlanRow, "plan_links">): string[] {
-  if (!row.plan_links) return [];
-  try {
-    const parsed = JSON.parse(row.plan_links) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
-  } catch {
-    return [];
-  }
-}
 
 export function parseQuestions(body: string | null): Question[] {
   if (!body) return [];
@@ -277,12 +270,11 @@ export class PlanStore {
   // ---------- guards ----------
 
   enabled(): boolean {
-    const ids = this.store.getKinds().map((kind) => kind.id);
-    return ids.includes(IDEA_KIND) && ids.includes(HORIZON_KIND);
+    return this.store.planningOn();
   }
 
   private assertEnabled(): void {
-    assertPlanKindsConfigured(this.store.getKinds().map((kind) => kind.id));
+    if (!this.store.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE, { kinds: [IDEA_KIND, HORIZON_KIND] });
   }
 
   private steer(what: SteeringWrite, identifier: string | null, options: PlanWriteOptions): void {
@@ -322,7 +314,7 @@ export class PlanStore {
     const payload: Record<string, unknown> = { updatedAt: now };
     for (const name of names) {
       const value = columns[name];
-      payload[FIELD_OF[name] ?? name] = name === "plan_links" && typeof value === "string" ? JSON.parse(value) : value;
+      payload[FIELD_OF[name] ?? name] = value;
     }
     this.store.journal.record({ entity: "issue", entityId: id, verb: "update", payload, actor: actor ?? null });
     insertEvent(this.db, { kind: event, issueId: id, actor, payload: detail });
@@ -332,13 +324,28 @@ export class PlanStore {
 
   /** Add the two kinds when they are missing and seed Now / Next / Later when no horizon exists. */
   enable(actor: string | null): PlanView {
+    if (this.store.planningOn()) return this.view();
+    /**
+     * A workspace may already use `idea` or `horizon` as a kind of its own. Its issues are not
+     * plans, and turning planning on would take them out of every task view, the queue and
+     * checkout, so it is refused, naming them, until they are re-kinded.
+     */
+    const unrelated = this.db
+      .prepare("SELECT identifier FROM issues WHERE kind IN (?, ?) ORDER BY identifier")
+      .all(IDEA_KIND, HORIZON_KIND) as Array<{ identifier: string }>;
+    if (unrelated.length > 0) {
+      const names = unrelated.map((row) => row.identifier);
+      throw new StapleError(
+        "validation",
+        `Planning uses the kinds "idea" and "horizon", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use one of them for other work. Re-kind ${names.length === 1 ? "it" : "them"} first (staple set <ref> --kind <other>), then turn planning on.`,
+        { issues: names },
+      );
+    }
     return this.store.journaled(() => {
       const ids = this.store.getKinds().map((kind) => kind.id);
       if (!ids.includes(IDEA_KIND)) this.store.addKind({ id: IDEA_KIND, label: "Idea" }, actor);
       if (!ids.includes(HORIZON_KIND)) this.store.addKind({ id: HORIZON_KIND, label: "Horizon" }, actor);
-      if (this.horizonRows().length === 0) {
-        DEFAULT_HORIZONS.forEach((name, index) => this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor));
-      }
+      DEFAULT_HORIZONS.forEach((name, index) => this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor));
       return this.view();
     });
   }
@@ -477,16 +484,19 @@ export class PlanStore {
       seen.add(id);
       const row = byId.get(id);
       if (!row) return out;
-      for (const link of linksOf(row)) if (work.rows.has(link)) out.add(link);
+      for (const link of planLinksOf(this.db, row.id)) out.add(link);
       for (const child of childIds.get(id) ?? []) for (const link of rolledLinks(child, seen)) out.add(link);
       return out;
     };
     return rows.map((row) => {
       const links = [...rolledLinks(row.id)];
-      const measured = this.measure(links, work);
+      // A link whose issue is gone (a rewind, say) still counts as linked: the stage does not slip back.
+      const present = links.filter((id) => work.rows.has(id));
+      const missing = links.length - present.length;
+      const measured = this.measure(present, work);
       const maturity = readMaturity(row.plan_maturity);
       const horizonId = row.plan_horizon_id !== null && horizonDates.has(row.plan_horizon_id) ? row.plan_horizon_id : null;
-      const stage = deriveStage({ maturity, scheduled: horizonId !== null, links: links.length, resolvedLinks: measured.resolved });
+      const stage = deriveStage({ maturity, scheduled: horizonId !== null, links: links.length, resolvedLinks: measured.resolved, missingLinks: missing });
       const actual: ActualWindow = {
         start: measured.start,
         end: measured.end,
@@ -506,7 +516,8 @@ export class PlanStore {
         planned: { start: row.plan_start, target: row.plan_target },
         baseline: started && hasBaseline ? { start: row.plan_baseline_start, target: row.plan_baseline_target } : null,
         rank: row.plan_rank ?? 0,
-        links: linksOf(row).filter((id) => work.rows.has(id)),
+        links: planLinksOf(this.db, row.id),
+        missingLinks: planLinksOf(this.db, row.id).filter((id) => !work.rows.has(id)),
         linkCount: links.length,
         resolvedLinks: measured.resolved,
         progress: started ? measured.progress : null,
@@ -562,9 +573,27 @@ export class PlanStore {
   }
 
   private linkView(id: string, work: ReturnType<PlanStore["work"]>): LinkView {
-    const row = work.rows.get(id)!;
+    const row = work.rows.get(id);
+    if (!row) {
+      return {
+        missing: true,
+        id,
+        identifier: id,
+        title: "Missing: this issue is no longer on this device",
+        kind: "",
+        status: "",
+        resolved: false,
+        leaves: 0,
+        doneLeaves: 0,
+        progress: 0,
+        startedAt: null,
+        completedAt: null,
+        milestone: null,
+      };
+    }
     const measured = this.measure([id], work);
     return {
+      missing: false,
       id,
       identifier: row.identifier,
       title: row.title,
@@ -624,7 +653,7 @@ export class PlanStore {
         parent: input.parent ?? null,
         createdBy: actor,
         allowDuplicate: true,
-      });
+      }, { plan: true });
       const columns: Record<string, unknown> = { plan_maturity: maturity, plan_rank: this.nextRank(IDEA_KIND) };
       if (input.horizon) columns.plan_horizon_id = this.horizonRow(input.horizon).id;
       const window = {
@@ -759,32 +788,40 @@ export class PlanStore {
     if (isPlanKind(target.kind)) {
       throw new StapleError("validation", `${target.identifier} is ${target.kind === IDEA_KIND ? "an idea" : "a horizon"}; only tracker work can be adopted.`);
     }
-    if (linksOf(row).includes(target.id)) return this.ideaView(row.id);
+    if (planLinksOf(this.db, row.id).includes(target.id)) return this.ideaView(row.id);
     this.store.journaled(() => this.link(row, target.id, actor));
     return this.ideaView(row.id);
   }
 
+  /**
+   * Unlink one issue. The issue may be gone (a rewind removed it): a link names it by id, and
+   * that id is accepted here even when nothing resolves it any more.
+   */
   unlink(ref: string, issueRef: string, actor: string | null): IdeaView {
     this.assertEnabled();
     const row = this.ideaRow(ref);
-    const target = this.store.getIssue(issueRef);
-    const links = linksOf(row);
-    if (!links.includes(target.id)) {
-      throw new StapleError("validation", `${target.identifier} is not linked to ${row.identifier}.`);
+    const links = planLinksOf(this.db, row.id);
+    const issueId = links.includes(issueRef.trim()) ? issueRef.trim() : this.store.getIssue(issueRef).id;
+    if (!links.includes(issueId)) {
+      throw new StapleError("validation", `${issueRef.trim()} is not linked to ${row.identifier}.`);
     }
+    const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined)?.identifier ?? issueId;
     this.store.journaled(() => {
-      const rest = links.filter((id) => id !== target.id);
-      this.write(row.id, { plan_links: rest.length > 0 ? JSON.stringify(rest) : null }, actor, "idea_unlinked", { issue: target.identifier });
+      writePlanLink(this.db, row.id, issueId, null);
+      this.store.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: { [planLinkField(issueId)]: null }, actor: actor ?? null });
+      insertEvent(this.db, { kind: "idea_unlinked", issueId: row.id, actor, payload: { issue: identifier } });
     });
     return this.ideaView(row.id);
   }
 
+  /** One link, one row, one field of the idea's `milestone` entity (`plan-links.ts`). */
   private link(row: PlanRow, issueId: string, actor: string | null): void {
-    const fresh = this.db.prepare("SELECT plan_links FROM issues WHERE id = ?").get(row.id) as Pick<PlanRow, "plan_links">;
-    const links = linksOf(fresh);
-    if (links.includes(issueId)) return;
+    if (planLinksOf(this.db, row.id).includes(issueId)) return;
     const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string }).identifier;
-    this.write(row.id, { plan_links: JSON.stringify([...links, issueId]) }, actor, "idea_linked", { issue: identifier });
+    const value = { linkedBy: actor ?? "unknown", linkedAt: this.store.journal.mutationAt() };
+    writePlanLink(this.db, row.id, issueId, value);
+    this.store.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: { [planLinkField(issueId)]: value }, actor: actor ?? null });
+    insertEvent(this.db, { kind: "idea_linked", issueId: row.id, actor, payload: { issue: identifier } });
     this.keepBaselines(row.id, actor);
   }
 
@@ -816,8 +853,7 @@ export class PlanStore {
   private isStarted(id: string, seen = new Set<string>()): boolean {
     if (seen.has(id)) return false;
     seen.add(id);
-    const row = this.db.prepare("SELECT plan_links FROM issues WHERE id = ?").get(id) as Pick<PlanRow, "plan_links"> | undefined;
-    if (row && linksOf(row).length > 0) return true;
+    if (planLinksOf(this.db, id).length > 0) return true;
     const children = this.db.prepare("SELECT id FROM issues WHERE parent_id = ? AND kind = ?").all(id, IDEA_KIND) as Array<{ id: string }>;
     return children.some((child) => this.isStarted(child.id, seen));
   }
@@ -842,7 +878,7 @@ export class PlanStore {
   // ---------- horizons (all the person's) ----------
 
   private insertHorizon(name: string, date: string | null, rank: number, actor: string | null): string {
-    const issue = this.store.createIssue({ title: name, kind: HORIZON_KIND, createdBy: actor });
+    const issue = this.store.createIssue({ title: name, kind: HORIZON_KIND, createdBy: actor }, { plan: true });
     this.write(issue.id, { plan_target: date, plan_rank: rank }, actor, "horizon_created", { date });
     return issue.id;
   }
@@ -872,7 +908,7 @@ export class PlanStore {
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
     this.store.journaled(() => {
-      if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor);
+      if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor, undefined, { plan: true });
       const columns: Record<string, unknown> = {};
       if (patch.date !== undefined) columns.plan_target = patch.date === null ? null : parsePlanDate(patch.date);
       if (patch.before !== undefined) columns.plan_rank = this.rankBefore(HORIZON_KIND, row.id, patch.before, actor);
@@ -889,7 +925,7 @@ export class PlanStore {
     this.store.journaled(() => {
       const on = this.db.prepare("SELECT id FROM issues WHERE kind = ? AND plan_horizon_id = ?").all(IDEA_KIND, row.id) as Array<{ id: string }>;
       for (const idea of on) this.write(idea.id, { plan_horizon_id: null }, actor, "idea_updated", { fields: ["plan_horizon_id"] });
-      this.store.updateIssue(row.id, { status: this.store.primaryStatusFor("cancelled") }, actor);
+      this.store.updateIssue(row.id, { status: this.store.primaryStatusFor("cancelled") }, actor, undefined, { plan: true });
     });
     return this.view();
   }

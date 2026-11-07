@@ -95,7 +95,7 @@ import {
   type KindWithAppearance,
 } from "./kind-appearance.js";
 import { MILESTONE_KIND, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
-import { IDEA_KIND, PLAN_KINDS, assertPlanParent, assertPlanRekind, isPlanKind, planKindRefusal } from "./plan.js";
+import { HORIZON_KIND, IDEA_KIND, PLAN_KINDS, assertPlanParent, assertPlanRekind, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
@@ -228,6 +228,14 @@ export interface UpdateIssueInput {
  * the key had been used before and the ORIGINAL row is being returned — the
  * caller's retry was absorbed, not applied twice.
  */
+/**
+ * A write the plan layer itself makes (`PlanStore`), which has already applied the person rule.
+ * The tracker's own create and update refuse a horizon and an idea's status without it.
+ */
+export interface PlanInternal {
+  plan?: boolean;
+}
+
 export interface CreateIssueResult {
   issue: Issue;
   replayed: boolean;
@@ -1950,7 +1958,7 @@ export class WorkspaceStore {
        * The plan kinds go only when nothing uses them: `--migrate-to` would turn every idea
        * into tracker work at once, which is the move `assertPlanRekind` refuses one at a time.
        */
-      if (isPlanKind(id) && this.kindUsageCount(id) > 0) {
+      if (isPlanKind(id) && this.planningOn() && this.kindUsageCount(id) > 0) {
         throw new StapleError(
           "validation",
           `Cannot remove the ${id} kind while ${this.kindUsageCount(id)} ${id === IDEA_KIND ? "idea" : "horizon"}${this.kindUsageCount(id) === 1 ? "" : "s"} still use it.`,
@@ -2538,12 +2546,12 @@ export class WorkspaceStore {
 
   // ---------- creation ----------
 
-  createIssue(input: CreateIssueInput): Issue {
-    return this.createIssueResult(input).issue;
+  createIssue(input: CreateIssueInput, internal: PlanInternal = {}): Issue {
+    return this.createIssueResult(input, internal).issue;
   }
 
   /** createIssue, plus whether an idempotency key replayed an earlier create. */
-  createIssueResult(input: CreateIssueInput): CreateIssueResult {
+  createIssueResult(input: CreateIssueInput, internal: PlanInternal = {}): CreateIssueResult {
     const title = input.title?.trim();
     if (!title) throw new StapleError("validation", "Title is required");
     if (input.priority) assertPriority(input.priority);
@@ -2595,7 +2603,11 @@ export class WorkspaceStore {
           throw new StapleError("validation", `Tree depth cap (${MAX_TREE_DEPTH}) exceeded`);
         }
       }
-      assertPlanParent({ kind }, parent);
+      if (this.planningOn()) {
+        assertPlanParent({ kind }, parent);
+        // A horizon is the person's; only the plan layer creates one (`PlanStore.createHorizon`).
+        if (kind === HORIZON_KIND && !internal.plan) throw steeringRefusal("horizons", null);
+      }
 
       // Duplicate guard: same normalized title among open siblings.
       const normalized = normalizeTitle(title);
@@ -2617,6 +2629,7 @@ export class WorkspaceStore {
       }
 
       const blockerRows = (input.blockedBy ?? []).map((ref) => this.requireTarget(ref));
+      this.assertNoPlanDependency(kind, blockerRows);
 
       const id = newId();
       const number = this.nextIssueNumber();
@@ -2761,6 +2774,14 @@ export class WorkspaceStore {
        * (`insertIssue`, `cloud/apply.ts`): two children created offline on two devices both keep
        * their edge. It used to travel nowhere, and existed only on the device that made it.
        */
+      /**
+       * An idea made through the tracker's own create (`create_task` with kind idea) is a captured
+       * idea: raw, at the end of the plan, as `capture_idea` would make it.
+       */
+      if (kind === IDEA_KIND && !internal.plan && this.planningOn()) {
+        const rank = (this.db.prepare("SELECT MAX(plan_rank) AS rank FROM issues WHERE kind = ?").get(IDEA_KIND) as { rank: number | null }).rank;
+        this.db.prepare("UPDATE issues SET plan_maturity = 'raw', plan_rank = ? WHERE id = ?").run((rank ?? 0) + 1024, id);
+      }
       // Transition site 1 of 5: a child appearing under a parent changes the
       // child landscape as surely as one moving does. The rule is about state,
       // not about which call produced it — so this is no longer gated on the
@@ -2874,6 +2895,7 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const blockers = blockerRefs.map((blockerRef) => this.requireTarget(blockerRef));
+      this.assertNoPlanDependency(row.kind, blockers, row.identifier);
       const deduped = [...new Map(blockers.map((b) => [b.id, b])).values()];
       this.assertNoCycle(
         row.id,
@@ -3449,7 +3471,8 @@ export class WorkspaceStore {
      * an idea or a horizon that reached a task's subtree (a sync from a device without the
      * parent guard, say) must not move that task's status.
      */
-    if (isPlanKind(ancestor.kind)) return [];
+    const planning = this.planningOn();
+    if (planning && isPlanKind(ancestor.kind)) return [];
     const rows =
       ancestor.kind === MILESTONE_KIND
         ? this.db
@@ -3464,7 +3487,7 @@ export class WorkspaceStore {
             .prepare("SELECT id, identifier, status, title, kind FROM issues WHERE parent_id = ?")
             .all(ancestor.id);
     const typed = (rows as Array<{ id: string; identifier: string; status: string; title: string; kind: string }>)
-      .filter((row) => !isPlanKind(row.kind))
+      .filter((row) => !(planning && isPlanKind(row.kind)))
       .map(({ kind: _kind, ...row }) => row);
     if (ancestor.kind !== MILESTONE_KIND) return typed;
     /**
@@ -4133,6 +4156,7 @@ export class WorkspaceStore {
     }
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      if (this.isPlanIssue(row.kind)) throw planKindRefusal(row, "gated");
       if (this.isResolvedStatus(row.status)) {
         throw new StapleError(
           "conflict",
@@ -4618,13 +4642,22 @@ export class WorkspaceStore {
     });
   }
 
-  updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null, attempt?: AttemptOptions): Issue {
+  updateIssue(ref: string, patch: UpdateIssueInput, actor?: string | null, attempt?: AttemptOptions, internal: PlanInternal = {}): Issue {
     assertAttemptOptions(attempt);
     if (patch.status) this.assertConfiguredStatus(patch.status);
     if (patch.kind) this.assertConfiguredKind(patch.kind);
     if (patch.priority) assertPriority(patch.priority);
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      /**
+       * Through the tracker's own update a horizon is never edited (it is the person's, and the
+       * plan layer edits it) and an idea's status never moves (maturity is its state; it leaves
+       * the board by being dropped, from the plan). Title and description of an idea stay open.
+       */
+      if (!internal.plan && isPlanKind(row.kind) && this.planningOn()) {
+        if (row.kind === HORIZON_KIND) throw steeringRefusal("horizons", row.identifier);
+        if (patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", row.identifier);
+      }
       if (
         patch.expectedStatusVersion !== undefined &&
         patch.expectedStatusVersion !== row.status_version
@@ -4651,7 +4684,7 @@ export class WorkspaceStore {
       // documented exception (design/milestones.md): a milestone that still owns
       // members or dates cannot stop being one.
       if (patch.kind !== undefined && patch.kind !== row.kind) {
-        assertPlanRekind(row, patch.kind);
+        if (this.planningOn()) assertPlanRekind(row, patch.kind);
         assertRekindAllowed(this.db, row, patch.kind);
       }
       if (patch.kind !== undefined) next.kind = patch.kind;
@@ -6799,7 +6832,7 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       // Ideas and horizons are plans, never work an agent holds (design/plan.md, "Guards").
-      if (isPlanKind(row.kind)) throw planKindRefusal(row, "checked out");
+      if (this.isPlanIssue(row.kind)) throw planKindRefusal(row, "checked out");
       if (this.isActiveStatus(row.status) && row.checkout_agent === agent) {
         // crash-recovery re-claim: the open attempt stays open, or a new one resumes an ended one
         this.attempts().reclaimed(row, agent, opts.attempt);
@@ -7736,7 +7769,7 @@ export class WorkspaceStore {
     if (filters.kind && filters.kind.length > 0) {
       where.push(`kind IN (${filters.kind.map(() => "?").join(",")})`);
       params.push(...filters.kind);
-    } else if (!filters.includePlan) {
+    } else if (!filters.includePlan && this.planningOn()) {
       // Ideas and horizons live in the Plan view; a task view lists them only when asked by kind.
       where.push(`kind NOT IN (${[...PLAN_KINDS].map(() => "?").join(",")})`);
       params.push(...PLAN_KINDS);
@@ -8005,6 +8038,7 @@ export class WorkspaceStore {
 
   /** Nested subtree (or all roots when no ref given). */
   tree(ref?: string): Array<{ issue: Issue; children: unknown[] }> {
+    const planning = this.planningOn();
     const build = (parentId: string | null, depth: number): Array<{ issue: Issue; children: unknown[] }> => {
       if (depth > MAX_TREE_DEPTH) return [];
       const rows = this.db
@@ -8015,7 +8049,7 @@ export class WorkspaceStore {
         )
         .all(...(parentId === null ? [] : [parentId])) as unknown as IssueRow[];
       return rows
-        .filter((r) => !isPlanKind(r.kind) || (ref !== undefined && depth > 0))
+        .filter((r) => !(planning && isPlanKind(r.kind)) || (ref !== undefined && depth > 0))
         .map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));
     };
     if (ref) {
@@ -8058,6 +8092,32 @@ export class WorkspaceStore {
   }
 
   // ---------- the plan layer (design/plan.md) ----------
+
+  /**
+   * Planning is on once a horizon carries a plan rank. Only the plan layer writes one, so a
+   * workspace that kept its own `idea` or `horizon` kind before this build is untouched by
+   * every plan guard until planning is turned on, which refuses while such issues exist.
+   */
+  planningOn(): boolean {
+    const kinds = this.settings().kinds;
+    if (!kinds.some((k) => k.id === IDEA_KIND) || !kinds.some((k) => k.id === HORIZON_KIND)) return false;
+    return this.db.prepare("SELECT 1 AS hit FROM issues WHERE kind = ? AND plan_rank IS NOT NULL LIMIT 1").get(HORIZON_KIND) !== undefined;
+  }
+
+  /** An issue of a plan kind, in a workspace where planning is on. */
+  isPlanIssue(kind: string): boolean {
+    return isPlanKind(kind) && this.planningOn();
+  }
+
+  /** Dependencies are tracker work: a plan neither blocks nor waits (design/plan.md, "Guards"). */
+  private assertNoPlanDependency(kind: string, blockers: ReadonlyArray<{ identifier: string; kind: string }>, identifier?: string): void {
+    if (blockers.length === 0 || !this.planningOn()) return;
+    if (isPlanKind(kind)) {
+      throw planKindRefusal({ identifier: identifier ?? "This issue", kind }, "blocked by other work");
+    }
+    const plan = blockers.find((blocker) => isPlanKind(blocker.kind));
+    if (plan) throw planKindRefusal(plan, "a blocker");
+  }
 
   private planStore: PlanStore | null = null;
 

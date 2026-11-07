@@ -19,7 +19,6 @@ const NO_PLAN = {
   plan_baseline_start: null,
   plan_baseline_target: null,
   plan_rank: null,
-  plan_links: null,
 };
 
 /**

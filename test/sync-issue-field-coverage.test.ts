@@ -61,7 +61,6 @@ const EXCLUDED: Record<string, string> = {
   plan_baseline_start: "as plan_maturity",
   plan_baseline_target: "as plan_maturity",
   plan_rank: "as plan_maturity",
-  plan_links: "as plan_maturity",
 };
 
 function armed(): WorkspaceStore {

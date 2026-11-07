@@ -143,6 +143,88 @@ describe("guards: an idea never enters the tracker", () => {
   });
 });
 
+describe("the tracker's own writes follow the person rule", () => {
+  it("refuses a horizon made through the tracker's create", () => {
+    const error = refused(() => store.createIssue({ title: "Agent horizon", kind: HORIZON_KIND, createdBy: "agent" }));
+    expect(error.message).toContain("the person's call");
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+  });
+
+  it("makes an idea made through the tracker's create a raw, captured idea", () => {
+    const made = store.createIssue({ title: "Agent idea via create_task", kind: IDEA_KIND, createdBy: "agent" });
+    expect(plan.ideaView(made.identifier)).toMatchObject({ maturity: "raw", stage: "raw" });
+    expect(plan.ideaView(made.identifier).rank).toBeGreaterThan(0);
+  });
+
+  it("refuses a horizon edited through the tracker's update: name, status or anything else", () => {
+    const now = plan.view().horizons[0]!;
+    const ref = idea("On Now", { horizon: now.id });
+    expect(refused(() => store.updateIssue(now.identifier, { title: "Renamed by agent" }, "agent")).message).toContain("the person's call");
+    expect(refused(() => store.updateIssue(now.identifier, { status: "cancelled" }, "agent")).message).toContain("the person's call");
+    expect(refused(() => store.updateIssue(now.identifier, { priority: "high" }, "agent")).message).toContain("the person's call");
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(plan.ideaView(ref).horizonId).toBe(now.id);
+  });
+
+  it("refuses an idea's status moved through the tracker's update, and keeps its title editable", () => {
+    const ref = idea("Keep me on the board");
+    for (const status of ["cancelled", "done", "in_progress"]) {
+      expect(refused(() => store.updateIssue(ref, { status }, "agent")).message).toContain("its status does not move");
+    }
+    expect(plan.view().ideas.map((i) => i.identifier)).toContain(ref);
+    expect(store.updateIssue(ref, { title: "Renamed by an agent" }, "agent").title).toBe("Renamed by an agent");
+  });
+
+  it("refuses a gate on an idea", () => {
+    const ref = idea("Gate me");
+    expect(refused(() => store.gateIssue(ref, { owner: "vp" }, "agent")).message).toContain("cannot be gated");
+  });
+});
+
+describe("dependencies are tracker work", () => {
+  it("refuses an idea as a blocker, an idea that waits, and a create that names an idea blocker", () => {
+    const ref = idea("Not a blocker");
+    const task = store.createIssue({ title: "Real work" }).identifier;
+    expect(refused(() => store.setBlockedBy(task, [ref], "agent")).message).toContain("cannot be a blocker");
+    expect(refused(() => store.setBlockedBy(ref, [task], "agent")).message).toContain("cannot be blocked by other work");
+    expect(refused(() => store.createIssue({ title: "Waits on an idea", blockedBy: [ref] })).message).toContain("cannot be a blocker");
+    expect(store.blockersOf(store.getIssue(task).id)).toEqual([]);
+  });
+});
+
+describe("a workspace that already had its own idea kind", () => {
+  function custom(): WorkspaceStore {
+    const own = memStore();
+    own.addKind({ id: IDEA_KIND, label: "Idea" }, "vp");
+    own.addKind({ id: HORIZON_KIND, label: "Horizon" }, "vp");
+    return own;
+  }
+
+  it("keeps every issue of that kind a tracker issue while planning is off", () => {
+    const own = custom();
+    const mine = own.createIssue({ title: "My idea ticket", kind: IDEA_KIND });
+    const theirs = own.createIssue({ title: "Their horizon ticket", kind: HORIZON_KIND });
+    expect(own.planningOn()).toBe(false);
+    expect(own.listIssues({}).map((i) => i.identifier)).toEqual(expect.arrayContaining([mine.identifier, theirs.identifier]));
+    expect(own.tree().map((n) => n.issue.identifier)).toContain(mine.identifier);
+    own.queue().enqueue(mine.identifier, {}, "vp");
+    expect(own.queue().effectiveQueue({ actor: "agent" }).rows.map((r) => r.identifier)).toContain(mine.identifier);
+    expect(own.checkoutIssue(mine.identifier, "agent").checkoutAgent).toBe("agent");
+    expect(own.updateIssue(theirs.identifier, { title: "Still mine" }, "agent").title).toBe("Still mine");
+  });
+
+  it("refuses to turn planning on while such issues exist, naming them, and turns on once they are re-kinded", () => {
+    const own = custom();
+    const mine = own.createIssue({ title: "My idea ticket", kind: IDEA_KIND });
+    const error = refused(() => own.plan().enable("vp"));
+    expect(error.message).toContain(mine.identifier);
+    expect(own.planningOn()).toBe(false);
+    own.updateIssue(mine.identifier, { kind: "task" }, "vp");
+    expect(own.plan().enable("vp").enabled).toBe(true);
+    expect(own.planningOn()).toBe(true);
+  });
+});
+
 describe("ideas and horizons", () => {
   it("nest, carry maturity and horizon independently, and read their stage", () => {
     const ga = idea("Exercise GA", { maturity: "shaped", horizon: horizon("Now") });
@@ -273,6 +355,19 @@ describe("Start, Adopt and Unlink", () => {
       plan.adopt(ref, epic, "agent");
       expect(plan.ideaView(ref).actual).toEqual({ start: null, end: null, forecastEnd: null });
     });
+  });
+
+  it("keeps a link whose issue is gone: the idea stays started, the link reads missing, and it can be unlinked", () => {
+    const ref = idea("Linked to something that vanishes", { maturity: "shaped" });
+    const epic = store.createIssue({ title: "Rewound away", kind: "epic" });
+    plan.adopt(ref, epic.identifier, "agent");
+    expect(plan.ideaView(ref).stage).toBe("started");
+    // A rewind removes rows outright; nothing in the plan is told.
+    store.db.prepare("DELETE FROM issues WHERE id = ?").run(epic.id);
+    const view = plan.ideaView(ref);
+    expect(view).toMatchObject({ stage: "started", links: [epic.id], missingLinks: [epic.id] });
+    expect(plan.detail(ref).linked).toEqual([expect.objectContaining({ id: epic.id, missing: true })]);
+    expect(plan.unlink(ref, epic.id, "agent")).toMatchObject({ stage: "shaped", links: [], missingLinks: [] });
   });
 
   it("Adopt refuses a plan-kind target and is idempotent", () => {

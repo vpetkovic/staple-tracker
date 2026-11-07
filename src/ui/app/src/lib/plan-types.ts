@@ -42,6 +42,7 @@ export interface IdeaData {
   baseline: PlanWindow | null;
   rank: number;
   links: string[];
+  missingLinks: string[];
   linkCount: number;
   resolvedLinks: number;
   progress: number | null;
@@ -62,6 +63,7 @@ export interface PlanData {
 }
 
 export interface LinkData {
+  missing: boolean;
   id: string;
   identifier: string;
   title: string;

@@ -33,6 +33,7 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     actual: { start: null, end: null, forecastEnd: null },
     late: false,
     notStarted: false,
+    missingLinks: [],
     childIds: [],
     openQuestions: 0,
     createdAt: "2026-11-01T00:00:00.000Z",

@@ -3284,7 +3284,7 @@ server.registerTool(
   "reset_idea_baseline",
   {
     description:
-      "App-only: the Reset baseline button in a Staple view. The idea's current planned window becomes its baseline, recorded under the person on this machine (config humanName). Hosts hide it from the model; an agent cannot reset a baseline.",
+      "The Reset baseline button in a Staple view: the idea's current planned window becomes its baseline, recorded as a person decision under this machine's config humanName. The person decision is what permits the write; marking the tool app-only is a hint that asks hosts to keep it from the model, not a guarantee, so call it only for a person's click.",
     inputSchema: { ref: ideaRefSchema, ws: wsSchema },
     annotations: { title: "Reset idea baseline (from a view)", ...milestoneWriteAnnotations },
     _meta: appOnly,

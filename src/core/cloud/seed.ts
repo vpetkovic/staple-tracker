@@ -51,6 +51,7 @@ import { attemptPayload, noteAttemptsSeededHere, readAttempt, readTransition, tr
 import type { SnapshotEntity } from "./wire.js";
 import { criterionMarkPosition } from "../milestone-goal.js";
 import { criterionMarkFields } from "../milestone-marks.js";
+import { planLinkFields, planLinkIssue } from "../plan-links.js";
 
 /** The plan's singleton entity id. Mirrors `queue-store.ts`. */
 const QUEUE_PLAN_ID = "@plan";
@@ -733,11 +734,34 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
         `SELECT issue_id AS id FROM milestone_meta
           UNION SELECT milestone_id AS id FROM milestone_members
           UNION SELECT milestone_id AS id FROM milestone_criterion_marks
+          UNION SELECT idea_id AS id FROM plan_links
           ORDER BY id`,
       )
       .all() as Array<{ id: string }>
   ).map((row) => row.id);
   for (const milestoneId of milestoneIds) {
+    /**
+     * An idea holds links and nothing else of this entity: it is seeded as its link fields
+     * alone, so a receiver writes no membership or metadata row for it.
+     */
+    const holdsMilestoneRows =
+      db
+        .prepare(
+          "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ?",
+        )
+        .get(milestoneId, milestoneId, milestoneId) !== undefined;
+    if (!holdsMilestoneRows) {
+      const links = planLinkFields(db, milestoneId);
+      out.push({
+        entity: "milestone",
+        entityId: milestoneId,
+        label: identifierOf(db, milestoneId),
+        payload: links,
+        actor: Object.values(links).at(-1)?.linkedBy ?? null,
+        at: latest(Object.values(links).map((link) => link.linkedAt), now),
+      });
+      continue;
+    }
     const meta = db
       .prepare("SELECT target_date, start_date, updated_at FROM milestone_meta WHERE issue_id = ?")
       .get(milestoneId) as { target_date: string | null; start_date: string | null; updated_at: string } | undefined;
@@ -756,6 +780,7 @@ function inventory(db: DatabaseSync, now: string, skipped: SeedSkipped[]): Local
     }
     // Its criterion marks, one field each (`criterion<n>`), as a mark is journaled.
     Object.assign(payload, criterionMarkFields(db, milestoneId));
+    Object.assign(payload, planLinkFields(db, milestoneId));
     out.push({
       entity: "milestone",
       entityId: milestoneId,
@@ -1178,15 +1203,20 @@ function replacedValues(db: DatabaseSync, index: SurveyIndex): SeedReplaced[] {
         const meta = db
           .prepare("SELECT target_date, start_date FROM milestone_meta WHERE issue_id = ?")
           .get(entity.entityId) as { target_date: string | null; start_date: string | null } | undefined;
-        if (!meta) break;
         for (const [field, column] of [["targetDate", "target_date"], ["startDate", "start_date"]] as const) {
-          if (!(field in entity.state)) continue;
+          if (!meta || !(field in entity.state)) continue;
           if (canonical(meta[column]) === canonical(entity.state[field])) continue;
           out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field: column, local: meta[column], repository: entity.state[field] });
         }
         const marks = criterionMarkFields(db, entity.entityId);
         for (const field of Object.keys(entity.state).filter((key) => criterionMarkPosition(key) !== null)) {
           const local = marks[field] ?? null;
+          if (canonical(local) === canonical(entity.state[field])) continue;
+          out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field, local, repository: entity.state[field] });
+        }
+        const links = planLinkFields(db, entity.entityId);
+        for (const field of Object.keys(entity.state).filter((key) => planLinkIssue(key) !== null)) {
+          const local = links[field] ?? null;
           if (canonical(local) === canonical(entity.state[field])) continue;
           out.push({ entity: "milestone", entityId: entity.entityId, label: identifierOf(db, entity.entityId), field, local, repository: entity.state[field] });
         }

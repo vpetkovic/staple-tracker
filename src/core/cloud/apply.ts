@@ -47,6 +47,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { renumberedRanks } from "../milestones.js";
 import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } from "../milestone-goal.js";
+import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.js";
 import { writeCriterionMark } from "../milestone-marks.js";
 import {
   SETTING_DEFINITIONS,
@@ -156,7 +157,6 @@ export const ISSUE_FIELDS: Record<string, Column> = {
   planBaselineStart: col("plan_baseline_start"),
   planBaselineTarget: col("plan_baseline_target"),
   planRank: col("plan_rank"),
-  planLinks: col("plan_links", "json"),
 };
 
 /**
@@ -173,7 +173,6 @@ export const PLAN_ISSUE_FIELDS: ReadonlySet<string> = new Set([
   "planBaselineStart",
   "planBaselineTarget",
   "planRank",
-  "planLinks",
 ]);
 
 export const COMMENT_FIELDS: Record<string, Column> = {
@@ -2259,7 +2258,15 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const marks = Object.keys(input.payload)
     .map((key) => ({ key, position: criterionMarkPosition(key) }))
     .filter((entry): entry is { key: string; position: number } => entry.position !== null);
-  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated && marks.length === 0) return false;
+  /**
+   * An idea's links (`planLink.<issue id>`, `plan-links.ts`) ride the same entity in the same
+   * way: one field per link, a null unlinks, a value that is not a link is ignored.
+   */
+  const links = Object.keys(input.payload)
+    .map((key) => ({ key, issueId: planLinkIssue(key) }))
+    .filter((entry): entry is { key: string; issueId: string } => entry.issueId !== null);
+  const fieldsOnly = marks.length + links.length;
+  if (!hasMembers && !hasTarget && !hasStart && !hasUpdated && fieldsOnly === 0) return false;
 
   if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
   for (const { key, position } of marks) {
@@ -2268,7 +2275,13 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
     if (value !== null && mark === null) continue;
     writeCriterionMark(db, input.entityId, position, mark === null ? null : criterionMarkValue(mark));
   }
-  if (marks.length > 0 && !hasMembers && !hasTarget && !hasStart && !hasUpdated) return true;
+  for (const { key, issueId } of links) {
+    const value = input.payload[key];
+    const link = value === null ? null : planLinkFromValue(value);
+    if (value !== null && link === null) continue;
+    writePlanLink(db, input.entityId, issueId, link);
+  }
+  if (fieldsOnly > 0 && !hasMembers && !hasTarget && !hasStart && !hasUpdated) return true;
   /**
    * When the milestone last changed, as the device that changed it wrote it: the payload's
    * `updatedAt`, which every build since this one sends (`journal.ts`, the row diff). An

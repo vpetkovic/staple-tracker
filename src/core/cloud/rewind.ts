@@ -44,6 +44,7 @@ import { localInventory } from "./seed.js";
 import { recordReconciledEpoch, withheldEntities } from "./sync-state.js";
 import type { SnapshotEntity } from "./wire.js";
 import { criterionMarkField, criterionMarkPosition } from "../milestone-goal.js";
+import { planLinkField, planLinkIssue } from "../plan-links.js";
 import { endOf, readAttempt, writeEnd, type AttemptEnd } from "../telemetry/attempt-records.js";
 import { ATTEMPT_END_FIELDS } from "./attempt-ends.js";
 
@@ -222,6 +223,21 @@ export function reconcileBeforeRead(db: DatabaseSync, entities: readonly Snapsho
       const field = criterionMarkField(position);
       if (field in entity.state || unsentMarks.has(`${entity.entityId} ${field}`)) continue;
       db.prepare("DELETE FROM milestone_criterion_marks WHERE milestone_id = ? AND position = ?").run(entity.entityId, position);
+    }
+  }
+
+  /** An idea's links follow the same rule, one field each (`plan-links.ts`). */
+  const unsentLinks = new Set(
+    unsent
+      .filter((op) => op.entity === "milestone")
+      .flatMap((op) => Object.keys(parsedPayload(op.payload)).filter((key) => planLinkIssue(key) !== null).map((key) => `${op.id} ${key}`)),
+  );
+  for (const entity of entities) {
+    if (entity.entity !== "milestone") continue;
+    for (const { issue_id } of db.prepare("SELECT issue_id FROM plan_links WHERE idea_id = ?").all(entity.entityId) as Array<{ issue_id: string }>) {
+      const field = planLinkField(issue_id);
+      if (field in entity.state || unsentLinks.has(`${entity.entityId} ${field}`)) continue;
+      db.prepare("DELETE FROM plan_links WHERE idea_id = ? AND issue_id = ?").run(entity.entityId, issue_id);
     }
   }
 
@@ -529,7 +545,7 @@ function heldEntities(db: DatabaseSync): Array<readonly [SyncEntity, string]> {
   for (const id of ids("SELECT id FROM issues")) out.push(["issue", id]);
   for (const id of ids("SELECT id FROM comments")) out.push(["comment", id]);
   for (const id of ids("SELECT DISTINCT blocked_id AS id FROM relations WHERE type = 'blocks'")) out.push(["relation", id]);
-  for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members UNION SELECT milestone_id AS id FROM milestone_criterion_marks")) {
+  for (const id of ids("SELECT issue_id AS id FROM milestone_meta UNION SELECT milestone_id AS id FROM milestone_members UNION SELECT milestone_id AS id FROM milestone_criterion_marks UNION SELECT idea_id AS id FROM plan_links")) {
     out.push(["milestone", id]);
   }
   if (ids("SELECT issue_id AS id FROM queue_entries LIMIT 1").length > 0) out.push(["queue", QUEUE_PLAN_ID]);
@@ -560,7 +576,8 @@ function holds(db: DatabaseSync, entity: string, id: string): boolean {
       return hit("SELECT 1 FROM relations WHERE blocked_id = ? AND type = 'blocks'", id);
     case "milestone":
       return hit(
-        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ?",
+        "SELECT 1 FROM milestone_meta WHERE issue_id = ? UNION SELECT 1 FROM milestone_members WHERE milestone_id = ? UNION SELECT 1 FROM milestone_criterion_marks WHERE milestone_id = ? UNION SELECT 1 FROM plan_links WHERE idea_id = ?",
+        id,
         id,
         id,
         id,
@@ -658,7 +675,8 @@ function remove(db: DatabaseSync, entity: SyncEntity, id: string): number {
       const members = db.prepare("DELETE FROM milestone_members WHERE milestone_id = ?").run(id).changes;
       const meta = db.prepare("DELETE FROM milestone_meta WHERE issue_id = ?").run(id).changes;
       const marks = db.prepare("DELETE FROM milestone_criterion_marks WHERE milestone_id = ?").run(id).changes;
-      return gone(Number(members) + Number(meta) + Number(marks));
+      const links = db.prepare("DELETE FROM plan_links WHERE idea_id = ?").run(id).changes;
+      return gone(Number(members) + Number(meta) + Number(marks) + Number(links));
     }
     case "queue":
       return gone(db.prepare("DELETE FROM queue_entries").run().changes);

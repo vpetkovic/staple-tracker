@@ -455,7 +455,7 @@ export class QueueStore {
   ): QueuePlan & { replayed: boolean } {
     const issue = this.requireIssue(ref);
     // Ideas and horizons are plans above the tracker; nothing queues them (design/plan.md).
-    if (isPlanKind(issue.kind)) throw planKindRefusal(issue, "queued");
+    if (this.store.isPlanIssue(issue.kind)) throw planKindRefusal(issue, "queued");
     return this.journaled(() => {
       const current = this.entryOf(issue.id);
       if (current !== undefined && !hasPosition(options)) {
@@ -659,7 +659,8 @@ export class QueueStore {
       .prepare("SELECT id, identifier, title, kind, status, parent_id, checkout_agent, assignee FROM issues")
       .all() as unknown as IssueNode[];
     // The resolver never sees a plan: no idea or horizon is ever an effective row.
-    return new Map(rows.filter((row) => !isPlanKind(row.kind)).map((row) => [row.id, row]));
+    const planning = this.store.planningOn();
+    return new Map(rows.filter((row) => !(planning && isPlanKind(row.kind))).map((row) => [row.id, row]));
   }
 
   /**

@@ -36,6 +36,81 @@ function planOf(machine: Machine): unknown {
   };
 }
 
+describe("links merge across devices: one field per link", () => {
+  async function both(a: Machine, b: Machine): Promise<void> {
+    for (let round = 0; round < 2; round += 1) {
+      for (const machine of [a, b]) {
+        machine.use();
+        await machine.sync();
+      }
+    }
+  }
+  const linked = (machine: Machine, idea: string): string[] =>
+    machine.store
+      .plan()
+      .ideaView(idea)
+      .links.map((id) => machine.store.getIssue(id).identifier)
+      .sort();
+  const conflicts = (machine: Machine): unknown[] => machine.db.prepare("SELECT field FROM sync_conflicts WHERE resolved_at IS NULL").all();
+
+  for (const fold of ["service", "tail"] as const) {
+    it(`keeps both of two adopts made offline on two devices (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp");
+      const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped" }, "vp", PERSON).identifier;
+      const x = a.store.createIssue({ title: "Epic X", kind: "epic" }).identifier;
+      const y = a.store.createIssue({ title: "Epic Y", kind: "epic" }).identifier;
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      a.use();
+      a.store.plan().adopt(idea, x, "agent-a");
+      b.use();
+      b.store.plan().adopt(idea, y, "agent-b");
+      await both(a, b);
+
+      expect(linked(a, idea)).toEqual([x, y].sort());
+      expect(linked(b, idea)).toEqual([x, y].sort());
+      expect(conflicts(a)).toEqual([]);
+      expect(conflicts(b)).toEqual([]);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      expect(linked(fresh, idea)).toEqual([x, y].sort());
+    });
+  }
+
+  it("converges when one device unlinks while another adopts", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    a.store.plan().enable("vp");
+    const idea = a.store.plan().capture({ title: "Idea", maturity: "shaped" }, "vp", PERSON).identifier;
+    const x = a.store.createIssue({ title: "Epic X", kind: "epic" }).identifier;
+    const y = a.store.createIssue({ title: "Epic Y", kind: "epic" }).identifier;
+    a.store.plan().adopt(idea, x, "vp");
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+
+    a.use();
+    a.store.plan().unlink(idea, x, "agent-a");
+    b.use();
+    b.store.plan().adopt(idea, y, "agent-b");
+    await both(a, b);
+
+    expect(linked(a, idea)).toEqual([y]);
+    expect(linked(b, idea)).toEqual([y]);
+    expect(conflicts(a)).toEqual([]);
+    expect(conflicts(b)).toEqual([]);
+    const fresh = fleet.machine("fresh");
+    await fresh.sync();
+    expect(linked(fresh, idea)).toEqual([y]);
+  });
+});
+
 describe("the plan synchronizes with no new entity", () => {
   for (const fold of ["service", "tail"] as const) {
     it(`reads the same on every device (${fold} fold)`, async () => {

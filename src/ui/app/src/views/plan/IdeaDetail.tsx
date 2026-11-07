@@ -201,19 +201,31 @@ export function IdeaDetail({ plan, detail, write, onClose, onOpen }: { plan: Pla
           {detail.linked.length === 0 && idea.linkCount > 0 ? <p className="mt-1 text-caption text-text-tertiary">Linked through its sub-ideas.</p> : null}
           <ul className="mt-2 space-y-2">
             {detail.linked.map((link) => (
-              <li key={link.id} className="rounded-md border px-2.5 py-2" data-plan-link={link.identifier}>
+              <li key={link.id} className={cn("rounded-md border px-2.5 py-2", link.missing && "border-dashed")} data-plan-link={link.identifier} data-plan-link-missing={link.missing || undefined}>
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
-                    <div className="text-label"><span className="font-mono text-text-tertiary">{link.identifier}</span> {link.title}</div>
-                    <div className="text-caption text-text-tertiary">
-                      {link.status} · {link.doneLeaves}/{link.leaves} done{link.milestone ? ` · in ${link.milestone.title} (${link.milestone.state}${link.milestone.run ? `, run ${link.milestone.run.state}` : ""})` : ""}
-                    </div>
+                    {link.missing ? (
+                      <>
+                        <div className="flex items-center gap-1.5 text-label">
+                          <Chip tone="amber">missing</Chip>
+                          <span className="truncate font-mono text-text-tertiary">{link.id}</span>
+                        </div>
+                        <div className="text-caption text-text-tertiary">This issue is no longer on this device. The idea keeps its stage; unlink it if it is gone for good.</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-label"><span className="font-mono text-text-tertiary">{link.identifier}</span> {link.title}</div>
+                        <div className="text-caption text-text-tertiary">
+                          {link.status} · {link.doneLeaves}/{link.leaves} done{link.milestone ? ` · in ${link.milestone.title} (${link.milestone.state}${link.milestone.run ? `, run ${link.milestone.run.state}` : ""})` : ""}
+                        </div>
+                      </>
+                    )}
                   </div>
                   <Button variant="ghost" size="icon" className="size-8 shrink-0" aria-label={`Unlink ${link.identifier}`} onClick={() => void write("unlink", { ref, issue: link.id })} data-plan-unlink={link.identifier}>
                     <Unlink aria-hidden />
                   </Button>
                 </div>
-                <Progress value={link.progress} />
+                {link.missing ? null : <Progress value={link.progress} />}
               </li>
             ))}
           </ul>

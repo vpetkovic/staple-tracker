@@ -60,8 +60,8 @@ import { migration as m020 } from "./020-plan-fields.js";
  * follows: two new tables, the metadata replicating as the `attachment` entity and the
  * bytes staying local except when a create inlines them. 019 (instruction documents) follows:
  * one column on `document_revisions` that rides in the revision's payload, and two machine-local
- * `runs` columns. 020 (the plan layer) follows: eight nullable `issues` columns that ride the
- * `issue` entity as fields.
+ * `runs` columns. 020 (the plan layer) follows: seven nullable `issues` columns that ride the
+ * `issue` entity as fields, and `plan_links`, one row per link, each a field of the idea's `milestone` entity.
  */
 export const WORKSPACE_TARGET: MigrationTarget = {
   label: "workspace database",

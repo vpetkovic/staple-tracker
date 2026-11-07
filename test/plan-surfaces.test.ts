@@ -133,6 +133,26 @@ describe("the plan on every surface", () => {
     expect(byId(plan, "PLA-5")).toMatchObject({ maturity: "raw", horizonId: null, planned: { start: null, target: null } });
   });
 
+  it("holds the person rule through the plain tracker tools too", async () => {
+    const plan = (await cliJson("plan", "show")) as Plan;
+    const now = plan.horizons[0]!;
+    for (const [tool, args, words] of [
+      ["create_task", { title: "Agent horizon", kind: "horizon" }, "the person's call"],
+      ["update_task", { ref: now.identifier, title: "Renamed by an agent" }, "the person's call"],
+      ["update_task", { ref: now.identifier, status: "cancelled" }, "the person's call"],
+      ["update_task", { ref: "PLA-5", status: "cancelled" }, "its status does not move"],
+      ["set_blocked_by", { ref: "PLA-1", blockers: ["PLA-5"] }, "cannot be a blocker"],
+    ] as const) {
+      const result = await mcpCall(tool, args);
+      expect(result.isError, `${tool} ${JSON.stringify(args)}`).toBe(true);
+      expect(JSON.stringify(result.content)).toContain(words);
+    }
+    const made = toolPayload(await mcpCall("create_task", { title: "Agent idea via create_task", kind: "idea" })) as { identifier: string };
+    const after = (await cliJson("plan", "show")) as Plan;
+    expect(byId(after, made.identifier)).toMatchObject({ maturity: "raw", stage: "raw" });
+    expect(after.horizons.map((h) => h.name)).toEqual(plan.horizons.map((h) => h.name));
+  });
+
   it("lets the agent do the capture-side edits and link work over MCP", async () => {
     const edited = toolPayload(await mcpCall("update_idea", { ref: "PLA-6", title: "From MCP, renamed", add_question: "Who?", add_decision: "Keep it small" })) as {
       idea: { title: string };
