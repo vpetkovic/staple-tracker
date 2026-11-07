@@ -222,6 +222,59 @@ describe("Start, Adopt and Unlink", () => {
     expect(plan.ideaView(parent).stage).toBe("shaped");
   });
 
+  describe("the actual window, on fixtures shaped like real linked work", () => {
+    /** Writes the timestamps an imported or long-lived tracker holds, which no store call sets. */
+    const stamp = (identifier: string, columns: { created?: string; started?: string | null; completed?: string | null; status?: string }) => {
+      const sets: string[] = [];
+      const values: Array<string | null> = [];
+      if (columns.created !== undefined) (sets.push("created_at = ?"), values.push(columns.created));
+      if (columns.started !== undefined) (sets.push("started_at = ?"), values.push(columns.started));
+      if (columns.completed !== undefined) (sets.push("completed_at = ?"), values.push(columns.completed));
+      if (columns.status !== undefined) (sets.push("status = ?"), values.push(columns.status));
+      store.db.prepare(`UPDATE issues SET ${sets.join(", ")} WHERE identifier = ?`).run(...values, identifier);
+    };
+
+    it("starts at the first started_at anywhere under a linked epic, not when the epic was filed", () => {
+      // Filed on Oct 5, first worked on Nov 3, half done: the epic carries the derived start.
+      const epic = store.createIssue({ title: "Planned early, worked late", kind: "epic" }).identifier;
+      const done = store.createIssue({ title: "done child", parent: epic }).identifier;
+      const open = store.createIssue({ title: "open child", parent: epic }).identifier;
+      stamp(epic, { created: "2026-10-05T16:17:15.000Z", started: "2026-11-03T23:19:32.000Z" });
+      stamp(done, { created: "2026-10-05T16:17:27.000Z", started: "2026-11-03T23:19:32.000Z", completed: "2026-11-05T13:47:42.000Z", status: "done" });
+      stamp(open, { created: "2026-10-05T16:17:40.000Z", started: null });
+      const ref = idea("Rung", { plannedStart: "2026-09-15", plannedTarget: "2026-10-31" });
+      plan.adopt(ref, epic, "agent");
+      const view = plan.ideaView(ref);
+      expect(view.actual).toMatchObject({ start: "2026-11-03", end: null });
+      expect(view.progress).toBe(0.5);
+      expect(view.late).toBe(true);
+    });
+
+    it("reads its children's start when the epic's own started_at is null, and ends at the last close", () => {
+      const epic = store.createIssue({ title: "Never claimed itself", kind: "epic" }).identifier;
+      const a = store.createIssue({ title: "a", parent: epic }).identifier;
+      const b = store.createIssue({ title: "b", parent: epic }).identifier;
+      stamp(epic, { created: "2026-10-01T09:00:00.000Z", started: null });
+      stamp(a, { started: "2026-10-10T09:00:00.000Z", completed: "2026-10-18T17:00:00.000Z", status: "done" });
+      stamp(b, { started: "2026-10-20T09:00:00.000Z", completed: null });
+      const ref = idea("Rung");
+      plan.adopt(ref, epic, "agent");
+      expect(plan.ideaView(ref).actual).toMatchObject({ start: "2026-10-10", end: null });
+      stamp(b, { completed: "2026-10-28T12:00:00.000Z", status: "done" });
+      stamp(epic, { completed: "2026-10-28T12:00:00.000Z", status: "done" });
+      expect(plan.ideaView(ref).actual).toMatchObject({ start: "2026-10-10", end: "2026-10-28", forecastEnd: null });
+    });
+
+    it("draws no actual window for linked work nobody has started", () => {
+      const epic = store.createIssue({ title: "Filed, untouched", kind: "epic" }).identifier;
+      store.createIssue({ title: "child", parent: epic });
+      stamp(epic, { created: "2026-10-01T09:00:00.000Z" });
+      const ref = idea("Rung");
+      plan.adopt(ref, epic, "agent");
+      expect(plan.ideaView(ref).actual).toEqual({ start: null, end: null, forecastEnd: null });
+    });
+  });
+
   it("Adopt refuses a plan-kind target and is idempotent", () => {
     const ref = idea("A");
     const other = idea("B");

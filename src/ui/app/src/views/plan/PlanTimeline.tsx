@@ -19,7 +19,8 @@ import { cn } from "@/lib/utils";
 import { Chip, type Write } from "./PlanBoards";
 import { dayIndex, dayLabel, dayOf, dragWindow, monthsIn, riskOf, timelineGroups, timelineRange } from "./plan-model";
 
-const ROW = 40;
+/** Every bar is drawn in a 40px band; a phone row is taller so its name can take up to three lines. */
+const BAND = 40;
 type Zoom = "fit" | "month" | "week";
 const ZOOM_PX: Record<Exclude<Zoom, "fit">, number> = { month: 5, week: 18 };
 
@@ -33,7 +34,8 @@ interface Drag {
 
 export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData; write: Write; onOpen: (id: string) => void; selected: string | null }) {
   const desk = useIsDesk();
-  const nameWidth = desk ? 240 : 136;
+  const nameWidth = desk ? 240 : 176;
+  const rowHeight = desk ? BAND : 52;
   const [zoom, setZoom] = useState<Zoom>(desk ? "fit" : "month");
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<{ id: string; start: number; end: number } | null>(null);
@@ -149,7 +151,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
             const risk = riskOf(group.rows.map((row) => row.idea).concat(group.undated));
             return (
               <div key={group.key} data-plan-timeline-group={group.key || "none"}>
-                <div className="flex border-b bg-surface-sunken" style={{ height: ROW - 8 }}>
+                <div className="flex border-b bg-surface-sunken" style={{ height: BAND - 8 }}>
                   <div className="sticky left-0 z-10 flex shrink-0 items-center gap-2 border-r bg-surface-sunken px-2 text-label font-semibold" style={{ width: nameWidth }}>
                     <span className="truncate">{group.title}</span>
                     {group.date ? <span className="shrink-0 font-normal text-text-tertiary">{dayLabel(group.date, false)}</span> : null}
@@ -163,8 +165,8 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                   const idea = row.idea;
                   const planned = preview?.id === idea.id ? { start: preview.start, end: preview.end } : windowOf(idea);
                   return (
-                    <div key={idea.id} className={cn("flex border-b", selected === idea.id && "bg-surface-selected")} style={{ height: ROW }} data-plan-timeline-row={idea.identifier}>
-                      <div className="sticky left-0 z-10 flex shrink-0 items-center gap-1 border-r bg-card pr-2" style={{ width: nameWidth, paddingLeft: 6 + row.depth * 14 }}>
+                    <div key={idea.id} className={cn("flex border-b", selected === idea.id && "bg-surface-selected")} style={{ height: rowHeight }} data-plan-timeline-row={idea.identifier}>
+                      <div className="sticky left-0 z-10 flex shrink-0 items-center gap-1 border-r bg-card pr-2" style={{ width: nameWidth, paddingLeft: 4 + row.depth * (desk ? 14 : 10) }}>
                         {row.folds ? (
                           <button
                             type="button"
@@ -183,12 +185,13 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                         ) : (
                           <span className="w-6 shrink-0" />
                         )}
-                        <button type="button" className="min-w-0 flex-1 truncate text-left text-label hover:underline" onClick={() => onOpen(idea.id)} title={idea.title}>
+                        <button type="button" className={cn("min-w-0 flex-1 text-left text-label hover:underline", desk ? "truncate" : "line-clamp-3 leading-tight [overflow-wrap:anywhere]")} onClick={() => onOpen(idea.id)} title={idea.title} data-plan-timeline-name={idea.identifier}>
                           {idea.title}
                         </button>
                         {idea.late ? <span className="size-1.5 shrink-0 rounded-full bg-destructive" aria-label="late" /> : idea.notStarted ? <span className="size-1.5 shrink-0 rounded-full bg-[color:var(--status-task-todo)]" aria-label="not started" /> : null}
                       </div>
                       <div className="relative" style={{ width }}>
+                        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2" style={{ height: BAND }}>
                         {idea.baseline ? <BaselineGhost idea={idea} x={x} /> : null}
                         {planned ? (
                           <div
@@ -220,6 +223,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                           </div>
                         ) : null}
                         <ActualBar idea={idea} x={x} px={px} today={today} />
+                        </div>
                       </div>
                     </div>
                   );
