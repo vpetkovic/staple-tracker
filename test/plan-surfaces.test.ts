@@ -231,3 +231,73 @@ describe("the plan on every surface", () => {
     expect(reset?._meta?.ui?.visibility).toEqual(["app"]);
   });
 });
+
+describe("no surface shows an unpromoted idea's draft identifier", () => {
+  const DRAFT = /~[0-9a-f]{32}/;
+
+  /** Every object in a JSON value that describes the given issue. */
+  function issueObjects(value: unknown, id: string, out: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
+    if (Array.isArray(value)) for (const item of value) issueObjects(item, id, out);
+    else if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (record.id === id && "identifier" in record) out.push(record);
+      for (const inner of Object.values(record)) issueObjects(inner, id, out);
+    }
+    return out;
+  }
+
+  it("walks the CLI, the MCP tools and the HTTP routes that print or serialize an issue", async () => {
+    const madeText = await cli("new", "Captured through new", "--kind", "idea", "--ws", WS);
+    expect(madeText.status, madeText.stderr).toBe(0);
+    const made = (await cliJson("new", "Captured through new, as JSON", "--kind", "idea")) as { id: string };
+    const id = made.id;
+    const texts: Array<[string, string]> = [["cli new", madeText.stdout]];
+    const documents: Array<[string, unknown]> = [["cli new --json", made]];
+
+    for (const args of [["ls", "--kind", "idea"], ["show", id], ["events"], ["idea", "show", id], ["inbox"]]) {
+      const label = args.filter((arg) => arg !== id).join(" ");
+      const text = await cli(...args, "--ws", WS);
+      expect(text.status, `${args.join(" ")}: ${text.stderr}`).toBe(0);
+      texts.push([`cli ${label}`, text.stdout + text.stderr]);
+      const json = await cli(...args, "--ws", WS, "--json");
+      expect(json.status, `${args.join(" ")} --json: ${json.stderr}`).toBe(0);
+      texts.push([`cli ${label} --json`, json.stdout]);
+      for (const line of json.stdout.trim().split("\n").filter(Boolean)) documents.push([`cli ${label} --json`, JSON.parse(line)]);
+    }
+    // A refusal names the idea too.
+    const refused = await cli("checkout", id, "--ws", WS);
+    expect(refused.status).not.toBe(0);
+    texts.push(["cli refusal", refused.stdout + refused.stderr]);
+
+    for (const [name, args] of [
+      ["get_task", { ref: id }],
+      ["list_tasks", { kind: ["idea"] }],
+      ["show_ticket", { ref: id }],
+      ["events_since", { since: 0, limit: 500 }],
+      ["inbox", {}],
+      ["checkout_task", { ref: id }],
+    ] as const) {
+      const result = await mcpCall(name, args);
+      texts.push([`mcp ${name}`, JSON.stringify(result)]);
+      if (!result.isError) documents.push([`mcp ${name}`, (result as { structuredContent?: unknown }).structuredContent ?? toolPayload(result)]);
+    }
+
+    for (const path of [`/api/issue?ws=${WS}&ref=${id}`, `/api/issues?ws=${WS}&kind=idea`, `/api/events?ws=${WS}`, `/api/bootstrap?ws=${WS}`, `/api/graph?ws=${WS}`]) {
+      const response = await fetch(`${origin}${path}`, { headers: { "x-staple-token": token } });
+      const body = await response.text();
+      texts.push([`http ${path}`, body]);
+      if (response.ok) documents.push([`http ${path}`, JSON.parse(body)]);
+    }
+
+    for (const [where, text] of texts) expect(DRAFT.test(text), `${where} shows a draft: ${text.match(DRAFT)?.[0]}`).toBe(false);
+    const described = documents.flatMap(([where, document]) => issueObjects(document, id).map((issue) => [where, issue] as const));
+    expect(described.map(([where]) => where)).toEqual(expect.arrayContaining(["cli new --json", "cli show --json", "cli ls --kind idea --json", "cli idea show --json", "mcp get_task", `http /api/issue?ws=${WS}&ref=${id}`]));
+    // An issue says it is a draft; the plan's own view of an idea says so as `promoted: false`.
+    for (const [where, issue] of described) {
+      const flag = "promoted" in issue ? { promoted: issue.promoted } : { draft: issue.draft };
+      expect({ where, identifier: issue.identifier, ...flag }).toEqual({ where, identifier: null, ...("promoted" in issue ? { promoted: false } : { draft: true }) });
+    }
+    // The text names it by its id.
+    expect(texts.find(([where]) => where === "cli show")?.[1]).toContain(id);
+  });
+});

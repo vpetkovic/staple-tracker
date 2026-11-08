@@ -643,6 +643,25 @@ export function rederiveMilestonesAfterPull(db: DatabaseSync): number {
   return new WorkspaceStore(db, "", "").rederiveEveryMilestone();
 }
 
+/**
+ * After a pull, the milestones whose plan-derived membership it changed (`rebuildPlanMembers`)
+ * re-derive here, from the membership this device now holds. Two devices that moved ideas offline
+ * each derived from their own half; neither status is the one the merged membership implies, and
+ * no device but this one can know which rows changed here. Derivation is a function of synced
+ * facts, so every device that re-derives writes the same status. Logged and skipped, never
+ * thrown: the sync that ran it is the user's.
+ */
+export function rederivePlanMilestonesAfterPull(db: DatabaseSync, changed: readonly string[]): void {
+  if (changed.length === 0) return;
+  const store = new WorkspaceStore(db, "", "");
+  try {
+    store.journal.run(() => store.rederiveMilestones(changed, "plan", null));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`staple: could not re-derive the plan's horizons after the pull (${detail}); the next change re-derives them.`);
+  }
+}
+
 /** Set by migration 017 on a database it backfilled `derived_status` on. */
 const DERIVED_STATUS_PUBLISH_KEY = "derived_status_publish_owed";
 
@@ -3175,6 +3194,18 @@ export class WorkspaceStore {
   }
 
   /**
+   * A horizon's rung (design/plan.md, "Derived, never stored"): read from its open and done
+   * work only. Cancelled work is not work it ships, so a horizon never derives to cancelled,
+   * nor to done on the strength of cancelled work; with nothing else in it, it is planned (the
+   * unstarted band) until the person removes it. Reopening the work derives it again.
+   */
+  private deriveHorizonStatus(inputs: readonly string[]): DerivedRung | null {
+    if (inputs.length === 0) return null;
+    const live = inputs.filter((status) => this.categoryOf(status) !== "cancelled");
+    return live.length === 0 ? "workable" : this.deriveStatusFromChildren(live);
+  }
+
+  /**
    * Recompute every ancestor's derived status after a child transition, and
    * write the ones derivation is allowed to write. (STA-98, generalizing
    * STA-79's one-way `in_progress` flip.)
@@ -3540,7 +3571,8 @@ export class WorkspaceStore {
      */
     if (this.categoryOf(ancestor.status) === "gated") return false;
 
-    const target = this.deriveStatusFromChildren(this.derivationInputs(ancestor));
+    const inputs = this.derivationInputs(ancestor);
+    const target = this.isHorizon(ancestor.id) ? this.deriveHorizonStatus(inputs) : this.deriveStatusFromChildren(inputs);
     if (target === null) return false; // rung 0: no children, so nothing to report
 
     /**

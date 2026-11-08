@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet, type Machine } from "./fixtures/sync-machines.js";
+import { formerHolders } from "../src/core/identifier-moves.js";
 
 const REPO = "5eed0000-0000-4000-8000-0000000001a2";
 const PERSON = { person: { via: "plan_view" } } as const;
@@ -307,5 +308,108 @@ describe("promotion takes a real number once, even on two devices offline", () =
     expect(settled).not.toBe(number);
     expect(settled).toBe(b.store.getIssue(q).identifier);
     expect(openConflicts(c)).toEqual([]);
+  });
+});
+
+describe("a horizon's status over sync", () => {
+  const category = (machine: Machine, id: string) => machine.store.categoryOf(machine.store.getIssue(id).status);
+  const names = (machine: Machine) => machine.store.plan().view().horizons.map((h) => h.name);
+
+  for (const fold of ["service", "tail"] as const) {
+    it(`keeps a horizon whose only work is cancelled, and derives it again everywhere when the work reopens (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp");
+      const now = a.store.plan().view().horizons[0]!.id;
+      const p = a.store.plan().capture({ title: "Only work on Now", maturity: "shaped", horizon: now }, "vp", PERSON).id;
+      a.store.plan().promote(p, "vp", PERSON);
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      a.use();
+      a.store.updateIssue(p, { status: a.store.primaryStatusFor("cancelled") }, "vp");
+      await both(a, b);
+      for (const machine of [a, b]) {
+        expect(names(machine)).toContain("Now");
+        expect(category(machine, now)).toBe("unstarted");
+        expect(membership(machine).Now).toEqual([machine.store.getIssue(p).identifier]);
+      }
+
+      b.use();
+      b.store.updateIssue(p, { status: "todo" }, "vp");
+      b.store.checkoutIssue(p, "agent-b");
+      await both(a, b);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, fresh]) {
+        expect(names(machine)).toContain("Now");
+        expect(category(machine, now)).toBe("active");
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+
+    it(`re-derives each horizon from the membership two offline moves leave, on every device (${fold} fold)`, async () => {
+      const server = new FakeSyncServer({ repositoryId: REPO, ...(fold === "tail" ? { maxSnapshotFoldOps: 3 } : {}) });
+      fleet = new Fleet(server, REPO);
+      const a = fleet.machine("a");
+      a.store.plan().enable("vp");
+      const [now, next] = a.store.plan().view().horizons.map((h) => h.id);
+      const p = a.store.plan().capture({ title: "Underway", maturity: "shaped", horizon: now }, "vp", PERSON).id;
+      const q = a.store.plan().capture({ title: "Not started", maturity: "shaped", horizon: next }, "vp", PERSON).id;
+      a.store.plan().promote(p, "vp", PERSON);
+      a.store.plan().promote(q, "vp", PERSON);
+      a.store.checkoutIssue(p, "agent");
+      expect(category(a, now!)).toBe("active");
+      await a.sync();
+      const b = fleet.machine("b");
+      await b.sync();
+
+      // Offline: A takes the work underway off Now, B puts the unstarted work on it.
+      a.use();
+      a.store.plan().update(p, { horizon: next }, "vp", PERSON);
+      b.use();
+      b.store.plan().update(q, { horizon: now }, "vp", PERSON);
+      // Each derived from its own half: neither saw Now hold only work nobody started.
+      expect(category(a, now!)).toBe("active");
+      expect(category(b, now!)).toBe("active");
+
+      await both(a, b, 3);
+      const fresh = fleet.machine("fresh");
+      await fresh.sync();
+      for (const machine of [a, b, fresh]) {
+        expect(membership(machine).Now).toEqual([machine.store.getIssue(q).identifier]);
+        expect(category(machine, now!)).toBe("unstarted");
+        expect(category(machine, next!)).toBe("active");
+        expect(openConflicts(machine)).toEqual([]);
+      }
+    });
+  }
+});
+
+describe("an idea an earlier build numbered", () => {
+  it("is drafted on every device, and its old number names it on every device", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    a.store.plan().enable("vp");
+    const p = a.store.plan().capture({ title: "Numbered by an earlier build" }, "vp", PERSON).id;
+    // What an earlier build sent: the idea took a ticket number at capture.
+    a.db.prepare("UPDATE issues SET identifier = 'TRA-77' WHERE id = ?").run(p);
+    a.db.prepare("UPDATE sync_outbox SET payload = json_set(payload, '$.identifier', 'TRA-77') WHERE entity_id = ? AND verb = 'create'").run(p);
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    expect(b.store.getIssue(p).identifier).toBe("TRA-77");
+
+    a.use();
+    a.store.plan().enable("vp");
+    await both(a, b);
+    for (const machine of [a, b]) {
+      expect(machine.store.getIssue(p).identifier.startsWith("~")).toBe(true);
+      expect(formerHolders(machine.db, "TRA-77").map((holder) => holder.issueId)).toEqual([p]);
+      expect(machine.store.getIssue("TRA-77").id).toBe(p);
+    }
   });
 });

@@ -1131,6 +1131,21 @@ function displaceIdentifierHolder(
   const incoming = index < 0 ? undefined : pairs[index];
   if (!incoming || typeof incoming[1] !== "string") return;
 
+  /**
+   * The record's own number, written on two devices: one idea promoted on both before either
+   * heard of the other (design/plan.md, "Ticket numbers"). Its identifier is one field, and the
+   * last write of it in the log is the value, as the service's fold keeps it. So a write this
+   * device made later than the incoming one stands, and the incoming one names nothing: it
+   * displaces no holder here, because on every device its number is about to be given up.
+   */
+  const ownDecision = (input.verb === "renumber" && input.actor !== "staple") || input.seq === undefined || input.seq === null;
+  const mine = ownDecision ? null : ownClaimSeq(db, "issue", input.entityId, ["identifier"]);
+  const theirs = claimSeqOf(input, ["identifier"]);
+  if (mine !== null && theirs !== null && mine > theirs && identifierOf(db, input.entityId) !== incoming[1]) {
+    pairs.splice(index, 1);
+    return;
+  }
+
   const owner = identifierOwner(db, incoming[1]);
   if (owner === null || owner === input.entityId) return;
 

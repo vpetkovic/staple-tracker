@@ -170,6 +170,7 @@ import {
   type BindingHome,
 } from "../core/telemetry/budget-config.js";
 import { usagePollingStatus } from "../core/telemetry/polling/run.js";
+import { hideDraftIdentifiers } from "../core/plan.js";
 
 interface UiOptions {
   port: number;
@@ -777,7 +778,8 @@ export function startUiServer(options: UiOptions): UiHandle {
   }
 
   function json(res: ServerResponse, status: number, payload: unknown, headers: Record<string, string> = {}): void {
-    const body = JSON.stringify(payload);
+    // Every API answer: no draft identifier leaves the server (design/plan.md, "Ticket numbers").
+    const body = JSON.stringify(payload, hideDraftIdentifiers);
     res.writeHead(status, { "content-type": "application/json; charset=utf-8", ...headers });
     res.end(body);
   }

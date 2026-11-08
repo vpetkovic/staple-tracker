@@ -187,6 +187,15 @@ third device minted meanwhile; that is a fresh claim, settled the same way.
   applies a settlement but leaves the stand-in's record open (reported as "1
   unresolved conflict" about an issue every device agrees on); its first sync on this
   build closes every identifier record whose issue has moved off its stand-in since.
+- **One record's own number, written on two devices, is the last write in the log.** An
+  idea promoted on two devices offline takes a number on each ([plan](plan.md#ticket-numbers-none-until-promotion)):
+  two `update`s of one field of one issue. The service's fold keeps the later, so every device
+  does too: a device whose own write of that identifier sits later in the log than the arriving
+  one keeps its value and lets the arriving one name nothing (it displaces no holder), and
+  otherwise the arriving one is applied like any claim, moving the record and freeing the
+  number it held for whoever waits on it. The conflict screen does not read such an `update`
+  as an edit, and keeps its place in the log (`seq`) on what it passes on, so it is decided
+  by order and never left open for a person (`test/cloud-plan-promotion-identity.test.ts`).
 - **A settled number keeps every allocator clear of it.** It reaches the other devices as
   a renumber of an issue they already hold, so the applier advances the local allocator
   on that path exactly as it does for a create — without it, the next `staple new` on a

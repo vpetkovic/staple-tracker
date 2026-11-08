@@ -13,6 +13,7 @@ import { configuredHumanName } from "../mcp-view-actions.js";
 import type { HorizonView, IdeaDetail, IdeaView, PlanView, PlanWriteOptions } from "../core/plan-store.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
+import { aKind } from "../core/plan.js";
 
 const COMMON = {
   db: { type: "string" },
@@ -194,7 +195,7 @@ export function runIdeaCommand(rest: string[]): void {
     case "promote": {
       const promoted = plan.promote(need(first, "an idea reference"), actor, options);
       if (values.json) return console.log(JSON.stringify(promoted));
-      console.log(`promoted to ${promoted.identifier}: ${promoted.title} is a ${promoted.kind} in the tracker now (${promoted.stage})`);
+      console.log(`promoted to ${promoted.identifier}: ${promoted.title} is ${aKind(promoted.kind)} in the tracker now (${promoted.stage})`);
       return;
     }
     case "adopt":

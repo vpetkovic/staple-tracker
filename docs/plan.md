@@ -42,7 +42,10 @@ staple idea ask <id> "Expire links after 30 days?"
 In the **Horizons** lens, drag a shaped idea from Unscheduled into a horizon. Give a horizon a
 date (**add a date**) and it becomes a release line; ideas past it are flagged. Add, rename and
 remove horizons from the column header and **+ Horizon**. Removing a horizon returns its ideas
-to Unscheduled.
+to Unscheduled. A horizon that still holds open work, or that is in the queue, cannot be removed
+until you move that work or take it off the queue; the refusal names what to move. Cancelling
+a horizon's work never removes the horizon: with nothing open or done left in it, it reads as
+planned, and it ships when work in it is done.
 
 The work of every idea on a horizon is that milestone's membership: you never add it by hand.
 Move an idea to another horizon and its work moves with it. Something you placed in a milestone

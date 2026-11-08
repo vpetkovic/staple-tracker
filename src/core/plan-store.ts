@@ -21,9 +21,11 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
+import { moveIdentifier } from "./identifier-moves.js";
 import { MILESTONE_KIND, rankBetween, renumberedRanks } from "./milestones.js";
 import {
   DEFAULT_HORIZONS,
+  aKind,
   IDEA_KIND,
   PLAN_KINDS_MISSING_MESSAGE,
   PROMOTED_KIND,
@@ -47,7 +49,7 @@ import {
   type SteeringWrite,
 } from "./plan.js";
 import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
-import { rebuildPlanMembers } from "./plan-members.js";
+import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
 import type { WorkspaceStore } from "./store.js";
 import { StapleError, type PersonDecision } from "./types.js";
 
@@ -318,7 +320,7 @@ export class PlanStore {
   private recordRow(ref: string, forWrite = true): PlanRow {
     const row = this.row(ref, forWrite);
     if (row.plan_maturity === null) {
-      throw new StapleError("validation", `${displayRef(row)} is not part of the plan (it is a ${row.kind}). Adopt it onto an idea to link it.`);
+      throw new StapleError("validation", `${displayRef(row)} is not part of the plan (it is ${aKind(row.kind)}). Adopt it onto an idea to link it.`);
     }
     return row;
   }
@@ -327,7 +329,7 @@ export class PlanStore {
   private ideaRow(ref: string, forWrite = true): PlanRow {
     const row = this.recordRow(ref, forWrite);
     if (row.kind !== IDEA_KIND) {
-      throw new StapleError("validation", `${row.identifier} is already promoted: it is a ${row.kind} in the tracker now.`, { identifier: row.identifier });
+      throw new StapleError("validation", `${row.identifier} is already promoted: it is ${aKind(row.kind)} in the tracker now.`, { identifier: row.identifier });
     }
     return row;
   }
@@ -336,6 +338,9 @@ export class PlanStore {
     const row = this.row(ref, forWrite);
     if (row.kind !== MILESTONE_KIND || row.plan_rank === null) {
       throw new StapleError("validation", `${displayRef(row)} is not a horizon: a horizon is a milestone the plan shows as a column.`);
+    }
+    if (!this.db.prepare(`SELECT 1 AS hit FROM issues WHERE id = ? AND ${LISTED_HORIZON}`).get(row.id)) {
+      throw new StapleError("validation", `${row.title} (${row.identifier}) was removed from the plan; it is a cancelled milestone now.`, { horizon: row.identifier });
     }
     return row;
   }
@@ -406,7 +411,8 @@ export class PlanStore {
     for (const idea of numbered) {
       const draft = draftIdentifier(idea.id);
       const now = this.store.journal.mutationAt();
-      this.db.prepare("UPDATE issues SET identifier = ?, updated_at = ? WHERE id = ?").run(draft, now, idea.id);
+      moveIdentifier(this.db, idea.id, draft, now);
+      this.db.prepare("UPDATE issues SET updated_at = ? WHERE id = ?").run(now, idea.id);
       this.store.journal.record({ entity: "issue", entityId: idea.id, verb: "renumber", payload: { identifier: draft }, actor: actor ?? null });
       insertEvent(this.db, { kind: "idea_drafted", issueId: idea.id, actor, payload: { from: idea.identifier } });
     }
@@ -419,18 +425,10 @@ export class PlanStore {
       this.db
         .prepare(
           `SELECT ${PLAN_COLUMNS}, (SELECT target_date FROM milestone_meta m WHERE m.issue_id = issues.id) AS target_date
-             FROM issues WHERE kind = ? AND plan_rank IS NOT NULL AND status NOT IN (${this.cancelledSql()})`,
+             FROM issues WHERE ${LISTED_HORIZON}`,
         )
-        .all(MILESTONE_KIND) as unknown as HorizonRow[]
+        .all() as unknown as HorizonRow[]
     ).sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.created_at.localeCompare(b.created_at));
-  }
-
-  private cancelledSql(): string {
-    const cancelled = this.store
-      .getStatuses()
-      .filter((status) => this.store.categoryOf(status.id) === "cancelled")
-      .map((status) => `'${status.id.replace(/'/g, "''")}'`);
-    return cancelled.length > 0 ? cancelled.join(", ") : "''";
   }
 
   /** Every plan record: unpromoted ideas while open, promoted ones whatever their status. */
@@ -996,21 +994,29 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
+    // Every value is checked before anything is written.
+    const name = patch.name === undefined ? undefined : oneLine(patch.name, "A horizon's name");
+    const date = patch.date === undefined ? undefined : patch.date === null ? null : parsePlanDate(patch.date);
+    if (patch.before !== undefined && patch.before !== null) this.horizonRow(patch.before);
     this.store.journaled(() => {
-      if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor, undefined, { plan: true });
-      if (patch.date !== undefined) {
-        this.store.milestones().update(row.id, { targetDate: patch.date === null ? null : parsePlanDate(patch.date) }, actor, { plan: true });
-      }
+      if (name !== undefined) this.store.updateIssue(row.id, { title: name }, actor, undefined, { plan: true });
+      if (date !== undefined) this.store.milestones().update(row.id, { targetDate: date }, actor, { plan: true });
       if (patch.before !== undefined) this.write(row.id, { plan_rank: this.rankBefore("horizons", row.id, patch.before, actor) }, actor, "horizon_updated", { fields: ["plan_rank"] });
     });
     return this.horizonOf(row.id);
   }
 
-  /** Remove a horizon: the milestone is cancelled (issues are never deleted) and its ideas become unscheduled. */
+  /**
+   * Remove a horizon: the milestone is cancelled (issues are never deleted) and its unstarted
+   * ideas become unscheduled. Refused while it holds open work or sits in the queue: cancelling
+   * it then would leave that work inside a cancelled milestone, or take the horizon off the queue
+   * without anyone deciding to, so the refusal names what to move first.
+   */
   removeHorizon(ref: string, actor: string | null, options: PlanWriteOptions = {}): PlanView {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
+    this.assertRemovable(row);
     this.store.journaled(() => {
       const on = this.db.prepare("SELECT id FROM issues WHERE plan_maturity IS NOT NULL AND plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
       for (const idea of on) this.write(idea.id, { plan_horizon_id: null }, actor, "idea_updated", { fields: ["plan_horizon_id"] });
@@ -1018,6 +1024,43 @@ export class PlanStore {
       this.store.updateIssue(row.id, { status: this.store.primaryStatusFor("cancelled") }, actor, undefined, { plan: true });
     });
     return this.view();
+  }
+
+  private assertRemovable(row: PlanRow): void {
+    const name = `${row.title} (${row.identifier})`;
+    if (this.db.prepare("SELECT 1 AS hit FROM queue_entries WHERE issue_id = ?").get(row.id)) {
+      throw new StapleError("validation", `${name} is in the queue. Take it off first (staple queue rm ${row.identifier}), then remove the horizon.`, {
+        horizon: row.identifier,
+        queued: true,
+      });
+    }
+    const resolved = this.resolvedStatuses();
+    const byHand = (
+      this.db
+        .prepare("SELECT i.identifier, i.status FROM milestone_members m JOIN issues i ON i.id = m.issue_id WHERE m.milestone_id = ? ORDER BY m.rank")
+        .all(row.id) as Array<{ identifier: string; status: string }>
+    )
+      .filter((member) => !resolved.has(member.status))
+      .map((member) => member.identifier);
+    const placedBy = new Map<string, string>();
+    for (const record of this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE plan_maturity IS NOT NULL AND plan_horizon_id = ?`).all(row.id) as unknown as PlanRow[]) {
+      const work = [...(record.kind === IDEA_KIND ? [] : [record.id]), ...planLinksOf(this.db, record.id)];
+      const open = work.some((id) => {
+        const status = (this.db.prepare("SELECT status FROM issues WHERE id = ?").get(id) as { status: string } | undefined)?.status;
+        return status !== undefined && !resolved.has(status);
+      });
+      if (open) placedBy.set(record.id, record.kind === IDEA_KIND ? `the idea "${record.title}" (${record.id})` : record.identifier);
+    }
+    if (byHand.length === 0 && placedBy.size === 0) return;
+    const moves = [
+      ...[...placedBy.values()].map((what) => `${what}: move it to another horizon or unschedule it (staple idea set <id> --horizon <other|none> --person)`),
+      ...byHand.map((identifier) => `${identifier}, placed by hand: staple milestone rm ${row.identifier} ${identifier}`),
+    ];
+    throw new StapleError("validation", `${name} holds open work, which removing it would leave inside a cancelled milestone. Move it first: ${moves.join("; ")}.`, {
+      horizon: row.identifier,
+      records: [...placedBy.keys()],
+      members: byHand,
+    });
   }
 
   private horizonOf(id: string): HorizonView {

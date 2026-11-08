@@ -400,7 +400,8 @@ const SCENARIOS: readonly Scenario[] = [
   {
     method: "PlanStore.removeHorizon",
     name: "remove a horizon its ideas sat on",
-    prep: (w) => void w.a.store.plan().update(w.ids["Idea"]!, { horizon: w.ids["Q2"]! }, "alice", { person: { via: "test" } }),
+    // An unstarted idea: a horizon that holds open work is refused, and its tests are in store-plan.
+    prep: (w) => void (w.ids["Idea on Q2"] = w.a.store.plan().capture({ title: "Idea on Q2", horizon: w.ids["Q2"]! }, "alice", { person: { via: "test" } }).id),
     run: (w) => void w.a.store.plan().removeHorizon(w.ids["Q2"]!, "alice", { person: { via: "test" } }),
   },
 

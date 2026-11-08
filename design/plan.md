@@ -32,7 +32,17 @@ milestone without one (an autopilot milestone, say, or one made with `create_mil
 an ordinary milestone and never appears in the plan. Its name is the milestone's title and its
 date is the milestone's target date, so everything a milestone has (progress, state, the queue
 expanding it, the goal check) a horizon has too. Issues are never deleted: removing a horizon
-cancels the milestone and unschedules its ideas, and a cancelled horizon is not listed.
+cancels the milestone and unschedules its unstarted ideas. It is refused while the horizon
+holds open work (planned or placed by hand) or sits in the queue, naming what to move first,
+and an edit of a removed horizon is refused before anything is written.
+
+**Only the person removes a horizon.** A horizon is listed by its flag (`LISTED_HORIZON`): a
+milestone with a plan rank, unless a person cancelled it, which is what removing does. Its
+derived status never hides it, and derivation never cancels it: a horizon derives from its
+open and done work only (`deriveHorizonStatus`), so cancelling all its work leaves it planned,
+it ships only on work that was done, and reopening the work derives it again. Membership is
+rebuilt over the same listed horizons, so no rebuild drops a horizon's rows for its status, and
+the outcome does not depend on when rebuilds run.
 
 **Planning is on** once the `idea` and `milestone` kinds exist and a milestone carries a plan
 rank (`WorkspaceStore.planningOn`). Only the plan layer writes one, it synchronizes as data,
@@ -46,7 +56,8 @@ already has kind `idea`, it is refused with `validation` naming those issues: th
 work, and planning would take them out of every task view. Re-kind them, then turn planning on.
 Every plan write before then is refused with `validation` naming the command
 (`PLAN_KINDS_MISSING_MESSAGE`). Run again where planning is on, `enable` gives any idea an
-earlier build numbered its draft identifier (below).
+earlier build numbered its draft identifier (below), and records the number it gave up as an
+alias, as every device that applies the move does, so the old number names the idea everywhere.
 
 ## Ticket numbers: none until promotion
 
@@ -59,20 +70,36 @@ the issue row changes shape, and the draft:
   reaches it, and `advanceIssueNumber` ignores it;
 - consumes nothing: `createIssue` skips `nextIssueNumber` for an idea while planning is on;
 - synchronizes as the identifier field, like any other value of it;
-- is never shown. `IdeaView.identifier` is `null` until promotion, refusals name an idea by
-  its title (`displayRef`), and the CLI, MCP tools and page refer to an idea by its id.
+- is never shown. Every surface sends what it prints through one rule in `plan.ts`: the CLI's
+  output (every line it prints, `cli.ts`), every MCP tool's answer (`published` in `mcp.ts`)
+  and every HTTP answer (`json` in `server.ts`). In JSON an issue whose identifier is a draft
+  goes out as `identifier: null, draft: true` (`hideDraftIdentifiers`), and a draft anywhere
+  else, a text line, a message or an event, goes out as the idea's id (`draftsAsIds`), which
+  is how the CLI, MCP tools and page refer to an idea. `IdeaView.identifier` is `null` until
+  promotion, and refusals name an idea by its title (`displayRef`).
 
 **Promotion allocates the number** through the tracker's own counter, on the same row
 (`promoteInPlace`): the identifier and the kind change in one journaled `update`, and
 `recordIdentifierMove` keeps the draft as an alias. To the sync applier that update is a
 *claim* on the number, exactly like a create's ([sync.md](sync.md), `claims.ts`): when two
-devices promote offline and both take the same next number, the log order decides. The earlier
-claim keeps it, the later device moves its epic to a stand-in and settles it on the next number
-it has, and every device converges on two distinct numbers with no conflict left open. A third
-device that reads both claims before the settlement gives the later one the same stand-in and
-records it, as it would a create's, so it never shows a promoted epic without a number
-(`displaceIdentifierHolder` in `apply.ts`). No protocol change: the identifier is an existing
-field, the settlement an existing verb.
+devices promote two ideas offline and both take the same next number, the log order decides.
+The earlier claim keeps it, the later device moves its epic to a stand-in and settles it on the
+next number it has, and every device converges on two distinct numbers with no conflict left
+open. A third device that reads both claims before the settlement gives the later one the same
+stand-in and records it, as it would a create's, so it never shows a promoted epic without a
+number (`displaceIdentifierHolder` in `apply.ts`).
+
+**One idea promoted on two devices offline** writes the identifier of one record twice. That
+is one field, so the last write in the log is its value, which is what the service's fold
+keeps, and every device keeps the same: a device whose own write of it is later than the
+arriving one keeps its number and lets the arriving one displace nobody; otherwise the arriving
+number is applied as a claim, and the number the record gave up is freed for whatever issue
+waits on it. The conflict screen leaves such an `update` to the applier and passes on its place
+in the log. Every device, a freshly hydrated one included and under both folds, ends with one
+number per record, no number naming two records, and no open conflict
+(`test/cloud-plan-promotion-identity.test.ts`). No protocol change and no Worker change: the
+identifier is an existing field, the settlement an existing verb, and last-write-wins per field
+is what the fold already does.
 
 ## Storage: seven columns on `issues`, two tables, no new entity
 
@@ -110,7 +137,8 @@ absent key on a create reads as NULL, the column default.
 **What an older build does.** A device that has not migrated refuses a pulled operation page
 stamped schema 20 with `schema_ahead`. The snapshot route checks the protocol only, not the
 schema, so an older build that hydrates from a snapshot drops these fields and links rather
-than refusing. Mixed old and new builds on one repository are out of scope for the plan layer:
+than refusing, and shows every unpromoted idea as an ordinary issue whose identifier is its
+`~hex` draft. Mixed old and new builds on one repository are out of scope for the plan layer:
 upgrade every device before planning.
 
 ## Links: one row, and one synced field, per link
@@ -143,12 +171,14 @@ milestone H, and so is every issue a record on H links. Moving the record moves 
 unscheduling it removes the work, and unlinking removes that issue. Nobody adds them by hand.
 
 `plan_members (issue_id, milestone_id, position)` holds the result, rebuilt by one
-deterministic function of synchronized facts (`derivePlanMembers`): the open horizons, each
+deterministic function of synchronized facts (`derivePlanMembers`): the listed horizons, each
 record's horizon, rank and kind, its links in `linked_at` order, and which issues exist on this
 device. Records are walked in plan order with the id breaking ties; an issue is placed once,
 first record wins; ideas and milestones are never members. Two devices holding the same facts
-hold the same rows. It is rebuilt after every plan write, which re-derives each milestone whose
-membership changed, and after every pull, before milestones are re-derived.
+hold the same rows. It is rebuilt after every plan write and after every pull, and each
+milestone whose membership changed on this device re-derives its status here, after a pull too
+(`rederivePlanMilestonesAfterPull`): two devices that moved ideas offline each derived from
+their own half, and only the merged membership says what the status is.
 
 Every reader of membership reads `MILESTONE_MEMBERSHIP`, the union of the hand-made
 `milestone_members` and `plan_members` for any issue not already in the first: the milestone
@@ -194,7 +224,7 @@ While planning is on, for an idea that is not promoted (a promoted one is an ord
 | never gated | `gateIssue` | *refuses a gate on an idea* |
 | never a blocker and never blocked | `assertNoPlanDependency` in `setBlockedBy` and `createIssue` | *refuses an idea as a blocker…* |
 | the kind goes only when nothing uses it | `removeKind` | *keeps tracker work and plans apart…* |
-| no ticket number, never shown | `createIssue`, `displayRef`, `IdeaView.identifier` | *identity…* |
+| no ticket number, never shown | `createIssue`, `displayRef`, `IdeaView.identifier`; on every surface `hideDraftIdentifiers` and `draftsAsIds` | *identity…*; on the surfaces `test/plan-surfaces.test.ts`, *no surface shows…* |
 
 Every guard was checked by removing it and running the suite: each removal fails the test
 named above. The resolver, derivation and listing guards hold even for shapes the local
@@ -246,7 +276,7 @@ follow the person rule*, and on MCP in `test/plan-surfaces.test.ts`.
 | late | the work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open (`isLate`) |
 | not started | nothing linked or promoted and the planned start has passed (`isNotStarted`) |
 | rollups | a parent record reads its sub-records' work for stage, progress and dates |
-| horizon shipped | its milestone's derived status is done |
+| horizon shipped | its milestone's derived status is done, derived from its open and done work only (cancelled work is not counted, so a horizon never derives to cancelled) |
 | membership | `plan_members`, above |
 
 Late and not started are separate facts with separate counts, on cards, horizon headers and
@@ -284,8 +314,9 @@ the plan as an outline behind it.
 
 | test | proves |
 |---|---|
-| `test/store-plan.test.ts` | enabling and its refusal; identity (no counter consumed, never a ref, never shown, numbered at promotion, earlier builds' numbers drafted); every guard; the tracker's own writes, horizon dates included; dependencies; nesting and stage; horizons as milestones; membership (move, unschedule, unlink, plan order, hand-placed members stay, a promoted record counted, a queued horizon expanding); Promote in place, under a promoted parent, refused when dropped or already promoted; Adopt on a promoted record; missing links; actual windows on real-shaped data; late vs not started; the baseline; every steering refusal |
-| `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; two offline adopts both arrive; an unlink racing an adopt converges; offline moves on two devices derive the same membership with no conflict and nothing sent for it; two offline promotions end with two distinct numbers, no draft and no open conflict; a third device reading both claims before the settlement shows a recorded stand-in, never a numberless epic |
+| `test/store-plan.test.ts` | enabling and its refusal; identity (no counter consumed, never a ref, never shown, numbered at promotion, earlier builds' numbers drafted); every guard; the tracker's own writes, horizon dates included; dependencies; nesting and stage; horizons as milestones; membership (move, unschedule, unlink, plan order, hand-placed members stay, a promoted record counted, a queued horizon expanding); a horizon's own status (its only work cancelled with and without a rebuild between, reopened; shipped on done work only; an earlier build's derived cancel taken back; removal refused while it holds open work or is queued; an edit of a removed horizon refused before any write); Promote in place, under a promoted parent, refused when dropped or already promoted; Adopt on a promoted record; missing links; actual windows on real-shaped data; late vs not started; the baseline; every steering refusal |
+| `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; two offline adopts both arrive; an unlink racing an adopt converges; offline moves on two devices derive the same membership with no conflict and nothing sent for it; two offline promotions end with two distinct numbers, no draft and no open conflict; a third device reading both claims before the settlement shows a recorded stand-in, never a numberless epic; a horizon whose only work is cancelled stays listed on every device and derives again when another device reopens the work; two offline moves re-derive each horizon from the merged membership; an idea an earlier build numbered resolves by its old number on every device |
+| `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline (with a ticket made offline on one, with a third device ahead, with equal counters, whichever device sends first) ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
 | `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
-| `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown, consume no number at capture, refuse the same agent writes (plain tracker tools and `update_milestone` included), promote into the horizon's milestone, and let the person steer |
+| `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown, walk every surface that prints or serializes an issue (CLI text and JSON, MCP tools, HTTP routes, events, refusals) and find no draft, with `identifier: null, draft: true` on every issue object, consume no number at capture, refuse the same agent writes (plain tracker tools and `update_milestone` included), promote into the horizon's milestone, and let the person steer |
 | `src/ui/app/src/views/plan/plan-model.test.ts` | board columns and nesting, the Ideas lens, the late/not-started split, timeline groups, range and dragging |

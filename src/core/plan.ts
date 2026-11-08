@@ -40,9 +40,65 @@ export function isDraftIdentifier(identifier: string | null | undefined): boolea
   return typeof identifier === "string" && identifier.startsWith(DRAFT_PREFIX);
 }
 
+// ---------- what a surface shows instead of a draft identifier ----------
+
+const DRAFT_IN_TEXT = /~([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})(?![0-9a-f])/g;
+
+/**
+ * Text with every draft identifier in it written as its idea's id, which is how the CLI, the MCP
+ * tools and the page refer to an idea before it has a number. The draft is the id's own hex, so
+ * nothing needs looking up.
+ */
+export function draftsAsIds(text: string): string {
+  return text.includes("~") ? text.replace(DRAFT_IN_TEXT, "$1-$2-$3-$4-$5") : text;
+}
+
+/**
+ * A `JSON.stringify` replacer for everything a surface sends: an object whose `identifier` is a
+ * draft goes out with `identifier: null` and `draft: true`, the shape `IdeaView` has, and a draft
+ * anywhere else (a parent's ref, a message) goes out as the idea's id.
+ */
+export function hideDraftIdentifiers(key: string, value: unknown): unknown {
+  if (typeof value === "string") return key === "identifier" && isDraftIdentifier(value) ? null : draftsAsIds(value);
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const identifier = (value as { identifier?: unknown }).identifier;
+    if (typeof identifier === "string" && isDraftIdentifier(identifier)) return { ...(value as Record<string, unknown>), identifier: null, draft: true };
+  }
+  return value;
+}
+
+/** A value as a surface sends it (`hideDraftIdentifiers`), still a value. */
+export function publicValue<T>(value: T): T {
+  if (value === undefined) return value;
+  return JSON.parse(JSON.stringify(value, hideDraftIdentifiers)) as T;
+}
+
+/**
+ * One line of output as a surface prints it. A JSON document keeps its shape and its layout,
+ * with drafts hidden as `hideDraftIdentifiers` hides them; any other text names an idea by its id.
+ */
+export function publicOutput(text: string): string {
+  if (!text.includes("~")) return text;
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const indented = /^[[{]\n( +)/.exec(trimmed)?.[1]?.length;
+      return JSON.stringify(JSON.parse(text), hideDraftIdentifiers, indented);
+    } catch {
+      /* not one JSON document: text like any other */
+    }
+  }
+  return draftsAsIds(text);
+}
+
 /** How a message names an issue: its ticket number, or the idea's title while it has none. */
 export function displayRef(row: { identifier: string; title?: string | null }): string {
   return isDraftIdentifier(row.identifier) ? `the idea "${row.title ?? "untitled"}"` : row.identifier;
+}
+
+/** A kind named in a sentence, with its article: "an epic", "a task". */
+export function aKind(kind: string): string {
+  return `${/^[aeiou]/i.test(kind) ? "an" : "a"} ${kind}`;
 }
 
 /** What a person sets by hand. `dropped` keeps the idea and takes it off the boards. */
@@ -203,7 +259,7 @@ export function assertPlanParent(
 ): void {
   if (parent === null) return;
   if (child.kind === IDEA_KIND && parent.kind !== IDEA_KIND && parent.planRecord !== true) {
-    throw new StapleError("validation", `An idea's parent must be another idea; ${displayRef(parent)} is a ${parent.kind}.`);
+    throw new StapleError("validation", `An idea's parent must be another idea; ${displayRef(parent)} is ${aKind(parent.kind)}.`);
   }
   if (!isPlanKind(child.kind) && isPlanKind(parent.kind)) {
     throw new StapleError(

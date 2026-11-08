@@ -141,6 +141,9 @@ describe("identity: an idea holds no ticket number until it is promoted", () => 
     expect(store.db.prepare("SELECT 1 FROM issues WHERE identifier = 'TST-77'").get()).toBeUndefined();
     const event = store.db.prepare("SELECT payload FROM events WHERE kind = 'idea_drafted' AND issue_id = ?").get(id) as { payload: string } | undefined;
     expect(JSON.parse(event!.payload)).toEqual({ from: "TST-77" });
+    // The number it gave up still names it here, as it does on every device that applies the move.
+    expect(formerHolders(store.db, "TST-77").map((holder) => holder.issueId)).toEqual([id]);
+    expect(store.getIssue("TST-77").id).toBe(id);
   });
 });
 
@@ -455,6 +458,7 @@ describe("membership: a horizon holds its ideas' work without anyone typing it",
     const task = store.createIssue({ title: "Its work" });
     plan.adopt(ref, task.identifier, "agent");
     expect(membersOf(mvp.id)).toEqual([task.id]);
+    plan.update(ref, { horizon: null }, "vp", PERSON);
     plan.removeHorizon(mvp.id, "vp", PERSON);
     // Another device scheduled the idea onto it before hearing of the removal.
     store.db.prepare("UPDATE issues SET plan_horizon_id = ? WHERE id = ?").run(mvp.id, ref);
@@ -470,6 +474,107 @@ describe("membership: a horizon holds its ideas' work without anyone typing it",
     const ref = idea("Scheduled", { horizon: horizon("Now") });
     plan.adopt(ref, task.identifier, "agent");
     expect(store.categoryOf(store.getIssue(horizon("Now")).status)).not.toBe("unstarted");
+  });
+});
+
+describe("a horizon's own status: only the person removes it", () => {
+  const cancelled = () => store.primaryStatusFor("cancelled");
+  const categoryOf = (id: string) => store.categoryOf(store.getIssue(id).status);
+  const listed = () => plan.view().horizons.map((h) => h.name);
+
+  function promotedOnNow(title = "Only work"): string {
+    const ref = idea(title, { maturity: "shaped", horizon: horizon("Now") });
+    return plan.promote(ref, "vp", PERSON).identifier!;
+  }
+
+  for (const rebuild of [false, true]) {
+    it(`stays a column holding its work when its only work is cancelled, and derives again when it reopens (${rebuild ? "a rebuild between" : "no rebuild"})`, () => {
+      const now = horizon("Now");
+      const epic = promotedOnNow();
+      store.checkoutIssue(epic, "agent");
+      expect(categoryOf(now)).toBe("active");
+      store.updateIssue(epic, { status: cancelled() }, "vp");
+      expect(categoryOf(now)).toBe("unstarted");
+      if (rebuild) idea("Something else");
+      expect(listed()).toContain("Now");
+      expect(membersOf(now)).toEqual([store.getIssue(epic).id]);
+      store.updateIssue(epic, { status: "todo" }, "vp");
+      store.checkoutIssue(epic, "agent");
+      expect(listed()).toContain("Now");
+      expect(categoryOf(now)).toBe("active");
+      expect(membersOf(now)).toEqual([store.getIssue(epic).id]);
+    });
+  }
+
+  it("ships on its done work and never on cancelled work", () => {
+    const now = horizon("Now");
+    const shipped = promotedOnNow("Shipped");
+    const dropped = promotedOnNow("Dropped");
+    store.updateIssue(dropped, { status: cancelled() }, "vp");
+    expect(categoryOf(now)).toBe("unstarted");
+    finish(shipped);
+    expect(categoryOf(now)).toBe("done");
+    expect(listed()).toContain("Now");
+  });
+
+  it("takes back a horizon an earlier build's derivation cancelled", () => {
+    const now = horizon("Now");
+    const epic = promotedOnNow();
+    // What an earlier build left: the horizon cancelled by derivation, and its members dropped.
+    store.db.prepare("UPDATE issues SET status = ?, derived_status = ? WHERE id = ?").run(cancelled(), cancelled(), now);
+    store.db.prepare("DELETE FROM plan_members").run();
+    expect(listed()).toContain("Now");
+    idea("Any plan write");
+    expect(membersOf(now)).toEqual([store.getIssue(epic).id]);
+    expect(categoryOf(now)).toBe("unstarted");
+  });
+
+  it("refuses to remove a horizon that holds open work, naming what to move", () => {
+    const now = horizon("Now");
+    const nowRef = store.getIssue(now).identifier;
+    const epic = promotedOnNow("Planned work");
+    const error = refused(() => plan.removeHorizon(now, "vp", PERSON));
+    expect(error.message).toContain(epic);
+    expect(error.message).toContain("staple idea set");
+    plan.update(store.getIssue(epic).id, { horizon: null }, "vp", PERSON);
+
+    const stray = store.createIssue({ title: "Placed by hand" });
+    store.milestones().addMember(now, stray.identifier, {}, "vp");
+    const byHand = refused(() => plan.removeHorizon(now, "vp", PERSON));
+    expect(byHand.message).toContain(`staple milestone rm ${nowRef} ${stray.identifier}`);
+    expect(listed()).toContain("Now");
+    expect(categoryOf(now)).not.toBe("cancelled");
+
+    finish(stray.identifier);
+    plan.removeHorizon(now, "vp", PERSON);
+    expect(listed()).not.toContain("Now");
+  });
+
+  it("refuses to remove a queued horizon", () => {
+    const now = horizon("Now");
+    const task = store.createIssue({ title: "Queued through Now" });
+    store.milestones().addMember(now, task.identifier, {}, "vp");
+    store.queue().enqueue(store.getIssue(now).identifier, {}, "vp");
+    finish(task.identifier);
+    const error = refused(() => plan.removeHorizon(now, "vp", PERSON));
+    expect(error.message).toContain(`staple queue rm ${store.getIssue(now).identifier}`);
+    expect(store.queue().entries({ all: true }).map((entry) => entry.issueId)).toContain(now);
+  });
+
+  it("refuses an edit of a removed horizon before writing any of it", () => {
+    const later = horizon("Later");
+    plan.removeHorizon(later, "vp", PERSON);
+    const error = refused(() => plan.updateHorizon(later, { name: "Someday", date: "2027-01-01" }, "vp", PERSON));
+    expect(error.message).toContain("was removed");
+    expect(store.getIssue(later).title).toBe("Later");
+    expect(refused(() => plan.updateHorizon(horizon("Now"), { name: "Today", date: "not a day" }, "vp", PERSON)).message).toContain("YYYY-MM-DD");
+    expect(store.getIssue(horizon("Now")).title).toBe("Now");
+  });
+
+  it("names kinds with the right article", () => {
+    const ref = idea("Shaped", { maturity: "shaped" });
+    plan.promote(ref, "vp", PERSON);
+    expect(refused(() => plan.promote(ref, "vp", PERSON)).message).toContain("it is an epic in the tracker now");
   });
 });
 

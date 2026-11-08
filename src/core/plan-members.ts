@@ -24,18 +24,20 @@ interface RecordRow {
   plan_rank: number | null;
 }
 
+/**
+ * The horizons the plan shows, as a condition on `issues`: a milestone with a plan rank, unless a
+ * person removed it. Removing one cancels it by hand, and that cancel is the only status that
+ * hides a horizon. Its derived status never does: a horizon whose work is all done is shipped and
+ * still a column, and one derivation cancelled (an earlier build did) is still a column, keeps
+ * its members, and derives again from them.
+ */
+export const LISTED_HORIZON = `kind = '${MILESTONE_KIND}' AND plan_rank IS NOT NULL
+  AND NOT (status IN (SELECT id FROM workspace_statuses WHERE category = 'cancelled')
+           AND (derived_status IS NULL OR derived_status <> status))`;
+
 /** The membership the plan's facts imply: issue id to horizon id, in the plan's order. */
 export function derivePlanMembers(db: DatabaseSync): Array<{ issueId: string; milestoneId: string }> {
-  const horizons = new Set(
-    (
-      db
-        .prepare(
-          `SELECT id FROM issues WHERE kind = ? AND plan_rank IS NOT NULL
-              AND status NOT IN (SELECT id FROM workspace_statuses WHERE category = 'cancelled')`,
-        )
-        .all(MILESTONE_KIND) as Array<{ id: string }>
-    ).map((row) => row.id),
-  );
+  const horizons = new Set((db.prepare(`SELECT id FROM issues WHERE ${LISTED_HORIZON}`).all() as Array<{ id: string }>).map((row) => row.id));
   if (horizons.size === 0) return [];
   const records = (
     db

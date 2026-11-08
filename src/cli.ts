@@ -80,6 +80,18 @@ import type { WorkspaceStore } from "./core/store.js";
 import { requireMineLens, splitMine } from "./core/cloud/member-lens.js";
 import { sharedLine, sharedStatus } from "./core/cloud/shared-status.js";
 import { readConnection } from "./core/cloud/connection.js";
+import { format } from "node:util";
+import { hideDraftIdentifiers, publicOutput } from "./core/plan.js";
+
+/**
+ * Everything the CLI prints goes through one place on its way out, so no command can show an
+ * unpromoted idea's draft identifier (design/plan.md, "Ticket numbers"): JSON hides it as
+ * `identifier: null, draft: true`, text names the idea by its id (`publicOutput`).
+ */
+for (const method of ["log", "error", "warn", "info"] as const) {
+  const print = console[method].bind(console);
+  console[method] = (...args: unknown[]) => print(publicOutput(format(...args)));
+}
 
 const STATUS_GLYPHS: Record<string, string> = {
   backlog: "◌",
@@ -456,11 +468,11 @@ function outJson(payload: unknown): void {
    */
   const notices = takeRenumberNotices();
   if (notices.length > 0 && payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
-    console.log(JSON.stringify({ ...(payload as Record<string, unknown>), renumbered: notices }));
+    console.log(JSON.stringify({ ...(payload as Record<string, unknown>), renumbered: notices }, hideDraftIdentifiers));
     return;
   }
   for (const notice of notices) console.error(`note: ${notice.message}`);
-  console.log(JSON.stringify(payload));
+  console.log(JSON.stringify(payload, hideDraftIdentifiers));
 }
 
 /** Every renumber notice a command left and did not put in its JSON answer, said now. */

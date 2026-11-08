@@ -53,6 +53,7 @@ import { registerBudgetTools } from "./core/telemetry/mcp-tools.js";
 import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
+import { publicOutput, publicValue } from "./core/plan.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import { requireMineLens } from "./core/cloud/member-lens.js";
 import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
@@ -296,6 +297,26 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
     };
 
   /**
+   * Every answer, as a tool sends it: no unpromoted idea's draft identifier leaves in a text block
+   * or the structured result (design/plan.md, "Ticket numbers"; `publicOutput`, `publicValue`).
+   */
+  const published =
+    (cb: ToolCallback): ToolCallback =>
+    (...args: unknown[]) => {
+      const shown = (value: unknown) => {
+        if (value === null || typeof value !== "object") return value;
+        const result = value as { content?: Array<{ type: string; text?: string }>; structuredContent?: Record<string, unknown> };
+        return {
+          ...result,
+          ...(result.content ? { content: result.content.map((block) => (typeof block.text === "string" ? { ...block, text: publicOutput(block.text) } : block)) } : {}),
+          ...(result.structuredContent ? { structuredContent: publicValue(result.structuredContent) } : {}),
+        };
+      };
+      const result = cb(...args);
+      return result instanceof Promise ? result.then(shown) : shown(result);
+    };
+
+  /**
    * Every write takes `acknowledgeRenumber`: the caller knows a number it uses may have moved
    * on this device, and means the issue that holds it now. Without it a write through a
    * number this device's issue moved off is refused while that issue may be the one meant
@@ -372,12 +393,12 @@ const MACHINE_LOCAL_WRITES = new Set(["record_budget_sample", "stop_run", "pause
     // synchronizes and writes through no issue number, so it gets neither the renumber flag
     // nor a post-write sync.
     return config.annotations?.readOnlyHint === true || MACHINE_LOCAL_WRITES.has(name)
-      ? direct(name, config, withNotices(cb))
+      ? direct(name, config, published(withNotices(cb)))
       : direct(
           name,
           // A tool that takes no arguments names no issue, and keeps the signature it has.
           config.inputSchema === undefined ? config : { ...config, inputSchema: { ...config.inputSchema, acknowledgeRenumber: ACKNOWLEDGE } },
-          withNotices(afterWrite(acknowledging(cb))),
+          published(withNotices(afterWrite(acknowledging(cb)))),
         );
   };
 }
@@ -564,6 +585,10 @@ const actorSchema = z
     "Who is performing this write (your agent name). Falls back to the server's STAPLE_AGENT; if neither is set the call is refused rather than attributed to a placeholder.",
   );
 
+/** An issue's ticket number; null for an unpromoted idea, which has none yet (design/plan.md). */
+const issueIdentifierSchema = z.string().nullable();
+const draftSchema = z.boolean().optional().describe("True for an unpromoted idea, which has no ticket number yet");
+
 /**
  * Output schema for tools returning an Issue. The SDK validates structuredContent
  * against this at call time and fails the call on mismatch, so the shape is pinned
@@ -571,7 +596,8 @@ const actorSchema = z
  */
 const issueShape = {
   id: z.string(),
-  identifier: z.string(),
+  identifier: issueIdentifierSchema,
+  draft: draftSchema,
   title: z.string(),
   description: z.string().nullable(),
   status: statusEnum,
@@ -607,7 +633,10 @@ const issueShape = {
 
 type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
-type _IssueShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof issueShape>>, Issue>>;
+/** A value as the tools send it: an unpromoted idea's identifier is null, and it says it is a draft (`publicValue`). */
+type Flat<T> = { [K in keyof T]: T[K] };
+type Published<T> = Flat<Omit<T, "identifier"> & { identifier: string | null; draft?: boolean | undefined }>;
+type _IssueShapeMatchesInterface = Expect<Equals<Flat<z.infer<z.ZodObject<typeof issueShape>>>, Published<Issue>>>;
 
 /**
  * Derived liveness for a held issue, so a caller can tell a working agent from
@@ -1020,7 +1049,7 @@ const taskSummaryShape = {
   ...gateFields,
 };
 
-const issueRefShape = { identifier: z.string(), title: z.string(), status: statusEnum };
+const issueRefShape = { identifier: issueIdentifierSchema, draft: draftSchema, title: z.string(), status: statusEnum };
 
 const documentMetaShape = {
   issueId: z.string(),
@@ -1106,7 +1135,8 @@ type _CrossBlockerShapeMatchesInterface = Expect<
 /** The ticket card. show_ticket answers with it; checkout_task and the from-view gate tools carry it too, so the view never reads it back. */
 const ticketCardShape = {
   workspace: z.string().describe("The workspace slug: the web UI's ws parameter"),
-  identifier: z.string(),
+  identifier: issueIdentifierSchema,
+  draft: draftSchema,
   title: z.string(),
   status: z.object({ id: z.string(), label: z.string(), category: z.string() }),
   kind: z.object({ id: z.string(), label: z.string() }),
@@ -1150,7 +1180,7 @@ const ticketCardShape = {
     .describe("The web UI deep link, <base>?ws=<slug>&issue=<REF>. The base is STAPLE_UI_URL, else the configured UI port on 127.0.0.1; null when STAPLE_UI_URL=off"),
   actions: z.object({ approve: z.boolean(), requestChanges: z.boolean() }),
 };
-type _TicketCardShapeMatchesInterface = Expect<Equals<z.infer<z.ZodObject<typeof ticketCardShape>>, TicketCard>>;
+type _TicketCardShapeMatchesInterface = Expect<Equals<Flat<z.infer<z.ZodObject<typeof ticketCardShape>>>, Published<TicketCard>>>;
 
 /** The queue lanes. show_queue answers with them; approve_gate_from_view from the queue carries them too. */
 const queueLaneRowShape = {
