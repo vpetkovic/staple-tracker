@@ -25,6 +25,7 @@ const OFFERED: Record<string, OfferedAction[]> = {
   raw: [
     { id: "edit", label: "Edit title and brief", who: "anyone" },
     { id: "explore", label: "Start exploring", who: "person" },
+    { id: "shape", label: "Mark shaped", who: "person" },
     { id: "drop", label: "Drop", who: "person" },
   ],
   shaped: [
@@ -139,7 +140,8 @@ describe("an idea in the shared drawer", () => {
   });
 
   it("offers the step its state offers as the one primary action, and nothing its state does not", () => {
-    expect(render(ideaDetail(idea("raw")))).toContain('data-plan-action="explore"');
+    // Raw's step forward is exploring; shaping it at once is in ⋯.
+    expect(render(ideaDetail(idea("raw")))).toMatch(/data-plan-action="explore" data-plan-primary=""|data-plan-primary="" [^>]*data-plan-action="explore"/);
     const shaped = render(ideaDetail(idea("shaped")));
     expect(shaped).toContain('data-plan-action="promote"');
     expect(shaped).toContain("Promote to epic");
@@ -157,7 +159,7 @@ describe("an idea in the shared drawer", () => {
     expect(promote!.call).toBeUndefined();
     expect(planPrimary(planActionItems("ws", idea("shipped")))).toBeNull();
     expect(moveOffered(idea("raw"), { maturity: "exploring" })).toBe(true);
-    expect(moveOffered(idea("raw"), { maturity: "shaped" })).toBe(false);
+    expect(moveOffered(idea("raw"), { maturity: "shaped" })).toBe(true);
     expect(moveOffered(idea("raw"), { horizon: "h1" })).toBe(false);
     expect(moveOffered(idea("shaped"), { horizon: "h1" })).toBe(true);
     expect(moveOffered(idea("started"), { maturity: "dropped" })).toBe(false);

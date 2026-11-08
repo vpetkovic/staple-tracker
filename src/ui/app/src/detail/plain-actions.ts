@@ -667,7 +667,7 @@ export function horizonActionItems(ws: string, horizon: { id: string; actions: r
 }
 
 /** The order the drawer picks its one primary plan action in: the step forward the state offers. */
-const PRIMARY_ORDER = ["promote", "shape", "explore", "restore", "open_epic"] as const;
+const PRIMARY_ORDER = ["promote", "explore", "shape", "restore", "open_epic"] as const;
 
 /** The primary plan action, or null; every other item goes in ⋯. */
 export function planPrimary(items: readonly PlanItem[]): PlanItem | null {
