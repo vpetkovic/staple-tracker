@@ -173,7 +173,7 @@ describe("sections", () => {
     expect(splitDepends("—")).toEqual([]);
     expect(splitDepends("none")).toEqual([]);
     expect(splitDepends("N/A")).toEqual([]);
-    expect(splitDepends("42.1 and EPIC-3 SDK")).toEqual(["42.1", "EPIC-3 SDK"]);
+    expect(splitDepends("42.1 and PLAN-3 SDK")).toEqual(["42.1", "PLAN-3 SDK"]);
   });
 });
 
