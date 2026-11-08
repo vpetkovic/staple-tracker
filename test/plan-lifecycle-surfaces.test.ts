@@ -33,7 +33,8 @@ import {
 } from "../src/core/plan-lifecycle.js";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { READY_PLAN } from "./fixtures/plan-ready.js";
-import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
+import { bundledCli, runBundledCli } from "./fixtures/cli-bundle.js";
+import { CONTRACT_AGENT, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 
 const WS = "cyclews";
 
@@ -86,11 +87,21 @@ async function plan(): Promise<Plan> {
 }
 
 async function cli(person: boolean, ...args: string[]) {
-  return await runCliAsync([...args, "--ws", WS, ...(person ? ["--person"] : [])], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
+  // The CLI as one bundled file: the walk runs it for hundreds of cells, and each run then starts in a fraction of tsx's time.
+  return await runBundledCli([...args, "--ws", WS, ...(person ? ["--person"] : [])], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT });
 }
 
 async function mcpCall(name: string, args: Record<string, unknown>) {
   return await mcp.call(name, { ws: WS, ...args });
+}
+
+/** Run every job, at most `width` at once, each next one starting as soon as one finishes. */
+async function pool(jobs: ReadonlyArray<() => Promise<void>>, width: number): Promise<void> {
+  let next = 0;
+  const lane = async (): Promise<void> => {
+    while (next < jobs.length) await jobs[next++]!();
+  };
+  await Promise.all(Array.from({ length: width }, lane));
 }
 
 let counter = 0;
@@ -197,10 +208,11 @@ function outcomeOf(ok: boolean, message: string, state: string): Outcome | `unex
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), "staple-cycle-home-"));
   emptyDir = mkdtempSync(join(tmpdir(), "staple-cycle-cwd-"));
+  await bundledCli();
   process.env.STAPLE_HOME = home;
   process.env.NODE_NO_WARNINGS = "1";
-  expect((await runCliAsync(["init", "--global", WS], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
-  expect((await runCliAsync(["config", "set", "humanName", "VP"], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
+  expect((await runBundledCli(["init", "--global", WS], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
+  expect((await runBundledCli(["config", "set", "humanName", "VP"], { STAPLE_HOME: home, STAPLE_AGENT: CONTRACT_AGENT })).status).toBe(0);
   mcp = await startMcpClient({ home, cwd: emptyDir, agent: CONTRACT_AGENT });
   ui = startUiServer({ port: 0, hub: true });
   await once(ui.server, "listening");
@@ -294,8 +306,8 @@ describe("the idea lifecycle on every surface", () => {
         }
       }
     }
-    // Every cell on its own record, so they run side by side, a few at a time.
-    for (let next = 0; next < jobs.length; next += 12) await Promise.all(jobs.slice(next, next + 12).map((job) => job()));
+    // Every cell on its own record, so they run side by side: a steady few at a time, each next one starting as one ends.
+    await pool(jobs, 6);
     expect(failures).toEqual([]);
     expect(cells).toBeGreaterThan(250);
   }, 300_000);
