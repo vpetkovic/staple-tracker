@@ -10,7 +10,7 @@
  * `src/ui/app/src/detail/plan-lifecycle-ui.test.ts`, against the same table.
  */
 import { once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import {
   IDEA_LIFECYCLE,
   IDEA_STATES,
   horizonOffers,
+  ideaOffered,
   ideaOffers,
   maturityAction,
   type HorizonAction,
@@ -104,10 +105,13 @@ async function task(done = false): Promise<string> {
   return made.identifier;
 }
 
+/** The maturity a fixture in `state` has. */
+const maturityOf = (state: IdeaState) => (state === "raw" ? "raw" : state === "exploring" ? "exploring" : state === "dropped" ? "dropped" : "shaped");
+
 /** A fresh idea in `state`, made as the person; its id, and the task it links when it has one. */
 async function fixture(state: IdeaState): Promise<{ id: string; linked: string | null }> {
-  const maturity = state === "raw" ? "raw" : state === "exploring" ? "exploring" : state === "dropped" ? "dropped" : "shaped";
-  const captured = await http("/api/plan/capture", { title: unique(`A ${state} idea`), maturity });
+  const maturity = maturityOf(state);
+  const captured = await http("/api/plan/capture", { title: unique(`A ${state} idea`), maturity, brief: "The first brief." });
   expect(captured.status, JSON.stringify(captured.body)).toBe(200);
   const id = (captured.body.idea as { idea: { id: string } }).idea.id;
   let linked: string | null = null;
@@ -116,6 +120,20 @@ async function fixture(state: IdeaState): Promise<{ id: string; linked: string |
     expect((await http("/api/plan/adopt", { ref: id, issue: linked })).status).toBe(200);
   }
   return { id, linked };
+}
+
+/** A record promoted in place, started (nothing under it yet) or shipped (its one task landed). */
+async function promotedFixture(state: "started" | "shipped"): Promise<{ id: string; identifier: string }> {
+  const { id } = await fixture("shaped");
+  const promoted = await http("/api/plan/promote", { ref: id });
+  expect(promoted.status, JSON.stringify(promoted.body)).toBe(200);
+  const identifier = ((await plan()).ideas.find((idea) => idea.id === id) as IdeaRow & { identifier: string }).identifier;
+  if (state === "shipped") {
+    const made = toolPayload(await mcpCall("create_task", { title: unique("Its task"), parent: identifier })) as { identifier: string };
+    await mcpCall("checkout_task", { ref: made.identifier });
+    await mcpCall("update_task", { ref: made.identifier, status: "done" });
+  }
+  return { id, identifier };
 }
 
 /** Every write a surface can make on an idea, and the lifecycle action it is from a given state. */
@@ -137,7 +155,7 @@ interface Ctx {
 
 const maturityWrite = (target: string): Write => ({
   key: `maturity:${target}`,
-  action: (state) => maturityAction(state, target),
+  action: (state) => maturityAction({ state, maturity: maturityOf(state) }, target),
   http: (ref) => ["update", { ref, maturity: target }],
   mcp: (ref) => ["update_idea", { ref, maturity: target }],
   cli: (ref) => ["idea", "set", ref, "--maturity", target],
@@ -202,7 +220,7 @@ describe("the idea lifecycle on every surface", () => {
       const { id } = await fixture(state);
       const row = (await plan()).ideas.find((idea) => idea.id === id)!;
       expect(row.state).toBe(state);
-      const table = IDEA_LIFECYCLE[state].filter((action) => action !== "open_epic" || row.promoted);
+      const table = ideaOffered(state, row.promoted).filter((action) => action !== "open_epic" || row.promoted);
       expect(row.actions.map((action) => action.id), state).toEqual(table);
       for (const action of row.actions) expect(action.who, `${state}/${action.id}`).toBe(IDEA_ACTIONS[action.id as IdeaAction].who);
     }
@@ -278,6 +296,123 @@ describe("the idea lifecycle on every surface", () => {
     expect(failures).toEqual([]);
     expect(cells).toBeGreaterThan(250);
   }, 300_000);
+});
+
+describe("promoted records and parents with sub-ideas on every surface", () => {
+  it("carries a promoted record's row with the epic's own edits added", async () => {
+    for (const state of ["started", "shipped"] as const) {
+      const { id } = await promotedFixture(state);
+      const row = (await plan()).ideas.find((idea) => idea.id === id)!;
+      expect(row).toMatchObject({ state, promoted: true });
+      expect(row.actions.map((action) => action.id), state).toEqual([...ideaOffered(state, true)]);
+    }
+  }, 60_000);
+
+  it("gives a parent its own row, whatever its sub-ideas' work is doing", async () => {
+    const cases: Array<{ parent: IdeaState; child: "started" | "shipped" }> = [
+      { parent: "raw", child: "started" },
+      { parent: "raw", child: "shipped" },
+      { parent: "exploring", child: "shipped" },
+      { parent: "shaped", child: "started" },
+      { parent: "dropped", child: "started" },
+    ];
+    for (const { parent, child } of cases) {
+      const { id } = await fixture(parent === "dropped" ? "shaped" : parent);
+      const sub = await http("/api/plan/capture", { title: unique("A sub-idea"), maturity: "shaped", parent: id });
+      const subId = (sub.body.idea as { idea: { id: string } }).idea.id;
+      expect((await http("/api/plan/adopt", { ref: subId, issue: await task(child === "shipped") })).status).toBe(200);
+      if (parent === "dropped") expect((await http("/api/plan/update", { ref: id, maturity: "dropped" })).status).toBe(200);
+      const row = (await plan()).ideas.find((idea) => idea.id === id)!;
+      expect(row.state, `${parent} parent, ${child} child`).toBe(parent);
+      expect(row.actions.map((action) => action.id)).toEqual([...IDEA_LIFECYCLE[parent]]);
+      // And on the agent's surface too.
+      const got = toolPayload(await mcpCall("get_idea", { ref: id })) as { idea: { state: string } };
+      expect(got.idea.state).toBe(parent);
+    }
+  }, 60_000);
+
+  it("accepts a maturity a record already has as no change, on every surface", async () => {
+    const { id } = await fixture("started");
+    expect((await http("/api/plan/update", { ref: id, maturity: "shaped" })).status).toBe(200);
+    expect((await mcpCall("update_idea", { ref: id, maturity: "shaped" })).isError).toBeFalsy();
+    expect((await cli(true, "idea", "set", id, "--maturity", "shaped")).status).toBe(0);
+  }, 60_000);
+});
+
+describe("an idea's documents and files on every surface", () => {
+  /** Every surface that writes an idea's own content, outside the plan's own tools. */
+  const CONTENT: Array<{ name: string; run: (ref: string) => Promise<{ ok: boolean; message: string }> }> = [
+    {
+      name: "mcp put_document",
+      run: async (ref) => {
+        const result = await mcpCall("put_document", { ref, key: "risks", body: "A plan section." });
+        return { ok: !result.isError, message: JSON.stringify(result.content) };
+      },
+    },
+    {
+      name: "http doc_restore",
+      run: async (ref) => {
+        const result = await http("/api/action", { ref, type: "doc_restore", key: "brief", revision: 1 });
+        return { ok: result.status === 200, message: JSON.stringify(result.body) };
+      },
+    },
+    {
+      name: "cli doc --put",
+      run: async (ref) => {
+        const file = join(home, `${unique("body")}.md`);
+        writeFileSync(file, "Notes from the CLI.");
+        const result = await cli(false, "doc", ref, "notes", "--put", file);
+        return { ok: result.status === 0, message: result.stderr };
+      },
+    },
+    {
+      name: "mcp attach_file",
+      run: async (ref) => {
+        const result = await mcpCall("attach_file", { ref, filename: "sketch.txt", bytes_base64: Buffer.from("a sketch").toString("base64"), actor: CONTRACT_AGENT });
+        return { ok: !result.isError, message: JSON.stringify(result.content) };
+      },
+    },
+  ];
+
+  it("holds every document and file write to the idea's edit cell", async () => {
+    const failures: string[] = [];
+    for (const state of IDEA_STATES) {
+      for (const surface of CONTENT) {
+        const { id } = await fixture(state);
+        const result = await surface.run(id);
+        const want: Outcome = ideaOffers(state, "edit") ? "ok" : "lifecycle";
+        const got = outcomeOf(result.ok, result.message, state);
+        if (got !== want) failures.push(`${state} × ${surface.name}: expected ${want}, got ${got}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  }, 300_000);
+
+  it("takes them on a promoted record in every state, as on any epic", async () => {
+    for (const state of ["started", "shipped"] as const) {
+      const { id } = await promotedFixture(state);
+      for (const surface of CONTENT) {
+        const result = await surface.run(id);
+        expect(result.ok, `${state} × ${surface.name}: ${result.message.slice(0, 200)}`).toBe(true);
+      }
+    }
+  }, 120_000);
+});
+
+describe("a horizon's milestone route", () => {
+  it("refuses a start date before writing anything, in words that blame nobody", async () => {
+    const created = await http("/api/plan/horizon-create", { name: unique("Dated horizon"), date: "2027-03-01" });
+    const made = (created.body.plan as Plan).horizons.find((h) => h.name.startsWith("Dated horizon"))!;
+    const both = await http("/api/milestone/update", { ref: made.identifier, targetDate: "2027-04-01", startDate: "2027-02-01" });
+    expect(both.status).not.toBe(200);
+    const message = JSON.stringify(both.body);
+    expect(message).toContain("a horizon has one date, its due date");
+    expect(message).not.toMatch(/agent/i);
+    expect(((await plan()).horizons.find((h) => h.id === made.id) as HorizonRow & { date: string }).date).toBe("2027-03-01");
+    const dated = await http("/api/milestone/update", { ref: made.identifier, targetDate: "2027-04-01" });
+    expect(dated.status, JSON.stringify(dated.body)).toBe(200);
+    expect(((await plan()).horizons.find((h) => h.id === made.id) as HorizonRow & { date: string }).date).toBe("2027-04-01");
+  }, 60_000);
 });
 
 describe("the horizon lifecycle on every surface", () => {

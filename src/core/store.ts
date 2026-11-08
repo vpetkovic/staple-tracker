@@ -3321,6 +3321,11 @@ export class WorkspaceStore {
     this.deriveHolders(milestoneIds, trigger, actor, new Set(milestoneIds));
   }
 
+  /** Re-derive what holds these issues (their parents, their milestones), as a move of theirs would. */
+  rederiveParents(issueIds: readonly string[], trigger: string, actor: string | null): void {
+    this.journaled(() => this.deriveHolders(issueIds, trigger, actor, new Set()));
+  }
+
   /**
    * True until this workspace has had its milestones brought up to the derivation that
    * reads their members, and false for the rest of a process in which the repair failed.
@@ -7363,6 +7368,15 @@ export class WorkspaceStore {
 
   // ---------- documents (keyed, revisioned) ----------
 
+  /**
+   * Every document, restore and file on an unpromoted idea is that idea's edit action
+   * (design/plan.md, "Lifecycle"): whatever the key, it is refused where the idea's state offers
+   * no edit, as `update_idea` refuses a brief. The plan layer's own writes have already asked.
+   */
+  private assertIdeaContentWrite(row: Pick<IssueRow, "id" | "kind">): void {
+    if (row.kind === IDEA_KIND && this.planningOn()) this.plan().assertEditable(row.id);
+  }
+
   putDocument(
     ref: string,
     key: string,
@@ -7379,6 +7393,7 @@ export class WorkspaceStore {
        */
       instructions?: boolean;
     } = {},
+    internal: PlanInternal = {},
   ): { key: string; revision: number; instructions: boolean } {
     const cleanKey = key.trim().toLowerCase();
     if (!/^[a-z0-9._-]{1,64}$/.test(cleanKey)) {
@@ -7386,6 +7401,7 @@ export class WorkspaceStore {
     }
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      if (!internal.plan) this.assertIdeaContentWrite(row);
       const current = this.db
         .prepare(
           `SELECT d.current_revision, COALESCE(r.instructions, 0) AS instructions
@@ -7594,6 +7610,7 @@ export class WorkspaceStore {
     }
     return this.journaled(() => {
       const row = this.requireTarget(ref);
+      this.assertIdeaContentWrite(row);
       const now = this.journal.mutationAt();
       let byteSync: ByteSync = byteSyncFor(input.bytes.byteLength);
       const meta: AttachmentMeta = {
@@ -7661,6 +7678,8 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const meta = readAttachment(this.db, id);
       if (!meta) throw new StapleError("not_found", `No file ${id}.`);
+      const owner = this.db.prepare("SELECT * FROM issues WHERE id = ?").get(meta.issueId) as unknown as IssueRow | undefined;
+      if (owner) this.assertIdeaContentWrite(owner);
       this.db.prepare("DELETE FROM attachments WHERE id = ?").run(id);
       this.emitEvent({
         kind: "file_removed",
@@ -8091,13 +8110,14 @@ export class WorkspaceStore {
     const planning = this.planningOn();
     const build = (parentId: string | null, depth: number): Array<{ issue: Issue; children: unknown[] }> => {
       if (depth > MAX_TREE_DEPTH) return [];
+      // A sub-idea promoted before its parent is top-level work until that parent is promoted too.
+      const roots =
+        planning
+          ? "SELECT * FROM issues WHERE parent_id IS NULL OR (kind <> ? AND parent_id IN (SELECT id FROM issues WHERE kind = ?)) ORDER BY created_at"
+          : "SELECT * FROM issues WHERE parent_id IS NULL ORDER BY created_at";
       const rows = this.db
-        .prepare(
-          parentId === null
-            ? "SELECT * FROM issues WHERE parent_id IS NULL ORDER BY created_at"
-            : "SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at",
-        )
-        .all(...(parentId === null ? [] : [parentId])) as unknown as IssueRow[];
+        .prepare(parentId === null ? roots : "SELECT * FROM issues WHERE parent_id = ? ORDER BY created_at")
+        .all(...(parentId === null ? (planning ? [IDEA_KIND, IDEA_KIND] : []) : [parentId])) as unknown as IssueRow[];
       return rows
         .filter((r) => !(planning && isPlanKind(r.kind)) || (ref !== undefined && depth > 0))
         .map((r) => ({ issue: rowToIssue(r), children: build(r.id, depth + 1) }));

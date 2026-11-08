@@ -1,7 +1,7 @@
 /**
  * The plan's lifecycle table (design/plan.md, "Lifecycle"): the states, the actions, which
  * actions each state offers and who may take them. Pure data and pure functions with no imports,
- * so the page's tests read the very table the store enforces. The refusals are `plan-lifecycle.ts`.
+ * so the page and its tests read the very table the store enforces. The refusals are `plan-lifecycle.ts`.
  */
 export const IDEA_STATES = ["raw", "exploring", "shaped", "started", "shipped", "dropped"] as const;
 export type IdeaState = (typeof IDEA_STATES)[number];
@@ -27,6 +27,8 @@ export const IDEA_ACTIONS = {
   explore: { label: "Start exploring", verb: "moved to exploring", who: "person" },
   shape: { label: "Mark shaped", verb: "marked shaped", who: "person" },
   unshape: { label: "Back to exploring", verb: "moved back to exploring", who: "person" },
+  /** No state offers it: an idea is refined forward from raw and never goes back there. */
+  back_to_raw: { label: "Back to raw", verb: "moved back to raw", who: "person" },
   drop: { label: "Drop", verb: "dropped", who: "person" },
   restore: { label: "Restore", verb: "restored", who: "person" },
   schedule: { label: "Schedule on a horizon", verb: "scheduled", who: "person" },
@@ -48,6 +50,9 @@ export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
  * linked to existing work. Started (promoted, or linked to work) is re-planned, not re-shaped,
  * and never promoted again. Shipped offers no edits: only linking more work (history that landed
  * elsewhere, or new work, which reopens it) and opening the epic. Dropped can only be restored.
+ *
+ * A state is the record's own: its maturity, its own promotion and its own links. Work under its
+ * sub-ideas is a rollup the record displays, and never moves it from one row to another.
  */
 export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> = {
   raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
@@ -57,6 +62,18 @@ export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> 
   shipped: ["adopt", "open_epic"],
   dropped: ["restore"],
 };
+
+/**
+ * A promoted record is an ordinary epic: its title, brief and documents are edited as any epic's,
+ * whatever its plan state. These it offers in every state it reaches, on top of the state's row.
+ */
+export const PROMOTED_ALWAYS: readonly IdeaAction[] = ["edit", "ask", "decide"];
+
+/** What a record offers: its state's row, and for a promoted record the epic's own edits. */
+export function ideaOffered(state: IdeaState, promoted = false): readonly IdeaAction[] {
+  const row = IDEA_LIFECYCLE[state];
+  return promoted ? [...row, ...PROMOTED_ALWAYS.filter((id) => !row.includes(id))] : row;
+}
 
 export const HORIZON_ACTIONS = {
   rename: { label: "Rename", verb: "renamed", who: "person" },
@@ -93,21 +110,23 @@ export function horizonState(view: { shipped: boolean; openWork: number }): Hori
 }
 
 /**
- * Which maturity action a maturity change is, from where it stands: to exploring is exploring
- * from raw, going back from shaped and restoring from dropped. Null when it is not a change, or
- * a change no action makes (back to raw).
+ * Which action a maturity change is, from where the record stands: null when the maturity is the
+ * one it already has (a no-op, whatever the state). Out of dropped it is restoring; to exploring
+ * it is going back from shaped and exploring otherwise; to raw it is going back to raw, which no
+ * state offers.
  */
-export function maturityAction(from: IdeaState, to: string): IdeaAction | null {
-  if (from === "dropped") return to === "dropped" ? null : "restore";
+export function maturityAction(record: { state: IdeaState; maturity: string }, to: string): IdeaAction | null {
+  if (to === record.maturity) return null;
+  if (record.state === "dropped") return "restore";
   if (to === "dropped") return "drop";
-  if (to === "shaped") return from === "shaped" ? null : "shape";
-  if (to === "exploring") return from === "raw" ? "explore" : from === "shaped" ? "unshape" : from === "exploring" ? null : "explore";
-  if (to === "raw") return from === "raw" ? null : "explore";
+  if (to === "shaped") return "shape";
+  if (to === "exploring") return record.maturity === "shaped" ? "unshape" : "explore";
+  if (to === "raw") return "back_to_raw";
   return null;
 }
 
-export function ideaOffers(state: IdeaState, action: IdeaAction): boolean {
-  return IDEA_LIFECYCLE[state].includes(action);
+export function ideaOffers(state: IdeaState, action: IdeaAction, promoted = false): boolean {
+  return ideaOffered(state, promoted).includes(action);
 }
 
 export function horizonOffers(state: HorizonState, action: HorizonAction): boolean {

@@ -457,6 +457,14 @@ const SCENARIOS: readonly Scenario[] = [
     },
   },
   {
+    // The same derivation, asked for by the plan when a promotion puts epics under a new epic:
+    // M1 reads `backlog` again, and re-deriving what holds its member moves it on every device.
+    method: "WorkspaceStore.rederiveParents",
+    name: "re-deriving what holds a member moves its milestone",
+    prep: (w) => void w.a.store.updateIssue(w.ids["M1"]!, { status: "backlog" }, "alice"),
+    run: (w) => void w.a.store.rederiveParents([w.ids["Member two"]!], "plan", "alice"),
+  },
+  {
     // The upgrade's one-shot repair travels like any derived move. M1 reads `backlog` while
     // its member is in progress, as a milestone did before this build; A owes the repair.
     method: "WorkspaceStore.rederiveEveryMilestone",

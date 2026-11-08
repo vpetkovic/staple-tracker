@@ -5177,19 +5177,29 @@ export function startUiServer(options: UiOptions): UiHandle {
              * milestone.
              */
             const horizon = handle.store.planningOn() && handle.store.isHorizon(handle.store.getIssue(ref).id);
-            if (horizon && body.targetDate !== undefined) {
-              handle.store.plan().updateHorizon(ref, { date: body.targetDate as string | null }, actor, { person: { via: "plan_view" } });
+            const goal = { description: body.description as string | null | undefined, acceptanceCriteria: body.acceptanceCriteria as string[] | undefined };
+            if (!horizon) {
+              payload = milestones.update(
+                ref,
+                { targetDate: body.targetDate as string | null | undefined, startDate: body.startDate as string | null | undefined, ...goal },
+                actor,
+              );
+              break;
             }
-            payload = milestones.update(
-              ref,
-              {
-                targetDate: horizon ? undefined : (body.targetDate as string | null | undefined),
-                startDate: body.startDate as string | null | undefined,
-                description: body.description as string | null | undefined,
-                acceptanceCriteria: body.acceptanceCriteria as string[] | undefined,
-              },
-              actor,
-            );
+            // Everything is checked before anything is written: a horizon has one date.
+            if (body.startDate !== undefined) {
+              throw new StapleError("validation", `${handle.store.getIssue(ref).title} is a horizon, and a horizon has one date, its due date. Set targetDate instead; it takes no start date.`, {
+                field: "startDate",
+              });
+            }
+            payload = handle.store.journaled(() => {
+              if (body.targetDate !== undefined) {
+                handle.store.plan().updateHorizon(ref, { date: body.targetDate as string | null }, actor, { person: { via: "plan_view" } });
+              }
+              // A date alone is done; anything else (or nothing at all) is the milestone's own update.
+              const dateOnly = body.targetDate !== undefined && goal.description === undefined && goal.acceptanceCriteria === undefined;
+              return dateOnly ? milestones.get(ref) : milestones.update(ref, goal, actor);
+            });
             break;
           }
           case "/api/milestone/criterion":

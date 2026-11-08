@@ -55,10 +55,10 @@ import {
   HORIZON_ACTIONS,
   HORIZON_LIFECYCLE,
   IDEA_ACTIONS,
-  IDEA_LIFECYCLE,
   assertHorizonAction,
   assertIdeaAction,
   horizonState,
+  ideaOffered,
   ideaState,
   maturityAction,
   type HorizonAction,
@@ -361,15 +361,20 @@ export class PlanStore {
    * for anyone, and the second only once the action itself is possible.
    */
   private allowIdea(row: PlanRow, action: IdeaAction, options: PlanWriteOptions, state: IdeaState = this.stateOf(row.id)): void {
-    assertIdeaAction(displayRef(row), state, action);
+    assertIdeaAction(displayRef(row), state, action, row.kind !== IDEA_KIND);
     if (IDEA_ACTIONS[action].who === "person") this.steer(STEERED_AS[action] ?? "maturity", displayRef(row), options);
   }
 
-  /** The tracker's own edit of an idea's title or description (`staple set`, `update_task`): the edit action. */
+  /**
+   * A write on an idea's own content from outside the plan: the tracker's edit of its title or
+   * description (`staple set`, `update_task`), and any document, file or restore on it. Each is
+   * the edit action, held to its state and to who may take it, as `update_idea` is. A promoted
+   * record is an ordinary epic, edited by the epic's rules.
+   */
   assertEditable(ref: string): void {
     const row = this.row(ref, false);
     if (row.plan_maturity === null || row.kind !== IDEA_KIND) return;
-    assertIdeaAction(displayRef(row), this.stateOf(row.id), "edit");
+    this.allowIdea(row, "edit", {});
   }
 
   private horizonStateOf(id: string): HorizonState {
@@ -653,21 +658,34 @@ export class PlanStore {
       return out;
     };
     return rows.map((row) => {
-      const workIds = [...rolledWork(row.id)];
-      // Linked work whose issue is gone (a rewind, say) still counts: the stage does not slip back.
-      const present = workIds.filter((id) => work.rows.has(id));
-      const missing = workIds.length - present.length;
-      const measured = this.measure(present, work);
+      const promoted = row.kind !== IDEA_KIND;
+      const ownLinks = planLinksOf(this.db, row.id);
+      // Its own state reads its own work only: itself once promoted, and its own links. Linked
+      // work whose issue is gone (a rewind, say) still counts, so the state does not slip back.
+      const ownWork = [...(promoted ? [row.id] : []), ...ownLinks];
+      const ownPresent = ownWork.filter((id) => work.rows.has(id));
+      const own = this.measure(ownPresent, work);
       const maturity = readMaturity(row.plan_maturity);
       const horizonId = row.plan_horizon_id !== null && horizonDates.has(row.plan_horizon_id) ? row.plan_horizon_id : null;
-      const stage = deriveStage({ maturity, scheduled: horizonId !== null, links: workIds.length, resolvedLinks: measured.resolved, missingLinks: missing });
+      const stage = deriveStage({
+        maturity,
+        scheduled: horizonId !== null,
+        links: ownWork.length,
+        resolvedLinks: own.resolved,
+        missingLinks: ownWork.length - ownPresent.length,
+      });
+      // The rollup adds its sub-records' work: what the record displays, never its state.
+      const workIds = [...rolledWork(row.id)];
+      const present = workIds.filter((id) => work.rows.has(id));
+      const measured = this.measure(present, work);
+      const rolledShipped = present.length > 0 && measured.resolved >= present.length;
       const actual: ActualWindow = {
         start: measured.start,
         end: measured.end,
         forecastEnd: forecastEnd({ start: measured.start, end: measured.end, progress: measured.progress ?? 0, today }),
       };
       const started = workIds.length > 0;
-      const hasBaseline = row.plan_baseline_start !== null || row.plan_baseline_target !== null;
+      const hasBaseline = ownWork.length > 0 && (row.plan_baseline_start !== null || row.plan_baseline_target !== null);
       return {
         id: row.id,
         identifier: shownIdentifier(row.identifier),
@@ -680,10 +698,10 @@ export class PlanStore {
         parentId: row.parent_id !== null && byId.has(row.parent_id) ? row.parent_id : null,
         horizonId,
         planned: { start: row.plan_start, target: row.plan_target },
-        baseline: started && hasBaseline ? { start: row.plan_baseline_start, target: row.plan_baseline_target } : null,
+        baseline: hasBaseline ? { start: row.plan_baseline_start, target: row.plan_baseline_target } : null,
         rank: row.plan_rank ?? 0,
-        links: planLinksOf(this.db, row.id),
-        missingLinks: planLinksOf(this.db, row.id).filter((id) => !work.rows.has(id)),
+        links: ownLinks,
+        missingLinks: ownLinks.filter((id) => !work.rows.has(id)),
         linkCount: workIds.length,
         resolvedLinks: measured.resolved,
         progress: started ? measured.progress : null,
@@ -693,18 +711,13 @@ export class PlanStore {
           horizonDate: horizonId === null ? null : (horizonDates.get(horizonId) ?? null),
           actual,
           links: workIds.length,
-          open: stage !== "shipped" && stage !== "dropped",
+          open: !rolledShipped && stage !== "dropped",
           today,
         }),
         notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today }),
         childIds: childIds.get(row.id) ?? [],
         openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
-        ...ideaLifecycle({
-          state: ideaState({ stage, maturity }),
-          promoted: row.kind !== IDEA_KIND,
-          ownLinks: planLinksOf(this.db, row.id).length,
-          parent: row.parent_id === null ? null : (byId.get(row.parent_id) ?? null),
-        }),
+        ...ideaLifecycle({ state: ideaState({ stage, maturity }), promoted, ownLinks: ownLinks.length }),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
@@ -836,7 +849,7 @@ export class PlanStore {
       if (window.start) columns.plan_start = window.start;
       if (window.target) columns.plan_target = window.target;
       this.write(issue.id, columns, actor, "idea_captured", { maturity });
-      if (input.brief?.trim()) this.store.putDocument(issue.id, BRIEF_KEY, input.brief, { author: actor });
+      if (input.brief?.trim()) this.store.putDocument(issue.id, BRIEF_KEY, input.brief, { author: actor }, { plan: true });
       this.settleMembership(actor);
       return issue.id;
     });
@@ -850,9 +863,11 @@ export class PlanStore {
     let state = before;
     const allow = (action: IdeaAction) => this.allowIdea(row, action, options, state);
     if (patch.title !== undefined || patch.brief !== undefined) allow("edit");
-    if (patch.maturity !== undefined) {
-      const maturity = parseMaturity(patch.maturity);
-      const action = maturityAction(before, maturity);
+    // A maturity it already has is no change: nothing to allow and nothing to write.
+    const maturity = patch.maturity === undefined ? undefined : parseMaturity(patch.maturity);
+    const moves = maturity !== undefined && maturity !== readMaturity(row.plan_maturity);
+    if (moves) {
+      const action = maturityAction({ state: before, maturity: readMaturity(row.plan_maturity) }, maturity);
       if (action !== null) allow(action);
       // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
       // and scheduling it is one decision. A started or shipped record keeps its state.
@@ -864,9 +879,9 @@ export class PlanStore {
     if (patch.before !== undefined) allow("reorder");
     this.store.journaled(() => {
       if (patch.title !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.title, "An idea's title") }, actor);
-      if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor });
+      if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor }, { plan: true });
       const columns: Record<string, unknown> = {};
-      if (patch.maturity !== undefined) columns.plan_maturity = parseMaturity(patch.maturity);
+      if (moves) columns.plan_maturity = maturity;
       if (patch.horizon !== undefined) columns.plan_horizon_id = patch.horizon === null ? null : this.horizonRow(patch.horizon).id;
       if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) {
         const window = {
@@ -890,9 +905,6 @@ export class PlanStore {
   private reparent(row: PlanRow, parentRef: string | null, actor: string | null): void {
     const parent = parentRef === null ? null : this.recordRow(parentRef);
     if (parent !== null) {
-      if (row.kind !== IDEA_KIND && parent.kind === IDEA_KIND) {
-        throw new StapleError("validation", `${row.identifier} is promoted; it cannot sit under ${displayRef(parent)}, which is not.`);
-      }
       let cursor: string | null = parent.id;
       for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
         if (cursor === row.id) throw new StapleError("validation", `${displayRef(parent)} sits under ${displayRef(row)}; an idea cannot be its own ancestor.`);
@@ -915,7 +927,7 @@ export class PlanStore {
     this.allowIdea(row, "ask", {});
     const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
     questions.push({ text: oneLine(text, "A question"), resolved: false });
-    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: "question added" });
+    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: "question added" }, { plan: true });
     return this.detail(row.id);
   }
 
@@ -929,7 +941,7 @@ export class PlanStore {
       throw new StapleError("validation", `${displayRef(row)} has ${questions.length} question${questions.length === 1 ? "" : "s"}; there is no #${position}.`);
     }
     question.resolved = resolved;
-    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: resolved ? "question resolved" : "question reopened" });
+    this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: resolved ? "question resolved" : "question reopened" }, { plan: true });
     return this.detail(row.id);
   }
 
@@ -938,7 +950,7 @@ export class PlanStore {
     this.allowIdea(row, "decide", {});
     const decisions = parseDecisions(this.documentBody(row.id, DECISIONS_KEY));
     decisions.push(`${this.today()}: ${oneLine(text, "A decision")}`);
-    this.store.putDocument(row.id, DECISIONS_KEY, decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "decision added" });
+    this.store.putDocument(row.id, DECISIONS_KEY, decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "decision added" }, { plan: true });
     return this.detail(row.id);
   }
 
@@ -947,8 +959,13 @@ export class PlanStore {
   /**
    * Promote in place: the idea becomes the epic on the same record. It takes the next ticket
    * number then, and keeps its documents, comments, files, events, links and plan fields; its
-   * sub-ideas stay under it. Only a shaped idea offers promotion, to a person or an agent alike. An
-   * idea under an idea that is not promoted yet waits for it.
+   * sub-ideas stay under it. Only a shaped idea offers promotion, to a person or an agent alike,
+   * whether or not its parent is promoted.
+   *
+   * The plan's tree is the tracker's: a record's parent stays its parent through promotion. An
+   * epic whose parent is still an idea is top-level work to the tracker (`WorkspaceStore.tree`,
+   * and ideas derive nothing), and the moment that parent is promoted the same write makes it the
+   * epic above them, so its status is derived from theirs here, in this transaction.
    */
   promote(ref: string, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
@@ -958,18 +975,14 @@ export class PlanStore {
       throw new StapleError("validation", `${row.identifier} is already promoted: it is ${aKind(row.kind)} in the tracker now.`, { identifier: row.identifier });
     }
     this.allowIdea(row, "promote", options);
-    if (row.parent_id !== null) {
-      const parent = this.db.prepare("SELECT identifier, title, kind, plan_maturity FROM issues WHERE id = ?").get(row.parent_id) as
-        | { identifier: string; title: string; kind: string; plan_maturity: string | null }
-        | undefined;
-      if (parent?.kind === IDEA_KIND) {
-        throw new StapleError("validation", `${displayRef(row)} sits under ${displayRef(parent)}, which is not promoted yet. Promote the parent first, so the epic has an epic above it.`);
-      }
-    }
     const kinds = this.store.getKinds().map((kind) => kind.id);
     const kind = kinds.includes(PROMOTED_KIND) ? PROMOTED_KIND : this.store.defaultKind();
     this.store.journaled(() => {
       this.store.promoteInPlace(row.id, kind, actor);
+      const promotedChildren = this.db
+        .prepare("SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL AND kind <> ?")
+        .all(row.id, IDEA_KIND) as Array<{ id: string }>;
+      if (promotedChildren.length > 0) this.store.rederiveParents(promotedChildren.map((child) => child.id), "plan", actor);
       this.keepBaselines(row.id, actor);
       this.settleMembership(actor);
     });
@@ -1030,37 +1043,23 @@ export class PlanStore {
   // ---------- the baseline ----------
 
   /**
-   * The first planned window a record has once it is started is kept as its baseline. Run after
-   * anything that can start one (a promotion, a link, on it or on a sub-idea) or give a started
-   * record its first window: it and every record above it that is started, has a window and has
-   * no baseline yet gets one. A baseline that exists is never moved here.
+   * The first planned window a record has once it is started itself is kept as its baseline. Run
+   * after anything that can start it (a promotion, a link) or give a started record its first
+   * window. A sub-idea's start is its own and starts no baseline above it. A baseline that exists
+   * is never moved here.
    */
   private keepBaselines(id: string, actor: string | null): void {
-    let cursor: string | null = id;
-    for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
-      const row = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(cursor) as unknown as PlanRow | undefined;
-      if (!row || row.plan_maturity === null) return;
-      const hasWindow = row.plan_start !== null || row.plan_target !== null;
-      const hasBaseline = row.plan_baseline_start !== null || row.plan_baseline_target !== null;
-      if (hasWindow && !hasBaseline && this.isStarted(row.id)) {
-        this.write(row.id, { plan_baseline_start: row.plan_start, plan_baseline_target: row.plan_target }, actor, "idea_baseline_kept", {
-          start: row.plan_start,
-          target: row.plan_target,
-        });
-      }
-      cursor = row.parent_id;
+    const row = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(id) as unknown as PlanRow | undefined;
+    if (!row || row.plan_maturity === null) return;
+    const hasWindow = row.plan_start !== null || row.plan_target !== null;
+    const hasBaseline = row.plan_baseline_start !== null || row.plan_baseline_target !== null;
+    const started = row.kind !== IDEA_KIND || planLinksOf(this.db, row.id).length > 0;
+    if (hasWindow && !hasBaseline && started) {
+      this.write(row.id, { plan_baseline_start: row.plan_start, plan_baseline_target: row.plan_target }, actor, "idea_baseline_kept", {
+        start: row.plan_start,
+        target: row.plan_target,
+      });
     }
-  }
-
-  /** Started: promoted, or links work, itself or through a sub-idea. */
-  private isStarted(id: string, seen = new Set<string>()): boolean {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    const row = this.db.prepare("SELECT kind FROM issues WHERE id = ?").get(id) as { kind: string } | undefined;
-    if (row !== undefined && row.kind !== IDEA_KIND) return true;
-    if (planLinksOf(this.db, id).length > 0) return true;
-    const children = this.db.prepare("SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL").all(id) as Array<{ id: string }>;
-    return children.some((child) => this.isStarted(child.id, seen));
   }
 
   /** Reset baseline: the current planned window becomes the baseline. The person's, and only on request. */
@@ -1214,23 +1213,15 @@ export class PlanStore {
 
 /**
  * A record's state and the actions it offers, with the preconditions the table cannot know: the
- * epic opens only once promoted, unlinking needs a link, and a sub-idea is promoted after its parent.
+ * epic opens only once promoted, and unlinking needs a link.
  */
-function ideaLifecycle(input: {
-  state: IdeaState;
-  promoted: boolean;
-  ownLinks: number;
-  parent: { kind: string; title: string; identifier: string } | null;
-}): { state: IdeaState; actions: OfferedAction[] } {
+function ideaLifecycle(input: { state: IdeaState; promoted: boolean; ownLinks: number }): { state: IdeaState; actions: OfferedAction[] } {
   const actions: OfferedAction[] = [];
-  for (const id of IDEA_LIFECYCLE[input.state]) {
+  for (const id of ideaOffered(input.state, input.promoted)) {
     if (id === "open_epic" && !input.promoted) continue;
     const rule = IDEA_ACTIONS[id];
     const offered: OfferedAction = { id, label: rule.label, who: rule.who };
     if (id === "unlink" && input.ownLinks === 0) offered.disabledReason = "Nothing is linked to it.";
-    if (id === "promote" && input.parent !== null && input.parent.kind === IDEA_KIND) {
-      offered.disabledReason = `Promote ${displayRef(input.parent)} first, so the epic has an epic above it.`;
-    }
     actions.push(offered);
   }
   return { state: input.state, actions };

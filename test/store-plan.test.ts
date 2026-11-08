@@ -620,13 +620,13 @@ describe("Promote, Adopt and Unlink", () => {
     expect(plan.ideaView(ref).stage).toBe("shipped");
   });
 
-  it("promotes a child only under a promoted parent", () => {
+  it("promotes a child whether or not its parent is promoted, and keeps it under its parent", () => {
     const parent = idea("Parent", { maturity: "shaped" });
     const child = plan.capture({ title: "Child", parent, maturity: "shaped" }, "vp", PERSON).id;
-    expect(refused(() => plan.promote(child, "vp", PERSON)).message).toContain("not promoted yet");
-    expect(plan.ideaView(child).promoted).toBe(false);
-    const epic = plan.promote(parent, "vp", PERSON).identifier!;
     const promoted = plan.promote(child, "vp", PERSON);
+    expect(promoted).toMatchObject({ promoted: true, parentId: parent });
+    expect(plan.ideaView(parent).promoted).toBe(false);
+    const epic = plan.promote(parent, "vp", PERSON).identifier!;
     expect(store.getIssue(promoted.identifier!).parentId).toBe(store.getIssue(epic).id);
   });
 
@@ -638,7 +638,7 @@ describe("Promote, Adopt and Unlink", () => {
     expect(refused(() => plan.promote(once, "vp", PERSON)).message).toContain("is already promoted: it is an epic");
   });
 
-  it("derives progress, actual dates and shipped from linked work, rolled up to the parent", () => {
+  it("derives progress, actual dates and shipped from linked work, and rolls a child's up to the parent's display", () => {
     const parent = idea("Release GA", { maturity: "shaped" });
     const child = plan.capture({ title: "R0", parent, maturity: "shaped" }, "vp", PERSON).id;
     const epic = store.createIssue({ title: "EPIC-40", kind: "epic" });
@@ -646,18 +646,18 @@ describe("Promote, Adopt and Unlink", () => {
     const b = store.createIssue({ title: "b", parent: epic.identifier });
     plan.adopt(child, epic.identifier, "agent");
     finish(a.identifier);
+    expect(plan.ideaView(child).stage).toBe("started");
     const half = plan.ideaView(parent);
-    expect(half.stage).toBe("started");
-    expect(half.progress).toBe(0.5);
+    // The parent's own state is its own: the child's work is its rollup.
+    expect(half).toMatchObject({ stage: "shaped", state: "shaped", progress: 0.5, linkCount: 1 });
     expect(half.actual.start).toBe(store.getIssue(a.identifier).startedAt!.slice(0, 10));
     expect(half.actual.end).toBeNull();
     finish(b.identifier);
     expect(plan.ideaView(child).stage).toBe("shipped");
-    expect(plan.ideaView(parent).stage).toBe("shipped");
+    expect(plan.ideaView(parent)).toMatchObject({ stage: "shaped", progress: 1 });
     expect(plan.ideaView(parent).actual.end).not.toBeNull();
-    // Shipped offers no edits: its link stays, and so does the parent's rolled-up state.
+    // Shipped offers no edits: its link stays.
     expect(refused(() => plan.unlink(child, epic.identifier, "agent")).message).toContain("is shipped; it cannot be unlinked");
-    expect(plan.ideaView(parent).stage).toBe("shipped");
   });
 
   describe("the actual window, on fixtures shaped like real linked work", () => {
@@ -902,9 +902,10 @@ describe("the lifecycle in the store", () => {
     const promoted = idea("Promoted, nothing linked");
     plan.promote(promoted, "vp", PERSON);
     expect(plan.ideaView(promoted).actions.find((a) => a.id === "unlink")).toMatchObject({ disabledReason: "Nothing is linked to it." });
+    // A parent that is not promoted holds nothing back: its sub-idea promotes on its own.
     const parent = idea("Parent, not promoted");
     const child = plan.capture({ title: "Child", parent, maturity: "shaped" }, "vp", PERSON).id;
-    expect(plan.ideaView(child).actions.find((a) => a.id === "promote")?.disabledReason).toContain('Promote the idea "Parent, not promoted" first');
+    expect(plan.ideaView(child).actions.find((a) => a.id === "promote")?.disabledReason).toBeUndefined();
     expect(plan.ideaView(parent).actions.find((a) => a.id === "promote")?.disabledReason).toBeUndefined();
   });
 

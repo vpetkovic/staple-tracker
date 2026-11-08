@@ -9,10 +9,13 @@ import {
   HORIZON_LIFECYCLE,
   IDEA_ACTIONS,
   IDEA_LIFECYCLE,
+  PROMOTED_ALWAYS,
   horizonState,
   ideaLifecycleRefusal,
+  ideaOffered,
   ideaState,
   maturityAction,
+  type IdeaState,
 } from "../src/core/plan-lifecycle.js";
 
 describe("the idea table", () => {
@@ -32,26 +35,41 @@ describe("the idea table", () => {
       .filter(([, rule]) => rule.who === "person")
       .map(([id]) => id)
       .sort();
-    expect(people).toEqual(["drop", "explore", "plan_dates", "reorder", "reparent", "reset_baseline", "restore", "schedule", "shape", "unshape"]);
+    expect(people).toEqual(["back_to_raw", "drop", "explore", "plan_dates", "reorder", "reparent", "reset_baseline", "restore", "schedule", "shape", "unshape"]);
   });
 
-  it("names each maturity change by where the idea stands", () => {
-    const cases: Array<[Parameters<typeof maturityAction>[0], string, string | null]> = [
-      ["raw", "exploring", "explore"],
-      ["raw", "shaped", "shape"],
-      ["raw", "raw", null],
-      ["exploring", "shaped", "shape"],
-      ["exploring", "exploring", null],
-      ["shaped", "exploring", "unshape"],
-      ["shaped", "shaped", null],
-      ["shaped", "dropped", "drop"],
-      ["started", "exploring", "explore"],
-      ["started", "dropped", "drop"],
-      ["dropped", "exploring", "restore"],
-      ["dropped", "raw", "restore"],
-      ["dropped", "dropped", null],
+  it("offers going back to raw in no state", () => {
+    for (const row of Object.values(IDEA_LIFECYCLE)) expect(row).not.toContain("back_to_raw");
+  });
+
+  it("gives a promoted record the epic's own edits in every state, on top of its row", () => {
+    expect(PROMOTED_ALWAYS).toEqual(["edit", "ask", "decide"]);
+    expect(ideaOffered("shipped", true)).toEqual(["adopt", "open_epic", "edit", "ask", "decide"]);
+    expect(ideaOffered("started", true)).toEqual(IDEA_LIFECYCLE.started);
+    expect(ideaOffered("shipped", false)).toEqual(["adopt", "open_epic"]);
+  });
+
+  it("names each maturity change by where the idea stands, and a maturity it already has as no change", () => {
+    const cases: Array<[IdeaState, string, string, string | null]> = [
+      ["raw", "raw", "exploring", "explore"],
+      ["raw", "raw", "shaped", "shape"],
+      ["raw", "raw", "raw", null],
+      ["exploring", "exploring", "shaped", "shape"],
+      ["exploring", "exploring", "exploring", null],
+      ["exploring", "exploring", "raw", "back_to_raw"],
+      ["shaped", "shaped", "exploring", "unshape"],
+      ["shaped", "shaped", "shaped", null],
+      ["shaped", "shaped", "dropped", "drop"],
+      ["shaped", "shaped", "raw", "back_to_raw"],
+      ["started", "shaped", "shaped", null],
+      ["started", "shaped", "exploring", "unshape"],
+      ["started", "shaped", "dropped", "drop"],
+      ["shipped", "shaped", "shaped", null],
+      ["dropped", "dropped", "exploring", "restore"],
+      ["dropped", "dropped", "raw", "restore"],
+      ["dropped", "dropped", "dropped", null],
     ];
-    for (const [from, to, action] of cases) expect(maturityAction(from, to), `${from} → ${to}`).toBe(action);
+    for (const [state, maturity, to, action] of cases) expect(maturityAction({ state, maturity }, to), `${state} (${maturity}) → ${to}`).toBe(action);
   });
 
   it("reads a scheduled idea as its maturity", () => {

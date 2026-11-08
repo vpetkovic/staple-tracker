@@ -3272,7 +3272,7 @@ server.registerTool(
   "start_idea",
   {
     description:
-      "Take an idea into the tracker. Without adopt: promote it in place, so the same record becomes an epic and takes its ticket number now (an idea has none before); its brief, questions, decisions, comments, files and history stay on it, and on a horizon its work joins that horizon's milestone. An agent may promote only an idea the person has marked shaped, and an idea under an unpromoted idea waits for its parent. With adopt: link that existing issue (an epic or a ticket) instead. Either way the idea reads started and its progress and actual dates come from the work.",
+      "Take an idea into the tracker. Without adopt: promote it in place, so the same record becomes an epic and takes its ticket number now (an idea has none before); its brief, questions, decisions, comments, files and history stay on it, and on a horizon its work joins that horizon's milestone. An agent may promote only an idea the person has marked shaped; a sub-idea promotes on its own, and its epic moves under its parent's epic when the parent is promoted. With adopt: link that existing issue (an epic or a ticket) instead. Either way the idea reads started and its progress and actual dates come from the work. A parent's own state never moves with its sub-ideas' work: that work is its rollup (progress, dates, late).",
     inputSchema: {
       ref: ideaRefSchema,
       adopt: refSchema.optional().describe("An existing issue to link instead of promoting the idea"),
