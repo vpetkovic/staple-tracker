@@ -6,63 +6,91 @@ Tickets are for doing. The plan layer is for deciding what to do and when, witho
 undecided work in the task list. It has three things:
 
 - an **idea**, which has a *maturity* (`raw`, `exploring`, `shaped`, or `dropped`), a brief,
-  open questions, decisions, an optional parent idea, and an optional planned window;
-- a **horizon**, an ordered bucket such as Now, Next or Later, which may carry a date and so
-  become a release line;
-- **links** from an idea to tracker work, made by **Start** (create an epic) or **Adopt**
-  (link an existing issue). This is the only door from the plan into the tracker.
+  open questions, decisions, an optional parent idea, and an optional planned window. An idea
+  has no ticket number;
+- a **horizon**, which is a milestone the plan shows as a column, such as Now, Next or Later.
+  A dated horizon is a release line;
+- the way into the tracker: **Promote** turns the idea itself into an epic, which takes its
+  ticket number then, and **Adopt** links an existing issue to it.
 
 Maturity and horizon are independent. "Shaped, no horizon" is a feature whose timing is open;
 "exploring, on Next" is a reserved slot whose scope is open. Both are valid.
 
 The pure rules live in `src/core/plan.ts`; the store half is `src/core/plan-store.ts`
-(`store.plan()`); links are `src/core/plan-links.ts`; the surfaces are `src/commands/plan.ts`
-(CLI), the plan tools in `src/mcp.ts`, the `/api/plan` routes in `src/ui/server.ts` and
-`src/ui/app/src/views/plan/`.
+(`store.plan()`); links are `src/core/plan-links.ts`; derived membership is
+`src/core/plan-members.ts`; the surfaces are `src/commands/plan.ts` (CLI), the plan tools in
+`src/mcp.ts`, the `/api/plan` routes in `src/ui/server.ts` and `src/ui/app/src/views/plan/`.
 
-## Identity: issues of two reserved kinds
+## Identity: ideas are issues, horizons are milestones
 
-An idea **is an issue** of the reserved kind `idea`, and a horizon is an issue of the reserved
-kind `horizon`, exactly as a milestone is an issue of the kind `milestone`
-([milestones.md](milestones.md#identity-an-issue-of-the-milestone-kind)). Title, description,
-parent, documents, comments, events and sync come from the issue. Together they are the
-*plan kinds* (`PLAN_KINDS`, `isPlanKind`).
+An idea **is an issue** of the reserved kind `idea`. Title, description, parent, documents,
+comments, files, events and sync come from the issue (`PLAN_KINDS`, `isPlanKind`).
 
-A horizon is an issue rather than a `setting:*` value because each horizon then changes on its
-own: renaming one and dating another on two devices are two field writes on two entities, not
-two whole-list writes on one setting where the later one wins. Its name is the issue's title.
-Issues are never deleted, so removing a horizon moves it to the workspace's cancelled status
-and unschedules its ideas; a cancelled horizon is not listed.
+A horizon **is a milestone** ([milestones.md](milestones.md#identity-an-issue-of-the-milestone-kind)):
+an issue of the kind `milestone` with a plan rank. The rank is what makes it a column; a
+milestone without one (an autopilot milestone, say, or one made with `create_milestone`) is
+an ordinary milestone and never appears in the plan. Its name is the milestone's title and its
+date is the milestone's target date, so everything a milestone has (progress, state, the queue
+expanding it, the goal check) a horizon has too. Issues are never deleted: removing a horizon
+cancels the milestone and unschedules its ideas, and a cancelled horizon is not listed.
 
-**Planning is on** once a horizon carries a plan rank (`WorkspaceStore.planningOn`). Only the
-plan layer writes one, it synchronizes as data, and no setting can switch it. Every guard below
-applies only while planning is on, so a workspace that already used `idea` or `horizon` as a
-kind of its own keeps every such issue a tracker issue after upgrading.
+**Planning is on** once the `idea` and `milestone` kinds exist and a milestone carries a plan
+rank (`WorkspaceStore.planningOn`). Only the plan layer writes one, it synchronizes as data,
+and no setting can switch it. Every guard below applies only while planning is on, so a
+workspace that already used `idea` as a kind of its own keeps every such issue a numbered
+tracker issue after upgrading.
 
 **Turning planning on.** `staple plan enable` (and "Turn on planning" in the web UI) adds the
-two kinds when they are missing and seeds Now, Next and Later. While any issue already has kind
-`idea` or `horizon`, it is refused with `validation` naming those issues: they are someone's
+two kinds when they are missing and creates Now, Next and Later as milestones. While any issue
+already has kind `idea`, it is refused with `validation` naming those issues: they are someone's
 work, and planning would take them out of every task view. Re-kind them, then turn planning on.
 Every plan write before then is refused with `validation` naming the command
-(`PLAN_KINDS_MISSING_MESSAGE`).
+(`PLAN_KINDS_MISSING_MESSAGE`). Run again where planning is on, `enable` gives any idea an
+earlier build numbered its draft identifier (below).
 
-## Storage: seven columns on `issues`, one table for links, no new entity
+## Ticket numbers: none until promotion
+
+An idea is stored under a **draft identifier**, `~` and its id's 32 hex digits
+(`draftIdentifier`). The `issues.identifier` column stays `NOT NULL UNIQUE`, so nothing about
+the issue row changes shape, and the draft:
+
+- is unique, because the id is;
+- never parses as a ticket ref (`IDENTIFIER_RE` is `^[A-Z]+-\d+$`), so no ref a person types
+  reaches it, and `advanceIssueNumber` ignores it;
+- consumes nothing: `createIssue` skips `nextIssueNumber` for an idea while planning is on;
+- synchronizes as the identifier field, like any other value of it;
+- is never shown. `IdeaView.identifier` is `null` until promotion, refusals name an idea by
+  its title (`displayRef`), and the CLI, MCP tools and page refer to an idea by its id.
+
+**Promotion allocates the number** through the tracker's own counter, on the same row
+(`promoteInPlace`): the identifier and the kind change in one journaled `update`, and
+`recordIdentifierMove` keeps the draft as an alias. To the sync applier that update is a
+*claim* on the number, exactly like a create's ([sync.md](sync.md), `claims.ts`): when two
+devices promote offline and both take the same next number, the log order decides. The earlier
+claim keeps it, the later device moves its epic to a stand-in and settles it on the next number
+it has, and every device converges on two distinct numbers with no conflict left open. A third
+device that reads both claims before the settlement gives the later one the same stand-in and
+records it, as it would a create's, so it never shows a promoted epic without a number
+(`displaceIdentifierHolder` in `apply.ts`). No protocol change: the identifier is an existing
+field, the settlement an existing verb.
+
+## Storage: seven columns on `issues`, two tables, no new entity
 
 What an issue cannot already say lives in seven nullable `issues` columns added by workspace
-migration **020** (`020-plan-fields.ts`), meaningful on the plan kinds only and NULL on every
-other row, and one table, `plan_links`.
+migration **020** (`020-plan-fields.ts`), NULL on every row outside the plan, and two tables:
+`plan_links` (synchronized) and `plan_members` (derived on each device, never sent).
 
 | column | on | meaning |
 |---|---|---|
-| `plan_maturity` | idea | `raw`, `exploring`, `shaped` or `dropped` |
-| `plan_horizon_id` | idea | the horizon it is scheduled into, or NULL |
-| `plan_start`, `plan_target` | idea | the planned window, `YYYY-MM-DD` |
-| `plan_target` | horizon | the horizon's date, or NULL |
-| `plan_baseline_start`, `plan_baseline_target` | idea | the window kept when it was started |
-| `plan_rank` | both | order of horizons, and of ideas in a column; a ranked horizon means planning is on |
+| `plan_maturity` | plan record | `raw`, `exploring`, `shaped` or `dropped`; non-null marks a plan record, promoted or not |
+| `plan_horizon_id` | plan record | the horizon it is scheduled into, or NULL |
+| `plan_start`, `plan_target` | plan record | the planned window, `YYYY-MM-DD` |
+| `plan_baseline_start`, `plan_baseline_target` | plan record | the window kept when it was started |
+| `plan_rank` | both | order of records, and of horizons; a ranked milestone is a horizon |
 
-The brief, open questions and decisions are documents on the idea (`brief`, `questions`,
-`decisions`), so they are revisioned and synchronize as documents already do.
+A horizon's date is its milestone's `target_date`. The brief, open questions and decisions are
+documents on the record (`brief`, `questions`, `decisions`), so they are revisioned and
+synchronize as documents already do, and they stay on the epic after promotion.
 
 **Why no protocol bump and no Worker change.** A new *entity* needs a protocol integer
 ([sync.md](sync.md#protocol-evolution)): attempts took 3 and attachments 4. These are new
@@ -88,7 +116,7 @@ upgrade every device before planning.
 ## Links: one row, and one synced field, per link
 
 `plan_links (idea_id, issue_id, linked_by, linked_at)` holds one row per link. On the wire each
-link is one field of the idea's `milestone` entity, `planLink.<issue id>`, whose value is
+link is one field of the record's `milestone` entity, `planLink.<issue id>`, whose value is
 `{ linkedBy, linkedAt }` and whose `null` unlinks. That is the shape criterion marks already
 use (`criterion<n>`, [milestones.md](milestones.md#goal)): the service folds the entity's keys
 one by one, so two devices linking different work to one idea write two fields and both
@@ -108,24 +136,65 @@ stays. The idea keeps counting it, so its stage does not slip back to a maturity
 shipped is judged on the linked work that is present. The detail lists it as missing, and
 `unlink` accepts its bare id.
 
-## Guards: a plan never enters the tracker
+## Membership: derived from the plan, never typed twice
 
-While planning is on:
+A horizon's members come from its records. A promoted record on horizon H is a member of
+milestone H, and so is every issue a record on H links. Moving the record moves its work,
+unscheduling it removes the work, and unlinking removes that issue. Nobody adds them by hand.
+
+`plan_members (issue_id, milestone_id, position)` holds the result, rebuilt by one
+deterministic function of synchronized facts (`derivePlanMembers`): the open horizons, each
+record's horizon, rank and kind, its links in `linked_at` order, and which issues exist on this
+device. Records are walked in plan order with the id breaking ties; an issue is placed once,
+first record wins; ideas and milestones are never members. Two devices holding the same facts
+hold the same rows. It is rebuilt after every plan write, which re-derives each milestone whose
+membership changed, and after every pull, before milestones are re-derived.
+
+Every reader of membership reads `MILESTONE_MEMBERSHIP`, the union of the hand-made
+`milestone_members` and `plan_members` for any issue not already in the first: the milestone
+view and progress, `milestoneOf`, the queue's expansion of a milestone, status derivation, the
+gate holders and the agent instructions. **A member a person put in a milestone by hand stays
+where it was put** and wins over the plan.
+
+**Why not write `milestone_members`.** Milestone membership replicates as one ordered list per
+milestone, written whole against a base version. Two devices moving ideas between horizons
+offline would each rewrite two lists, and the second would land as a conflict for a person to
+settle. The derived rows are never journaled or seeded; only the ideas' own fields travel, and
+those merge per field.
+
+## Promote, Adopt and Unlink
+
+**Promote** (`PlanStore.promote`) turns the idea into an epic in place (the workspace's `epic`
+kind, or its default kind when it has none). It is the same record: its id, documents,
+comments, files, events, links, sub-ideas and plan fields stay, and its history shows the
+promotion (`idea_promoted`). It takes its ticket number then, it is started from then on, and
+its baseline is kept if it has a window. A person may promote any idea that is not dropped; an
+agent only one the person marked `shaped`. A sub-idea is promoted only once its parent is, so
+an epic always sits under an epic. Once promoted it is an ordinary epic: queued, worked,
+renamed and closed as any other, while its plan fields keep it on the board and the timeline.
+Breaking it down into tickets is ordinary tracker work.
+
+**Adopt** links an existing issue to a record, promoted or not; **Unlink** removes one link.
+
+## Guards: an idea never enters the tracker
+
+While planning is on, for an idea that is not promoted (a promoted one is an ordinary epic):
 
 | guard | where | pinned by (`test/store-plan.test.ts`) |
 |---|---|---|
 | never queued: `enqueue` refuses with `validation` | `QueueStore.enqueue` | *is never queued* |
 | never checked out | `WorkspaceStore.checkoutIssue` | *is never checked out* |
 | never an effective row, so never `queue next` or `next_task` | `QueueStore.nodes` | *is never emitted by the resolver even when another device's plan holds it* |
-| never counted by a non-plan parent's derived status; plans derive nothing | `derivationInputRows` | *is never counted in a non-idea parent's derived status* |
+| never counted by a non-idea parent's derived status; ideas derive nothing | `derivationInputRows` | *is never counted in a non-idea parent's derived status* |
 | never listed by `listIssues` (Tasks, board, inbox, `list_tasks`) unless asked by kind | `issuesQuery` | *is never listed in a task view by default* |
 | never in the tree | `WorkspaceStore.tree` | same |
-| an idea's parent is an idea; a horizon has none; tracker work never sits under a plan | `assertPlanParent` in `createIssue` | *keeps tracker work and plans apart…* |
-| no re-kind across the plan boundary, in either direction | `assertPlanRekind` in `updateIssue` | same |
-| never a milestone member | `MilestoneStore.addMember` | same |
+| an idea's parent is a plan record; tracker work never sits under an idea | `assertPlanParent` in `createIssue` | *keeps tracker work and plans apart…* |
+| no re-kind across the idea boundary, in either direction, except by promotion | `assertPlanRekind` in `updateIssue` | same |
+| never a milestone member, by hand or derived | `MilestoneStore.addMember`, `derivePlanMembers` | same, and *membership…* |
 | never gated | `gateIssue` | *refuses a gate on an idea* |
 | never a blocker and never blocked | `assertNoPlanDependency` in `setBlockedBy` and `createIssue` | *refuses an idea as a blocker…* |
-| the kinds go only when nothing uses them | `removeKind` | *keeps tracker work and plans apart…* |
+| the kind goes only when nothing uses it | `removeKind` | *keeps tracker work and plans apart…* |
+| no ticket number, never shown | `createIssue`, `displayRef`, `IdeaView.identifier` | *identity…* |
 
 Every guard was checked by removing it and running the suite: each removal fails the test
 named above. The resolver, derivation and listing guards hold even for shapes the local
@@ -154,28 +223,31 @@ try; the flag is the distinction. Three surfaces set it:
 Model-visible plan tools and the CLI without `--person` never set it, and a steering write
 without it is refused with `validation` (`steeringRefusal`) saying what an agent may do
 instead. `update_idea` accepts the steering fields only so that the refusal can explain itself.
-**Start from an agent** is allowed only on an idea the person has marked `shaped`.
+**Promote from an agent** is allowed only on an idea the person has marked `shaped`.
 
-**The tracker's own writes hold the same line.** `create_task`/`staple new` and
-`update_task`/`staple set` reach the store's `createIssue` and `updateIssue`, which carry no
-person, so while planning is on: a horizon cannot be created there; a horizon cannot be edited
-there at all (name, status or any field); an idea's status never moves there (maturity is its
-state; dropping it is the person's, in the Plan view); and an idea made there is captured raw
-at the end of the plan, as `capture_idea` would make it. The plan layer's own writes pass
-`PlanInternal` after applying the person rule. Pinned in *the tracker's own writes follow the
-person rule*, and on MCP in `test/plan-surfaces.test.ts`.
+**The tracker's own writes hold the same line.** `create_task`/`staple new`,
+`update_task`/`staple set` and `update_milestone` reach the store's `createIssue`,
+`updateIssue` and `MilestoneStore.update`, which carry no person, so while planning is on: a
+horizon cannot be edited there at all (name, status, dates or any field); a milestone made
+there is an ordinary milestone, never a column; an idea's status never moves there (maturity is
+its state; dropping it is the person's, in the Plan view); and an idea made there is captured
+raw, numberless, at the end of the plan, as `capture_idea` would make it. The plan layer's own
+writes pass `PlanInternal` after applying the person rule. Pinned in *the tracker's own writes
+follow the person rule*, and on MCP in `test/plan-surfaces.test.ts`.
 
 ## Derived, never stored
 
 | fact | rule |
 |---|---|
-| stage | `started` when it links work (its own or a sub-idea's), `shipped` when every linked issue present is resolved, `dropped`, `scheduled` when it has a horizon, otherwise its maturity (`deriveStage`) |
-| progress | done leaves over counted leaves of the linked work, each leaf once, cancelled leaves not counted |
-| actual window | the first `started_at` anywhere under the linked work (an epic whose own start is null reads its children's) to the last `completed_at`/`cancelled_at` once all are resolved; work nobody started draws no actual window |
+| stage | `started` when it is promoted or links work (its own or a sub-idea's), `shipped` when every issue it stands for that is present is resolved, `dropped`, `scheduled` when it has a horizon, otherwise its maturity (`deriveStage`) |
+| progress | done leaves over counted leaves of the record's work (itself once promoted, its links, its sub-records'), each leaf once, cancelled leaves not counted |
+| actual window | the first `started_at` anywhere under that work (an epic whose own start is null reads its children's) to the last `completed_at`/`cancelled_at` once all are resolved; work nobody started draws no actual window |
 | forecast end | a straight line from the days spent and the share done, while open and partly done |
-| late | linked work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open (`isLate`) |
-| not started | nothing linked and the planned start has passed (`isNotStarted`) |
-| rollups | a parent idea reads its sub-ideas' links for stage, progress and dates |
+| late | the work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open (`isLate`) |
+| not started | nothing linked or promoted and the planned start has passed (`isNotStarted`) |
+| rollups | a parent record reads its sub-records' work for stage, progress and dates |
+| horizon shipped | its milestone's derived status is done |
+| membership | `plan_members`, above |
 
 Late and not started are separate facts with separate counts, on cards, horizon headers and
 the timeline, and never one number. Dates are calendar days in UTC, inclusive, as for
@@ -183,35 +255,37 @@ milestones ([milestones.md](milestones.md#dates-calendar-days-utc-inclusive)).
 
 ## The baseline
 
-The first planned window an idea has once it is started is kept as its baseline
-(`plan_baseline_*`). It is written when an idea becomes started with a window, or when a
-started idea gets its first window, and for every started idea above it; a baseline that
-exists is never moved by a re-plan. Reset is an explicit, person-only action that copies the
-current window. Before an idea is started there is no baseline and moving the window just
-moves it. The timeline draws a baseline that differs from the plan as an outline behind it.
+The first planned window a record has once it is started is kept as its baseline
+(`plan_baseline_*`). It is written when a record becomes started with a window (promoted, or
+linked to work), or when a started record gets its first window, and for every started record
+above it; a baseline that exists is never moved by a re-plan. Reset is an explicit,
+person-only action that copies the current window. Before a record is started there is no
+baseline and moving the window just moves it. The timeline draws a baseline that differs from
+the plan as an outline behind it.
 
 ## Surfaces
 
-- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|start|adopt|unlink|ask|resolve|decide|reset-baseline`,
-  `staple horizon ls|new|set|mv|rm`, with `--person` for steering.
+- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|promote|adopt|unlink|ask|resolve|decide|reset-baseline`,
+  `staple horizon ls|new|set|mv|rm`, with `--person` for steering. An idea's ref is its id.
 - **MCP** `list_ideas`, `get_idea`, `list_horizons` (reads); `capture_idea`, `update_idea`,
-  `start_idea` (link or spawn: `adopt` links an existing issue, otherwise an epic is created
-  with the brief as its `plan` document), `unlink_idea`; `reset_idea_baseline` (a view button).
-- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, start, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove}`.
+  `start_idea` (promote in place, or with `adopt` link an existing issue; answers the promoted
+  `{ id, identifier, kind }` or `null`), `unlink_idea`; `reset_idea_baseline` (a view button).
+- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove}`.
   Every write answers `{ plan, idea }`.
 - **Web UI** the Plan view ([web-ui.md](web-ui.md)): Ideas (columns by maturity, capture),
   Horizons (Unscheduled and each horizon), Timeline (planned, baseline and actual windows on a
-  month axis, today and horizon lines, drag to move and resize), and an idea detail panel. A
-  sub-idea in its parent's column folds under the parent's card; one in another column shows
-  there, labelled with its parent. Below 768px the boards are one column with a switcher and
-  the timeline scrolls inside its own frame with the names pinned, each up to three lines.
+  month axis, today and horizon lines, drag to move and resize), and a detail panel with
+  Promote. Cards never show a number; a promoted record's detail does. A sub-idea in its
+  parent's column folds under the parent's card; one in another column shows there, labelled
+  with its parent. Below 768px the boards are one column with a switcher and the timeline
+  scrolls inside its own frame with the names pinned, each up to three lines.
 
 ## What the tests prove
 
 | test | proves |
 |---|---|
-| `test/store-plan.test.ts` | enabling and its refusal, every guard, the tracker's own writes, dependencies, nesting and stage, horizons, documents, Start/Adopt/Unlink, missing links, actual windows on real-shaped data, late vs not started, the baseline, every steering refusal |
-| `test/cloud-plan-sync.test.ts` | the plan converges across devices under both folds; two offline adopts both arrive; an unlink racing an adopt converges; neither raises a conflict |
-| `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation converges column for column |
-| `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan, refuse the same agent writes (plain tracker tools included), and let the person steer |
+| `test/store-plan.test.ts` | enabling and its refusal; identity (no counter consumed, never a ref, never shown, numbered at promotion, earlier builds' numbers drafted); every guard; the tracker's own writes, horizon dates included; dependencies; nesting and stage; horizons as milestones; membership (move, unschedule, unlink, plan order, hand-placed members stay, a promoted record counted, a queued horizon expanding); Promote in place, under a promoted parent, refused when dropped or already promoted; Adopt on a promoted record; missing links; actual windows on real-shaped data; late vs not started; the baseline; every steering refusal |
+| `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; two offline adopts both arrive; an unlink racing an adopt converges; offline moves on two devices derive the same membership with no conflict and nothing sent for it; two offline promotions end with two distinct numbers, no draft and no open conflict; a third device reading both claims before the settlement shows a recorded stand-in, never a numberless epic |
+| `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
+| `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown, consume no number at capture, refuse the same agent writes (plain tracker tools and `update_milestone` included), promote into the horizon's milestone, and let the person steer |
 | `src/ui/app/src/views/plan/plan-model.test.ts` | board columns and nesting, the Ideas lens, the late/not-started split, timeline groups, range and dragging |

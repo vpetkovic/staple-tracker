@@ -94,7 +94,7 @@ milestone is on pace for its date.
 column per maturity and a capture box; **Horizons** has Unscheduled and each horizon (Now,
 Next, Later, or your own), with late and not-started counts; **Timeline** shows planned
 windows you drag and resize, with the real dates of started ideas beside them. Open an idea to
-write its brief and questions, or to start it as an epic. See [The plan](plan.md).
+write its brief and questions, or to promote it to an epic. See [The plan](plan.md).
 
 ## 7. Open a task
 

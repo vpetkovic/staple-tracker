@@ -178,13 +178,13 @@ need `--person`, which records the change under `humanName`.
 
 | Command | What it does |
 |---|---|
-| `staple plan enable` | Turn planning on: the `idea` and `horizon` kinds and the horizons Now, Next and Later. |
+| `staple plan enable` | Turn planning on: the `idea` and `milestone` kinds and the horizons Now, Next and Later, which are milestones. |
 | `staple plan show` / `staple horizon ls` | Horizons in order, with their late and not-started counts. |
-| `staple idea ls` | Ideas with stage, horizon and progress. `--maturity M`, `--horizon H` filter. |
+| `staple idea ls` | Ideas with stage, horizon and progress. `--maturity M`, `--horizon H` filter. An idea has no ticket number until it is promoted; its `<ref>` is the id this prints. |
 | `staple idea new <title>` | Capture a raw idea. `--brief T`, `--parent REF`. |
 | `staple idea show <ref>` | Stage, planned and actual windows, baseline, brief, questions, decisions and links. |
 | `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`. |
-| `staple idea start <ref>` | Create an epic with the brief as its plan and link it. An agent may start only a shaped idea. |
+| `staple idea promote <ref>` | The idea becomes an epic on the same record and takes its ticket number. An agent may promote only a shaped idea. |
 | `staple idea adopt <ref> <issue>` / `unlink` | Link existing work, or remove a link. |
 | `staple idea ask` / `resolve <ref> <n>` / `decide` | Add a question, resolve question `n`, record a decision. |
 | `staple idea reset-baseline <ref> --person` | The current planned window becomes the baseline. |
