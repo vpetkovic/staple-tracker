@@ -1128,10 +1128,9 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
-    // What to move first (open work, the queue) tells more than the state does; the state then
-    // refuses what is left (a horizon whose work has all landed).
+    // The lifecycle's remove cell, said with what to move first: an active horizon is one holding
+    // open work, and this refuses exactly that, and a queued one; planned and done ones may go.
     this.assertRemovable(row);
-    this.allowHorizon(row, "remove");
     this.store.journaled(() => {
       const on = this.db.prepare("SELECT id FROM issues WHERE plan_maturity IS NOT NULL AND plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
       for (const idea of on) this.write(idea.id, { plan_horizon_id: null }, actor, "idea_updated", { fields: ["plan_horizon_id"] });
