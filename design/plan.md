@@ -199,10 +199,18 @@ kind, or its default kind when it has none). It is the same record: its id, docu
 comments, files, events, links, sub-ideas and plan fields stay, and its history shows the
 promotion (`idea_promoted`). It takes its ticket number then, it is started from then on, and
 its baseline is kept if it has a window. Only a shaped idea offers promotion, to a person or an
-agent alike (the lifecycle, below). A sub-idea is promoted only once its parent is, so
-an epic always sits under an epic. Once promoted it is an ordinary epic: queued, worked,
-renamed and closed as any other, while its plan fields keep it on the board and the timeline.
-Breaking it down into tickets is ordinary tracker work.
+agent alike (the lifecycle, below), whether or not its parent is promoted. Once promoted it is
+an ordinary epic: queued, worked, renamed, documented and closed as any other, in every plan
+state, while its plan fields keep it on the board and the timeline. Breaking it down into
+tickets is ordinary tracker work.
+
+**A sub-idea promoted before its parent.** The plan's tree is the tracker's: promotion never
+moves a record, so the epic's parent is still the idea above it. The tracker reads that epic as
+top-level work: `WorkspaceStore.tree` lists it at the root, and an idea derives nothing, so no
+status flows into or out of the idea. When the parent is promoted, the same write makes it the
+epic above its promoted sub-ideas, and its status is derived from theirs in that transaction
+(`rederiveParents`). A sub-idea promoted under a parent that is already promoted is its child
+from the start.
 
 **Adopt** links an existing issue to a record, promoted or not; **Unlink** removes one link.
 
@@ -210,10 +218,21 @@ Breaking it down into tickets is ordinary tracker work.
 
 Each record is in one lifecycle state, and the state decides which actions it offers
 (`plan-lifecycle.ts`). An idea's state is its derived stage, with `scheduled` read as its
-maturity: raw, exploring, shaped, started (promoted, or linked to work), shipped, or dropped. A
+maturity: raw, exploring, shaped, started (promoted, or linked to work), shipped, or dropped.
+
+**Its own state against its rollup.** The state reads only the record's own facts: its
+maturity, whether it is promoted, and its own links. Its sub-ideas' work is its **rollup**:
+progress, the actual window, the forecast and the late and not-started flags read the record's
+work and every sub-record's, for the card, the header and the timeline. The rollup never changes
+the state or the actions. So a raw parent whose sub-idea is underway stays raw (refined, never
+scheduled), a parent whose sub-ideas all shipped can still be shaped and promoted, and a
+dropped parent stays dropped and restorable while its sub-ideas carry on. Maturity never
+cascades: dropping a parent leaves its sub-ideas' states alone. A
 horizon is planned (no open work), active (it holds open work) or shipped (its milestone is done);
 only a person's removal cancels one. A
-promoted record is an ordinary epic in the tracker; its plan record reads started or shipped.
+promoted record is an ordinary epic in the tracker; its plan record reads started or shipped,
+and it offers the epic's own edits (edit, ask, decide: `PROMOTED_ALWAYS`) in both, so its title
+and documents follow epic rules on the plan's surfaces and the tracker's alike.
 
 | state | offers |
 |---|---|
@@ -221,18 +240,30 @@ promoted record is an ordinary epic in the tracker; its plan record reads starte
 | exploring | edit, ask, decide, shape, drop, schedule, plan dates, reparent, reorder |
 | shaped | edit, ask, decide, back to exploring, drop, schedule, plan dates, reparent, reorder, promote, adopt |
 | started | edit, ask, decide, schedule, plan dates, reorder, adopt, unlink, reset baseline, open the epic |
-| shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic |
+| shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic; a promoted record adds edit, ask, decide |
 | dropped | restore |
 | horizon planned | rename, date, reorder, remove (held back while it is queued) |
 | horizon active | rename, date, reorder, queue |
 | horizon shipped | remove |
 
 So raw is never scheduled or promoted, a started or promoted idea never offers promotion again,
-shipped offers no edits (only linking more work), and a horizon is removed only while it holds no
+an unpromoted shipped idea offers no edits (only linking more work), and a horizon is removed only while it holds no
 open work and is not queued (a done horizon included), and queued only while it holds open work. Each action also says who may take it: the steering actions (maturity moves,
 schedule, dates, order, parent, baseline, every horizon definition) are the person's; the rest
 are anyone's. A few preconditions need data and travel with the offer as a `disabledReason`:
-unlinking needs a link, a sub-idea is promoted after its parent, the epic opens once promoted.
+unlinking needs a link, the epic opens once promoted.
+
+A maturity change is named from where the record stands (`maturityAction`): the maturity it
+already has is no change and succeeds as one, in any state; out of dropped is restoring; to
+exploring is going back from shaped and exploring otherwise; to raw is going back to raw, an
+action (`back_to_raw`) that no state offers, so its refusal says so in those words.
+
+**Every write on an idea's own content is its edit action.** A document under any key (the
+brief, questions, decisions, every plan section, any other), a restore of an old revision, and
+adding or removing a file are refused where the idea's state offers no edit, on every surface:
+`WorkspaceStore.putDocument`, `attachFile` and `removeFile` ask the table through
+`PlanStore.assertEditable`, the same cell and person rule as `update_idea`, so the MCP tools, the
+CLI and `/api/action` (`doc_restore`) all inherit it. The plan's own writes have already asked.
 
 **Every surface derives from the table.** `PlanStore` checks it first on every write and refuses
 with `validation` naming the state, the refused action and what the state offers, before the
@@ -257,7 +288,9 @@ agents** (the `get_idea` payload) and **Time** (planned against actual against b
 header shows the title, an "Idea · state" chip and a sentence, never a ticket number: the
 detail arrives through the shared serialization seam with `identifier: null, draft: true`, and the
 page addresses the record by its id (`getIssue`). Each editor in the Plan tab renders only when the state offers
-its action. Once promoted, the same record is an epic and gets the epic's strip, with the Plan
+its action, the header's title is read-only where the state offers no edit, and the Documents
+tab offers no restore there. The command palette builds an idea's commands from the same offered
+actions (`planActionItems`), with its title as the hint, never its id. Once promoted, the same record is an epic and gets the epic's strip, with the Plan
 tab kept for the plan actions its state still offers. A horizon opens as the milestone it is,
 with its state, its offered actions and the ideas on it above the milestone's own parts; its due
 date is written through the plan, as the person.
@@ -325,13 +358,13 @@ follow the person rule*, and on MCP in `test/plan-surfaces.test.ts`.
 
 | fact | rule |
 |---|---|
-| stage | `started` when it is promoted or links work (its own or a sub-idea's), `shipped` when every issue it stands for that is present is resolved, `dropped`, `scheduled` when it has a horizon, otherwise its maturity (`deriveStage`) |
+| stage | from its own facts only: `started` when it is promoted or links work itself, `shipped` when every issue of its own work that is present is resolved, `dropped`, `scheduled` when it has a horizon, otherwise its maturity (`deriveStage`) |
 | progress | done leaves over counted leaves of the record's work (itself once promoted, its links, its sub-records'), each leaf once, cancelled leaves not counted |
 | actual window | the first `started_at` anywhere under that work (an epic whose own start is null reads its children's) to the last `completed_at`/`cancelled_at` once all are resolved; work nobody started draws no actual window |
 | forecast end | a straight line from the days spent and the share done, while open and partly done |
 | late | the work landed, or is forecast to land, after the earlier of the planned end and the horizon's date, or that day has passed while it is open (`isLate`) |
 | not started | nothing linked or promoted and the planned start has passed (`isNotStarted`) |
-| rollups | a parent record reads its sub-records' work for stage, progress and dates |
+| rollups | a parent record reads its sub-records' work for progress, dates, the forecast and late / not started, which it displays; never for its stage, state or actions |
 | horizon shipped | its milestone's derived status is done, derived from its open and done work only (cancelled work is not counted, so a horizon never derives to cancelled) |
 | membership | `plan_members`, above |
 
@@ -341,10 +374,10 @@ milestones ([milestones.md](milestones.md#dates-calendar-days-utc-inclusive)).
 
 ## The baseline
 
-The first planned window a record has once it is started is kept as its baseline
+The first planned window a record has once it is started itself is kept as its baseline
 (`plan_baseline_*`). It is written when a record becomes started with a window (promoted, or
-linked to work), or when a started record gets its first window, and for every started record
-above it; a baseline that exists is never moved by a re-plan. Reset is an explicit,
+linked to work), or when a started record gets its first window; a sub-idea's start starts no
+baseline above it. A baseline that exists is never moved by a re-plan. Reset is an explicit,
 person-only action that copies the current window. Before a record is started there is no
 baseline and moving the window just moves it. The timeline draws a baseline that differs from
 the plan as an outline behind it.
@@ -375,7 +408,9 @@ the plan as an outline behind it.
 | `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline (with a ticket made offline on one, with a third device ahead, with equal counters, whichever device sends first) ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
 | `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown, walk every surface that prints or serializes an issue (CLI text and JSON, MCP tools, HTTP routes, events, refusals) and find no draft, with `identifier: null, draft: true` on every issue object, consume no number at capture, refuse the same agent writes (plain tracker tools and `update_milestone` included), promote into the horizon's milestone, and let the person steer |
-| `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, how a maturity change is named, how states are read |
-| `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the lifecycle table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; the page's items are built from it alone |
-| `src/ui/app/src/detail/plan-drawer.test.tsx` | an idea's tab strip, the epic's strip once promoted, no ticket number in any presentation, actions exactly as offered, a horizon's section |
+| `test/plan-lifecycle.test.ts` | the table itself, pinned: every state's actions, who takes each, the promoted record's epic edits, back to raw offered nowhere, how a maturity change is named (a no-op included), how states are read |
+| `test/plan-own-state.test.ts` | with hand-written expectations, not the table's: a parent's own state against its rollup (a raw parent with work underway or landed beneath it, a dropped one restored, its sub-ideas left alone, no baseline, late rolled up); a sub-idea promoted or adopted on its own and re-parented by its parent's promotion, its tree and derived status; a promoted record edited as an epic once shipped; the maturity no-op; every document key, restore and file on a shipped, dropped or raw idea |
+| `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the lifecycle table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row, promoted records and parents with sub-ideas included; every document and file write (MCP `put_document`, `attach_file`, `doc_restore`, `staple doc --put`) in every state; the no-op maturity; a horizon's milestone route refusing a start date before any write |
+| `src/ui/app/src/detail/plan-drawer.test.tsx` | an idea's tab strip, the epic's strip once promoted, no ticket number in any presentation, actions exactly as offered, a read-only title where the state offers no edit, idea wording in Activity, Documents and Files, a horizon's section and a held-back action's reason |
+| `src/ui/app/src/components/command-palette/commands.test.ts` | a plan record's palette commands are its one-click offered actions only (no status, start or stop for an idea; a promoted one keeps its epic commands), with its title as the hint, never its id |
 | `src/ui/app/src/views/plan/plan-model.test.ts` | board columns and nesting, the Ideas lens, the late/not-started split, timeline groups, range and dragging |

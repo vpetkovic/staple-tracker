@@ -71,10 +71,16 @@ their horizon with **add dates**. The vertical lines are today and each dated ho
 Open a shaped idea and press **Promote to epic**: the idea itself becomes the epic and takes its
 ticket number now. Its brief, questions, decisions, comments and history stay on it, and on a
 horizon it joins that horizon's milestone. Break it into tickets as you would any epic. A
-sub-idea is promoted once its parent is. Or **Adopt** an issue that already exists; an idea can
-link several, promoted or not. From then on the idea reads **started**, then **shipped** when
-all of its work is done, and the timeline adds the real dates from that work: a solid bar for
-what has happened, a dashed one to the forecast end, hatched where it runs past the plan.
+sub-idea can be promoted on its own; when its parent is promoted later, the sub-idea's epic
+moves under the parent's. Or **Adopt** an issue that already exists; an idea can link several,
+promoted or not. From then on the idea reads **started**, then **shipped** when all of its work
+is done, and the timeline adds the real dates from that work: a solid bar for what has happened,
+a dashed one to the forecast end, hatched where it runs past the plan.
+
+A parent's state is its own. Work under its sub-ideas shows on the parent as progress, dates
+and late or not-started counts, but it never starts, ships or reopens the parent, and dropping a
+parent leaves its sub-ideas as they are. A promoted idea is an ordinary epic: its title, brief
+and documents can be edited even once it has shipped.
 
 The window an idea has when it starts is kept as its **baseline**. If you re-plan later, the
 timeline keeps the baseline as an outline behind the new plan, so a slip stays visible. Choose
@@ -91,7 +97,7 @@ follows the same rules:
 | Exploring | everything raw can, plus reserve a horizon and plan dates, then mark it shaped |
 | Shaped | schedule and date it, promote it, adopt existing work, or send it back to exploring |
 | Started | re-plan it, adopt more work, unlink work, reset the baseline, open the epic |
-| Shipped | open the epic, or link more work (open work reopens it); nothing is edited any more |
+| Shipped | open the epic, or link more work (open work reopens it); nothing is edited any more, not its documents or files either |
 | Dropped | restore it |
 
 A raw idea is never scheduled or promoted, and an idea already started or promoted never offers
