@@ -907,4 +907,28 @@ describe("the lifecycle in the store", () => {
     expect(plan.ideaView(child).actions.find((a) => a.id === "promote")?.disabledReason).toContain('Promote the idea "Parent, not promoted" first');
     expect(plan.ideaView(parent).actions.find((a) => a.id === "promote")?.disabledReason).toBeUndefined();
   });
+
+  it("holds a write that shapes an idea and schedules it to the state the shaping leads to", () => {
+    const raw = plan.capture({ title: "Shaped and scheduled at once" }, "vp", PERSON).id;
+    expect(plan.update(raw, { maturity: "shaped", horizon: horizon("Now"), plannedTarget: "2026-12-01" }, "vp", PERSON)).toMatchObject({ state: "shaped", horizonId: horizon("Now") });
+    const dropping = idea("Dropped and scheduled at once");
+    expect(refused(() => plan.update(dropping, { maturity: "dropped", horizon: horizon("Next") }, "vp", PERSON)).message).toContain("is dropped; it cannot be scheduled");
+  });
+
+  it("counts only open work toward a horizon's state, and holds back removing a queued one", () => {
+    const later = plan.view().horizons.find((h) => h.name === "Later")!;
+    const task = store.createIssue({ title: "Will be cancelled" });
+    store.milestones().addMember(later.identifier, task.identifier, {}, "vp");
+    expect(plan.view().horizons.find((h) => h.id === later.id)!.state).toBe("active");
+    store.updateIssue(task.identifier, { status: store.primaryStatusFor("cancelled") }, "vp");
+    const after = plan.view().horizons.find((h) => h.id === later.id)!;
+    expect(after.state).toBe("planned");
+    expect(after.actions.find((a) => a.id === "remove")?.disabledReason).toBeUndefined();
+    const open = store.createIssue({ title: "Open work" });
+    store.milestones().addMember(later.identifier, open.identifier, {}, "vp");
+    store.queue().enqueue(later.identifier, {}, "vp");
+    finish(open.identifier);
+    const queued = plan.view().horizons.find((h) => h.id === later.id)!;
+    expect(queued.actions.find((a) => a.id === "remove")?.disabledReason).toBe("It is in the queue; take it off first.");
+  });
 });

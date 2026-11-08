@@ -15,6 +15,7 @@ import { DetailContent } from "./IssueDetailPanel";
 import { useIssueActions } from "./IssueActions";
 import { horizonActionItems, moveOffered, planActionItems, planPrimary } from "./plain-actions";
 import { visibleTabs } from "./tabs/registry";
+import { addressDrafts } from "@/lib/api";
 
 const noop = () => {};
 const ID = "1d4e7a52-0c6e-4b8e-9a51-3f1f3c0b9d21";
@@ -160,6 +161,20 @@ describe("an idea in the shared drawer", () => {
     expect(moveOffered(idea("raw"), { horizon: "h1" })).toBe(false);
     expect(moveOffered(idea("shaped"), { horizon: "h1" })).toBe(true);
     expect(moveOffered(idea("started"), { maturity: "dropped" })).toBe(false);
+  });
+});
+
+describe("an idea as the server sends it", () => {
+  it("is addressed by its id, with its ancestors and children, so no request ever names null", () => {
+    const sent = detail({
+      issue: { ...issue({ id: ID, kind: "idea" }), identifier: null as unknown as string, draft: true },
+      ancestors: [{ ...issue({ id: "parent-idea" }), identifier: null as unknown as string, draft: true }],
+      children: [issue({ id: "child", identifier: "LAR-7" })],
+    });
+    const held = addressDrafts(sent);
+    expect(held.issue).toMatchObject({ id: ID, identifier: ID, draft: true });
+    expect(held.ancestors[0]).toMatchObject({ id: "parent-idea", identifier: "parent-idea" });
+    expect(held.children[0]!.identifier).toBe("LAR-7");
   });
 });
 

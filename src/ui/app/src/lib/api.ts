@@ -717,7 +717,7 @@ export const getIssue = (params: { ws?: string; ref: string }) =>
  * the one ref every route resolves, so a tab that names its issue in a request never sends null.
  * What the page SHOWS for it is decided by the drawer (`detail/plan-record.ts`), never this.
  */
-function addressDrafts(detail: IssueDetail): IssueDetail {
+export function addressDrafts(detail: IssueDetail): IssueDetail {
   const address = <I extends { id: string; identifier: string | null }>(issue: I): I & { identifier: string } =>
     (issue.identifier === null ? { ...issue, identifier: issue.id } : issue) as I & { identifier: string };
   return { ...detail, issue: address(detail.issue), ancestors: detail.ancestors.map(address), children: detail.children.map(address) };
