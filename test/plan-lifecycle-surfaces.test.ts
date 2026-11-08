@@ -307,7 +307,8 @@ describe("promoted records and parents with sub-ideas on every surface", () => {
       const { id } = await promotedFixture(state);
       const row = (await plan()).ideas.find((idea) => idea.id === id)!;
       expect(row).toMatchObject({ state, promoted: true });
-      expect(row.actions.map((action) => action.id), state).toEqual([...ideaOffered(state, true)]);
+      // A started record that was not scaffolded does not offer Scaffold.
+      expect(row.actions.map((action) => action.id), state).toEqual(ideaOffered(state, true).filter((action) => !(action === "scaffold" && state === "started")));
     }
   }, 60_000);
 
@@ -321,7 +322,7 @@ describe("promoted records and parents with sub-ideas on every surface", () => {
     ];
     for (const { parent, child } of cases) {
       const { id } = await fixture(parent === "dropped" ? "shaped" : parent);
-      const sub = await http("/api/plan/capture", { title: unique("A sub-idea"), maturity: "shaped", parent: id });
+      const sub = await http("/api/plan/capture", { title: unique("A sub-idea"), maturity: "shaped", parent: id, plan: READY_PLAN });
       const subId = (sub.body.idea as { idea: { id: string } }).idea.id;
       expect((await http("/api/plan/adopt", { ref: subId, issue: await task(child === "shipped") })).status).toBe(200);
       if (parent === "dropped") expect((await http("/api/plan/update", { ref: id, maturity: "dropped" })).status).toBe(200);

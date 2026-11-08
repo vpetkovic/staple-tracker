@@ -177,6 +177,31 @@ describe("Scaffold", () => {
     expect(plan.ideaView(thinking)).toMatchObject({ promoted: false, state: "exploring" });
   });
 
+  it("scaffolds a sub-idea before its parent; the parent's Scaffold then files that epic under its own and adds nothing twice", () => {
+    const parent = shaped("Release GA");
+    const child = shaped("Rung 2", { ...PLAN, breakdown: [{ key: "2.1", title: "Endpoints", estimate: "4h", dependsOn: [], acceptance: "Served", owner: null, notes: null }] }, { parent });
+    expect(plan.ideaView(child).actions.find((action) => action.id === "scaffold")?.disabledReason).toBeUndefined();
+    plan.scaffold(child, "agent");
+    const childTask = store.listIssues({}).find((issue) => issue.parentId === child)!;
+    store.checkoutIssue(childTask.identifier, "agent");
+    const childEpic = store.getIssue(child);
+    expect(childEpic).toMatchObject({ kind: "epic" });
+    expect(store.tree().map((node) => node.issue.identifier)).toContain(childEpic.identifier);
+    // The parent's own state is untouched by its sub-idea's start.
+    expect(plan.ideaView(parent)).toMatchObject({ state: "shaped", promoted: false });
+    const before = store.listIssues({}).length;
+    plan.scaffold(parent, "agent");
+    const parentEpic = store.getIssue(parent);
+    expect(store.getIssue(child).parentId).toBe(parentEpic.id);
+    expect(store.tree().map((node) => node.issue.identifier)).not.toContain(childEpic.identifier);
+    // The parent epic reads its sub-epic as any epic does: that one is underway, so is it.
+    expect(store.categoryOf(store.getIssue(parent).status)).toBe(store.categoryOf(store.getIssue(child).status));
+    expect(store.categoryOf(store.getIssue(parent).status)).not.toBe(store.categoryOf(store.primaryStatusFor("unstarted")));
+    // The parent's epic and its own rows only; the sub-idea's task replays.
+    expect(store.listIssues({}).length - before).toBe(1 + PLAN.breakdown!.length);
+    expect(store.listIssues({}).filter((issue) => issue.parentId === child).map((issue) => issue.title)).toEqual(["2.1 Endpoints"]);
+  });
+
   it("is offered only where the lifecycle offers it: never to an idea that is not shaped", () => {
     const raw = plan.capture({ title: "Not shaped", plan: PLAN }, "agent").id;
     expect(refused(() => plan.scaffold(raw, "agent"))).toContain("is raw; it cannot be scaffolded");
