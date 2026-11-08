@@ -89,7 +89,8 @@ Open a shaped idea and press **Scaffold epic and tasks**. It shows first what it
 the epic (this same record, now with a ticket number) and a task for every breakdown row, with
 its estimate, what it waits on, and when it is done. Confirm, and each task gets those fields and
 a context page, so an agent can work it from the ticket alone. Shaped sub-ideas become child
-epics the same way. Scaffolding again creates only rows written since. **Promote to epic** does
+epics the same way. A sub-idea can be scaffolded before its parent; its epic moves under the
+parent's once the parent is scaffolded too, and nothing is created twice. Scaffolding again creates only rows written since. **Promote to epic** does
 the promotion alone: the idea itself becomes the epic and takes its ticket number now. Its brief, questions, decisions, comments and history stay on it, and on a
 horizon it joins that horizon's milestone. Break it into tickets as you would any epic. A
 sub-idea can be promoted on its own; when its parent is promoted later, the sub-idea's epic
