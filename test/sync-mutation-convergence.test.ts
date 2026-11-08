@@ -357,7 +357,7 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "PlanStore.migrateLegacyLater", name: "upgrade the undated Later bucket without losing hand membership", run: (w) => {
     const plan = w.a.store.plan();
     const later = plan.createHorizon({ name: "Later" }, "alice", { person: { via: "test" } });
-    plan.capture({ title: "Unscheduled research", horizon: later.id }, "alice", { person: { via: "test" } });
+    plan.capture({ title: "Unscheduled research", maturity: "exploring", horizon: later.id }, "alice", { person: { via: "test" } });
     w.a.store.milestones().addMember(later.id, issue(w, "Retained hand placement"), {}, "alice");
     plan.migrateLegacyLater();
   } },

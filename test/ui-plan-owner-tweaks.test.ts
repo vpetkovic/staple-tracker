@@ -16,6 +16,7 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
 const { chromium } = await import("playwright-core");
 let browser: Browser;
 let ui: UiHandle;
+let singleUi: UiHandle;
 let home: string;
 let idea: string;
 let epic: string;
@@ -38,6 +39,8 @@ beforeAll(async () => {
     if (i === 1) { plan.promote(record.id, "Mira", person); epic = record.id; }
   }
   ws.store.db.close();
+  singleUi = startUiServer({ port: 0, hub: false, db: ws.dbPath });
+  await once(singleUi.server, "listening");
   const other = initWorkspace({ global: true, slug: "meadow" });
   other.store.plan().enable("Mira");
   secondWorkspace = other.store.slug;
@@ -46,7 +49,23 @@ beforeAll(async () => {
   await once(ui.server, "listening");
   browser = await chromium.launch();
 }, 60_000);
-afterAll(async () => { await browser?.close(); ui?.close(); if (home) rmSync(home, { recursive: true, force: true }); });
+afterAll(async () => { await browser?.close(); ui?.close(); singleUi?.close(); if (home) rmSync(home, { recursive: true, force: true }); });
+
+it("keeps the Plan URL and remembered lens aligned without a workspace parameter", async () => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  try {
+    const page = await context.newPage();
+    await page.goto(`http://127.0.0.1:${(singleUi.server.address() as AddressInfo).port}/?token=${singleUi.token}&view=plan&plan-lens=horizons`);
+    await expect.poll(() => page.locator('[data-plan-lens="horizons"]').getAttribute("aria-selected")).toBe("true");
+    await page.locator('[data-plan-lens="timeline"]').click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("plan-lens")).toBe("timeline");
+    await goView(page, "tasks", 390);
+    await goView(page, "plan", 390);
+    await expect.poll(() => new URL(page.url()).searchParams.get("plan-lens")).toBe("timeline");
+    await page.reload();
+    await expect.poll(() => page.locator('[data-plan-lens="timeline"]').getAttribute("aria-selected")).toBe("true");
+  } finally { await context.close(); }
+}, 20_000);
 
 async function goView(page: Page, view: string, width: number) {
   if (view === "tasks") view = "tree";
