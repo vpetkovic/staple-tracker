@@ -2959,7 +2959,7 @@ server.registerTool(
   "list_milestones",
   {
     description:
-      "Every open milestone with its dates, derived state, progress and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
+      "Every open plain milestone and dated horizon (undated horizons stay in Plan), with dates, derived state, progress and members revision, sorted by plan position, then target date, then identifier. Milestones are issues of the reserved `milestone` kind; a workspace without that kind refuses with validation naming the `kinds add` that enables it.",
     inputSchema: {
       all: z.boolean().optional().describe("Include done and cancelled milestones"),
       ws: wsSchema,

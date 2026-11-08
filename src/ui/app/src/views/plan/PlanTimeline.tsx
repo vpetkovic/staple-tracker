@@ -1,3 +1,4 @@
+import { planCounts, countWord } from "@/views/plan/plan-counts";
 /**
  * The Timeline lens: ideas as rows grouped by horizon, on a month axis.
  *
@@ -138,7 +139,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
         </div>
       </div>
       <Legend />
-      <div ref={frame} className="relative mx-gutter mb-3 min-h-0 flex-1 overflow-auto rounded-lg border bg-card" data-plan-timeline-frame>
+      <div ref={frame} data-plan-timeline-frame className="relative mx-gutter mb-3 min-h-0 flex-1 overflow-auto rounded-lg border bg-card" data-plan-timeline-frame>
         <div ref={chart} className="relative" style={{ width: nameWidth + width }}>
           {/* The axis, pinned on top. */}
           <div className="sticky top-0 z-20 flex h-8 border-b bg-card">
@@ -182,7 +183,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                   </div>
                   <div className="sticky z-10 flex items-center gap-1.5 px-2 text-caption" style={{ left: nameWidth }}>
                     {group.horizon ? <>
-                      <span>{group.horizon.ideaCount} ideas · {group.horizon.memberCount} members</span>
+                      <span>{planCounts(group.horizon.ideaCount, group.horizon.memberCount)}</span>
                       {group.horizon.awaitingApproval ? <Chip tone="amber">Waiting for your approval</Chip> : null}
                       {horizonDone(group.horizon) ? <ShippedMark /> : group.horizon.shippedCount > 0 ? <ShippedMark count={group.horizon.shippedCount} /> : null}
                       {group.horizon.progress !== null && !horizonDone(group.horizon) ? <Progress value={group.horizon.progress} /> : null}

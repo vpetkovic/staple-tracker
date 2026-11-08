@@ -109,6 +109,7 @@ export function withShellState(href: string, state: ShellUrlState): string {
   // The graph's layout belongs to the Graph: on any other page it would ride along, unread,
   // into every link and bookmark — and re-appear on the Graph from a stale address.
   if (state.view !== "graph") params.delete(GRAPH_PARAM);
+  if (state.view !== "plan") params.delete("plan-lens");
   const extra = [...params.entries()];
   const next = new URLSearchParams();
   if (state.ws) next.set(URL_PARAMS.ws, state.ws);

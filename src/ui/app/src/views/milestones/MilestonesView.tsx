@@ -1,3 +1,4 @@
+import { PlannedIdeaLinks } from "@/detail/PlannedIdeaLinks";
 /**
  * The Milestones destination — R3c (STA-173), design/milestones.md.
  *
@@ -858,6 +859,7 @@ export function MilestoneDetailPane({
           </Button>
         </header>
       ) : null}
+      {decision?.detail.horizonPlan ? <PlannedIdeaLinks workspace={decision.detail.workspace} ideas={decision.detail.horizonPlan.ideas} /> : null}
       {desk ? gateBlock : null}
       {desk ? (
         <section aria-label="Progress" data-milestone-progress className="rounded-xl border bg-card px-4 py-4">

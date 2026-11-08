@@ -114,7 +114,7 @@ describe("the plan on every surface", () => {
       ["From MCP", null, "raw", "raw"],
       ["From the page", null, "shaped", "shaped"],
     ]);
-    // Captures took no ticket number: the next issue is the one after the epic and the three horizons.
+    // Captures took no ticket number: the next issue is the one after the epic and the two horizons.
     const next = (await cliJson("new", "Next ticket")) as { identifier: string };
     expect(next.identifier).toBe("PLA-5");
     // And no surface shows the draft identifier an idea is stored under.
@@ -236,7 +236,7 @@ describe("the plan on every surface", () => {
     expect(detail.idea.maturity).toBe("exploring");
     const horizons = (await cliJson("horizon", "new", "Q2", "--date", "2027-06-30", "--person")) as Array<{ name: string }>;
     // A dated horizon goes in date order ahead of the undated ones.
-    expect(horizons.map((h) => h.name)).toEqual(["Q2", "Now", "Next", "Later"]);
+    expect(horizons.map((h) => h.name)).toEqual(["Q2", "Now", "Next"]);
   });
 
   it("keeps the baseline reset away from the model: the MCP tool is app-only", async () => {

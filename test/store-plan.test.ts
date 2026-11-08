@@ -71,14 +71,14 @@ function finish(identifier: string): void {
 }
 
 describe("enabling", () => {
-  it("adds the idea and milestone kinds and seeds Now, Next and Later once, as milestones", () => {
+  it("adds the idea and milestone kinds and seeds Now and Next once, as milestones", () => {
     expect(store.getKinds().map((k) => k.id)).toEqual(expect.arrayContaining([IDEA_KIND, MILESTONE_KIND]));
     const horizons = plan.view().horizons;
-    expect(horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     for (const h of horizons) expect(store.getIssue(h.id).kind).toBe(MILESTONE_KIND);
-    expect(store.milestones().list().map((m) => m.milestone.title)).toEqual(expect.arrayContaining(["Now", "Next", "Later"]));
+    expect(store.milestones().list()).toEqual([]);
     plan.enable("vp");
-    expect(plan.view().horizons).toHaveLength(3);
+    expect(plan.view().horizons).toHaveLength(2);
   });
 
   it("refuses every write in a workspace that has not turned planning on", () => {
@@ -230,7 +230,7 @@ describe("guards: an idea never enters the tracker", () => {
 describe("the tracker's own writes follow the person rule", () => {
   it("makes a milestone created through the tracker an ordinary milestone, never a column", () => {
     const made = store.createIssue({ title: "Autopilot milestone", kind: MILESTONE_KIND, createdBy: "agent" });
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     expect(store.updateIssue(made.identifier, { title: "Renamed by its agent" }, "agent").title).toBe("Renamed by its agent");
     store.milestones().update(made.identifier, { targetDate: "2026-12-01" }, "agent");
     expect(store.milestones().get(made.identifier).milestone.targetDate).toBe("2026-12-01");
@@ -248,7 +248,7 @@ describe("the tracker's own writes follow the person rule", () => {
     expect(refused(() => store.updateIssue(now.identifier, { title: "Renamed by agent" }, "agent")).message).toContain("the person's call");
     expect(refused(() => store.updateIssue(now.identifier, { status: "cancelled" }, "agent")).message).toContain("the person's call");
     expect(refused(() => store.updateIssue(now.identifier, { priority: "high" }, "agent")).message).toContain("the person's call");
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     expect(plan.ideaView(ref).horizonId).toBe(now.id);
   });
 
@@ -341,12 +341,12 @@ describe("ideas and horizons", () => {
     const mvp = plan.createHorizon({ name: "MVP", date: "2026-12-31" }, "vp", PERSON);
     expect(store.getIssue(mvp.id).kind).toBe(MILESTONE_KIND);
     expect(store.milestones().get(mvp.id).milestone.targetDate).toBe("2026-12-31");
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["MVP", "Now", "Next", "Later"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["MVP", "Now", "Next"]);
     plan.updateHorizon(mvp.identifier, { name: "Now · MVP", before: null }, "vp", PERSON);
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later", "Now · MVP"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Now · MVP"]);
     const ref = idea("On it", { horizon: mvp.id });
     plan.removeHorizon(mvp.identifier, "vp", PERSON);
-    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next", "Later"]);
+    expect(plan.view().horizons.map((h) => h.name)).toEqual(["Now", "Next"]);
     expect(plan.ideaView(ref).horizonId).toBeNull();
     expect(store.categoryOf(store.getIssue(mvp.id).status)).toBe("cancelled");
   });
@@ -397,7 +397,7 @@ describe("membership: a horizon holds its ideas' work without anyone typing it",
   });
 
   it("leaves a member a person put in a milestone by hand where it was put", () => {
-    const later = plan.view().horizons.find((h) => h.name === "Later")!;
+    const later = plan.createHorizon({ name: "Release", date: "2027-02-01" }, "vp", PERSON);
     const task = store.createIssue({ title: "Hand-placed" });
     store.milestones().addMember(later.identifier, task.identifier, {}, "vp");
     const ref = idea("Wants it on Now", { horizon: horizon("Now") });
@@ -435,7 +435,7 @@ describe("membership: a horizon holds its ideas' work without anyone typing it",
   });
 
   it("leaves a hand-placed member out of the horizon the plan would put it in, for status as well", () => {
-    const later = plan.view().horizons.find((h) => h.name === "Later")!;
+    const later = plan.createHorizon({ name: "Release", date: "2027-02-01" }, "vp", PERSON);
     const task = store.createIssue({ title: "Hand-placed, then finished" });
     store.milestones().addMember(later.identifier, task.identifier, {}, "vp");
     const ref = idea("Wants it on Now", { horizon: horizon("Now") });
@@ -567,11 +567,11 @@ describe("a horizon's own status: only the person removes it", () => {
   });
 
   it("refuses an edit of a removed horizon before writing any of it", () => {
-    const later = horizon("Later");
+    const later = plan.createHorizon({ name: "Release", date: "2027-02-01" }, "vp", PERSON).id;
     plan.removeHorizon(later, "vp", PERSON);
     const error = refused(() => plan.updateHorizon(later, { name: "Someday", date: "2027-01-01" }, "vp", PERSON));
     expect(error.message).toContain("was removed");
-    expect(store.getIssue(later).title).toBe("Later");
+    expect(store.getIssue(later).title).toBe("Release");
     expect(refused(() => plan.updateHorizon(horizon("Now"), { name: "Today", date: "not a day" }, "vp", PERSON)).message).toContain("YYYY-MM-DD");
     expect(store.getIssue(horizon("Now")).title).toBe("Now");
   });
@@ -861,7 +861,6 @@ describe("agents capture, the person steers", () => {
     expect(plan.view().horizons.map((h) => [h.name, h.date])).toEqual([
       ["Now", null],
       ["Next", null],
-      ["Later", null],
     ]);
   });
 
@@ -920,7 +919,7 @@ describe("the lifecycle in the store", () => {
   });
 
   it("counts only open work toward a horizon's state, and holds back removing a queued one", () => {
-    const later = plan.view().horizons.find((h) => h.name === "Later")!;
+    const later = plan.createHorizon({ name: "Release", date: "2027-02-01" }, "vp", PERSON);
     const task = store.createIssue({ title: "Will be cancelled" });
     store.milestones().addMember(later.identifier, task.identifier, {}, "vp");
     expect(plan.view().horizons.find((h) => h.id === later.id)!.state).toBe("active");

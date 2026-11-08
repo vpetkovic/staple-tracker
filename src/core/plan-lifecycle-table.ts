@@ -77,6 +77,8 @@ export function ideaOffered(state: IdeaState, promoted = false): readonly IdeaAc
   return promoted ? [...row, ...PROMOTED_ALWAYS.filter((id) => !row.includes(id))] : row;
 }
 
+/** Named horizons may be undated: the same lifecycle applies. Only dated horizons list in
+ * Milestones. Unscheduled is the absence of a horizon, never an actionable milestone. */
 export const HORIZON_ACTIONS = {
   rename: { label: "Rename", verb: "renamed", who: "person" },
   date: { label: "Set the date", verb: "dated", who: "person" },

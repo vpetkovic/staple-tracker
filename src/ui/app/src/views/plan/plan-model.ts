@@ -3,7 +3,7 @@
  * how child ideas nest under their parent, what a drop writes, and where a bar sits on the
  * timeline. Pure, so `plan-model.test.ts` pins it without rendering.
  */
-import type { HorizonData, IdeaData, Maturity, PlanData } from "../../lib/plan-types";
+import type { HorizonData, IdeaData, Maturity, PlanData } from "../../lib/plan-types.js";
 
 export type Lens = "ideas" | "horizons" | "timeline";
 

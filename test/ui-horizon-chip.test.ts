@@ -56,7 +56,7 @@ describe("the phone horizon chip", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(String(error)));
       await page.goto(`http://127.0.0.1:${(ui.server.address() as AddressInfo).port}/?token=${ui.token}`, { waitUntil: "networkidle" });
-      const chip = page.locator("[data-horizon-chip-compact]").first();
+      const chip = page.locator("[data-horizon-indicator]").first();
       await chip.waitFor();
       await chip.tap();
       const popover = page.locator('[data-slot="popover-content"]');

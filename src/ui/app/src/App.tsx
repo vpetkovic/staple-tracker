@@ -1,3 +1,4 @@
+import { browserStorage, loadPlanMemory, withPlanLens } from "./views/plan/plan-memory";
 /**
  * The root: bootstrap, session state, and the mount points that sit above the shell.
  *
@@ -174,9 +175,9 @@ export function App() {
    * filtered in yet, so nobody opens this build to a filter set they never chose. See
    * `filtersForScope` in lib/view-prefs.ts.
    */
-  const [legacyFilters, setLegacyFilters] = useState<FilterState>(() => loadFilters(window.localStorage));
+  const [legacyFilters, setLegacyFilters] = useState<FilterState>(() => loadFilters(browserStorage() as Storage));
   const [filterPrefs, setFilterPrefs] = useState<Record<string, FilterState>>(() => {
-    const stored = loadViewPrefs(window.localStorage).filters;
+    const stored = loadViewPrefs(browserStorage() as Storage).filters;
     // An address that describes a page decides that page's filters, whatever was stored.
     if (!initialUrl) return stored;
     return withFiltersForScope(stored, sortScopeKey(initialUrl.ws, initialUrl.view), initialUrl.filters);
@@ -187,7 +188,7 @@ export function App() {
    * reason the filters are: an effect would paint one frame of the wrong layout and then
    * correct itself, and a list that re-arranges itself 16ms after it appears reads as a bug.
    */
-  const [groupBy, setGroupBy] = useState<GroupBy>(() => loadViewPrefs(window.localStorage).groupBy);
+  const [groupBy, setGroupBy] = useState<GroupBy>(() => loadViewPrefs(browserStorage() as Storage).groupBy);
 
   /**
    * The sort preference for every scope the user has ever set one in — R4a (STA-186).
@@ -199,7 +200,7 @@ export function App() {
    * the wrong order and then correct itself.
    */
   const [sortPrefs, setSortPrefs] = useState<Record<string, SortPref>>(
-    () => loadViewPrefs(window.localStorage).sort,
+    () => loadViewPrefs(browserStorage() as Storage).sort,
   );
 
   /**
@@ -209,7 +210,7 @@ export function App() {
    */
   useEffect(() => {
     const prefs: ViewPrefs = { groupBy, sort: sortPrefs, filters: filterPrefs };
-    saveViewPrefs(window.localStorage, prefs);
+    saveViewPrefs(browserStorage() as Storage, prefs);
   }, [groupBy, sortPrefs, filterPrefs]);
 
   /**
@@ -237,7 +238,7 @@ export function App() {
    * they had before the upgrade.
    */
   useEffect(() => {
-    saveFilters(window.localStorage, filters);
+    saveFilters(browserStorage() as Storage, filters);
   }, [filters]);
 
   /**
@@ -542,7 +543,8 @@ export function App() {
       // The page being left forgets the ticket too, the way it does for one opened from the
       // page (whose entry was stepped past): Back returns to the page, not to the ticket.
       if (navigating && from !== window.location.href) replaceUrl(from);
-      const href = withShellState(from, shellState);
+      const shellHref = withShellState(from, shellState);
+      const href = navigating && shellState.view === "plan" ? withPlanLens(shellHref, loadPlanMemory(shellState.ws).lens) : shellHref;
       if (href === window.location.href) return;
       if (navigating) pushPage(href);
       else replaceUrl(href);

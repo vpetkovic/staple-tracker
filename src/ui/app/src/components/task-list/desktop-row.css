@@ -540,22 +540,17 @@
   color: var(--foreground);
 }
 
-/* The phone's horizon chip (below 480px): its own slot, a short name, the full one on tap. */
-.staple-row-horizon-compact {
+/* The phone's horizon is secondary metadata, revealed on tap without a badge. */
+.staple-row-horizon-indicator {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 3px;
-  height: 22px;
-  max-width: 11ch;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--surface-hover);
-  color: var(--muted-foreground);
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-tertiary);
   font-size: var(--text-caption, 11px);
-}
-.staple-row-horizon-compact-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }

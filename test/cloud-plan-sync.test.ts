@@ -197,7 +197,8 @@ describe("membership is derived on every device, so moves made offline never con
       const a = fleet.machine("a");
       const plan = a.store.plan();
       plan.enable("vp");
-      const [now, next, later] = plan.view().horizons.map((h) => h.id) as [string, string, string];
+      const [now, next] = plan.view().horizons.map((h) => h.id) as [string, string];
+      const later = plan.createHorizon({ name: "Later", date: "2027-02-01" }, "vp", PERSON).id;
       const first = plan.capture({ title: "First", maturity: "shaped", plan: READY_PLAN, horizon: now }, "vp", PERSON).id;
       const second = plan.capture({ title: "Second", maturity: "shaped", plan: READY_PLAN, horizon: next }, "vp", PERSON).id;
       const third = plan.capture({ title: "Third", maturity: "shaped", plan: READY_PLAN, horizon: later }, "vp", PERSON).id;

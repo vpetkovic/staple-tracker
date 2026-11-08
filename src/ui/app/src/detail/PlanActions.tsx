@@ -1,3 +1,5 @@
+import { PlannedIdeaLinks } from "./PlannedIdeaLinks";
+import { planCounts, countWord } from "@/views/plan/plan-counts";
 /**
  * The plan's controls in the shared drawer: an idea's status line and actions, and a horizon's
  * section. Every button and menu item is an item from `plain-actions.ts` (`planActionItems`,
@@ -194,35 +196,12 @@ export function HorizonSection({ detail, horizon, ideas, controller, className }
           <Progress value={progress} />
         </div>
       ) : null}
-      <p className="mt-3 text-caption text-text-tertiary">{horizon.ideaCount} ideas · {horizon.memberCount} members</p>
+      <p className="mt-3 text-caption text-text-tertiary">{planCounts(horizon.ideaCount, horizon.memberCount)}</p>
       <h3 className="mt-4 mb-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">Ideas on it ({horizon.ideaCount})</h3>
       {ideas.length === 0 ? (
         <p className="m-0 text-label text-text-secondary">No ideas are scheduled on it yet.</p>
       ) : (
-        <ul className="m-0 list-none space-y-1 p-0">
-          {ideas.map((idea) => (
-            <li key={idea.id}>
-              <button
-                type="button"
-                onClick={() => session.open(detail.workspace, idea.identifier ?? idea.id)}
-                className="focus-ring flex min-h-10 w-full items-center gap-2 rounded-md px-2 text-left text-label hover:bg-surface-hover"
-                data-horizon-idea={idea.id}
-              >
-                <span className="min-w-0 flex-1 truncate">{idea.title}</span>
-                {idea.state === "shipped" ? (
-                  <ShippedMark on={idea.actual.end} className="text-caption" />
-                ) : idea.late ? (
-                  <Chip tone="red">late</Chip>
-                ) : idea.notStarted ? (
-                  <Chip tone="amber">not started</Chip>
-                ) : (
-                  <Chip>{STATE_WORDS[idea.state]?.toLowerCase()}</Chip>
-                )}
-                <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <PlannedIdeaLinks workspace={detail.workspace} ideas={ideas} />
       )}
     </section>
   );

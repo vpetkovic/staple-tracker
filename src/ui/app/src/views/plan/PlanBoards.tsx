@@ -1,3 +1,4 @@
+import { planCounts, countWord } from "@/views/plan/plan-counts";
 /**
  * The Ideas and Horizons boards, one job each: Ideas is thinking (a record's own raw or exploring
  * state, with how much of its plan is written), Horizons is delivery (shaped, started and
@@ -53,6 +54,8 @@ interface BoardProps {
   write: Write;
   onOpen: (id: string) => void;
   selected: string | null;
+  currentColumn?: string;
+  onColumn?: (column: string) => void;
 }
 
 export function IdeasBoard(props: BoardProps) {
@@ -78,9 +81,11 @@ export function HorizonsBoard(props: BoardProps) {
   );
 }
 
-function Board({ plan, write, onOpen, selected, columns, hint, footer, action }: BoardProps & { columns: BoardColumn[]; hint: string; footer?: ReactNode; action?: ReactNode }) {
+function Board({ plan, write, onOpen, selected, columns, hint, footer, action, currentColumn, onColumn }: BoardProps & { columns: BoardColumn[]; hint: string; footer?: ReactNode; action?: ReactNode }) {
   const desk = useIsDesk();
-  const [current, setCurrent] = useState(columns[0]?.key ?? "");
+  const [localColumn, setLocalColumn] = useState(columns[0]?.key ?? "");
+  const current = currentColumn ?? localColumn;
+  const setCurrent = (next: string) => { setLocalColumn(next); onColumn?.(next); };
   useEffect(() => {
     if (!columns.some((column) => column.key === current) && columns[0]) setCurrent(columns[0].key);
   }, [columns, current]);
@@ -110,7 +115,7 @@ function Board({ plan, write, onOpen, selected, columns, hint, footer, action }:
                 )}
               >
                 {column.title}
-                <span className="text-text-tertiary">{column.horizon ? `${column.horizon.ideaCount} ideas · ${column.horizon.memberCount} members` : column.ideas.length}</span>
+                <span className="text-text-tertiary">{column.horizon ? planCounts(column.horizon.ideaCount, column.horizon.memberCount) : column.ideas.length}</span>
                 {risk.late > 0 ? <span aria-label={`${risk.late} late`} className="size-1.5 rounded-full bg-destructive" /> : null}
               </button>
             );
@@ -178,11 +183,11 @@ function Column({ plan, column, columns, write, desk, onOpen, selected }: BoardP
         >
           {folded ? <ChevronRight className="size-3.5 shrink-0" aria-hidden /> : <ChevronDown className="size-3.5 shrink-0" aria-hidden />}
           <span>
-            All {column.horizon!.memberCount} members landed · {folded ? "show" : "hide"}
+            {column.horizon!.memberCount === 1 ? "The member landed" : `All ${column.horizon!.memberCount} members landed`} · {folded ? "show" : "hide"}
           </span>
         </button>
       ) : null}
-      <div className={cn("flex flex-col gap-2 p-2", desk && "min-h-0 overflow-y-auto", folded && "hidden")}>
+      <div data-plan-scroll-key={column.key} className={cn("flex flex-col gap-2 p-2", desk && "min-h-0 overflow-y-auto", folded && "hidden")}>
         {entries.map((entry) => (
           <IdeaCard key={entry.idea.id} plan={plan} entry={entry} column={column} columns={columns} write={write} onOpen={onOpen} selected={selected} />
         ))}
@@ -502,7 +507,7 @@ function HorizonHeader({ column, write, onOpen, done }: { column: BoardColumn; w
           </form>
         ) : (
           <button type="button" className="min-w-0 flex-1 truncate text-left text-body font-semibold" onClick={() => (offers(horizon, "rename") ? setRenaming(true) : undefined)} title={offers(horizon, "rename") ? "Rename" : horizon.name}>
-            {horizon.name} <span className="text-label font-normal text-text-tertiary">{horizon.ideaCount} ideas · {horizon.memberCount} members</span>
+            {horizon.name} <span className="text-label font-normal text-text-tertiary">{planCounts(horizon.ideaCount, horizon.memberCount)}</span>
           </button>
         )}
         <DropdownMenu>

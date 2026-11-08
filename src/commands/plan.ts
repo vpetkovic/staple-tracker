@@ -86,7 +86,7 @@ function printScaffold(preview: ScaffoldPreview, dry: boolean, depth = 0): void 
 function horizonLine(horizon: HorizonView): string {
   const risk = [horizon.lateCount ? `${horizon.lateCount} late` : null, horizon.notStartedCount ? `${horizon.notStartedCount} not started` : null].filter(Boolean).join(" · ");
   const run = horizon.runMode ? `  runs ${horizon.runMode}${horizon.goal.length ? ` · ${horizon.goal.length} goal criteria` : ""}` : horizon.goal.length ? `  ${horizon.goal.length} goal criteria` : "";
-  return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(horizon.ideaCount).padStart(3)} ideas${risk ? `  ${risk}` : ""}${run}${horizon.awaitingApproval ? "  waiting for your approval" : ""}`;
+  return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(horizon.ideaCount).padStart(3)} ${horizon.ideaCount === 1 ? "idea" : "ideas"}${risk ? `  ${risk}` : ""}${run}${horizon.awaitingApproval ? "  waiting for your approval" : ""}`;
 }
 
 function printDetail(detail: IdeaDetail): void {
@@ -143,7 +143,7 @@ export function runPlanCommand(rest: string[]): void {
   if (values.json) return console.log(JSON.stringify(view));
   if (!view.enabled) return console.log("Planning is not turned on. Run `staple plan enable`.");
   for (const horizon of view.horizons) console.log(horizonLine(horizon));
-  console.log(`${view.ideas.length} ideas · today ${view.today}`);
+  console.log(`${view.ideas.length} ${view.ideas.length === 1 ? "idea" : "ideas"} · today ${view.today}`);
 }
 
 export function runIdeaCommand(rest: string[]): void {

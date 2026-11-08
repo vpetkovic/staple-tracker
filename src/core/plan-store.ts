@@ -620,6 +620,7 @@ export class PlanStore {
   enable(actor: string | null): PlanView {
     if (this.store.planningOn()) {
       this.store.journaled(() => {
+        this.migrateLegacyLater();
         this.draftNumberedIdeas(actor);
         this.settleMembership(actor);
       });
@@ -640,6 +641,24 @@ export class PlanStore {
       if (!ids.includes(MILESTONE_KIND)) this.store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, actor);
       DEFAULT_HORIZONS.forEach((name, index) => this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor));
       return this.view();
+    });
+  }
+
+  /** Upgrade the old default bucket through ordinary synchronized issue updates.
+   * Keep hand membership, queue and history on a plain milestone rather than cancel open work.
+   * Dated Later is intentional and stays. No marker is needed: clearing rank is idempotent.
+   */
+  migrateLegacyLater(): void {
+    if (!this.enabled()) return;
+    const legacy = this.horizonRows().filter(row => row.title === "Later" && row.target_date === null);
+    if (legacy.length === 0) return;
+    this.store.journaled(() => {
+      for (const row of legacy) {
+        const ideas = this.db.prepare("SELECT id FROM issues WHERE plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
+        for (const idea of ideas) this.write(idea.id, { plan_horizon_id: null }, null, "idea_updated", { fields: ["plan_horizon_id"], upgrade: "unscheduled" });
+        this.write(row.id, { plan_rank: null }, null, "horizon_updated", { fields: ["plan_rank"], upgrade: "unscheduled" });
+      }
+      this.settleMembership(null);
     });
   }
 

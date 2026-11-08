@@ -126,16 +126,7 @@ export function PickupPill({ cue }: { cue: RowPickupCue }) {
   );
 }
 
-/** A short name for a narrow row: the first word, or the first eight characters. */
-function shortName(name: string): string {
-  const first = name.split(/[\s·]+/)[0] ?? name;
-  return first.length > 8 ? `${first.slice(0, 7)}…` : first;
-}
-
-/**
- * The phone's horizon chip, below 480px where the milestone mark is dropped: `◇ Now`, its own
- * slot. A tap shows the full name; the horizon is a further tap away.
- */
+/** A quiet diamond in the phone row’s secondary metadata; tap reveals the full name. */
 export function HorizonCompactChip({ cue, onOpen }: { cue: RowMilestoneCue; onOpen?: (identifier: string) => void }) {
   const [open, setOpen] = useState(false);
   const name = cue.title ?? cue.identifier;
@@ -144,13 +135,12 @@ export function HorizonCompactChip({ cue, onOpen }: { cue: RowMilestoneCue; onOp
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="staple-row-horizon-compact"
-          data-horizon-chip-compact={cue.identifier}
+          className="staple-row-horizon-indicator"
+          data-horizon-indicator={cue.identifier}
           aria-label={`On horizon ${cue.identifier}: ${name} — tap for the full name`}
           onClick={(event) => event.stopPropagation()}
         >
           <span aria-hidden="true">{MILESTONE_CUE_GLYPH}</span>
-          <span className="staple-row-horizon-compact-name">{shortName(name)}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-auto max-w-[calc(100vw-2rem)] p-2 text-label" onClick={(event) => event.stopPropagation()}>

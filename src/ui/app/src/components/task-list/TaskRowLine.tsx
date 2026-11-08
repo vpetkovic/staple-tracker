@@ -540,7 +540,6 @@ export function TaskRowLine({
             ("Next", "Queued"), after the title, never with the marks before it. */}
         {cues?.pickup && plan.cues === "marks" && !desk ? <PickupCue cue={cues.pickup} compact={!plan.cueWords} /> : null}
         {milestoneCue && plan.milestoneMark && !desk ? <MilestoneCue cue={milestoneCue} onOpen={onOpenMilestone} /> : null}
-        {milestoneCue?.horizon && plan.horizonChip === "compact" && !desk ? <HorizonCompactChip cue={milestoneCue} onOpen={onOpenMilestone} /> : null}
         {columns.workspace ? (
           <span className="staple-row-workspace" data-testid="workspace-pill" title={`Workspace: ${row.workspace}`}>
             {row.workspace}
@@ -717,6 +716,7 @@ export function TaskRowLine({
         </span>
       ) : (
       <span className="staple-row-meta">
+        {milestoneCue?.horizon && plan.horizonChip === "compact" && !desk ? <HorizonCompactChip cue={milestoneCue} onOpen={onOpenMilestone} /> : null}
         {/*
           FIRST in the meta cluster — O6 (STA-138), and therefore the element nearest the
           title. VP's reference puts the warning triangle immediately beside the priority
