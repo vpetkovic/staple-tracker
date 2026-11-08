@@ -1134,16 +1134,17 @@ The plan (ideas and horizons above the tracker)
               one task breakdown row (key, title, estimate, depends-on, acceptance)
   idea import <plan.md> [--parent REF] [--horizon H] [--maturity M]
               capture an idea from a plan file: its sections and task table, with the
-              file attached; prints what it could not place
+              file attached; prints what it kept in Context instead of its section
   idea set <ref> [--title T] [--brief T]
               the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
               --horizon H|none, --parent REF|none, --start D|none, --target D|none and
               --before REF|end
   idea promote <ref>                    the idea becomes an epic on the same record and takes
               its ticket number; only a shaped idea offers it
-  idea scaffold <ref> [--preview]       promote it and turn its task breakdown into the epic's
-              tasks (estimate, blockers, acceptance, a context document each); --preview
-              shows what it would make; a retry makes only what is missing
+  idea scaffold <ref> [--confirm FP]   without --confirm, the preview: the epic and every task it
+              would make (estimate, blockers, acceptance, a context document each), what
+              holds it back, and its fingerprint; --confirm FP makes exactly that preview
+              and is refused when the plan changed since; a retry makes only what is missing
   idea adopt <ref> <issue>              link existing work to the idea
   idea unlink <ref> <issue>
   idea ask <ref> <question>             add an open question

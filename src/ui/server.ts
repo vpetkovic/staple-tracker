@@ -707,6 +707,15 @@ function resolveAsset(pathname: string): string | null {
   return candidate;
 }
 
+/**
+ * How long an idle kept-alive connection is held. Every handler shares one event loop, and a
+ * synchronous one (a write waiting out SQLite's five-second busy timeout, say) stalls the rest.
+ * Node's default of five seconds let the idle timer of a socket a client had just reused run out
+ * during such a stall, before the server read the request already on it, and the client got a
+ * reset. Held well past any stall the server can be put through, a reused socket is answered.
+ */
+export const KEEP_ALIVE_MS = 65_000;
+
 export function startUiServer(options: UiOptions): UiHandle {
   const stores = new Map<string, StoreHandle>();
 
@@ -5076,6 +5085,7 @@ export function startUiServer(options: UiOptions): UiHandle {
                 plannedTarget: optional<string | null>("plannedTarget"),
                 before: optional<string | null>("before"),
                 plan: optional<Record<string, unknown>>("plan") as never,
+                breakdownBase: optional<string>("breakdownBase"),
               },
               actor,
               person,
@@ -5094,7 +5104,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               json(res, 200, { plan: plan.view(), idea: plan.detail(ref), scaffold: plan.scaffoldPreview(ref) });
               return;
             }
-            json(res, 200, { scaffold: plan.scaffold(ref, actor, person), plan: plan.view(), idea: plan.detail(ref) });
+            json(res, 200, { scaffold: plan.scaffold(ref, typeof body.fingerprint === "string" ? body.fingerprint : null, actor, person), plan: plan.view(), idea: plan.detail(ref) });
             return;
           case "/api/plan/decision":
             plan.addDecision(ref, (body.text as string) ?? "", actor);
@@ -5457,6 +5467,9 @@ export function startUiServer(options: UiOptions): UiHandle {
       return `unresolved workspace (${envelope.code}: ${envelope.message.split("\n")[0]})`;
     }
   }
+
+  server.keepAliveTimeout = KEEP_ALIVE_MS;
+  server.headersTimeout = KEEP_ALIVE_MS + 1_000;
 
   server.listen(options.port, "127.0.0.1", () => {
     /**

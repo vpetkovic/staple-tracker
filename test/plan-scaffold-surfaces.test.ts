@@ -105,12 +105,14 @@ describe("Scaffold on every surface", () => {
     expect((await mcp.call("get_idea", { ws: WS, ref: id })).isError).toBeFalsy();
     const before = toolPayload(await mcp.call("list_tasks", { ws: WS })) as { items: unknown[] };
 
-    const confirmed = toolPayload(await mcp.call("scaffold_idea", { ws: WS, ref: id, confirm: true })) as { scaffold: { tasks: Array<{ existing: string }>; epic: { identifier: string } } };
+    const fingerprint = (agent as { fingerprint: string }).fingerprint;
+    const confirmed = toolPayload(await mcp.call("scaffold_idea", { ws: WS, ref: id, confirm: true, fingerprint })) as { scaffold: { tasks: Array<{ existing: string }>; epic: { identifier: string } } };
     expect(confirmed.scaffold.epic.identifier).toMatch(/^[A-Z]+-\d+$/);
     const numbers = confirmed.scaffold.tasks.map((task) => task.existing);
     expect(numbers.every((n) => /^[A-Z]+-\d+$/.test(n))).toBe(true);
     // A retry from another surface creates nothing.
-    const retried = JSON.parse((await cli("idea", "scaffold", id, "--json")).stdout) as { tasks: Array<{ existing: string }> };
+    const again = JSON.parse((await cli("idea", "scaffold", id, "--json")).stdout) as { fingerprint: string };
+    const retried = JSON.parse((await cli("idea", "scaffold", id, "--confirm", again.fingerprint, "--json")).stdout) as { tasks: Array<{ existing: string }> };
     expect(retried.tasks.map((task) => task.existing)).toEqual(numbers);
     const after = toolPayload(await mcp.call("list_tasks", { ws: WS })) as { items: unknown[] };
     expect(after.items.length - before.items.length).toBe(3);
@@ -125,5 +127,101 @@ describe("Scaffold on every surface", () => {
     const result = await cli("idea", "import", file);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toMatch(/^imported PLAN-7 — Checkout \(idea [0-9a-f-]{36}\): 1 task, 4\/10 sections/);
+  });
+});
+
+describe("the scaffold confirm on every surface", () => {
+  const PLAN = {
+    goal: "Two tasks.",
+    acceptance: ["Both done"],
+    breakdown: [
+      { key: "1", title: "First", estimate: "2h", dependsOn: [], acceptance: "First done", owner: null, notes: null },
+      { key: "2", title: "Second", estimate: "1h", dependsOn: ["1"], acceptance: "Second done", owner: null, notes: null },
+    ],
+  };
+  const tasksOf = async (id: string) => ((toolPayload(await mcp.call("list_tasks", { ws: WS })) as { items: Array<{ parentId?: string; parent?: unknown }> }).items ?? []).length;
+
+  it("refuses a confirm without a preview's fingerprint on the page, MCP and the CLI, creating nothing", async () => {
+    const id = await capture("No preview", { maturity: "shaped", plan: PLAN });
+    const before = await tasksOf(id);
+    const page = await http("/api/plan/scaffold", { ref: id });
+    expect(page.status).not.toBe(200);
+    expect(JSON.stringify(page.body)).toContain("Preview");
+    const agent = await mcp.call("scaffold_idea", { ws: WS, ref: id, confirm: true });
+    expect(agent.isError).toBe(true);
+    expect(JSON.stringify(agent.content)).toContain("Preview");
+    // On the CLI, no --confirm is the preview itself: it writes nothing and prints how to confirm.
+    const terminal = await cli("idea", "scaffold", id);
+    expect(terminal.status, terminal.stderr).toBe(0);
+    expect(terminal.stdout).toMatch(/confirm with: staple idea scaffold \S+ --confirm [0-9a-f]{16}/);
+    expect(await tasksOf(id)).toBe(before);
+  });
+
+  it("refuses a confirm whose plan changed since the preview on every surface", async () => {
+    const id = await capture("Stale preview", { maturity: "shaped", plan: PLAN });
+    const preview = toolPayload(await mcp.call("scaffold_idea", { ws: WS, ref: id })) as { scaffold: { fingerprint: string } };
+    expect((await mcp.call("update_idea", { ws: WS, ref: id, plan: { breakdown: [{ key: "9", title: "Delete prod data", acceptance: "gone" }] } })).isError).toBeFalsy();
+    const fingerprint = preview.scaffold.fingerprint;
+    const agent = await mcp.call("scaffold_idea", { ws: WS, ref: id, confirm: true, fingerprint });
+    expect(JSON.stringify(agent.content)).toContain("the plan changed since the preview");
+    const page = await http("/api/plan/scaffold", { ref: id, fingerprint });
+    expect(JSON.stringify(page.body)).toContain("the plan changed since the preview");
+    const terminal = await cli("idea", "scaffold", id, "--confirm", fingerprint);
+    expect(terminal.status).not.toBe(0);
+    expect(terminal.stderr).toContain("the plan changed since the preview");
+  });
+
+  it("refuses a preview for a raw idea, as its confirm is refused", async () => {
+    const raw = await capture("Raw, no scaffold", { plan: PLAN });
+    const agent = await mcp.call("scaffold_idea", { ws: WS, ref: raw });
+    expect(agent.isError).toBe(true);
+    expect(JSON.stringify(agent.content)).toContain("is raw; it cannot be scaffolded");
+    expect((await http("/api/plan/scaffold", { ref: raw, preview: true })).status).not.toBe(200);
+  });
+});
+
+describe("plan writes are checked whole on every surface", () => {
+  it("refuses a malformed plan on the page, leaving the shaped idea's breakdown as it was", async () => {
+    const id = await capture("Malformed", { maturity: "shaped", plan: READY_PLAN });
+    const write = await http("/api/plan/update", { ref: id, plan: { breakdown: "oops", acceptance: "one criterion" } });
+    expect(write.status).not.toBe(200);
+    expect(JSON.stringify(write.body)).toContain("plan.acceptance must be a list of text");
+    const detail = toolPayload(await mcp.call("get_idea", { ws: WS, ref: id })) as { plan: { breakdown: unknown[]; acceptance: string[] } };
+    expect(detail.plan.breakdown).toHaveLength(1);
+    expect(detail.plan.acceptance).toEqual(READY_PLAN.acceptance);
+  });
+
+  it("refuses a raw document write to the breakdown over MCP, and shows a hollowed shaped plan as incomplete to the agent", async () => {
+    const id = await capture("Raw doc", { maturity: "shaped", plan: READY_PLAN });
+    const put = await mcp.call("put_document", { ws: WS, ref: id, key: "breakdown", body: "| 1 | not json |" });
+    expect(put.isError).toBe(true);
+    expect(JSON.stringify(put.content)).toContain("structured rows, not a document");
+    expect((await mcp.call("update_idea", { ws: WS, ref: id, plan: { goal: null }, add_question: "Is this even right?" })).isError).toBeFalsy();
+    const detail = toolPayload(await mcp.call("get_idea", { ws: WS, ref: id })) as { idea: { state: string; planIncomplete: string[]; actions: Array<{ id: string; disabledReason?: string }> } };
+    expect(detail.idea.state).toBe("shaped");
+    expect(detail.idea.planIncomplete).toEqual(["a goal", "1 open question answered or deferred"]);
+    expect(detail.idea.actions.find((action) => action.id === "scaffold")?.disabledReason).toContain("Plan incomplete");
+  });
+
+  it("refuses a CLI import into shaped while the file holds an open question, and creates nothing", async () => {
+    const file = join(emptyDir, "q.md");
+    writeFileSync(file, "# Q plan\n\n## Goal\n\ng\n\n## Task breakdown\n\n| # | Task | Done when |\n|---|---|---|\n| 1.1 | Do | done |\n\n## Acceptance criteria\n\n- ok\n\n## Open questions\n\n- Who pays?\n");
+    const before = ((toolPayload(await mcp.call("list_ideas", { ws: WS })) as { ideas: unknown[] }).ideas ?? []).length;
+    const person = await cli("idea", "import", file, "--maturity", "shaped", "--person");
+    expect(person.status).not.toBe(0);
+    expect(person.stderr).toContain("1 open question answered or deferred");
+    expect(((toolPayload(await mcp.call("list_ideas", { ws: WS })) as { ideas: unknown[] }).ideas ?? []).length).toBe(before);
+  });
+});
+
+describe("the page confirms what it previewed", () => {
+  it("creates the epic and its tasks over HTTP with the preview's fingerprint", async () => {
+    const id = await capture("Page confirm", { maturity: "shaped", plan: READY_PLAN });
+    const preview = (await http("/api/plan/scaffold", { ref: id, preview: true })).body.scaffold as { fingerprint: string };
+    const confirmed = await http("/api/plan/scaffold", { ref: id, fingerprint: preview.fingerprint });
+    expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
+    const made = confirmed.body.scaffold as { epic: { identifier: string }; tasks: Array<{ existing: string | null }> };
+    expect(made.epic.identifier).toMatch(/^[A-Z]+-\d+$/);
+    expect(made.tasks.every((task) => task.existing !== null)).toBe(true);
   });
 });

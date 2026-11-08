@@ -78,6 +78,8 @@ export interface IdeaData {
   notStarted: boolean;
   childIds: string[];
   openQuestions: number;
+  /** A shaped plan that no longer passes the shaped gate: what it lacks. Scaffold and Promote wait for it. */
+  planIncomplete: string[];
   state: IdeaState;
   actions: OfferedAction[];
   createdAt: string;
@@ -109,6 +111,8 @@ export interface LinkData {
 
 /** One task breakdown row (`src/core/plan-sections.ts`). */
 export interface BreakdownRow {
+  /** Stable for the row's life; a new row in the editor has none until it is saved. */
+  id?: string;
   key: string;
   title: string;
   estimate: string | null;
@@ -131,13 +135,16 @@ export interface PlanSections {
 }
 
 export interface ScaffoldTaskData {
+  rowId: string;
   key: string;
   title: string;
   estimate: string | null;
   estimatedSeconds: number | null;
+  estimateWarning: string | null;
   blockedBy: string[];
   waitsOutside: string[];
   acceptance: string[];
+  acceptanceInherited: boolean;
   context: string;
   existing: string | null;
 }
@@ -147,6 +154,9 @@ export interface ScaffoldPreviewData {
   epic: { identifier: string | null; kind: string; planDocument: string; acceptance: string[]; promoted: boolean };
   tasks: ScaffoldTaskData[];
   children: ScaffoldPreviewData[];
+  problems: string[];
+  warnings: string[];
+  fingerprint: string;
 }
 
 export interface IdeaDetailData {
@@ -161,6 +171,8 @@ export interface IdeaDetailData {
   plan: PlanSections;
   completeness: { starred: number; starredTotal: number; filled: number; total: number };
   missingForShaped: string[];
+  planWarnings: string[];
+  breakdownRevision: string;
   scaffold: ScaffoldPreviewData | null;
   today: string;
 }

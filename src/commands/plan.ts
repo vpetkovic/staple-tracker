@@ -13,7 +13,7 @@ import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { configuredHumanName } from "../mcp-view-actions.js";
 import type { HorizonView, IdeaDetail, IdeaView, PlanView, PlanWriteOptions, ScaffoldPreview } from "../core/plan-store.js";
-import { splitDepends, type BreakdownRow, type PlanSections } from "../core/plan-sections.js";
+import { splitDepends, type BreakdownRowInput, type PlanPatch } from "../core/plan-sections.js";
 import { resolveWorkspace } from "../core/workspace.js";
 import { StapleError } from "../core/types.js";
 import { aKind } from "../core/plan.js";
@@ -75,8 +75,11 @@ function printScaffold(preview: ScaffoldPreview, dry: boolean, depth = 0): void 
   console.log(`${pad}${dry ? "would make" : "made"} ${epic}: ${preview.idea.title} · ${preview.epic.acceptance.length} acceptance criteria`);
   for (const task of preview.tasks) {
     const blockers = task.blockedBy.length > 0 ? ` · after ${task.blockedBy.join(", ")}` : "";
-    console.log(`${pad}  ${task.existing ?? (dry ? "new" : "?")} ${task.title}${task.estimate ? ` · ${task.estimate}` : ""}${blockers}`);
+    const inherited = task.acceptanceInherited ? " · acceptance inherited" : "";
+    const estimate = task.estimateWarning ? ` · ${task.estimateWarning}` : task.estimate ? ` · ${task.estimate}` : "";
+    console.log(`${pad}  ${task.existing ?? (dry ? "new" : "?")} ${task.title}${estimate}${blockers}${inherited}`);
   }
+  for (const warning of depth === 0 ? preview.warnings : []) console.log(`${pad}warning ${warning}`);
   for (const child of preview.children) printScaffold(child, dry, depth + 1);
 }
 
@@ -102,10 +105,14 @@ function printDetail(detail: IdeaDetail): void {
   for (const link of detail.linked) console.log(`  linked  ${link.identifier} ${link.title} · ${link.status} · ${link.doneLeaves}/${link.leaves}`);
   const { completeness: c } = detail;
   console.log(`plan     ${c.starred}/${c.starredTotal} required sections · ${c.filled}/${c.total} written${detail.missingForShaped.length > 0 && (idea.state === "raw" || idea.state === "exploring") ? ` · to shape: ${detail.missingForShaped.join("; ")}` : ""}`);
+  if (idea.planIncomplete.length > 0) console.log(`shaped · plan incomplete: ${idea.planIncomplete.join("; ")}`);
   if (detail.plan.goal) console.log(`goal     ${detail.plan.goal.split("\n")[0]}`);
+  const inherits = detail.plan.acceptance.length > 0;
   for (const row of detail.plan.breakdown) {
-    console.log(`  task ${row.key} ${row.title}${row.estimate ? ` · ${row.estimate}` : ""}${row.dependsOn.length ? ` · after ${row.dependsOn.join(", ")}` : ""}${row.acceptance ? "" : " · no acceptance"}`);
+    const done = row.acceptance ? "" : inherits ? " · done when: inherits the plan's acceptance" : " · no acceptance";
+    console.log(`  task ${row.key} ${row.title}${row.estimate ? ` · ${row.estimate}` : ""}${row.dependsOn.length ? ` · after ${row.dependsOn.join(", ")}` : ""}${done}`);
   }
+  for (const warning of detail.planWarnings) console.log(`  warning ${warning}`);
   for (const item of detail.plan.acceptance) console.log(`  accept ${item}`);
   console.log(`offers   ${offeredLine(idea.actions)}`);
 }
@@ -165,6 +172,7 @@ export function runIdeaCommand(rest: string[]): void {
       owner: { type: "string" },
       notes: { type: "string" },
       preview: { type: "boolean" },
+      confirm: { type: "string" },
     },
   });
   const [sub = "ls", first, ...others] = positionals;
@@ -268,7 +276,7 @@ export function runIdeaCommand(rest: string[]): void {
     case "plan": {
       // The text and list sections; a list flag given replaces that list whole.
       const ref = need(first, "an idea reference");
-      const patch: Partial<PlanSections> = {};
+      const patch: PlanPatch = {};
       if (values.goal !== undefined) patch.goal = values.goal;
       if (values.context !== undefined) patch.context = values.context === "-" ? readFileSync(0, "utf8") : values.context;
       if (values.acceptance !== undefined) patch.acceptance = values.acceptance;
@@ -283,9 +291,10 @@ export function runIdeaCommand(rest: string[]): void {
       // One breakdown row at a time: add <key> <title…>, set <key>, rm <key>.
       const ref = need(first, "an idea reference");
       const [verb, key, ...titleWords] = others;
-      const rows = [...plan.detail(ref).plan.breakdown];
+      const read = plan.detail(ref);
+      const rows: BreakdownRowInput[] = [...read.plan.breakdown];
       const at = rows.findIndex((row) => row.key === key);
-      const fields = (base: BreakdownRow): BreakdownRow => ({
+      const fields = (base: BreakdownRowInput): BreakdownRowInput => ({
         ...base,
         title: titleWords.length > 0 ? titleWords.join(" ") : values.title ?? base.title,
         estimate: values.estimate ?? base.estimate,
@@ -304,14 +313,23 @@ export function runIdeaCommand(rest: string[]): void {
       } else {
         throw new StapleError("validation", "staple idea task <ref> add|set|rm <key> [title] [--estimate E] [--depends K,K] [--acceptance T] [--owner O] [--notes T]");
       }
-      plan.update(ref, { plan: { breakdown: rows } }, actor, options);
+      plan.update(ref, { plan: { breakdown: rows }, breakdownBase: read.breakdownRevision }, actor, options);
       return show(ref);
     }
     case "scaffold": {
       const ref = need(first, "an idea reference");
-      const result = values.preview ? plan.scaffoldPreview(ref) : plan.scaffold(ref, actor, options);
+      // Without --confirm it is the preview; the confirm names the fingerprint the preview printed.
+      const dry = values.confirm === undefined;
+      const result = dry ? plan.scaffoldPreview(ref) : plan.scaffold(ref, values.confirm, actor, options);
       if (values.json) return console.log(JSON.stringify(result));
-      printScaffold(result, values.preview === true);
+      printScaffold(result, dry);
+      if (dry) {
+        console.log(
+          result.problems.length > 0
+            ? `held back: ${result.problems.join("; ")}`
+            : `confirm with: staple idea scaffold ${ref} --confirm ${result.fingerprint}${values.person ? " --person" : ""}`,
+        );
+      }
       return;
     }
     case "import": {
@@ -324,7 +342,7 @@ export function runIdeaCommand(rest: string[]): void {
       );
       if (values.json) return console.log(JSON.stringify(result));
       console.log(`imported ${result.idea.idea.title} (idea ${result.idea.idea.id}): ${result.rows} task${result.rows === 1 ? "" : "s"}, ${result.idea.completeness.filled}/${result.idea.completeness.total} sections`);
-      for (const warning of result.warnings) console.log(`  not placed: ${warning}`);
+      for (const warning of result.warnings) console.log(`  warning: ${warning}`);
       return;
     }
     default:

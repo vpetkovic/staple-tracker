@@ -48,6 +48,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { renumberedRanks } from "../milestones.js";
 import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } from "../milestone-goal.js";
 import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.js";
+import { planRowFromValue, planRowId, writePlanRow } from "../plan-rows.js";
 import { isDraftIdentifier } from "../plan.js";
 import { writeCriterionMark } from "../milestone-marks.js";
 import {
@@ -2293,7 +2294,11 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
   const links = Object.keys(input.payload)
     .map((key) => ({ key, issueId: planLinkIssue(key) }))
     .filter((entry): entry is { key: string; issueId: string } => entry.issueId !== null);
-  const fieldsOnly = marks.length + links.length;
+  /** And its task breakdown rows (`planRow.<row id>`, `plan-rows.ts`): one field per row, a null removes it. */
+  const rows = Object.keys(input.payload)
+    .map((key) => ({ key, rowId: planRowId(key) }))
+    .filter((entry): entry is { key: string; rowId: string } => entry.rowId !== null);
+  const fieldsOnly = marks.length + links.length + rows.length;
   if (!hasMembers && !hasTarget && !hasStart && !hasUpdated && fieldsOnly === 0) return false;
 
   if (!issueExists(db, input.entityId)) throw new ReferentMissing(`milestone ${input.entityId}`);
@@ -2308,6 +2313,12 @@ function applyMilestone(db: DatabaseSync, input: ApplyInput): boolean {
     const link = value === null ? null : planLinkFromValue(value);
     if (value !== null && link === null) continue;
     writePlanLink(db, input.entityId, issueId, link);
+  }
+  for (const { key, rowId } of rows) {
+    const value = input.payload[key];
+    const row = value === null ? null : planRowFromValue(value);
+    if (value !== null && row === null) continue;
+    writePlanRow(db, input.entityId, rowId, row);
   }
   if (fieldsOnly > 0 && !hasMembers && !hasTarget && !hasStart && !hasUpdated) return true;
   /**

@@ -49,9 +49,9 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
   // The header's Scaffold opens the preview here: it is never a one-click write.
   useEffect(() => onScaffoldRequest(() => setScaffoldOpen(true)), []);
   if (!record) return null;
-  const scaffold = async () => {
+  const scaffold = async (fingerprint: string) => {
     setBusy(true);
-    if (await write("scaffold", { ref: record.idea.id })) setScaffoldOpen(false);
+    if (await write("scaffold", { ref: record.idea.id, fingerprint })) setScaffoldOpen(false);
     setBusy(false);
   };
   return (
@@ -59,7 +59,7 @@ export function PlanTab({ detail, workspace, onAuthError, refresh }: TabProps) {
       {refusal ? <GuardRefusal refusal={refusal} /> : null}
       <Stage record={record} />
       <Completeness record={record} />
-      {record.scaffold ? <ScaffoldSection preview={record.scaffold} open={scaffoldOpen} onToggle={() => setScaffoldOpen((open) => !open)} onConfirm={() => void scaffold()} busy={busy} /> : null}
+      {record.scaffold ? <ScaffoldSection preview={record.scaffold} open={scaffoldOpen} onToggle={() => setScaffoldOpen((open) => !open)} onConfirm={(fingerprint) => void scaffold(fingerprint)} busy={busy} /> : null}
       <Fields record={record} plan={plan} write={write} />
       <Brief record={record} write={write} />
       <PlanSectionsView record={record} write={write} />

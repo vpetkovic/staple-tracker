@@ -448,6 +448,14 @@ CREATE TABLE plan_links (
         PRIMARY KEY (idea_id, issue_id)
       );
 
+CREATE TABLE plan_rows (
+        idea_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        row_id  TEXT NOT NULL,
+        body    TEXT NOT NULL,
+        rank    REAL NOT NULL,
+        PRIMARY KEY (idea_id, row_id)
+      );
+
 CREATE TABLE plan_members (
         issue_id     TEXT    PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
         milestone_id TEXT    NOT NULL    REFERENCES issues(id) ON DELETE CASCADE,

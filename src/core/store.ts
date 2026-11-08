@@ -234,6 +234,8 @@ export interface UpdateIssueInput {
  */
 export interface PlanInternal {
   plan?: boolean;
+  /** The id the plan layer derived for a task Scaffold makes (`scaffoldTaskId`); a create otherwise mints one. */
+  id?: string;
 }
 
 export interface CreateIssueResult {
@@ -2662,7 +2664,7 @@ export class WorkspaceStore {
       const blockerRows = (input.blockedBy ?? []).map((ref) => this.requireTarget(ref));
       this.assertNoPlanDependency(kind, blockerRows);
 
-      const id = newId();
+      const id = internal.id ?? newId();
       /**
        * An idea holds no ticket number until it is promoted: a draft identifier made from its own
        * UUID, which consumes nothing from the counter and is never shown (design/plan.md, "Identity").
@@ -7401,7 +7403,10 @@ export class WorkspaceStore {
     }
     return this.journaled(() => {
       const row = this.requireTarget(ref);
-      if (!internal.plan) this.assertIdeaContentWrite(row);
+      if (!internal.plan) {
+        this.assertIdeaContentWrite(row);
+        if (this.planningOn()) this.plan().assertDocumentWrite(row.id, cleanKey, body);
+      }
       const current = this.db
         .prepare(
           `SELECT d.current_revision, COALESCE(r.instructions, 0) AS instructions

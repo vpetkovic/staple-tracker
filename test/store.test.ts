@@ -432,6 +432,7 @@ describe("schema migration against a live database", () => {
       for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank"]) legacyDb.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
       legacyDb.exec("DROP TABLE IF EXISTS plan_members");
       legacyDb.exec("DROP TABLE IF EXISTS plan_links");
+      legacyDb.exec("DROP TABLE IF EXISTS plan_rows");
       legacyDb.prepare("UPDATE meta SET value = '1' WHERE key = 'schema_version'").run();
       legacyDb.close();
 

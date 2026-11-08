@@ -45,6 +45,7 @@ export function IdeaStatusLine({ record, className, children }: { record: IdeaDe
     <div className={cn("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2", className)} data-status-line="" data-idea-status={idea.state}>
       <span className="inline-flex h-7 items-center gap-1.5 rounded-full border bg-surface-raised px-2.5 text-label font-medium" data-idea-state-chip={idea.state}>
         Idea · {STATE_WORDS[idea.state]}
+        {idea.planIncomplete.length > 0 ? " · plan incomplete" : ""}
       </span>
       <p className="m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary" data-status-sentence="">
         <span>{sentence(record)}</span>

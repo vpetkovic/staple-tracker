@@ -116,6 +116,7 @@ import { StapleError, nowIso } from "../types.js";
 import { criterionMarkPosition } from "../milestone-goal.js";
 import { criterionMarkFields } from "../milestone-marks.js";
 import { planLinkFields, planLinkIssue } from "../plan-links.js";
+import { planRowFields, planRowId } from "../plan-rows.js";
 import {
   COMMENT_COLUMNS,
   ISSUE_COLUMNS,
@@ -239,6 +240,8 @@ function policy(entity: string, key: string): FieldPolicy | null {
       if (criterionMarkPosition(key) !== null) return { name: key };
       // One link is one field too (`plan-links.ts`).
       if (planLinkIssue(key) !== null) return { name: key };
+      // And one breakdown row (`plan-rows.ts`).
+      if (planRowId(key) !== null) return { name: key };
       if (key === "targetDate" || key === "target_date") return named("target_date");
       if (key === "startDate" || key === "start_date") return named("start_date");
       if (key === "updatedAt" || key === "updated_at") return named("updated_at");
@@ -332,6 +335,10 @@ function readField(
       if (planLinkIssue(name) !== null) {
         if (!db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(entityId)) return { present: false, value: null };
         return { present: true, value: planLinkFields(db, entityId)[name] ?? null };
+      }
+      if (planRowId(name) !== null) {
+        if (!db.prepare("SELECT 1 AS hit FROM issues WHERE id = ?").get(entityId)) return { present: false, value: null };
+        return { present: true, value: planRowFields(db, entityId)[name] ?? null };
       }
       return scalar("milestone_meta", "issue_id", name);
     case "queue":

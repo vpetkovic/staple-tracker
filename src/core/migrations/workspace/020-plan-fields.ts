@@ -35,6 +35,11 @@ import type { Migration } from "../types.js";
  * both links arrive. `issue_id` has no foreign key: a link whose issue is gone (a rewind,
  * say) stays visible as missing and can still be unlinked.
  *
+ * `plan_rows` holds an idea's task breakdown, one row per breakdown row: the row as JSON and its
+ * rank. Each replicates as its own field of the idea's `milestone` entity (`planRow.<row id>`),
+ * the shape links use, so two devices editing different rows both keep their edit and the same
+ * row edited on two devices is a field conflict (`plan-rows.ts`).
+ *
  * No new entity and no protocol change: the Worker carries the payload fields without knowing
  * them. A device that has not migrated refuses an operation page stamped 20 with
  * `schema_ahead`; the snapshot route checks the protocol only, so an older build hydrating
@@ -63,6 +68,13 @@ export const migration: Migration = {
         linked_by TEXT NOT NULL,
         linked_at TEXT NOT NULL,
         PRIMARY KEY (idea_id, issue_id)
+      );
+      CREATE TABLE plan_rows (
+        idea_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+        row_id  TEXT NOT NULL,
+        body    TEXT NOT NULL,
+        rank    REAL NOT NULL,
+        PRIMARY KEY (idea_id, row_id)
       );
       CREATE TABLE plan_members (
         issue_id     TEXT    PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,

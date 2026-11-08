@@ -102,7 +102,7 @@ const READS: Record<StoreName, readonly string[]> = {
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
   // The plan layer's reads, and the lifecycle checks the tracker asks of it: derived on every call, nothing stored.
-  PlanStore: ["today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertQueueable", "sectionsOf", "scaffoldPreview"],
+  PlanStore: ["today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview"],
 };
 
 interface World {
@@ -405,7 +405,10 @@ const SCENARIOS: readonly Scenario[] = [
         "alice",
         { person: { via: "test" } },
       ).id),
-    run: (w) => void w.a.store.plan().scaffold(w.ids["Scaffolded"]!, "alice"),
+    run: (w) => {
+      const plan = w.a.store.plan();
+      plan.scaffold(w.ids["Scaffolded"]!, plan.scaffoldPreview(w.ids["Scaffolded"]!).fingerprint, "alice");
+    },
   },
   {
     method: "WorkspaceStore.promoteInPlace",

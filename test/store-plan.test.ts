@@ -587,6 +587,8 @@ describe("Promote, Adopt and Unlink", () => {
   it("Promote turns the idea into an epic on the same record, keeping its documents and history", () => {
     const ref = idea("Programming API", { maturity: "shaped", brief: "The brief.", plannedStart: "2026-11-01", plannedTarget: "2026-12-01" });
     plan.addQuestion(ref, "Which auth?", "agent");
+    // Left open on purpose: an open question would hold Promote back until it is answered or deferred.
+    plan.deferQuestion(ref, 1, "agent");
     store.addComment(ref, "Seen at capture", "agent", "agent");
     const promoted = plan.promote(ref, "vp", PERSON);
     expect(promoted).toMatchObject({ id: ref, promoted: true, kind: "epic", stage: "started" });
@@ -595,7 +597,7 @@ describe("Promote, Adopt and Unlink", () => {
     expect(epic.id).toBe(ref);
     expect(epic.kind).toBe("epic");
     expect(plan.detail(ref).brief).toBe("The brief.");
-    expect(plan.detail(ref).questions).toEqual([{ text: "Which auth?", resolved: false }]);
+    expect(plan.detail(ref).questions).toEqual([{ text: "Which auth?", resolved: false, deferred: true }]);
     expect(store.listComments(ref).map((c) => c.body)).toEqual(["Seen at capture"]);
     expect(promoted.baseline).toEqual({ start: "2026-11-01", target: "2026-12-01" });
     expect(store.getIssue(ref).identifier).toBe(promoted.identifier);

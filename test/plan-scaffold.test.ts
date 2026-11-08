@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../src/core/db.js";
-import type { PlanSections } from "../src/core/plan-sections.js";
+import type { PlanPatch } from "../src/core/plan-sections.js";
 import type { PlanStore } from "../src/core/plan-store.js";
 import { migrateWorkspace } from "../src/core/schema.js";
 import { WorkspaceStore } from "../src/core/store.js";
@@ -35,7 +35,7 @@ function refused(fn: () => unknown): string {
   throw new Error("expected a validation refusal");
 }
 
-const PLAN: Partial<PlanSections> = {
+const PLAN: PlanPatch = {
   goal: "Checkout as a product.",
   context: "Pinned versions; one error envelope.",
   breakdown: [
@@ -48,7 +48,12 @@ const PLAN: Partial<PlanSections> = {
   risks: "Review bandwidth.",
 };
 
-function shaped(title: string, sections: Partial<PlanSections> = PLAN, extra: { parent?: string } = {}): string {
+/** Scaffold as every surface does it: preview, then confirm with that preview's fingerprint. */
+function confirm(ref: string, actor: string) {
+  return plan.scaffold(ref, plan.scaffoldPreview(ref).fingerprint, actor);
+}
+
+function shaped(title: string, sections: PlanPatch = PLAN, extra: { parent?: string } = {}): string {
   return plan.capture({ title, maturity: "shaped", plan: sections, ...extra }, "vp", PERSON).id;
 }
 
@@ -99,9 +104,9 @@ describe("the shaped gate", () => {
       'The idea "Thin" cannot be marked shaped yet: it needs a goal, a task breakdown and acceptance criteria before it is shaped.',
     );
     plan.update(raw, { maturity: "exploring" }, "vp", PERSON);
-    plan.update(raw, { plan: { ...PLAN, breakdown: [{ ...PLAN.breakdown![0]!, acceptance: null }] } }, "agent");
-    expect(refused(() => plan.update(raw, { maturity: "shaped" }, "vp", PERSON))).toContain("acceptance on task 1.1");
-    expect(plan.ideaView(raw).actions.find((action) => action.id === "shape")?.disabledReason).toContain("acceptance on task 1.1");
+    plan.update(raw, { plan: { ...PLAN, breakdown: [{ ...PLAN.breakdown![0]!, title: "" }] } }, "agent");
+    expect(refused(() => plan.update(raw, { maturity: "shaped" }, "vp", PERSON))).toContain("a title on task 1.1");
+    expect(plan.ideaView(raw).actions.find((action) => action.id === "shape")?.disabledReason).toContain("a title on task 1.1");
     plan.update(raw, { plan: { breakdown: PLAN.breakdown } }, "agent");
     expect(plan.update(raw, { maturity: "shaped" }, "vp", PERSON).state).toBe("shaped");
   });
@@ -132,7 +137,7 @@ describe("Scaffold", () => {
       ["1.2 Versioning ADR", 7200, ["1.1"], [], ["ADR accepted"], null],
       ["1.3 Rate limits", 5400, ["1.2"], ["PLAN-3"], ["429 with Retry-After"], null],
     ]);
-    const made = plan.scaffold(id, "agent");
+    const made = confirm(id, "agent");
     const epic = store.getIssue(id);
     expect(epic).toMatchObject({ kind: "epic", acceptanceCriteria: PLAN.acceptance });
     expect(store.getDocument(id, "plan").body).toBe(preview.epic.planDocument);
@@ -152,14 +157,14 @@ describe("Scaffold", () => {
 
   it("is idempotent: a retry creates nothing, and rows written since are all it adds", () => {
     const id = shaped("Retry me");
-    const first = plan.scaffold(id, "agent");
+    const first = confirm(id, "agent");
     const count = () => store.listIssues({}).filter((issue) => issue.parentId === id).length;
     expect(count()).toBe(3);
-    const again = plan.scaffold(id, "agent");
+    const again = confirm(id, "agent");
     expect(again.tasks.map((task) => task.existing)).toEqual(first.tasks.map((task) => task.existing));
     expect(count()).toBe(3);
     plan.update(id, { plan: { breakdown: [...PLAN.breakdown!, { key: "1.4", title: "Docs", estimate: "1h", dependsOn: ["1.3"], acceptance: "Published", owner: null, notes: null }] } }, "agent");
-    const more = plan.scaffold(id, "agent");
+    const more = confirm(id, "agent");
     expect(count()).toBe(4);
     expect(more.tasks.slice(0, 3).map((task) => task.existing)).toEqual(first.tasks.map((task) => task.existing));
     expect(store.blockersOf(store.getIssue(more.tasks[3]!.existing!).id).map((b) => b.id)).toEqual([store.getIssue(first.tasks[2]!.existing!).id]);
@@ -171,7 +176,7 @@ describe("Scaffold", () => {
     const thinking = plan.capture({ title: "Rung 9", parent, maturity: "exploring" }, "vp", PERSON).id;
     const preview = plan.scaffoldPreview(parent);
     expect(preview.children.map((c) => c.idea.id)).toEqual([child]);
-    plan.scaffold(parent, "agent");
+    confirm(parent, "agent");
     expect(store.getIssue(child)).toMatchObject({ kind: "epic", parentId: parent });
     expect(store.listIssues({}).filter((issue) => issue.parentId === child).map((issue) => issue.title)).toEqual(["2.1 Endpoints"]);
     expect(plan.ideaView(thinking)).toMatchObject({ promoted: false, state: "exploring" });
@@ -181,7 +186,7 @@ describe("Scaffold", () => {
     const parent = shaped("Release GA");
     const child = shaped("Rung 2", { ...PLAN, breakdown: [{ key: "2.1", title: "Endpoints", estimate: "4h", dependsOn: [], acceptance: "Served", owner: null, notes: null }] }, { parent });
     expect(plan.ideaView(child).actions.find((action) => action.id === "scaffold")?.disabledReason).toBeUndefined();
-    plan.scaffold(child, "agent");
+    confirm(child, "agent");
     const childTask = store.listIssues({}).find((issue) => issue.parentId === child)!;
     store.checkoutIssue(childTask.identifier, "agent");
     const childEpic = store.getIssue(child);
@@ -190,7 +195,7 @@ describe("Scaffold", () => {
     // The parent's own state is untouched by its sub-idea's start.
     expect(plan.ideaView(parent)).toMatchObject({ state: "shaped", promoted: false });
     const before = store.listIssues({}).length;
-    plan.scaffold(parent, "agent");
+    confirm(parent, "agent");
     const parentEpic = store.getIssue(parent);
     expect(store.getIssue(child).parentId).toBe(parentEpic.id);
     expect(store.tree().map((node) => node.issue.identifier)).not.toContain(childEpic.identifier);
@@ -204,11 +209,11 @@ describe("Scaffold", () => {
 
   it("is offered only where the lifecycle offers it: never to an idea that is not shaped", () => {
     const raw = plan.capture({ title: "Not shaped", plan: PLAN }, "agent").id;
-    expect(refused(() => plan.scaffold(raw, "agent"))).toContain("is raw; it cannot be scaffolded");
+    expect(refused(() => plan.scaffold(raw, null, "agent"))).toContain("is raw; it cannot be scaffolded");
     const linked = shaped("Linked, not scaffolded");
     plan.adopt(linked, store.createIssue({ title: "Existing work" }).identifier, "agent");
     expect(plan.ideaView(linked).actions.map((action) => action.id)).not.toContain("scaffold");
-    expect(refused(() => plan.scaffold(linked, "agent"))).toContain("cannot be scaffolded");
+    expect(refused(() => plan.scaffold(linked, null, "agent"))).toContain("cannot be scaffolded");
   });
 });
 
@@ -224,7 +229,7 @@ describe("import", () => {
     expect(result.idea.questions).toEqual([{ text: "Webhooks?", resolved: false }]);
     expect(result.idea.decisions).toEqual(["Dated versions"]);
     expect(store.listFiles(result.idea.idea.id).map((file) => file.filename)).toEqual(["PLAN-7-checkout.md"]);
-    // Rows without acceptance hold shaping back, as any plan's would.
-    expect(result.idea.missingForShaped).toEqual(["acceptance on task 7.1", "acceptance on task 7.2", "1 open question answered or deferred"]);
+    // Rows without their own "done when" inherit the plan's acceptance; the open question holds shaping back.
+    expect(result.idea.missingForShaped).toEqual(["1 open question answered or deferred"]);
   });
 });

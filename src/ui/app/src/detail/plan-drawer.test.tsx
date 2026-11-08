@@ -75,6 +75,7 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
     notStarted: false,
     childIds: [],
     openQuestions: 0,
+    planIncomplete: [],
     state: state as IdeaData["state"],
     actions: OFFERED[state]!,
     createdAt: "2026-11-01T00:00:00.000Z",
@@ -96,6 +97,8 @@ function record(view: IdeaData): IdeaDetailData {
     plan: { goal: null, context: null, breakdown: [], acceptance: [], dependencies: [], outOfScope: null, risks: null, sources: [] },
     completeness: { starred: 0, starredTotal: 3, filled: 0, total: 10 },
     missingForShaped: ["a goal"],
+    planWarnings: [],
+    breakdownRevision: "r0",
     scaffold: null,
     today: "2026-11-08",
   };
@@ -279,7 +282,7 @@ describe("the Plan tab", () => {
       sources: [],
     };
     rec.completeness = { starred: 3, starredTotal: 3, filled: 3, total: 10 };
-    rec.missingForShaped = ["acceptance on task 7.2"];
+    rec.missingForShaped = ["1 open question answered or deferred"];
     return rec;
   };
   const renderTab = (rec: IdeaDetailData) =>
@@ -299,11 +302,14 @@ describe("the Plan tab", () => {
   it("shows every plan section, the starred ones marked, the breakdown as rows, and what shaping still needs", () => {
     const html = renderTab(planned("raw", { state: "exploring", maturity: "exploring", stage: "exploring" }));
     expect(html).toContain('data-plan-completeness="3/3"');
-    expect(html).toContain("To shape it: acceptance on task 7.2.");
+    expect(html).toContain("To shape it: 1 open question answered or deferred.");
     for (const section of ["goal", "context", "breakdown", "acceptance", "dependencies", "out-of-scope", "risks", "sources"]) expect(html).toContain(`data-plan-section="${section}"`);
     expect((html.match(/aria-label="required to shape"/g) ?? []).length).toBe(3);
     expect(html).toContain('data-plan-row="7.1"');
     expect(html).toContain('data-plan-row="7.2"');
+    // 7.2 has no "done when" of its own: it inherits the plan's acceptance, and says so.
+    expect(html).toMatch(/data-plan-row="7\.2" data-plan-row-inherits=""/);
+    expect(html).not.toMatch(/data-plan-row="7\.1" data-plan-row-inherits/);
   });
 
   it("shows Scaffold's preview section only when the state offers it", () => {
@@ -312,11 +318,33 @@ describe("the Plan tab", () => {
     rec.scaffold = {
       idea: { id: ID, title: "Coach shares a program" },
       epic: { identifier: null, kind: "epic", planDocument: "# x", acceptance: ["Works"], promoted: false },
-      tasks: [{ key: "7.1", title: "7.1 Spike", estimate: "3h", estimatedSeconds: 10800, blockedBy: [], waitsOutside: [], acceptance: ["Findings written"], context: "", existing: null }],
+      tasks: [{ rowId: "r1", key: "7.1", title: "7.1 Spike", estimate: "3h", estimatedSeconds: 10800, estimateWarning: null, blockedBy: [], waitsOutside: [], acceptance: ["Findings written"], acceptanceInherited: false, context: "", existing: null }],
       children: [],
+      problems: [],
+      warnings: [],
+      fingerprint: "f0",
     };
     const html = renderTab(rec);
     expect(html).toContain("data-plan-scaffold");
     expect(html).toContain("1 new task of 1");
+    expect(html).not.toContain("data-plan-scaffold-held");
+  });
+
+  it("holds Scaffold back on a shaped plan edited since, saying what it lacks, on the tab and the status line", () => {
+    const rec = planned("shaped");
+    rec.idea.planIncomplete = ["a goal"];
+    rec.scaffold = {
+      idea: { id: ID, title: "Coach shares a program" },
+      epic: { identifier: null, kind: "epic", planDocument: "# x", acceptance: ["Works"], promoted: false },
+      tasks: [],
+      children: [],
+      problems: ["a goal"],
+      warnings: [],
+      fingerprint: "f0",
+    };
+    const html = renderTab(rec);
+    expect(html).toContain("Shaped · plan incomplete: a goal.");
+    expect(html).toContain("data-plan-scaffold-held");
+    expect(html).toContain("Held back, the plan is incomplete: a goal.");
   });
 });

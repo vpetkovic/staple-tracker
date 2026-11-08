@@ -54,7 +54,7 @@ import { registerTelemetryReadTools } from "./core/telemetry/mcp-read-tools.js";
 import type { PlanComparison, PlanSummary } from "./core/plan-rollup.js";
 import { takeRenumberNotices, withRenumberAcknowledged } from "./core/identifier-moves.js";
 import { publicOutput, publicValue } from "./core/plan.js";
-import type { PlanSections } from "./core/plan-sections.js";
+import type { PlanPatch } from "./core/plan-sections.js";
 import type { CrossBlockerState } from "./core/hub.js";
 import { requireMineLens } from "./core/cloud/member-lens.js";
 import { CONTINUE_STOP_REASONS, RUN_STATES, RUN_STOP_REASONS, RUN_TICKET_OUTCOMES, RUN_WAIT_REASONS } from "./core/run-store.js";
@@ -3195,7 +3195,8 @@ server.registerTool(
 server.registerTool(
   "get_idea",
   {
-    description: "One idea: its view (stage, windows, flags), parent, sub-ideas, horizon, brief, open questions, decisions, and each linked issue with its progress and the milestone (and live run) holding it.",
+    description:
+      "One idea, everything an agent needs to build from it: its view (lifecycle state and the actions it offers, maturity, stage, windows, flags, and planIncomplete: what a shaped plan edited since it was shaped now lacks, which holds Scaffold and Promote back), parent, sub-ideas, horizon, brief, questions (open, resolved, deferred), decisions, each linked issue with its progress and the milestone (and live run) holding it; its plan sections (plan: goal, context, breakdown rows {id, key, title, estimate, dependsOn, acceptance, owner, notes}, acceptance, dependencies, outOfScope, risks, sources), completeness, missingForShaped (what the shaped gate still needs), planWarnings (estimates that are not durations), breakdownRevision (pass it to update_idea as breakdown_base to refuse a stale breakdown edit), and while its state offers Scaffold the scaffold preview (scaffold_idea without confirm answers the same): the epic, every task with estimate, blockers, acceptance (inherited from the plan when its row has none, flagged), context and the task it already made, problems that hold the confirm back, warnings, and the fingerprint the confirm names.",
     inputSchema: { ref: ideaRefSchema, ws: wsSchema },
     annotations: { title: "Get idea", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3254,6 +3255,7 @@ server.registerTool(
           breakdown: z
             .array(
               z.object({
+                id: z.string().optional().describe("The row's id from get_idea; left out, a row keeps the id of the stored row with its key, or is new"),
                 key: z.string(),
                 title: z.string(),
                 estimate: z.string().nullable().optional(),
@@ -3272,6 +3274,10 @@ server.registerTool(
         })
         .optional()
         .describe("Plan sections to replace; a section left out is left alone"),
+      breakdown_base: z
+        .string()
+        .optional()
+        .describe("The breakdownRevision you read (get_idea). With plan.breakdown, the edit is refused with revision_conflict when the breakdown changed since; re-read and redo it"),
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().nullable().optional(),
       parent: z.string().nullable().optional(),
@@ -3294,7 +3300,8 @@ server.registerTool(
         parent: input.parent,
         plannedStart: input.planned_start,
         plannedTarget: input.planned_target,
-        plan: input.plan as Partial<PlanSections> | undefined,
+        plan: input.plan as PlanPatch | undefined,
+        breakdownBase: input.breakdown_base,
       };
       if (Object.values(fields).some((value) => value !== undefined)) plan.update(input.ref, fields, actor);
       if (input.add_question !== undefined) plan.addQuestion(input.ref, input.add_question, actor);
@@ -3309,20 +3316,21 @@ server.registerTool(
   "scaffold_idea",
   {
     description:
-      "Scaffold a shaped idea: it is promoted in place into the epic (its goal, context, decisions, scope and risks become the epic's plan document, its acceptance criteria the epic's), and each task breakdown row becomes a child task with its estimate, blockers from depends-on, acceptance and a context document; each shaped sub-idea becomes a child epic the same way. Without confirm: true it only answers the preview (the epic and every task it would create), writing nothing. Idempotent: a row already scaffolded is not created again, so a retry or a scaffold after rows were added creates only what is missing. Only a shaped idea offers it (or one scaffolded before); see the idea's actions.",
+      "Scaffold a shaped idea, in two calls. First without confirm: the preview, writing nothing: the epic it becomes (promoted in place; its goal, context, decisions, scope and risks become the epic's plan document, its acceptance criteria the epic's), every task its breakdown rows become (estimate, blockers from depends-on, acceptance, a context document; a row with no \"done when\" inherits the plan's acceptance criteria and its task is labelled acceptance-inherited to be sharpened), each shaped sub-idea as a child epic the same way, problems (what the plan lacks; while any is listed the confirm is refused), warnings (estimates that are not durations) and a fingerprint. Then confirm: true with that fingerprint creates exactly what the preview showed; a confirm without a fingerprint is refused, and one whose plan changed since the preview is refused with revision_conflict (preview again). Idempotent: each task's identity follows from the idea and its row, so a retry, a scaffold after rows were added, or another device scaffolding the same idea creates each task once; it adds the blockers depends-on names and never removes one someone set. Only a shaped idea offers it (or one scaffolded before); a raw or exploring idea or a plain task is refused, preview included.",
     inputSchema: {
       ref: ideaRefSchema,
-      confirm: z.boolean().optional().describe("true creates what the preview shows; absent or false only previews"),
+      confirm: z.boolean().optional().describe("true creates what the preview with this fingerprint showed; absent or false only previews"),
+      fingerprint: z.string().optional().describe("The preview's fingerprint; required with confirm: true"),
       actor: actorSchema,
       ws: wsSchema,
     },
     annotations: { title: "Scaffold idea", ...milestoneWriteAnnotations },
   },
-  ({ ref, confirm, actor, ws }) =>
+  ({ ref, confirm, fingerprint, actor, ws }) =>
     run(() => {
       const plan = storeFor(ws).plan();
       if (confirm !== true) return { preview: true, scaffold: plan.scaffoldPreview(ref) };
-      return { preview: false, scaffold: plan.scaffold(ref, requireActor(actor)) };
+      return { preview: false, scaffold: plan.scaffold(ref, fingerprint ?? null, requireActor(actor)) };
     }),
 );
 

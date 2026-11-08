@@ -318,6 +318,14 @@ export function IdeaChips({ idea, horizonLabel, stage }: { idea: IdeaData; horiz
   const chips: ReactNode[] = [];
   if (horizonLabel) chips.push(<Chip key="h">{horizonLabel}</Chip>);
   if (stage) chips.push(<Chip key="s">{stage}</Chip>);
+  // Shaped, but edited since so it no longer passes the gate: Scaffold waits for it, and the card says so.
+  if (idea.planIncomplete.length > 0) {
+    chips.push(
+      <span key="pi" title={`Plan incomplete: ${idea.planIncomplete.join("; ")}`} data-plan-card-incomplete>
+        <Chip tone="amber">plan incomplete</Chip>
+      </span>,
+    );
+  }
   if (idea.openQuestions > 0) chips.push(<Chip key="q" tone="amber">{idea.openQuestions} open question{idea.openQuestions === 1 ? "" : "s"}</Chip>);
   if (idea.linkCount > 0) chips.push(<Chip key="l" tone="blue">{idea.linkCount} linked</Chip>);
   if (idea.late) chips.push(<Chip key="late" tone="red">late</Chip>);
