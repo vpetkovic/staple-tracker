@@ -469,6 +469,13 @@ describe("a plan record's commands come from its lifecycle", () => {
     expect(actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: held })))).toEqual([]);
   });
 
+  it("never runs Scaffold in one click: it is a preview first, in the drawer", () => {
+    const scaffoldable = { ...shaped, actions: [...shaped.actions, { id: "scaffold", label: "Scaffold epic and tasks", who: "anyone" as const }] };
+    const commands = actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: IDEA_ID }, planRecord: scaffoldable })));
+    expect(commands.map((command) => command.label)).toEqual(["Back to exploring", "Drop", "Promote to epic"]);
+    expect(commands.some((command) => command.action.type === "plan" && command.action.verb === "scaffold")).toBe(false);
+  });
+
   it("keeps a promoted record's epic commands, and adds the plan actions its state offers", () => {
     const promoted = { ...shaped, promoted: true, actions: [{ id: "reset_baseline", label: "Reset baseline to the plan", who: "person" as const }, { id: "open_epic", label: "Open the epic", who: "anyone" as const }] };
     const labels = actionsOf(buildCommands(context({ selection: { workspace: "staple", ref: "STA-90" }, selectionStatus: "todo", planRecord: promoted }))).map((command) => command.label);
