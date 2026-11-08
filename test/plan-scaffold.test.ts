@@ -74,6 +74,17 @@ describe("plan sections", () => {
     expect(refused(() => plan.update(id, { plan: { breakdown: twice } }, "agent"))).toContain("share the key 1.1");
   });
 
+  it("are an edit: a state that offers no edits refuses them", () => {
+    const id = shaped("Landed");
+    const work = store.createIssue({ title: "Its work" });
+    plan.adopt(id, work.identifier, "agent");
+    store.checkoutIssue(work.identifier, "agent");
+    store.updateIssue(work.identifier, { status: "done" }, "agent");
+    expect(plan.ideaView(id).state).toBe("shipped");
+    expect(refused(() => plan.update(id, { plan: { goal: "Rewritten after it landed" } }, "agent"))).toContain("is shipped; it cannot be edited");
+    expect(plan.detail(id).plan.goal).toBe(PLAN.goal);
+  });
+
   it("are written by an agent, as edits are", () => {
     const id = plan.capture({ title: "Agent drafts the plan" }, "agent").id;
     expect(plan.update(id, { plan: PLAN }, "agent").id).toBe(id);

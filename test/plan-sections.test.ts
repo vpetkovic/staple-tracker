@@ -171,6 +171,8 @@ describe("sections", () => {
     expect(estimateSeconds("Aug")).toBeNull();
     expect(splitDepends("40.6, 40.7")).toEqual(["40.6", "40.7"]);
     expect(splitDepends("—")).toEqual([]);
+    expect(splitDepends("none")).toEqual([]);
+    expect(splitDepends("N/A")).toEqual([]);
     expect(splitDepends("42.1 and EPIC-3 SDK")).toEqual(["42.1", "EPIC-3 SDK"]);
   });
 });
