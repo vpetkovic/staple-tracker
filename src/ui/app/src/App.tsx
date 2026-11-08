@@ -526,6 +526,7 @@ export function App() {
     () => ({ ws, view, filters, focus: milestoneFocus }),
     [ws, view, filters, milestoneFocus],
   );
+  const planWorkspace = ws || (bootstrap.data?.workspaces.length === 1 || bootstrap.data?.mode === "workspace" ? bootstrap.data?.workspaces[0]?.slug : "") || "";
   useEffect(() => {
     const navigating = !correcting.current && isNavigation(lastSynced.current, shellState);
     correcting.current = false;
@@ -544,7 +545,7 @@ export function App() {
       // page (whose entry was stepped past): Back returns to the page, not to the ticket.
       if (navigating && from !== window.location.href) replaceUrl(from);
       const shellHref = withShellState(from, shellState);
-      const href = navigating && shellState.view === "plan" ? withPlanLens(shellHref, loadPlanMemory(shellState.ws).lens) : shellHref;
+      const href = navigating && shellState.view === "plan" ? withPlanLens(shellHref, loadPlanMemory(planWorkspace).lens) : shellHref;
       if (href === window.location.href) return;
       if (navigating) pushPage(href);
       else replaceUrl(href);
@@ -553,7 +554,7 @@ export function App() {
     // returns to the old page and not to a stale overlay entry of it.
     if (navigating) leaveOverlays(write);
     else afterHistorySettles(write);
-  }, [shellState]);
+  }, [shellState, planWorkspace]);
 
   useEffect(() => {
     const onPop = () => {

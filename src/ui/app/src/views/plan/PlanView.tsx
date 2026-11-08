@@ -56,7 +56,11 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const [written, setWritten] = useState<PlanData | null>(null);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const memory = useRef(loadPlanMemory(workspace));
-  const [lens, setLens] = useState<Lens>(() => (new URLSearchParams(window.location.search).get("view") === "plan" && (new URLSearchParams(window.location.search).get("ws") ?? "") === workspace ? readPlanLens(window.location.search) : null) ?? memory.current.lens);
+  const [lens, setLens] = useState<Lens>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sameWorkspace = !params.get("ws") || params.get("ws") === workspace;
+    return (params.get("view") === "plan" && sameWorkspace ? readPlanLens(window.location.search) : null) ?? memory.current.lens;
+  });
   const frame = useRef<HTMLDivElement>(null);
   const scrollReady = useRef(false);
   const restored = useRef(false);
