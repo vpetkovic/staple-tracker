@@ -80,8 +80,9 @@ The loop an agent follows, described in
 | `get_idea` | One idea: brief, questions, decisions, links | `staple idea show` | no |
 | `list_horizons` | Horizons in order | `staple horizon ls` | no |
 | `capture_idea` | Capture a raw idea | `staple idea new` | yes |
-| `update_idea` | Edit title, brief, questions and decisions | `staple idea set`, `ask`, `resolve`, `decide` | yes |
+| `update_idea` | Edit title, brief, plan sections, questions (answer or defer) and decisions | `staple idea set`, `ask`, `resolve`, `decide` | yes |
 | `start_idea` | Promote an idea to an epic in place, or adopt an issue | `staple idea promote`, `adopt` | yes |
+| `scaffold_idea` | Preview, then create, an idea's epic and its tasks from the breakdown | `staple idea scaffold` | yes |
 | `unlink_idea` | Remove a link from an idea | `staple idea unlink` | yes |
 
 ## Autopilot runs

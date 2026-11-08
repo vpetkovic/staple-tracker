@@ -185,6 +185,11 @@ need `--person`, which records the change under `humanName`.
 | `staple idea show <ref>` | Stage, planned and actual windows, baseline, brief, questions, decisions and links. |
 | `staple idea set <ref>` | `--title`, `--brief`; with `--person` also `--maturity`, `--horizon H\|none`, `--parent REF\|none`, `--start D\|none`, `--target D\|none`, `--before REF\|end`. |
 | `staple idea promote <ref>` | The idea becomes an epic on the same record and takes its ticket number. An agent may promote only a shaped idea. |
+| `staple idea scaffold <ref> [--preview]` | Promote it and turn its task breakdown into the epic's tasks (estimate, blockers, acceptance, a context page each). `--preview` shows what it would make; a retry makes only what is missing. |
+| `staple idea plan <ref>` | Write plan sections: `--goal`, `--context`, `--acceptance`…, `--dependency`…, `--out-of-scope`, `--risks`, `--source`…. |
+| `staple idea task <ref> add\|set\|rm <key>` | One breakdown row: title, `--estimate`, `--depends`, `--acceptance`, `--owner`, `--notes`. |
+| `staple idea import <plan.md>` | Capture an idea from a plan file, with `--parent`, `--horizon`, `--maturity`. |
+| `staple idea defer <ref> <n>` | Leave question `n` open on purpose; it no longer holds shaping back. |
 | `staple idea adopt <ref> <issue>` / `unlink` | Link existing work, or remove a link. |
 | `staple idea ask` / `resolve <ref> <n>` / `decide` | Add a question, resolve question `n`, record a decision. |
 | `staple idea reset-baseline <ref> --person` | The current planned window becomes the baseline. |

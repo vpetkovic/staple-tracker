@@ -214,6 +214,51 @@ from the start.
 
 **Adopt** links an existing issue to a record, promoted or not; **Unlink** removes one link.
 
+## Plan sections: an idea an agent can build from
+
+An idea is a plan. Besides its brief, open questions and decisions it holds ten sections, each
+a revisioned document on the record (`plan-sections.ts`), so they are versioned and synchronize
+as documents already do: **Goal**★, **Context and constraints**, **Decisions**, **Open
+questions** (answered, open, or deferred: left open on purpose), **Task breakdown**★,
+**Acceptance criteria**★, **Dependencies**, **Out of scope**, **Risks** and **Sources and
+files**. Text sections are markdown; list sections one `- item` per line. The task breakdown is
+structured, a JSON array of rows `{ key, title, estimate, dependsOn, acceptance, owner, notes }`,
+because a row's fields become a task's when the idea is scaffolded. Writing a section is the
+edit action (anyone's); a write replaces each section it names whole, and two rows may not share
+a key. The detail carries the sections, a completeness count (★ sections, and all ten) and what
+the shaped gate still needs.
+
+**The shaped gate.** An idea is shaped only with a goal, a task breakdown of at least one row
+with a title and acceptance on every row, acceptance criteria, and no open question that is not
+deferred (`shapedGate`). It holds on every way to shaped: a maturity change, a capture straight
+into shaped, and a raw idea shaped in the same write that gives it its plan (the gate reads the
+plan as that write leaves it). The lifecycle offers Mark shaped held back with what is missing,
+and the refusal names it.
+
+**Scaffold** (`PlanStore.scaffold`) is Promote plus the breakdown: the idea promotes in place
+into the epic, the epic's `plan` document is composed from the goal, context, decisions,
+dependencies, scope, risks and sources, its acceptance criteria are the idea's, and each row
+becomes a child task with its estimate (`3h`, `1.5h`, `30m`, `2d`), blockers from the rows it
+depends on, its acceptance, and a `context` document that makes it workable alone (what the
+epic is for, done-when, what it waits on inside and outside the plan, the constraints, scope).
+Each shaped sub-idea is scaffolded the same way under it. `scaffoldPreview` computes exactly
+what the create path writes, and the create path builds from it. Idempotent: each task is created
+under the key `plan-scaffold:<idea>:<row>`, which the store replays, and the record keeps which
+row became which task (`scaffold` document), so a retry creates nothing and a scaffold after
+rows were added creates only those. A started record offers Scaffold again only if it was
+scaffolded. Two devices scaffolding the same idea offline each create the tasks; sync settles the
+key as it settles any claimed key, so both devices converge, but on the same tasks twice.
+
+**Import** (`staple idea import <plan.md>`, `PlanStore.importPlan`) reads a plan file into one
+idea: the first heading is the title, front matter is skipped, the text before the first section
+is the brief, and each `##` heading is mapped by its words (Goal, Task or Step breakdown,
+Acceptance criteria, Out of scope, Risk, Open questions, Dependencies, Decisions or ruling,
+Sources). Breakdown tables are read by their header row whatever their columns; a list line like
+`42.1 — Title` works too, but never repeats a key a table gave. Every other heading lands in
+Context under its own heading, so nothing is dropped; what a row waits on outside the plan
+becomes a dependency; the file is attached and listed as a source; anything that could not be
+placed is reported.
+
 ## Lifecycle: one table drives every action
 
 Each record is in one lifecycle state, and the state decides which actions it offers
@@ -236,10 +281,10 @@ and documents follow epic rules on the plan's surfaces and the tracker's alike.
 
 | state | offers |
 |---|---|
-| raw | edit, ask, decide, explore, drop, reparent, reorder |
+| raw | edit, ask, decide, explore, shape, drop, reparent, reorder |
 | exploring | edit, ask, decide, shape, drop, schedule, plan dates, reparent, reorder |
-| shaped | edit, ask, decide, back to exploring, drop, schedule, plan dates, reparent, reorder, promote, adopt |
-| started | edit, ask, decide, schedule, plan dates, reorder, adopt, unlink, reset baseline, open the epic |
+| shaped | edit, ask, decide, back to exploring, drop, schedule, plan dates, reparent, reorder, promote, scaffold, adopt |
+| started | edit, ask, decide, schedule, plan dates, reorder, scaffold (only if it was scaffolded), adopt, unlink, reset baseline, open the epic |
 | shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic; a promoted record adds edit, ask, decide |
 | dropped | restore |
 | horizon planned | rename, date, reorder, remove (held back while it is queued) |
@@ -281,8 +326,12 @@ action) cell, and checks that every payload carries exactly the table's row.
 
 An idea opens in the shared detail drawer (`detail/IssueDetailPanel.tsx`), as every issue does.
 The tab registry (`detail/tabs/registry.ts`) chooses the strip by kind and state through
-`available`: an unpromoted idea gets **Plan** (in place of Details: stage, maturity, horizon,
-parent, planned and actual windows, brief, questions, decisions, sub-ideas, linked work),
+`available`: an unpromoted idea gets **Plan** (in place of Details: the lifecycle as phases,
+Thinking, Started and Shipped, with maturity and horizon as separate facts so being scheduled
+never reads as more mature than exploring; the completeness meter; Scaffold's preview and
+confirm; horizon, parent, planned and actual windows; the brief; every plan section, the task
+breakdown a table on a desk and a tap-to-edit card per row on a phone; questions with defer;
+decisions; sub-ideas; linked work),
 **Connections** (parent, sub-ideas, horizon, linked work), Documents, Files, Activity, **For
 agents** (the `get_idea` payload) and **Time** (planned against actual against baseline). Its
 header shows the title, an "Idea · state" chip and a sentence, never a ticket number: the
@@ -384,12 +433,14 @@ the plan as an outline behind it.
 
 ## Surfaces
 
-- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|promote|adopt|unlink|ask|resolve|decide|reset-baseline`,
+- **CLI** `staple plan enable|show`, `staple idea ls|new|show|set|plan|task|promote|scaffold|import|adopt|unlink|ask|resolve|defer|decide|reset-baseline`,
   `staple horizon ls|new|set|mv|rm`, with `--person` for steering. An idea's ref is its id.
 - **MCP** `list_ideas`, `get_idea`, `list_horizons` (reads); `capture_idea`, `update_idea`,
   `start_idea` (promote in place, or with `adopt` link an existing issue; answers the promoted
-  `{ id, identifier, kind }` or `null`), `unlink_idea`; `reset_idea_baseline` (a view button).
-- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove, horizon-queue}`.
+  `{ id, identifier, kind }` or `null`), `unlink_idea`, `scaffold_idea` (preview without
+  `confirm`, create with it); `update_idea` also takes `plan` (sections) and `defer_question`;
+  `reset_idea_baseline` (a view button).
+- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, scaffold, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove, horizon-queue}`; `update` and `capture` take `plan`, `resolve` takes `deferred`, `scaffold` takes `preview`.
   Every write answers `{ plan, idea }`. `GET /api/issue` adds `planRecord` and `horizonPlan`.
 - **Web UI** the Plan view ([web-ui.md](web-ui.md)): Ideas (columns by maturity, capture),
   Horizons (Unscheduled and each horizon), Timeline (planned, baseline and actual windows on a
@@ -404,6 +455,9 @@ the plan as an outline behind it.
 | test | proves |
 |---|---|
 | `test/store-plan.test.ts` | enabling and its refusal; identity (no counter consumed, never a ref, never shown, numbered at promotion, earlier builds' numbers drafted); every guard; the tracker's own writes, horizon dates included; dependencies; nesting and stage; horizons as milestones; membership (move, unschedule, unlink, plan order, hand-placed members stay, a promoted record counted, a queued horizon expanding); a horizon's own status (its only work cancelled with and without a rebuild between, reopened; shipped on done work only; an earlier build's derived cancel taken back; removal refused while it holds open work or is queued; an edit of a removed horizon refused before any write); Promote in place, under a promoted parent, refused when dropped or already promoted; Adopt on a promoted record; missing links; actual windows on real-shaped data; late vs not started; the baseline; every steering refusal |
+| `test/plan-sections.test.ts` | the importer on fixtures shaped like real plan files (lane tables, a step breakdown with other columns, revision notes naming keys, decision subsections, checklists, a risk note): every row kept, sections mapped, nothing dropped, what it cannot place reported; sections round-trip through their documents; estimates and depends-on cells; the gate's phrases; completeness |
+| `test/plan-scaffold.test.ts` | sections persist as revisions, an agent writes them, duplicate keys refused; the gate on every path to shaped, deferred questions let through; Scaffold creates exactly its preview (epic, plan document, acceptance, tasks with estimate, blockers, acceptance, context), idempotently and for rows added later, nested sub-ideas as child epics, never where the lifecycle does not offer it; import with its file attached |
+| `test/plan-scaffold-surfaces.test.ts` | the gate on the page, the CLI with `--person` and an agent over MCP; the three Scaffold previews agree and write nothing; a confirm creates once whichever surface retries; CLI import |
 | `test/cloud-plan-sync.test.ts` | under both folds: the plan, its membership and its numbers converge on a tail device and a hydrated one; two offline adopts both arrive; an unlink racing an adopt converges; offline moves on two devices derive the same membership with no conflict and nothing sent for it; two offline promotions end with two distinct numbers, no draft and no open conflict; a third device reading both claims before the settlement shows a recorded stand-in, never a numberless epic; a horizon whose only work is cancelled stays listed on every device and derives again when another device reopens the work; two offline moves re-derive each horizon from the merged membership; an idea an earlier build numbered resolves by its old number on every device |
 | `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline (with a ticket made offline on one, with a third device ahead, with equal counters, whichever device sends first) ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
 | `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |

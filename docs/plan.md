@@ -66,10 +66,31 @@ The **Timeline** lens shows each idea's planned window as a bar, grouped by hori
 bar to move it and drag its ends to change the dates. Ideas without dates are listed under
 their horizon with **add dates**. The vertical lines are today and each dated horizon.
 
-## 5. Start the work
+## 5. Write the plan
 
-Open a shaped idea and press **Promote to epic**: the idea itself becomes the epic and takes its
-ticket number now. Its brief, questions, decisions, comments and history stay on it, and on a
+An idea is a plan an agent can build from. Its **Plan** tab holds the sections: Goal, Context
+and constraints, Decisions, Open questions, the **Task breakdown** (a row per task: key, title,
+estimate, what it waits on, when it is done, owner, notes), Acceptance criteria, Dependencies,
+Out of scope, Risks, and Sources and files. The three marked ★ are required before it can be
+shaped: a goal, a breakdown with a "done when" on every row, and acceptance criteria. Every open
+question must be answered or deferred too. The meter at the top says what is still missing.
+
+Agents can write all of it. A plan you already have as a file comes in whole:
+
+```bash
+staple idea import Plans/PLAN-7-checkout.md --parent <id> --horizon Now --maturity exploring --person
+```
+
+It reads the headings and task tables, attaches the file, and says what it could not place.
+
+## 6. Start the work
+
+Open a shaped idea and press **Scaffold epic and tasks**. It shows first what it will create:
+the epic (this same record, now with a ticket number) and a task for every breakdown row, with
+its estimate, what it waits on, and when it is done. Confirm, and each task gets those fields and
+a context page, so an agent can work it from the ticket alone. Shaped sub-ideas become child
+epics the same way. Scaffolding again creates only rows written since. **Promote to epic** does
+the promotion alone: the idea itself becomes the epic and takes its ticket number now. Its brief, questions, decisions, comments and history stay on it, and on a
 horizon it joins that horizon's milestone. Break it into tickets as you would any epic. A
 sub-idea can be promoted on its own; when its parent is promoted later, the sub-idea's epic
 moves under the parent's. Or **Adopt** an issue that already exists; an idea can link several,
@@ -95,7 +116,7 @@ follows the same rules:
 |---|---|
 | Raw | edit it, ask and decide, start exploring, drop it, move it under another idea |
 | Exploring | everything raw can, plus reserve a horizon and plan dates, then mark it shaped |
-| Shaped | schedule and date it, promote it, adopt existing work, or send it back to exploring |
+| Shaped | schedule and date it, scaffold or promote it, adopt existing work, or send it back to exploring |
 | Started | re-plan it, adopt more work, unlink work, reset the baseline, open the epic |
 | Shipped | open the epic, or link more work (open work reopens it); nothing is edited any more, not its documents or files either |
 | Dropped | restore it |
@@ -139,6 +160,9 @@ An agent trying any of these gets a `validation` refusal that says so.
 | `staple idea new` | `capture_idea` | Capture a raw idea |
 | `staple idea set`, `ask`, `resolve`, `decide` | `update_idea` | Edit an idea |
 | `staple idea promote`, `adopt` | `start_idea` | Promote the idea to an epic, or adopt an issue |
+| `staple idea scaffold [--preview]` | `scaffold_idea` | Promote it and create its tasks from the breakdown |
+| `staple idea plan`, `task`, `defer` | `update_idea` (`plan`, `defer_question`) | Write plan sections and breakdown rows; defer a question |
+| `staple idea import <plan.md>` | | Capture an idea from a plan file |
 | `staple idea unlink` | `unlink_idea` | Remove a link |
 | `staple idea reset-baseline --person` | `reset_idea_baseline` (view button only) | Make the current window the baseline |
 

@@ -134,6 +134,8 @@ function nextKey(rows: readonly BreakdownRow[]): string {
 export function BreakdownSection({ rows, editable, onSave }: { rows: BreakdownRow[]; editable: boolean; onSave: (rows: BreakdownRow[]) => void }) {
   const desk = useIsDesk();
   const [draft, setDraft] = useState(rows);
+  /** On a phone one row is open for editing at a time; the rest read as a summary. */
+  const [open, setOpen] = useState<number | null>(null);
   useEffect(() => setDraft(rows), [rows]);
   const commit = (next: BreakdownRow[]) => {
     setDraft(next);
@@ -186,7 +188,7 @@ export function BreakdownSection({ rows, editable, onSave }: { rows: BreakdownRo
         <ul className="m-0 list-none space-y-2 p-0" data-plan-breakdown="cards">
           {draft.map((row, index) => (
             <li key={index} className={cn("rounded-md border p-2.5", !row.acceptance && "border-[color:var(--status-task-todo)]/50")} data-plan-row={row.key}>
-              {editable ? (
+              {editable && open === index ? (
                 <div className="grid grid-cols-[4.5rem_1fr] items-center gap-x-2 gap-y-1.5 text-label">
                   {COLUMNS.map((column) => (
                     <label key={column.field} className="contents">
@@ -195,13 +197,25 @@ export function BreakdownSection({ rows, editable, onSave }: { rows: BreakdownRo
                     </label>
                   ))}
                   <span />
-                  <Button variant="ghost" size="sm" className="h-10 justify-self-start" onClick={() => commit(draft.filter((_, at) => at !== index))}>
-                    <Trash2 aria-hidden />
-                    Remove task {row.key}
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" className="h-10" onClick={() => setOpen(null)}>
+                      Done
+                    </Button>
+                    <Button variant="ghost" size="sm" className="h-10" onClick={() => (commit(draft.filter((_, at) => at !== index)), setOpen(null))}>
+                      <Trash2 aria-hidden />
+                      Remove task {row.key}
+                    </Button>
+                  </div>
                 </div>
               ) : (
-                <div className="space-y-1 text-label">
+                <button
+                  type="button"
+                  disabled={!editable}
+                  onClick={() => setOpen(index)}
+                  className="block w-full space-y-1 text-left text-label disabled:cursor-default"
+                  aria-label={editable ? `Edit task ${row.key}` : undefined}
+                  data-plan-row-open={row.key}
+                >
                   <div className="font-medium">
                     <span className="font-mono text-text-tertiary">{row.key}</span> {row.title}
                   </div>
@@ -209,7 +223,7 @@ export function BreakdownSection({ rows, editable, onSave }: { rows: BreakdownRo
                     {[row.estimate, row.dependsOn.length ? `after ${row.dependsOn.join(", ")}` : null, row.owner].filter(Boolean).join(" · ")}
                   </div>
                   <div className="text-caption">{row.acceptance ? `Done when: ${row.acceptance}` : <span className="text-[color:var(--status-task-todo)]">No "done when" yet</span>}</div>
-                </div>
+                </button>
               )}
             </li>
           ))}
@@ -220,7 +234,10 @@ export function BreakdownSection({ rows, editable, onSave }: { rows: BreakdownRo
           variant="outline"
           size="sm"
           className="mt-2 min-h-9"
-          onClick={() => setDraft((current) => [...current, { key: nextKey(current), title: "", estimate: null, dependsOn: [], acceptance: null, owner: null, notes: null }])}
+          onClick={() => {
+            setDraft((current) => [...current, { key: nextKey(current), title: "", estimate: null, dependsOn: [], acceptance: null, owner: null, notes: null }]);
+            setOpen(draft.length);
+          }}
           data-plan-add-row
         >
           <Plus aria-hidden />

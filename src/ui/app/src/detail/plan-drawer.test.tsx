@@ -17,6 +17,7 @@ import { horizonActionItems, moveOffered, planActionItems, planPrimary } from ".
 import { visibleTabs } from "./tabs/registry";
 import { DocumentsTab } from "./tabs/DocumentsTab";
 import { FilesTab } from "./tabs/FilesTab";
+import { PlanTab } from "./tabs/PlanTab";
 import { describeEvent } from "./timeline";
 import { addressDrafts } from "@/lib/api";
 
@@ -257,5 +258,65 @@ describe("the idea's header follows its state", () => {
       expect(html, state).not.toContain("data-edit-title");
       expect(html, state).toContain("Coach shares a program");
     }
+  });
+});
+
+describe("the Plan tab", () => {
+  const planned = (state: "raw" | "shaped" | "started", patch: Partial<IdeaData> = {}) => {
+    const view = idea(state, patch);
+    const rec = record(view);
+    rec.plan = {
+      goal: "Ship the checkout API.",
+      context: null,
+      breakdown: [
+        { key: "7.1", title: "Spike", estimate: "3h", dependsOn: [], acceptance: "Findings written", owner: null, notes: null },
+        { key: "7.2", title: "Build", estimate: "5h", dependsOn: ["7.1"], acceptance: null, owner: null, notes: null },
+      ],
+      acceptance: ["Works"],
+      dependencies: [],
+      outOfScope: null,
+      risks: null,
+      sources: [],
+    };
+    rec.completeness = { starred: 3, starredTotal: 3, filled: 3, total: 10 };
+    rec.missingForShaped = ["acceptance on task 7.2"];
+    return rec;
+  };
+  const renderTab = (rec: IdeaDetailData) =>
+    renderToStaticMarkup(
+      <SessionContext.Provider value={fakeSession()}>
+        <PlanTab detail={detail({ issue: issue({ id: ID, identifier: ID, draft: true, kind: "idea" }), planRecord: rec })} workspace="ws" onAuthError={noop} refresh={noop} />
+      </SessionContext.Provider>,
+    );
+
+  it("shows the lifecycle as phases, so a scheduled idea still reads as thinking, with its maturity", () => {
+    const html = renderTab(planned("raw", { stage: "scheduled", maturity: "exploring", horizonId: "h1" }));
+    expect(html).toContain('data-plan-phases="thinking"');
+    expect(html).toContain("Thinking · exploring");
+    expect(html).not.toContain(">scheduled<");
+  });
+
+  it("shows every plan section, the starred ones marked, the breakdown as rows, and what shaping still needs", () => {
+    const html = renderTab(planned("raw", { state: "exploring", maturity: "exploring", stage: "exploring" }));
+    expect(html).toContain('data-plan-completeness="3/3"');
+    expect(html).toContain("To shape it: acceptance on task 7.2.");
+    for (const section of ["goal", "context", "breakdown", "acceptance", "dependencies", "out-of-scope", "risks", "sources"]) expect(html).toContain(`data-plan-section="${section}"`);
+    expect((html.match(/aria-label="required to shape"/g) ?? []).length).toBe(3);
+    expect(html).toContain('data-plan-row="7.1"');
+    expect(html).toContain('data-plan-row="7.2"');
+  });
+
+  it("shows Scaffold's preview section only when the state offers it", () => {
+    const rec = planned("shaped");
+    expect(renderTab(rec)).not.toContain("data-plan-scaffold");
+    rec.scaffold = {
+      idea: { id: ID, title: "Coach shares a program" },
+      epic: { identifier: null, kind: "epic", planDocument: "# x", acceptance: ["Works"], promoted: false },
+      tasks: [{ key: "7.1", title: "7.1 Spike", estimate: "3h", estimatedSeconds: 10800, blockedBy: [], waitsOutside: [], acceptance: ["Findings written"], context: "", existing: null }],
+      children: [],
+    };
+    const html = renderTab(rec);
+    expect(html).toContain("data-plan-scaffold");
+    expect(html).toContain("1 new task of 1");
   });
 });
