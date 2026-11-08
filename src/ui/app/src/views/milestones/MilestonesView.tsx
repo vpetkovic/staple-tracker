@@ -859,7 +859,6 @@ export function MilestoneDetailPane({
           </Button>
         </header>
       ) : null}
-      {decision?.detail.horizonPlan ? <PlannedIdeaLinks workspace={decision.detail.workspace} ideas={decision.detail.horizonPlan.ideas} /> : null}
       {desk ? gateBlock : null}
       {desk ? (
         <section aria-label="Progress" data-milestone-progress className="rounded-xl border bg-card px-4 py-4">
@@ -920,6 +919,7 @@ export function MilestoneDetailPane({
       </header>
 
       )}
+      {decision?.detail.horizonPlan ? <PlannedIdeaLinks workspace={decision.detail.workspace} ideas={decision.detail.horizonPlan.ideas} /> : null}
       {desk ? null : gateBlock}
       {desk ? null : (
       <section aria-label="Progress" data-milestone-progress>

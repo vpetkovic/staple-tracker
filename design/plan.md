@@ -70,7 +70,7 @@ The same lifecycle, Tasks chip/group/filter, CLI and MCP operations apply with o
 Only **dated horizons** appear in the Milestones list, alongside plain milestones as before.
 Clearing a horizon date removes it from that list; it remains in Plan and Tasks grouping.
 
-**Upgrade.** On workspace open, and on `plan enable` in an existing workspace,
+**Upgrade.** On workspace open, on `plan enable`, and after sync binds its device journal,
 `migrateLegacyLater` finds listed, undated horizons named exactly Later. In one journaled
 transaction it unschedules every plan record on them, including promoted records, then clears
 the old milestone's plan rank. Derived membership rebuilds; hand-placed members, queue position,
@@ -78,7 +78,7 @@ goal, history and status remain on the now-plain milestone. Nothing is deleted o
 keeping the ordinary milestone is what preserves the person's manual commitments. An empty
 plain milestone may be removed by the person later. Dated Later horizons are intentional and stay.
 The changed `planHorizonId` and `planRank` fields travel through the existing issue journal,
-tail and snapshots, with no new schema or protocol. Clearing rank makes the upgrade idempotent.
+tail and snapshots, with no new schema or protocol. A connected workspace without a device identity defers the upgrade until its journal can send it. Clearing rank makes the upgrade idempotent.
 
 ## Returning to Plan
 

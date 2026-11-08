@@ -85,7 +85,7 @@ function printScaffold(preview: ScaffoldPreview, dry: boolean, depth = 0): void 
 
 function horizonLine(horizon: HorizonView): string {
   const risk = [horizon.lateCount ? `${horizon.lateCount} late` : null, horizon.notStartedCount ? `${horizon.notStartedCount} not started` : null].filter(Boolean).join(" · ");
-  const run = horizon.runMode ? `  runs ${horizon.runMode}${horizon.goal.length ? ` · ${horizon.goal.length} goal criteria` : ""}` : horizon.goal.length ? `  ${horizon.goal.length} goal criteria` : "";
+  const run = horizon.runMode ? `  runs ${horizon.runMode}${horizon.goal.length ? ` · ${horizon.goal.length} goal ${horizon.goal.length === 1 ? "criterion" : "criteria"}` : ""}` : horizon.goal.length ? `  ${horizon.goal.length} goal ${horizon.goal.length === 1 ? "criterion" : "criteria"}` : "";
   return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(horizon.ideaCount).padStart(3)} ${horizon.ideaCount === 1 ? "idea" : "ideas"}${risk ? `  ${risk}` : ""}${run}${horizon.awaitingApproval ? "  waiting for your approval" : ""}`;
 }
 

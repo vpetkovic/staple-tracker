@@ -41,6 +41,17 @@ function displays(plan: PlanData) {
   };
 }
 
+it("uses singular counts on the horizon header, drawer and timeline", () => {
+  const plan = store.plan().view();
+  const horizon = plan.horizons[0]!;
+  Object.assign(horizon, { ideaCount: 1, memberCount: 1 });
+  // Keep an otherwise empty timeline group visible, as a hand-placed member does.
+  for (const html of Object.values(displays(plan))) {
+    expect(plain(html)).toContain("1 idea · 1 member");
+    expect(plain(html)).not.toContain("1 ideas");
+  }
+});
+
 describe("D review integration", () => {
   it("uses the server's complete horizon counts and progress on board, drawer and timeline", () => {
     const plan = store.plan();

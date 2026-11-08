@@ -1,4 +1,5 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { PlanStore } from "../src/core/plan-store.js";
 import { FakeSyncServer } from "./fixtures/fake-sync-server.js";
 import { Fleet } from "./fixtures/sync-machines.js";
 import { openWorkspace } from "../src/core/open.js";
@@ -19,14 +20,19 @@ it("upgrades Later on open and synchronizes Unscheduled ideas and retained hand 
   plan.adopt(idea.id, task.id, "worker");
   const hand = a.store.createIssue({ title: "Hand placed" });
   a.store.milestones().addMember(later.id, hand.id, {}, "Mira");
+  // Simulate the old build publishing its Later column before this upgrade exists.
+  const oldBuild = vi.spyOn(PlanStore.prototype, "migrateLegacyLater").mockImplementation(() => {});
   await a.sync();
   const b = fleet.machine("b");
   await b.sync();
+  oldBuild.mockRestore();
+  expect(b.store.plan().view().horizons.some(h => h.id === later.id)).toBe(true);
   a.use();
   const previousDevice = process.env.STAPLE_DEVICE_ID;
   process.env.STAPLE_DEVICE_ID = a.deviceId;
   try { const opened = openWorkspace(a.dbPath); opened.store.db.close(); }
   finally { if (previousDevice) process.env.STAPLE_DEVICE_ID = previousDevice; else delete process.env.STAPLE_DEVICE_ID; }
+  expect(a.store.plan().view().horizons.some(h => h.id === later.id)).toBe(false);
   await a.sync();
   await b.sync();
   const fresh = fleet.machine("snapshot");
