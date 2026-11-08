@@ -292,7 +292,10 @@ export type CommentAuthorType = "user" | "agent" | "system";
 
 export interface Issue {
   id: string;
+  /** Its ticket number. An unpromoted idea has none: the server sends null with `draft: true`, and the page addresses it by `id` (`getIssue`). */
   identifier: string;
+  /** An unpromoted idea: no ticket number yet. */
+  draft?: boolean;
   title: string;
   description: string | null;
   status: IssueStatus;

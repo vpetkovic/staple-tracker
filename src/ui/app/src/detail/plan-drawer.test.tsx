@@ -80,9 +80,9 @@ function record(view: IdeaData): IdeaDetailData {
   return { idea: view, parent: null, children: [], horizon: null, brief: "Read-only link.", questions: [], decisions: [], linked: [], today: "2026-11-08" };
 }
 
-/** An idea's detail exactly as the server sends it: its id where a number would be. */
+/** An idea's detail as the page holds it: `draft: true`, addressed by its id (`getIssue`). */
 function ideaDetail(view: IdeaData): IssueDetail {
-  return detail({ issue: issue({ id: ID, identifier: view.identifier ?? ID, kind: view.kind, title: view.title }), planRecord: record(view) });
+  return detail({ issue: issue({ id: ID, identifier: view.identifier ?? ID, draft: view.identifier === null, kind: view.kind, title: view.title }), planRecord: record(view) });
 }
 
 function Content({ d, presentation }: { d: IssueDetail; presentation: DetailPresentation }) {

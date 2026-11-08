@@ -168,6 +168,8 @@ function expected(state: IdeaState, action: IdeaAction, agent: boolean): Outcome
 function outcomeOf(ok: boolean, message: string, state: string): Outcome | `unexpected: ${string}` {
   if (ok) return "ok";
   if (message.includes(`is ${state}; it cannot be`)) return "lifecycle";
+  // An active horizon's removal is refused by the check that names the open work to move first.
+  if (state === "active" && message.includes("holds open work, which removing it would leave")) return "lifecycle";
   if (message.includes("the person's call")) return "person";
   return `unexpected: ${message.slice(0, 160)}`;
 }

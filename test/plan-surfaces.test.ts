@@ -126,11 +126,11 @@ describe("the plan on every surface", () => {
     const tasks = toolPayload(await mcpCall("list_tasks", {})) as { items: Array<{ identifier: string; title: string }> };
     expect(tasks.items.map((task) => task.identifier)).not.toContain(null);
     for (const title of ["From the CLI", "From MCP", "From the page"]) expect(tasks.items.map((task) => task.title)).not.toContain(title);
-    // The shared drawer's payload for an idea: its id where a number would be, its plan, never the stored key.
+    // The shared drawer's payload for an idea: no number (null, draft), its plan, never the stored key.
     const drawer = await http(`/api/issue?ws=${WS}&ref=${ref("From the page")}`);
     expect(drawer.status).toBe(200);
     expect(JSON.stringify(drawer.body)).not.toMatch(/~[0-9a-f]{32}/);
-    expect(drawer.body.issue).toMatchObject({ id: ref("From the page"), identifier: ref("From the page") });
+    expect(drawer.body.issue).toMatchObject({ id: ref("From the page"), identifier: null, draft: true });
     expect(drawer.body.planRecord).toMatchObject({ idea: { id: ref("From the page"), state: "shaped", identifier: null } });
     const now = (fromCli.horizons[0] as { identifier: string; id: string });
     const horizonDrawer = await http(`/api/issue?ws=${WS}&ref=${now.identifier}`);

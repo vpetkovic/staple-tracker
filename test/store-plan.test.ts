@@ -460,7 +460,7 @@ describe("membership: a horizon holds its ideas' work without anyone typing it",
     const ref = idea("On MVP", { horizon: mvp.id });
     const task = store.createIssue({ title: "Its work" });
     // A horizon is removed only while it holds no work.
-    expect(refused(() => plan.adopt(ref, task.identifier, "agent") && plan.removeHorizon(mvp.id, "vp", PERSON)).message).toContain("while it holds work");
+    expect(refused(() => plan.adopt(ref, task.identifier, "agent") && plan.removeHorizon(mvp.id, "vp", PERSON)).message).toContain("holds open work");
     expect(membersOf(mvp.id)).toEqual([task.id]);
     plan.unlink(ref, task.identifier, "agent");
     plan.removeHorizon(mvp.id, "vp", PERSON);
@@ -635,7 +635,7 @@ describe("Promote, Adopt and Unlink", () => {
     expect(refused(() => plan.promote(dropped, "vp", PERSON)).message).toContain("is dropped; it cannot be promoted");
     const once = idea("Once", { maturity: "shaped" });
     plan.promote(once, "vp", PERSON);
-    expect(refused(() => plan.promote(once, "vp", PERSON)).message).toContain("is started; it cannot be promoted");
+    expect(refused(() => plan.promote(once, "vp", PERSON)).message).toContain("is already promoted: it is an epic");
   });
 
   it("derives progress, actual dates and shipped from linked work, rolled up to the parent", () => {

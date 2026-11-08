@@ -661,7 +661,7 @@ export function planActionItems(ws: string, record: { id: string; actions: reado
   return itemsOf(ws, record.id, record.actions, ONE_CLICK);
 }
 
-/** The one-click actions a horizon's state offers: queue it, or remove it while it holds no work. */
+/** The one-click actions a horizon's state offers: queue it, or remove it while it holds no open work. */
 export function horizonActionItems(ws: string, horizon: { id: string; actions: readonly OfferedPlanAction[] }): PlanItem[] {
   return itemsOf(ws, horizon.id, horizon.actions, HORIZON_ONE_CLICK);
 }

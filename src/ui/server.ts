@@ -38,7 +38,6 @@ import { contentDisposition, servedFileHeaders, sniffMediaType } from "../core/a
 import { evidenceFilename, parseEvidenceDocument, summarizeEvidence } from "../core/legacy-evidence.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { MILESTONE_KIND, assertNotReservedActor } from "../core/milestones.js";
-import { isDraftIdentifier } from "../core/plan.js";
 import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
@@ -1042,7 +1041,7 @@ export function startUiServer(options: UiOptions): UiHandle {
     };
     return {
       workspace: handle.slug,
-      ...withoutDrafts(context),
+      ...context,
       crossBlockers,
       claim: handle.store.claimActivity(context.issue.id),
       gate: handle.store.gate(context.issue.id),
@@ -1065,16 +1064,6 @@ export function startUiServer(options: UiOptions): UiHandle {
       milestonePlan: context.issue.kind === MILESTONE_KIND ? orNull(() => milestones.get(context.issue.id)) : null,
       ...planDetail(handle, context.issue.id),
     };
-  }
-
-  /**
-   * An unpromoted idea's stored identifier is a lookup key, never a name, and is never sent to the
-   * page: wherever the detail carries an issue whose identifier is a draft (the issue itself, its
-   * ancestors, its children), the page gets its id instead, which every route resolves.
-   */
-  function withoutDrafts<T extends { issue: { id: string; identifier: string }; ancestors: Array<{ id: string; identifier: string }>; children: Array<{ id: string; identifier: string }> }>(context: T): T {
-    const scrub = <I extends { id: string; identifier: string }>(issue: I): I => (isDraftIdentifier(issue.identifier) ? { ...issue, identifier: issue.id } : issue);
-    return { ...context, issue: scrub(context.issue), ancestors: context.ancestors.map(scrub), children: context.children.map(scrub) };
   }
 
   /**

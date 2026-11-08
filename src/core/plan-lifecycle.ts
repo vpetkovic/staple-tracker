@@ -61,7 +61,7 @@ export function ideaLifecycleRefusal(subject: string, state: IdeaState, action: 
 
 export function horizonLifecycleRefusal(subject: string, state: HorizonState, action: HorizonAction): StapleError {
   const offered = HORIZON_LIFECYCLE[state];
-  const why = state === "active" && action === "remove" ? " while it holds work" : state === "planned" && action === "queue" ? " before it holds any work" : "";
+  const why = state === "active" && action === "remove" ? " while it holds open work" : state === "planned" && action === "queue" ? " while it holds no open work" : "";
   return new StapleError(
     "validation",
     `Horizon ${subject} is ${state}; it cannot be ${HORIZON_ACTIONS[action].verb}${why}. ${article(state)} ${state} horizon offers: ${offeredWords(offered, HORIZON_ACTIONS)}.`,

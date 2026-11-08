@@ -211,7 +211,8 @@ Breaking it down into tickets is ordinary tracker work.
 Each record is in one lifecycle state, and the state decides which actions it offers
 (`plan-lifecycle.ts`). An idea's state is its derived stage, with `scheduled` read as its
 maturity: raw, exploring, shaped, started (promoted, or linked to work), shipped, or dropped. A
-horizon is planned (no work yet), active (it holds work) or shipped (its milestone is done). A
+horizon is planned (no open work), active (it holds open work) or shipped (its milestone is done);
+only a person's removal cancels one. A
 promoted record is an ordinary epic in the tracker; its plan record reads started or shipped.
 
 | state | offers |
@@ -222,13 +223,13 @@ promoted record is an ordinary epic in the tracker; its plan record reads starte
 | started | edit, ask, decide, schedule, plan dates, reorder, adopt, unlink, reset baseline, open the epic |
 | shipped | adopt (linking more work: landed work keeps it shipped, open work reopens it), open the epic |
 | dropped | restore |
-| horizon planned | rename, date, reorder, remove |
+| horizon planned | rename, date, reorder, remove (held back while it is queued) |
 | horizon active | rename, date, reorder, queue |
-| horizon shipped | nothing |
+| horizon shipped | remove |
 
 So raw is never scheduled or promoted, a started or promoted idea never offers promotion again,
-shipped offers no edits (only linking more work), and a horizon is removed only while it holds no work and queued only
-while it does. Each action also says who may take it: the steering actions (maturity moves,
+shipped offers no edits (only linking more work), and a horizon is removed only while it holds no
+open work and is not queued (a done horizon included), and queued only while it holds open work. Each action also says who may take it: the steering actions (maturity moves,
 schedule, dates, order, parent, baseline, every horizon definition) are the person's; the rest
 are anyone's. A few preconditions need data and travel with the offer as a `disabledReason`:
 unlinking needs a link, a sub-idea is promoted after its parent, the epic opens once promoted.
@@ -254,8 +255,8 @@ parent, planned and actual windows, brief, questions, decisions, sub-ideas, link
 **Connections** (parent, sub-ideas, horizon, linked work), Documents, Files, Activity, **For
 agents** (the `get_idea` payload) and **Time** (planned against actual against baseline). Its
 header shows the title, an "Idea · state" chip and a sentence, never a ticket number: the
-detail payload carries the record's id where a number would be (`withoutDrafts`), so the draft
-identifier never reaches the page. Each editor in the Plan tab renders only when the state offers
+detail arrives through the shared serialization seam with `identifier: null, draft: true`, and the
+page addresses the record by its id (`getIssue`). Each editor in the Plan tab renders only when the state offers
 its action. Once promoted, the same record is an epic and gets the epic's strip, with the Plan
 tab kept for the plan actions its state still offers. A horizon opens as the milestone it is,
 with its state, its offered actions and the ideas on it above the milestone's own parts; its due

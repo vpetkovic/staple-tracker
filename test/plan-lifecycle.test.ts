@@ -18,7 +18,7 @@ import {
 describe("the idea table", () => {
   it("offers exactly the agreed actions in each state", () => {
     expect(IDEA_LIFECYCLE).toEqual({
-      raw: ["edit", "ask", "decide", "explore", "drop", "reparent", "reorder"],
+      raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
       exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"],
       shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "adopt"],
       started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline", "open_epic"],
@@ -62,7 +62,7 @@ describe("the idea table", () => {
 
   it("refuses naming the state and what it offers", () => {
     expect(ideaLifecycleRefusal('the idea "X"', "raw", "promote").message).toBe(
-      'The idea "X" is raw; it cannot be promoted. A raw idea offers: edit title and brief, ask a question, record a decision, start exploring, drop, move under another idea or reorder.',
+      'The idea "X" is raw; it cannot be promoted. A raw idea offers: edit title and brief, ask a question, record a decision, start exploring, mark shaped, drop, move under another idea or reorder.',
     );
   });
 });
@@ -72,14 +72,14 @@ describe("the horizon table", () => {
     expect(HORIZON_LIFECYCLE).toEqual({
       planned: ["rename", "date", "reorder", "remove"],
       active: ["rename", "date", "reorder", "queue"],
-      shipped: [],
+      shipped: ["remove"],
     });
     expect(Object.entries(HORIZON_ACTIONS).filter(([, rule]) => rule.who === "anyone").map(([id]) => id)).toEqual(["queue"]);
   });
 
-  it("is shipped once its milestone is done, active while it holds work, planned before", () => {
-    expect(horizonState({ shipped: true, memberCount: 3 })).toBe("shipped");
-    expect(horizonState({ shipped: false, memberCount: 1 })).toBe("active");
-    expect(horizonState({ shipped: false, memberCount: 0 })).toBe("planned");
+  it("is shipped once its milestone is done, active while it holds open work, planned otherwise", () => {
+    expect(horizonState({ shipped: true, openWork: 3 })).toBe("shipped");
+    expect(horizonState({ shipped: false, openWork: 1 })).toBe("active");
+    expect(horizonState({ shipped: false, openWork: 0 })).toBe("planned");
   });
 });

@@ -95,8 +95,8 @@ follows the same rules:
 | Dropped | restore it |
 
 A raw idea is never scheduled or promoted, and an idea already started or promoted never offers
-promotion again. A horizon can be queued while it holds work, and removed only while it holds
-none. Ask for something a state does not offer and the refusal names the state and what it
+promotion again. A horizon can be queued while it holds open work, and removed only once it
+holds no open work and is not in the queue. Ask for something a state does not offer and the refusal names the state and what it
 offers instead.
 
 ## Late and not started

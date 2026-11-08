@@ -43,14 +43,14 @@ export type IdeaAction = keyof typeof IDEA_ACTIONS;
 export const IDEA_ACTION_IDS = Object.keys(IDEA_ACTIONS) as IdeaAction[];
 
 /**
- * The idea table. Raw is captured thinking: it is refined, explored or dropped, never scheduled
- * or promoted. Exploring may reserve a horizon slot. Shaped is ready: it is scheduled, promoted or
+ * The idea table. Raw is captured thinking: it is refined, explored, shaped or dropped, never
+ * scheduled or promoted while it is raw. Exploring may reserve a horizon slot. Shaped is ready: it is scheduled, promoted or
  * linked to existing work. Started (promoted, or linked to work) is re-planned, not re-shaped,
  * and never promoted again. Shipped offers no edits: only linking more work (history that landed
  * elsewhere, or new work, which reopens it) and opening the epic. Dropped can only be restored.
  */
 export const IDEA_LIFECYCLE: Readonly<Record<IdeaState, readonly IdeaAction[]>> = {
-  raw: ["edit", "ask", "decide", "explore", "drop", "reparent", "reorder"],
+  raw: ["edit", "ask", "decide", "explore", "shape", "drop", "reparent", "reorder"],
   exploring: ["edit", "ask", "decide", "shape", "drop", "schedule", "plan_dates", "reparent", "reorder"],
   shaped: ["edit", "ask", "decide", "unshape", "drop", "schedule", "plan_dates", "reparent", "reorder", "promote", "adopt"],
   started: ["edit", "ask", "decide", "schedule", "plan_dates", "reorder", "adopt", "unlink", "reset_baseline", "open_epic"],
@@ -69,14 +69,15 @@ export type HorizonAction = keyof typeof HORIZON_ACTIONS;
 export const HORIZON_ACTION_IDS = Object.keys(HORIZON_ACTIONS) as HorizonAction[];
 
 /**
- * The horizon table. Planned holds no work yet: it is defined and may be removed, but there is
- * nothing to queue. Active holds work: it is queued, and it stays while it holds that work.
- * Shipped (its milestone is done) offers nothing.
+ * The horizon table. Planned holds no open work: it is defined and may be removed (a person's
+ * removal is the only way a horizon is cancelled), but there is nothing to queue. Active holds
+ * open work: it is queued, and it stays while it holds that work. Shipped (its milestone is
+ * done) is only removed, by a person, once nothing is left to do in it.
  */
 export const HORIZON_LIFECYCLE: Readonly<Record<HorizonState, readonly HorizonAction[]>> = {
   planned: ["rename", "date", "reorder", "remove"],
   active: ["rename", "date", "reorder", "queue"],
-  shipped: [],
+  shipped: ["remove"],
 };
 
 /** A record's state from its derived stage: a scheduled idea is in the state of its maturity. */
@@ -85,10 +86,10 @@ export function ideaState(view: { stage: string; maturity: string }): IdeaState 
   return (IDEA_STATES as readonly string[]).includes(state) ? (state as IdeaState) : "raw";
 }
 
-/** A horizon's state: shipped once its milestone is done, active while it holds work, planned before. */
-export function horizonState(view: { shipped: boolean; memberCount: number }): HorizonState {
+/** A horizon's state: shipped once its milestone is done, active while it holds open work, planned otherwise. */
+export function horizonState(view: { shipped: boolean; openWork: number }): HorizonState {
   if (view.shipped) return "shipped";
-  return view.memberCount > 0 ? "active" : "planned";
+  return view.openWork > 0 ? "active" : "planned";
 }
 
 /**

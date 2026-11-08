@@ -25,7 +25,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
 import { moveIdentifier } from "./identifier-moves.js";
-import { MILESTONE_KIND, rankBetween, renumberedRanks } from "./milestones.js";
+import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, rankBetween, renumberedRanks } from "./milestones.js";
 import {
   DEFAULT_HORIZONS,
   aKind,
@@ -540,8 +540,21 @@ export class PlanStore {
       lateCount,
       notStartedCount: on.filter((idea) => idea.notStarted).length,
       late: lateCount > 0,
-      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", memberCount),
+      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", this.openWorkOf(row.id), this.isQueued(row.id)),
     };
+  }
+
+  /** Members of a horizon, put there or derived, that are not resolved: the work removing it would strand. */
+  private openWorkOf(horizonId: string): number {
+    const resolved = [...this.resolvedStatuses()];
+    const rows = this.db
+      .prepare(`SELECT i.status FROM ${MILESTONE_MEMBERSHIP} m JOIN issues i ON i.id = m.issue_id WHERE m.milestone_id = ?`)
+      .all(horizonId) as Array<{ status: string }>;
+    return rows.filter((row) => !resolved.includes(row.status)).length;
+  }
+
+  private isQueued(issueId: string): boolean {
+    return this.db.prepare("SELECT 1 AS hit FROM queue_entries WHERE issue_id = ?").get(issueId) !== undefined;
   }
 
   /** Every tracker issue (never an unpromoted idea), read once per view: the work's subtrees come from this. */
@@ -833,12 +846,17 @@ export class PlanStore {
   update(ref: string, patch: IdeaPatch, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
-    const state = this.stateOf(row.id);
+    const before = this.stateOf(row.id);
+    let state = before;
     const allow = (action: IdeaAction) => this.allowIdea(row, action, options, state);
     if (patch.title !== undefined || patch.brief !== undefined) allow("edit");
     if (patch.maturity !== undefined) {
-      const action = maturityAction(state, parseMaturity(patch.maturity));
+      const maturity = parseMaturity(patch.maturity);
+      const action = maturityAction(before, maturity);
       if (action !== null) allow(action);
+      // The rest of one write is held to the state its maturity change leads to: shaping a raw idea
+      // and scheduling it is one decision. A started or shipped record keeps its state.
+      if (before !== "started" && before !== "shipped") state = maturity;
     }
     if (patch.horizon !== undefined) allow("schedule");
     if (patch.parent !== undefined) allow("reparent");
@@ -935,6 +953,10 @@ export class PlanStore {
   promote(ref: string, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
+    // A record already promoted says what it is now, which tells more than its state does.
+    if (row.kind !== IDEA_KIND) {
+      throw new StapleError("validation", `${row.identifier} is already promoted: it is ${aKind(row.kind)} in the tracker now.`, { identifier: row.identifier });
+    }
     this.allowIdea(row, "promote", options);
     if (row.parent_id !== null) {
       const parent = this.db.prepare("SELECT identifier, title, kind, plan_maturity FROM issues WHERE id = ?").get(row.parent_id) as
@@ -1106,8 +1128,10 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
-    this.allowHorizon(row, "remove");
+    // What to move first (open work, the queue) tells more than the state does; the state then
+    // refuses what is left (a horizon whose work has all landed).
     this.assertRemovable(row);
+    this.allowHorizon(row, "remove");
     this.store.journaled(() => {
       const on = this.db.prepare("SELECT id FROM issues WHERE plan_maturity IS NOT NULL AND plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
       for (const idea of on) this.write(idea.id, { plan_horizon_id: null }, actor, "idea_updated", { fields: ["plan_horizon_id"] });
@@ -1213,7 +1237,16 @@ function ideaLifecycle(input: {
   return { state: input.state, actions };
 }
 
-function horizonLifecycle(shipped: boolean, memberCount: number): { state: HorizonState; actions: OfferedAction[] } {
-  const state = horizonState({ shipped, memberCount });
-  return { state, actions: HORIZON_LIFECYCLE[state].map((id) => ({ id, label: HORIZON_ACTIONS[id].label, who: HORIZON_ACTIONS[id].who })) };
+/** A horizon's state and offers. Removing it is held back while it sits in the queue: take it off first. */
+function horizonLifecycle(shipped: boolean, openWork: number, queued: boolean): { state: HorizonState; actions: OfferedAction[] } {
+  const state = horizonState({ shipped, openWork });
+  return {
+    state,
+    actions: HORIZON_LIFECYCLE[state].map((id) => ({
+      id,
+      label: HORIZON_ACTIONS[id].label,
+      who: HORIZON_ACTIONS[id].who,
+      ...(id === "remove" && queued ? { disabledReason: "It is in the queue; take it off first." } : {}),
+    })),
+  };
 }
