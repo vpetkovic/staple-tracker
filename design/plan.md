@@ -8,7 +8,7 @@ undecided work in the task list. It has three things:
 - an **idea**, which has a *maturity* (`raw`, `exploring`, `shaped`, or `dropped`), a brief,
   open questions, decisions, an optional parent idea, and an optional planned window. An idea
   has no ticket number;
-- a **horizon**, which is a milestone the plan shows as a column, such as Now, Next or Later.
+- a **horizon**, which is a milestone the plan shows as a column, such as Now or Next.
   A dated horizon is a release line;
 - the way into the tracker: **Promote** turns the idea itself into an epic, which takes its
   ticket number then, and **Adopt** links an existing issue to it.
@@ -51,13 +51,50 @@ workspace that already used `idea` as a kind of its own keeps every such issue a
 tracker issue after upgrading.
 
 **Turning planning on.** `staple plan enable` (and "Turn on planning" in the web UI) adds the
-two kinds when they are missing and creates Now, Next and Later as milestones. While any issue
+two kinds when they are missing and creates Now and Next as milestones. While any issue
 already has kind `idea`, it is refused with `validation` naming those issues: they are someone's
 work, and planning would take them out of every task view. Re-kind them, then turn planning on.
 Every plan write before then is refused with `validation` naming the command
 (`PLAN_KINDS_MISSING_MESSAGE`). Run again where planning is on, `enable` gives any idea an
 earlier build numbered its draft identifier (below), and records the number it gave up as an
 alias, as every device that applies the move does, so the old number names the idea everywhere.
+
+## Unscheduled and optional dates
+
+Unscheduled is the absence of a horizon (`plan_horizon_id = NULL`), not a milestone.
+It replaces the old default Later column. New workspaces seed Now and Next only.
+Named horizons may still be undated: Now, Next or a person-created Research column describes
+an intentional grouping, while Unscheduled means no grouping has been chosen. Requiring dates
+would invent deadlines for those groups and complicate the lifecycle without changing delivery.
+The same lifecycle, Tasks chip/group/filter, CLI and MCP operations apply with or without a date.
+Only **dated horizons** appear in the Milestones list, alongside plain milestones as before.
+Clearing a horizon date removes it from that list; it remains in Plan and Tasks grouping.
+
+**Upgrade.** On workspace open, and on `plan enable` in an existing workspace,
+`migrateLegacyLater` finds listed, undated horizons named exactly Later. In one journaled
+transaction it unschedules every plan record on them, including promoted records, then clears
+the old milestone's plan rank. Derived membership rebuilds; hand-placed members, queue position,
+goal, history and status remain on the now-plain milestone. Nothing is deleted or cancelled:
+keeping the ordinary milestone is what preserves the person's manual commitments. An empty
+plain milestone may be removed by the person later. Dated Later horizons are intentional and stay.
+The changed `planHorizonId` and `planRank` fields travel through the existing issue journal,
+tail and snapshots, with no new schema or protocol. Clearing rank makes the upgrade idempotent.
+
+## Returning to Plan
+
+Plan reuses the detail drawer's `DetailTabStrip`, Radix keys and accessibility. The phone uses
+its finger-sized segments; the desktop uses its underline strip. There is one implementation.
+The last lens, open record, each lens's scroll axes and phone column are per-viewer preferences
+under `staple:plan:v1:<workspace>`. Filters use the existing workspace/view preference envelope
+and URL state. The shareable `plan-lens` and `issue` parameters take precedence on arrival;
+Back/Forward follows the URL, and an explicit drawer close clears the remembered record.
+Storage reads, writes and access to the storage getter all fail safe. Search filters the ideas
+in every lens. Per-column vertical scrolling is remembered separately from the board frame.
+
+A horizon's drawer and the Milestones detail both link directly to each planned record using
+`view=plan&issue=<stable id>`. A promoted epic is the same record and carries an explicit
+"Open original idea in Plan" link. On phones the task row's secondary metadata has a quiet
+unfilled diamond. Tap reveals the full horizon name and its Open link; the desktop keeps its chip.
 
 ## Ticket numbers: none until promotion
 

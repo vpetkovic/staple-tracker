@@ -58,9 +58,11 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const memory = useRef(loadPlanMemory(workspace));
   const [lens, setLens] = useState<Lens>(() => (new URLSearchParams(window.location.search).get("view") === "plan" && (new URLSearchParams(window.location.search).get("ws") ?? "") === workspace ? readPlanLens(window.location.search) : null) ?? memory.current.lens);
   const frame = useRef<HTMLDivElement>(null);
+  const scrollReady = useRef(false);
   const restored = useRef(false);
   const [column, setColumn] = useState(() => memory.current.column[lens]);
   const chooseLens = (next: Lens) => {
+    scrollReady.current = false;
     setColumn(memory.current.column[next]);
     setLens(next);
   };
@@ -92,19 +94,23 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
     savePlanMemory(workspace, memory.current);
   }, [session.selection, workspace]);
   const rememberScroll = (target: HTMLElement) => {
+    if (!scrollReady.current) return;
     if (!target.matches("[data-plan-board], [data-plan-timeline-frame], [data-plan-scroll-key]")) return;
     const key = target.dataset.planScrollKey ? `${lens}:${target.dataset.planScrollKey}` : lens;
     memory.current.scroll[key] = { left: target.scrollLeft, top: target.scrollTop };
     savePlanMemory(workspace, memory.current);
   };
   useLayoutEffect(() => {
+    scrollReady.current = false;
+    const saved = { ...memory.current.scroll };
     // Boards mount after the request. Run after their own initial layout, including timeline centering.
     const id = requestAnimationFrame(() => {
       for (const element of frame.current?.querySelectorAll<HTMLElement>("[data-plan-board], [data-plan-timeline-frame], [data-plan-scroll-key]") ?? []) {
         const key = element.dataset.planScrollKey ? `${lens}:${element.dataset.planScrollKey}` : lens;
-        const position = memory.current.scroll[key];
+        const position = saved[key];
         if (position) { element.scrollLeft = position.left; element.scrollTop = position.top; }
       }
+      scrollReady.current = true;
     });
     return () => cancelAnimationFrame(id);
   }, [lens, resource.data !== undefined]);

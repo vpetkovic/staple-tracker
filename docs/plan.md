@@ -19,7 +19,7 @@ Open **Plan** in the web UI and press **Turn on planning**, or run:
 staple plan enable
 ```
 
-This adds the `idea` and `milestone` kinds and three horizons: Now, Next and Later. A horizon
+This adds the `idea` and `milestone` kinds and two horizons: Now and Next. A horizon
 is a milestone, so it also shows under **Milestones** with its progress, and queueing it queues
 its ideas' work.
 
@@ -218,3 +218,5 @@ An agent trying any of these gets a `validation` refusal that says so.
 | `staple idea reset-baseline --person` | `reset_idea_baseline` (view button only) | Make the current window the baseline |
 
 The design contract is [design/plan.md](https://github.com/vpetkovic/staple-tracker/blob/master/design/plan.md).
+
+Undated work without a horizon lives in Unscheduled. Named horizons can have no date, but only dated horizons appear in Milestones. Plan remembers your lens, open record, scroll and filters per workspace. A milestone links straight to each of its planned ideas.

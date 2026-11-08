@@ -67,6 +67,17 @@ describe("the owner's plan tweaks", () => {
       expect(store.milestones().list().map(m => m.milestone.id)).toEqual([plain.milestone.id]);
     } finally { db.close(); }
   });
+  it("defers a connected workspace's upgrade until its device can journal it", () => {
+    const { db, store, plan } = fixture();
+    try {
+      const later = plan.createHorizon({ name: "Later" }, "Mira", PERSON);
+      db.prepare("UPDATE sync_state SET epoch = 1 WHERE id = 1").run();
+      const identity = vi.spyOn(store.journal, "deviceIdentity").mockReturnValue(null);
+      plan.migrateLegacyLater();
+      expect(plan.view().horizons.some(h => h.id === later.id)).toBe(true);
+      identity.mockRestore();
+    } finally { db.close(); }
+  });
   it.each([false, true])("shares the drawer's strip and Radix accessibility, sheet=%s", sheet => {
     const html = renderToStaticMarkup(<Tabs value="ideas"><DetailTabStrip sheet={sheet} label="Plan lens" items={[{ id: "ideas", label: "Ideas" }, { id: "horizons", label: "Horizons" }]} /></Tabs>);
     expect(html).toContain('aria-label="Plan lens"');

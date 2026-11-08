@@ -49,13 +49,14 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); ui?.close(); if (home) rmSync(home, { recursive: true, force: true }); });
 
 async function goView(page: Page, view: string, width: number) {
-  await page.locator(width < 768 ? `[data-view-tab="${view}"]` : `[data-nav-item="${view}"]`).click();
+  await page.locator(width < 768 ? `[data-view-tab="${view}"]` : `[data-nav-item="view:${view}"]`).click();
 }
 for (const width of [1280, 390]) {
   it(`restores Plan lens, drawer, filters and both scroll axes at ${width}px; URL wins and workspaces stay separate`, async () => {
     const context = await browser.newContext({ viewport: { width, height: 844 } });
     try {
       const page = await context.newPage();
+      page.setDefaultTimeout(5000);
       const errors: string[] = [];
       page.on("pageerror", e => errors.push(String(e)));
       await page.goto(route("plan", "&ws=larkspur"));
@@ -71,16 +72,16 @@ for (const width of [1280, 390]) {
       await page.getByRole("textbox", { name: "Filter ideas", exact: true }).fill("Merchant");
       const frame = page.locator("[data-plan-timeline-frame]");
       await frame.waitFor();
+      await page.locator(`[data-plan-timeline-row="${idea}"] button`).last().click();
+      await page.locator('[aria-label="Issue detail"]').waitFor();
       await frame.evaluate(el => { el.scrollTop = 360; el.scrollLeft = 160; el.dispatchEvent(new Event("scroll", { bubbles: true })); });
       const position = await frame.evaluate(el => ({ top: el.scrollTop, left: el.scrollLeft }));
       expect(position.top).toBeGreaterThan(0);
-      await page.locator(`[data-plan-timeline-row="${idea}"] button`).last().click();
-      await page.locator('[aria-label="Issue detail"]').waitFor();
-      await goView(page, "tree", width);
+      await page.goto(route("tasks", "&ws=larkspur"));
       await goView(page, "plan", width);
       await page.locator('[aria-label="Issue detail"]').waitFor();
       await expect.poll(() => page.locator('[data-plan-lens="timeline"]').getAttribute("aria-selected")).toBe("true");
-      expect(await page.getByRole("textbox", { name: "Filter ideas", exact: true }).inputValue()).toBe("Merchant");
+      expect(await page.locator('input[aria-label="Filter ideas"]').inputValue()).toBe("Merchant");
       await expect.poll(() => frame.evaluate(el => Math.round(el.scrollTop))).toBe(Math.round(position.top));
       await expect.poll(() => frame.evaluate(el => Math.round(el.scrollLeft))).toBe(Math.round(position.left));
       await page.reload();
@@ -101,6 +102,7 @@ for (const width of [1280, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 844 } });
     try {
       const page = await context.newPage();
+      page.setDefaultTimeout(5000);
       await page.goto(route("milestones", `&ws=larkspur&focus=${horizon}`));
       const link = page.locator(`[data-open-plan-idea="${idea}"]`).first();
       await link.waitFor();

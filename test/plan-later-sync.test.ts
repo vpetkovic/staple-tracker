@@ -23,8 +23,10 @@ it("upgrades Later on open and synchronizes Unscheduled ideas and retained hand 
   const b = fleet.machine("b");
   await b.sync();
   a.use();
-  const opened = openWorkspace(a.dbPath);
-  opened.store.db.close();
+  const previousDevice = process.env.STAPLE_DEVICE_ID;
+  process.env.STAPLE_DEVICE_ID = a.deviceId;
+  try { const opened = openWorkspace(a.dbPath); opened.store.db.close(); }
+  finally { if (previousDevice) process.env.STAPLE_DEVICE_ID = previousDevice; else delete process.env.STAPLE_DEVICE_ID; }
   await a.sync();
   await b.sync();
   const fresh = fleet.machine("snapshot");

@@ -1949,3 +1949,22 @@ the per-id rules so the category wins. Adding a status never needs a new token.
 
 Working on the app itself is a contributor path — dev server, rebuild loop, and
 the rest are in [CONTRIBUTING.md](https://github.com/vpetkovic/staple-tracker/blob/master/CONTRIBUTING.md).
+
+
+## Plan navigation and horizon cues
+
+The Plan lenses use `detail/tabs/DetailTabStrip.tsx`, shared with `IssueDetailPanel`.
+Desktop tabs use its line treatment; phone tabs use its 48px segment track. Radix owns
+roving focus, arrow keys and tab/panel relationships. Scroll reveal and edge fades are shared.
+Plan remembers its lens, drawer, scroll and phone column per workspace, while filters use
+the shell's existing URL and per-viewer preferences. Every storage access fails safe.
+
+Unscheduled replaces the default Later bucket. Optional-date named horizons remain available
+in Plan, Tasks grouping, chip and filter; only dated horizons list in Milestones. Plain
+milestones retain their existing listing behavior. The synchronized upgrade is documented
+in [plan.md](plan.md#unscheduled-and-optional-dates).
+
+Milestones and horizon drawers link each planned idea directly to its Plan drawer, by stable id.
+Promoted epics link back to that same original idea. Both layouts use the same links.
+At phone widths below 480px, a quiet diamond in the row's secondary metadata replaces the
+short-name badge. Tap reveals the full name and an Open link. The desktop chip stays.

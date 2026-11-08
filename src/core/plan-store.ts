@@ -650,6 +650,10 @@ export class PlanStore {
    */
   migrateLegacyLater(): void {
     if (!this.enabled()) return;
+    const sync = this.db.prepare("SELECT epoch FROM sync_state WHERE id = 1").get() as { epoch: number } | undefined;
+    // A connected workspace must journal this upgrade. If its device is unavailable, sync
+    // retries after binding the real journal, rather than making local-only data changes.
+    if ((sync?.epoch ?? 0) > 0 && !this.store.journal.deviceIdentity()) return;
     const legacy = this.horizonRows().filter(row => row.title === "Later" && row.target_date === null);
     if (legacy.length === 0) return;
     this.store.journaled(() => {

@@ -116,7 +116,7 @@ describe("the plan on every surface", () => {
     ]);
     // Captures took no ticket number: the next issue is the one after the epic and the two horizons.
     const next = (await cliJson("new", "Next ticket")) as { identifier: string };
-    expect(next.identifier).toBe("PLA-5");
+    expect(next.identifier).toBe("PLA-4");
     // And no surface shows the draft identifier an idea is stored under.
     for (const text of [JSON.stringify(fromCli), JSON.stringify(fromMcp), JSON.stringify(fromHttp), (await cli("idea", "list", "--ws", WS)).stdout]) {
       expect(text).not.toMatch(/"?~[0-9a-f]{32}/);
@@ -213,11 +213,11 @@ describe("the plan on every surface", () => {
     };
     expect(started.idea.idea).toMatchObject({ stage: "started", promoted: true, baseline: { start: "2026-10-01", target: "2026-11-30" } });
     // Promoted in place: the same record, now an epic with the next ticket number, in its horizon's milestone.
-    expect(started.promoted).toMatchObject({ id: ref("From the page"), identifier: "PLA-7", kind: "epic" });
+    expect(started.promoted).toMatchObject({ id: ref("From the page"), identifier: "PLA-6", kind: "epic" });
     const epic = (await cliJson("show", started.promoted.identifier)) as { issue: { id: string; kind: string } };
     expect(epic.issue).toMatchObject({ id: ref("From the page"), kind: "epic" });
     const milestone = toolPayload(await mcpCall("get_milestone", { ref: now.identifier })) as { members: Array<{ identifier: string }> };
-    expect(milestone.members.map((member) => member.identifier)).toContain("PLA-7");
+    expect(milestone.members.map((member) => member.identifier)).toContain("PLA-6");
     // A re-plan moves the plan and keeps the baseline; the page's reset moves the baseline.
     await http("/api/plan/update", { ref: ref("From the page"), plannedTarget: "2026-12-20" });
     const replanned = (await http(`/api/plan-idea?ws=${WS}&ref=${ref("From the page")}`)).body as unknown as { idea: Idea };
