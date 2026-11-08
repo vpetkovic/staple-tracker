@@ -147,6 +147,13 @@ export function HorizonSection({ detail, horizon, ideas, controller, className }
           ))}
         </div>
       </div>
+      {items
+        .filter((item) => item.disabledReason)
+        .map((item) => (
+          <p key={item.id} className="m-0 mt-2 text-label text-text-secondary" data-horizon-held={item.id}>
+            {item.label}: {item.disabledReason}
+          </p>
+        ))}
       {progress !== null ? (
         <div className="mt-3">
           <Progress value={progress} />

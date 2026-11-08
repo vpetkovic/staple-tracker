@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import type { IdeaData, PlanData } from "@/lib/plan-types";
 import { useIsDesk } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
-import { horizonActionItems, moveOffered, offers, planActionItems } from "@/detail/plain-actions";
+import { horizonActionItems, moveOffered, offers, planActionItems, type PlanItem } from "@/detail/plain-actions";
 import {
   columnEntries,
   dayLabel,
@@ -422,21 +422,12 @@ function HorizonHeader({ column, write, onOpen }: { column: BoardColumn; write: 
             <DropdownMenuItem onSelect={() => onOpen(horizon.id)} data-plan-horizon-open={horizon.identifier}>
               Open the horizon
             </DropdownMenuItem>
-            {/* From the horizon's offered actions: a shipped horizon offers none, an active one is not removed. */}
+            {/* From the horizon's offered actions: an active one is not removed, a held-back one says why. */}
             {offers(horizon, "rename") ? <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem> : null}
             {offers(horizon, "date") ? <DropdownMenuItem onSelect={() => setDating(true)}>{horizon.date ? "Change date" : "Add a date"}</DropdownMenuItem> : null}
             {horizonActionItems("", horizon).map((item) => (
-              <DropdownMenuItem
-                key={item.id}
-                onSelect={() => item.call?.route === "plan" && void write(item.call.verb, item.call.body)}
-                data-plan-horizon-remove={item.id === "remove" ? horizon.identifier : undefined}
-                data-plan-horizon-action={item.id}
-              >
-                {item.id === "remove" ? <Trash2 aria-hidden /> : null}
-                {item.label}
-              </DropdownMenuItem>
+              <HorizonMenuItem key={item.id} item={item} identifier={horizon.identifier} onChoose={(call) => void write(call.verb, call.body)} />
             ))}
-            {horizon.actions.length === 0 ? <DropdownMenuItem disabled>Shipped: nothing to change</DropdownMenuItem> : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -476,6 +467,33 @@ function HorizonHeader({ column, write, onOpen }: { column: BoardColumn; write: 
         </div>
       ) : null}
     </header>
+  );
+}
+
+/**
+ * One of the horizon's one-click actions in its column menu. An action its state offers but
+ * cannot run yet (Remove while it is queued) is shown disabled, with the reason under its label.
+ */
+export function HorizonMenuItem({ item, identifier, onChoose }: { item: PlanItem; identifier: string; onChoose: (call: { verb: string; body: Record<string, unknown> }) => void }) {
+  const call = item.call?.route === "plan" ? item.call : null;
+  return (
+    <DropdownMenuItem
+      disabled={Boolean(item.disabledReason)}
+      onSelect={() => call && onChoose(call)}
+      data-plan-horizon-remove={item.id === "remove" ? identifier : undefined}
+      data-plan-horizon-action={item.id}
+      className={item.disabledReason ? "flex-col items-start" : undefined}
+    >
+      <span className="inline-flex items-center gap-2">
+        {item.id === "remove" ? <Trash2 aria-hidden /> : null}
+        {item.label}
+      </span>
+      {item.disabledReason ? (
+        <span className="text-caption text-text-tertiary" data-plan-horizon-held={item.id}>
+          {item.disabledReason}
+        </span>
+      ) : null}
+    </DropdownMenuItem>
   );
 }
 

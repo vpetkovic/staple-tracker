@@ -25,6 +25,21 @@ export function isIdeaDetail(detail: IssueDetail): boolean {
   return record !== null && !record.idea.promoted;
 }
 
+/**
+ * Whether the record's own content (documents, restores, files) is closed to edits: an
+ * unpromoted idea whose lifecycle state offers no edit (shipped, dropped). A promoted record is
+ * an epic, edited as one.
+ */
+export function contentLocked(detail: IssueDetail): boolean {
+  const record = planRecordOf(detail);
+  return record !== null && !record.idea.promoted && !record.idea.actions.some((action) => action.id === "edit");
+}
+
+/** What the drawer calls the record in a sentence: an unpromoted idea is an idea, not a ticket. */
+export function recordNoun(detail: IssueDetail): "idea" | "ticket" {
+  return isIdeaDetail(detail) ? "idea" : "ticket";
+}
+
 /** A horizon's plan side: the horizon and the records on it; null for any other issue. */
 export function horizonPlanOf(detail: IssueDetail): { horizon: HorizonData; ideas: IdeaData[] } | null {
   return detail.horizonPlan ?? null;

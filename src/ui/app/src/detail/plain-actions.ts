@@ -36,6 +36,7 @@
  * decides on its own what a state allows.
  */
 import type { ActionPayload, ClaimActivity, Issue, IssueGate, IssueStatus, QueuedBy, StatusCategory } from "@/lib/types";
+import { maturityAction, type IdeaState } from "../../../../core/plan-lifecycle-table";
 
 /** Silence, in seconds, after which a claim may be taken over or freed. Mirrors lib/claim. */
 export const STALE_SECONDS = 30 * 60;
@@ -685,12 +686,7 @@ export function planPrimary(items: readonly PlanItem[]): PlanItem | null {
  */
 export function moveActionOf(idea: { state: string; maturity: string; horizonId: string | null }, target: { maturity: string } | { horizon: string | null }): string | null {
   if ("horizon" in target) return idea.horizonId === target.horizon ? null : "schedule";
-  if (idea.maturity === target.maturity) return null;
-  if (idea.state === "dropped") return "restore";
-  if (target.maturity === "dropped") return "drop";
-  if (target.maturity === "shaped") return "shape";
-  if (target.maturity === "exploring") return idea.state === "shaped" ? "unshape" : "explore";
-  return "explore";
+  return maturityAction({ state: idea.state as IdeaState, maturity: idea.maturity }, target.maturity);
 }
 
 /** Whether a board move is one the idea's state offers (and can run now). */

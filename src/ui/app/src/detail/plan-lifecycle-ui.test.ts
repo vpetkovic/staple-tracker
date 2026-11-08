@@ -14,7 +14,7 @@ import {
   IDEA_STATES,
   maturityAction,
 } from "../../../../core/plan-lifecycle-table";
-import { horizonActionItems, moveOffered, planActionItems, type OfferedPlanAction } from "./plain-actions";
+import { horizonActionItems, moveActionOf, moveOffered, planActionItems, type OfferedPlanAction } from "./plain-actions";
 
 /** A record's actions exactly as the server sends them for a state. */
 const offered = (state: (typeof IDEA_STATES)[number]): OfferedPlanAction[] =>
@@ -28,13 +28,23 @@ describe("the page builds every plan control from the offered actions", () => {
       const idea = { id: "i", state, maturity: state === "raw" || state === "exploring" || state === "dropped" ? state : "shaped", horizonId: null, actions: offered(state) };
       expect(planActionItems("ws", idea).map((item) => item.id)).toEqual(IDEA_LIFECYCLE[state].filter((id) => ONE_CLICK.has(id)));
       for (const maturity of ["raw", "exploring", "shaped", "dropped"]) {
-        const action = maturityAction(state, maturity);
+        const action = maturityAction({ state, maturity: idea.maturity }, maturity);
         const change = idea.maturity !== maturity;
         expect(moveOffered(idea, { maturity }), `${state} → ${maturity}`).toBe(change && action !== null && IDEA_LIFECYCLE[state].includes(action));
       }
       expect(moveOffered(idea, { horizon: "h" })).toBe(IDEA_LIFECYCLE[state].includes("schedule"));
     });
   }
+
+  it("names a board move by the table's own maturity rule", () => {
+    const at = (state: string, maturity: string) => ({ state, maturity, horizonId: null });
+    expect(moveActionOf(at("shaped", "shaped"), { maturity: "exploring" })).toBe("unshape");
+    expect(moveActionOf(at("raw", "raw"), { maturity: "exploring" })).toBe("explore");
+    expect(moveActionOf(at("exploring", "exploring"), { maturity: "raw" })).toBe("back_to_raw");
+    expect(moveActionOf(at("started", "shaped"), { maturity: "shaped" })).toBeNull();
+    expect(moveActionOf(at("dropped", "dropped"), { maturity: "exploring" })).toBe("restore");
+    expect(moveActionOf(at("shaped", "shaped"), { horizon: "h" })).toBe("schedule");
+  });
 
   for (const state of HORIZON_STATES) {
     it(`a ${state} horizon: its buttons are exactly its one-click actions`, () => {

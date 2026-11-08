@@ -138,6 +138,8 @@ function estimateWords(seconds: number): string {
  */
 export function describeEvent(
   event: TimelineEvent,
+  /** What the record is called: an unpromoted idea is captured, not created as a task. */
+  noun: "task" | "idea" = "task",
 ): Pick<TimelineEntry, "kind" | "summary" | "status" | "from" | "chips"> | null {
   const payload = event.payload ?? {};
   switch (event.kind) {
@@ -160,7 +162,7 @@ export function describeEvent(
     }
 
     case "issue_created":
-      return { kind: "lifecycle", summary: "created this task" };
+      return { kind: "lifecycle", summary: noun === "idea" ? "captured this idea" : "created this task" };
 
     case "checkout":
       return { kind: "lifecycle", summary: "started working on it" };
@@ -246,6 +248,8 @@ export function buildTimeline(input: {
   revisions: readonly TimelineRevision[];
   /** Override for the worklog key; defaults to the local mirror of the canonical one. */
   worklogKey?: string;
+  /** What the record is called in its rows: a task, or an unpromoted idea. */
+  noun?: "task" | "idea";
 }): TimelineEntry[] {
   const worklogKey = input.worklogKey ?? WORKLOG_KEY;
   // doc_updated is dropped from the thread but is the only place a revision's *actor*
@@ -287,7 +291,7 @@ export function buildTimeline(input: {
   }
 
   for (const event of input.events) {
-    const described = describeEvent(event);
+    const described = describeEvent(event, input.noun);
     if (!described) continue;
     entries.push({
       id: `event:${event.seq}`,

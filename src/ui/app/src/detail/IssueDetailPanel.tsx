@@ -64,7 +64,7 @@ import { useMembersCache, useOtherMembersRule } from "@/lib/members";
 import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout } from "./PropertyGrid";
 import { PersonChip, RelativeTime } from "./parts";
 import { MilestoneCrumb, MilestoneDue, MilestoneSentence, MilestoneValue, OpenPlanAction, opensPlan, planOf } from "./MilestoneParts";
-import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
+import { offers, primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
 import { HorizonSection, IdeaStatusLine, PlanOverflow, PlanPrimary } from "./PlanActions";
 import { hasNoNumber, horizonPlanOf, isIdeaDetail, planRecordOf } from "./plan-record";
 import { detailFacts } from "./properties";
@@ -498,7 +498,7 @@ export function DetailContent({
     return (
       <div data-detail-layout={sheet ? "sheet" : expanded ? "page" : "drawer"} data-detail-idea={idea.idea.id} className={cn("flex w-full flex-col", expanded ? "mx-auto max-w-readable px-6 pt-8 pb-12" : sheet ? "px-4 pt-3 pb-6" : "px-6 pt-6 pb-10")}>
         {sheet ? <Breadcrumb selection={{ workspace: detail.workspace, ref: issue.id }} detail={detail} className="-ml-1 mb-1.5" /> : null}
-        <InlineTitle issue={issue} workspace={detail.workspace} refresh={refresh} size={sheet ? "heading" : "display"} />
+        <InlineTitle issue={issue} workspace={detail.workspace} refresh={refresh} size={sheet ? "heading" : "display"} readOnly={!offers(idea.idea, "edit")} />
         <IdeaStatusLine record={idea} className="mt-3">
           {sheet ? null : (
             <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">

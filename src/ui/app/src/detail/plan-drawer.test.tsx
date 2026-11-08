@@ -15,6 +15,9 @@ import { DetailContent } from "./IssueDetailPanel";
 import { useIssueActions } from "./IssueActions";
 import { horizonActionItems, moveOffered, planActionItems, planPrimary } from "./plain-actions";
 import { visibleTabs } from "./tabs/registry";
+import { DocumentsTab } from "./tabs/DocumentsTab";
+import { FilesTab } from "./tabs/FilesTab";
+import { describeEvent } from "./timeline";
 import { addressDrafts } from "@/lib/api";
 
 const noop = () => {};
@@ -43,6 +46,7 @@ const OFFERED: Record<string, OfferedAction[]> = {
     { id: "reset_baseline", label: "Reset baseline to the plan", who: "person" },
   ],
   shipped: [],
+  dropped: [{ id: "restore", label: "Restore", who: "person" }],
 };
 
 function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaData {
@@ -53,8 +57,8 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
     kind: "idea",
     title: "Coach shares a program",
     description: null,
-    maturity: state === "raw" ? "raw" : "shaped",
-    stage: state === "raw" ? "raw" : state === "shaped" ? "shaped" : state === "started" ? "started" : "shipped",
+    maturity: state === "raw" || state === "dropped" ? state : "shaped",
+    stage: state as IdeaData["stage"],
     parentId: null,
     horizonId: null,
     planned: { start: null, target: null },
@@ -153,9 +157,9 @@ describe("an idea in the shared drawer", () => {
   });
 
   it("builds items from the offered actions alone: a disabled one says why, and a move needs its action", () => {
-    const held = idea("shaped", { actions: [{ id: "promote", label: "Promote to epic", who: "anyone", disabledReason: "Promote the parent first." }] });
+    const held = idea("shaped", { actions: [{ id: "promote", label: "Promote to epic", who: "anyone", disabledReason: "Held back for now." }] });
     const [promote] = planActionItems("ws", held);
-    expect(promote).toMatchObject({ id: "promote", disabledReason: "Promote the parent first." });
+    expect(promote).toMatchObject({ id: "promote", disabledReason: "Held back for now." });
     expect(promote!.call).toBeUndefined();
     expect(planPrimary(planActionItems("ws", idea("shipped")))).toBeNull();
     expect(moveOffered(idea("raw"), { maturity: "exploring" })).toBe(true);
@@ -207,5 +211,37 @@ describe("a horizon in the shared drawer", () => {
     expect(html).not.toContain('data-horizon-action="remove"');
     expect(html).toContain("Coach shares a program");
     expect(horizonActionItems("ws", horizon("shipped", []))).toEqual([]);
+  });
+
+  it("says why an offered action is held back, in words on the page", () => {
+    const queued = horizon("planned", [{ id: "remove", label: "Remove", who: "person", disabledReason: "It is in the queue; take it off first." }]);
+    const d = detail({ issue: issue({ id: "h1", identifier: "LAR-3", kind: "milestone", title: "Now · Beta" }), horizonPlan: { horizon: queued, ideas: [] } });
+    const read = render(d).replace(/<[^>]*>/g, " ");
+    expect(read).toContain("It is in the queue; take it off first.");
+  });
+});
+
+describe("the idea's tabs speak of an idea", () => {
+  const tabProps = (d: IssueDetail) => ({ detail: d, workspace: "ws", onAuthError: noop, refresh: noop });
+  it("says an idea was captured, and has no plan, notes or files 'on this ticket'", () => {
+    const d = ideaDetail(idea("raw"));
+    expect(describeEvent({ seq: 1, kind: "issue_created", actor: "vp", createdAt: "2026-11-01T00:00:00.000Z", payload: {} } as never, "idea")?.summary).toBe("captured this idea");
+    expect(describeEvent({ seq: 1, kind: "issue_created", actor: "vp", createdAt: "2026-11-01T00:00:00.000Z", payload: {} } as never)?.summary).toBe("created this task");
+    const docs = renderToStaticMarkup(<SessionContext.Provider value={fakeSession()}><DocumentsTab {...tabProps(d)} /></SessionContext.Provider>);
+    expect(docs).toContain("No plan or notes on this idea yet.");
+    const files = renderToStaticMarkup(<SessionContext.Provider value={fakeSession()}><FilesTab {...tabProps(d)} /></SessionContext.Provider>);
+    expect(files).toContain("No files on this idea.");
+  });
+});
+
+describe("the idea's header follows its state", () => {
+  it("makes the title editable only where the state offers editing", () => {
+    expect(render(ideaDetail(idea("raw")))).toContain("data-edit-title");
+    expect(render(ideaDetail(idea("shaped")))).toContain("data-edit-title");
+    for (const state of ["shipped", "dropped"] as const) {
+      const html = render(ideaDetail(idea(state)));
+      expect(html, state).not.toContain("data-edit-title");
+      expect(html, state).toContain("Coach shares a program");
+    }
   });
 });
