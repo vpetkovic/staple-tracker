@@ -1167,7 +1167,8 @@ export class MilestoneStore {
     }
     const milestone = this.requireMilestone(ref);
     // A horizon's dates are the person's, set from the plan (design/plan.md, "Who steers").
-    if (!internal.plan && (patch.targetDate !== undefined || patch.startDate !== undefined) && this.store.isHorizon(milestone.id)) {
+    // So is its goal: what agents work it toward is the person's, set with its run setting.
+    if (!internal.plan && (patch.targetDate !== undefined || patch.startDate !== undefined || goalPatch) && this.store.isHorizon(milestone.id)) {
       throw steeringRefusal("horizons", milestone.identifier);
     }
     return this.journaled(() => {
@@ -1185,7 +1186,7 @@ export class MilestoneStore {
           },
           actor,
           undefined,
-          // A horizon's goal is execution's, like any milestone's; its name and status stay guarded.
+          // A horizon's goal reaches here only from the plan (checked above); a milestone's is its own.
           { plan: true },
         );
       }

@@ -102,7 +102,7 @@ const READS: Record<StoreName, readonly string[]> = {
   QueueStore: ["revision", "entries", "effectiveQueue", "view", "scopeMembership"],
   ProjectStore: ["list", "get", "issueCounts"],
   // The plan layer's reads, and the lifecycle checks the tracker asks of it: derived on every call, nothing stored.
-  PlanStore: ["today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview"],
+  PlanStore: ["today", "enabled", "view", "ideaView", "detail", "stateOf", "assertEditable", "assertDocumentWrite", "assertQueueable", "sectionsOf", "scaffoldPreview", "horizonsOf", "horizonIds"],
 };
 
 interface World {
@@ -434,6 +434,11 @@ const SCENARIOS: readonly Scenario[] = [
   },
   { method: "PlanStore.createHorizon", name: "add a dated horizon", run: (w) => void (w.ids["Q2"] = w.a.store.plan().createHorizon({ name: "Q2", date: "2027-06-30" }, "alice", { person: { via: "test" } }).id) },
   { method: "PlanStore.updateHorizon", name: "rename, re-date and move a horizon", run: (w) => void w.a.store.plan().updateHorizon(w.ids["Q2"]!, { name: "Q2 launch", date: "2027-06-15", before: null }, "alice", { person: { via: "test" } }) },
+  {
+    method: "PlanStore.setHorizonRun",
+    name: "set how agents run a horizon, and its goal",
+    run: (w) => void w.a.store.plan().setHorizonRun(w.ids["Q2"]!, { mode: "goal", goal: ["Checkout works end to end"] }, "alice", { person: { via: "test" } }),
+  },
   {
     method: "PlanStore.removeHorizon",
     name: "remove a horizon an idea sat on",

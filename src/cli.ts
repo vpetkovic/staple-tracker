@@ -1156,7 +1156,7 @@ The plan (ideas and horizons above the tracker)
   idea reset-baseline <ref> --person    the current planned window becomes the baseline
   horizon ls
   horizon new <name> [--date D] --person
-  horizon set <ref> [--name N] [--date D|none] --person
+  horizon set <ref> [--name N] [--date D|none] [--run work|goal|epic|none] [--goal TEXT]... [--no-goal] --person
   horizon mv <ref> (--before H|--end) --person
   horizon rm <ref> --person             cancels the horizon; its ideas become unscheduled.
               A horizon is a milestone: its ideas' work is its membership

@@ -3206,7 +3206,7 @@ server.registerTool(
 server.registerTool(
   "list_horizons",
   {
-    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) and goal-run; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, member count, idea count, and the late and not-started counts, and its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers. Horizons are defined by the person.",
+    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) like a task; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, progress, member count, idea count, the shipped, late and not-started counts, its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers, and its run setting: runMode (how far agents take it: work, until its work is done; goal, until its goal is met; epic, stop for review after each epic; null when unset), goal (its acceptance criteria) and awaitingApproval. The run setting is the person's and reaches you as the horizon-run instruction on every ticket of the horizon (next_task, get_task, continue_run); a goal run (start_run) over a horizon is refused unless it is set to goal. Horizons are defined by the person.",
     inputSchema: { ws: wsSchema },
     annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },

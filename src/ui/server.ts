@@ -3913,10 +3913,15 @@ export function startUiServer(options: UiOptions): UiHandle {
         const assignee = url.searchParams.get("assignee") ?? undefined;
         const targets = options.hub && !wanted ? allHandles() : [handleFor(wanted)];
         const out = targets.flatMap((h) => {
-          const issues = h.store.listIssues({
-            includeResolved: true,
-            assignee: assignee || undefined,
-          });
+          // A horizon is not a task: it shows as a heading under Group: Horizon and as each row's
+          // chip. Plain milestones stay rows.
+          const horizonIds = h.store.plan().horizonIds();
+          const issues = h.store
+            .listIssues({
+              includeResolved: true,
+              assignee: assignee || undefined,
+            })
+            .filter((issue) => !horizonIds.has(issue.id));
           const ids = issues.map((i) => i.id);
           // One batched liveness query per workspace, not one per row.
           const claims = h.store.claimActivityFor(ids);
@@ -3959,6 +3964,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           // The direct milestone of each member, one query for the page: the list nests a
           // parentless member under its milestone, and membership is not a parent link.
           const milestoneOf = h.store.milestones().queueSeam().milestoneOf;
+          // The horizon each row's work belongs to, its own membership or an ancestor's.
+          const horizons = h.store.plan().horizonsOf(ids);
           return issues.map((issue) => ({
             workspace: h.slug,
             issue,
@@ -3974,6 +3981,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               blocks: blocks.get(issue.id) ?? [],
             },
             milestoneId: milestoneOf.get(issue.id) ?? null,
+            horizon: horizons.get(issue.id) ?? null,
           }));
         });
         json(res, 200, out);
@@ -5136,6 +5144,19 @@ export function startUiServer(options: UiOptions): UiHandle {
             break;
           case "/api/plan/horizon-remove":
             plan.removeHorizon(ref, actor, person);
+            idea = null;
+            break;
+          case "/api/plan/horizon-run":
+            // The horizon's run setting: the person's, as every horizon setting is. Nothing runs from it.
+            plan.setHorizonRun(
+              ref,
+              {
+                ...("mode" in body ? { mode: (body.mode ?? null) as never } : {}),
+                ...("goal" in body ? { goal: Array.isArray(body.goal) ? (body.goal as string[]) : [] } : {}),
+              },
+              actor,
+              person,
+            );
             idea = null;
             break;
           case "/api/plan/horizon-queue":

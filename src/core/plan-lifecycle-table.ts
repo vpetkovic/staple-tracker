@@ -83,6 +83,8 @@ export const HORIZON_ACTIONS = {
   reorder: { label: "Reorder", verb: "reordered", who: "person" },
   remove: { label: "Remove", verb: "removed", who: "person" },
   queue: { label: "Queue the horizon", verb: "queued", who: "anyone" },
+  /** How far agents take the horizon when they pick its work up, and its goal: a setting, the person's. Nothing runs from it. */
+  run: { label: "Set how agents run it", verb: "set to run", who: "person" },
 } as const satisfies Record<string, ActionRule>;
 export type HorizonAction = keyof typeof HORIZON_ACTIONS;
 export const HORIZON_ACTION_IDS = Object.keys(HORIZON_ACTIONS) as HorizonAction[];
@@ -94,8 +96,8 @@ export const HORIZON_ACTION_IDS = Object.keys(HORIZON_ACTIONS) as HorizonAction[
  * done) is only removed, by a person, once nothing is left to do in it.
  */
 export const HORIZON_LIFECYCLE: Readonly<Record<HorizonState, readonly HorizonAction[]>> = {
-  planned: ["rename", "date", "reorder", "remove"],
-  active: ["rename", "date", "reorder", "queue"],
+  planned: ["rename", "date", "reorder", "run", "remove"],
+  active: ["rename", "date", "reorder", "queue", "run"],
   shipped: ["remove"],
 };
 
@@ -106,6 +108,32 @@ export function ideaState(view: { stage: string; maturity: string }): IdeaState 
 }
 
 /** A horizon's state: shipped once its milestone is done, active while it holds open work, planned otherwise. */
+/**
+ * How far agents take a horizon when they pick its work up (`plan_run_mode`). Agents read it;
+ * the person sets it. Three, because they are the three places a run can stop: the last member,
+ * the goal, or each epic for review.
+ */
+export const RUN_MODES = {
+  work: {
+    label: "Until its work is done",
+    asks: "Take its work through the queue (staple queue next) until every member has landed. Do not add work beyond it, and do not start a goal run over it. It ships when its last member lands.",
+  },
+  goal: {
+    label: "Until its goal is met",
+    asks: "Work toward its goal: a goal run over it (staple run start --scope <horizon>) works its members, judges each criterion with evidence, and may file the tickets the goal still needs. It ends waiting for the person to approve the close.",
+  },
+  epic: {
+    label: "Stop for review after each epic",
+    asks: "Work one epic at a time. When an epic under it lands, stop and leave the next for the person to release; do not start the next epic on your own, and do not start a goal run over it.",
+  },
+} as const;
+export type RunMode = keyof typeof RUN_MODES;
+export const RUN_MODE_IDS = Object.keys(RUN_MODES) as RunMode[];
+
+export function isRunMode(value: unknown): value is RunMode {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(RUN_MODES, value);
+}
+
 export function horizonState(view: { shipped: boolean; openWork: number }): HorizonState {
   if (view.shipped) return "shipped";
   return view.openWork > 0 ? "active" : "planned";

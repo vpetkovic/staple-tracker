@@ -329,6 +329,13 @@ const matchPriority = (row: IssueRow, value: string) => row.issue.priority === v
  * would land in no bucket at all and vanish from the list entirely.
  */
 const matchKind = (row: IssueRow, value: string) => row.issue.kind === value;
+/**
+ * The horizon a row's work belongs to (`row.horizon`, derived membership and ancestors
+ * included), by the name the person sees, or none. A name, like a label: renaming a horizon
+ * is renaming what the filter asks for.
+ */
+export const NO_HORIZON = "__no_horizon__";
+const matchHorizon = (row: IssueRow, value: string) => (value === NO_HORIZON ? !row.horizon : row.horizon?.name === value);
 const matchClaim = (row: IssueRow, value: string) => claimStateOf(row) === value;
 const matchHandoff = (row: IssueRow, value: string) => handoffRiskOf(row) === value;
 
@@ -445,6 +452,26 @@ export const FILTER_DIMENSIONS: readonly FilterDimension[] = [
      * strip the one surface that lies about a renamed kind.
      */
     format: (value) => kindLabel(value),
+  },
+  /**
+   * Horizon, beside Kind: another way of asking "which part of the work". The plan's order,
+   * then "No horizon", offered only when some row is on a horizon, so a workspace without a
+   * plan never sees it.
+   */
+  {
+    id: "horizon",
+    label: "Horizon",
+    options: (rows) => {
+      const ranked = new Map<string, number>();
+      for (const row of rows) if (row.horizon && !ranked.has(row.horizon.name)) ranked.set(row.horizon.name, row.horizon.rank);
+      if (ranked.size === 0) return [];
+      const values = [...ranked.keys()].sort((a, b) => ranked.get(a)! - ranked.get(b)! || a.localeCompare(b));
+      values.push(NO_HORIZON);
+      const counts = tally(rows, values, matchHorizon);
+      return values.map((value) => ({ value, label: value === NO_HORIZON ? "No horizon" : value, count: counts.get(value) ?? 0 }));
+    },
+    matches: matchHorizon,
+    format: (value) => (value === NO_HORIZON ? "No horizon" : value),
   },
   {
     id: "assignee",

@@ -60,6 +60,10 @@ import {
   horizonState,
   ideaOffered,
   ideaState,
+  isRunMode,
+  RUN_MODE_IDS,
+  RUN_MODES,
+  type RunMode,
   maturityAction,
   type HorizonAction,
   type HorizonState,
@@ -88,6 +92,7 @@ import {
   planWarnings,
   readSection,
   renderSection,
+  dependencyResolver,
   shapedGate,
   type BreakdownRow,
   type BreakdownRowInput,
@@ -122,10 +127,29 @@ export interface HorizonView {
   lateCount: number;
   /** Plan records on it with nothing started whose planned start has passed. */
   notStartedCount: number;
+  /** Plan records on it whose work has all landed. */
+  shippedCount: number;
+  /** Members landed over members it holds, 0..1; null while it holds none. */
+  progress: number | null;
+  /** How far agents take it when they pick its work up; null until the person sets it. */
+  runMode: RunMode | null;
+  /** Its goal: the milestone's acceptance criteria, set by the person. */
+  goal: string[];
+  /** Its close waits for the person's approval (a goal run gated it, or a person did). */
+  awaitingApproval: boolean;
   late: boolean;
   /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
   state: HorizonState;
   actions: OfferedAction[];
+}
+
+/** The horizon a task's work belongs to, as the task list shows it. */
+export interface RowHorizon {
+  id: string;
+  identifier: string;
+  name: string;
+  date: string | null;
+  rank: number;
 }
 
 export interface PlanWindow {
@@ -174,6 +198,10 @@ export interface IdeaView {
    * Empty otherwise.
    */
   planIncomplete: string[];
+  /** How much of its plan is written: the starred sections and all ten. */
+  completeness: { starred: number; starredTotal: number; filled: number; total: number };
+  /** The records it waits on, by id: those its dependencies and outside depends-on cells name. */
+  dependsOn: string[];
   /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
   state: IdeaState;
   actions: OfferedAction[];
@@ -336,6 +364,7 @@ interface PlanRow {
   plan_baseline_start: string | null;
   plan_baseline_target: string | null;
   plan_rank: number | null;
+  plan_run_mode: string | null;
 }
 
 interface HorizonRow extends PlanRow {
@@ -356,7 +385,7 @@ interface WorkRow {
 
 const RANK_STEP = 1024;
 const PLAN_COLUMNS = `id, identifier, title, description, kind, status, parent_id, depth, created_at, updated_at,
-  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank`;
+  plan_maturity, plan_horizon_id, plan_start, plan_target, plan_baseline_start, plan_baseline_target, plan_rank, plan_run_mode`;
 
 /** Column name to the payload field the issue entity carries it as. */
 const FIELD_OF: Record<string, string> = {
@@ -367,6 +396,7 @@ const FIELD_OF: Record<string, string> = {
   plan_baseline_start: "planBaselineStart",
   plan_baseline_target: "planBaselineTarget",
   plan_rank: "planRank",
+  plan_run_mode: "planRunMode",
   parent_id: "parentId",
 };
 
@@ -641,6 +671,45 @@ export class PlanStore {
     ).sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.created_at.localeCompare(b.created_at));
   }
 
+  /**
+   * The horizon each issue's work belongs to: the milestone it is a member of (put there or
+   * derived from the plan), else its nearest ancestor's, when that milestone is a horizon.
+   * What the task list reads for its ◇ chip, its Horizon grouping and its horizon filter.
+   */
+  horizonsOf(ids: readonly string[]): Map<string, RowHorizon> {
+    const out = new Map<string, RowHorizon>();
+    if (ids.length === 0 || !this.enabled()) return out;
+    const horizons = new Map(this.horizonRows().map((row) => [row.id, { id: row.id, identifier: row.identifier, name: row.title, date: row.target_date, rank: row.plan_rank ?? 0 }]));
+    if (horizons.size === 0) return out;
+    const memberOf = new Map((this.db.prepare(`SELECT issue_id, milestone_id FROM ${MILESTONE_MEMBERSHIP}`).all() as Array<{ issue_id: string; milestone_id: string }>).map((row) => [row.issue_id, row.milestone_id]));
+    const parentOf = new Map((this.db.prepare("SELECT id, parent_id FROM issues").all() as Array<{ id: string; parent_id: string | null }>).map((row) => [row.id, row.parent_id]));
+    for (const id of ids) {
+      // A horizon is its own: it never falls under "No horizon".
+      const own = horizons.get(id);
+      if (own) {
+        out.set(id, own);
+        continue;
+      }
+      let cursor: string | null = id;
+      for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
+        const milestone = memberOf.get(cursor);
+        if (milestone !== undefined) {
+          const horizon = horizons.get(milestone);
+          if (horizon) out.set(id, horizon);
+          break;
+        }
+        cursor = parentOf.get(cursor) ?? null;
+      }
+    }
+    return out;
+  }
+
+  /** The horizons' issue ids: the task list leaves them out of its rows, and shows each as a heading or a chip. */
+  horizonIds(): Set<string> {
+    if (!this.enabled()) return new Set();
+    return new Set(this.horizonRows().map((row) => row.id));
+  }
+
   /** Every plan record: unpromoted ideas while open, promoted ones whatever their status. */
   private recordRows(): PlanRow[] {
     const resolved = this.resolvedStatuses();
@@ -668,6 +737,8 @@ export class PlanStore {
     const memberCount = (
       this.db.prepare("SELECT COUNT(*) AS n FROM milestone_members WHERE milestone_id = ?").get(row.id) as { n: number }
     ).n + (this.db.prepare("SELECT COUNT(*) AS n FROM plan_members WHERE milestone_id = ? AND issue_id NOT IN (SELECT issue_id FROM milestone_members)").get(row.id) as { n: number }).n;
+    const open = this.openWorkOf(row.id);
+    const own = this.db.prepare("SELECT gate_state, acceptance_criteria FROM issues WHERE id = ?").get(row.id) as { gate_state: string | null; acceptance_criteria: string | null };
     return {
       id: row.id,
       identifier: row.identifier,
@@ -680,8 +751,13 @@ export class PlanStore {
       ideaCount: on.length,
       lateCount,
       notStartedCount: on.filter((idea) => idea.notStarted).length,
+      shippedCount: on.filter((idea) => idea.stage === "shipped").length,
+      progress: memberCount > 0 ? (memberCount - open) / memberCount : null,
+      runMode: isRunMode(row.plan_run_mode) ? row.plan_run_mode : null,
+      goal: own.acceptance_criteria ? (JSON.parse(own.acceptance_criteria) as string[]) : [],
+      awaitingApproval: own.gate_state === "pending",
       late: lateCount > 0,
-      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", this.openWorkOf(row.id), this.isQueued(row.id)),
+      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", open, this.isQueued(row.id)),
     };
   }
 
@@ -811,8 +887,15 @@ export class PlanStore {
       for (const child of childIds.get(id) ?? []) for (const item of rolledWork(child, seen)) out.add(item);
       return out;
     };
+    // Every record's sections first: a depends-on cell may name a row of another record's breakdown.
+    const sectionsOf = new Map(rows.map((row) => [row.id, this.sectionsOf(row.id)]));
+    const dependsOn = dependencyResolver(
+      rows.map((row) => ({ id: row.id, identifier: shownIdentifier(row.identifier), title: row.title, rowKeys: sectionsOf.get(row.id)!.breakdown.map((entry) => entry.key) })),
+    );
     return rows.map((row) => {
       const promoted = row.kind !== IDEA_KIND;
+      const sections = sectionsOf.get(row.id)!;
+      const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
       const ownLinks = planLinksOf(this.db, row.id);
       // Its own state reads its own work only: itself once promoted, and its own links. Linked
       // work whose issue is gone (a rewind, say) still counts, so the state does not slip back.
@@ -875,7 +958,9 @@ export class PlanStore {
         }),
         notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today }),
         childIds: childIds.get(row.id) ?? [],
-        openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
+        openQuestions: questions.filter((q) => !q.resolved).length,
+        completeness: completeness(sections, questions, parseDecisions(this.documentBody(row.id, DECISIONS_KEY))),
+        dependsOn: dependsOn(row.id, sections),
         planIncomplete,
         ...ideaLifecycle({
           state,
@@ -1655,6 +1740,26 @@ export class PlanStore {
   }
 
   /**
+   * A horizon's run setting: how far agents take it when they pick its work up (`mode`), and its
+   * goal, the milestone's acceptance criteria. Both are the person's; nothing runs from here.
+   * Agents read them in every take of the horizon's work (`instructions.ts`, "horizon-run").
+   */
+  setHorizonRun(ref: string, patch: { mode?: RunMode | null; goal?: readonly string[] }, actor: string | null, options: PlanWriteOptions = {}): HorizonView {
+    this.assertEnabled();
+    const row = this.horizonRow(ref);
+    this.allowHorizon(row, "run");
+    this.steer("horizons", row.identifier, options);
+    if (patch.mode !== undefined && patch.mode !== null && !isRunMode(patch.mode)) {
+      throw new StapleError("validation", `A horizon runs ${RUN_MODE_IDS.map((id) => `${id} (${RUN_MODES[id].label.toLowerCase()})`).join(", ")}; not "${String(patch.mode)}".`);
+    }
+    this.store.journaled(() => {
+      if (patch.mode !== undefined && patch.mode !== row.plan_run_mode) this.write(row.id, { plan_run_mode: patch.mode }, actor, "horizon_updated", { fields: ["plan_run_mode"] });
+      if (patch.goal !== undefined) this.store.milestones().update(row.id, { acceptanceCriteria: [...patch.goal] }, actor, { plan: true });
+    });
+    return this.horizonOf(row.id);
+  }
+
+  /**
    * Remove a horizon: the milestone is cancelled (issues are never deleted) and its unstarted
    * ideas become unscheduled. Refused while it holds open work or sits in the queue: cancelling
    * it then would leave that work inside a cancelled milestone, or take the horizon off the queue
@@ -1793,6 +1898,7 @@ function horizonLifecycle(shipped: boolean, openWork: number, queued: boolean): 
       label: HORIZON_ACTIONS[id].label,
       who: HORIZON_ACTIONS[id].who,
       ...(id === "remove" && queued ? { disabledReason: "It is in the queue; take it off first." } : {}),
+      ...(id === "queue" && queued ? { disabledReason: "It is in the queue already." } : {}),
     })),
   };
 }

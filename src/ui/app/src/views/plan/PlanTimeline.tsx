@@ -5,20 +5,23 @@
  * ends (resize), and, once work is linked, the ACTUAL window derived from it: solid while
  * work has happened, dashed to the forecast end, hatched where it runs past the planned end.
  * A started idea that was re-planned shows its baseline as a faint outline behind the plan.
- * Vertical lines mark today and every dated horizon.
+ * Vertical lines mark today and every dated horizon. An arrow runs from each record to the
+ * records that wait on it (their Dependencies, and depends-on cells naming it), and a shipped
+ * record's bar ends in the same ✓ every other surface shows.
  *
  * The chart scrolls inside its own frame in both directions with the idea names pinned on
  * the left and the axis pinned on top, so the page itself never scrolls sideways.
  */
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Button } from "@/components/ui/button";
 import type { IdeaData, PlanData } from "@/lib/plan-types";
 import { useIsDesk } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
-import { Chip, type Write } from "./PlanBoards";
-import { dayIndex, dayLabel, dayOf, dragWindow, monthsIn, riskOf, timelineGroups, timelineRange } from "./plan-model";
+import { Chip, Progress, type Write } from "./PlanBoards";
+import { dayIndex, dayLabel, dayOf, dependencyEdges, dragWindow, horizonDone, isShipped, monthsIn, riskOf, timelineGroups, timelineRange } from "./plan-model";
 import { offers } from "@/detail/plain-actions";
+import { ShippedCheck, ShippedMark } from "@/detail/ShippedMark";
 
 /** Every bar is drawn in a 40px band; a phone row is taller so its name can take up to three lines. */
 const BAND = 40;
@@ -61,6 +64,19 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
   const groups = useMemo(() => timelineGroups(plan, folded), [plan, folded]);
   const months = useMemo(() => monthsIn(range), [range]);
   const today = dayIndex(plan.today);
+  const shown = useMemo(() => new Set(groups.flatMap((group) => group.rows.map((row) => row.idea.id))), [groups]);
+  const edges = useMemo(() => dependencyEdges(plan, shown), [plan, shown]);
+  // Where each row sits, measured once laid out: undated rows and group headers vary in height.
+  const chart = useRef<HTMLDivElement>(null);
+  const [rowTops, setRowTops] = useState<Map<string, number>>(new Map());
+  useLayoutEffect(() => {
+    const element = chart.current;
+    if (!element) return;
+    const next = new Map<string, number>();
+    for (const row of element.querySelectorAll<HTMLElement>("[data-plan-timeline-row]")) next.set(row.dataset.planTimelineRow!, row.offsetTop);
+    setRowTops((current) => (current.size === next.size && [...next].every(([id, top]) => current.get(id) === top) ? current : next));
+  }, [groups, rowHeight, edges]);
+  const ideaById = useMemo(() => new Map(plan.ideas.map((idea) => [idea.id, idea])), [plan]);
 
   // Bring today into view once per zoom level, after the frame has been measured.
   const centred = useRef<Zoom | null>(null);
@@ -123,7 +139,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
       </div>
       <Legend />
       <div ref={frame} className="relative mx-gutter mb-3 min-h-0 flex-1 overflow-auto rounded-lg border bg-card" data-plan-timeline-frame>
-        <div className="relative" style={{ width: nameWidth + width }}>
+        <div ref={chart} className="relative" style={{ width: nameWidth + width }}>
           {/* The axis, pinned on top. */}
           <div className="sticky top-0 z-20 flex h-8 border-b bg-card">
             <div className="sticky left-0 z-30 shrink-0 border-r bg-card" style={{ width: nameWidth }} />
@@ -150,8 +166,13 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                 </div>
               ))}
           </div>
+          <DependencyArrows edges={edges} ideas={ideaById} rowTops={rowTops} rowHeight={rowHeight} x={x} left={nameWidth} width={width} />
           {groups.map((group) => {
-            const risk = riskOf(group.rows.map((row) => row.idea).concat(group.undated));
+            // A horizon's counts are the server's, as its board header and drawer show them; the
+            // records with no horizon are counted from the rows.
+            const risk = group.horizon
+              ? { late: group.horizon.lateCount, notStarted: group.horizon.notStartedCount }
+              : riskOf(group.rows.map((row) => row.idea).concat(group.undated));
             return (
               <div key={group.key} data-plan-timeline-group={group.key || "none"}>
                 <div className="flex border-b bg-surface-sunken" style={{ height: BAND - 8 }}>
@@ -160,6 +181,12 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                     {group.date ? <span className="shrink-0 font-normal text-text-tertiary">{dayLabel(group.date, false)}</span> : null}
                   </div>
                   <div className="sticky z-10 flex items-center gap-1.5 px-2 text-caption" style={{ left: nameWidth }}>
+                    {group.horizon ? <>
+                      <span>{group.horizon.ideaCount} ideas · {group.horizon.memberCount} members</span>
+                      {group.horizon.awaitingApproval ? <Chip tone="amber">Waiting for your approval</Chip> : null}
+                      {horizonDone(group.horizon) ? <ShippedMark /> : group.horizon.shippedCount > 0 ? <ShippedMark count={group.horizon.shippedCount} /> : null}
+                      {group.horizon.progress !== null && !horizonDone(group.horizon) ? <Progress value={group.horizon.progress} /> : null}
+                    </> : null}
                     {risk.late > 0 ? <Chip tone="red">{risk.late} late</Chip> : null}
                     {risk.notStarted > 0 ? <Chip tone="amber">{risk.notStarted} not started</Chip> : null}
                   </div>
@@ -291,12 +318,17 @@ function ActualBar({ idea, x, px, today }: { idea: IdeaData; x: (day: number) =>
   const plannedEnd = idea.planned.target ? dayIndex(idea.planned.target) : null;
   const last = Math.max(done, forecast ?? done);
   const slipFrom = plannedEnd !== null && last > plannedEnd ? Math.max(start, plannedEnd + 1) : null;
-  const shipped = idea.stage === "shipped";
+  const shipped = isShipped(idea);
   return (
     <div className="pointer-events-none absolute top-[26px] h-1.5" style={{ left: x(start), width: Math.max(4, x(last + 1) - x(start)) }} data-plan-actual={idea.id}>
       <div className={cn("absolute inset-y-0 left-0 rounded-full", shipped ? "bg-[color:var(--status-task-done)]" : "bg-foreground/80")} style={{ width: Math.max(4, (done - start + 1) * px) }} />
       {forecast !== null && forecast > done ? (
         <div className="absolute inset-y-0 rounded-full border border-dashed border-foreground/60" style={{ left: (done - start + 1) * px, width: (forecast - done) * px }} data-plan-forecast={idea.id} />
+      ) : null}
+      {shipped ? (
+        <span className="absolute top-1/2 -translate-y-1/2" style={{ left: (done - start + 1) * px - 2 }} data-plan-shipped-cap={idea.id}>
+          <ShippedCheck label={`${idea.title} shipped`} />
+        </span>
       ) : null}
       {slipFrom !== null ? (
         <div
@@ -314,6 +346,80 @@ function ActualBar({ idea, x, px, today }: { idea: IdeaData; x: (day: number) =>
   );
 }
 
+/** The day a record's bar starts and ends on: planned where it has a plan, else its actual work. */
+function spanOf(idea: IdeaData): { start: number; end: number } | null {
+  const planned = windowOf(idea);
+  if (planned) return planned;
+  if (!idea.actual.start) return null;
+  const end = idea.actual.end ?? idea.actual.forecastEnd ?? idea.actual.start;
+  return { start: dayIndex(idea.actual.start), end: dayIndex(end) };
+}
+
+/**
+ * An arrow from the end of the record waited on to the start of the one waiting, drawn under
+ * the bars and above the grid. A row not laid out yet (folded away) draws none.
+ */
+export function DependencyArrows({
+  edges,
+  ideas,
+  rowTops,
+  rowHeight,
+  x,
+  left,
+  width,
+}: {
+  edges: ReadonlyArray<{ from: string; to: string }>;
+  ideas: ReadonlyMap<string, IdeaData>;
+  rowTops: ReadonlyMap<string, number>;
+  rowHeight: number;
+  x: (day: number) => number;
+  left: number;
+  width: number;
+}) {
+  // The planned bar's middle: the 40px band sits centred in the row, the bar 8px below its top.
+  const barY = (top: number) => top + rowHeight / 2 - BAND / 2 + 16;
+  const paths = edges.flatMap((edge) => {
+    const from = ideas.get(edge.from);
+    const to = ideas.get(edge.to);
+    const fromTop = rowTops.get(edge.from);
+    const toTop = rowTops.get(edge.to);
+    if (!from || !to || fromTop === undefined || toTop === undefined) return [];
+    const a = spanOf(from);
+    const b = spanOf(to);
+    if (!a || !b) return [];
+    const x1 = x(a.end + 1);
+    const y1 = barY(fromTop);
+    const x2 = x(b.start) - 2;
+    const y2 = barY(toTop);
+    const bend = Math.max(12, Math.min(48, Math.abs(x2 - x1) / 2));
+    return [{ key: `${edge.from}>${edge.to}`, d: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`, late: b.start <= a.end }];
+  });
+  if (paths.length === 0) return null;
+  return (
+    <svg className="pointer-events-none absolute top-0 z-[5] h-full overflow-visible" style={{ left, width }} aria-hidden data-plan-arrows={paths.length}>
+      <defs>
+        <marker id="plan-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L8,4 L0,8 z" className="fill-text-secondary" />
+        </marker>
+        <marker id="plan-arrow-late" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L8,4 L0,8 z" className="fill-destructive" />
+        </marker>
+      </defs>
+      {paths.map((path) => (
+        <path
+          key={path.key}
+          d={path.d}
+          fill="none"
+          strokeWidth={1.25}
+          className={path.late ? "stroke-destructive" : "stroke-text-secondary"}
+          markerEnd={path.late ? "url(#plan-arrow-late)" : "url(#plan-arrow)"}
+          data-plan-arrow={path.key}
+        />
+      ))}
+    </svg>
+  );
+}
+
 function Legend() {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-gutter py-2 text-caption text-text-tertiary" aria-label="Legend">
@@ -322,6 +428,11 @@ function Legend() {
       <span className="flex items-center gap-1.5"><span className="h-1.5 w-6 rounded-full bg-foreground/80" />actual</span>
       <span className="flex items-center gap-1.5"><span className="h-1.5 w-6 rounded-full border border-dashed border-foreground/60" />forecast</span>
       <span className="flex items-center gap-1.5"><span className="h-2 w-6 rounded-sm" style={{ backgroundImage: "repeating-linear-gradient(135deg, var(--color-destructive) 0 2px, transparent 2px 5px)" }} />past the plan</span>
+      <span className="flex items-center gap-1.5"><ShippedCheck label="" />shipped</span>
+      <span className="flex items-center gap-1.5">
+        <svg width="24" height="8" aria-hidden><path d="M1 4 H 20" className="stroke-text-secondary" strokeWidth="1.25" /><path d="M18,1 L23,4 L18,7 z" className="fill-text-secondary" /></svg>
+        needed first
+      </span>
     </div>
   );
 }

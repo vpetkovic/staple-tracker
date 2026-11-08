@@ -23,6 +23,15 @@
 import type { IssueRow } from "@/lib/types";
 import { MILESTONE_KIND } from "@/detail/plain-actions";
 
+/**
+ * The placement an axis wants. Grouped by epic, the axis IS the epics a milestone would fold
+ * together; grouped by horizon, each horizon is already a section, and nesting its members
+ * under it again would draw each one twice. Every other shape nests members under milestones.
+ */
+export function placeForAxis(rows: readonly IssueRow[], groupBy: string): IssueRow[] {
+  return groupBy === "parent" || groupBy === "horizon" ? (rows as IssueRow[]) : placeUnderMilestones(rows);
+}
+
 export function placeUnderMilestones(rows: readonly IssueRow[]): IssueRow[] {
   const milestones = new Map<string, IssueRow>();
   for (const row of rows) {

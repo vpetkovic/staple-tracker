@@ -47,6 +47,16 @@ export interface HorizonData {
   ideaCount: number;
   lateCount: number;
   notStartedCount: number;
+  /** Records on it whose work has all landed. */
+  shippedCount: number;
+  /** Members landed over members held, 0..1; null while it holds none. */
+  progress: number | null;
+  /** How far agents take it when they pick its work up; null until the person sets it. */
+  runMode: "work" | "goal" | "epic" | null;
+  /** Its goal: the milestone's acceptance criteria. */
+  goal: string[];
+  /** Its close waits for the person's approval. */
+  awaitingApproval: boolean;
   late: boolean;
   state: HorizonState;
   actions: OfferedAction[];
@@ -80,6 +90,9 @@ export interface IdeaData {
   openQuestions: number;
   /** A shaped plan that no longer passes the shaped gate: what it lacks. Scaffold and Promote wait for it. */
   planIncomplete: string[];
+  /** Written sections and dependencies, derived by the server from the plan. */
+  completeness: { starred: number; starredTotal: number; filled: number; total: number };
+  dependsOn: string[];
   state: IdeaState;
   actions: OfferedAction[];
   createdAt: string;

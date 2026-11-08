@@ -74,6 +74,8 @@ export function chipPhrase(chip: Pick<FilterChip, "dimension" | "value" | "label
       return `Tagged “${chip.label}”`;
     case "milestone":
       return `In ${chip.label}`;
+    case "horizon":
+      return chip.label === "No horizon" ? "On no horizon" : `On horizon ${chip.label}`;
     case "epic":
       return `Part of ${chip.label}`;
     case "project":

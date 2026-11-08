@@ -7,7 +7,7 @@ import type { Migration } from "../types.js";
  * An idea is an issue of the reserved kind `idea` until it is promoted in place into an epic;
  * a horizon is a milestone that the plan shows as a column. Title, brief, parent, documents,
  * comments, events and sync come from the issue they are. What an issue cannot already say
- * lives in seven nullable `issues` columns, NULL on every row the plan never wrote:
+ * lives in eight nullable `issues` columns, NULL on every row the plan never wrote:
  *
  *   plan_maturity         raw | exploring | shaped | dropped; set on every plan record, promoted or not
  *   plan_horizon_id       the horizon (milestone) a plan record is scheduled into
@@ -16,6 +16,7 @@ import type { Migration } from "../types.js";
  *   plan_baseline_start   the planned window kept when it was started
  *   plan_baseline_target  (both written together, and reset only on request)
  *   plan_rank             the order of horizons, and of plan records inside a column
+ *   plan_run_mode         a horizon's run setting, how far agents take it: work | goal | epic
  *
  * They replicate as fields of the `issue` entity (`ISSUE_FIELDS`). A milestone with a rank is a
  * horizon, and is also what says planning is on in this workspace: only the plan layer writes
@@ -61,6 +62,7 @@ export const migration: Migration = {
       ALTER TABLE issues ADD COLUMN plan_baseline_start TEXT;
       ALTER TABLE issues ADD COLUMN plan_baseline_target TEXT;
       ALTER TABLE issues ADD COLUMN plan_rank INTEGER;
+      ALTER TABLE issues ADD COLUMN plan_run_mode TEXT;
       CREATE INDEX issues_plan_ranked_idx ON issues(kind) WHERE plan_rank IS NOT NULL;
       CREATE TABLE plan_links (
         idea_id   TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,

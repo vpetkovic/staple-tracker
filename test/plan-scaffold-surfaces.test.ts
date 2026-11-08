@@ -13,6 +13,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startUiServer, type UiHandle } from "../src/ui/server.js";
 import { CONTRACT_AGENT, runCliAsync, startMcpClient, toolPayload, type McpHarness } from "./fixtures/contract-support.js";
 import { READY_PLAN } from "./fixtures/plan-ready.js";
+import { buildBrief } from "../src/core/run-brief.js";
+import type { ResolvedInstruction } from "../src/core/instructions.js";
 
 const WS = "scaffws";
 let home: string;
@@ -223,5 +225,84 @@ describe("the page confirms what it previewed", () => {
     const made = confirmed.body.scaffold as { epic: { identifier: string }; tasks: Array<{ existing: string | null }> };
     expect(made.epic.identifier).toMatch(/^[A-Z]+-\d+$/);
     expect(made.tasks.every((task) => task.existing !== null)).toBe(true);
+  });
+});
+
+describe("the task list reads each row's horizon", () => {
+  it("gives every row of a scaffolded epic the epic's horizon, and a row on none nothing", async () => {
+    const plan = (await http("/api/plan")).body as { plan?: { horizons: Array<{ id: string; name: string; identifier: string }> }; horizons?: Array<{ id: string; name: string; identifier: string }> };
+    const horizons = plan.horizons ?? plan.plan!.horizons;
+    const now = horizons.find((h) => h.name === "Now")!;
+    const id = await capture("Rows on Now", { maturity: "shaped", plan: READY_PLAN, horizon: now.id });
+    const preview = (await http("/api/plan/scaffold", { ref: id, preview: true })).body.scaffold as { fingerprint: string };
+    const done = await http("/api/plan/scaffold", { ref: id, fingerprint: preview.fingerprint });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    const loose = (await mcp.call("create_task", { ws: WS, title: "On no horizon" })) as unknown;
+    expect(loose).toBeTruthy();
+    const response = await fetch(`${origin}/api/issues?ws=${WS}`, { headers: { "x-staple-token": token } });
+    const rows = (await response.json()) as Array<{ issue: { id: string; title: string; parentId: string | null }; horizon: { identifier: string; name: string } | null }>;
+    const epic = rows.find((row) => row.issue.id === id)!;
+    const tasks = rows.filter((row) => row.issue.parentId === id);
+    expect(epic.horizon).toMatchObject({ identifier: now.identifier, name: "Now" });
+    expect(tasks.length).toBeGreaterThan(0);
+    for (const task of tasks) expect(task.horizon?.identifier).toBe(now.identifier);
+    expect(rows.find((row) => row.issue.title === "On no horizon")!.horizon).toBeNull();
+  });
+
+  it("leaves the horizons themselves out of the rows, empty ones included, and keeps a plain milestone", async () => {
+    expect((await mcp.call("create_milestone", { ws: WS, title: "A plain milestone" })).isError).toBeFalsy();
+    const response = await fetch(`${origin}/api/issues?ws=${WS}`, { headers: { "x-staple-token": token } });
+    const rows = (await response.json()) as Array<{ issue: { identifier: string; title: string; kind: string } }>;
+    const plan = (await http("/api/plan")).body as { horizons?: Array<{ identifier: string }>; plan?: { horizons: Array<{ identifier: string }> } };
+    const horizons = new Set((plan.horizons ?? plan.plan!.horizons).map((h) => h.identifier));
+    expect(horizons.size).toBeGreaterThan(0);
+    expect(rows.filter((row) => horizons.has(row.issue.identifier))).toEqual([]);
+    expect(rows.some((row) => row.issue.title === "A plain milestone" && row.issue.kind === "milestone")).toBe(true);
+  });
+});
+
+describe("a horizon's run setting on every surface", () => {
+  it("is set by the person on the page and the CLI, read by an agent with every ticket of the horizon, and honoured by a goal run", async () => {
+    const plan = (await http("/api/plan")).body as { horizons?: Array<{ id: string; name: string; identifier: string }>; plan?: { horizons: Array<{ id: string; name: string; identifier: string }> } };
+    const next = (plan.horizons ?? plan.plan!.horizons).find((h) => h.name === "Next")!;
+    const id = await capture("Work on Next", { maturity: "shaped", plan: READY_PLAN, horizon: next.id });
+    const preview = (await http("/api/plan/scaffold", { ref: id, preview: true })).body.scaffold as { fingerprint: string };
+    expect((await http("/api/plan/scaffold", { ref: id, fingerprint: preview.fingerprint })).status).toBe(200);
+    const page = await http("/api/plan/horizon-run", { ref: next.id, mode: "work", goal: ["Every Next ticket landed"] });
+    expect(page.status, JSON.stringify(page.body)).toBe(200);
+    // An agent reads it with each ticket it takes.
+    const rows = (await (await fetch(`${origin}/api/issues?ws=${WS}`, { headers: { "x-staple-token": token } })).json()) as Array<{ issue: { identifier: string; parentId: string | null } }>;
+    const child = rows.find((row) => row.issue.parentId === id)!.issue.identifier;
+    const ticket = toolPayload(await mcp.call("get_task", { ws: WS, ref: child })) as { instructions: Array<{ key: string; body: string }> };
+    const run = ticket.instructions.find((entry) => entry.key === "horizon-run")!;
+    expect(run.body).toContain("Until its work is done");
+    expect(run.body).toContain("Every Next ticket landed");
+    const queued = await http("/api/plan/horizon-queue", { ref: next.id });
+    expect(queued.status).toBe(200);
+    const nextCli = JSON.parse((await cli("queue", "next", "--scope", next.identifier, "--json")).stdout) as { next: { identifier: string }; instructions: ResolvedInstruction[] };
+    const nextMcp = toolPayload(await mcp.call("next_task", { ws: WS, scope: next.identifier })) as { next: { identifier: string }; instructions: ResolvedInstruction[] };
+    expect(nextMcp.next.identifier).toBe(child);
+    expect(nextMcp.instructions).toEqual(nextCli.instructions);
+    expect(nextMcp.instructions.find((entry) => entry.key === "horizon-run")?.body).toBe(run.body);
+    const forAgents = await http(`/api/agent-context?ws=${WS}&ref=${child}`);
+    expect((forAgents.body.instructions as ResolvedInstruction[]).find((entry) => entry.key === "horizon-run")?.body).toBe(run.body);
+    // A goal run over it is refused, as the setting says; set to goal, it is allowed.
+    const refusedRun = await mcp.call("start_run", { ws: WS, scope: next.identifier });
+    expect(refusedRun.isError).toBe(true);
+    expect(JSON.stringify(refusedRun.content)).toContain("until its work is done");
+    // The CLI sets it only as the person.
+    expect((await cli("horizon", "set", next.identifier, "--run", "goal")).status).not.toBe(0);
+    const person = await cli("horizon", "set", next.identifier, "--run", "goal", "--goal", "Every Next ticket landed", "--person");
+    expect(person.status, person.stderr).toBe(0);
+    expect(person.stdout).toContain("runs goal · 1 goal criteria");
+    const started = toolPayload(await mcp.call("start_run", { ws: WS, scope: next.identifier })) as { id: string };
+    const take = toolPayload(await mcp.call("continue_run", { ws: WS, run: started.id })) as { action: string; ref: string; instructions: ResolvedInstruction[] };
+    expect(take.action).toBe("take");
+    const setting = take.instructions.find((entry) => entry.key === "horizon-run")!;
+    expect(setting.body).toContain("Until its goal is met");
+    expect(setting.body).toContain("Every Next ticket landed");
+    const brief = buildBrief({ ref: take.ref, title: "Work", workspace: "/scratch", db: "/scratch/fixture.db", runId: started.id, actor: CONTRACT_AGENT, finish: "in_review", instructions: null, ticketInstructions: take.instructions });
+    expect(brief).toContain(setting.body);
+    expect((await mcp.call("stop_run", { ws: WS, run: started.id })).isError).toBeFalsy();
   });
 });

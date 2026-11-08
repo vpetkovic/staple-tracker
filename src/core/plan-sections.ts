@@ -723,3 +723,87 @@ function parseBreakdown(lines: readonly string[], rows: ImportedRow[], warnings:
   }
   return unplaced;
 }
+
+// ---------- dependencies between records ----------
+
+/** A reference key: capitals with a number, as plans name their parts (`C2`, `R4`, `EPIC-40`, `TST-12`). */
+const REF_KEY = /^[A-Z]{1,8}-?\d+(?:\.\d+)*$/;
+/** A breakdown row's key, as another plan's depends-on cell names it (`42.1`). */
+const ROW_KEY = /^\d+(?:\.\d+)+$/;
+
+function tokens(text: string): string[] {
+  return text.split(/[^A-Za-z0-9.-]+/).map((token) => token.replace(/^[.-]+|[.-]+$/g, "")).filter(Boolean);
+}
+
+/** The references a text leads with: its first words while each is a key. "C2 and C3 land first" leads with C2 only. */
+function leadingKeys(text: string, keyShape: (token: string) => boolean): string[] {
+  const out: string[] = [];
+  for (const token of tokens(text)) {
+    if (!keyShape(token)) break;
+    out.push(token);
+  }
+  return out;
+}
+
+const isReference = (token: string) => REF_KEY.test(token) || ROW_KEY.test(token);
+
+/** A record as dependencies name it: its ticket number, its title, and its own breakdown rows' keys. */
+export interface DependencyRecord {
+  id: string;
+  identifier: string | null;
+  title: string;
+  rowKeys?: readonly string[];
+}
+
+/**
+ * The names a plan uses for a record: its ticket number once it has one, and the keys its title
+ * leads with (`C2 Checkout API` is C2, `R2 · EPIC-40 — Exercise API` is R2 and EPIC-40). A word
+ * further into a title, or one that is not a key (`OAuth2`), names nothing.
+ */
+export function recordKeys(record: Pick<DependencyRecord, "identifier" | "title">): string[] {
+  const keys = new Set<string>();
+  if (record.identifier) keys.add(record.identifier);
+  for (const key of leadingKeys(record.title, (token) => REF_KEY.test(token))) keys.add(key);
+  return [...keys];
+}
+
+/**
+ * Which records a record waits on. Only an explicit reference counts: a dependency line, or a
+ * depends-on cell naming something outside its own breakdown, that LEADS with a record's ticket
+ * number, a key its title leads with, or the key of a row in exactly one other record's
+ * breakdown. Anything else is prose, whatever words with digits it holds. A key two records share
+ * names neither, and a record never waits on itself.
+ */
+export function resolveDependencies(self: string, sections: Pick<PlanSections, "dependencies" | "breakdown">, records: ReadonlyArray<DependencyRecord>): string[] {
+  return dependencyResolver(records)(self, sections);
+}
+
+/** The same resolution with the records' keys indexed once, for a view that resolves every record. */
+export function dependencyResolver(records: ReadonlyArray<DependencyRecord>): (self: string, sections: Pick<PlanSections, "dependencies" | "breakdown">) => string[] {
+  const owners = new Map<string, Set<string>>();
+  const own = (key: string, id: string) => {
+    const set = owners.get(key) ?? new Set<string>();
+    set.add(id);
+    owners.set(key, set);
+  };
+  for (const record of records) {
+    for (const key of recordKeys(record)) own(key, record.id);
+    for (const key of record.rowKeys ?? []) own(key, record.id);
+  }
+  return (self, sections) => resolveWith(owners, self, sections);
+}
+
+function resolveWith(owners: ReadonlyMap<string, ReadonlySet<string>>, self: string, sections: Pick<PlanSections, "dependencies" | "breakdown">): string[] {
+  const rowKeys = new Set(sections.breakdown.map((row) => row.key));
+  const texts = [...sections.dependencies, ...sections.breakdown.flatMap((row) => row.dependsOn.filter((dep) => !rowKeys.has(dep)))];
+  const out: string[] = [];
+  for (const text of texts) {
+    for (const key of leadingKeys(text, isReference)) {
+      const ids = owners.get(key);
+      if (!ids || ids.size !== 1) continue;
+      const [id] = [...ids];
+      if (id !== self && !out.includes(id!)) out.push(id!);
+    }
+  }
+  return out;
+}

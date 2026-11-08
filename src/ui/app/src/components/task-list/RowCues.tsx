@@ -26,6 +26,8 @@
  * sentence rather than two different abridgements of it.
  */
 import { Milestone } from "lucide-react";
+import { useState } from "react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { RowMilestoneCue, RowPickupCue } from "@/lib/types";
 import {
   MILESTONE_CUE_GLYPH,
@@ -124,6 +126,50 @@ export function PickupPill({ cue }: { cue: RowPickupCue }) {
   );
 }
 
+/** A short name for a narrow row: the first word, or the first eight characters. */
+function shortName(name: string): string {
+  const first = name.split(/[\s·]+/)[0] ?? name;
+  return first.length > 8 ? `${first.slice(0, 7)}…` : first;
+}
+
+/**
+ * The phone's horizon chip, below 480px where the milestone mark is dropped: `◇ Now`, its own
+ * slot. A tap shows the full name; the horizon is a further tap away.
+ */
+export function HorizonCompactChip({ cue, onOpen }: { cue: RowMilestoneCue; onOpen?: (identifier: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const name = cue.title ?? cue.identifier;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="staple-row-horizon-compact"
+          data-horizon-chip-compact={cue.identifier}
+          aria-label={`On horizon ${cue.identifier}: ${name} — tap for the full name`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <span aria-hidden="true">{MILESTONE_CUE_GLYPH}</span>
+          <span className="staple-row-horizon-compact-name">{shortName(name)}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-auto max-w-[calc(100vw-2rem)] p-2 text-label" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center gap-2">
+          <span>
+            <span aria-hidden="true">{MILESTONE_CUE_GLYPH} </span>
+            {name}
+          </span>
+          {onOpen ? (
+            <button type="button" className="text-caption text-primary underline-offset-2 hover:underline" onClick={() => onOpen(cue.identifier)}>
+              Open
+            </button>
+          ) : null}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function MilestoneCue({
   cue,
   onOpen,
@@ -134,7 +180,7 @@ export function MilestoneCue({
   /** The desktop row: a calm chip naming the milestone, in the cue cluster. */
   chip?: boolean;
 }) {
-  const sentence = milestoneCueSentence(cue.identifier, cue.title);
+  const sentence = milestoneCueSentence(cue.identifier, cue.title, cue.horizon);
   if (chip) {
     return (
       <button
@@ -142,6 +188,7 @@ export function MilestoneCue({
         className="staple-row-milestone-chip"
         data-testid="row-milestone-cue"
         data-milestone={cue.identifier}
+        data-horizon-chip={cue.horizon ? cue.identifier : undefined}
         title={sentence}
         aria-label={sentence}
         onClick={(event) => {
@@ -149,7 +196,13 @@ export function MilestoneCue({
           onOpen?.(cue.identifier);
         }}
       >
-        <Milestone aria-hidden="true" focusable="false" />
+        {cue.horizon ? (
+          <span aria-hidden="true" className="staple-row-horizon-glyph">
+            {MILESTONE_CUE_GLYPH}
+          </span>
+        ) : (
+          <Milestone aria-hidden="true" focusable="false" />
+        )}
         <span className="staple-row-milestone-name">{cue.title ?? cue.identifier}</span>
       </button>
     );
@@ -161,6 +214,7 @@ export function MilestoneCue({
       className="staple-row-milestone"
       data-testid="row-milestone-cue"
       data-milestone={cue.identifier}
+      data-horizon-chip={cue.horizon ? cue.identifier : undefined}
       title={sentence}
       aria-label={sentence}
       onClick={(event) => {

@@ -71,7 +71,7 @@ import {
   type SortPref,
 } from "./sort-modes";
 
-export type GroupBy = "none" | "status" | "pickup" | "parent" | "kind";
+export type GroupBy = "none" | "status" | "pickup" | "parent" | "kind" | "horizon";
 
 /**
  * The dimensions offered, in menu order. A registry rather than a switch, so a third entry
@@ -121,6 +121,12 @@ export const GROUP_BY_OPTIONS: readonly { id: GroupBy; label: string; hint: stri
     // Names the vocabulary rather than listing it: the five built-ins are only the seed,
     // and a workspace that added `milestone` would be reading a hint that omits it.
     hint: "epics, tasks, bugs and the rest, each in their own section",
+  },
+  {
+    id: "horizon",
+    // The trigger reads "Group: Horizon". Appended, as every new axis is.
+    label: "Horizon",
+    hint: "each horizon of the plan in its order, then work on none",
   },
 ];
 

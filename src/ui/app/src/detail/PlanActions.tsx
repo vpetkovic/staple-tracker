@@ -13,10 +13,12 @@ import type { HorizonData, IdeaData, IdeaDetailData } from "@/lib/plan-types";
 import { useSession } from "@/lib/session";
 import type { IssueDetail } from "@/lib/types";
 import { Chip, Progress } from "@/views/plan/PlanBoards";
-import { dayLabel } from "@/views/plan/plan-model";
+import { dayLabel, horizonDone } from "@/views/plan/plan-model";
 import type { IssueActionsController } from "./IssueActions";
 import { cn } from "./parts/cn";
+import { RunSettingDialog, runSettingLabel } from "@/views/plan/RunSetting";
 import { horizonActionItems, planActionItems, planPrimary, type PlanItem } from "./plain-actions";
+import { ShippedCheck, ShippedMark } from "./ShippedMark";
 import { STATE_WORDS, requestScaffold } from "./plan-record";
 import { openDetailTab } from "./tabs/registry";
 
@@ -44,11 +46,12 @@ export function IdeaStatusLine({ record, className, children }: { record: IdeaDe
   return (
     <div className={cn("flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2", className)} data-status-line="" data-idea-status={idea.state}>
       <span className="inline-flex h-7 items-center gap-1.5 rounded-full border bg-surface-raised px-2.5 text-label font-medium" data-idea-state-chip={idea.state}>
+        {idea.state === "shipped" ? <ShippedCheck label="" className="size-3.5 [&_svg]:size-2.5" /> : null}
         Idea · {STATE_WORDS[idea.state]}
         {idea.planIncomplete.length > 0 ? " · plan incomplete" : ""}
       </span>
       <p className="m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-text-secondary" data-status-sentence="">
-        <span>{sentence(record)}</span>
+        {idea.state === "shipped" ? <ShippedMark on={idea.actual.end} withYear /> : <span>{sentence(record)}</span>}
         {idea.late ? <Chip tone="red">late</Chip> : null}
         {idea.notStarted ? <Chip tone="amber">not started</Chip> : null}
       </p>
@@ -128,15 +131,17 @@ export function PlanOverflow({ workspace, idea, controller, triggerClassName }: 
  */
 export function HorizonSection({ detail, horizon, ideas, controller, className }: { detail: IssueDetail; horizon: HorizonData; ideas: IdeaData[]; controller: IssueActionsController; className?: string }) {
   const session = useSession();
+  const [running, setRunning] = useState(false);
   const items = horizonActionItems(detail.workspace, horizon);
-  const progress = horizon.memberCount > 0 && detail.milestonePlan ? (detail.milestonePlan.progress.percent ?? 0) / 100 : null;
+  const progress = horizon.progress;
   return (
     <section aria-label="Horizon" className={cn("rounded-lg border p-4", className)} data-horizon-section={horizon.id} data-horizon-state={horizon.state}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="inline-flex h-7 items-center rounded-full border bg-surface-raised px-2.5 text-label font-medium" data-horizon-state-chip={horizon.state}>
           Horizon · {STATE_WORDS[horizon.state]}
         </span>
-        {horizon.shipped ? <Chip tone="blue">✓ shipped</Chip> : null}
+        {horizon.awaitingApproval ? <Chip tone="amber">Waiting for your approval</Chip> : null}
+        {horizonDone(horizon) ? <ShippedMark className="text-label" /> : horizon.shippedCount > 0 ? <ShippedMark count={horizon.shippedCount} className="text-label" /> : null}
         {horizon.lateCount ? <Chip tone="red">{horizon.lateCount} late</Chip> : null}
         {horizon.notStartedCount ? <Chip tone="amber">{horizon.notStartedCount} not started</Chip> : null}
         <div className="ml-auto flex flex-wrap gap-2">
@@ -147,7 +152,7 @@ export function HorizonSection({ detail, horizon, ideas, controller, className }
               variant={item.id === "queue" ? "default" : "outline"}
               disabled={controller.busy || Boolean(item.disabledReason)}
               title={item.disabledReason}
-              onClick={() => item.call && void controller.run(item.call)}
+              onClick={() => (item.call ? void controller.run(item.call) : item.opens === "run" ? setRunning(true) : undefined)}
               data-horizon-action={item.id}
             >
               {item.label}
@@ -162,12 +167,35 @@ export function HorizonSection({ detail, horizon, ideas, controller, className }
             {item.label}: {item.disabledReason}
           </p>
         ))}
+      {running ? (
+        <RunSettingDialog
+          horizon={horizon}
+          onClose={() => setRunning(false)}
+          write={async (verb, body) => {
+            await controller.run({ route: "plan", ws: detail.workspace, verb, body, actor: { from: "person" } });
+            return true;
+          }}
+        />
+      ) : null}
+      <div className="mt-3 text-label" data-horizon-run-setting={horizon.runMode ?? "unset"}>
+        <span className="font-medium">{runSettingLabel(horizon.runMode)}</span>
+        {horizon.goal.length > 0 ? (
+          <ul className="m-0 mt-1 list-disc space-y-0.5 pl-5 text-text-secondary" data-horizon-goal>
+            {horizon.goal.map((criterion, index) => (
+              <li key={`${index}-${criterion}`}>{criterion}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="m-0 mt-1 text-text-secondary">No goal yet. Set it with how agents run it.</p>
+        )}
+      </div>
       {progress !== null ? (
         <div className="mt-3">
           <Progress value={progress} />
         </div>
       ) : null}
-      <h3 className="mt-4 mb-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">Ideas on it ({ideas.length})</h3>
+      <p className="mt-3 text-caption text-text-tertiary">{horizon.ideaCount} ideas · {horizon.memberCount} members</p>
+      <h3 className="mt-4 mb-1.5 text-caption font-semibold tracking-wide text-text-tertiary uppercase">Ideas on it ({horizon.ideaCount})</h3>
       {ideas.length === 0 ? (
         <p className="m-0 text-label text-text-secondary">No ideas are scheduled on it yet.</p>
       ) : (
@@ -181,7 +209,15 @@ export function HorizonSection({ detail, horizon, ideas, controller, className }
                 data-horizon-idea={idea.id}
               >
                 <span className="min-w-0 flex-1 truncate">{idea.title}</span>
-                {idea.late ? <Chip tone="red">late</Chip> : idea.notStarted ? <Chip tone="amber">not started</Chip> : <Chip>{STATE_WORDS[idea.state]?.toLowerCase()}</Chip>}
+                {idea.state === "shipped" ? (
+                  <ShippedMark on={idea.actual.end} className="text-caption" />
+                ) : idea.late ? (
+                  <Chip tone="red">late</Chip>
+                ) : idea.notStarted ? (
+                  <Chip tone="amber">not started</Chip>
+                ) : (
+                  <Chip>{STATE_WORDS[idea.state]?.toLowerCase()}</Chip>
+                )}
                 <ChevronRight aria-hidden className="size-4 shrink-0 text-text-tertiary" />
               </button>
             </li>

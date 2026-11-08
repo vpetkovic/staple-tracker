@@ -18,6 +18,7 @@ import type {
   PlanSource,
   PullRequestRef,
   RowCues,
+  RowHorizon,
   WorklogSummary,
 } from "@/lib/types";
 
@@ -209,6 +210,8 @@ export interface TaskRow {
    * Only the ungrouped tree supplies it. See views/TreeView.tsx and row-cues.ts.
    */
   cues?: RowCues | null;
+  /** The horizon this row's work belongs to, carried from `IssueRow` unchanged: the ◇ chip reads it in every grouping. */
+  horizon?: RowHorizon | null;
 }
 
 /**
@@ -567,6 +570,7 @@ export interface TaskSource {
   worklog?: WorklogSummary | null;
   deps?: IssueDeps;
   cues?: RowCues | null;
+  horizon?: RowHorizon | null;
 }
 
 /**
@@ -588,6 +592,7 @@ export function flatRow(source: TaskSource, over: Partial<TaskRow> = {}): TaskRo
     // R4c (STA-188). A row built outside the ungrouped tree has no join behind it, so it
     // says nothing about the plan. Explicit for the same reason `rollup` and `ghost` are.
     cues: source.cues ?? null,
+    horizon: source.horizon ?? null,
     depth: 0,
     hasChildren: false,
     isExpanded: false,

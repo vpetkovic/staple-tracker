@@ -60,6 +60,28 @@ async function both(a: Machine, b: Machine, rounds = 2): Promise<void> {
 
 const openConflicts = (machine: Machine): unknown[] => machine.db.prepare("SELECT entity, field FROM sync_conflicts WHERE resolved_at IS NULL").all();
 
+describe("a horizon's run setting across devices", () => {
+  it("carries the person's mode and goal through the tail and a fresh snapshot", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    a.store.plan().enable("vp");
+    const now = a.store.plan().view().horizons[0]!;
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+    a.use();
+    a.store.plan().setHorizonRun(now.id, { mode: "goal", goal: ["A merchant can check out"] }, "vp", PERSON);
+    await a.sync();
+    await b.sync();
+    const fresh = fleet.machine("fresh");
+    await fresh.sync();
+    for (const machine of [a, b, fresh]) {
+      expect(machine.store.plan().view().horizons.find((h) => h.id === now.id), machine.label).toMatchObject({ runMode: "goal", goal: ["A merchant can check out"] });
+    }
+  });
+});
+
 describe("links merge across devices: one field per link", () => {
   const linked = (machine: Machine, idea: string): string[] =>
     machine.store

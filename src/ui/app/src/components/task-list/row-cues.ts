@@ -67,6 +67,7 @@ import {
   type IssueRow,
   type QueueView,
   type RowCues,
+  type RowMilestoneCue,
   type RowCueState,
   type RowPickupCue,
 } from "@/lib/types";
@@ -164,9 +165,18 @@ export function rowCueSentence(cue: RowPickupCue): string {
 }
 
 /** The milestone marker's sentence, for `title`, `aria-label` and the tooltip alike. */
-export function milestoneCueSentence(identifier: string, title: string | null): string {
+export function milestoneCueSentence(identifier: string, title: string | null, horizon = false): string {
   const named = title ? `${identifier}: ${title}` : identifier;
-  return `Planned under milestone ${named} — open the milestone plan`;
+  return horizon ? `On horizon ${named} — open the horizon` : `Planned under milestone ${named} — open the milestone plan`;
+}
+
+/**
+ * The row's milestone marker: its horizon when its work belongs to one (read from the row, so
+ * it is there in every grouping and for landed work), else the queue's milestone cue.
+ */
+export function rowMilestoneCue(row: Pick<IssueRow, "horizon" | "cues">): RowMilestoneCue | null {
+  if (row.horizon) return { identifier: row.horizon.identifier, title: row.horizon.name, horizon: true };
+  return row.cues?.milestone ?? null;
 }
 
 /**
