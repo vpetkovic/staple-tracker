@@ -611,8 +611,8 @@ export interface PlanItem {
   label: string;
   disabledReason?: string;
   call?: WriteCall;
-  /** Not a write: opens the epic this record became. */
-  opens?: "epic";
+  /** Not a write: opens the epic this record became, or Scaffold's preview (never one click). */
+  opens?: "epic" | "scaffold";
 }
 
 /**
@@ -644,8 +644,10 @@ function itemsOf(ws: string, ref: string, actions: readonly OfferedPlanAction[],
   const items: PlanItem[] = [];
   for (const action of actions) {
     const write = oneClick[action.id];
-    if (action.id === "open_epic") {
-      items.push({ id: action.id, label: action.label, opens: "epic" });
+    if (action.id === "open_epic" || action.id === "scaffold") {
+      const item: PlanItem = { id: action.id, label: action.id === "scaffold" ? `${action.label}…` : action.label, opens: action.id === "scaffold" ? "scaffold" : "epic" };
+      if (action.disabledReason) item.disabledReason = action.disabledReason;
+      items.push(item);
       continue;
     }
     if (!write) continue;
@@ -668,7 +670,7 @@ export function horizonActionItems(ws: string, horizon: { id: string; actions: r
 }
 
 /** The order the drawer picks its one primary plan action in: the step forward the state offers. */
-const PRIMARY_ORDER = ["promote", "explore", "shape", "restore", "open_epic"] as const;
+const PRIMARY_ORDER = ["scaffold", "promote", "explore", "shape", "restore", "open_epic"] as const;
 
 /** The primary plan action, or null; every other item goes in ⋯. */
 export function planPrimary(items: readonly PlanItem[]): PlanItem | null {

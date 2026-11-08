@@ -107,15 +107,61 @@ export interface LinkData {
   milestone: { identifier: string; title: string; state: string; run: { state: string; actor: string } | null } | null;
 }
 
+/** One task breakdown row (`src/core/plan-sections.ts`). */
+export interface BreakdownRow {
+  key: string;
+  title: string;
+  estimate: string | null;
+  dependsOn: string[];
+  acceptance: string | null;
+  owner: string | null;
+  notes: string | null;
+}
+
+/** An idea's plan sections, mirrored from `PlanSections`. */
+export interface PlanSections {
+  goal: string | null;
+  context: string | null;
+  breakdown: BreakdownRow[];
+  acceptance: string[];
+  dependencies: string[];
+  outOfScope: string | null;
+  risks: string | null;
+  sources: string[];
+}
+
+export interface ScaffoldTaskData {
+  key: string;
+  title: string;
+  estimate: string | null;
+  estimatedSeconds: number | null;
+  blockedBy: string[];
+  waitsOutside: string[];
+  acceptance: string[];
+  context: string;
+  existing: string | null;
+}
+
+export interface ScaffoldPreviewData {
+  idea: { id: string; title: string };
+  epic: { identifier: string | null; kind: string; planDocument: string; acceptance: string[]; promoted: boolean };
+  tasks: ScaffoldTaskData[];
+  children: ScaffoldPreviewData[];
+}
+
 export interface IdeaDetailData {
   idea: IdeaData;
   parent: { id: string; identifier: string | null; title: string } | null;
   children: IdeaData[];
   horizon: HorizonData | null;
   brief: string | null;
-  questions: Array<{ text: string; resolved: boolean }>;
+  questions: Array<{ text: string; resolved: boolean; deferred?: boolean }>;
   decisions: string[];
   linked: LinkData[];
+  plan: PlanSections;
+  completeness: { starred: number; starredTotal: number; filled: number; total: number };
+  missingForShaped: string[];
+  scaffold: ScaffoldPreviewData | null;
   today: string;
 }
 

@@ -20,7 +20,7 @@ import { horizonActionItems, moveActionOf, moveOffered, planActionItems, type Of
 const offered = (state: (typeof IDEA_STATES)[number]): OfferedPlanAction[] =>
   IDEA_LIFECYCLE[state].map((id) => ({ id, label: IDEA_ACTIONS[id].label, who: IDEA_ACTIONS[id].who }));
 
-const ONE_CLICK = new Set(["explore", "shape", "unshape", "drop", "restore", "promote", "reset_baseline", "open_epic"]);
+const ONE_CLICK = new Set(["explore", "shape", "unshape", "drop", "restore", "promote", "reset_baseline", "open_epic", "scaffold"]);
 
 describe("the page builds every plan control from the offered actions", () => {
   for (const state of IDEA_STATES) {

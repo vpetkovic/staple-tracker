@@ -89,3 +89,18 @@ export function usePlanWrite(workspace: string, refresh: () => void): { write: P
   );
   return { write, refusal };
 }
+
+const SCAFFOLD_REQUEST = "staple:plan-scaffold-preview";
+
+/**
+ * The header's Scaffold asks the Plan tab to open its preview: scaffolding is never a one-click
+ * write. A window event, as `openDetailTab` is, because the tab owns that state.
+ */
+export function requestScaffold(): void {
+  window.dispatchEvent(new CustomEvent(SCAFFOLD_REQUEST));
+}
+
+export function onScaffoldRequest(handler: () => void): () => void {
+  window.addEventListener(SCAFFOLD_REQUEST, handler);
+  return () => window.removeEventListener(SCAFFOLD_REQUEST, handler);
+}

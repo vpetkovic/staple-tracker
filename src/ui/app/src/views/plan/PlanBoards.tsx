@@ -181,7 +181,7 @@ function MoveMenu({ idea, column, columns, write }: { idea: IdeaData; column: Bo
   const moves = columns.filter((target) => target.key !== column.key && dropChanges(idea, target.drop) && moveOffered(idea, target.drop));
   const move = (target: DropTarget) => void write("update", { ref: idea.id, ...dropBody(target) });
   // The maturity columns are the moves; what is left is drop, restore, promote and the baseline.
-  const others = planActionItems("", idea).filter((item) => !["explore", "shape", "unshape", "open_epic"].includes(item.id));
+  const others = planActionItems("", idea).filter((item) => !["explore", "shape", "unshape", "open_epic", "scaffold"].includes(item.id));
   if (moves.length === 0 && others.length === 0) return null;
   return (
     <DropdownMenu>

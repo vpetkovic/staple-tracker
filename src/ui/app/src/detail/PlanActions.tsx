@@ -17,7 +17,8 @@ import { dayLabel } from "@/views/plan/plan-model";
 import type { IssueActionsController } from "./IssueActions";
 import { cn } from "./parts/cn";
 import { horizonActionItems, planActionItems, planPrimary, type PlanItem } from "./plain-actions";
-import { STATE_WORDS } from "./plan-record";
+import { STATE_WORDS, requestScaffold } from "./plan-record";
+import { openDetailTab } from "./tabs/registry";
 
 /** What a plan item does when chosen: its write, or opening the epic the record became. */
 function useChoose(workspace: string, controller: IssueActionsController, epicRef: string | null) {
@@ -25,6 +26,12 @@ function useChoose(workspace: string, controller: IssueActionsController, epicRe
   return (item: PlanItem) => {
     if (item.opens === "epic") {
       if (epicRef) session.open(workspace, epicRef);
+      return;
+    }
+    if (item.opens === "scaffold") {
+      openDetailTab("plan");
+      // The tab mounts on the switch; ask once it is there.
+      window.setTimeout(requestScaffold, 0);
       return;
     }
     if (item.call) void controller.run(item.call);

@@ -83,7 +83,21 @@ function idea(state: keyof typeof OFFERED, patch: Partial<IdeaData> = {}): IdeaD
 }
 
 function record(view: IdeaData): IdeaDetailData {
-  return { idea: view, parent: null, children: [], horizon: null, brief: "Read-only link.", questions: [], decisions: [], linked: [], today: "2026-11-08" };
+  return {
+    idea: view,
+    parent: null,
+    children: [],
+    horizon: null,
+    brief: "Read-only link.",
+    questions: [],
+    decisions: [],
+    linked: [],
+    plan: { goal: null, context: null, breakdown: [], acceptance: [], dependencies: [], outOfScope: null, risks: null, sources: [] },
+    completeness: { starred: 0, starredTotal: 3, filled: 0, total: 10 },
+    missingForShaped: ["a goal"],
+    scaffold: null,
+    today: "2026-11-08",
+  };
 }
 
 /** An idea's detail as the page holds it: `draft: true`, addressed by its id (`getIssue`). */
