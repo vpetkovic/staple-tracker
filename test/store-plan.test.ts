@@ -47,9 +47,12 @@ function horizon(name: string): string {
   return plan.view().horizons.find((h) => h.name === name)!.id;
 }
 
-/** Capture an idea as the person; answers its id, the only handle an unpromoted idea has. */
+/**
+ * Capture an idea as the person; answers its id, the only handle an unpromoted idea has. Shaped
+ * unless told otherwise: the state that may be scheduled, dated, linked and promoted.
+ */
 function idea(title: string, extra: Parameters<PlanStore["capture"]>[0] extends infer I ? Partial<I> : never = {}): string {
-  return plan.capture({ title, ...extra }, "vp", PERSON).id;
+  return plan.capture({ title, maturity: "shaped", ...extra }, "vp", PERSON).id;
 }
 
 function counter(): string {
@@ -318,7 +321,7 @@ describe("a workspace that already had its own idea kind", () => {
 describe("ideas and horizons", () => {
   it("nest, carry maturity and horizon independently, and read their stage", () => {
     const ga = idea("Release GA", { maturity: "shaped", horizon: horizon("Now") });
-    const r8 = plan.capture({ title: "R8 Mobile", parent: ga, horizon: horizon("Next") }, "vp", PERSON);
+    const r8 = plan.capture({ title: "R8 Mobile", parent: ga, horizon: horizon("Next"), maturity: "exploring" }, "vp", PERSON);
     const api = idea("Programming API", { maturity: "exploring", horizon: horizon("Next") });
     const sdk = idea("SDKs", { maturity: "shaped" });
     const view = plan.view();
@@ -456,13 +459,14 @@ describe("membership: a horizon holds its ideas' work without anyone typing it",
     const mvp = plan.createHorizon({ name: "MVP" }, "vp", PERSON);
     const ref = idea("On MVP", { horizon: mvp.id });
     const task = store.createIssue({ title: "Its work" });
-    plan.adopt(ref, task.identifier, "agent");
+    // A horizon is removed only while it holds no work.
+    expect(refused(() => plan.adopt(ref, task.identifier, "agent") && plan.removeHorizon(mvp.id, "vp", PERSON)).message).toContain("while it holds work");
     expect(membersOf(mvp.id)).toEqual([task.id]);
-    plan.update(ref, { horizon: null }, "vp", PERSON);
+    plan.unlink(ref, task.identifier, "agent");
     plan.removeHorizon(mvp.id, "vp", PERSON);
-    // Another device scheduled the idea onto it before hearing of the removal.
+    // Another device scheduled the idea onto it, and linked its work, before hearing of the removal.
     store.db.prepare("UPDATE issues SET plan_horizon_id = ? WHERE id = ?").run(mvp.id, ref);
-    plan.update(ref, { title: "On MVP, renamed" }, "agent");
+    plan.adopt(ref, task.identifier, "agent");
     expect(membersOf(mvp.id)).toEqual([]);
     expect(store.milestones().milestoneOf(task.identifier)).toBeNull();
   });
@@ -628,15 +632,15 @@ describe("Promote, Adopt and Unlink", () => {
 
   it("refuses to promote a dropped idea, or one already promoted", () => {
     const dropped = idea("Gone", { maturity: "dropped" });
-    expect(refused(() => plan.promote(dropped, "vp", PERSON)).message).toContain("dropped");
+    expect(refused(() => plan.promote(dropped, "vp", PERSON)).message).toContain("is dropped; it cannot be promoted");
     const once = idea("Once", { maturity: "shaped" });
     plan.promote(once, "vp", PERSON);
-    expect(refused(() => plan.promote(once, "vp", PERSON)).message).toContain("already promoted");
+    expect(refused(() => plan.promote(once, "vp", PERSON)).message).toContain("is started; it cannot be promoted");
   });
 
   it("derives progress, actual dates and shipped from linked work, rolled up to the parent", () => {
     const parent = idea("Release GA", { maturity: "shaped" });
-    const child = plan.capture({ title: "R0", parent }, "vp", PERSON).id;
+    const child = plan.capture({ title: "R0", parent, maturity: "shaped" }, "vp", PERSON).id;
     const epic = store.createIssue({ title: "EPIC-40", kind: "epic" });
     const a = store.createIssue({ title: "a", parent: epic.identifier });
     const b = store.createIssue({ title: "b", parent: epic.identifier });
@@ -651,8 +655,9 @@ describe("Promote, Adopt and Unlink", () => {
     expect(plan.ideaView(child).stage).toBe("shipped");
     expect(plan.ideaView(parent).stage).toBe("shipped");
     expect(plan.ideaView(parent).actual.end).not.toBeNull();
-    plan.unlink(child, epic.identifier, "agent");
-    expect(plan.ideaView(parent).stage).toBe("shaped");
+    // Shipped offers no edits: its link stays, and so does the parent's rolled-up state.
+    expect(refused(() => plan.unlink(child, epic.identifier, "agent")).message).toContain("is shipped; it cannot be unlinked");
+    expect(plan.ideaView(parent).stage).toBe("shipped");
   });
 
   describe("the actual window, on fixtures shaped like real linked work", () => {
@@ -796,14 +801,14 @@ describe("the baseline", () => {
 
   it("cannot be reset on an idea that is not started", () => {
     const ref = idea("Not started", { plannedTarget: "2026-12-01" });
-    expect(refused(() => plan.resetBaseline(ref, "vp", PERSON)).message).toContain("not started");
+    expect(refused(() => plan.resetBaseline(ref, "vp", PERSON)).message).toContain("is shaped; it cannot be re-baselined");
   });
 });
 
 describe("agents capture, the person steers", () => {
   const steering = (fn: () => unknown) => {
     const error = refused(fn);
-    expect(error.message).toMatch(/person's call|not shaped yet/);
+    expect(error.message).toMatch(/person's call|is raw; it cannot be/);
     return error;
   };
 
@@ -814,10 +819,13 @@ describe("agents capture, the person steers", () => {
     plan.addQuestion(ref, "q?", "agent");
     plan.resolveQuestion(ref, 1, "agent");
     plan.addDecision(ref, "d", "agent");
+    expect(plan.detail(ref).idea.title).toBe("Agent idea, renamed");
+    // Linking work is a shaped idea's: once the person has shaped it, the agent links and unlinks.
+    plan.update(ref, { maturity: "exploring" }, "vp", PERSON);
+    plan.update(ref, { maturity: "shaped" }, "vp", PERSON);
     const task = store.createIssue({ title: "t" }).identifier;
     plan.adopt(ref, task, "agent");
-    plan.unlink(ref, task, "agent");
-    expect(plan.detail(ref).idea.title).toBe("Agent idea, renamed");
+    expect(plan.unlink(ref, task, "agent").links).toEqual([]);
   });
 
   it("refuses an agent's capture of anything but a raw, unscheduled, undated idea", () => {
@@ -860,13 +868,14 @@ describe("agents capture, the person steers", () => {
     steering(() => plan.resetBaseline(ref, "agent"));
   });
 
-  it("lets an agent promote only an idea the person marked shaped", () => {
+  it("lets anyone promote a shaped idea and nobody promote an idea that is not shaped", () => {
     const raw = plan.capture({ title: "Raw" }, "agent").id;
     steering(() => plan.promote(raw, "agent"));
+    expect(refused(() => plan.promote(raw, "vp", PERSON)).message).toContain("is raw; it cannot be promoted");
     expect(plan.ideaView(raw)).toMatchObject({ promoted: false, identifier: null });
+    plan.update(raw, { maturity: "exploring" }, "vp", PERSON);
+    expect(refused(() => plan.promote(raw, "vp", PERSON)).message).toContain("is exploring; it cannot be promoted");
     plan.update(raw, { maturity: "shaped" }, "vp", PERSON);
     expect(plan.promote(raw, "agent")).toMatchObject({ promoted: true, stage: "started" });
-    const person = idea("Person promotes raw");
-    expect(plan.promote(person, "vp", PERSON).stage).toBe("started");
   });
 });

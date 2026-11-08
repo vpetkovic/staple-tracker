@@ -3172,7 +3172,7 @@ server.registerTool(
   "list_ideas",
   {
     description:
-      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates and the late / notStarted flags. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace without planning answers enabled: false.",
+      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates, the late / notStarted flags, and its lifecycle state with the actions that state offers (state, actions: id, label, who: anyone or person, disabledReason). A write the state does not offer is refused with validation naming the state and what it offers. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace without planning answers enabled: false.",
     inputSchema: {
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().optional().describe("A horizon's identifier or name"),
@@ -3204,7 +3204,7 @@ server.registerTool(
 server.registerTool(
   "list_horizons",
   {
-    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) and goal-run; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, member count, idea count, and the late and not-started counts. Horizons are defined by the person.",
+    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) and goal-run; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, member count, idea count, and the late and not-started counts, and its lifecycle state (planned: no work yet; active: holds work and may be queued; shipped) with the actions that state offers. Horizons are defined by the person.",
     inputSchema: { ws: wsSchema },
     annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3236,7 +3236,7 @@ server.registerTool(
   "update_idea",
   {
     description:
-      "Edit an idea as an agent may: title, brief, add_question, resolve_question (1-based; reopen with resolved: false), add_decision. maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. Answers the idea's detail.",
+      "Edit an idea as an agent may: title, brief, add_question, resolve_question (1-based; reopen with resolved: false), add_decision, as its lifecycle state offers them (a shipped or dropped idea offers no edits; see the record's actions). maturity, horizon, parent, planned_start and planned_target are accepted only to be refused with validation: they are the person's, set in the Plan view. Answers the idea's detail.",
     inputSchema: {
       ref: ideaRefSchema,
       title: z.string().optional(),

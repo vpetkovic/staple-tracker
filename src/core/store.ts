@@ -4700,11 +4700,13 @@ export class WorkspaceStore {
       /**
        * Through the tracker's own update a horizon is never edited (it is the person's, and the
        * plan layer edits it) and an idea's status never moves (maturity is its state; it leaves
-       * the board by being dropped, from the plan). Title and description of an idea stay open.
+       * the board by being dropped, from the plan). Its title and description are its edit
+       * action, which its lifecycle state offers or not (`plan-lifecycle.ts`).
        */
       if (!internal.plan && this.planningOn()) {
         if (this.isHorizon(row.id)) throw steeringRefusal("horizons", row.identifier);
         if (isPlanKind(row.kind) && patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", displayRef(row));
+        if (isPlanKind(row.kind) && (patch.title !== undefined || patch.description !== undefined)) this.plan().assertEditable(row.id);
       }
       if (
         patch.expectedStatusVersion !== undefined &&

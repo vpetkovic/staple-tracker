@@ -9,13 +9,16 @@
  * write runs inside the store's journaled scope, so the plan columns travel as fields of the
  * `issue` entity and links as fields of the idea's `milestone` entity.
  *
- * Two rules shape every write:
+ * Three rules shape every write:
  *
+ *  - The lifecycle decides what a record's state offers (`plan-lifecycle.ts`). Every write is
+ *    one of its actions and is refused, naming the state and what it offers, when the state
+ *    does not offer it. That check comes first, so the refusal says why for anyone.
  *  - Steering is the person's. Maturity, horizon assignment, horizon definitions and dates,
  *    planned dates, order and the baseline need a `PersonDecision`; a write without one is an
  *    agent's and is refused with `steeringRefusal`. Agents capture raw ideas, edit titles and
- *    briefs, add and resolve questions, add decisions, adopt and unlink work, and promote an
- *    idea the person has marked shaped.
+ *    briefs, add and resolve questions, add decisions, adopt and unlink work, and promote a
+ *    shaped idea (the only state that offers promotion).
  *  - Derived facts are never stored: stage beyond maturity, progress, actual dates, forecast,
  *    lateness and a horizon's members are read or rebuilt from the work every time.
  */
@@ -48,6 +51,22 @@ import {
   type Stage,
   type SteeringWrite,
 } from "./plan.js";
+import {
+  HORIZON_ACTIONS,
+  HORIZON_LIFECYCLE,
+  IDEA_ACTIONS,
+  IDEA_LIFECYCLE,
+  assertHorizonAction,
+  assertIdeaAction,
+  horizonState,
+  ideaState,
+  maturityAction,
+  type HorizonAction,
+  type HorizonState,
+  type IdeaAction,
+  type IdeaState,
+  type OfferedAction,
+} from "./plan-lifecycle.js";
 import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
 import { LISTED_HORIZON, rebuildPlanMembers } from "./plan-members.js";
 import type { WorkspaceStore } from "./store.js";
@@ -78,6 +97,9 @@ export interface HorizonView {
   /** Plan records on it with nothing started whose planned start has passed. */
   notStartedCount: number;
   late: boolean;
+  /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
+  state: HorizonState;
+  actions: OfferedAction[];
 }
 
 export interface PlanWindow {
@@ -120,6 +142,9 @@ export interface IdeaView {
   childIds: string[];
   /** Questions not yet resolved, from the `questions` document. */
   openQuestions: number;
+  /** Its lifecycle state, and the actions that state offers (`plan-lifecycle.ts`). */
+  state: IdeaState;
+  actions: OfferedAction[];
   createdAt: string;
   updatedAt: string;
 }
@@ -283,6 +308,20 @@ function shownIdentifier(identifier: string): string | null {
   return isDraftIdentifier(identifier) ? null : identifier;
 }
 
+/** The steering word a person-only idea action is refused with (`steeringRefusal`). */
+const STEERED_AS: Partial<Record<IdeaAction, SteeringWrite>> = {
+  explore: "maturity",
+  shape: "maturity",
+  unshape: "maturity",
+  drop: "maturity",
+  restore: "maturity",
+  schedule: "horizon",
+  plan_dates: "planned dates",
+  reorder: "horizon",
+  reparent: "parent",
+  reset_baseline: "baseline",
+};
+
 export class PlanStore {
   /** The clock the derived dates read; replaceable so tests can stand on a fixed day. */
   clock: () => Date = () => new Date();
@@ -311,6 +350,44 @@ export class PlanStore {
     if (!options.person) throw steeringRefusal(what, subject);
   }
 
+  /** A record's lifecycle state, read from the same derivation every view uses. */
+  stateOf(ref: string): IdeaState {
+    return this.ideaView(ref).state;
+  }
+
+  /**
+   * Refuse an idea action its record's state does not offer, naming the state and what it offers;
+   * then a person-only action taken without a person. In that order, so the first refusal says why
+   * for anyone, and the second only once the action itself is possible.
+   */
+  private allowIdea(row: PlanRow, action: IdeaAction, options: PlanWriteOptions, state: IdeaState = this.stateOf(row.id)): void {
+    assertIdeaAction(displayRef(row), state, action);
+    if (IDEA_ACTIONS[action].who === "person") this.steer(STEERED_AS[action] ?? "maturity", displayRef(row), options);
+  }
+
+  /** The tracker's own edit of an idea's title or description (`staple set`, `update_task`): the edit action. */
+  assertEditable(ref: string): void {
+    const row = this.row(ref, false);
+    if (row.plan_maturity === null || row.kind !== IDEA_KIND) return;
+    assertIdeaAction(displayRef(row), this.stateOf(row.id), "edit");
+  }
+
+  private horizonStateOf(id: string): HorizonState {
+    return this.horizonOf(id).state;
+  }
+
+  /** Refuse a horizon action its state does not offer. Every horizon write but queueing is the person's, checked first by the caller. */
+  private allowHorizon(row: PlanRow, action: HorizonAction): void {
+    assertHorizonAction(`"${row.title}"`, this.horizonStateOf(row.id), action);
+  }
+
+  /** Whether a queue may take this milestone: any milestone that is not a horizon, or a horizon whose state offers queueing. */
+  assertQueueable(issueId: string): void {
+    if (!this.store.isHorizon(issueId)) return;
+    const row = this.row(issueId, false);
+    assertHorizonAction(`"${row.title}"`, this.horizonStateOf(row.id), "queue");
+  }
+
   private row(ref: string, forWrite = true): PlanRow {
     const issue = forWrite ? this.store.writeTarget(ref) : this.store.getIssue(ref);
     return this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(issue.id) as unknown as PlanRow;
@@ -325,14 +402,6 @@ export class PlanStore {
     return row;
   }
 
-  /** An idea not yet promoted. */
-  private ideaRow(ref: string, forWrite = true): PlanRow {
-    const row = this.recordRow(ref, forWrite);
-    if (row.kind !== IDEA_KIND) {
-      throw new StapleError("validation", `${row.identifier} is already promoted: it is ${aKind(row.kind)} in the tracker now.`, { identifier: row.identifier });
-    }
-    return row;
-  }
 
   private horizonRow(ref: string, forWrite = true): PlanRow {
     const row = this.row(ref, forWrite);
@@ -471,6 +540,7 @@ export class PlanStore {
       lateCount,
       notStartedCount: on.filter((idea) => idea.notStarted).length,
       late: lateCount > 0,
+      ...horizonLifecycle(this.store.categoryOf(row.status) === "done", memberCount),
     };
   }
 
@@ -616,6 +686,12 @@ export class PlanStore {
         notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today }),
         childIds: childIds.get(row.id) ?? [],
         openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
+        ...ideaLifecycle({
+          state: ideaState({ stage, maturity }),
+          promoted: row.kind !== IDEA_KIND,
+          ownLinks: planLinksOf(this.db, row.id).length,
+          parent: row.parent_id === null ? null : (byId.get(row.parent_id) ?? null),
+        }),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       };
@@ -725,8 +801,16 @@ export class PlanStore {
     const title = oneLine(input.title ?? "", "An idea's title");
     const maturity = input.maturity === undefined ? "raw" : parseMaturity(input.maturity);
     if (maturity !== "raw") this.steer("maturity", null, options);
-    if (input.horizon) this.steer("horizon", null, options);
-    if (input.plannedStart || input.plannedTarget) this.steer("planned dates", null, options);
+    // Captured straight into a maturity, it is in that state: what it may carry follows the table.
+    const subject = `the idea "${title}"`;
+    if (input.horizon) {
+      assertIdeaAction(subject, maturity, "schedule");
+      this.steer("horizon", null, options);
+    }
+    if (input.plannedStart || input.plannedTarget) {
+      assertIdeaAction(subject, maturity, "plan_dates");
+      this.steer("planned dates", null, options);
+    }
     const id = this.store.journaled(() => {
       const issue = this.store.createIssue({ title, kind: IDEA_KIND, parent: input.parent ?? null, createdBy: actor, allowDuplicate: true }, { plan: true });
       const columns: Record<string, unknown> = { plan_maturity: maturity, plan_rank: this.nextRecordRank() };
@@ -749,12 +833,17 @@ export class PlanStore {
   update(ref: string, patch: IdeaPatch, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
-    const name = displayRef(row);
-    if (patch.maturity !== undefined) this.steer("maturity", name, options);
-    if (patch.horizon !== undefined) this.steer("horizon", name, options);
-    if (patch.parent !== undefined) this.steer("parent", name, options);
-    if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) this.steer("planned dates", name, options);
-    if (patch.before !== undefined) this.steer("horizon", name, options);
+    const state = this.stateOf(row.id);
+    const allow = (action: IdeaAction) => this.allowIdea(row, action, options, state);
+    if (patch.title !== undefined || patch.brief !== undefined) allow("edit");
+    if (patch.maturity !== undefined) {
+      const action = maturityAction(state, parseMaturity(patch.maturity));
+      if (action !== null) allow(action);
+    }
+    if (patch.horizon !== undefined) allow("schedule");
+    if (patch.parent !== undefined) allow("reparent");
+    if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) allow("plan_dates");
+    if (patch.before !== undefined) allow("reorder");
     this.store.journaled(() => {
       if (patch.title !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.title, "An idea's title") }, actor);
       if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor });
@@ -805,6 +894,7 @@ export class PlanStore {
 
   addQuestion(ref: string, text: string, actor: string | null): IdeaDetail {
     const row = this.recordRow(ref);
+    this.allowIdea(row, "ask", {});
     const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
     questions.push({ text: oneLine(text, "A question"), resolved: false });
     this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: "question added" });
@@ -814,6 +904,7 @@ export class PlanStore {
   /** Resolve (or reopen) the question at a 1-based position. */
   resolveQuestion(ref: string, position: number, actor: string | null, resolved = true): IdeaDetail {
     const row = this.recordRow(ref);
+    this.allowIdea(row, "ask", {});
     const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
     const question = questions[position - 1];
     if (!question) {
@@ -826,6 +917,7 @@ export class PlanStore {
 
   addDecision(ref: string, text: string, actor: string | null): IdeaDetail {
     const row = this.recordRow(ref);
+    this.allowIdea(row, "decide", {});
     const decisions = parseDecisions(this.documentBody(row.id, DECISIONS_KEY));
     decisions.push(`${this.today()}: ${oneLine(text, "A decision")}`);
     this.store.putDocument(row.id, DECISIONS_KEY, decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "decision added" });
@@ -837,15 +929,13 @@ export class PlanStore {
   /**
    * Promote in place: the idea becomes the epic on the same record. It takes the next ticket
    * number then, and keeps its documents, comments, files, events, links and plan fields; its
-   * sub-ideas stay under it. A person may promote any idea that is not dropped; an agent only one
-   * the person marked shaped. An idea under an idea that is not promoted yet waits for it.
+   * sub-ideas stay under it. Only a shaped idea offers promotion, to a person or an agent alike. An
+   * idea under an idea that is not promoted yet waits for it.
    */
   promote(ref: string, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
-    const row = this.ideaRow(ref);
-    const maturity = readMaturity(row.plan_maturity);
-    if (!options.person && maturity !== "shaped") throw steeringRefusal("promote", displayRef(row));
-    if (maturity === "dropped") throw new StapleError("validation", `${displayRef(row)} is dropped; restore it before promoting it.`);
+    const row = this.recordRow(ref);
+    this.allowIdea(row, "promote", options);
     if (row.parent_id !== null) {
       const parent = this.db.prepare("SELECT identifier, title, kind, plan_maturity FROM issues WHERE id = ?").get(row.parent_id) as
         | { identifier: string; title: string; kind: string; plan_maturity: string | null }
@@ -868,6 +958,7 @@ export class PlanStore {
   adopt(ref: string, issueRef: string, actor: string | null): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
+    this.allowIdea(row, "adopt", {});
     const target = this.store.writeTarget(issueRef);
     if (isPlanKind(target.kind) || target.id === row.id) {
       throw new StapleError("validation", `${displayRef(target)} is an idea; only tracker work can be adopted.`);
@@ -887,6 +978,7 @@ export class PlanStore {
   unlink(ref: string, issueRef: string, actor: string | null): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
+    this.allowIdea(row, "unlink", {});
     const links = planLinksOf(this.db, row.id);
     const issueId = links.includes(issueRef.trim()) ? issueRef.trim() : this.store.getIssue(issueRef).id;
     if (!links.includes(issueId)) {
@@ -953,10 +1045,7 @@ export class PlanStore {
   resetBaseline(ref: string, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
     const row = this.recordRow(ref);
-    this.steer("baseline", displayRef(row), options);
-    if (!this.isStarted(row.id)) {
-      throw new StapleError("validation", `${displayRef(row)} is not started, so it has no baseline to reset.`);
-    }
+    this.allowIdea(row, "reset_baseline", options);
     this.store.journaled(() =>
       this.write(row.id, { plan_baseline_start: row.plan_start, plan_baseline_target: row.plan_target }, actor, "idea_baseline_reset", {
         from: { start: row.plan_baseline_start, target: row.plan_baseline_target },
@@ -994,6 +1083,9 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
+    if (patch.name !== undefined) this.allowHorizon(row, "rename");
+    if (patch.date !== undefined) this.allowHorizon(row, "date");
+    if (patch.before !== undefined) this.allowHorizon(row, "reorder");
     this.store.journaled(() => {
       if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor, undefined, { plan: true });
       if (patch.date !== undefined) {
@@ -1014,6 +1106,7 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
+    this.allowHorizon(row, "remove");
     this.assertRemovable(row);
     this.store.journaled(() => {
       const on = this.db.prepare("SELECT id FROM issues WHERE plan_maturity IS NOT NULL AND plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
@@ -1094,4 +1187,33 @@ export class PlanStore {
     });
     return rankBetween(index > 0 ? ranks[index - 1]! : null, ranks[index]!) ?? ranks[index]! - 1;
   }
+}
+
+/**
+ * A record's state and the actions it offers, with the preconditions the table cannot know: the
+ * epic opens only once promoted, unlinking needs a link, and a sub-idea is promoted after its parent.
+ */
+function ideaLifecycle(input: {
+  state: IdeaState;
+  promoted: boolean;
+  ownLinks: number;
+  parent: { kind: string; title: string; identifier: string } | null;
+}): { state: IdeaState; actions: OfferedAction[] } {
+  const actions: OfferedAction[] = [];
+  for (const id of IDEA_LIFECYCLE[input.state]) {
+    if (id === "open_epic" && !input.promoted) continue;
+    const rule = IDEA_ACTIONS[id];
+    const offered: OfferedAction = { id, label: rule.label, who: rule.who };
+    if (id === "unlink" && input.ownLinks === 0) offered.disabledReason = "Nothing is linked to it.";
+    if (id === "promote" && input.parent !== null && input.parent.kind === IDEA_KIND) {
+      offered.disabledReason = `Promote ${displayRef(input.parent)} first, so the epic has an epic above it.`;
+    }
+    actions.push(offered);
+  }
+  return { state: input.state, actions };
+}
+
+function horizonLifecycle(shipped: boolean, memberCount: number): { state: HorizonState; actions: OfferedAction[] } {
+  const state = horizonState({ shipped, memberCount });
+  return { state, actions: HORIZON_LIFECYCLE[state].map((id) => ({ id, label: HORIZON_ACTIONS[id].label, who: HORIZON_ACTIONS[id].who })) };
 }

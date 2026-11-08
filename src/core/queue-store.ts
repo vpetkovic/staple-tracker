@@ -456,6 +456,8 @@ export class QueueStore {
     const issue = this.requireIssue(ref);
     // Ideas and horizons are plans above the tracker; nothing queues them (design/plan.md).
     if (this.store.isPlanIssue(issue.kind)) throw planKindRefusal(issue, "queued");
+    // A horizon is queued while it holds work; before that there is nothing to queue, and after it shipped nothing is left.
+    if (this.store.planningOn()) this.store.plan().assertQueueable(issue.id);
     return this.journaled(() => {
       const current = this.entryOf(issue.id);
       if (current !== undefined && !hasPosition(options)) {

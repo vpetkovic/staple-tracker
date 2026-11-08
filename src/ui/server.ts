@@ -38,6 +38,7 @@ import { contentDisposition, servedFileHeaders, sniffMediaType } from "../core/a
 import { evidenceFilename, parseEvidenceDocument, summarizeEvidence } from "../core/legacy-evidence.js";
 import { sanitizeSvg } from "../core/svg-sanitize.js";
 import { MILESTONE_KIND, assertNotReservedActor } from "../core/milestones.js";
+import { isDraftIdentifier } from "../core/plan.js";
 import type { CriterionVerdict } from "../core/milestone-goal.js";
 import { readStoredRepositoryId } from "../core/repo-identity.js";
 import { readBudget } from "../core/telemetry/read-budget.js";
@@ -1041,7 +1042,7 @@ export function startUiServer(options: UiOptions): UiHandle {
     };
     return {
       workspace: handle.slug,
-      ...context,
+      ...withoutDrafts(context),
       crossBlockers,
       claim: handle.store.claimActivity(context.issue.id),
       gate: handle.store.gate(context.issue.id),
@@ -1062,7 +1063,35 @@ export function startUiServer(options: UiOptions): UiHandle {
        */
       milestone: orNull(() => milestones.effectiveMilestone(context.issue.id)),
       milestonePlan: context.issue.kind === MILESTONE_KIND ? orNull(() => milestones.get(context.issue.id)) : null,
+      ...planDetail(handle, context.issue.id),
     };
+  }
+
+  /**
+   * An unpromoted idea's stored identifier is a lookup key, never a name, and is never sent to the
+   * page: wherever the detail carries an issue whose identifier is a draft (the issue itself, its
+   * ancestors, its children), the page gets its id instead, which every route resolves.
+   */
+  function withoutDrafts<T extends { issue: { id: string; identifier: string }; ancestors: Array<{ id: string; identifier: string }>; children: Array<{ id: string; identifier: string }> }>(context: T): T {
+    const scrub = <I extends { id: string; identifier: string }>(issue: I): I => (isDraftIdentifier(issue.identifier) ? { ...issue, identifier: issue.id } : issue);
+    return { ...context, issue: scrub(context.issue), ancestors: context.ancestors.map(scrub), children: context.children.map(scrub) };
+  }
+
+  /**
+   * The plan's side of a detail (design/plan.md, "Lifecycle"): for a plan record, its plan detail
+   * (state, offered actions, brief, questions, decisions, links); for a horizon, its view and the
+   * records on it. Null outside the plan. The drawer reads its tabs, header and actions from
+   * these, never from the issue's own fields, so an unpromoted idea's stored identifier is never
+   * what it shows.
+   */
+  function planDetail(handle: ReturnType<typeof handleFor>, issueId: string): { planRecord: unknown; horizonPlan: unknown } {
+    const plan = handle.store.plan();
+    if (!plan.enabled()) return { planRecord: null, horizonPlan: null };
+    const view = plan.view();
+    const horizon = view.horizons.find((h) => h.id === issueId) ?? null;
+    if (horizon) return { planRecord: null, horizonPlan: { horizon, ideas: view.ideas.filter((idea) => idea.horizonId === issueId) } };
+    if (!view.ideas.some((idea) => idea.id === issueId)) return { planRecord: null, horizonPlan: null };
+    return { planRecord: plan.detail(issueId), horizonPlan: null };
   }
 
   async function readRawBody(req: IncomingMessage): Promise<string> {
@@ -5099,6 +5128,11 @@ export function startUiServer(options: UiOptions): UiHandle {
             plan.removeHorizon(ref, actor, person);
             idea = null;
             break;
+          case "/api/plan/horizon-queue":
+            // A horizon is a milestone: queueing it is the queue's own enqueue, held to the horizon's lifecycle.
+            handle.store.queue().enqueue(ref, {}, actor);
+            idea = null;
+            break;
           default:
             json(res, 404, { error: "not found" });
             return;
@@ -5147,11 +5181,20 @@ export function startUiServer(options: UiOptions): UiHandle {
               actor,
             );
             break;
-          case "/api/milestone/update":
+          case "/api/milestone/update": {
+            /**
+             * A horizon's date is the person's, and the page is the person: on a horizon the due
+             * date goes through the plan (its lifecycle and steering rules), the rest as for any
+             * milestone.
+             */
+            const horizon = handle.store.planningOn() && handle.store.isHorizon(handle.store.getIssue(ref).id);
+            if (horizon && body.targetDate !== undefined) {
+              handle.store.plan().updateHorizon(ref, { date: body.targetDate as string | null }, actor, { person: { via: "plan_view" } });
+            }
             payload = milestones.update(
               ref,
               {
-                targetDate: body.targetDate as string | null | undefined,
+                targetDate: horizon ? undefined : (body.targetDate as string | null | undefined),
                 startDate: body.startDate as string | null | undefined,
                 description: body.description as string | null | undefined,
                 acceptanceCriteria: body.acceptanceCriteria as string[] | undefined,
@@ -5159,6 +5202,7 @@ export function startUiServer(options: UiOptions): UiHandle {
               actor,
             );
             break;
+          }
           case "/api/milestone/criterion":
             payload = milestones.markCriterion(
               ref,

@@ -126,6 +126,15 @@ describe("the plan on every surface", () => {
     const tasks = toolPayload(await mcpCall("list_tasks", {})) as { items: Array<{ identifier: string; title: string }> };
     expect(tasks.items.map((task) => task.identifier)).not.toContain(null);
     for (const title of ["From the CLI", "From MCP", "From the page"]) expect(tasks.items.map((task) => task.title)).not.toContain(title);
+    // The shared drawer's payload for an idea: its id where a number would be, its plan, never the stored key.
+    const drawer = await http(`/api/issue?ws=${WS}&ref=${ref("From the page")}`);
+    expect(drawer.status).toBe(200);
+    expect(JSON.stringify(drawer.body)).not.toMatch(/~[0-9a-f]{32}/);
+    expect(drawer.body.issue).toMatchObject({ id: ref("From the page"), identifier: ref("From the page") });
+    expect(drawer.body.planRecord).toMatchObject({ idea: { id: ref("From the page"), state: "shaped", identifier: null } });
+    const now = (fromCli.horizons[0] as { identifier: string; id: string });
+    const horizonDrawer = await http(`/api/issue?ws=${WS}&ref=${now.identifier}`);
+    expect(horizonDrawer.body.horizonPlan).toMatchObject({ horizon: { id: now.id, state: "planned" } });
   });
 
   it("refuses an agent's steering on the CLI and over MCP, naming why", async () => {
@@ -135,16 +144,17 @@ describe("the plan on every surface", () => {
       await cli("idea", "reset-baseline", ref("From the CLI"), "--ws", WS),
     ]) {
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("the person's call");
+      // Refused for the person rule, or first by the lifecycle (a raw idea is not scheduled or re-baselined).
+      expect(result.stderr).toMatch(/the person's call|is raw; it cannot be/);
     }
     for (const args of [{ maturity: "shaped" }, { horizon: "Now" }, { planned_target: "2026-12-01" }, { parent: ref("From MCP") }]) {
       const result = await mcpCall("update_idea", { ref: ref("From the CLI"), ...args });
       expect(result.isError).toBe(true);
-      expect(JSON.stringify(result.content)).toContain("the person's call");
+      expect(JSON.stringify(result.content)).toMatch(/the person's call|is raw; it cannot be/);
     }
     const start = await mcpCall("start_idea", { ref: ref("From the CLI") });
     expect(start.isError).toBe(true);
-    expect(JSON.stringify(start.content)).toContain("not shaped yet");
+    expect(JSON.stringify(start.content)).toContain("is raw; it cannot be promoted");
     const plan = (await cliJson("plan", "show")) as Plan;
     expect(byId(plan, ref("From the CLI"))).toMatchObject({ maturity: "raw", horizonId: null, identifier: null, planned: { start: null, target: null } });
   });
@@ -180,11 +190,14 @@ describe("the plan on every surface", () => {
     expect(edited.idea.title).toBe("From MCP, renamed");
     expect(edited.questions).toEqual([{ text: "Who?", resolved: false }]);
     expect(edited.decisions).toHaveLength(1);
-    const adopted = toolPayload(await mcpCall("start_idea", { ref: ref("From MCP"), adopt: "PLA-1" })) as { idea: { idea: Idea }; promoted: null };
+    // Linking work is a shaped idea's: a raw one refuses it, naming its state.
+    const early = await mcpCall("start_idea", { ref: ref("From MCP"), adopt: "PLA-1" });
+    expect(JSON.stringify(early.content)).toContain("is raw; it cannot be linked to work");
+    const adopted = toolPayload(await mcpCall("start_idea", { ref: ref("From the page"), adopt: "PLA-1" })) as { idea: { idea: Idea }; promoted: null };
     expect(adopted.idea.idea).toMatchObject({ stage: "started", identifier: null, promoted: false });
     expect(adopted.promoted).toBeNull();
-    const unlinked = toolPayload(await mcpCall("unlink_idea", { ref: ref("From MCP"), issue: "PLA-1" })) as { idea: Idea };
-    expect(unlinked.idea.stage).toBe("raw");
+    const unlinked = toolPayload(await mcpCall("unlink_idea", { ref: ref("From the page"), issue: "PLA-1" })) as { idea: Idea };
+    expect(unlinked.idea.stage).toBe("shaped");
   });
 
   it("lets the person steer from the page, and an agent promote what the person shaped", async () => {

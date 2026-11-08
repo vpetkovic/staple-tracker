@@ -319,6 +319,9 @@ describe("read shapes", () => {
       // and is not one, so both are null.
       milestone: null,
       milestonePlan: null,
+      // The plan's side, UI-only: CON-1 is neither a plan record nor a horizon.
+      planRecord: null,
+      horizonPlan: null,
     });
   });
 
@@ -806,6 +809,7 @@ describe("KNOWN: logical errors this surface cannot project", () => {
       "/api/plan/decision",
       "/api/plan/enable",
       "/api/plan/horizon-create",
+      "/api/plan/horizon-queue",
       "/api/plan/horizon-remove",
       "/api/plan/horizon-update",
       "/api/plan/promote",

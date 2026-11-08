@@ -148,7 +148,7 @@ describe("the plan synchronizes with no new entity", () => {
       expect(planOf(b)).toEqual(planOf(a));
 
       b.use();
-      b.store.plan().update(ga.id, { maturity: "exploring" }, "vp", PERSON);
+      b.store.plan().update(ga.id, { title: "Exercise GA, renamed on B" }, "vp", PERSON);
       await b.sync();
       a.use();
       await a.sync();

@@ -68,13 +68,13 @@ function ideaLine(idea: IdeaView, plan: PlanView): string {
 
 function horizonLine(horizon: HorizonView): string {
   const risk = [horizon.lateCount ? `${horizon.lateCount} late` : null, horizon.notStartedCount ? `${horizon.notStartedCount} not started` : null].filter(Boolean).join(" · ");
-  return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${String(horizon.ideaCount).padStart(3)} ideas${risk ? `  ${risk}` : ""}`;
+  return `${horizon.identifier.padEnd(9)} ${horizon.name.padEnd(24)} ${(horizon.date ?? "no date").padEnd(10)} ${horizon.state.padEnd(8)} ${String(horizon.ideaCount).padStart(3)} ideas${risk ? `  ${risk}` : ""}`;
 }
 
 function printDetail(detail: IdeaDetail): void {
   const { idea } = detail;
   console.log(`${idea.identifier ?? `idea ${idea.id}`} · ${idea.title}`);
-  console.log(`stage ${idea.stage} · maturity ${idea.maturity} · horizon ${detail.horizon?.name ?? "unscheduled"}${detail.parent ? ` · part of ${detail.parent.identifier ?? detail.parent.title}` : ""}`);
+  console.log(`state ${idea.state} · stage ${idea.stage} · maturity ${idea.maturity} · horizon ${detail.horizon?.name ?? "unscheduled"}${detail.parent ? ` · part of ${detail.parent.identifier ?? detail.parent.title}` : ""}`);
   console.log(`planned ${idea.planned.start ?? "—"} → ${idea.planned.target ?? "—"}${idea.baseline ? ` · baseline ${idea.baseline.start ?? "—"} → ${idea.baseline.target ?? "—"}` : ""}`);
   if (idea.linkCount > 0) {
     console.log(`actual ${idea.actual.start ?? "—"} → ${idea.actual.end ?? (idea.actual.forecastEnd ? `~${idea.actual.forecastEnd}` : "open")} · ${Math.round((idea.progress ?? 0) * 100)}%${idea.late ? " · late" : ""}`);
@@ -84,8 +84,15 @@ function printDetail(detail: IdeaDetail): void {
   if (detail.brief) console.log(`brief    ${detail.brief.split("\n")[0]}`);
   detail.questions.forEach((q, i) => console.log(`  ${q.resolved ? "[x]" : "[ ]"} ${i + 1}. ${q.text}`));
   for (const decision of detail.decisions) console.log(`  decided ${decision}`);
-  for (const child of detail.children) console.log(`  sub-idea ${child.identifier} ${child.title} (${child.stage})`);
+  for (const child of detail.children) console.log(`  sub-idea ${child.identifier ?? child.id} ${child.title} (${child.stage})`);
   for (const link of detail.linked) console.log(`  linked  ${link.identifier} ${link.title} · ${link.status} · ${link.doneLeaves}/${link.leaves}`);
+  console.log(`offers   ${offeredLine(idea.actions)}`);
+}
+
+/** What the record's state offers, from the lifecycle table; a person-only action says so. */
+function offeredLine(actions: IdeaDetail["idea"]["actions"]): string {
+  if (actions.length === 0) return "nothing";
+  return actions.map((action) => `${action.label.toLowerCase()}${action.who === "person" ? " (person)" : ""}${action.disabledReason ? ` [${action.disabledReason}]` : ""}`).join(", ");
 }
 
 export function runPlanCommand(rest: string[]): void {
