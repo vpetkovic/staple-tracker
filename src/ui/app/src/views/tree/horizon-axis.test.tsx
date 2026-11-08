@@ -122,7 +122,7 @@ describe("the ◇ horizon chip on a phone", () => {
 
   it("shows a short name and gives the full one on tap", () => {
     const html = renderToStaticMarkup(<HorizonCompactChip cue={{ identifier: "LAR-3", title: "Now · Beta release train", horizon: true }} />);
-    expect(html).toContain('data-horizon-chip-compact="LAR-3"');
+    expect(html).toContain('data-horizon-indicator="LAR-3"');
     expect(html).toContain('aria-label="On horizon LAR-3: Now · Beta release train — tap for the full name"');
     expect(html.replace(/<[^>]*>/g, " ")).toContain("◇");
   });
@@ -153,13 +153,13 @@ describe("the ◇ horizon chip on a drawn row", () => {
 
   it("draws the compact chip on a 390px row, where the milestone mark is gone", () => {
     const phone = at(390);
-    expect(phone).toContain('data-horizon-chip-compact="LAR-3"');
+    expect(phone).toContain('data-horizon-indicator="LAR-3"');
     expect(phone).not.toContain('data-testid="row-milestone-cue"');
   });
 
   it("draws the full chip on a desk row, and no compact one", () => {
     const desk = at(1280);
     expect(desk).toContain('data-horizon-chip="LAR-3"');
-    expect(desk).not.toContain("data-horizon-chip-compact");
+    expect(desk).not.toContain("data-horizon-indicator");
   });
 });

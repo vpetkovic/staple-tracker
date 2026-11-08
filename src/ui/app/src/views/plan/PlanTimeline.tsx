@@ -1,4 +1,4 @@
-import { planCounts, countWord } from "@/views/plan/plan-counts";
+import { planCounts } from "@/views/plan/plan-counts";
 /**
  * The Timeline lens: ideas as rows grouped by horizon, on a month axis.
  *
@@ -139,7 +139,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
         </div>
       </div>
       <Legend />
-      <div ref={frame} data-plan-timeline-frame className="relative mx-gutter mb-3 min-h-0 flex-1 overflow-auto rounded-lg border bg-card" data-plan-timeline-frame>
+      <div ref={frame} className="relative mx-gutter mb-3 min-h-0 flex-1 overflow-auto rounded-lg border bg-card" data-plan-timeline-frame>
         <div ref={chart} className="relative" style={{ width: nameWidth + width }}>
           {/* The axis, pinned on top. */}
           <div className="sticky top-0 z-20 flex h-8 border-b bg-card">

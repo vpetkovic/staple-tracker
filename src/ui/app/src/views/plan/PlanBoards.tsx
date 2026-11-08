@@ -1,4 +1,4 @@
-import { planCounts, countWord } from "@/views/plan/plan-counts";
+import { planCounts } from "@/views/plan/plan-counts";
 /**
  * The Ideas and Horizons boards, one job each: Ideas is thinking (a record's own raw or exploring
  * state, with how much of its plan is written), Horizons is delivery (shaped, started and

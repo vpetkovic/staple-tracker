@@ -58,6 +58,10 @@ describe("the phone horizon chip", () => {
       await page.goto(`http://127.0.0.1:${(ui.server.address() as AddressInfo).port}/?token=${ui.token}`, { waitUntil: "networkidle" });
       const chip = page.locator("[data-horizon-indicator]").first();
       await chip.waitFor();
+      expect(await chip.innerText()).toBe("◇");
+      expect(await chip.evaluate(element => !!element.closest(".staple-row-meta"))).toBe(true);
+      expect(await chip.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
+      expect(await page.locator("[data-horizon-chip-compact]").count()).toBe(0);
       await chip.tap();
       const popover = page.locator('[data-slot="popover-content"]');
       await popover.waitFor();

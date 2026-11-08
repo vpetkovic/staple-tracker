@@ -1,5 +1,5 @@
 import { PlannedIdeaLinks } from "./PlannedIdeaLinks";
-import { planCounts, countWord } from "@/views/plan/plan-counts";
+import { planCounts } from "@/views/plan/plan-counts";
 /**
  * The plan's controls in the shared drawer: an idea's status line and actions, and a horizon's
  * section. Every button and menu item is an item from `plain-actions.ts` (`planActionItems`,
@@ -7,7 +7,7 @@ import { planCounts, countWord } from "@/views/plan/plan-counts";
  * (the core table, through the payload) into writes. The writes run through the drawer's own
  * controller, so a refusal lands in the same place every other action's does.
  */
-import { ChevronRight, Ellipsis } from "lucide-react";
+import { Ellipsis } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -132,7 +132,6 @@ export function PlanOverflow({ workspace, idea, controller, triggerClassName }: 
  * (queue it while it holds work, remove it while it holds none), and the ideas on it.
  */
 export function HorizonSection({ detail, horizon, ideas, controller, className }: { detail: IssueDetail; horizon: HorizonData; ideas: IdeaData[]; controller: IssueActionsController; className?: string }) {
-  const session = useSession();
   const [running, setRunning] = useState(false);
   const items = horizonActionItems(detail.workspace, horizon);
   const progress = horizon.progress;
