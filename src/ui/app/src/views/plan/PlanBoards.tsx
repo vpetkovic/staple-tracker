@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import type { IdeaData, PlanData } from "@/lib/plan-types";
 import { useIsDesk } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
+import { horizonActionItems, moveOffered, offers, planActionItems } from "@/detail/plain-actions";
 import {
   columnEntries,
   dayLabel,
@@ -126,7 +127,8 @@ function Column({ plan, column, columns, write, desk, onOpen, selected }: BoardP
     setOver(false);
     const id = event.dataTransfer.getData("text/plain");
     const idea = plan.ideas.find((candidate) => candidate.id === id);
-    if (idea && dropChanges(idea, column.drop)) void write("update", { ref: idea.id, ...dropBody(column.drop) });
+    // Only a move the idea's lifecycle state offers is sent (plain-actions, from the core table).
+    if (idea && dropChanges(idea, column.drop) && moveOffered(idea, column.drop)) void write("update", { ref: idea.id, ...dropBody(column.drop) });
   };
   const entries = columnEntries(plan, column);
   return (
@@ -146,7 +148,7 @@ function Column({ plan, column, columns, write, desk, onOpen, selected }: BoardP
       )}
     >
       {column.horizon ? (
-        <HorizonHeader column={column} write={write} />
+        <HorizonHeader column={column} write={write} onOpen={onOpen} />
       ) : (
         <header className="border-b px-3 py-2">
           <div className="flex items-baseline gap-2 text-body font-semibold">
@@ -170,10 +172,17 @@ function Column({ plan, column, columns, write, desk, onOpen, selected }: BoardP
   );
 }
 
+/**
+ * The card's ⋯: the column moves its state offers, then its other one-click actions (promote,
+ * drop, restore, reset the baseline). All of it from the idea's offered actions; a move a state
+ * does not offer is not listed, and an idea whose state offers nothing has no menu.
+ */
 function MoveMenu({ idea, column, columns, write }: { idea: IdeaData; column: BoardColumn; columns: BoardColumn[]; write: Write }) {
-  const moves = columns.filter((target) => target.key !== column.key && dropChanges(idea, target.drop));
+  const moves = columns.filter((target) => target.key !== column.key && dropChanges(idea, target.drop) && moveOffered(idea, target.drop));
   const move = (target: DropTarget) => void write("update", { ref: idea.id, ...dropBody(target) });
-  const onHorizons = column.key.startsWith("h:");
+  // The maturity columns are the moves; what is left is drop, restore, promote and the baseline.
+  const others = planActionItems("", idea).filter((item) => !["explore", "shape", "unshape", "open_epic"].includes(item.id));
+  if (moves.length === 0 && others.length === 0) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -189,20 +198,24 @@ function MoveMenu({ idea, column, columns, write }: { idea: IdeaData; column: Bo
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
-        <DropdownMenuLabel>Move to</DropdownMenuLabel>
+        {moves.length > 0 ? <DropdownMenuLabel>Move to</DropdownMenuLabel> : null}
         {moves.map((target) => (
           <DropdownMenuItem key={target.key} onSelect={() => move(target.drop)} data-plan-move={target.key}>
             {target.title}
           </DropdownMenuItem>
         ))}
-        {!onHorizons && idea.maturity !== "dropped" ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => move({ maturity: "dropped" })} data-plan-move="m:dropped">
-              Drop this idea
-            </DropdownMenuItem>
-          </>
-        ) : null}
+        {moves.length > 0 && others.length > 0 ? <DropdownMenuSeparator /> : null}
+        {others.map((item) => (
+          <DropdownMenuItem
+            key={item.id}
+            disabled={Boolean(item.disabledReason)}
+            title={item.disabledReason}
+            onSelect={() => item.call?.route === "plan" && void write(item.call.verb, item.call.body)}
+            data-plan-action={item.id}
+          >
+            {item.label}
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -371,7 +384,7 @@ function DroppedShelf({ ideas, write }: { ideas: IdeaData[]; write: Write }) {
 
 // ---------------------------------------------------------------- horizons
 
-function HorizonHeader({ column, write }: { column: BoardColumn; write: Write }) {
+function HorizonHeader({ column, write, onOpen }: { column: BoardColumn; write: Write; onOpen: (id: string) => void }) {
   const horizon = column.horizon!;
   const [renaming, setRenaming] = useState(false);
   const [dating, setDating] = useState(false);
@@ -395,7 +408,7 @@ function HorizonHeader({ column, write }: { column: BoardColumn; write: Write })
             <Input value={name} autoFocus onChange={(event) => setName(event.target.value)} onBlur={rename} aria-label="Horizon name" className="h-8" />
           </form>
         ) : (
-          <button type="button" className="min-w-0 flex-1 truncate text-left text-body font-semibold" onClick={() => setRenaming(true)} title="Rename">
+          <button type="button" className="min-w-0 flex-1 truncate text-left text-body font-semibold" onClick={() => (offers(horizon, "rename") ? setRenaming(true) : undefined)} title={offers(horizon, "rename") ? "Rename" : horizon.name}>
             {horizon.name} <span className="text-label font-normal text-text-tertiary">{column.ideas.length}</span>
           </button>
         )}
@@ -406,13 +419,24 @@ function HorizonHeader({ column, write }: { column: BoardColumn; write: Write })
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setDating(true)}>{horizon.date ? "Change date" : "Add a date"}</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => void write("horizon-remove", { ref: horizon.id })} data-plan-horizon-remove={horizon.identifier}>
-              <Trash2 aria-hidden />
-              Remove horizon
+            <DropdownMenuItem onSelect={() => onOpen(horizon.id)} data-plan-horizon-open={horizon.identifier}>
+              Open the horizon
             </DropdownMenuItem>
+            {/* From the horizon's offered actions: a shipped horizon offers none, an active one is not removed. */}
+            {offers(horizon, "rename") ? <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename</DropdownMenuItem> : null}
+            {offers(horizon, "date") ? <DropdownMenuItem onSelect={() => setDating(true)}>{horizon.date ? "Change date" : "Add a date"}</DropdownMenuItem> : null}
+            {horizonActionItems("", horizon).map((item) => (
+              <DropdownMenuItem
+                key={item.id}
+                onSelect={() => item.call?.route === "plan" && void write(item.call.verb, item.call.body)}
+                data-plan-horizon-remove={item.id === "remove" ? horizon.identifier : undefined}
+                data-plan-horizon-action={item.id}
+              >
+                {item.id === "remove" ? <Trash2 aria-hidden /> : null}
+                {item.label}
+              </DropdownMenuItem>
+            ))}
+            {horizon.actions.length === 0 ? <DropdownMenuItem disabled>Shipped: nothing to change</DropdownMenuItem> : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

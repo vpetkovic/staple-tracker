@@ -38,14 +38,16 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
     missingLinks: [],
     childIds: [],
     openQuestions: 0,
+    state: "raw",
+    actions: [],
     createdAt: "2026-11-01T00:00:00.000Z",
     updatedAt: "2026-11-01T00:00:00.000Z",
     ...extra,
   };
 }
 
-const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false };
-const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false };
+const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false, state: "planned", actions: [] };
+const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false, state: "planned", actions: [] };
 
 function plan(ideas: IdeaData[]): PlanData {
   return { enabled: true, today: "2026-11-07", horizons: [now, next], ideas };

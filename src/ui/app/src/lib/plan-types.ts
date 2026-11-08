@@ -17,6 +17,22 @@ export interface ActualWindow {
   forecastEnd: string | null;
 }
 
+/** The lifecycle states (`src/core/plan-lifecycle.ts`). */
+export type IdeaState = "raw" | "exploring" | "shaped" | "started" | "shipped" | "dropped";
+export type HorizonState = "planned" | "active" | "shipped";
+
+/**
+ * One action a record's lifecycle state offers, as the server computed it from the core table.
+ * The page renders these and nothing else: it never decides on its own what a state allows.
+ */
+export interface OfferedAction {
+  id: string;
+  label: string;
+  who: "anyone" | "person";
+  /** Offered in this state but cannot run yet, and why. */
+  disabledReason?: string;
+}
+
 export interface HorizonData {
   id: string;
   identifier: string;
@@ -32,6 +48,8 @@ export interface HorizonData {
   lateCount: number;
   notStartedCount: number;
   late: boolean;
+  state: HorizonState;
+  actions: OfferedAction[];
 }
 
 export interface IdeaData {
@@ -60,6 +78,8 @@ export interface IdeaData {
   notStarted: boolean;
   childIds: string[];
   openQuestions: number;
+  state: IdeaState;
+  actions: OfferedAction[];
   createdAt: string;
   updatedAt: string;
 }

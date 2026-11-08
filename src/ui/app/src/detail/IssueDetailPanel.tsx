@@ -65,6 +65,8 @@ import { EmptyValue, MoreDetails, PropertyList, PropertyRow, type PropertyLayout
 import { PersonChip, RelativeTime } from "./parts";
 import { MilestoneCrumb, MilestoneDue, MilestoneSentence, MilestoneValue, OpenPlanAction, opensPlan, planOf } from "./MilestoneParts";
 import { primaryItem, queueAheadOf, statusSentence } from "./plain-actions";
+import { HorizonSection, IdeaStatusLine, PlanOverflow, PlanPrimary } from "./PlanActions";
+import { hasNoNumber, horizonPlanOf, isIdeaDetail, planRecordOf } from "./plan-record";
 import { detailFacts } from "./properties";
 import {
   anchorAfterScroll,
@@ -148,7 +150,11 @@ export function IssueDetailPanel({
         onClose={onClose}
         overflow={
           sheet && detail ? (
-            <OverflowMenu detail={detail} controller={controller} onRequestApproval={() => setRequestOpen(true)} triggerClassName="size-11" />
+            isIdeaDetail(detail) ? (
+              <PlanOverflow workspace={detail.workspace} idea={planRecordOf(detail)!.idea} controller={controller} triggerClassName="size-11" />
+            ) : (
+              <OverflowMenu detail={detail} controller={controller} onRequestApproval={() => setRequestOpen(true)} triggerClassName="size-11" />
+            )
           ) : null
         }
       />
@@ -192,7 +198,9 @@ export function IssueDetailPanel({
           {/* A refusal from the bottom bar or the top bar's ⋯ shows here, next to the thumb
               that caused it, never at the top of a long scroll. */}
           <ActionRefusal controller={controller} className="max-h-[40vh] overflow-y-auto" />
-          {opensPlan(detail) ? (
+          {isIdeaDetail(detail) ? (
+            <PlanPrimary workspace={detail.workspace} idea={planRecordOf(detail)!.idea} controller={controller} size="lg" className="w-full" />
+          ) : opensPlan(detail) ? (
             <OpenPlanAction workspace={detail.workspace} identifier={detail.issue.identifier} size="lg" className="w-full" />
           ) : (
             <>
@@ -370,7 +378,7 @@ function Breadcrumb({ selection, detail, className }: { selection: Selection; de
         <span key={ancestor.id} className="flex min-w-0 items-center gap-1">
           <button
             type="button"
-            title={`${ancestor.identifier} · ${ancestor.title}`}
+            title={hasNoNumber(ancestor) ? ancestor.title : `${ancestor.identifier} · ${ancestor.title}`}
             onClick={() => session.open(detail!.workspace, ancestor.identifier)}
             className="focus-ring max-w-[18rem] min-w-0 truncate rounded-md px-1 py-0.5 text-text-secondary hover:bg-surface-hover hover:text-foreground pointer-coarse:py-2"
           >
@@ -382,10 +390,19 @@ function Breadcrumb({ selection, detail, className }: { selection: Selection; de
       {/* Never wraps: on a phone the row gives its column to the title, so this is where the
           reference is read, and it has to read as one word. */}
       <span className="shrink-0 px-1 whitespace-nowrap" data-detail-identifier="">
-        {detail?.issue.identifier ?? selection.ref}
+        {referenceOf(selection, detail)}
       </span>
     </nav>
   );
+}
+
+/**
+ * The quiet reference at the end of the breadcrumb. An unpromoted idea has no ticket number, so
+ * it reads "Idea"; while a detail loads, a ref that is an id or a stored key is not shown either.
+ */
+function referenceOf(selection: Selection, detail: IssueDetail | undefined): string {
+  if (detail) return isIdeaDetail(detail) ? "Idea" : detail.issue.identifier;
+  return selection.ref.startsWith("~") || /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(selection.ref) ? "" : selection.ref;
 }
 
 /**
@@ -472,6 +489,29 @@ export function DetailContent({
   const sheet = presentation === "sheet";
   const { issue } = detail;
   const gate = <GateSection detail={detail} controller={controller} requestOpen={requestOpen} onCloseRequest={onCloseRequest} />;
+  const idea = isIdeaDetail(detail) ? planRecordOf(detail) : null;
+  const horizon = horizonPlanOf(detail);
+
+  if (idea) {
+    // An idea is a plan, not work: no status pill, no claim, no properties grid. Its state and the
+    // actions that state offers lead; the Plan tab holds the rest.
+    return (
+      <div data-detail-layout={sheet ? "sheet" : expanded ? "page" : "drawer"} data-detail-idea={idea.idea.id} className={cn("flex w-full flex-col", expanded ? "mx-auto max-w-readable px-6 pt-8 pb-12" : sheet ? "px-4 pt-3 pb-6" : "px-6 pt-6 pb-10")}>
+        {sheet ? <Breadcrumb selection={{ workspace: detail.workspace, ref: issue.id }} detail={detail} className="-ml-1 mb-1.5" /> : null}
+        <InlineTitle issue={issue} workspace={detail.workspace} refresh={refresh} size={sheet ? "heading" : "display"} />
+        <IdeaStatusLine record={idea} className="mt-3">
+          {sheet ? null : (
+            <div className="ml-auto flex shrink-0 items-center gap-1 pl-2">
+              <PlanPrimary workspace={detail.workspace} idea={idea.idea} controller={controller} />
+              <PlanOverflow workspace={detail.workspace} idea={idea.idea} controller={controller} />
+            </div>
+          )}
+        </IdeaStatusLine>
+        {sheet ? null : <ActionRefusal controller={controller} className="mt-4" />}
+        <DetailTabs detail={detail} sheet={sheet} refresh={refresh} onAuthError={onAuthError} />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -513,6 +553,8 @@ export function DetailContent({
         <div ref={gateRef} tabIndex={-1} className="scroll-mt-4 outline-none empty:hidden [&:not(:empty)]:mt-5" data-detail-gate="">
           {gate}
         </div>
+
+        {horizon ? <HorizonSection detail={detail} horizon={horizon.horizon} ideas={horizon.ideas} controller={controller} className="mt-5" /> : null}
 
         {!sheet && !expanded ? (
           <section aria-label="Properties" className="mt-6 border-t pt-4">

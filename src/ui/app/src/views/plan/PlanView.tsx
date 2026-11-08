@@ -3,7 +3,9 @@
  *
  * Three lenses on the same ideas, one segmented control: Ideas (columns by maturity, quick
  * capture), Horizons (Unscheduled and each horizon in order) and Timeline (planned, baseline
- * and actual windows on a month axis). Any card or row opens the idea's detail.
+ * and actual windows on a month axis). Any card or row opens the idea in the shared detail
+ * drawer, the same one every issue opens in; the drawer chooses its tabs and actions by the
+ * record's kind and lifecycle state.
  *
  * The page is the person: the server records every write here as the person's, which is what
  * lets it set maturity, horizons, dates and the baseline that an agent may not.
@@ -16,15 +18,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { personActor } from "@/detail/parts/person";
-import { getPlan, getPlanIdea, planWrite, type AuthError } from "@/lib/api";
-import type { IdeaDetailData, PlanData } from "@/lib/plan-types";
+import { getPlan, planWrite, type AuthError } from "@/lib/api";
+import type { PlanData } from "@/lib/plan-types";
 import { describeRefusal, type Refusal } from "@/lib/refusal";
 import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useStaple";
 import { ErrorState, LoadingState } from "@/views/ViewChrome";
 import { workspaceScope } from "@/views/workspace-scope";
 import { HorizonsBoard, IdeasBoard, type Write } from "./PlanBoards";
-import { IdeaDetail } from "./IdeaDetail";
 import { PlanTimeline } from "./PlanTimeline";
 import { LENSES, type Lens } from "./plan-model";
 
@@ -51,25 +52,9 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
   const [written, setWritten] = useState<PlanData | null>(null);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [lens, setLens] = useState<Lens>("ideas");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [detail, setDetail] = useState<IdeaDetailData | null>(null);
 
   // A fresh read replaces what the last write answered.
   useEffect(() => setWritten(null), [resource.data]);
-
-  useEffect(() => {
-    if (selected === null) {
-      setDetail(null);
-      return;
-    }
-    let live = true;
-    getPlanIdea({ ws, ref: selected })
-      .then((next) => live && setDetail(next))
-      .catch((error: unknown) => live && setRefusal(describeRefusal(error)));
-    return () => {
-      live = false;
-    };
-  }, [selected, ws, resource.data]);
 
   const write: Write = useCallback(
     async (verb, body) => {
@@ -77,22 +62,29 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
       try {
         const result = await planWrite(verb, { ws, actor: personActor() ?? "ui", ...body });
         setWritten(result.plan);
-        if (result.idea && result.idea.idea.id === selected) setDetail(result.idea);
-        else if (selected !== null) setDetail(await getPlanIdea({ ws, ref: selected }));
+        // The drawer and every other view read the same records: tell them it changed.
+        session.refresh();
         return true;
       } catch (error) {
         setRefusal(describeRefusal(error));
         return false;
       }
     },
-    [ws, selected],
+    [ws, session],
   );
 
   const plan = written ?? resource.data;
   if (!plan) return resource.error ? <ErrorState error={resource.error} /> : <LoadingState />;
   if (!plan.enabled) return <PlanOff workspace={workspace} onTurnOn={() => void write("enable", {})} refusal={refusal} />;
 
-  const board = { plan, write, onOpen: setSelected, selected };
+  // An idea opens by its id (it has no number), a promoted one by its number, both in the shared drawer.
+  const open = (id: string) => {
+    const idea = plan.ideas.find((candidate) => candidate.id === id);
+    const horizon = plan.horizons.find((candidate) => candidate.id === id);
+    session.open(workspace, idea?.identifier ?? horizon?.identifier ?? id);
+  };
+  const selected = session.selection && session.selection.workspace === workspace ? (plan.ideas.find((idea) => idea.id === session.selection!.ref || idea.identifier === session.selection!.ref)?.id ?? null) : null;
+  const board = { plan, write, onOpen: open, selected };
   return (
     <div className="relative flex h-full min-h-0 flex-col" data-plan-view={workspace}>
       <PlanBar lens={lens} onLens={setLens} onCapture={(title) => write("capture", { title })} />
@@ -104,7 +96,6 @@ function WorkspacePlan({ workspace, onAuthError }: { workspace: string; onAuthEr
       <div className="min-h-0 flex-1">
         {lens === "ideas" ? <IdeasBoard {...board} /> : lens === "horizons" ? <HorizonsBoard {...board} /> : <PlanTimeline {...board} />}
       </div>
-      {detail && selected === detail.idea.id ? <IdeaDetail plan={plan} detail={detail} write={write} onClose={() => setSelected(null)} onOpen={setSelected} /> : null}
     </div>
   );
 }
@@ -119,9 +110,9 @@ function PlanOff({ workspace, onTurnOn, refusal }: { workspace: string; onTurnOn
           help={
             <>
               The plan keeps ideas out of the task list. Capture an idea, let it mature from raw
-              to shaped, give it a horizon such as Now, Next or Later, and start it as an epic when
+              to shaped, give it a horizon such as Now, Next or Later, and promote it to an epic when
               it is ready. Turning planning on adds the <span className="font-mono">idea</span> and{" "}
-              <span className="font-mono">horizon</span> kinds and three horizons: Now, Next and Later.
+              <span className="font-mono">milestone</span> kinds and three horizons, Now, Next and Later, which are milestones.
             </>
           }
         >

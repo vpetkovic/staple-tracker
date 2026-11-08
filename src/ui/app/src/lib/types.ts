@@ -1,3 +1,4 @@
+import type { HorizonData, IdeaData, IdeaDetailData } from "./plan-types.js";
 /**
  * The wire vocabulary — one mirror of src/core/types.ts plus the envelopes
  * src/ui/server.ts actually returns.
@@ -1133,6 +1134,14 @@ export interface IssueDetail {
   milestone?: EffectiveMilestone | null;
   /** On a milestone's own detail: its plan (dates, state, progress, members). Else null. */
   milestonePlan?: MilestoneView | null;
+  /**
+   * A plan record's plan detail (state, offered actions, brief, questions, decisions, links), or
+   * null when the issue is not part of the plan. An unpromoted idea is drawn from this, never from
+   * `issue.identifier`, which it holds only for lookups.
+   */
+  planRecord?: IdeaDetailData | null;
+  /** On a horizon's own detail: the horizon as the plan reads it, and the records on it. Else null. */
+  horizonPlan?: { horizon: HorizonData; ideas: IdeaData[] } | null;
 }
 
 /** Mirror of `EffectiveMilestone` in src/core/milestone-store.ts. */

@@ -18,6 +18,7 @@ import { useIsDesk } from "@/lib/use-media";
 import { cn } from "@/lib/utils";
 import { Chip, type Write } from "./PlanBoards";
 import { dayIndex, dayLabel, dayOf, dragWindow, monthsIn, riskOf, timelineGroups, timelineRange } from "./plan-model";
+import { offers } from "@/detail/plain-actions";
 
 /** Every bar is drawn in a 40px band; a phone row is taller so its name can take up to three lines. */
 const BAND = 40;
@@ -73,6 +74,8 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
   }, [zoom, frameWidth, width]);
 
   const begin = (event: ReactPointerEvent, idea: IdeaData, mode: Drag["mode"]) => {
+    // Dates move only where the idea's state offers it (a shipped or raw idea's bar stays put).
+    if (!offers(idea, "plan_dates")) return;
     event.preventDefault();
     event.stopPropagation();
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
@@ -234,11 +237,17 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                       No dates yet
                     </div>
                     <div className="sticky flex flex-wrap items-center gap-1.5 px-2 py-1.5" style={{ left: nameWidth }}>
-                      {group.undated.map((idea) => (
-                        <Button key={idea.id} size="sm" variant="outline" className="h-7 text-caption" onClick={() => addDates(idea)} data-plan-add-dates={idea.id}>
-                          {idea.title} · add dates
-                        </Button>
-                      ))}
+                      {group.undated.map((idea) =>
+                        offers(idea, "plan_dates") ? (
+                          <Button key={idea.id} size="sm" variant="outline" className="h-7 text-caption" onClick={() => addDates(idea)} data-plan-add-dates={idea.id}>
+                            {idea.title} · add dates
+                          </Button>
+                        ) : (
+                          <span key={idea.id} className="inline-flex h-7 items-center rounded-md border border-dashed px-2 text-caption text-text-tertiary" data-plan-undated-idea={idea.id}>
+                            {idea.title}
+                          </span>
+                        ),
+                      )}
                     </div>
                   </div>
                 ) : null}

@@ -17,7 +17,7 @@ import type { DetailPresentation } from "./drawer";
 import { DetailContent } from "./IssueDetailPanel";
 import { useIssueActions } from "./IssueActions";
 import { formatWhen } from "./properties";
-import { TABS } from "./tabs/registry";
+import { TABS, visibleTabs } from "./tabs/registry";
 
 const noop = () => {};
 
@@ -158,13 +158,19 @@ describe("the tab strip", () => {
   it("uses plain names, and keeps the ids code keys off", () => {
     expect(TABS.map((tab) => [tab.id, tab.label])).toEqual([
       ["overview", "Details"],
+      ["plan", "Plan"],
       ["relations", "Connections"],
+      ["idea-connections", "Connections"],
       ["documents", "Documents"],
       ["files", "Files"],
       ["activity", "Activity"],
       ["agent", "For agents"],
+      ["idea-agent", "For agents"],
       ["analytics", "Time"],
+      ["plan-time", "Time"],
     ]);
+    // A task's strip: the plan's tabs are for plan records only.
+    expect(visibleTabs(LOADED).map((tab) => tab.id)).toEqual(["overview", "relations", "documents", "files", "activity", "agent", "analytics"]);
   });
 
   it("is a scrollable segmented control on the phone and an underlined strip on a desk", () => {
