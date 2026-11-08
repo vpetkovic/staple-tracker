@@ -27,7 +27,9 @@ its ideas' work.
 
 Type in **Capture an idea** and press Enter. A new idea is **raw**. Drag it to **Exploring**
 while questions are open and to **Shaped** when the scope is clear, or use the card's menu.
-Open an idea to write its brief, add open questions, tick them off and record decisions.
+Open an idea and it opens in the same panel as any task, with the tabs an idea needs: **Plan**
+(its brief, open questions, decisions, horizon, dates and linked work), Connections, Documents,
+Files, Activity, For agents and Time. An idea shows no ticket number until it is promoted.
 
 Agents capture too. An idea has no ticket number yet, so on the command line you name it by
 the id `staple idea ls` prints:
@@ -66,7 +68,7 @@ their horizon with **add dates**. The vertical lines are today and each dated ho
 
 ## 5. Start the work
 
-Open an idea and press **Promote to epic**: the idea itself becomes the epic and takes its
+Open a shaped idea and press **Promote to epic**: the idea itself becomes the epic and takes its
 ticket number now. Its brief, questions, decisions, comments and history stay on it, and on a
 horizon it joins that horizon's milestone. Break it into tickets as you would any epic. A
 sub-idea is promoted once its parent is. Or **Adopt** an issue that already exists; an idea can
@@ -75,8 +77,27 @@ all of its work is done, and the timeline adds the real dates from that work: a 
 what has happened, a dashed one to the forecast end, hatched where it runs past the plan.
 
 The window an idea has when it starts is kept as its **baseline**. If you re-plan later, the
-timeline keeps the baseline as an outline behind the new plan, so a slip stays visible. Press
-**Reset to the plan** in the idea to make the current window the new baseline.
+timeline keeps the baseline as an outline behind the new plan, so a slip stays visible. Choose
+**Reset baseline to the plan** in the idea's ⋯ menu to make the current window the new baseline.
+
+## What each state offers
+
+An idea offers only the actions that fit where it stands, and every button, menu and command
+follows the same rules:
+
+| State | You can |
+|---|---|
+| Raw | edit it, ask and decide, start exploring, drop it, move it under another idea |
+| Exploring | everything raw can, plus reserve a horizon and plan dates, then mark it shaped |
+| Shaped | schedule and date it, promote it, adopt existing work, or send it back to exploring |
+| Started | re-plan it, adopt more work, unlink work, reset the baseline, open the epic |
+| Shipped | open the epic; nothing is edited any more |
+| Dropped | restore it |
+
+A raw idea is never scheduled or promoted, and an idea already started or promoted never offers
+promotion again. A horizon can be queued while it holds work, and removed only while it holds
+none. Ask for something a state does not offer and the refusal names the state and what it
+offers instead.
 
 ## Late and not started
 
@@ -92,6 +113,8 @@ adopt or unlink work. They can promote an idea only once you have marked it shap
 horizons, dates, order and the baseline are yours: you set them in the Plan view, or on the
 command line with `--person`, which records the change under your name
 (`staple config set humanName "Your Name"` first):
+
+For an exploring idea:
 
 ```bash
 staple idea set <id> --maturity shaped --horizon Next --start 2027-01-05 --target 2027-02-12 --person

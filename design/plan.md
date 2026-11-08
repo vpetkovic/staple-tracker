@@ -16,7 +16,7 @@ undecided work in the task list. It has three things:
 Maturity and horizon are independent. "Shaped, no horizon" is a feature whose timing is open;
 "exploring, on Next" is a reserved slot whose scope is open. Both are valid.
 
-The pure rules live in `src/core/plan.ts`; the store half is `src/core/plan-store.ts`
+The pure rules live in `src/core/plan.ts` and the lifecycle table in `src/core/plan-lifecycle.ts`; the store half is `src/core/plan-store.ts`
 (`store.plan()`); links are `src/core/plan-links.ts`; derived membership is
 `src/core/plan-members.ts`; the surfaces are `src/commands/plan.ts` (CLI), the plan tools in
 `src/mcp.ts`, the `/api/plan` routes in `src/ui/server.ts` and `src/ui/app/src/views/plan/`.
@@ -198,13 +198,68 @@ those merge per field.
 kind, or its default kind when it has none). It is the same record: its id, documents,
 comments, files, events, links, sub-ideas and plan fields stay, and its history shows the
 promotion (`idea_promoted`). It takes its ticket number then, it is started from then on, and
-its baseline is kept if it has a window. A person may promote any idea that is not dropped; an
-agent only one the person marked `shaped`. A sub-idea is promoted only once its parent is, so
+its baseline is kept if it has a window. Only a shaped idea offers promotion, to a person or an
+agent alike (the lifecycle, below). A sub-idea is promoted only once its parent is, so
 an epic always sits under an epic. Once promoted it is an ordinary epic: queued, worked,
 renamed and closed as any other, while its plan fields keep it on the board and the timeline.
 Breaking it down into tickets is ordinary tracker work.
 
 **Adopt** links an existing issue to a record, promoted or not; **Unlink** removes one link.
+
+## Lifecycle: one table drives every action
+
+Each record is in one lifecycle state, and the state decides which actions it offers
+(`plan-lifecycle.ts`). An idea's state is its derived stage, with `scheduled` read as its
+maturity: raw, exploring, shaped, started (promoted, or linked to work), shipped, or dropped. A
+horizon is planned (no work yet), active (it holds work) or shipped (its milestone is done). A
+promoted record is an ordinary epic in the tracker; its plan record reads started or shipped.
+
+| state | offers |
+|---|---|
+| raw | edit, ask, decide, explore, drop, reparent, reorder |
+| exploring | edit, ask, decide, shape, drop, schedule, plan dates, reparent, reorder |
+| shaped | edit, ask, decide, back to exploring, drop, schedule, plan dates, reparent, reorder, promote, adopt |
+| started | edit, ask, decide, schedule, plan dates, reorder, adopt, unlink, reset baseline, open the epic |
+| shipped | open the epic |
+| dropped | restore |
+| horizon planned | rename, date, reorder, remove |
+| horizon active | rename, date, reorder, queue |
+| horizon shipped | nothing |
+
+So raw is never scheduled or promoted, a started or promoted idea never offers promotion again,
+shipped offers no edits, and a horizon is removed only while it holds no work and queued only
+while it does. Each action also says who may take it: the steering actions (maturity moves,
+schedule, dates, order, parent, baseline, every horizon definition) are the person's; the rest
+are anyone's. A few preconditions need data and travel with the offer as a `disabledReason`:
+unlinking needs a link, a sub-idea is promoted after its parent, the epic opens once promoted.
+
+**Every surface derives from the table.** `PlanStore` checks it first on every write and refuses
+with `validation` naming the state, the refused action and what the state offers, before the
+person rule; the tracker's own edit of an idea's title or description, and queueing a horizon,
+ask the same table. Every plan payload carries each record's `state` and `actions` (id, label,
+who, disabledReason), so `get_idea`, `list_ideas`, `list_horizons` and `staple idea show`
+("offers") read it, and the page renders from it: `plain-actions.ts` (`planActionItems`,
+`horizonActionItems`, `moveOffered`) turns exactly those offers into the drawer's buttons, the
+card's ⋯ menu, the board's drops and the timeline's drags; it names which action a board move
+is, never whether it is allowed. `test/plan-lifecycle-surfaces.test.ts` walks every (state,
+write) cell on HTTP, MCP and the CLI with and without `--person`, and every horizon (state,
+action) cell, and checks that every payload carries exactly the table's row.
+
+## The drawer: ideas and horizons open where issues do
+
+An idea opens in the shared detail drawer (`detail/IssueDetailPanel.tsx`), as every issue does.
+The tab registry (`detail/tabs/registry.ts`) chooses the strip by kind and state through
+`available`: an unpromoted idea gets **Plan** (in place of Details: stage, maturity, horizon,
+parent, planned and actual windows, brief, questions, decisions, sub-ideas, linked work),
+**Connections** (parent, sub-ideas, horizon, linked work), Documents, Files, Activity, **For
+agents** (the `get_idea` payload) and **Time** (planned against actual against baseline). Its
+header shows the title, an "Idea · state" chip and a sentence, never a ticket number: the
+detail payload carries the record's id where a number would be (`withoutDrafts`), so the draft
+identifier never reaches the page. Each editor in the Plan tab renders only when the state offers
+its action. Once promoted, the same record is an epic and gets the epic's strip, with the Plan
+tab kept for the plan actions its state still offers. A horizon opens as the milestone it is,
+with its state, its offered actions and the ideas on it above the milestone's own parts; its due
+date is written through the plan, as the person.
 
 ## Guards: an idea never enters the tracker
 
@@ -300,12 +355,12 @@ the plan as an outline behind it.
 - **MCP** `list_ideas`, `get_idea`, `list_horizons` (reads); `capture_idea`, `update_idea`,
   `start_idea` (promote in place, or with `adopt` link an existing issue; answers the promoted
   `{ id, identifier, kind }` or `null`), `unlink_idea`; `reset_idea_baseline` (a view button).
-- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove}`.
-  Every write answers `{ plan, idea }`.
+- **HTTP** `GET /api/plan`, `GET /api/plan-idea?ref=`; `POST /api/plan/{enable, capture, update, question, resolve, decision, promote, adopt, unlink, reset-baseline, horizon-create, horizon-update, horizon-remove, horizon-queue}`.
+  Every write answers `{ plan, idea }`. `GET /api/issue` adds `planRecord` and `horizonPlan`.
 - **Web UI** the Plan view ([web-ui.md](web-ui.md)): Ideas (columns by maturity, capture),
   Horizons (Unscheduled and each horizon), Timeline (planned, baseline and actual windows on a
-  month axis, today and horizon lines, drag to move and resize), and a detail panel with
-  Promote. Cards never show a number; a promoted record's detail does. A sub-idea in its
+  month axis, today and horizon lines, drag to move and resize); a card or a horizon opens in
+  the shared drawer. Cards never show a number; a promoted record's detail does. A sub-idea in its
   parent's column folds under the parent's card; one in another column shows there, labelled
   with its parent. Below 768px the boards are one column with a switcher and the timeline
   scrolls inside its own frame with the names pinned, each up to three lines.
@@ -319,4 +374,6 @@ the plan as an outline behind it.
 | `test/cloud-plan-promotion-identity.test.ts` | under both folds: one idea promoted on two devices offline (with a ticket made offline on one, with a third device ahead, with equal counters, whichever device sends first) ends on one number per record on every device and a fresh one, no number on two records, no open conflict |
 | `test/sync-mutation-convergence.test.ts` | every `PlanStore` mutation, and `promoteInPlace`, converges column for column |
 | `test/plan-surfaces.test.ts` | CLI, MCP and HTTP read one plan with no idea numbers and no draft shown, walk every surface that prints or serializes an issue (CLI text and JSON, MCP tools, HTTP routes, events, refusals) and find no draft, with `identifier: null, draft: true` on every issue object, consume no number at capture, refuse the same agent writes (plain tracker tools and `update_milestone` included), promote into the horizon's milestone, and let the person steer |
+| `test/plan-lifecycle-surfaces.test.ts` | every idea (state, write) cell and every horizon (state, action) cell agrees with the lifecycle table on HTTP, MCP and the CLI with and without `--person`; every payload carries exactly the table's row; the page's items are built from it alone |
+| `src/ui/app/src/detail/plan-drawer.test.tsx` | an idea's tab strip, the epic's strip once promoted, no ticket number in any presentation, actions exactly as offered, a horizon's section |
 | `src/ui/app/src/views/plan/plan-model.test.ts` | board columns and nesting, the Ideas lens, the late/not-started split, timeline groups, range and dragging |

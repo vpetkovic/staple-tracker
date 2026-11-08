@@ -93,8 +93,9 @@ milestone is on pace for its date.
 **Plan** sits beside it: ideas that are not work yet, in three lenses. **Ideas** has a
 column per maturity and a capture box; **Horizons** has Unscheduled and each horizon (Now,
 Next, Later, or your own), with late and not-started counts; **Timeline** shows planned
-windows you drag and resize, with the real dates of started ideas beside them. Open an idea to
-write its brief and questions, or to promote it to an epic. See [The plan](plan.md).
+windows you drag and resize, with the real dates of started ideas beside them. An idea opens in
+the same panel as a task, with a Plan tab for its brief and questions and only the actions its
+state offers, such as promoting a shaped idea to an epic. See [The plan](plan.md).
 
 ## 7. Open a task
 
