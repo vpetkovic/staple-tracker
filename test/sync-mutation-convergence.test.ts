@@ -376,6 +376,16 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "PlanStore.addDecision", name: "record a decision", run: (w) => void w.a.store.plan().addDecision(w.ids["Idea"]!, "Metric only", "alice") },
   { method: "PlanStore.promote", name: "promote an idea in place", run: (w) => void w.a.store.plan().promote(w.ids["Idea"]!, "alice", { person: { via: "test" } }) },
   {
+    method: "PlanStore.importPlan",
+    name: "import a plan file",
+    run: (w) =>
+      void (w.ids["Imported"] = w.a.store.plan().importPlan(
+        { name: "plan.md", markdown: "# Imported plan\n\n## Goal\n\nShip it.\n\n## Task breakdown\n\n| # | Task | Est. |\n|---|---|---|\n| 1 | Build | 2h |\n\n## Acceptance criteria\n\n- Works\n" },
+        {},
+        "alice",
+      ).idea.idea.id),
+  },
+  {
     method: "PlanStore.scaffold",
     name: "scaffold an idea into its epic and tasks",
     prep: (w) =>
