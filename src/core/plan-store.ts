@@ -994,13 +994,11 @@ export class PlanStore {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
-    // Every value is checked before anything is written.
-    const name = patch.name === undefined ? undefined : oneLine(patch.name, "A horizon's name");
-    const date = patch.date === undefined ? undefined : patch.date === null ? null : parsePlanDate(patch.date);
-    if (patch.before !== undefined && patch.before !== null) this.horizonRow(patch.before);
     this.store.journaled(() => {
-      if (name !== undefined) this.store.updateIssue(row.id, { title: name }, actor, undefined, { plan: true });
-      if (date !== undefined) this.store.milestones().update(row.id, { targetDate: date }, actor, { plan: true });
+      if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor, undefined, { plan: true });
+      if (patch.date !== undefined) {
+        this.store.milestones().update(row.id, { targetDate: patch.date === null ? null : parsePlanDate(patch.date) }, actor, { plan: true });
+      }
       if (patch.before !== undefined) this.write(row.id, { plan_rank: this.rankBefore("horizons", row.id, patch.before, actor) }, actor, "horizon_updated", { fields: ["plan_rank"] });
     });
     return this.horizonOf(row.id);

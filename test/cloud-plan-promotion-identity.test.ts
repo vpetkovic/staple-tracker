@@ -56,7 +56,7 @@ function setup(fold: (typeof FOLDS)[number]): { server: FakeSyncServer; fleet: F
 describe("one idea promoted on two devices offline", () => {
   for (const fold of FOLDS) {
     it(`ends on one number when one device also made a ticket offline (${fold} fold)`, async () => {
-      const { fleet } = setup(fold);
+      const { server, fleet } = setup(fold);
       const a = fleet.machine("a");
       a.store.plan().enable("vp");
       const p = a.store.plan().capture({ title: "Same idea", maturity: "shaped" }, "vp", PERSON).id;
@@ -77,6 +77,10 @@ describe("one idea promoted on two devices offline", () => {
       const fresh = fleet.machine("fresh");
       await fresh.sync();
       expectOneNumberingEverywhere([a, b, fresh]);
+      // The promotion that lost displaced nobody: B's ticket keeps the number it was made with,
+      // and no device had to renumber anything.
+      expect(numbers(fresh)).toEqual([`B offline ticket=${onA}`, `Same idea=${onB}`]);
+      expect(server.ops.filter((op) => op.verb === "renumber")).toEqual([]);
       // The counter is clear of every number everywhere.
       for (const m of [a, b]) {
         m.use();
