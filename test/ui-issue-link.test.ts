@@ -105,7 +105,7 @@ async function open(ui: UiHandle, path: string, device: typeof DESK | typeof PHO
 const settle = (p: Page, ms = 600) => p.waitForTimeout(ms);
 const param = (p: Page, name: string) => new URL(p.url()).searchParams.get(name);
 const detail = (p: Page) => p.locator("[data-detail-overlay]");
-/** The panel itself: the dialog's first h2 is its hidden accessible name (the ref), not the title. */
+/** The panel itself, below the dialog's hidden accessible name. */
 const heading = (p: Page) => detail(p).locator('aside[aria-label="Issue detail"]');
 
 describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
@@ -275,5 +275,36 @@ describe.skipIf(Boolean(reason))("a link opens one ticket", () => {
     expect(await detail(page).count()).toBe(0);
     expect(param(page, "issue")).toBeNull();
     await context.close();
+  }, 30_000);
+
+  it("keeps an unpromoted idea's internal id out of the phone dialog's accessible name", async () => {
+    const post = async (path: string, body: object) => {
+      const response = await fetch(`${at(single)}${path}`, {
+        method: "POST",
+        headers: { "x-staple-token": single.token, "content-type": "application/json" },
+        body: JSON.stringify({ actor: "VP", ...body }),
+      });
+      expect(response.status).toBe(200);
+      return await response.json();
+    };
+    await post("/api/plan/enable", {});
+    const captured = await post("/api/plan/capture", { title: "Larkspur visitor welcome" });
+    const id = captured.idea.idea.id as string;
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, context, errors } = await open(single, `/?view=plan&issue=${id}`, { ...PHONE, viewport: { width: 390, height: 844 } });
+      try {
+        await page.emulateMedia({ colorScheme });
+        await page.evaluate((theme) => document.documentElement.classList.toggle("dark", theme === "dark"), colorScheme);
+        await expect.poll(() => heading(page).innerText()).toContain("Larkspur visitor welcome");
+        const dialog = page.getByRole("dialog", { name: "Issue detail", exact: true });
+        expect(await dialog.count()).toBe(1);
+        expect(await dialog.innerText()).not.toContain(id);
+        expect(await heading(page).innerText()).not.toMatch(/ALP-\d+/);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+        expect(errors).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    }
   }, 30_000);
 });
