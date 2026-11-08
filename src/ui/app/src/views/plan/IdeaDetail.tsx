@@ -3,10 +3,10 @@
  * desk breakpoint, the whole screen below it.
  *
  * What a person sets is editable here (title, maturity, horizon, parent, planned dates,
- * brief, questions, decisions) and so are the links into the tracker: Start creates an epic
- * with the brief as its plan document, Adopt links an existing issue, Unlink removes one.
- * What is derived (stage, progress, actual dates, lateness) is shown and never edited. The
- * baseline appears once the idea is started and resets only from its own button.
+ * brief, questions, decisions) and so are the ways into the tracker: Promote turns the idea into an epic
+ * on the same record, Adopt links an existing issue, Unlink removes one. Once promoted, it says so
+ * instead of offering Promote again. What is derived (stage, progress, actual dates, lateness) is shown
+ * and never edited. The baseline appears once the idea is started and resets only from its own button.
  */
 import { ArrowLeft, Link2, Rocket, RotateCcw, Unlink, X } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
@@ -37,7 +37,7 @@ export function IdeaDetail({ plan, detail, write, onClose, onOpen }: { plan: Pla
   return (
     <aside
       aria-label={`Idea ${idea.title}`}
-      data-plan-detail={idea.identifier}
+      data-plan-detail={idea.id}
       className={cn("z-40 flex flex-col bg-card", desk ? "absolute inset-y-0 right-0 w-[28rem] max-w-full border-l shadow-lg" : "fixed inset-0")}
     >
       <header className="flex items-center gap-2 border-b px-3 py-2">
@@ -61,7 +61,7 @@ export function IdeaDetail({ plan, detail, write, onClose, onOpen }: { plan: Pla
             className="h-9 border-transparent px-1 text-title font-semibold shadow-none focus-visible:border-input"
           />
         </form>
-        <span className="shrink-0 font-mono text-caption text-text-tertiary" data-plan-detail-id>{idea.identifier}</span>
+        {idea.identifier ? <span className="shrink-0 font-mono text-caption text-text-tertiary" data-plan-detail-id>{idea.identifier}</span> : null}
         {desk ? (
           <Button variant="ghost" size="icon" className="size-9" aria-label="Close" onClick={onClose}>
             <X aria-hidden />
@@ -230,16 +230,28 @@ export function IdeaDetail({ plan, detail, write, onClose, onOpen }: { plan: Pla
             ))}
           </ul>
           <div className="mt-3 space-y-2 rounded-md border border-dashed p-3">
-            {idea.maturity !== "shaped" && !started ? (
-              <p className="text-caption text-[color:var(--status-task-todo)]">Still {idea.maturity}. Starting now skips shaping.</p>
-            ) : null}
-            <p className="text-caption text-text-tertiary">Start creates an epic and stores this brief on it as its plan. Adopt links work that already exists.</p>
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => void write("start", { ref })} data-plan-start>
-                <Rocket aria-hidden />
-                Start as an epic
-              </Button>
-            </div>
+            {idea.promoted ? (
+              <p className="text-caption text-text-tertiary" data-plan-promoted>
+                Promoted: this is <span className="font-mono">{idea.identifier}</span>, a {idea.kind} in the tracker, with everything it held as an idea.
+              </p>
+            ) : idea.maturity === "dropped" ? (
+              <p className="text-caption text-text-tertiary">Dropped. Restore it to a maturity before promoting it.</p>
+            ) : (
+              <>
+                {idea.maturity !== "shaped" ? (
+                  <p className="text-caption text-[color:var(--status-task-todo)]">Still {idea.maturity}. Promoting now skips shaping.</p>
+                ) : null}
+                <p className="text-caption text-text-tertiary">
+                  Promote turns this idea into an epic on the same record and gives it a ticket number then; its brief, questions, decisions and history stay. Adopt links work that already exists.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" onClick={() => void write("promote", { ref })} data-plan-promote>
+                    <Rocket aria-hidden />
+                    Promote to epic
+                  </Button>
+                </div>
+              </>
+            )}
             <AddLine placeholder="Adopt an issue by its identifier" onAdd={(issue) => write("adopt", { ref, issue })} testId="adopt" icon={<Link2 className="size-4" aria-hidden />} button="Adopt" />
           </div>
         </Section>

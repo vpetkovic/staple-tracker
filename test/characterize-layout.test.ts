@@ -216,6 +216,8 @@ describe("a fresh repo-local `staple init`", () => {
       // STA-172 (007-milestones): the two milestone tables, their primary keys,
       // the (milestone_id, rank) uniqueness and the member-order index.
       "index:milestone_members_milestone_idx",
+      // 020-plan-fields: the membership the plan derives, read in each milestone's order.
+      "index:plan_members_milestone_idx",
       "index:relations_blocked_idx",
       "index:relations_blocker_idx",
       // 015-autopilot-runs: the one-live-run-per-actor-per-scope rule, and the run list's order.
@@ -240,6 +242,7 @@ describe("a fresh repo-local `staple init`", () => {
       "index:sqlite_autoindex_milestone_meta_1",
       // 020-plan-fields: one link per (idea, issue).
       "index:sqlite_autoindex_plan_links_1",
+      "index:sqlite_autoindex_plan_members_1",
       // 009-projects: the projects table's `id` primary key and its `UNIQUE (slug)`.
       "index:sqlite_autoindex_projects_1",
       "index:sqlite_autoindex_projects_2",
@@ -292,6 +295,8 @@ describe("a fresh repo-local `staple init`", () => {
       "table:milestone_members",
       "table:milestone_meta",
       "table:plan_links",
+      // 020-plan-fields: machine-local, rebuilt from the plan after every write and pull.
+      "table:plan_members",
       "table:projects",
       "table:queue_entries",
       "table:relations",

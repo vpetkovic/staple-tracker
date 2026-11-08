@@ -182,7 +182,7 @@ function MoveMenu({ idea, column, columns, write }: { idea: IdeaData; column: Bo
           size="icon"
           className="-mr-1.5 -mt-1 size-8 shrink-0 text-text-tertiary"
           aria-label={`Move ${idea.title}`}
-          data-plan-card-menu={idea.identifier}
+          data-plan-card-menu={idea.id}
           onClick={(event) => event.stopPropagation()}
         >
           <MoreHorizontal aria-hidden />
@@ -236,7 +236,7 @@ function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: Boa
         event.dataTransfer.setData("text/plain", idea.id);
         event.dataTransfer.effectAllowed = "move";
       }}
-      data-plan-card={idea.identifier}
+      data-plan-card={idea.id}
       className={cn(
         "cursor-pointer rounded-md border bg-card px-3 py-2 text-left shadow-xs outline-none focus-visible:ring-2 focus-visible:ring-ring",
         selected === idea.id && "border-ring",
@@ -258,7 +258,7 @@ function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: Boa
             type="button"
             className="flex min-h-8 w-full items-center gap-1 text-left text-label text-text-secondary"
             aria-expanded={expanded}
-            data-plan-children={idea.identifier}
+            data-plan-children={idea.id}
             onClick={(event) => {
               event.stopPropagation();
               setExpanded(!expanded);
@@ -270,7 +270,7 @@ function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: Boa
             </span>
           </button>
           {rollup ? (
-            <div className="pl-[1.125rem] text-caption text-text-tertiary" data-plan-rollup={idea.identifier}>
+            <div className="pl-[1.125rem] text-caption text-text-tertiary" data-plan-rollup={idea.id}>
               {rollup}
             </div>
           ) : null}
@@ -281,7 +281,7 @@ function IdeaCard({ plan, entry, column, columns, write, onOpen, selected }: Boa
                   <button
                     type="button"
                     className="flex min-h-8 w-full items-center gap-2 rounded px-1.5 text-left text-label hover:bg-surface-hover"
-                    data-plan-child={child.identifier}
+                    data-plan-child={child.id}
                     onClick={(event) => {
                       event.stopPropagation();
                       onOpen(child.id);

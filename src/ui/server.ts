@@ -5068,8 +5068,8 @@ export function startUiServer(options: UiOptions): UiHandle {
           case "/api/plan/decision":
             plan.addDecision(ref, (body.text as string) ?? "", actor);
             break;
-          case "/api/plan/start":
-            plan.start(ref, { title: optional<string>("title") }, actor, person);
+          case "/api/plan/promote":
+            plan.promote(ref, actor, person);
             break;
           case "/api/plan/adopt":
             plan.adopt(ref, (body.issue as string) ?? "", actor);

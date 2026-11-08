@@ -2,7 +2,7 @@
  * `staple plan`, `staple idea` and `staple horizon` (design/plan.md).
  *
  * The CLI is an agent's door by default: it captures raw ideas, edits titles and briefs, adds
- * and resolves questions, adds decisions, adopts and unlinks work, and starts an idea the
+ * and resolves questions, adds decisions, adopts and unlinks work, and promotes an idea the
  * person has marked shaped. Maturity, horizons, dates, order and the baseline are the
  * person's; a person at the terminal says so with `--person`, which records the write under
  * the machine's configured `humanName` (`staple config set humanName "…"`), as a decision a
@@ -61,7 +61,8 @@ function ideaLine(idea: IdeaView, plan: PlanView): string {
     return level;
   })();
   const progress = idea.progress === null ? "" : ` ${Math.round(idea.progress * 100)}%`;
-  return `${idea.identifier.padEnd(9)} ${idea.stage.padEnd(9)} ${horizon.padEnd(14)} ${"  ".repeat(depth)}${idea.title}${progress}${flags ? `  [${flags}]` : ""}`;
+  // An idea has no ticket number to show; its id is what a command takes until it is promoted.
+  return `${(idea.identifier ?? idea.id).padEnd(9)} ${idea.stage.padEnd(9)} ${horizon.padEnd(14)} ${"  ".repeat(depth)}${idea.title}${progress}${flags ? `  [${flags}]` : ""}`;
 }
 
 function horizonLine(horizon: HorizonView): string {
@@ -71,8 +72,8 @@ function horizonLine(horizon: HorizonView): string {
 
 function printDetail(detail: IdeaDetail): void {
   const { idea } = detail;
-  console.log(`${idea.identifier} · ${idea.title}`);
-  console.log(`stage ${idea.stage} · maturity ${idea.maturity} · horizon ${detail.horizon?.name ?? "unscheduled"}${detail.parent ? ` · part of ${detail.parent.identifier}` : ""}`);
+  console.log(`${idea.identifier ?? `idea ${idea.id}`} · ${idea.title}`);
+  console.log(`stage ${idea.stage} · maturity ${idea.maturity} · horizon ${detail.horizon?.name ?? "unscheduled"}${detail.parent ? ` · part of ${detail.parent.identifier ?? detail.parent.title}` : ""}`);
   console.log(`planned ${idea.planned.start ?? "—"} → ${idea.planned.target ?? "—"}${idea.baseline ? ` · baseline ${idea.baseline.start ?? "—"} → ${idea.baseline.target ?? "—"}` : ""}`);
   if (idea.linkCount > 0) {
     console.log(`actual ${idea.actual.start ?? "—"} → ${idea.actual.end ?? (idea.actual.forecastEnd ? `~${idea.actual.forecastEnd}` : "open")} · ${Math.round((idea.progress ?? 0) * 100)}%${idea.late ? " · late" : ""}`);
@@ -190,10 +191,10 @@ export function runIdeaCommand(rest: string[]): void {
       );
       return show(ref);
     }
-    case "start": {
-      const result = plan.start(need(first, "an idea reference"), { title: values.title }, actor, options);
-      if (values.json) return console.log(JSON.stringify(result));
-      console.log(`started ${result.epic.identifier} from ${result.idea.identifier} (${result.idea.stage})`);
+    case "promote": {
+      const promoted = plan.promote(need(first, "an idea reference"), actor, options);
+      if (values.json) return console.log(JSON.stringify(promoted));
+      console.log(`promoted to ${promoted.identifier}: ${promoted.title} is a ${promoted.kind} in the tracker now (${promoted.stage})`);
       return;
     }
     case "adopt":
@@ -218,7 +219,7 @@ export function runIdeaCommand(rest: string[]): void {
       plan.resetBaseline(need(first, "an idea reference"), actor, options);
       return show(first!);
     default:
-      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, start, adopt, unlink, ask, resolve, decide, reset-baseline`);
+      throw new StapleError("validation", `Unknown idea verb "${sub}". Use: ls, new, show, set, promote, adopt, unlink, ask, resolve, decide, reset-baseline`);
   }
 }
 

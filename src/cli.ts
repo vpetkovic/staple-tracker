@@ -1104,12 +1104,13 @@ Milestones
               issue's parent, blockers, status or claim
 
 The plan (ideas and horizons above the tracker)
-  plan enable                           turn planning on: adds the "idea" and "horizon"
-              kinds and the horizons Now, Next and Later
+  plan enable                           turn planning on: adds the "idea" and "milestone"
+              kinds and the horizons Now, Next and Later, which are milestones
   plan show                             the horizons in order with their late and
               not-started counts
   idea ls [--maturity M] [--horizon H]  ideas with stage, horizon and progress; ideas are
-              never queued, checked out, picked by next or listed by ls
+              never queued, checked out, picked by next or listed by ls. An idea has
+              no ticket number until it is promoted: its <ref> is the id idea ls prints
   idea new <title> [--brief T] [--parent REF]
               capture a raw idea (an agent captures raw ideas only)
   idea show <ref>                       stage, windows, brief, questions, decisions, links
@@ -1117,8 +1118,8 @@ The plan (ideas and horizons above the tracker)
               the agent's edits; with --person also --maturity raw|exploring|shaped|dropped,
               --horizon H|none, --parent REF|none, --start D|none, --target D|none and
               --before REF|end
-  idea start <ref> [--title T]          create an epic with the brief as its plan document
-              and link it; an agent starts only an idea the person marked shaped
+  idea promote <ref>                    the idea becomes an epic on the same record and takes
+              its ticket number; an agent promotes only an idea the person marked shaped
   idea adopt <ref> <issue>              link existing work to the idea
   idea unlink <ref> <issue>
   idea ask <ref> <question>             add an open question
@@ -1129,7 +1130,8 @@ The plan (ideas and horizons above the tracker)
   horizon new <name> [--date D] --person
   horizon set <ref> [--name N] [--date D|none] --person
   horizon mv <ref> (--before H|--end) --person
-  horizon rm <ref> --person             cancels the horizon; its ideas become unscheduled
+  horizon rm <ref> --person             cancels the horizon; its ideas become unscheduled.
+              A horizon is a milestone: its ideas' work is its membership
               --person records a steering write as the person's, under the machine's
               configured humanName; maturity, horizons, dates and the baseline need it
 

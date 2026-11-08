@@ -65,6 +65,7 @@ describe("workspace migration 017", () => {
     db.exec("ALTER TABLE runs DROP COLUMN instructions_seq");
     db.exec("DROP INDEX IF EXISTS issues_plan_ranked_idx");
     for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+    db.exec("DROP TABLE IF EXISTS plan_members");
     db.exec("DROP TABLE IF EXISTS plan_links");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
     expect(describeSchema(db, WORKSPACE_TARGET).pending).toEqual([17, 18, 19, 20]);
@@ -97,6 +98,7 @@ describe("workspace migration 017", () => {
     db.exec("ALTER TABLE runs DROP COLUMN instructions_seq");
     db.exec("DROP INDEX IF EXISTS issues_plan_ranked_idx");
     for (const column of ["plan_maturity", "plan_horizon_id", "plan_start", "plan_target", "plan_baseline_start", "plan_baseline_target", "plan_rank"]) db.exec(`ALTER TABLE issues DROP COLUMN ${column}`);
+    db.exec("DROP TABLE IF EXISTS plan_members");
     db.exec("DROP TABLE IF EXISTS plan_links");
     db.prepare("UPDATE meta SET value = '16' WHERE key = 'schema_version'").run();
     migrateWorkspace(db);

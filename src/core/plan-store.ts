@@ -1,32 +1,38 @@
 /**
  * The plan layer in the store: the database half of `design/plan.md`.
  *
- * Ideas and horizons are issues of the reserved kinds `idea` and `horizon`. This service owns
- * the plan columns migration 020 added to `issues` and nothing else: title, description,
- * parent, documents, comments and sync are the issue's own. Every write runs inside the
- * store's journaled scope, so the plan columns travel as fields of the `issue` entity.
+ * A plan record is an issue with a maturity: an idea (kind `idea`, a draft identifier, no ticket
+ * number) or an idea the person promoted in place into an epic (a real number, the same row). A
+ * horizon is a milestone with a plan rank. This service owns the plan columns migration 020
+ * added to `issues`, the links in `plan_links` and the derived membership in `plan_members`;
+ * title, description, parent, documents, comments, files and sync are the issue's own. Every
+ * write runs inside the store's journaled scope, so the plan columns travel as fields of the
+ * `issue` entity and links as fields of the idea's `milestone` entity.
  *
  * Two rules shape every write:
  *
  *  - Steering is the person's. Maturity, horizon assignment, horizon definitions and dates,
  *    planned dates, order and the baseline need a `PersonDecision`; a write without one is an
  *    agent's and is refused with `steeringRefusal`. Agents capture raw ideas, edit titles and
- *    briefs, add and resolve questions, add decisions, adopt and unlink work, and start an
+ *    briefs, add and resolve questions, add decisions, adopt and unlink work, and promote an
  *    idea the person has marked shaped.
- *  - Derived facts are never stored: stage beyond maturity, progress, actual dates, forecast
- *    and lateness are read from the linked work every time a view is built.
+ *  - Derived facts are never stored: stage beyond maturity, progress, actual dates, forecast,
+ *    lateness and a horizon's members are read or rebuilt from the work every time.
  */
 import type { DatabaseSync } from "node:sqlite";
 import { insertEvent } from "./event-log.js";
-import { rankBetween, renumberedRanks } from "./milestones.js";
+import { MILESTONE_KIND, rankBetween, renumberedRanks } from "./milestones.js";
 import {
   DEFAULT_HORIZONS,
-  HORIZON_KIND,
   IDEA_KIND,
   PLAN_KINDS_MISSING_MESSAGE,
+  PROMOTED_KIND,
   assertPlanWindow,
   deriveStage,
+  displayRef,
+  draftIdentifier,
   forecastEnd,
+  isDraftIdentifier,
   isLate,
   isNotStarted,
   isPlanKind,
@@ -41,6 +47,7 @@ import {
   type SteeringWrite,
 } from "./plan.js";
 import { planLinkField, planLinksOf, writePlanLink } from "./plan-links.js";
+import { rebuildPlanMembers } from "./plan-members.js";
 import type { WorkspaceStore } from "./store.js";
 import { StapleError, type PersonDecision } from "./types.js";
 
@@ -51,15 +58,22 @@ export interface PlanWriteOptions {
 
 export interface HorizonView {
   id: string;
+  /** The milestone's ticket number: a horizon is real work, so it has one. */
   identifier: string;
   name: string;
-  /** YYYY-MM-DD, or null for an undated horizon such as Later. */
+  /** YYYY-MM-DD, or null for an undated horizon such as Later (the milestone's target date). */
   date: string | null;
   rank: number;
+  /** The milestone's own status, derived from its members like any milestone's. */
+  status: string;
+  /** Its derived done: every member landed. */
+  shipped: boolean;
+  /** Members it holds, put there or derived from its plan records. */
+  memberCount: number;
   ideaCount: number;
-  /** Ideas on it whose linked work is past its line. */
+  /** Plan records on it whose work is past its line. */
   lateCount: number;
-  /** Ideas on it with nothing linked whose planned start has passed. */
+  /** Plan records on it with nothing started whose planned start has passed. */
   notStartedCount: number;
   late: boolean;
 }
@@ -71,7 +85,12 @@ export interface PlanWindow {
 
 export interface IdeaView {
   id: string;
-  identifier: string;
+  /** The ticket number once promoted; null while it is an idea, which has none to show. */
+  identifier: string | null;
+  /** Promoted in place: this record is now an epic in the tracker. */
+  promoted: boolean;
+  /** Its kind: `idea`, or the kind it was promoted to. */
+  kind: string;
   title: string;
   description: string | null;
   maturity: Maturity;
@@ -79,22 +98,22 @@ export interface IdeaView {
   parentId: string | null;
   horizonId: string | null;
   planned: PlanWindow;
-  /** The window kept when the idea was started; null before it is started or when it had no window. */
+  /** The window kept when it was started; null before it is started or when it had no window. */
   baseline: PlanWindow | null;
   rank: number;
-  /** The issues this idea itself links, by id; some may be missing (see `missingLinks`). */
+  /** The issues this record itself links, by id; some may be missing (see `missingLinks`). */
   links: string[];
   /** Own links whose issue this device no longer holds (a rewind, say): shown as missing, still unlinkable. */
   missingLinks: string[];
-  /** Linked issues, own and rolled up from child ideas. */
+  /** Work it stands for, rolled up from sub-ideas: itself once promoted, and every link. */
   linkCount: number;
   resolvedLinks: number;
-  /** Done leaves over counted leaves of the linked work, 0..1; null with nothing linked. */
+  /** Done leaves over counted leaves of that work, 0..1; null before it is started. */
   progress: number | null;
   actual: ActualWindow;
-  /** Linked work landed, or is forecast to land, past the planned end or the horizon line. */
+  /** Its work landed, or is forecast to land, past the planned end or the horizon line. */
   late: boolean;
-  /** Nothing linked yet and the planned start has passed. */
+  /** Nothing started yet and the planned start has passed. */
   notStarted: boolean;
   childIds: string[];
   /** Questions not yet resolved, from the `questions` document. */
@@ -134,7 +153,7 @@ export interface Question {
 
 export interface IdeaDetail {
   idea: IdeaView;
-  parent: { id: string; identifier: string; title: string } | null;
+  parent: { id: string; identifier: string | null; title: string } | null;
   children: IdeaView[];
   horizon: HorizonView | null;
   brief: string | null;
@@ -162,7 +181,7 @@ export interface IdeaPatch {
   parent?: string | null;
   plannedStart?: string | null;
   plannedTarget?: string | null;
-  /** Place this idea immediately before that one in the plan order; null moves it to the end. */
+  /** Place this record immediately before that one in the plan order; null moves it to the end. */
   before?: string | null;
 }
 
@@ -191,6 +210,10 @@ interface PlanRow {
   plan_baseline_start: string | null;
   plan_baseline_target: string | null;
   plan_rank: number | null;
+}
+
+interface HorizonRow extends PlanRow {
+  target_date: string | null;
 }
 
 interface WorkRow {
@@ -253,6 +276,11 @@ function oneLine(text: string, what: string): string {
   return clean;
 }
 
+/** A plan record's number to show: none while it is an idea. */
+function shownIdentifier(identifier: string): string | null {
+  return isDraftIdentifier(identifier) ? null : identifier;
+}
+
 export class PlanStore {
   /** The clock the derived dates read; replaceable so tests can stand on a fixed day. */
   clock: () => Date = () => new Date();
@@ -274,11 +302,11 @@ export class PlanStore {
   }
 
   private assertEnabled(): void {
-    if (!this.store.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE, { kinds: [IDEA_KIND, HORIZON_KIND] });
+    if (!this.store.planningOn()) throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE, { kinds: [IDEA_KIND, MILESTONE_KIND] });
   }
 
-  private steer(what: SteeringWrite, identifier: string | null, options: PlanWriteOptions): void {
-    if (!options.person) throw steeringRefusal(what, identifier);
+  private steer(what: SteeringWrite, subject: string | null, options: PlanWriteOptions): void {
+    if (!options.person) throw steeringRefusal(what, subject);
   }
 
   private row(ref: string, forWrite = true): PlanRow {
@@ -286,18 +314,28 @@ export class PlanStore {
     return this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(issue.id) as unknown as PlanRow;
   }
 
-  private ideaRow(ref: string, forWrite = true): PlanRow {
+  /** A plan record: an idea, or one already promoted. */
+  private recordRow(ref: string, forWrite = true): PlanRow {
     const row = this.row(ref, forWrite);
+    if (row.plan_maturity === null) {
+      throw new StapleError("validation", `${displayRef(row)} is not part of the plan (it is a ${row.kind}). Adopt it onto an idea to link it.`);
+    }
+    return row;
+  }
+
+  /** An idea not yet promoted. */
+  private ideaRow(ref: string, forWrite = true): PlanRow {
+    const row = this.recordRow(ref, forWrite);
     if (row.kind !== IDEA_KIND) {
-      throw new StapleError("validation", `${row.identifier} is not an idea (it is a ${row.kind}).`, { identifier: row.identifier });
+      throw new StapleError("validation", `${row.identifier} is already promoted: it is a ${row.kind} in the tracker now.`, { identifier: row.identifier });
     }
     return row;
   }
 
   private horizonRow(ref: string, forWrite = true): PlanRow {
     const row = this.row(ref, forWrite);
-    if (row.kind !== HORIZON_KIND) {
-      throw new StapleError("validation", `${row.identifier} is not a horizon (it is a ${row.kind}).`, { identifier: row.identifier });
+    if (row.kind !== MILESTONE_KIND || row.plan_rank === null) {
+      throw new StapleError("validation", `${displayRef(row)} is not a horizon: a horizon is a milestone the plan shows as a column.`);
     }
     return row;
   }
@@ -312,57 +350,94 @@ export class PlanStore {
       .prepare(`UPDATE issues SET ${names.map((name) => `${name} = ?`).join(", ")}, updated_at = ? WHERE id = ?`)
       .run(...(names.map((name) => columns[name]) as never[]), now, id);
     const payload: Record<string, unknown> = { updatedAt: now };
-    for (const name of names) {
-      const value = columns[name];
-      payload[FIELD_OF[name] ?? name] = value;
-    }
+    for (const name of names) payload[FIELD_OF[name] ?? name] = columns[name];
     this.store.journal.record({ entity: "issue", entityId: id, verb: "update", payload, actor: actor ?? null });
     insertEvent(this.db, { kind: event, issueId: id, actor, payload: detail });
   }
 
+  /**
+   * After a plan write, the horizons' derived members are rebuilt (`plan-members.ts`), and every
+   * milestone whose membership moved re-derives its status as one that gained or lost a member does.
+   */
+  private settleMembership(actor: string | null): void {
+    const changed = rebuildPlanMembers(this.db);
+    if (changed.length > 0) this.store.rederiveMilestones(changed, "plan", actor);
+  }
+
   // ---------- enabling ----------
 
-  /** Add the two kinds when they are missing and seed Now / Next / Later when no horizon exists. */
+  /**
+   * Turn planning on: the `idea` and `milestone` kinds when missing, and the horizons Now, Next
+   * and Later, which are milestones. Refused while an issue uses the `idea` kind for other work.
+   * Run again on a workspace where planning is on, it converts what an earlier build left: a
+   * numbered idea back to a draft identifier.
+   */
   enable(actor: string | null): PlanView {
-    if (this.store.planningOn()) return this.view();
-    /**
-     * A workspace may already use `idea` or `horizon` as a kind of its own. Its issues are not
-     * plans, and turning planning on would take them out of every task view, the queue and
-     * checkout, so it is refused, naming them, until they are re-kinded.
-     */
-    const unrelated = this.db
-      .prepare("SELECT identifier FROM issues WHERE kind IN (?, ?) ORDER BY identifier")
-      .all(IDEA_KIND, HORIZON_KIND) as Array<{ identifier: string }>;
+    if (this.store.planningOn()) {
+      this.store.journaled(() => {
+        this.draftNumberedIdeas(actor);
+        this.settleMembership(actor);
+      });
+      return this.view();
+    }
+    const unrelated = this.db.prepare("SELECT identifier FROM issues WHERE kind = ? ORDER BY identifier").all(IDEA_KIND) as Array<{ identifier: string }>;
     if (unrelated.length > 0) {
       const names = unrelated.map((row) => row.identifier);
       throw new StapleError(
         "validation",
-        `Planning uses the kinds "idea" and "horizon", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use one of them for other work. Re-kind ${names.length === 1 ? "it" : "them"} first (staple set <ref> --kind <other>), then turn planning on.`,
+        `Planning uses the kind "idea", and ${names.slice(0, 10).join(", ")}${names.length > 10 ? ` and ${names.length - 10} more` : ""} already use it for other work. Re-kind ${names.length === 1 ? "it" : "them"} first (staple set <ref> --kind <other>), then turn planning on.`,
         { issues: names },
       );
     }
     return this.store.journaled(() => {
       const ids = this.store.getKinds().map((kind) => kind.id);
       if (!ids.includes(IDEA_KIND)) this.store.addKind({ id: IDEA_KIND, label: "Idea" }, actor);
-      if (!ids.includes(HORIZON_KIND)) this.store.addKind({ id: HORIZON_KIND, label: "Horizon" }, actor);
+      if (!ids.includes(MILESTONE_KIND)) this.store.addKind({ id: MILESTONE_KIND, label: "Milestone" }, actor);
       DEFAULT_HORIZONS.forEach((name, index) => this.insertHorizon(name, null, (index + 1) * RANK_STEP, actor));
       return this.view();
     });
   }
 
-  // ---------- reads ----------
-
-  private horizonRows(): PlanRow[] {
-    const resolved = this.resolvedStatuses();
-    return (this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE kind = ?`).all(HORIZON_KIND) as unknown as PlanRow[])
-      .filter((row) => !resolved.has(row.status))
-      .sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.created_at.localeCompare(b.created_at));
+  /** An idea an earlier build numbered takes its draft identifier: ideas hold no ticket number. */
+  private draftNumberedIdeas(actor: string | null): void {
+    const numbered = this.db
+      .prepare("SELECT id, identifier FROM issues WHERE kind = ? AND plan_maturity IS NOT NULL AND identifier NOT LIKE '~%'")
+      .all(IDEA_KIND) as Array<{ id: string; identifier: string }>;
+    for (const idea of numbered) {
+      const draft = draftIdentifier(idea.id);
+      const now = this.store.journal.mutationAt();
+      this.db.prepare("UPDATE issues SET identifier = ?, updated_at = ? WHERE id = ?").run(draft, now, idea.id);
+      this.store.journal.record({ entity: "issue", entityId: idea.id, verb: "renumber", payload: { identifier: draft }, actor: actor ?? null });
+      insertEvent(this.db, { kind: "idea_drafted", issueId: idea.id, actor, payload: { from: idea.identifier } });
+    }
   }
 
-  private ideaRows(): PlanRow[] {
+  // ---------- reads ----------
+
+  private horizonRows(): HorizonRow[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT ${PLAN_COLUMNS}, (SELECT target_date FROM milestone_meta m WHERE m.issue_id = issues.id) AS target_date
+             FROM issues WHERE kind = ? AND plan_rank IS NOT NULL AND status NOT IN (${this.cancelledSql()})`,
+        )
+        .all(MILESTONE_KIND) as unknown as HorizonRow[]
+    ).sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.created_at.localeCompare(b.created_at));
+  }
+
+  private cancelledSql(): string {
+    const cancelled = this.store
+      .getStatuses()
+      .filter((status) => this.store.categoryOf(status.id) === "cancelled")
+      .map((status) => `'${status.id.replace(/'/g, "''")}'`);
+    return cancelled.length > 0 ? cancelled.join(", ") : "''";
+  }
+
+  /** Every plan record: unpromoted ideas while open, promoted ones whatever their status. */
+  private recordRows(): PlanRow[] {
     const resolved = this.resolvedStatuses();
-    return (this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE kind = ?`).all(IDEA_KIND) as unknown as PlanRow[])
-      .filter((row) => !resolved.has(row.status))
+    return (this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE plan_maturity IS NOT NULL`).all() as unknown as PlanRow[])
+      .filter((row) => row.kind !== IDEA_KIND || !resolved.has(row.status))
       .sort((a, b) => (a.plan_rank ?? Number.MAX_SAFE_INTEGER) - (b.plan_rank ?? Number.MAX_SAFE_INTEGER) || a.created_at.localeCompare(b.created_at));
   }
 
@@ -370,7 +445,7 @@ export class PlanStore {
     return new Set(this.store.getStatuses().filter((status) => this.store.isResolvedStatus(status.id)).map((status) => status.id));
   }
 
-  /** The whole plan: every horizon in order and every idea with its derived facts. */
+  /** The whole plan: every horizon in order and every record with its derived facts. */
   view(): PlanView {
     const today = this.today();
     if (!this.enabled()) return { enabled: false, today, horizons: [], ideas: [] };
@@ -379,15 +454,21 @@ export class PlanStore {
     return { enabled: true, today, horizons, ideas };
   }
 
-  private horizonView(row: PlanRow, ideas: readonly IdeaView[]): HorizonView {
+  private horizonView(row: HorizonRow, ideas: readonly IdeaView[]): HorizonView {
     const on = ideas.filter((idea) => idea.horizonId === row.id && idea.stage !== "dropped");
     const lateCount = on.filter((idea) => idea.late).length;
+    const memberCount = (
+      this.db.prepare("SELECT COUNT(*) AS n FROM milestone_members WHERE milestone_id = ?").get(row.id) as { n: number }
+    ).n + (this.db.prepare("SELECT COUNT(*) AS n FROM plan_members WHERE milestone_id = ? AND issue_id NOT IN (SELECT issue_id FROM milestone_members)").get(row.id) as { n: number }).n;
     return {
       id: row.id,
       identifier: row.identifier,
       name: row.title,
-      date: row.plan_target,
+      date: row.target_date,
       rank: row.plan_rank ?? 0,
+      status: row.status,
+      shipped: this.store.categoryOf(row.status) === "done",
+      memberCount,
       ideaCount: on.length,
       lateCount,
       notStartedCount: on.filter((idea) => idea.notStarted).length,
@@ -395,7 +476,7 @@ export class PlanStore {
     };
   }
 
-  /** Every non-plan issue, read once per view: the links' subtrees come from this. */
+  /** Every tracker issue (never an unpromoted idea), read once per view: the work's subtrees come from this. */
   private work(): { rows: Map<string, WorkRow>; children: Map<string, string[]> } {
     const all = this.db
       .prepare("SELECT id, identifier, title, kind, status, parent_id, started_at, completed_at, cancelled_at FROM issues")
@@ -429,7 +510,7 @@ export class PlanStore {
     return out;
   }
 
-  /** Progress and dates over a set of linked roots, each leaf counted once. */
+  /** Progress and dates over a set of roots, each leaf counted once. */
   private measure(
     roots: readonly string[],
     work: ReturnType<PlanStore["work"]>,
@@ -467,7 +548,7 @@ export class PlanStore {
   }
 
   private ideaViews(today: string): IdeaView[] {
-    const rows = this.ideaRows();
+    const rows = this.recordRows();
     const byId = new Map(rows.map((row) => [row.id, row]));
     const childIds = new Map<string, string[]>();
     for (const row of rows) {
@@ -476,37 +557,41 @@ export class PlanStore {
       list.push(row.id);
       childIds.set(row.parent_id, list);
     }
-    const horizonDates = new Map(this.horizonRows().map((row) => [row.id, row.plan_target]));
+    const horizonDates = new Map(this.horizonRows().map((row) => [row.id, row.target_date]));
     const work = this.work();
-    const rolledLinks = (id: string, seen = new Set<string>()): Set<string> => {
+    /** The work a record stands for: itself once promoted, its links, and its sub-records' work. */
+    const rolledWork = (id: string, seen = new Set<string>()): Set<string> => {
       const out = new Set<string>();
       if (seen.has(id)) return out;
       seen.add(id);
       const row = byId.get(id);
       if (!row) return out;
+      if (row.kind !== IDEA_KIND) out.add(row.id);
       for (const link of planLinksOf(this.db, row.id)) out.add(link);
-      for (const child of childIds.get(id) ?? []) for (const link of rolledLinks(child, seen)) out.add(link);
+      for (const child of childIds.get(id) ?? []) for (const item of rolledWork(child, seen)) out.add(item);
       return out;
     };
     return rows.map((row) => {
-      const links = [...rolledLinks(row.id)];
-      // A link whose issue is gone (a rewind, say) still counts as linked: the stage does not slip back.
-      const present = links.filter((id) => work.rows.has(id));
-      const missing = links.length - present.length;
+      const workIds = [...rolledWork(row.id)];
+      // Linked work whose issue is gone (a rewind, say) still counts: the stage does not slip back.
+      const present = workIds.filter((id) => work.rows.has(id));
+      const missing = workIds.length - present.length;
       const measured = this.measure(present, work);
       const maturity = readMaturity(row.plan_maturity);
       const horizonId = row.plan_horizon_id !== null && horizonDates.has(row.plan_horizon_id) ? row.plan_horizon_id : null;
-      const stage = deriveStage({ maturity, scheduled: horizonId !== null, links: links.length, resolvedLinks: measured.resolved, missingLinks: missing });
+      const stage = deriveStage({ maturity, scheduled: horizonId !== null, links: workIds.length, resolvedLinks: measured.resolved, missingLinks: missing });
       const actual: ActualWindow = {
         start: measured.start,
         end: measured.end,
         forecastEnd: forecastEnd({ start: measured.start, end: measured.end, progress: measured.progress ?? 0, today }),
       };
-      const started = links.length > 0;
+      const started = workIds.length > 0;
       const hasBaseline = row.plan_baseline_start !== null || row.plan_baseline_target !== null;
       return {
         id: row.id,
-        identifier: row.identifier,
+        identifier: shownIdentifier(row.identifier),
+        promoted: row.kind !== IDEA_KIND,
+        kind: row.kind,
         title: row.title,
         description: row.description,
         maturity,
@@ -518,7 +603,7 @@ export class PlanStore {
         rank: row.plan_rank ?? 0,
         links: planLinksOf(this.db, row.id),
         missingLinks: planLinksOf(this.db, row.id).filter((id) => !work.rows.has(id)),
-        linkCount: links.length,
+        linkCount: workIds.length,
         resolvedLinks: measured.resolved,
         progress: started ? measured.progress : null,
         actual,
@@ -526,11 +611,11 @@ export class PlanStore {
           plannedTarget: row.plan_target,
           horizonDate: horizonId === null ? null : (horizonDates.get(horizonId) ?? null),
           actual,
-          links: links.length,
+          links: workIds.length,
           open: stage !== "shipped" && stage !== "dropped",
           today,
         }),
-        notStarted: isNotStarted({ plannedStart: row.plan_start, links: links.length, dropped: maturity === "dropped", today }),
+        notStarted: isNotStarted({ plannedStart: row.plan_start, links: workIds.length, dropped: maturity === "dropped", today }),
         childIds: childIds.get(row.id) ?? [],
         openQuestions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)).filter((q) => !q.resolved).length,
         createdAt: row.created_at,
@@ -540,25 +625,23 @@ export class PlanStore {
   }
 
   ideaView(ref: string): IdeaView {
-    const row = this.ideaRow(ref, false);
+    const row = this.recordRow(ref, false);
     const idea = this.ideaViews(this.today()).find((view) => view.id === row.id);
-    if (!idea) throw new StapleError("not_found", `${row.identifier} is not an open idea.`, { identifier: row.identifier });
+    if (!idea) throw new StapleError("not_found", `${displayRef(row)} is not an open idea.`);
     return idea;
   }
 
-  /** One idea with its brief, questions, decisions, children and linked work. */
+  /** One record with its brief, questions, decisions, children and linked work. */
   detail(ref: string): IdeaDetail {
     this.assertEnabled();
-    const row = this.ideaRow(ref, false);
+    const row = this.recordRow(ref, false);
     const today = this.today();
     const ideas = this.ideaViews(today);
     const idea = ideas.find((view) => view.id === row.id);
-    if (!idea) throw new StapleError("not_found", `${row.identifier} is not an open idea.`, { identifier: row.identifier });
-    const horizons = this.horizonRows();
-    const horizonRow = horizons.find((h) => h.id === idea.horizonId);
+    if (!idea) throw new StapleError("not_found", `${displayRef(row)} is not an open idea.`);
+    const horizonRow = this.horizonRows().find((h) => h.id === idea.horizonId);
     const parentRow = idea.parentId === null ? undefined : ideas.find((view) => view.id === idea.parentId);
     const work = this.work();
-    const linked = idea.links.map((id) => this.linkView(id, work));
     return {
       idea,
       parent: parentRow ? { id: parentRow.id, identifier: parentRow.identifier, title: parentRow.title } : null,
@@ -567,7 +650,7 @@ export class PlanStore {
       brief: this.documentBody(row.id, BRIEF_KEY),
       questions: parseQuestions(this.documentBody(row.id, QUESTIONS_KEY)),
       decisions: parseDecisions(this.documentBody(row.id, DECISIONS_KEY)),
-      linked,
+      linked: idea.links.map((id) => this.linkView(id, work)),
       today,
     };
   }
@@ -619,7 +702,7 @@ export class PlanStore {
         this.store
           .runs()
           .list({ all: true })
-          .find((candidate) => candidate.scope.kind === "milestone" && candidate.scope.issueId === milestoneId && (candidate.state === "active" || candidate.state === "paused")) ?? null;
+          .find((candidate) => candidate.scope.kind === "milestone" && candidate.scope.issueId === milestone.id && (candidate.state === "active" || candidate.state === "paused")) ?? null;
       return {
         identifier: milestone.identifier,
         title: milestone.title,
@@ -636,9 +719,9 @@ export class PlanStore {
     return known ? this.store.getDocument(id, key).body : null;
   }
 
-  // ---------- ideas ----------
+  // ---------- records ----------
 
-  /** Capture an idea. An agent captures raw ideas only: title, parent and brief. */
+  /** Capture an idea. An agent captures raw ideas only: title, parent and brief. No ticket number. */
   capture(input: CaptureInput, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
     const title = oneLine(input.title ?? "", "An idea's title");
@@ -647,14 +730,8 @@ export class PlanStore {
     if (input.horizon) this.steer("horizon", null, options);
     if (input.plannedStart || input.plannedTarget) this.steer("planned dates", null, options);
     const id = this.store.journaled(() => {
-      const issue = this.store.createIssue({
-        title,
-        kind: IDEA_KIND,
-        parent: input.parent ?? null,
-        createdBy: actor,
-        allowDuplicate: true,
-      }, { plan: true });
-      const columns: Record<string, unknown> = { plan_maturity: maturity, plan_rank: this.nextRank(IDEA_KIND) };
+      const issue = this.store.createIssue({ title, kind: IDEA_KIND, parent: input.parent ?? null, createdBy: actor, allowDuplicate: true }, { plan: true });
+      const columns: Record<string, unknown> = { plan_maturity: maturity, plan_rank: this.nextRecordRank() };
       if (input.horizon) columns.plan_horizon_id = this.horizonRow(input.horizon).id;
       const window = {
         start: input.plannedStart ? parsePlanDate(input.plannedStart) : null,
@@ -665,6 +742,7 @@ export class PlanStore {
       if (window.target) columns.plan_target = window.target;
       this.write(issue.id, columns, actor, "idea_captured", { maturity });
       if (input.brief?.trim()) this.store.putDocument(issue.id, BRIEF_KEY, input.brief, { author: actor });
+      this.settleMembership(actor);
       return issue.id;
     });
     return this.ideaView(id);
@@ -672,12 +750,13 @@ export class PlanStore {
 
   update(ref: string, patch: IdeaPatch, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
-    const row = this.ideaRow(ref);
-    if (patch.maturity !== undefined) this.steer("maturity", row.identifier, options);
-    if (patch.horizon !== undefined) this.steer("horizon", row.identifier, options);
-    if (patch.parent !== undefined) this.steer("parent", row.identifier, options);
-    if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) this.steer("planned dates", row.identifier, options);
-    if (patch.before !== undefined) this.steer("horizon", row.identifier, options);
+    const row = this.recordRow(ref);
+    const name = displayRef(row);
+    if (patch.maturity !== undefined) this.steer("maturity", name, options);
+    if (patch.horizon !== undefined) this.steer("horizon", name, options);
+    if (patch.parent !== undefined) this.steer("parent", name, options);
+    if (patch.plannedStart !== undefined || patch.plannedTarget !== undefined) this.steer("planned dates", name, options);
+    if (patch.before !== undefined) this.steer("horizon", name, options);
     this.store.journaled(() => {
       if (patch.title !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.title, "An idea's title") }, actor);
       if (patch.brief !== undefined) this.store.putDocument(row.id, BRIEF_KEY, patch.brief ?? "", { author: actor });
@@ -693,28 +772,30 @@ export class PlanStore {
         columns.plan_start = window.start;
         columns.plan_target = window.target;
       }
-      if (patch.before !== undefined) columns.plan_rank = this.rankBefore(IDEA_KIND, row.id, patch.before, actor);
+      if (patch.before !== undefined) columns.plan_rank = this.rankBefore("records", row.id, patch.before, actor);
       this.write(row.id, columns, actor, "idea_updated", { fields: Object.keys(columns) });
       if (patch.parent !== undefined) this.reparent(row, patch.parent, actor);
       this.keepBaselines(row.id, actor);
+      this.settleMembership(actor);
     });
     return this.ideaView(row.id);
   }
 
-  /** Re-file an idea under another idea (or at the top), moving its subtree's depth with it. */
+  /** Re-file a record under another record (or at the top), moving its subtree's depth with it. */
   private reparent(row: PlanRow, parentRef: string | null, actor: string | null): void {
-    const parent = parentRef === null ? null : this.ideaRow(parentRef);
+    const parent = parentRef === null ? null : this.recordRow(parentRef);
     if (parent !== null) {
+      if (row.kind !== IDEA_KIND && parent.kind === IDEA_KIND) {
+        throw new StapleError("validation", `${row.identifier} is promoted; it cannot sit under ${displayRef(parent)}, which is not.`);
+      }
       let cursor: string | null = parent.id;
       for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
-        if (cursor === row.id) {
-          throw new StapleError("validation", `${parent.identifier} sits under ${row.identifier}; an idea cannot be its own ancestor.`);
-        }
+        if (cursor === row.id) throw new StapleError("validation", `${displayRef(parent)} sits under ${displayRef(row)}; an idea cannot be its own ancestor.`);
         cursor = (this.db.prepare("SELECT parent_id FROM issues WHERE id = ?").get(cursor) as { parent_id: string | null } | undefined)?.parent_id ?? null;
       }
     }
     const depth = parent === null ? 0 : parent.depth + 1;
-    this.write(row.id, { parent_id: parent?.id ?? null, depth }, actor, "idea_moved", { parent: parent?.identifier ?? null });
+    this.write(row.id, { parent_id: parent?.id ?? null, depth }, actor, "idea_moved", {});
     const walk = (id: string, level: number): void => {
       for (const child of this.db.prepare("SELECT id FROM issues WHERE parent_id = ?").all(id) as Array<{ id: string }>) {
         this.db.prepare("UPDATE issues SET depth = ? WHERE id = ?").run(level, child.id);
@@ -725,7 +806,7 @@ export class PlanStore {
   }
 
   addQuestion(ref: string, text: string, actor: string | null): IdeaDetail {
-    const row = this.ideaRow(ref);
+    const row = this.recordRow(ref);
     const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
     questions.push({ text: oneLine(text, "A question"), resolved: false });
     this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: "question added" });
@@ -734,11 +815,11 @@ export class PlanStore {
 
   /** Resolve (or reopen) the question at a 1-based position. */
   resolveQuestion(ref: string, position: number, actor: string | null, resolved = true): IdeaDetail {
-    const row = this.ideaRow(ref);
+    const row = this.recordRow(ref);
     const questions = parseQuestions(this.documentBody(row.id, QUESTIONS_KEY));
     const question = questions[position - 1];
     if (!question) {
-      throw new StapleError("validation", `${row.identifier} has ${questions.length} question${questions.length === 1 ? "" : "s"}; there is no #${position}.`);
+      throw new StapleError("validation", `${displayRef(row)} has ${questions.length} question${questions.length === 1 ? "" : "s"}; there is no #${position}.`);
     }
     question.resolved = resolved;
     this.store.putDocument(row.id, QUESTIONS_KEY, renderQuestions(questions), { author: actor, changeSummary: resolved ? "question resolved" : "question reopened" });
@@ -746,50 +827,58 @@ export class PlanStore {
   }
 
   addDecision(ref: string, text: string, actor: string | null): IdeaDetail {
-    const row = this.ideaRow(ref);
+    const row = this.recordRow(ref);
     const decisions = parseDecisions(this.documentBody(row.id, DECISIONS_KEY));
     decisions.push(`${this.today()}: ${oneLine(text, "A decision")}`);
     this.store.putDocument(row.id, DECISIONS_KEY, decisions.map((line) => `- ${line}`).join("\n") + "\n", { author: actor, changeSummary: "decision added" });
     return this.detail(row.id);
   }
 
-  // ---------- links: Start, Adopt, Unlink ----------
+  // ---------- into the tracker: Promote, Adopt, Unlink ----------
 
   /**
-   * Start: create an epic from the idea, its brief stored as the epic's `plan` document, and
-   * link it. A person may start any idea; an agent only one the person marked shaped.
+   * Promote in place: the idea becomes the epic on the same record. It takes the next ticket
+   * number then, and keeps its documents, comments, files, events, links and plan fields; its
+   * sub-ideas stay under it. A person may promote any idea that is not dropped; an agent only one
+   * the person marked shaped. An idea under an idea that is not promoted yet waits for it.
    */
-  start(ref: string, input: { title?: string } = {}, actor: string | null, options: PlanWriteOptions = {}): { idea: IdeaView; epic: { id: string; identifier: string } } {
+  promote(ref: string, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
     const row = this.ideaRow(ref);
-    if (!options.person && readMaturity(row.plan_maturity) !== "shaped") throw steeringRefusal("start", row.identifier);
+    const maturity = readMaturity(row.plan_maturity);
+    if (!options.person && maturity !== "shaped") throw steeringRefusal("promote", displayRef(row));
+    if (maturity === "dropped") throw new StapleError("validation", `${displayRef(row)} is dropped; restore it before promoting it.`);
+    if (row.parent_id !== null) {
+      const parent = this.db.prepare("SELECT identifier, title, kind, plan_maturity FROM issues WHERE id = ?").get(row.parent_id) as
+        | { identifier: string; title: string; kind: string; plan_maturity: string | null }
+        | undefined;
+      if (parent?.kind === IDEA_KIND) {
+        throw new StapleError("validation", `${displayRef(row)} sits under ${displayRef(parent)}, which is not promoted yet. Promote the parent first, so the epic has an epic above it.`);
+      }
+    }
     const kinds = this.store.getKinds().map((kind) => kind.id);
-    const epic = this.store.journaled(() => {
-      const issue = this.store.createIssue({
-        title: oneLine(input.title ?? row.title, "The epic's title"),
-        description: row.description,
-        kind: kinds.includes("epic") ? "epic" : undefined,
-        createdBy: actor,
-        allowDuplicate: true,
-      });
-      const brief = this.documentBody(row.id, BRIEF_KEY);
-      if (brief?.trim()) this.store.putDocument(issue.id, "plan", brief, { author: actor, changeSummary: `from ${row.identifier}` });
-      this.link(row, issue.id, actor);
-      return issue;
+    const kind = kinds.includes(PROMOTED_KIND) ? PROMOTED_KIND : this.store.defaultKind();
+    this.store.journaled(() => {
+      this.store.promoteInPlace(row.id, kind, actor);
+      this.keepBaselines(row.id, actor);
+      this.settleMembership(actor);
     });
-    return { idea: this.ideaView(row.id), epic: { id: epic.id, identifier: epic.identifier } };
+    return this.ideaView(row.id);
   }
 
-  /** Adopt: link an existing issue (an epic or a ticket) to the idea. */
+  /** Adopt: link an existing issue (an epic or a ticket) to a plan record. */
   adopt(ref: string, issueRef: string, actor: string | null): IdeaView {
     this.assertEnabled();
-    const row = this.ideaRow(ref);
+    const row = this.recordRow(ref);
     const target = this.store.writeTarget(issueRef);
-    if (isPlanKind(target.kind)) {
-      throw new StapleError("validation", `${target.identifier} is ${target.kind === IDEA_KIND ? "an idea" : "a horizon"}; only tracker work can be adopted.`);
+    if (isPlanKind(target.kind) || target.id === row.id) {
+      throw new StapleError("validation", `${displayRef(target)} is an idea; only tracker work can be adopted.`);
     }
     if (planLinksOf(this.db, row.id).includes(target.id)) return this.ideaView(row.id);
-    this.store.journaled(() => this.link(row, target.id, actor));
+    this.store.journaled(() => {
+      this.link(row, target.id, actor);
+      this.settleMembership(actor);
+    });
     return this.ideaView(row.id);
   }
 
@@ -799,22 +888,23 @@ export class PlanStore {
    */
   unlink(ref: string, issueRef: string, actor: string | null): IdeaView {
     this.assertEnabled();
-    const row = this.ideaRow(ref);
+    const row = this.recordRow(ref);
     const links = planLinksOf(this.db, row.id);
     const issueId = links.includes(issueRef.trim()) ? issueRef.trim() : this.store.getIssue(issueRef).id;
     if (!links.includes(issueId)) {
-      throw new StapleError("validation", `${issueRef.trim()} is not linked to ${row.identifier}.`);
+      throw new StapleError("validation", `${issueRef.trim()} is not linked to ${displayRef(row)}.`);
     }
     const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string } | undefined)?.identifier ?? issueId;
     this.store.journaled(() => {
       writePlanLink(this.db, row.id, issueId, null);
       this.store.journal.record({ entity: "milestone", entityId: row.id, verb: "update", payload: { [planLinkField(issueId)]: null }, actor: actor ?? null });
       insertEvent(this.db, { kind: "idea_unlinked", issueId: row.id, actor, payload: { issue: identifier } });
+      this.settleMembership(actor);
     });
     return this.ideaView(row.id);
   }
 
-  /** One link, one row, one field of the idea's `milestone` entity (`plan-links.ts`). */
+  /** One link, one row, one field of the record's `milestone` entity (`plan-links.ts`). */
   private link(row: PlanRow, issueId: string, actor: string | null): void {
     if (planLinksOf(this.db, row.id).includes(issueId)) return;
     const identifier = (this.db.prepare("SELECT identifier FROM issues WHERE id = ?").get(issueId) as { identifier: string }).identifier;
@@ -828,16 +918,16 @@ export class PlanStore {
   // ---------- the baseline ----------
 
   /**
-   * The first planned window an idea has once it is started is kept as its baseline. Run
-   * after anything that can start an idea (a link on it or on a child idea) or give a started
-   * idea its first window: the idea and every idea above it that is started, has a window and
-   * has no baseline yet gets one. A baseline that exists is never moved here.
+   * The first planned window a record has once it is started is kept as its baseline. Run after
+   * anything that can start one (a promotion, a link, on it or on a sub-idea) or give a started
+   * record its first window: it and every record above it that is started, has a window and has
+   * no baseline yet gets one. A baseline that exists is never moved here.
    */
   private keepBaselines(id: string, actor: string | null): void {
     let cursor: string | null = id;
     for (let hops = 0; cursor !== null && hops < 64; hops += 1) {
       const row = this.db.prepare(`SELECT ${PLAN_COLUMNS} FROM issues WHERE id = ?`).get(cursor) as unknown as PlanRow | undefined;
-      if (!row || row.kind !== IDEA_KIND) return;
+      if (!row || row.plan_maturity === null) return;
       const hasWindow = row.plan_start !== null || row.plan_target !== null;
       const hasBaseline = row.plan_baseline_start !== null || row.plan_baseline_target !== null;
       if (hasWindow && !hasBaseline && this.isStarted(row.id)) {
@@ -850,21 +940,24 @@ export class PlanStore {
     }
   }
 
+  /** Started: promoted, or links work, itself or through a sub-idea. */
   private isStarted(id: string, seen = new Set<string>()): boolean {
     if (seen.has(id)) return false;
     seen.add(id);
+    const row = this.db.prepare("SELECT kind FROM issues WHERE id = ?").get(id) as { kind: string } | undefined;
+    if (row !== undefined && row.kind !== IDEA_KIND) return true;
     if (planLinksOf(this.db, id).length > 0) return true;
-    const children = this.db.prepare("SELECT id FROM issues WHERE parent_id = ? AND kind = ?").all(id, IDEA_KIND) as Array<{ id: string }>;
+    const children = this.db.prepare("SELECT id FROM issues WHERE parent_id = ? AND plan_maturity IS NOT NULL").all(id) as Array<{ id: string }>;
     return children.some((child) => this.isStarted(child.id, seen));
   }
 
   /** Reset baseline: the current planned window becomes the baseline. The person's, and only on request. */
   resetBaseline(ref: string, actor: string | null, options: PlanWriteOptions = {}): IdeaView {
     this.assertEnabled();
-    const row = this.ideaRow(ref);
-    this.steer("baseline", row.identifier, options);
+    const row = this.recordRow(ref);
+    this.steer("baseline", displayRef(row), options);
     if (!this.isStarted(row.id)) {
-      throw new StapleError("validation", `${row.identifier} is not started, so it has no baseline to reset.`, { identifier: row.identifier });
+      throw new StapleError("validation", `${displayRef(row)} is not started, so it has no baseline to reset.`);
     }
     this.store.journaled(() =>
       this.write(row.id, { plan_baseline_start: row.plan_start, plan_baseline_target: row.plan_target }, actor, "idea_baseline_reset", {
@@ -875,11 +968,12 @@ export class PlanStore {
     return this.ideaView(row.id);
   }
 
-  // ---------- horizons (all the person's) ----------
+  // ---------- horizons: milestones the plan shows as columns (all the person's) ----------
 
   private insertHorizon(name: string, date: string | null, rank: number, actor: string | null): string {
-    const issue = this.store.createIssue({ title: name, kind: HORIZON_KIND, createdBy: actor }, { plan: true });
-    this.write(issue.id, { plan_target: date, plan_rank: rank }, actor, "horizon_created", { date });
+    const issue = this.store.createIssue({ title: name, kind: MILESTONE_KIND, createdBy: actor, allowDuplicate: true }, { plan: true });
+    this.write(issue.id, { plan_rank: rank }, actor, "horizon_created", { date });
+    if (date !== null) this.store.milestones().update(issue.id, { targetDate: date }, actor, { plan: true });
     return issue.id;
   }
 
@@ -891,13 +985,8 @@ export class PlanStore {
     const date = input.date ? parsePlanDate(input.date) : null;
     const id = this.store.journaled(() => {
       const rows = this.horizonRows();
-      let rank: number;
-      const next = date === null ? undefined : rows.find((row) => row.plan_target === null || row.plan_target > date);
-      if (next === undefined) {
-        rank = (rows.at(-1)?.plan_rank ?? 0) + RANK_STEP;
-      } else {
-        rank = this.rankBefore(HORIZON_KIND, null, next.id, actor);
-      }
+      const next = date === null ? undefined : rows.find((row) => row.target_date === null || row.target_date > date);
+      const rank = next === undefined ? (rows.at(-1)?.plan_rank ?? 0) + RANK_STEP : this.rankBefore("horizons", null, next.id, actor);
       return this.insertHorizon(name, date, rank, actor);
     });
     return this.horizonOf(id);
@@ -909,22 +998,23 @@ export class PlanStore {
     this.steer("horizons", row.identifier, options);
     this.store.journaled(() => {
       if (patch.name !== undefined) this.store.updateIssue(row.id, { title: oneLine(patch.name, "A horizon's name") }, actor, undefined, { plan: true });
-      const columns: Record<string, unknown> = {};
-      if (patch.date !== undefined) columns.plan_target = patch.date === null ? null : parsePlanDate(patch.date);
-      if (patch.before !== undefined) columns.plan_rank = this.rankBefore(HORIZON_KIND, row.id, patch.before, actor);
-      this.write(row.id, columns, actor, "horizon_updated", { fields: Object.keys(columns) });
+      if (patch.date !== undefined) {
+        this.store.milestones().update(row.id, { targetDate: patch.date === null ? null : parsePlanDate(patch.date) }, actor, { plan: true });
+      }
+      if (patch.before !== undefined) this.write(row.id, { plan_rank: this.rankBefore("horizons", row.id, patch.before, actor) }, actor, "horizon_updated", { fields: ["plan_rank"] });
     });
     return this.horizonOf(row.id);
   }
 
-  /** Remove a horizon: it is cancelled (issues are never deleted) and its ideas become unscheduled. */
+  /** Remove a horizon: the milestone is cancelled (issues are never deleted) and its ideas become unscheduled. */
   removeHorizon(ref: string, actor: string | null, options: PlanWriteOptions = {}): PlanView {
     this.assertEnabled();
     const row = this.horizonRow(ref);
     this.steer("horizons", row.identifier, options);
     this.store.journaled(() => {
-      const on = this.db.prepare("SELECT id FROM issues WHERE kind = ? AND plan_horizon_id = ?").all(IDEA_KIND, row.id) as Array<{ id: string }>;
+      const on = this.db.prepare("SELECT id FROM issues WHERE plan_maturity IS NOT NULL AND plan_horizon_id = ?").all(row.id) as Array<{ id: string }>;
       for (const idea of on) this.write(idea.id, { plan_horizon_id: null }, actor, "idea_updated", { fields: ["plan_horizon_id"] });
+      this.settleMembership(actor);
       this.store.updateIssue(row.id, { status: this.store.primaryStatusFor("cancelled") }, actor, undefined, { plan: true });
     });
     return this.view();
@@ -938,21 +1028,20 @@ export class PlanStore {
 
   // ---------- order ----------
 
-  private nextRank(kind: string): number {
-    const row = this.db.prepare("SELECT MAX(plan_rank) AS rank FROM issues WHERE kind = ?").get(kind) as { rank: number | null };
+  private nextRecordRank(): number {
+    const row = this.db.prepare("SELECT MAX(plan_rank) AS rank FROM issues WHERE plan_maturity IS NOT NULL").get() as { rank: number | null };
     return (row.rank ?? 0) + RANK_STEP;
   }
 
   /**
-   * The rank that puts `id` immediately before `beforeRef` among the open rows of a kind
-   * (`null`: at the end). Ranks are sparse; when two neighbours leave no room, the kind's
-   * rows are renumbered in their current order first.
+   * The rank that puts `id` immediately before `beforeRef` among the plan's records or its
+   * horizons (`null`: at the end). Ranks are sparse; when two neighbours leave no room, the rows
+   * are renumbered in their current order first.
    */
-  private rankBefore(kind: string, id: string | null, beforeRef: string | null, actor: string | null): number {
-    const ordered = (kind === IDEA_KIND ? this.ideaRows() : this.horizonRows()).filter((row) => row.id !== id);
+  private rankBefore(among: "records" | "horizons", id: string | null, beforeRef: string | null, actor: string | null): number {
+    const ordered = (among === "records" ? this.recordRows() : this.horizonRows()).filter((row) => row.id !== id);
     if (beforeRef === null) return (ordered.at(-1)?.plan_rank ?? 0) + RANK_STEP;
-    const before = this.row(beforeRef);
-    if (before.kind !== kind) throw new StapleError("validation", `${before.identifier} is not ${kind === IDEA_KIND ? "an idea" : "a horizon"}.`);
+    const before = among === "records" ? this.recordRow(beforeRef) : this.horizonRow(beforeRef);
     const index = ordered.findIndex((row) => row.id === before.id);
     const lower = index > 0 ? (ordered[index - 1]!.plan_rank ?? null) : null;
     const rank = rankBetween(lower, before.plan_rank ?? null);

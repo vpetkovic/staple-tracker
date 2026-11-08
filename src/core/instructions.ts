@@ -21,7 +21,7 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import { nearestMilestone } from "./milestones.js";
+import { MILESTONE_MEMBERSHIP, nearestMilestone } from "./milestones.js";
 import { MAX_TREE_DEPTH, StapleError } from "./types.js";
 
 export const INSTRUCTION_SOURCE_KINDS = ["self", "parent", "milestone", "run"] as const;
@@ -136,7 +136,7 @@ export function instructionSources(db: DatabaseSync, issueId: string): Array<{ k
     row,
   }));
   const memberRows = db
-    .prepare(`SELECT issue_id, milestone_id FROM milestone_members WHERE issue_id IN (${chain.map(() => "?").join(",")})`)
+    .prepare(`SELECT issue_id, milestone_id FROM ${MILESTONE_MEMBERSHIP} WHERE issue_id IN (${chain.map(() => "?").join(",")})`)
     .all(...chain.map((row) => row.id)) as Array<{ issue_id: string; milestone_id: string }>;
   const memberOf = new Map(memberRows.map((row) => [row.issue_id, row.milestone_id]));
   const milestoneId = nearestMilestone(

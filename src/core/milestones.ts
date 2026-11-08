@@ -349,3 +349,13 @@ export function milestoneState(
 function article(word: string): string {
   return /^[aeiou]/i.test(word) ? "an" : "a";
 }
+
+/**
+ * A milestone's membership as every reader means it: the members a person or an agent put in it
+ * (`milestone_members`, replicated as the milestone's ordered list) and the members the plan
+ * derives for a horizon (`plan_members`, this device's own, rebuilt from synced idea fields;
+ * design/plan.md, "Membership"). An issue a person put somewhere is there and not where the plan
+ * would put it. Use it in place of the table name in a read: `FROM ${MILESTONE_MEMBERSHIP}`.
+ */
+export const MILESTONE_MEMBERSHIP = `(SELECT issue_id, milestone_id FROM milestone_members
+   UNION ALL SELECT issue_id, milestone_id FROM plan_members WHERE issue_id NOT IN (SELECT issue_id FROM milestone_members))`;

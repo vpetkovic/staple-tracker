@@ -63,6 +63,7 @@ import { owedLeaseReleases, settleOwedLeaseRelease } from "./lease-store.js";
 import { countQuarantined, markWaitingAcrossRewind, quarantineOperation, retryQuarantine, withoutLaterWrites } from "./quarantine.js";
 import { refreshPresence, writeOwnOrphanEnds } from "../telemetry/attempts.js";
 import { owedMilestoneRederive, publishDerivedStatuses, rederiveMilestonesAfterPull } from "../store.js";
+import { rebuildPlanMembers } from "../plan-members.js";
 import { blockerSets, narrateRewoundSets, reconcileAfterRead, reconcileBeforeRead } from "./rewind.js";
 import { TailFold, refusedAsStillFolding, refusedAsTooLargeToFold, type Entry } from "./tail-fold.js";
 import { seedModeOf, seedOwed, seedRepository, type RepositorySurvey, type SeedReport } from "./seed.js";
@@ -694,6 +695,12 @@ async function syncRepositoryOnce(
    * rewinds members the repair would otherwise read. Sent in this sync, after any repair a
    * device that synchronized first has already sent.
    */
+  /**
+   * And the membership the plan derives for its horizons, rebuilt from what the pull brought
+   * (`plan-members.ts`): this device's own rows, never sent, the same on every device that holds
+   * the same plan. Before the repair below, which reads it.
+   */
+  rebuildPlanMembers(db);
   rederiveMilestonesAfterPull(db);
   if (pendingCount(db) > 0) await pushAll();
   /**

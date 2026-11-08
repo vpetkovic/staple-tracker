@@ -16,7 +16,9 @@ import {
 function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
   return {
     id,
-    identifier: `T-${id}`,
+    identifier: null,
+    promoted: false,
+    kind: "idea",
     title: id,
     description: null,
     maturity: "raw",
@@ -42,8 +44,8 @@ function idea(id: string, extra: Partial<IdeaData> = {}): IdeaData {
   };
 }
 
-const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false };
-const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false };
+const now: HorizonData = { id: "now", identifier: "T-now", name: "Now", date: "2026-12-31", rank: 1, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false };
+const next: HorizonData = { id: "next", identifier: "T-next", name: "Next", date: null, rank: 2, status: "backlog", shipped: false, memberCount: 0, ideaCount: 0, lateCount: 0, notStartedCount: 0, late: false };
 
 function plan(ideas: IdeaData[]): PlanData {
   return { enabled: true, today: "2026-11-07", horizons: [now, next], ideas };

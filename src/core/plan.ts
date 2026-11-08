@@ -1,22 +1,48 @@
 /**
  * The plan layer: the pure half of `design/plan.md`.
  *
- * An idea is an issue of the reserved kind `idea`; a horizon is an issue of the reserved
- * kind `horizon`. Together they are the plan kinds. They live above the tracker: never
- * queued, never checked out, never picked by `next`, never counted by a non-plan parent's
- * derived status and never listed in a task view unless asked for. Start (a new epic) and
- * Adopt (an existing issue) are the only links from an idea into the work.
+ * An idea is an issue of the reserved kind `idea`, above the tracker: never queued, never
+ * checked out, never picked by `next`, never counted by a non-plan parent's derived status
+ * and never listed in a task view unless asked for. It holds no ticket number: its identifier
+ * is a draft form until it is promoted in place into an epic, which is the way in, beside
+ * Adopt (link an existing issue). A horizon is a milestone the plan shows as a column.
  *
  * Everything here is a type or a function of its arguments: no store, no database, no clock.
  */
 import { StapleError } from "./types.js";
 
 export const IDEA_KIND = "idea";
-export const HORIZON_KIND = "horizon";
-export const PLAN_KINDS: ReadonlySet<string> = new Set([IDEA_KIND, HORIZON_KIND]);
+/** The kind a horizon is: a milestone with a plan rank. */
+export const HORIZON_MILESTONE_KIND = "milestone";
+/** The kind a promoted idea becomes, when the workspace has it. */
+export const PROMOTED_KIND = "epic";
+/** Kinds the tracker keeps out of its work: only an unpromoted idea. */
+export const PLAN_KINDS: ReadonlySet<string> = new Set([IDEA_KIND]);
 
 export function isPlanKind(kind: string | null | undefined): boolean {
   return typeof kind === "string" && PLAN_KINDS.has(kind);
+}
+
+// ---------- the draft identifier ----------
+
+const DRAFT_PREFIX = "~";
+
+/**
+ * An unpromoted idea's identifier: `~` and its UUID's hex. Unique because the UUID is; never
+ * `PREFIX-n`, so nothing parses it as a ticket ref, resolves a typed ref to it, or advances the
+ * ticket counter past it; and never shown.
+ */
+export function draftIdentifier(issueId: string): string {
+  return `${DRAFT_PREFIX}${issueId.replace(/-/g, "").toLowerCase()}`;
+}
+
+export function isDraftIdentifier(identifier: string | null | undefined): boolean {
+  return typeof identifier === "string" && identifier.startsWith(DRAFT_PREFIX);
+}
+
+/** How a message names an issue: its ticket number, or the idea's title while it has none. */
+export function displayRef(row: { identifier: string; title?: string | null }): string {
+  return isDraftIdentifier(row.identifier) ? `the idea "${row.title ?? "untitled"}"` : row.identifier;
 }
 
 /** What a person sets by hand. `dropped` keeps the idea and takes it off the boards. */
@@ -155,61 +181,50 @@ export function isNotStarted(input: { plannedStart: string | null; links: number
 // ---------- guards ----------
 
 export const PLAN_KINDS_MISSING_MESSAGE =
-  "Planning is not turned on in this workspace. Run `staple plan enable` (it adds the `idea` and `horizon` kinds).";
+  "Planning is not turned on in this workspace. Run `staple plan enable` (it adds the `idea` and `milestone` kinds and the horizons Now, Next and Later).";
 
-export function assertPlanKindsConfigured(kindIds: readonly string[]): void {
-  if (!kindIds.includes(IDEA_KIND) || !kindIds.includes(HORIZON_KIND)) {
-    throw new StapleError("validation", PLAN_KINDS_MISSING_MESSAGE, { kinds: [IDEA_KIND, HORIZON_KIND] });
-  }
-}
-
-/** The one sentence every tracker door gives a plan-kind issue. */
-export function planKindRefusal(issue: { identifier: string; kind: string }, action: string): StapleError {
-  const noun = issue.kind === IDEA_KIND ? "an idea" : "a horizon";
-  const door =
-    issue.kind === IDEA_KIND
-      ? ` Ideas reach the tracker through Start or Adopt (\`staple idea start ${issue.identifier}\`).`
-      : "";
-  return new StapleError("validation", `${issue.identifier} is ${noun}; it cannot be ${action}.${door}`, {
-    identifier: issue.identifier,
-    kind: issue.kind,
-  });
+/** The one sentence every tracker door gives an unpromoted idea. */
+export function planKindRefusal(issue: { identifier: string; kind: string; title?: string | null }, action: string): StapleError {
+  const name = displayRef(issue);
+  return new StapleError(
+    "validation",
+    `${name.charAt(0).toUpperCase()}${name.slice(1)} is an idea; it cannot be ${action}. An idea reaches the tracker when the person promotes it, or when work is adopted onto it.`,
+    { kind: issue.kind },
+  );
 }
 
 /**
- * The parent rule. An idea's parent is an idea or nothing; a horizon has none; a tracker
- * issue never sits under a plan-kind issue.
+ * The parent rule. An idea's parent is a plan record (an idea, or one already promoted) or
+ * nothing; tracker work never sits under an unpromoted idea.
  */
 export function assertPlanParent(
-  child: { kind: string; identifier?: string },
-  parent: { kind: string; identifier: string } | null,
+  child: { kind: string },
+  parent: { kind: string; identifier: string; title?: string | null; planRecord?: boolean } | null,
 ): void {
   if (parent === null) return;
-  if (child.kind === HORIZON_KIND) {
-    throw new StapleError("validation", "A horizon cannot have a parent.", { parent: parent.identifier });
-  }
-  if (child.kind === IDEA_KIND && parent.kind !== IDEA_KIND) {
-    throw new StapleError("validation", `An idea's parent must be another idea; ${parent.identifier} is ${parent.kind === HORIZON_KIND ? "a horizon" : `a ${parent.kind}`}.`, {
-      parent: parent.identifier,
-    });
+  if (child.kind === IDEA_KIND && parent.kind !== IDEA_KIND && parent.planRecord !== true) {
+    throw new StapleError("validation", `An idea's parent must be another idea; ${displayRef(parent)} is a ${parent.kind}.`);
   }
   if (!isPlanKind(child.kind) && isPlanKind(parent.kind)) {
     throw new StapleError(
       "validation",
-      `${parent.identifier} is ${parent.kind === IDEA_KIND ? "an idea" : "a horizon"}; tracker work cannot be filed under it. Use \`staple idea adopt ${parent.identifier} <ref>\` to link work to an idea.`,
-      { parent: parent.identifier },
+      `${displayRef(parent)} is an idea; tracker work cannot be filed under it. Adopt the work onto the idea instead (staple idea adopt <idea> <ref>).`,
     );
   }
 }
 
 /** Re-declaring a kind across the plan boundary is refused in both directions. */
-export function assertPlanRekind(row: { identifier: string; kind: string }, nextKind: string): void {
+/**
+ * Re-declaring a kind across the plan boundary is refused in both directions through the
+ * tracker's own update: an idea becomes tracker work only by promotion, which the plan does.
+ */
+export function assertPlanRekind(row: { identifier: string; kind: string; title?: string | null }, nextKind: string): void {
   if (row.kind === nextKind) return;
   if (isPlanKind(row.kind) || isPlanKind(nextKind)) {
     throw new StapleError(
       "validation",
-      `${row.identifier} cannot change kind from ${row.kind} to ${nextKind}: ideas and horizons stay above the tracker. Start or adopt work from an idea instead.`,
-      { identifier: row.identifier, kind: row.kind, nextKind },
+      `${displayRef(row)} cannot change kind from ${row.kind} to ${nextKind} here: an idea stays above the tracker until the person promotes it (staple idea promote), and tracker work becomes part of a plan by being adopted onto an idea.`,
+      { kind: row.kind, nextKind },
     );
   }
 }
@@ -230,19 +245,21 @@ export type SteeringWrite =
   | "planned dates"
   | "baseline"
   | "horizons"
-  | "start";
+  | "promote";
 
-export function steeringRefusal(what: SteeringWrite, identifier: string | null): StapleError {
-  const subject = identifier ?? "the plan";
+/** `subject` is how the message names the record (`displayRef`), never a draft identifier. */
+export function steeringRefusal(what: SteeringWrite, subject: string | null): StapleError {
+  const name = subject ?? "the plan";
+  const Name = `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
   const message =
-    what === "start"
-      ? `${subject} is not shaped yet; an agent may start only an idea the person has marked shaped. Capture questions or decisions on it instead, or ask the person to shape it.`
+    what === "promote"
+      ? `${Name} is not shaped yet; an agent may promote only an idea the person has marked shaped. Capture questions or decisions on it instead, or ask the person to shape it.`
       : what === "status"
-        ? `${subject} is an idea; its status does not move. Its maturity is its state, and the person sets it, or drops the idea, in the Plan view (or the CLI with --person). Start or adopt work to track progress.`
-        : `Changing ${what === "horizons" ? "horizons" : `the ${what} of ${subject}`} is the person's call, not an agent's. ` +
-        "Agents capture ideas, edit titles and briefs, add questions and decisions, and adopt or unlink work; " +
-        "the person sets maturity, horizons, dates and the baseline in the Plan view (or the CLI with --person).";
-  return new StapleError("validation", message, { steering: what, ...(identifier ? { identifier } : {}) });
+        ? `${Name} is an idea; its status does not move. Its maturity is its state, and the person sets it, or drops the idea, in the Plan view (or the CLI with --person). Promote it, or adopt work onto it, to track progress.`
+        : `Changing ${what === "horizons" ? "horizons" : `the ${what} of ${name}`} is the person's call, not an agent's. ` +
+          "Agents capture ideas, edit titles and briefs, add questions and decisions, and adopt or unlink work; " +
+          "the person sets maturity, horizons, dates and the baseline in the Plan view (or the CLI with --person).";
+  return new StapleError("validation", message, { steering: what });
 }
 
 /** Default horizons for `staple plan enable`, in order. */

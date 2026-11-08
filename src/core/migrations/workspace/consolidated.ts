@@ -447,4 +447,12 @@ CREATE TABLE plan_links (
         linked_at TEXT NOT NULL,
         PRIMARY KEY (idea_id, issue_id)
       );
+
+CREATE TABLE plan_members (
+        issue_id     TEXT    PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+        milestone_id TEXT    NOT NULL    REFERENCES issues(id) ON DELETE CASCADE,
+        position     INTEGER NOT NULL
+      );
+
+CREATE INDEX plan_members_milestone_idx ON plan_members(milestone_id, position);
 `;

@@ -2,7 +2,7 @@ import { type ResolvedInstruction, resolveInstructions } from "./instructions.js
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { EVENT_ORDER, EVENT_ORDER_DESC, insertEvent } from "./event-log.js";
-import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, renumbersAcknowledged } from "./identifier-moves.js";
+import { RENUMBER_GUARD_MS, aliasedIssueId, removedByRestore, formerHolderOf, formerHolders, formerMove, noteRenumber, recordIdentifierMove, renumbersAcknowledged } from "./identifier-moves.js";
 import { connectionPath } from "./cloud/connection.js";
 import { MemberLens, withEventMembers } from "./cloud/member-lens.js";
 import { readMembersCache } from "./cloud/members-cache.js";
@@ -94,8 +94,8 @@ import {
   type KindAppearanceMap,
   type KindWithAppearance,
 } from "./kind-appearance.js";
-import { MILESTONE_KIND, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
-import { HORIZON_KIND, IDEA_KIND, PLAN_KINDS, assertPlanParent, assertPlanRekind, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
+import { MILESTONE_KIND, MILESTONE_MEMBERSHIP, assertNotReservedActor, isGoalRunGate } from "./milestones.js";
+import { IDEA_KIND, PLAN_KINDS, assertPlanParent, assertPlanRekind, displayRef, draftIdentifier, isPlanKind, planKindRefusal, steeringRefusal } from "./plan.js";
 import { PlanStore } from "./plan-store.js";
 import { fallbackTarget, recordRemovalTarget } from "./vocabulary-targets.js";
 import { ProjectStore } from "./project-store.js";
@@ -2604,9 +2604,8 @@ export class WorkspaceStore {
         }
       }
       if (this.planningOn()) {
-        assertPlanParent({ kind }, parent);
-        // A horizon is the person's; only the plan layer creates one (`PlanStore.createHorizon`).
-        if (kind === HORIZON_KIND && !internal.plan) throw steeringRefusal("horizons", null);
+        // A promoted idea is still a plan record, so its sub-ideas may stay under it.
+        assertPlanParent({ kind }, parent === null ? null : { ...parent, planRecord: (parent as unknown as { plan_maturity: string | null }).plan_maturity !== null });
       }
 
       // Duplicate guard: same normalized title among open siblings.
@@ -2632,8 +2631,12 @@ export class WorkspaceStore {
       this.assertNoPlanDependency(kind, blockerRows);
 
       const id = newId();
-      const number = this.nextIssueNumber();
-      const identifier = `${this.prefix}-${number}`;
+      /**
+       * An idea holds no ticket number until it is promoted: a draft identifier made from its own
+       * UUID, which consumes nothing from the counter and is never shown (design/plan.md, "Identity").
+       */
+      const draft = kind === IDEA_KIND && (internal.plan === true || this.planningOn());
+      const identifier = draft ? draftIdentifier(id) : `${this.prefix}-${this.nextIssueNumber()}`;
       const now = this.journal.mutationAt();
       const row = this.db
         .prepare(
@@ -2895,7 +2898,7 @@ export class WorkspaceStore {
     return this.journaled(() => {
       const row = this.requireTarget(ref);
       const blockers = blockerRefs.map((blockerRef) => this.requireTarget(blockerRef));
-      this.assertNoPlanDependency(row.kind, blockers, row.identifier);
+      this.assertNoPlanDependency(row.kind, blockers, row);
       const deduped = [...new Map(blockers.map((b) => [b.id, b])).values()];
       this.assertNoCycle(
         row.id,
@@ -3426,7 +3429,7 @@ export class WorkspaceStore {
     const holdersOf = this.db.prepare(
       `SELECT parent_id AS id FROM issues WHERE id = ? AND parent_id IS NOT NULL
         UNION ALL
-       SELECT milestone_id AS id FROM milestone_members WHERE issue_id = ?`,
+       SELECT milestone_id AS id FROM ${MILESTONE_MEMBERSHIP} WHERE issue_id = ?`,
     );
     let frontier = [...start];
     for (let depth = 0; frontier.length > 0 && depth < MAX_TREE_DEPTH; depth += 1) {
@@ -3479,7 +3482,7 @@ export class WorkspaceStore {
             .prepare(
               `SELECT id, identifier, status, title, kind FROM issues
                 WHERE parent_id = ?
-                   OR id IN (SELECT issue_id FROM milestone_members WHERE milestone_id = ?)
+                   OR id IN (SELECT issue_id FROM ${MILESTONE_MEMBERSHIP} WHERE milestone_id = ?)
                 ORDER BY created_at`,
             )
             .all(ancestor.id, ancestor.id)
@@ -3759,7 +3762,7 @@ export class WorkspaceStore {
       .prepare(
         `SELECT id FROM issues WHERE id = ?
           UNION
-         SELECT milestone_id AS id FROM milestone_members WHERE issue_id = ?`,
+         SELECT milestone_id AS id FROM ${MILESTONE_MEMBERSHIP} WHERE issue_id = ?`,
       )
       .all(row.parent_id ?? "", row.id) as Array<{ id: string }>;
     for (const { id: holderId } of holders) {
@@ -4181,7 +4184,7 @@ export class WorkspaceStore {
       ).length;
       const members =
         row.kind === MILESTONE_KIND
-          ? (this.db.prepare("SELECT COUNT(*) AS n FROM milestone_members WHERE milestone_id = ?").get(row.id) as { n: number }).n
+          ? (this.db.prepare(`SELECT COUNT(*) AS n FROM ${MILESTONE_MEMBERSHIP} WHERE milestone_id = ?`).get(row.id) as { n: number }).n
           : 0;
       // A goal run's gate may stand on an empty milestone: it exists to hold the close.
       if (children === 0 && members === 0 && !(row.kind === MILESTONE_KIND && isGoalRunGate(requestedBy))) {
@@ -4654,9 +4657,9 @@ export class WorkspaceStore {
        * plan layer edits it) and an idea's status never moves (maturity is its state; it leaves
        * the board by being dropped, from the plan). Title and description of an idea stay open.
        */
-      if (!internal.plan && isPlanKind(row.kind) && this.planningOn()) {
-        if (row.kind === HORIZON_KIND) throw steeringRefusal("horizons", row.identifier);
-        if (patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", row.identifier);
+      if (!internal.plan && this.planningOn()) {
+        if (this.isHorizon(row.id)) throw steeringRefusal("horizons", row.identifier);
+        if (isPlanKind(row.kind) && patch.status !== undefined && patch.status !== row.status) throw steeringRefusal("status", displayRef(row));
       }
       if (
         patch.expectedStatusVersion !== undefined &&
@@ -8094,14 +8097,41 @@ export class WorkspaceStore {
   // ---------- the plan layer (design/plan.md) ----------
 
   /**
-   * Planning is on once a horizon carries a plan rank. Only the plan layer writes one, so a
-   * workspace that kept its own `idea` or `horizon` kind before this build is untouched by
-   * every plan guard until planning is turned on, which refuses while such issues exist.
+   * Planning is on once a milestone carries a plan rank (a horizon). Only the plan layer writes
+   * one, so a workspace that kept its own `idea` kind before this build is untouched by every
+   * plan guard until planning is turned on, which refuses while such issues exist.
    */
   planningOn(): boolean {
     const kinds = this.settings().kinds;
-    if (!kinds.some((k) => k.id === IDEA_KIND) || !kinds.some((k) => k.id === HORIZON_KIND)) return false;
-    return this.db.prepare("SELECT 1 AS hit FROM issues WHERE kind = ? AND plan_rank IS NOT NULL LIMIT 1").get(HORIZON_KIND) !== undefined;
+    if (!kinds.some((k) => k.id === IDEA_KIND) || !kinds.some((k) => k.id === MILESTONE_KIND)) return false;
+    return this.db.prepare("SELECT 1 AS hit FROM issues WHERE kind = ? AND plan_rank IS NOT NULL LIMIT 1").get(MILESTONE_KIND) !== undefined;
+  }
+
+  /**
+   * Promote an idea in place (design/plan.md, "Ticket numbers"): the same row takes the next ticket
+   * number and the given kind. Everything that hangs on the row (documents, comments, files,
+   * events, links, its plan fields) stays. The number travels as an `identifier` write on the
+   * issue, which is a claim like a create's: two devices that promote offline settle by the log,
+   * the earlier claim keeps the number and the later device renumbers its own (`claims.ts`).
+   * Only the plan layer calls this, after its own rules (shaped, person, parent promoted).
+   */
+  promoteInPlace(issueId: string, kind: string, actor: string | null): Issue {
+    this.assertConfiguredKind(kind);
+    return this.journaled(() => {
+      const row = this.requireRow(issueId);
+      const now = this.journal.mutationAt();
+      const identifier = `${this.prefix}-${this.nextIssueNumber()}`;
+      this.db.prepare("UPDATE issues SET identifier = ?, kind = ?, updated_at = ? WHERE id = ?").run(identifier, kind, now, row.id);
+      recordIdentifierMove(this.db, { issueId: row.id, from: row.identifier, to: identifier, at: now });
+      this.journal.record({ entity: "issue", entityId: row.id, verb: "update", payload: { identifier, kind, updatedAt: now }, actor: actor ?? null });
+      this.emitEvent({ kind: "idea_promoted", issueId: row.id, actor, payload: { identifier, kind } });
+      return rowToIssue(this.requireRow(row.id));
+    });
+  }
+
+  /** A horizon: a milestone the plan ranks as a column. Its name, date, order and removal are the person's. */
+  isHorizon(issueId: string): boolean {
+    return this.db.prepare("SELECT 1 AS hit FROM issues WHERE id = ? AND kind = ? AND plan_rank IS NOT NULL").get(issueId, MILESTONE_KIND) !== undefined;
   }
 
   /** An issue of a plan kind, in a workspace where planning is on. */
@@ -8110,10 +8140,14 @@ export class WorkspaceStore {
   }
 
   /** Dependencies are tracker work: a plan neither blocks nor waits (design/plan.md, "Guards"). */
-  private assertNoPlanDependency(kind: string, blockers: ReadonlyArray<{ identifier: string; kind: string }>, identifier?: string): void {
+  private assertNoPlanDependency(
+    kind: string,
+    blockers: ReadonlyArray<{ identifier: string; kind: string; title: string }>,
+    self?: { identifier: string; title: string },
+  ): void {
     if (blockers.length === 0 || !this.planningOn()) return;
     if (isPlanKind(kind)) {
-      throw planKindRefusal({ identifier: identifier ?? "This issue", kind }, "blocked by other work");
+      throw planKindRefusal({ identifier: self?.identifier ?? "~", title: self?.title ?? "this one", kind }, "blocked by other work");
     }
     const plan = blockers.find((blocker) => isPlanKind(blocker.kind));
     if (plan) throw planKindRefusal(plan, "a blocker");

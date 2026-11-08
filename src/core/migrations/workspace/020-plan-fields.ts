@@ -4,22 +4,30 @@ import type { Migration } from "../types.js";
 /**
  * Version 20: the plan layer (`design/plan.md`).
  *
- * Ideas and horizons are issues of the reserved kinds `idea` and `horizon`, so their title,
- * brief, parent, documents, comments, events and sync come from the issue they are. What an
- * issue cannot already say lives in seven nullable `issues` columns, meaningful on the plan
- * kinds only and NULL on every other row:
+ * An idea is an issue of the reserved kind `idea` until it is promoted in place into an epic;
+ * a horizon is a milestone that the plan shows as a column. Title, brief, parent, documents,
+ * comments, events and sync come from the issue they are. What an issue cannot already say
+ * lives in seven nullable `issues` columns, NULL on every row the plan never wrote:
  *
- *   plan_maturity         raw | exploring | shaped | dropped (an idea's maturity)
- *   plan_horizon_id       the horizon an idea is scheduled into
- *   plan_start            YYYY-MM-DD, the start of an idea's planned window
- *   plan_target           YYYY-MM-DD, an idea's planned end, or a horizon's date
- *   plan_baseline_start   the planned window kept when the idea was started
+ *   plan_maturity         raw | exploring | shaped | dropped; set on every plan record, promoted or not
+ *   plan_horizon_id       the horizon (milestone) a plan record is scheduled into
+ *   plan_start            YYYY-MM-DD, the start of a plan record's planned window
+ *   plan_target           YYYY-MM-DD, its planned end
+ *   plan_baseline_start   the planned window kept when it was started
  *   plan_baseline_target  (both written together, and reset only on request)
- *   plan_rank             the order of horizons, and of ideas inside a column
+ *   plan_rank             the order of horizons, and of plan records inside a column
  *
- * They replicate as fields of the `issue` entity (`ISSUE_FIELDS`). A horizon with a rank is
- * also what says planning is on in this workspace: only the plan layer writes one, so a
- * workspace that had its own `idea` or `horizon` kind before keeps every issue it had.
+ * They replicate as fields of the `issue` entity (`ISSUE_FIELDS`). A milestone with a rank is a
+ * horizon, and is also what says planning is on in this workspace: only the plan layer writes
+ * one, so a workspace that had its own `idea` kind before keeps every issue it had.
+ *
+ * An unpromoted idea holds a draft identifier, `~` and its UUID's hex (`plan.ts`), and never a
+ * ticket number: promotion takes the next number then.
+ *
+ * `plan_members` is this device's own: one row per issue a horizon holds through the plan (a
+ * promoted record on the horizon, and the work its records link), rebuilt from the synced
+ * fields above by one deterministic function on every device and never journaled. Readers of
+ * a milestone's membership union it with `milestone_members`.
  *
  * `plan_links` holds one row per link from an idea to tracker work. Each row replicates as
  * its own field of the idea's `milestone` entity (`planLink.<issue id>`), the shape criterion
@@ -56,6 +64,12 @@ export const migration: Migration = {
         linked_at TEXT NOT NULL,
         PRIMARY KEY (idea_id, issue_id)
       );
+      CREATE TABLE plan_members (
+        issue_id     TEXT    PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+        milestone_id TEXT    NOT NULL    REFERENCES issues(id) ON DELETE CASCADE,
+        position     INTEGER NOT NULL
+      );
+      CREATE INDEX plan_members_milestone_idx ON plan_members(milestone_id, position);
     `);
   },
 };

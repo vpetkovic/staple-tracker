@@ -165,7 +165,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                   const idea = row.idea;
                   const planned = preview?.id === idea.id ? { start: preview.start, end: preview.end } : windowOf(idea);
                   return (
-                    <div key={idea.id} className={cn("flex border-b", selected === idea.id && "bg-surface-selected")} style={{ height: rowHeight }} data-plan-timeline-row={idea.identifier}>
+                    <div key={idea.id} className={cn("flex border-b", selected === idea.id && "bg-surface-selected")} style={{ height: rowHeight }} data-plan-timeline-row={idea.id}>
                       <div className="sticky left-0 z-10 flex shrink-0 items-center gap-1 border-r bg-card pr-2" style={{ width: nameWidth, paddingLeft: 4 + row.depth * (desk ? 14 : 10) }}>
                         {row.folds ? (
                           <button
@@ -185,7 +185,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                         ) : (
                           <span className="w-6 shrink-0" />
                         )}
-                        <button type="button" className={cn("min-w-0 flex-1 text-left text-label hover:underline", desk ? "truncate" : "line-clamp-3 leading-tight [overflow-wrap:anywhere]")} onClick={() => onOpen(idea.id)} title={idea.title} data-plan-timeline-name={idea.identifier}>
+                        <button type="button" className={cn("min-w-0 flex-1 text-left text-label hover:underline", desk ? "truncate" : "line-clamp-3 leading-tight [overflow-wrap:anywhere]")} onClick={() => onOpen(idea.id)} title={idea.title} data-plan-timeline-name={idea.id}>
                           {idea.title}
                         </button>
                         {idea.late ? <span className="size-1.5 shrink-0 rounded-full bg-destructive" aria-label="late" /> : idea.notStarted ? <span className="size-1.5 shrink-0 rounded-full bg-[color:var(--status-task-todo)]" aria-label="not started" /> : null}
@@ -197,7 +197,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                           <div
                             className="group absolute top-2 h-4 cursor-grab touch-none rounded-sm border border-[color:var(--status-task-in_progress)]/70 bg-[color:var(--status-task-in_progress)]/20 hover:bg-[color:var(--status-task-in_progress)]/30 focus-visible:ring-2 focus-visible:ring-ring"
                             style={{ left: x(planned.start), width: Math.max(6, (planned.end - planned.start + 1) * px) }}
-                            data-plan-bar={idea.identifier}
+                            data-plan-bar={idea.id}
                             role="slider"
                             aria-label={`${idea.title} planned ${dayLabel(dayOf(planned.start))} to ${dayLabel(dayOf(planned.end))}`}
                             aria-valuetext={`${dayOf(planned.start)} to ${dayOf(planned.end)}`}
@@ -218,8 +218,8 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                               void write("update", { ref: idea.id, plannedStart: dayOf(next.start), plannedTarget: dayOf(next.end) });
                             }}
                           >
-                            <span className="absolute inset-y-0 left-0 w-2 cursor-ew-resize" onPointerDown={(event) => begin(event, idea, "start")} onPointerMove={move} onPointerUp={end} data-plan-bar-start={idea.identifier} />
-                            <span className="absolute inset-y-0 right-0 w-2 cursor-ew-resize" onPointerDown={(event) => begin(event, idea, "end")} onPointerMove={move} onPointerUp={end} data-plan-bar-end={idea.identifier} />
+                            <span className="absolute inset-y-0 left-0 w-2 cursor-ew-resize" onPointerDown={(event) => begin(event, idea, "start")} onPointerMove={move} onPointerUp={end} data-plan-bar-start={idea.id} />
+                            <span className="absolute inset-y-0 right-0 w-2 cursor-ew-resize" onPointerDown={(event) => begin(event, idea, "end")} onPointerMove={move} onPointerUp={end} data-plan-bar-end={idea.id} />
                           </div>
                         ) : null}
                         <ActualBar idea={idea} x={x} px={px} today={today} />
@@ -235,7 +235,7 @@ export function PlanTimeline({ plan, write, onOpen, selected }: { plan: PlanData
                     </div>
                     <div className="sticky flex flex-wrap items-center gap-1.5 px-2 py-1.5" style={{ left: nameWidth }}>
                       {group.undated.map((idea) => (
-                        <Button key={idea.id} size="sm" variant="outline" className="h-7 text-caption" onClick={() => addDates(idea)} data-plan-add-dates={idea.identifier}>
+                        <Button key={idea.id} size="sm" variant="outline" className="h-7 text-caption" onClick={() => addDates(idea)} data-plan-add-dates={idea.id}>
                           {idea.title} · add dates
                         </Button>
                       ))}
@@ -268,7 +268,7 @@ function BaselineGhost({ idea, x }: { idea: IdeaData; x: (day: number) => number
       className="pointer-events-none absolute top-1 h-6 rounded-sm border border-dashed border-text-tertiary/70"
       style={{ left: x(dayIndex(start)), width: Math.max(6, x(dayIndex(end) + 1) - x(dayIndex(start))) }}
       title={`Baseline ${dayLabel(start)} to ${dayLabel(end)}`}
-      data-plan-baseline={idea.identifier}
+      data-plan-baseline={idea.id}
     />
   );
 }
@@ -284,10 +284,10 @@ function ActualBar({ idea, x, px, today }: { idea: IdeaData; x: (day: number) =>
   const slipFrom = plannedEnd !== null && last > plannedEnd ? Math.max(start, plannedEnd + 1) : null;
   const shipped = idea.stage === "shipped";
   return (
-    <div className="pointer-events-none absolute top-[26px] h-1.5" style={{ left: x(start), width: Math.max(4, x(last + 1) - x(start)) }} data-plan-actual={idea.identifier}>
+    <div className="pointer-events-none absolute top-[26px] h-1.5" style={{ left: x(start), width: Math.max(4, x(last + 1) - x(start)) }} data-plan-actual={idea.id}>
       <div className={cn("absolute inset-y-0 left-0 rounded-full", shipped ? "bg-[color:var(--status-task-done)]" : "bg-foreground/80")} style={{ width: Math.max(4, (done - start + 1) * px) }} />
       {forecast !== null && forecast > done ? (
-        <div className="absolute inset-y-0 rounded-full border border-dashed border-foreground/60" style={{ left: (done - start + 1) * px, width: (forecast - done) * px }} data-plan-forecast={idea.identifier} />
+        <div className="absolute inset-y-0 rounded-full border border-dashed border-foreground/60" style={{ left: (done - start + 1) * px, width: (forecast - done) * px }} data-plan-forecast={idea.id} />
       ) : null}
       {slipFrom !== null ? (
         <div
@@ -298,7 +298,7 @@ function ActualBar({ idea, x, px, today }: { idea: IdeaData; x: (day: number) =>
             backgroundImage: "repeating-linear-gradient(135deg, var(--color-destructive) 0 2px, transparent 2px 5px)",
             opacity: 0.8,
           }}
-          data-plan-slip={idea.identifier}
+          data-plan-slip={idea.id}
         />
       ) : null}
     </div>

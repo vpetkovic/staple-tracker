@@ -23,6 +23,11 @@ export interface HorizonData {
   name: string;
   date: string | null;
   rank: number;
+  /** The milestone's status; a horizon is a milestone. */
+  status: string;
+  /** Its derived done: every member landed. */
+  shipped: boolean;
+  memberCount: number;
   ideaCount: number;
   lateCount: number;
   notStartedCount: number;
@@ -31,7 +36,11 @@ export interface HorizonData {
 
 export interface IdeaData {
   id: string;
-  identifier: string;
+  /** The ticket number once promoted; null while it is an idea, which has none. */
+  identifier: string | null;
+  /** Promoted in place: the record is an epic in the tracker now. */
+  promoted: boolean;
+  kind: string;
   title: string;
   description: string | null;
   maturity: Maturity;
@@ -80,7 +89,7 @@ export interface LinkData {
 
 export interface IdeaDetailData {
   idea: IdeaData;
-  parent: { id: string; identifier: string; title: string } | null;
+  parent: { id: string; identifier: string | null; title: string } | null;
   children: IdeaData[];
   horizon: HorizonData | null;
   brief: string | null;

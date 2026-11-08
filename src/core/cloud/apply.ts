@@ -48,6 +48,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { renumberedRanks } from "../milestones.js";
 import { criterionMarkFromValue, criterionMarkPosition, criterionMarkValue } from "../milestone-goal.js";
 import { planLinkFromValue, planLinkIssue, writePlanLink } from "../plan-links.js";
+import { isDraftIdentifier } from "../plan.js";
 import { writeCriterionMark } from "../milestone-marks.js";
 import {
   SETTING_DEFINITIONS,
@@ -1162,6 +1163,18 @@ function displaceIdentifierHolder(
   }
   if (!decision && input.read !== undefined) {
     laterClaimInRead(db, input, pairs, index, incoming[1]);
+    return;
+  }
+  /**
+   * A promoted idea's first number is a claim like a create's (design/plan.md, "Identity"): the
+   * row holds a draft identifier, which is never shown, so a later claim it lost takes the
+   * stand-in a create would, on the record until the promoting device settles it.
+   */
+  const current = identifierOf(db, input.entityId);
+  if (!decision && current !== null && isDraftIdentifier(current)) {
+    const provisional = provisionalIdentifier(db, incoming[1], claimSeqOf(input, ["identifier"]));
+    recordIdentifierConflict(db, input, incoming[1], provisional);
+    pairs[index] = ["identifier", provisional];
     return;
   }
   if (!decision) {

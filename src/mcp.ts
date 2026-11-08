@@ -3142,7 +3142,7 @@ server.registerTool(
   "list_ideas",
   {
     description:
-      "The plan: every horizon in order (name, date, idea count, late and not-started counts) and every open idea with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates and the late / notStarted flags. Ideas are issues of the reserved `idea` kind and never appear in list_tasks, the queue or next_task. Filter with maturity or horizon (an identifier or name). A workspace without planning answers enabled: false.",
+      "The plan: every horizon in order (a horizon is a milestone shown as a column: name, date, status, shipped, member count, idea count, late and not-started counts) and every plan record with its maturity, derived stage (raw, exploring, shaped, scheduled, started, shipped, dropped), horizon, parent, planned window, baseline, linked issues, progress, actual dates and the late / notStarted flags. An unpromoted idea has identifier null (it holds no ticket number; refer to it by id) and never appears in list_tasks, the queue or next_task; a promoted one is an ordinary epic with its number. Filter with maturity or horizon (an identifier or name). A workspace without planning answers enabled: false.",
     inputSchema: {
       maturity: z.enum(["raw", "exploring", "shaped", "dropped"]).optional(),
       horizon: z.string().optional().describe("A horizon's identifier or name"),
@@ -3174,7 +3174,7 @@ server.registerTool(
 server.registerTool(
   "list_horizons",
   {
-    description: "The horizons in order: name, optional date (a dated horizon is a release line), idea count, and the late and not-started counts. Horizons are defined by the person.",
+    description: "The horizons in order. A horizon is a milestone the plan shows as a column, so it can be queued (enqueue_task) and goal-run; its members are the work of its ideas, derived, plus any added by hand. Each has name, optional date (a dated horizon is a release line), status, shipped, member count, idea count, and the late and not-started counts. Horizons are defined by the person.",
     inputSchema: { ws: wsSchema },
     annotations: { title: "List horizons", readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
@@ -3242,26 +3242,25 @@ server.registerTool(
   "start_idea",
   {
     description:
-      "Link an idea to work, the only way into the tracker. With adopt: link that existing issue (an epic or a ticket). Without: create an epic from the idea (title defaults to the idea's), store its brief as the epic's `plan` document, and link it; an agent may start only an idea the person has marked shaped. Once linked, the idea reads started and its progress and actual dates come from the work.",
+      "Take an idea into the tracker. Without adopt: promote it in place, so the same record becomes an epic and takes its ticket number now (an idea has none before); its brief, questions, decisions, comments, files and history stay on it, and on a horizon its work joins that horizon's milestone. An agent may promote only an idea the person has marked shaped, and an idea under an unpromoted idea waits for its parent. With adopt: link that existing issue (an epic or a ticket) instead. Either way the idea reads started and its progress and actual dates come from the work.",
     inputSchema: {
       ref: ideaRefSchema,
-      adopt: refSchema.optional().describe("An existing issue to link instead of creating an epic"),
-      title: z.string().optional().describe("The new epic's title"),
+      adopt: refSchema.optional().describe("An existing issue to link instead of promoting the idea"),
       actor: actorSchema,
       ws: wsSchema,
     },
     annotations: { title: "Start idea", ...milestoneWriteAnnotations },
   },
-  ({ ref, adopt, title, actor, ws }) =>
+  ({ ref, adopt, actor, ws }) =>
     run(() => {
       const plan = storeFor(ws).plan();
       const who = requireActor(actor);
       if (adopt !== undefined) {
         plan.adopt(ref, adopt, who);
-        return { idea: plan.detail(ref), epic: null };
+        return { idea: plan.detail(ref), promoted: null };
       }
-      const started = plan.start(ref, { title }, who);
-      return { idea: plan.detail(ref), epic: started.epic };
+      const promoted = plan.promote(ref, who);
+      return { idea: plan.detail(ref), promoted: { id: promoted.id, identifier: promoted.identifier, kind: promoted.kind } };
     }),
 );
 

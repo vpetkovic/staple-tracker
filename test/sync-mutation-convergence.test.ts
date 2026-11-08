@@ -75,7 +75,7 @@ const READS: Record<StoreName, readonly string[]> = {
     "blockingChildrenOf", "gate", "gateFor", "gateDecision", "queuedByFor", "gateQueueOf", "queuedBy", "claimActivity",
     "claimActivityFor", "worklogSummaryFor", "timingFor", "timing", "detailTiming", "listComments", "latestComments", "listCommentsPage",
     "getDocument", "listDocuments", "listDocumentRevisions", "instructions", "listIssues", "listIssuesPage", "inbox", "context", "tree",
-    "edges", "milestones", "queue", "projects", "plan", "planningOn", "isPlanIssue", "writeTarget",
+    "edges", "milestones", "queue", "projects", "plan", "planningOn", "isPlanIssue", "isHorizon", "writeTarget",
     // The attempt ledger the mutators write through; its own writes are the store's methods below.
     "attempts",
     // The attempt read surfaces: pure reads, which write no stored orphan end either.
@@ -372,7 +372,13 @@ const SCENARIOS: readonly Scenario[] = [
   { method: "PlanStore.addQuestion", name: "ask on an idea", run: (w) => void w.a.store.plan().addQuestion(w.ids["Idea"]!, "Which units?", "alice") },
   { method: "PlanStore.resolveQuestion", name: "resolve a question", run: (w) => void w.a.store.plan().resolveQuestion(w.ids["Idea"]!, 1, "alice") },
   { method: "PlanStore.addDecision", name: "record a decision", run: (w) => void w.a.store.plan().addDecision(w.ids["Idea"]!, "Metric only", "alice") },
-  { method: "PlanStore.start", name: "start an idea as an epic", run: (w) => void w.a.store.plan().start(w.ids["Idea"]!, {}, "alice") },
+  { method: "PlanStore.promote", name: "promote an idea in place", run: (w) => void w.a.store.plan().promote(w.ids["Idea"]!, "alice", { person: { via: "test" } }) },
+  {
+    method: "WorkspaceStore.promoteInPlace",
+    name: "number and re-kind an idea on its own record",
+    prep: (w) => void (w.ids["Bare idea"] = w.a.store.plan().capture({ title: "Bare idea" }, "alice").id),
+    run: (w) => void w.a.store.promoteInPlace(w.ids["Bare idea"]!, "task", "alice"),
+  },
   {
     method: "PlanStore.adopt",
     name: "adopt existing work",
@@ -402,7 +408,8 @@ const SCENARIOS: readonly Scenario[] = [
   {
     method: "MilestoneStore.create",
     name: "create a milestone",
-    prep: (w) => void w.a.store.addKind({ id: "milestone", label: "Milestone" }, "alice"),
+    // Turning planning on added the kind already; a workspace without the plan adds it here.
+    prep: (w) => void (w.a.store.getKinds().some((kind) => kind.id === "milestone") || w.a.store.addKind({ id: "milestone", label: "Milestone" }, "alice")),
     run: (w) => void (w.ids["M1"] = milestoneIdOf(w, w.a.store.milestones().create({ title: "M1", targetDate: "2026-11-01" }, "alice"))),
   },
   {
