@@ -879,3 +879,32 @@ describe("agents capture, the person steers", () => {
     expect(plan.promote(raw, "agent")).toMatchObject({ promoted: true, stage: "started" });
   });
 });
+
+describe("the lifecycle in the store", () => {
+  it("refuses an idea placed on a horizon or dated at capture before its state offers it", () => {
+    expect(refused(() => plan.capture({ title: "Raw on Now", horizon: horizon("Now") }, "vp", PERSON)).message).toContain('"Raw on Now" is raw; it cannot be scheduled');
+    expect(refused(() => plan.capture({ title: "Raw, dated", plannedTarget: "2026-12-01" }, "vp", PERSON)).message).toContain("is raw; it cannot be given planned dates");
+    expect(plan.capture({ title: "Exploring on Now", maturity: "exploring", horizon: horizon("Now") }, "vp", PERSON).horizonId).toBe(horizon("Now"));
+  });
+
+  it("offers no edit on a shipped idea, through the plan or through the tracker", () => {
+    const ref = idea("Landed");
+    const done = store.createIssue({ title: "Its work" });
+    plan.adopt(ref, done.identifier, "agent");
+    finish(done.identifier);
+    expect(plan.ideaView(ref).state).toBe("shipped");
+    expect(refused(() => plan.update(ref, { brief: "Rewritten after the fact" }, "agent")).message).toContain("is shipped; it cannot be edited");
+    expect(refused(() => store.updateIssue(ref, { title: "Renamed after the fact" }, "agent")).message).toContain("is shipped; it cannot be edited");
+    expect(refused(() => store.updateIssue(ref, { description: "Described after the fact" }, "agent")).message).toContain("is shipped; it cannot be edited");
+  });
+
+  it("holds back an offered action whose precondition is missing, saying why", () => {
+    const promoted = idea("Promoted, nothing linked");
+    plan.promote(promoted, "vp", PERSON);
+    expect(plan.ideaView(promoted).actions.find((a) => a.id === "unlink")).toMatchObject({ disabledReason: "Nothing is linked to it." });
+    const parent = idea("Parent, not promoted");
+    const child = plan.capture({ title: "Child", parent, maturity: "shaped" }, "vp", PERSON).id;
+    expect(plan.ideaView(child).actions.find((a) => a.id === "promote")?.disabledReason).toContain('Promote the idea "Parent, not promoted" first');
+    expect(plan.ideaView(parent).actions.find((a) => a.id === "promote")?.disabledReason).toBeUndefined();
+  });
+});
