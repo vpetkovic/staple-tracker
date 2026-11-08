@@ -652,10 +652,23 @@ export function rederiveMilestonesAfterPull(db: DatabaseSync): number {
  * thrown: the sync that ran it is the user's.
  */
 export function rederivePlanMilestonesAfterPull(db: DatabaseSync, changed: readonly string[]): void {
-  if (changed.length === 0) return;
+  /**
+   * And every horizon derivation left cancelled. No build derives one there now, but an older
+   * one could, and its write arrives by a pull; re-derived here it reads its work again.
+   */
+  const cancelledByDerivation = (
+    db
+      .prepare(
+        `SELECT id FROM issues WHERE kind = ? AND plan_rank IS NOT NULL AND derived_status = status
+            AND status IN (SELECT id FROM workspace_statuses WHERE category = 'cancelled')`,
+      )
+      .all(MILESTONE_KIND) as Array<{ id: string }>
+  ).map((row) => row.id);
+  const ids = [...new Set([...changed, ...cancelledByDerivation])].sort();
+  if (ids.length === 0) return;
   const store = new WorkspaceStore(db, "", "");
   try {
-    store.journal.run(() => store.rederiveMilestones(changed, "plan", null));
+    store.journal.run(() => store.rederiveMilestones(ids, "plan", null));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error(`staple: could not re-derive the plan's horizons after the pull (${detail}); the next change re-derives them.`);

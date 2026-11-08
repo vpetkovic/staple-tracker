@@ -413,3 +413,32 @@ describe("an idea an earlier build numbered", () => {
     }
   });
 });
+
+describe("a horizon cancelled by an older build's derivation", () => {
+  it("arrives listed and derives again from its work on the device that pulls it", async () => {
+    const server = new FakeSyncServer({ repositoryId: REPO });
+    fleet = new Fleet(server, REPO);
+    const a = fleet.machine("a");
+    a.store.plan().enable("vp");
+    const now = a.store.plan().view().horizons[0]!.id;
+    const p = a.store.plan().capture({ title: "Open work on Now", maturity: "shaped", horizon: now }, "vp", PERSON).id;
+    a.store.plan().promote(p, "vp", PERSON);
+    await a.sync();
+    const b = fleet.machine("b");
+    await b.sync();
+
+    // What an earlier build sent: derivation's cancel of the horizon, while its work is open.
+    a.use();
+    const cancelled = a.store.primaryStatusFor("cancelled");
+    a.store.journaled(() => {
+      a.db.prepare("UPDATE issues SET status = ?, derived_status = ? WHERE id = ?").run(cancelled, cancelled, now);
+      a.store.journal.record({ entity: "issue", entityId: now, verb: "update", payload: { status: cancelled, derivedStatus: cancelled, derived: "children_cancelled" }, actor: null });
+    });
+    await a.sync();
+    b.use();
+    await b.sync();
+    expect(b.store.plan().view().horizons.map((h) => h.id)).toContain(now);
+    expect(b.store.categoryOf(b.store.getIssue(now).status)).toBe("unstarted");
+    expect(openConflicts(b)).toEqual([]);
+  });
+});
