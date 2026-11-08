@@ -49,7 +49,11 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); ui?.close(); if (home) rmSync(home, { recursive: true, force: true }); });
 
 async function goView(page: Page, view: string, width: number) {
-  await page.locator(width < 768 ? `[data-view-tab="${view}"]` : `[data-nav-item="view:${view}"]`).click();
+  if (view === "tasks") view = "tree";
+  const target = page.locator(width < 768 ? `[data-view-tab="${view}"]` : `[data-nav-item="view:${view}"]`);
+  // Invoke shell navigation with an open modal too: on phones its sheet covers the rail.
+  if (await page.locator('[aria-label="Issue detail"]').count()) await target.evaluate((el: HTMLElement) => el.click());
+  else await target.click();
 }
 for (const width of [1280, 390]) {
   it(`restores Plan lens, drawer, filters and both scroll axes at ${width}px; URL wins and workspaces stay separate`, async () => {
@@ -78,7 +82,8 @@ for (const width of [1280, 390]) {
       await frame.evaluate(el => { el.scrollTop = 360; el.scrollLeft = 160; el.dispatchEvent(new Event("scroll", { bubbles: true })); });
       const position = await frame.evaluate(el => ({ top: el.scrollTop, left: el.scrollLeft }));
       expect(position.top).toBeGreaterThan(0);
-      await page.goto(route("tasks", "&ws=larkspur"));
+      await goView(page, "tasks", width);
+      await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("tasks");
       await goView(page, "plan", width);
       await page.locator('[aria-label="Issue detail"]').waitFor();
       await expect.poll(() => page.locator('[data-plan-lens="timeline"]').getAttribute("aria-selected")).toBe("true");

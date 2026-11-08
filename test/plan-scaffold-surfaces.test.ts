@@ -294,7 +294,7 @@ describe("a horizon's run setting on every surface", () => {
     expect((await cli("horizon", "set", next.identifier, "--run", "goal")).status).not.toBe(0);
     const person = await cli("horizon", "set", next.identifier, "--run", "goal", "--goal", "Every Next ticket landed", "--person");
     expect(person.status, person.stderr).toBe(0);
-    expect(person.stdout).toContain("runs goal · 1 goal criteria");
+    expect(person.stdout).toContain("runs goal · 1 goal criterion");
     const started = toolPayload(await mcp.call("start_run", { ws: WS, scope: next.identifier })) as { id: string };
     const take = toolPayload(await mcp.call("continue_run", { ws: WS, run: started.id })) as { action: string; ref: string; instructions: ResolvedInstruction[] };
     expect(take.action).toBe("take");

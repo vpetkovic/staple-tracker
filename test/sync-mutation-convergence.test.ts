@@ -354,6 +354,13 @@ const SCENARIOS: readonly Scenario[] = [
 
   // ---- the plan layer: every write is issue fields, documents or a new issue
   { method: "PlanStore.enable", name: "turn planning on", run: (w) => void w.a.store.plan().enable("alice") },
+  { method: "PlanStore.migrateLegacyLater", name: "upgrade the undated Later bucket without losing hand membership", run: (w) => {
+    const plan = w.a.store.plan();
+    const later = plan.createHorizon({ name: "Later" }, "alice", { person: { via: "test" } });
+    plan.capture({ title: "Unscheduled research", horizon: later.id }, "alice", { person: { via: "test" } });
+    w.a.store.milestones().addMember(later.id, issue(w, "Retained hand placement"), {}, "alice");
+    plan.migrateLegacyLater();
+  } },
   {
     method: "PlanStore.capture",
     name: "capture a scheduled, dated idea",

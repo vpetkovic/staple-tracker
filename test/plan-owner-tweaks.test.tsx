@@ -71,7 +71,7 @@ describe("the owner's plan tweaks", () => {
     const { db, store, plan } = fixture();
     try {
       const later = plan.createHorizon({ name: "Later" }, "Mira", PERSON);
-      db.prepare("UPDATE sync_state SET epoch = 1 WHERE id = 1").run();
+      db.prepare("INSERT INTO sync_state (id, epoch) VALUES (1, 1)").run();
       const identity = vi.spyOn(store.journal, "deviceIdentity").mockReturnValue(null);
       plan.migrateLegacyLater();
       expect(plan.view().horizons.some(h => h.id === later.id)).toBe(true);

@@ -113,7 +113,7 @@ export interface HorizonView {
   /** The milestone's ticket number: a horizon is real work, so it has one. */
   identifier: string;
   name: string;
-  /** YYYY-MM-DD, or null for an undated horizon such as Later (the milestone's target date). */
+  /** YYYY-MM-DD, or null for an undated named horizon (the milestone's target date). */
   date: string | null;
   rank: number;
   /** The milestone's own status, derived from its members like any milestone's. */
